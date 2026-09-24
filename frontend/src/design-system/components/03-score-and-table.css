@@ -95,10 +95,10 @@
    kinds do nothing on a row click, so they opt out: an expanded detail row
    keeps its own fill and cursor, and `.tbl--static` (additive modifier) marks
    a read-only table such as an asset's column schema. */
-.tbl tbody tr.tbl__expand { cursor: default; }
+.tbl tbody tr.tbl__expand,
+.tbl--static tbody tr { cursor: default; }
 .tbl tbody tr.tbl__expand:hover,
 .tbl tbody tr.tbl__expand:active { background: var(--bg-1); }
-.tbl--static tbody tr { cursor: default; }
 .tbl--static tbody tr:hover,
 .tbl--static tbody tr:active { background: transparent; }
 .tbl__expand-inner {

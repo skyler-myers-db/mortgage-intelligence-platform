@@ -617,17 +617,18 @@ function transitionedProperties(value: string): string[] {
 const selectsExactly = (list: string, selector: string) => list.split(',').map((part) => part.trim()).includes(selector);
 
 /**
- * The transitioned properties of the single `transition` in a rule of this
- * exact selector or, when it has no rule of its own, of the one rule whose
- * selector list names it (a shared theme list like `.topbar, ..., .main` is
- * ignored when the selector has its own rule).
+ * The transitioned properties that win for this selector: the last
+ * `transition` (in cascade order: partials, then the lazy feature sheets)
+ * whose selector list names it, skipping the reduced-motion `none` resets.
+ * Every caller's rules are single-class or equal-specificity lists, so source
+ * order decides, as it does in the browser.
  */
 function transitionOf(selector: string): string[] {
-  const transitions = cssDeclarations().filter((d) => d.property === 'transition');
-  const own = transitions.filter((d) => d.selector === selector);
-  const found = own.length > 0 ? own : transitions.filter((d) => selectsExactly(d.selector, selector));
-  expect(found, `${selector} declares one transition`).toHaveLength(1);
-  return transitionedProperties(found[0].value);
+  const found = cssDeclarations().filter(
+    (d) => d.property === 'transition' && d.value !== 'none' && selectsExactly(d.selector, selector),
+  );
+  expect(found.length, `${selector} has a transition`).toBeGreaterThan(0);
+  return transitionedProperties(found[found.length - 1].value);
 }
 
 /**
@@ -682,6 +683,10 @@ describe('motion runs on named, compositor-friendly properties (motion-05)', () 
     }
     expect(transitionOf('.kpi')).toEqual(['background-color', 'border-color']);
     expect(transitionOf('.seg-card')).toContain('transform');
+    // The five `all var(--dur-fast)` controls share one list (01-app-shell.css).
+    for (const control of ['.btn', '.topbar__icon-btn', '.rail__item', '.evidence-chip', '.filter']) {
+      expect(transitionOf(control), control).toEqual(['background-color', 'border-color', 'color', 'box-shadow', 'translate', 'scale']);
+    }
     expect(transitionOf('.chip__remove')).toContain('translate');
     expect(transitionOf('.tweak-row .switch')).toEqual(['background-color', 'border-color', 'scale']);
   });
@@ -746,9 +751,8 @@ describe('hover states promise only real clicks (motion-09)', () => {
   it('keeps the prototype row pointer and opts static and expanded rows out of it', () => {
     const css = designCss();
     expect(css).toContain('.tbl tbody tr { cursor: pointer; transition: background var(--dur-fast) var(--ease); }');
-    expect(css).toMatch(/\.tbl--static tbody tr\s*\{\s*cursor:\s*default;\s*\}/);
+    expect(css).toMatch(/\.tbl tbody tr\.tbl__expand,\s*\.tbl--static tbody tr\s*\{\s*cursor:\s*default;\s*\}/);
     expect(css).toMatch(/\.tbl--static tbody tr:hover,\s*\.tbl--static tbody tr:active\s*\{\s*background:\s*transparent;\s*\}/);
-    expect(css).toMatch(/\.tbl tbody tr\.tbl__expand\s*\{\s*cursor:\s*default;\s*\}/);
     expect(css).toMatch(/\.tbl tbody tr\.tbl__expand:hover,\s*\.tbl tbody tr\.tbl__expand:active\s*\{\s*background:\s*var\(--bg-1\);\s*\}/);
     // The opt-outs come after the defaults they override at equal specificity.
     expect(css.indexOf('.tbl--static tbody tr:hover')).toBeGreaterThan(css.indexOf('.tbl tbody tr:hover'));
@@ -758,10 +762,13 @@ describe('hover states promise only real clicks (motion-09)', () => {
 
   it('gives a hovered or focused proof tab a lighter step than the selected tab', () => {
     const rules = cssRules(designCss());
-    const active = rules.find((rule) => rule.selector === '.proof-tab.is-active');
-    expect(active?.block).toMatch(/border-color:var\(--accent\);color:var\(--accent-ink\);background:var\(--accent-soft\)/);
-    const hover = rules.find((rule) => rule.selector.includes('.proof-tab:hover'));
-    expect(hover?.selector).toBe('.proof-tab:hover:not(.is-active),.proof-tab:focus-visible:not(.is-active)');
-    expect(hover?.block).toBe('border-color:var(--line-3);color:var(--text-1);background:var(--bg-3)');
+    const activeAt = rules.findIndex((rule) => rule.selector === '.proof-tab.is-active');
+    expect(rules[activeAt]?.block).toBe('border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)');
+    const hoverAt = rules.findIndex((rule) => rule.selector.includes('.proof-tab:hover'));
+    expect(rules[hoverAt]?.selector).toBe('.proof-tab:hover,.proof-tab:focus-visible');
+    expect(rules[hoverAt]?.block).toBe('border-color:var(--line-3);color:var(--text-1);background:var(--bg-3)');
+    // Equal specificity: the selected rule comes later, so a hovered or
+    // focused selected tab still paints as selected.
+    expect(activeAt).toBeGreaterThan(hoverAt);
   });
 });

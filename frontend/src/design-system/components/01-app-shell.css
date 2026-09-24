@@ -317,14 +317,7 @@
   display: grid; place-items: center;
   background: transparent; border: 1px solid var(--line-1); color: var(--text-2);
   cursor: pointer;
-  /* Explicit list, not the prototype's `all` (index.html:272-276; audit
-     motion-05): the colours its hover / active states change, plus the
-     pressed nudge. */
-  transition:
-    background-color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    translate var(--dur-instant) var(--ease);
+  /* Transition: the shared control list under BUTTONS (audit motion-05). */
 }
 .topbar__icon-btn:hover { background: var(--bg-3); color: var(--text-1); border-color: var(--line-2); }
 .topbar__icon-btn.is-active { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--chip-line); }
@@ -412,13 +405,7 @@
   border: 1px solid transparent;
   color: var(--text-3);
   cursor: pointer;
-  /* Explicit list, not the prototype's `all` (index.html:303-311; audit
-     motion-05). */
-  transition:
-    background-color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    scale var(--dur-instant) var(--ease);
+  /* Transition: the shared control list under BUTTONS (audit motion-05). */
   background: transparent;
   position: relative;
   text-decoration: none;
@@ -556,17 +543,31 @@
   letter-spacing: var(--tracking-body);
   border: 1px solid var(--line-2); background: transparent; color: var(--text-1);
   cursor: pointer;
-  /* Explicit list, not the prototype's `all` (index.html:378-384; audit
-     motion-05): hover / variant / disabled colours and the primary halo,
-     plus the pressed nudge. */
+  white-space: nowrap;
+  text-decoration: none;
+}
+/* One explicit transition list for the five pointer controls whose
+   prototype rules each said `transition: all var(--dur-fast) var(--ease)`
+   (DEPARTURE from design_files/index.html:272-276 .topbar__icon-btn,
+   :303-311 .rail__item, :378-384 .btn, :422-432 .evidence-chip and :826-832
+   .filter; audit motion-05). It names the union of what they change on
+   hover, is-active, disabled or a theme switch (fill, edge, ink, the primary
+   button's halo) at the old duration, plus the pressed nudge / settle
+   (translate / scale) at --dur-instant. `all` also tweened focus outlines
+   and layout. Declared once, after the shared theme list above, so these
+   five read it and the initial stylesheet stays small. */
+.btn,
+.topbar__icon-btn,
+.rail__item,
+.evidence-chip,
+.filter {
   transition:
     background-color var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease),
     box-shadow var(--dur-fast) var(--ease),
-    translate var(--dur-instant) var(--ease);
-  white-space: nowrap;
-  text-decoration: none;
+    translate var(--dur-instant) var(--ease),
+    scale var(--dur-instant) var(--ease);
 }
 .btn:hover { background: var(--bg-3); border-color: var(--line-3); }
 .btn--primary {

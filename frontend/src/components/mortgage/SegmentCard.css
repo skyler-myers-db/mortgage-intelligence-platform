@@ -22,6 +22,16 @@
   grid-template-rows: subgrid;
   row-gap: 0;
   margin-block-end: var(--sp-3);
+  /* Explicit list, not the prototype's `all` (index.html:488-495; audit
+     motion-05): the hover / selected / updating colours and shadows, the
+     hover lift (transform) and the pressed settle (scale). Here rather than
+     in the 02 partial so it stays out of the initial stylesheet. */
+  transition:
+    background-color var(--dur-base) var(--ease),
+    border-color var(--dur-base) var(--ease),
+    box-shadow var(--dur-base) var(--ease),
+    transform var(--dur-base) var(--ease),
+    scale var(--dur-instant) var(--ease);
 }
 /* Pinned rows: a card without a reconcile note or facets leaves that row
    empty instead of pulling the rows below it up. */
@@ -178,12 +188,14 @@
 .seg-card__facet-share--2 { background: color-mix(in oklab, var(--seg-color, var(--accent)) 60%, var(--bg-2)); }
 .seg-card__facet-share--3 { background: color-mix(in oklab, var(--seg-color, var(--accent)) 32%, var(--bg-2)); }
 .seg-card__facet-share--4 { background: var(--line-2); }
-/* Forced colors (audit a11y-10 / responsive-v3): the share bar is a
-   non-text data mark, so it keeps its segment-hue shares (the chip's text
-   around it is still forced) on a Canvas track edged in CanvasText. It lives
-   here, not in 33-contrast-modes.css, because this lazy sheet loads after
-   the shell CSS and would win the tie. */
+/* Forced colors (audit a11y-10 / responsive-v3): a selected card gets a
+   Highlight edge (its segment-hue border and glow are forced away), and the
+   share bar is a non-text data mark, so it keeps its segment-hue shares (the
+   chip's text around it is still forced) on a Canvas track edged in
+   CanvasText. Here, not in 33-contrast-modes.css, because this lazy sheet
+   loads after the shell CSS and wins ties. */
 @media (forced-colors: active) {
+  .seg-card.is-selected { border-color: Highlight; }
   .seg-card__facet-bar {
     forced-color-adjust: none;
     background-color: Canvas;

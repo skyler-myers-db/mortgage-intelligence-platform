@@ -97,13 +97,13 @@ const NON_COLOR_TOKEN = /^(?:none|solid|dashed|dotted|double|0|-?\d*\.?\d+(?:px|
 
 /** Non-text data marks allowed to opt out of forcing (brief item 8b, plus the switch knob). */
 const DATA_MARKS = [
-  ':is(.tweak-row, .admin-row, .campaign-setup__toggle) .switch::after',
+  '.switch.switch::after',
   '.conf__bar',
-  '.map-region:is(.is-empty, .lvl-1, .lvl-2, .lvl-3, .lvl-4)',
+  '.map-region.map-region',
   '.map-legend__bar span',
   '.zip-tile',
   '.map-label',
-  '.topbar__pill .dot:is(.dot, .amber, .danger)',
+  '.topbar__pill .dot.dot',
   '.seg-card__facet-bar',
 ];
 
@@ -138,7 +138,7 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
     expect(highlighted).toEqual(
       expect.arrayContaining([
         '.segmented button.is-active',
-        ':is(.tweak-row, .admin-row, .campaign-setup__toggle) .switch.on',
+        '.switch.switch.on',
         '.filter.is-active',
         '.rail__item.is-active',
         '.topbar__icon-btn.is-active',

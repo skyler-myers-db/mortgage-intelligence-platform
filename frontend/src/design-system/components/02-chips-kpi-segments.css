@@ -77,13 +77,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-11); font-weight: 500;
   cursor: pointer;
-  /* Explicit list, not the prototype's `all` (index.html:422-432; audit
-     motion-05). */
-  transition:
-    background-color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    translate var(--dur-instant) var(--ease);
+  /* Transition: the shared control list in 01-app-shell.css (motion-05). */
   letter-spacing: 0;
   min-inline-size: 0;
   min-block-size: calc(var(--sp-6) + var(--sp-1));
@@ -363,15 +357,8 @@
      button) and to the chips, so the cursor never promises a click that
      does nothing — e.g. on a gated card, which has no select button. */
   cursor: default;
-  /* Explicit list, not the prototype's `all` (index.html:488-495; audit
-     motion-05): the hover / selected / updating colours and shadows, the
-     hover lift (transform) and the pressed settle (scale). */
-  transition:
-    background-color var(--dur-base) var(--ease),
-    border-color var(--dur-base) var(--ease),
-    box-shadow var(--dur-base) var(--ease),
-    transform var(--dur-base) var(--ease),
-    scale var(--dur-instant) var(--ease);
+  /* The card's transition list ships with the lazy SegmentCard.css (audit
+     motion-05); the prototype's `all` (index.html:488-495) is gone. */
   overflow: hidden;
   text-align: left;
   width: 100%;
