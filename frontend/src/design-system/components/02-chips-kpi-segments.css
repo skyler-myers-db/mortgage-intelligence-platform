@@ -32,7 +32,7 @@
   border: none; border-radius: var(--r-pill);
   background: transparent; color: inherit;
   cursor: pointer; opacity: 0.65;
-  transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 .chip__remove:hover,
 .chip__remove:focus-visible { opacity: 1; background: var(--bg-3); }
@@ -264,7 +264,7 @@
      nor stalls. */
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
-  animation: spark-draw var(--dur-draw) var(--ease-draw) 80ms forwards;
+  animation: spark-draw var(--dur-draw) var(--ease-draw) var(--dur-instant) forwards;
 }
 @keyframes spark-draw {
   to { stroke-dashoffset: 0; }
@@ -273,7 +273,7 @@
    over the same window (opacity only: compositor-friendly). */
 .spark__area--fade {
   opacity: 0;
-  animation: spark-area-fade var(--dur-draw) var(--ease-draw) 80ms forwards;
+  animation: spark-area-fade var(--dur-draw) var(--ease-draw) var(--dur-instant) forwards;
 }
 @keyframes spark-area-fade {
   to { opacity: 1; }

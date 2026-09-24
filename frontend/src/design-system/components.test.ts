@@ -208,6 +208,21 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.funnel-sankey--enter \.funnel-sankey__ribbon\s*\{[^}]*opacity:\s*1;/s);
   });
 
+  /**
+   * 2026-09-21 audit motion-04: five hand-written nth-of-type delays
+   * (40/110/180/250/320ms) staggered the ribbons, so a 7th stage snapped in
+   * at 0ms. One rule on the ribbon's own index keeps those five exactly
+   * (40 + 70*i) and staggers any further ribbon.
+   */
+  it('staggers every Sankey ribbon from its index, not a list of nth-of-type delays', () => {
+    const css = designCss();
+    expect(css).toMatch(
+      /\.funnel-sankey--enter \.funnel-sankey__ribbon\s*\{[^}]*animation-delay:\s*calc\(var\(--dur-instant\) \/ 2 \+ var\(--ribbon-i, 0\) \* var\(--stagger-step-lg\)\);/s,
+    );
+    expect(css).not.toMatch(/\.funnel-sankey__ribbon:nth-of-type/);
+    expect(tokensCss()).toMatch(/--dur-instant:\s*80ms;[\s\S]*--stagger-step-lg:\s*70ms;/);
+  });
+
   it('animates map level transitions without collapsing the hero map flex layout (Buyer-Wow #4)', () => {
     const css = designCss();
     // The keyed wrapper MUST be flex-transparent: it takes .map-wrap's flex:1

@@ -586,3 +586,22 @@ input[type="checkbox"] {
 :root {
   --z-topbar-menu: 55;
 }
+
+/* ---------- Motion scale (motion-04) ----------
+ * The loop, shimmer, stagger and in-out literals the partials repeated
+ * (2026-09-21 audit motion-04), on tokens so a timing change is one edit and
+ * tokenUsage.test.ts can forbid numeric durations and bare easing keywords in
+ * component CSS. The values are the literals they replace, so nothing runs
+ * faster or slower. --ease-in-out is the ease-in-out keyword's own curve.
+ * --ease (enter) and --ease-exit (leave) carry the out / in roles; there is no
+ * separate --ease-out / --ease-in until a consumer needs one.
+ */
+:root {
+  --dur-instant: 80ms;       /* sparkline draw delay; half of it leads the Sankey stagger */
+  --dur-pulse: 1.2s;         /* loading, typing and progress pulses */
+  --dur-shimmer: 1.4s;       /* skeleton sweep */
+  --dur-pulse-slow: 1.6s;    /* degraded-banner dot */
+  --ease-in-out: cubic-bezier(0.42, 0, 0.58, 1);
+  --stagger-step: 16ms;      /* ZIP tile settle-in */
+  --stagger-step-lg: 70ms;   /* funnel Sankey ribbons */
+}

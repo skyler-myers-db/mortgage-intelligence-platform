@@ -235,12 +235,13 @@ export function FunnelSankey({
           <stop offset="100%" stopColor="var(--seg-itm)" stopOpacity="0.28" />
         </linearGradient>
       </defs>
-      {model.ribbons.map((ribbon) => (
+      {model.ribbons.map((ribbon, index) => (
         <path
           key={`${ribbon.fromOrder}-${ribbon.toOrder}`}
           className="funnel-sankey__ribbon"
           d={ribbon.path}
           fill={`url(#fs-${gradientId})`}
+          style={{ '--ribbon-i': index } as CSSProperties}
         />
       ))}
       {model.nodes.map((node) => {

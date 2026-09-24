@@ -236,7 +236,7 @@
    warns — neither may wear the unavailable/no-timestamp look. */
 .source-freshness--loading::before {
   background: var(--accent);
-  animation: freshness-pulse 1.2s ease-in-out infinite;
+  animation: freshness-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
 .source-freshness--error::before { background: var(--signal-warning); }
 @keyframes freshness-pulse {

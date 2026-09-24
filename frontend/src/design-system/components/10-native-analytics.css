@@ -154,18 +154,16 @@
 }
 /* One-time draw on first appearance: ribbons fade in left-to-right. Gated
    in JS by useFirstAppearance so it never replays on tab/route re-entry. */
+/* Staggered left-to-right reveal: ribbon i (0-based, `--ribbon-i` from
+   analytics.charts.tsx) starts at 40 + 70*i ms, the 40/110/180/250/320ms the
+   five hand-written nth-of-type delays gave Module 0's six stages. The step
+   is a formula, not a list, so a 7th stage's ribbon keeps staggering instead
+   of snapping in at 0ms (2026-09-21 audit motion-04). */
 .funnel-sankey--enter .funnel-sankey__ribbon {
   opacity: 0;
   animation: funnel-ribbon-in var(--dur-slow) var(--ease) forwards;
+  animation-delay: calc(var(--dur-instant) / 2 + var(--ribbon-i, 0) * var(--stagger-step-lg));
 }
-/* Staggered left-to-right reveal. Module 0's funnel is a fixed 6 stages
-   (5 ribbons); a 7th stage would just snap its ribbon in at 0ms (harmless,
-   only un-staggered) until a 6th delay is added here. */
-.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(1) { animation-delay: 40ms; }
-.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(2) { animation-delay: 110ms; }
-.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(3) { animation-delay: 180ms; }
-.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(4) { animation-delay: 250ms; }
-.funnel-sankey--enter .funnel-sankey__ribbon:nth-of-type(5) { animation-delay: 320ms; }
 @keyframes funnel-ribbon-in {
   from { opacity: 0; }
   to { opacity: 1; }

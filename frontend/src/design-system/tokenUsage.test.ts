@@ -110,7 +110,7 @@ describe('every referenced custom property resolves (css-04 / motion-04)', () =>
   const TSX_SET_WITH_FALLBACK = [
     '--bar-pct', '--chip-hue', '--filter-menu-space', '--genie-composer-block-size',
     '--genie-route-nav-block-size', '--lead-table-fill-block', '--offer-action-bar-block-size',
-    '--offer-action-bar-genie-clearance', '--receipt-i', '--seg-color', '--tile-i',
+    '--offer-action-bar-genie-clearance', '--receipt-i', '--seg-color', '--tile-i', '--ribbon-i',
   ];
   const consumers = [{ file: 'design-system/components.css (partials)', css: components }, ...featureStylesheets()];
   const declared = new Set(
@@ -150,6 +150,88 @@ describe('every referenced custom property resolves (css-04 / motion-04)', () =>
     expect(stale, 'no .ts/.tsx under src sets these any more: drop them from the list').toEqual([]);
     const unused = [...TSX_SET, ...TSX_SET_WITH_FALLBACK].filter((name) => !references.some((ref) => ref.name === name));
     expect(unused, 'no stylesheet reads these any more').toEqual([]);
+  });
+});
+
+/**
+ * motion-04: component CSS times and eases motion through the --dur-* /
+ * --ease-* / --stagger-* tokens only (1.2s pulses, a 1.4s shimmer, a 16ms
+ * stagger, bare `ease` / `ease-in-out` and five hand-written Sankey delays
+ * used to bypass them). Two exemptions: the global reduced-motion reset
+ * (01-app-shell.css: `0.01ms` / `0s !important`), and a discrete
+ * `visibility` transition entry, which may hold `0s` and `linear` (the
+ * drawer / Genie exit contract: `visibility 0s linear var(--dur-exit)`).
+ */
+describe('motion timings come from tokens (motion-04)', () => {
+  const MOTION_PROPERTY = /^(?:transition|animation)(?:-[a-z-]+)?$/;
+  const TIME_LITERAL = /(?<![\w.-])\d*\.?\d+m?s(?![\w-])/;
+  const EASING_LITERAL =
+    /(?<![\w-])(?:ease(?:-in-out|-in|-out)?|linear|step-start|step-end)(?![\w(-])|(?<![\w-])(?:cubic-bezier|steps|linear)\(/;
+  const REDUCED_MOTION_RESET = '*, *::before, *::after';
+
+  /** Top-level comma split (commas inside var() / calc() stay in their entry). */
+  function entries(value: string): string[] {
+    const out: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < value.length; i += 1) {
+      if (value[i] === '(') depth += 1;
+      else if (value[i] === ')') depth -= 1;
+      else if (value[i] === ',' && depth === 0) {
+        out.push(value.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    out.push(value.slice(start).trim());
+    return out;
+  }
+
+  function literalMotion(css: string): string[] {
+    const offenders: string[] = [];
+    for (const rule of rules(css)) {
+      if (rule.selector === REDUCED_MOTION_RESET) continue;
+      for (const part of rule.block.split(';')) {
+        const colon = part.indexOf(':');
+        if (colon === -1) continue;
+        const property = part.slice(0, colon).trim();
+        if (!MOTION_PROPERTY.test(property)) continue;
+        for (const entry of entries(part.slice(colon + 1).trim())) {
+          const checked = /^visibility\s/.test(entry)
+            ? entry.replace(/(?<![\w.-])0m?s(?![\w-])/g, '').replace(/(?<![\w-])linear(?![\w(-])/g, '')
+            : entry;
+          if (TIME_LITERAL.test(checked) || EASING_LITERAL.test(checked)) offenders.push(`${rule.selector} { ${property}: ${entry} }`);
+        }
+      }
+    }
+    return offenders;
+  }
+
+  it('finds a literal duration, delay or easing keyword where one is written', () => {
+    expect(literalMotion('.kpi { transition: border-color 200ms var(--ease); }')).toHaveLength(1);
+    expect(literalMotion('.x { animation: spin var(--dur-pulse) ease-in-out infinite; }')).toHaveLength(1);
+    expect(literalMotion('.x { animation-delay: calc(var(--tile-i) * 16ms); }')).toHaveLength(1);
+    expect(literalMotion('.x { transition: opacity var(--dur-fast) linear; }')).toHaveLength(1);
+    expect(literalMotion('.x { transition: visibility 200ms linear 0s; }')).toHaveLength(1);
+    expect(literalMotion('.x { transition: opacity var(--dur-fast) var(--ease-in-out), visibility 0s linear var(--dur-exit); }')).toEqual([]);
+  });
+
+  it('writes no numeric duration or delay and no bare easing keyword in component CSS', () => {
+    const sheets = [{ file: 'design-system/components.css (partials)', css: components }, ...featureStylesheets()];
+    const offenders = sheets.flatMap(({ file, css }) => literalMotion(css).map((where) => `${file}: ${where}`));
+    expect(offenders, 'use a --dur-* / --ease-* / --stagger-* token (tokens.css)').toEqual([]);
+  });
+
+  it('keeps the literal-free values the motion scale replaced', () => {
+    const cascade = new TokenCascade(tokens, { theme: 'dark', accent: 'bright' });
+    expect(cascade.raw('--dur-instant')).toBe('80ms');
+    expect(cascade.raw('--dur-pulse')).toBe('1.2s');
+    expect(cascade.raw('--dur-shimmer')).toBe('1.4s');
+    expect(cascade.raw('--dur-pulse-slow')).toBe('1.6s');
+    expect(cascade.raw('--ease-in-out')).toBe('cubic-bezier(0.42, 0, 0.58, 1)');
+    expect(cascade.raw('--stagger-step')).toBe('16ms');
+    expect(cascade.raw('--stagger-step-lg')).toBe('70ms');
+    // --ease / --ease-exit carry the out / in roles; no unconsumed aliases.
+    for (const name of ['--ease-out', '--ease-in', '--ease-spring']) expect(cascade.raw(name), name).toBeUndefined();
   });
 });
 

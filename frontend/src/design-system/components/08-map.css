@@ -194,7 +194,7 @@
 .map-region.is-loading {
   fill: color-mix(in oklab, var(--accent) 12%, var(--bg-3));
   opacity: 0.72;
-  animation: map-region-pulse 1.2s var(--ease) infinite;
+  animation: map-region-pulse var(--dur-pulse) var(--ease) infinite;
 }
 /* Fill classes paint the shared --map-ramp-* steps, the same tokens the
    legend bar and the ZIP tiles use, so a class and its swatch cannot drift
@@ -441,7 +441,7 @@
      zoom/scale feel comes from the .map-levels wrapper, which is not the
      hovered element. Disabled under reduced motion. */
   animation: zip-tile-in var(--dur-base) var(--ease) both;
-  animation-delay: calc(var(--tile-i, 0) * 16ms);
+  animation-delay: calc(var(--tile-i, 0) * var(--stagger-step));
 }
 @keyframes zip-tile-in {
   from { opacity: 0; }
