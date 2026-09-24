@@ -593,14 +593,22 @@ function transitionedProperties(value: string): string[] {
   return value.split(/,(?![^(]*\))/).map((entry) => entry.trim().split(/\s+/)[0]);
 }
 
-/** The transitioned properties of one exact selector's single `transition`. */
+/** Whether a rule's selector list names this exact selector. */
+const selectsExactly = (list: string, selector: string) => list.split(',').map((part) => part.trim()).includes(selector);
+
+/**
+ * The transitioned properties of the single `transition` in a rule of this
+ * exact selector or, when it has no rule of its own, of the one rule whose
+ * selector list names it (a shared theme list like `.topbar, ..., .main` is
+ * ignored when the selector has its own rule).
+ */
 function transitionOf(selector: string): string[] {
-  const found = cssDeclarations().filter((d) => d.selector === selector && d.property === 'transition');
+  const transitions = cssDeclarations().filter((d) => d.property === 'transition');
+  const own = transitions.filter((d) => d.selector === selector);
+  const found = own.length > 0 ? own : transitions.filter((d) => selectsExactly(d.selector, selector));
   expect(found, `${selector} declares one transition`).toHaveLength(1);
   return transitionedProperties(found[0].value);
 }
-
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * 2026-09-21 audit motion-05 / css-09: nine prototype-verbatim
@@ -660,14 +668,13 @@ describe('motion runs on named, compositor-friendly properties (motion-05)', () 
 
   it('slides both switch knobs by translate, never left', () => {
     const css = designCss();
-    for (const knob of ['.tweak-row .switch::after', '.campaign-setup__toggle .switch::after']) {
+    for (const knob of ['.tweak-row .switch::after', '.admin-row > .switch::after', '.campaign-setup__toggle .switch::after']) {
       expect(transitionOf(knob), knob).toEqual(['translate', 'background-color']);
-      expect(css, `${knob} rests at the start`).toMatch(
-        new RegExp(`${escapeRegExp(knob)}\\s*\\{[^}]*left:\\s*calc\\(var\\(--sp-1\\) / 2\\);`, 's'),
-      );
+      const blocks = cssRules(css).filter((rule) => selectsExactly(rule.selector, knob)).map((rule) => rule.block).join(';');
+      expect(blocks, `${knob} rests at the start`).toMatch(/(?<![-\w])left:\s*calc\(var\(--sp-1\) \/ 2\);/);
     }
-    for (const on of ['.tweak-row .switch.on::after', '.campaign-setup__toggle .switch.on::after']) {
-      const blocks = cssRules(css).filter((rule) => rule.selector === on).map((rule) => rule.block).join(';');
+    for (const on of ['.tweak-row .switch.on::after', '.admin-row > .switch.on::after', '.campaign-setup__toggle .switch.on::after']) {
+      const blocks = cssRules(css).filter((rule) => selectsExactly(rule.selector, on)).map((rule) => rule.block).join(';');
       expect(blocks, on).toMatch(/translate:\s*calc\(var\(--sp-10\) - var\(--sp-5\) - var\(--sp-1\)\) 0;/);
       expect(blocks, on).not.toMatch(/(?<![-\w])left:/);
     }

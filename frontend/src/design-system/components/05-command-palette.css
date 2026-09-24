@@ -37,13 +37,15 @@
   border-block-end: 1px solid var(--line-1);
   color: var(--text-3);
 }
+/* No outline reset (audit css-06): the palette input keeps the global
+   :focus-visible ring, the only focus cue a borderless field has, and the
+   one forced-colors mode repaints. */
 .cmdk__input {
   flex: 1;
   border: none;
   background: transparent;
   color: var(--text-1);
   font-size: var(--fs-16);
-  outline: none;
 }
 .cmdk__input::placeholder { color: var(--text-3); }
 .cmdk__hint,

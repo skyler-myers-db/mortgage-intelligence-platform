@@ -70,7 +70,12 @@
   color: var(--text-1);
   border-color: var(--line-2);
   opacity: 1;
-  outline: none;
+}
+/* The keyboard handle keeps the global ring (its outline was reset, so a
+   Tab stop on it was invisible; audit css-06), drawn inside its own box so
+   the panel's clipped corner does not cut it off. */
+.genie__resize:focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 .genie__resize:active {
   background: var(--accent-soft);

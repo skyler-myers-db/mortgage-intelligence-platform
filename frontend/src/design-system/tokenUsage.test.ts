@@ -436,8 +436,17 @@ describe('text inputs keep the shared focus ring (a11y-01)', () => {
   // 1px `--accent` border swap (design_files/index.html:770-772), 1.9:1 in
   // light + bright and invisible under forced colours.
   // `.admin-filter-input` retired with the audit explorer rewrite, whose
-  // filters are `.form-input` fields.
-  const TEXT_INPUTS = ['.genie__input input', '.form-input'];
+  // filters are `.form-input` fields. css-06 adds the palette input, the
+  // Console's (prototype-verbatim, index.html:921) select / text rule, and
+  // the Genie panel's keyboard resize handle.
+  const TEXT_INPUTS = [
+    '.genie__input input',
+    '.form-input',
+    '.cmdk__input',
+    '.tweak-row input[type="text"]',
+    '.tweak-row select',
+    '.genie__resize:focus-visible',
+  ];
 
   it('never switches the outline off on a text-entry control', () => {
     const all = rules(components);
@@ -447,6 +456,28 @@ describe('text inputs keep the shared focus ring (a11y-01)', () => {
       const off = own.filter((rule) => /(?<![-\w])outline:\s*(?:none|0)(?![\w.%])/.test(rule.block));
       expect(off.map((rule) => rule.selector), `${selector} must keep the global focus ring`).toEqual([]);
     }
+  });
+
+  it('insets the resize handle ring so the panel corner does not clip it (css-06)', () => {
+    const own = rules(components).filter((rule) => rule.selector === '.genie__resize:focus-visible');
+    expect(own.map((rule) => rule.block).join(';')).toMatch(/outline-offset:\s*calc\(-1 \* var\(--focus-ring-width\)\);/);
+  });
+});
+
+describe('the Admin Config switches share the Console switch (css-06)', () => {
+  // admin-config.tsx renders `button.switch` straight inside `.admin-row`;
+  // only `.tweak-row .switch` and `.campaign-setup__toggle .switch` were
+  // styled, so "Show evidence chips" / "Show signal meters" were empty,
+  // stateless buttons.
+  it('names .admin-row > .switch beside every .tweak-row .switch rule', () => {
+    const switchRules = rules(components).filter((rule) => /\.tweak-row \.switch(?![\w-])/.test(rule.selector));
+    expect(switchRules.map((rule) => rule.selector)).toEqual([
+      '.tweak-row .switch, .admin-row > .switch',
+      '.tweak-row .switch::after, .admin-row > .switch::after',
+      '.tweak-row .switch.on, .admin-row > .switch.on',
+      '.tweak-row .switch.on::after, .admin-row > .switch.on::after',
+      '.tweak-row .switch:active, .admin-row > .switch:active',
+    ]);
   });
 });
 

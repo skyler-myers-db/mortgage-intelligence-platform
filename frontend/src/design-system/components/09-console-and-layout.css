@@ -82,10 +82,12 @@
 .tweak-row .sw--red { background: var(--entrada-red); }
 .tweak-row .sw.is-active { border-color: var(--text-1); }
 .tweak-row .sw:active { scale: var(--pressed-scale); }
+/* No outline reset (DEPARTURE from index.html:921, audit css-06): these
+   fields keep the global :focus-visible ring. */
 .tweak-row select, .tweak-row input[type="text"] {
   width: 100%; background: var(--bg-2); border: 1px solid var(--line-1);
   color: var(--text-1); font-family: var(--font-sans); font-size: var(--fs-13);
-  padding: 6px 10px; border-radius: var(--r-md); outline: none;
+  padding: 6px 10px; border-radius: var(--r-md);
 }
 .tweak-row .segmented {
   display: flex; background: var(--bg-2); border: 1px solid var(--line-1);
@@ -100,7 +102,12 @@
 .tweak-row .segmented button:active { translate: 0 var(--pressed-shift); }
 .tweak-row .row { display: flex; align-items: center; justify-content: space-between; }
 .tweak-row .row label { margin: 0; }
-.tweak-row .switch {
+/* The Console switch, also the Admin Config Appearance switches, which
+   render the same `button.switch` directly in an `.admin-row` and were
+   unstyled (empty, stateless buttons) until they shared these rules
+   (audit css-06 re-verification). */
+.tweak-row .switch,
+.admin-row > .switch {
   position: relative; width: var(--sp-10); height: var(--sp-6); border-radius: 999px;
   background: var(--bg-3); border: 1px solid var(--line-1); cursor: pointer;
   transition:
@@ -111,7 +118,8 @@
 /* The knob moves by `translate` on the compositor, never by `left`, which
    re-laid it out every frame. DEPARTURE from the prototype's `all` + `left`
    knob (index.html:942-950; audit motion-05): the same 16px travel. */
-.tweak-row .switch::after {
+.tweak-row .switch::after,
+.admin-row > .switch::after {
   content: '';
   position: absolute;
   top: calc(var(--sp-1) / 2);
@@ -122,12 +130,15 @@
   background: var(--text-3);
   transition: translate var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
 }
-.tweak-row .switch.on { background: var(--accent-soft); border-color: var(--accent); }
-.tweak-row .switch.on::after {
+.tweak-row .switch.on,
+.admin-row > .switch.on { background: var(--accent-soft); border-color: var(--accent); }
+.tweak-row .switch.on::after,
+.admin-row > .switch.on::after {
   translate: calc(var(--sp-10) - var(--sp-5) - var(--sp-1)) 0;
   background: var(--accent);
 }
-.tweak-row .switch:active { scale: var(--pressed-scale); }
+.tweak-row .switch:active,
+.admin-row > .switch:active { scale: var(--pressed-scale); }
 /* PropertyLookupPanel in its compact (Console) form. The ~266px track holds
    neither the header's nowrap "Every lookup audited" chip beside the title
    nor two side-by-side inputs, so the header wraps the chip onto its own
