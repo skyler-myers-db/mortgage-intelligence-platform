@@ -467,11 +467,6 @@ export function LeadTable({
           {exportState.message}
         </div>
       )}
-      {sales.salesToast && (
-        <div role="status" aria-live="polite" className="table-success">
-          {sales.salesToast}
-        </div>
-      )}
       {flow.toast && DecisionToast && (
         <DecisionToast
           toast={flow.toast}

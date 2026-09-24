@@ -2,17 +2,23 @@
  * useLeadSalesActions — the sales-operations half of the ranked-borrower
  * table: optimistic per-row overrides from assignment / lifecycle writes (and
  * therefore the merged `displayLeads` view every other consumer reads), assign
- * + round-robin distribution, the call-disposition panel's form state, and the
- * sales toast. Extracted from LeadTable.tsx (file-size gate, plan item 2);
- * state ownership and effect order are unchanged.
+ * + round-robin distribution, and the call-disposition panel's form state.
+ * Extracted from LeadTable.tsx (file-size gate, plan item 2).
+ *
+ * The writes run on the sales mutations (lib/mutations/sales, audit stack-09
+ * / wow-power-5 step 1): networkMode 'always', one request_id per intent,
+ * and an honest strategy ('manual' for one loan officer, 'round_robin' for
+ * two or more; 'score_balanced' is never sent). Results and write failures
+ * go to the shell toast region with the audit event id; pre-flight
+ * validation stays in the table's alert.
  */
 
-import { useEffect, useState } from 'react';
-import type { QueryClient } from '@tanstack/react-query';
+import { useRef, useState } from 'react';
+import { useIsMutating, type QueryClient } from '@tanstack/react-query';
 import type { CallDisposition, LeadSummary, SalesTeamMember } from '../../types';
-import { api } from '../../lib/api';
-import { invalidateOperationalQueries } from '../../lib/queryKeys';
-import { distributionStrategy } from '../../lib/mutations/sales';
+import { intentFingerprint, useIntentRequestIds } from '../../lib/mutations/requestIds';
+import { salesMutationKeys, useAssignLeads, useLogDisposition } from '../../lib/mutations/sales';
+import { toast } from '../../lib/toast';
 import { dispositionLabel } from './LeadTable.logic';
 
 /** One assignment row as returned by `assignLead` / `distributeLeads`. */
@@ -40,17 +46,23 @@ export function useLeadSalesActions({
   queryClient,
   setApprovalError,
 }: UseLeadSalesActionsInput) {
-  'use no memo';
-
   const [selectedAssignee, setSelectedAssignee] = useState<string>('');
-  const [salesToast, setSalesToast] = useState<string | null>(null);
-  const [salesBusy, setSalesBusy] = useState(false);
   const [salesOverrides, setSalesOverrides] = useState<Record<string, Partial<LeadSummary>>>({});
   const [pendingDisposition, setPendingDisposition] = useState<string | null>(null);
   const [dispositionOutcome, setDispositionOutcome] = useState<CallDisposition['outcome']>('called_left_voicemail');
   const [dispositionLo, setDispositionLo] = useState<string>('');
   const [dispositionCallbackAt, setDispositionCallbackAt] = useState('');
   const [dispositionNotes, setDispositionNotes] = useState('');
+  const assignLeads = useAssignLeads(queryClient);
+  const logDisposition = useLogDisposition(queryClient);
+  const requestIds = useIntentRequestIds();
+  // Synchronous latch for assign AND disposition: two clicks in one frame
+  // both see the render's `salesBusy=false`, and a disposition had no guard
+  // at all, so a double click logged two.
+  const salesInFlightRef = useRef(false);
+  const salesBusy = useIsMutating({ mutationKey: salesMutationKeys.all }, queryClient) > 0;
+  // The select shows the first loan officer until the user picks one.
+  const effectiveAssignee = selectedAssignee || salesTeam[0]?.email || '';
 
   // The overrides ARE the reason the table renders a merged view, so the
   // merge lives with them: every other consumer (sorting, selection,
@@ -58,26 +70,14 @@ export function useLeadSalesActions({
   const displayLeads = leads.map((lead) => ({ ...lead, ...(salesOverrides[lead.borrower_id] ?? {}) }));
   const leadsById = new Map(displayLeads.map((lead) => [lead.borrower_id, lead]));
 
-  useEffect(() => {
-    if (!selectedAssignee && salesTeam.length > 0) {
-      setSelectedAssignee(salesTeam[0].email);
-    }
-  }, [salesTeam, selectedAssignee]);
-
   function openDisposition(borrowerId: string) {
     const lead = leadsById.get(borrowerId);
     setPendingDisposition(borrowerId);
-    setDispositionLo(lead?.assigned_to_email ?? selectedAssignee ?? salesTeam[0]?.email ?? '');
+    setDispositionLo(lead?.assigned_to_email ?? effectiveAssignee);
     setDispositionOutcome('called_left_voicemail');
     setDispositionCallbackAt('');
     setDispositionNotes('');
   }
-
-  useEffect(() => {
-    if (!salesToast) return;
-    const t = window.setTimeout(() => setSalesToast(null), 4000);
-    return () => window.clearTimeout(t);
-  }, [salesToast]);
 
   function applyAssignmentOverrides(assignments: LeadAssignmentResult[]) {
     setSalesOverrides((current) => {
@@ -107,96 +107,104 @@ export function useLeadSalesActions({
     }));
   }
 
+  /** A sales write is on the wire, from this mount or one that unmounted. */
+  function salesWriteInFlight(): boolean {
+    return salesInFlightRef.current || queryClient.isMutating({ mutationKey: salesMutationKeys.all }) > 0;
+  }
+
+  /** Hold the latch until `write` settles; the latch is released first. */
+  function latched(write: Promise<void>): Promise<void> {
+    const release = () => {
+      salesInFlightRef.current = false;
+    };
+    void write.then(release, release);
+    return write;
+  }
+
   /**
    * Assign or round-robin-distribute the caller's selection.
    *
    * `borrowerIds` and `onAssigned` are parameters, not hook inputs, because
    * the selection set lives in `useLeadApprovalActions` — which is
-   * constructed from `displayLeads` and therefore after this hook. Passing
-   * them in keeps the success path's setState order identical to the
-   * pre-split component (toast, then clear selection, then busy=false).
+   * constructed from `displayLeads` and therefore after this hook.
    */
-  async function assignSelected(
+  function assignSelected(
     mode: 'selected-lo' | 'round-robin',
     borrowerIds: string[],
     onAssigned: () => void,
-  ) {
-    if (salesBusy) return;
-    if (borrowerIds.length === 0) return;
+  ): Promise<void> {
+    if (salesWriteInFlight() || borrowerIds.length === 0) return Promise.resolve();
     const loEmails = mode === 'round-robin'
       ? salesTeam.map((member) => member.email)
-      : selectedAssignee
-        ? [selectedAssignee]
+      : effectiveAssignee
+        ? [effectiveAssignee]
         : [];
     if (loEmails.length === 0) {
       setApprovalError('No active loan officers are available for assignment.');
-      return;
+      return Promise.resolve();
     }
-    setSalesBusy(true);
+    salesInFlightRef.current = true;
     setApprovalError(null);
-    try {
-      const result = borrowerIds.length === 1 && loEmails.length === 1
-        ? {
-            assigned_count: 1,
-            assignments: [(await api.assignLead(borrowerIds[0], loEmails[0])).assignment],
-          }
-        : await api.distributeLeads(borrowerIds, loEmails, distributionStrategy(loEmails));
-      applyAssignmentOverrides(result.assignments);
-      void invalidateOperationalQueries(queryClient);
-      setSalesToast(`${result.assigned_count} ${result.assigned_count === 1 ? 'lead' : 'leads'} assigned`);
-      onAssigned();
-    } catch (err: unknown) {
-      setApprovalError(
-        err instanceof Error
-          ? `Couldn't assign selected leads: ${err.message}`
-          : "Couldn't assign selected leads.",
-      );
-    } finally {
-      setSalesBusy(false);
-    }
+    const intent = intentFingerprint('assign', borrowerIds.join(','), loEmails.join(','));
+    return latched(assignLeads.run({ borrowerIds, loEmails, requestId: requestIds.idFor(intent) }).then(
+      (result) => {
+        requestIds.settle(intent);
+        applyAssignmentOverrides(result.assignments);
+        const noun = result.assigned_count === 1 ? 'lead' : 'leads';
+        toast.success(`${result.assigned_count} ${noun} assigned`, { auditEventId: result.audit_event_id });
+        onAssigned();
+      },
+      (err: unknown) => {
+        toast.error("Couldn't assign the selected leads", { detail: err instanceof Error ? err.message : null });
+      },
+    ));
   }
 
-  async function submitDisposition() {
-    if (!pendingDisposition) return;
+  function submitDisposition(): Promise<void> {
+    if (!pendingDisposition || salesWriteInFlight()) return Promise.resolve();
     if (!dispositionLo) {
       setApprovalError('Choose the loan officer who worked this lead.');
-      return;
+      return Promise.resolve();
     }
     if (dispositionOutcome === 'callback_scheduled' && !dispositionCallbackAt) {
       setApprovalError('Callback scheduled dispositions require a callback time.');
-      return;
+      return Promise.resolve();
     }
-    setSalesBusy(true);
+    salesInFlightRef.current = true;
     setApprovalError(null);
-    try {
-      const result = await api.logDisposition(pendingDisposition, {
-        lo_email: dispositionLo,
-        outcome: dispositionOutcome,
-        callback_at: dispositionCallbackAt ? new Date(dispositionCallbackAt).toISOString() : null,
-        notes: dispositionNotes.trim() || null,
-      });
-      setSalesOverrides((current) => ({
-        ...current,
-        [pendingDisposition]: {
-          ...(current[pendingDisposition] ?? {}),
-          assigned_to_email: current[pendingDisposition]?.assigned_to_email ?? leadsById.get(pendingDisposition)?.assigned_to_email ?? dispositionLo,
-          latest_disposition_outcome: result.disposition.outcome,
-          latest_disposition_at: result.disposition.occurred_at,
-          latest_callback_at: result.disposition.callback_at ?? null,
-        },
-      }));
-      setSalesToast(`${dispositionLabel(result.disposition.outcome)} logged for ${pendingDisposition}`);
-      void invalidateOperationalQueries(queryClient);
-      setPendingDisposition(null);
-    } catch (err: unknown) {
-      setApprovalError(
-        err instanceof Error
-          ? `Couldn't log disposition: ${err.message}`
-          : "Couldn't log disposition.",
-      );
-    } finally {
-      setSalesBusy(false);
-    }
+    const borrowerId = pendingDisposition;
+    const payload = {
+      lo_email: dispositionLo,
+      outcome: dispositionOutcome,
+      callback_at: dispositionCallbackAt ? new Date(dispositionCallbackAt).toISOString() : null,
+      notes: dispositionNotes.trim() || null,
+    };
+    const intent = intentFingerprint(
+      'disposition', borrowerId, payload.lo_email, payload.outcome, payload.callback_at, payload.notes,
+    );
+    return latched(logDisposition.mutateAsync({ borrowerId, payload, requestId: requestIds.idFor(intent) }).then(
+      (result) => {
+        requestIds.settle(intent);
+        setSalesOverrides((current) => ({
+          ...current,
+          [borrowerId]: {
+            ...(current[borrowerId] ?? {}),
+            assigned_to_email: current[borrowerId]?.assigned_to_email ?? leadsById.get(borrowerId)?.assigned_to_email ?? payload.lo_email,
+            latest_disposition_outcome: result.disposition.outcome,
+            latest_disposition_at: result.disposition.occurred_at,
+            latest_callback_at: result.disposition.callback_at ?? null,
+          },
+        }));
+        toast.success(`${dispositionLabel(result.disposition.outcome)} logged`, {
+          detail: `Borrower ${borrowerId}`,
+          auditEventId: result.audit_event_id,
+        });
+        setPendingDisposition(null);
+      },
+      (err: unknown) => {
+        toast.error("Couldn't log the disposition", { detail: err instanceof Error ? err.message : null });
+      },
+    ));
   }
 
   return {
@@ -204,9 +212,8 @@ export function useLeadSalesActions({
     leadsById,
     applyLeadUpdate,
     assignSelected,
-    selectedAssignee,
+    selectedAssignee: effectiveAssignee,
     setSelectedAssignee,
-    salesToast,
     salesBusy,
     pendingDisposition,
     setPendingDisposition,
