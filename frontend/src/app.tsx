@@ -96,6 +96,13 @@ const ROUTE_ELEMENTS = {
  * route boundary, which offers Reload. No loaders, no useNavigation, no route
  * objects (owner decision #9).
  *
+ * Because of that hold, the URL can name a route that is not yet on screen
+ * (history has already moved; the old route is still painted). The keyed
+ * div's `data-route-path` is the committed-route marker: the pathname of the
+ * route actually painted, so a reader that must know what is on screen (the
+ * fixture harness's settle, tests/e2e/fixture/app.ts) compares it with the
+ * URL instead of trusting the URL. The fallback wrapper carries none.
+ *
  * The route ErrorBoundary wraps the Suspense (a boundary inside PageShell
  * could not catch a failed lazy chunk or a route-level throw) and resets on
  * pathname, so a broken route leaves the shell usable and navigating away
@@ -114,7 +121,7 @@ function RouteTransition() {
           </div>
         )}
       >
-        <div key={pathname} className="route-transition">
+        <div key={pathname} className="route-transition" data-route-path={pathname}>
           <Routes>
             {ROUTE_IDS.map((id) => (
               <Route key={id} path={ROUTES[id].pattern} element={ROUTE_ELEMENTS[id]} />

@@ -10,7 +10,9 @@
  *   B. a Genie chat chunk that will not load offers Reload inside the Genie
  *      frame; C. the same for the Console, inside #workspace-console;
  *   D. an in-app navigation to an unloaded route holds the painted page
- *      (no fallback) and then focuses the new heading;
+ *      (no fallback) and then focuses the new heading; the harness's
+ *      settle() waits for the URL's route instead of taking the held page
+ *      for it, and a legacy redirect and the not-found route still settle;
  *   E. what reaches POST /api/telemetry/rum: one closed client_error and
  *      templated api_call events, nothing message- or id-bearing;
  *   F. a Back the unsaved-changes guard holds records no route_change, and a
@@ -228,12 +230,53 @@ test.describe('D. route hold (shell-05)', () => {
     // Held: the chunk is still on the wire, and Home is what is painted.
     await expect(page.locator('#main-content h1')).toHaveText(HOME_H1);
     expect(await fallbackMounts(), 'no fallback while the chunk is held').toBe(0);
+    // The held Home page has an h1, no aria-busy and a quiet API; settle()
+    // must still not take it for /glossary.
+    await expect(app.settle(2_000), 'settle() waits for the URL\'s route').rejects.toThrow(
+      'route painted in <main>=/ (URL path /glossary)',
+    );
 
     release();
+    await app.settle();
     const heading = page.locator('#main-content h1');
     await expect(heading).toHaveText(GLOSSARY_H1);
     await expect(heading).toBeFocused();
     expect(await fallbackMounts(), 'the route fallback never mounted').toBe(0);
+  });
+
+  test('settle() after opening a dossier whose chunk is held returns only once the dossier is painted and read', async ({ app, mockApi, page }) => {
+    const release = await holdChunk(page, 'borrower-360');
+    const dossierReads = () => mockApi.calls.filter((call) => call.method === 'GET' && /^\/api\/borrowers\/B-[0-9A-Z]{13}$/.test(call.path));
+    await app.gotoRoute('/lead-queue');
+    const toggle = page.locator('table.tbl tbody [aria-expanded]').first();
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await page.locator('tr.tbl__expand').getByRole('link', { name: 'Open Borrower 360' }).click();
+    await expect(page).toHaveURL(/\/borrower-360\/B-[0-9A-Z]{13}$/);
+
+    // Held: the queue is still painted and the dossier is unread.
+    await expect(app.settle(2_000)).rejects.toThrow('route painted in <main>=/lead-queue (URL path /borrower-360/');
+    expect(dossierReads(), 'nothing read the dossier while its chunk is held').toEqual([]);
+
+    release();
+    await app.settle();
+    await expect(page.locator('#main-content .route-transition')).toHaveAttribute('data-route-path', new URL(page.url()).pathname);
+    expect(dossierReads(), 'settle() returned after the dossier read').toHaveLength(1);
+  });
+
+  test('a legacy redirect settles on its target and the not-found route settles', async ({ app, page }) => {
+    const painted = page.locator('#main-content .route-transition[data-route-path]');
+    await app.gotoRoute('/outreach-composer');
+    await expect(page).toHaveURL(/\/lead-queue$/);
+    await expect(painted).toHaveAttribute('data-route-path', '/lead-queue');
+
+    await app.gotoRoute(`/outreach-composer/${PRIMARY_BORROWER.borrower_id}`);
+    await expect(page).toHaveURL(/\/lead-queue$/);
+    await expect(painted).toHaveAttribute('data-route-path', '/lead-queue');
+
+    await app.gotoRoute('/this-route-does-not-exist');
+    await expect(painted).toHaveAttribute('data-route-path', '/this-route-does-not-exist');
+    await expect(page.locator('#main-content h1')).toBeVisible();
   });
 });
 

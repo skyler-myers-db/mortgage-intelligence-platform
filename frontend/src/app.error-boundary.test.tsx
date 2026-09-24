@@ -171,6 +171,11 @@ describe('App route error boundary', () => {
 
   describe('route hold (shell-05)', () => {
     const fallbacks = () => container.querySelectorAll('[data-route-fallback]');
+    /** The committed-route marker(s) on the painted `.route-transition` wrapper. */
+    const paintedRoutePaths = () => Array.from(
+      container.querySelectorAll('.route-transition[data-route-path]'),
+      (node) => node.getAttribute('data-route-path'),
+    );
 
     /** Counts every [data-route-fallback] insertion from now on, however briefly it mounts. */
     function countFallbackMounts(): () => number {
@@ -211,6 +216,8 @@ describe('App route error boundary', () => {
       expect(container.querySelector('[data-testid="route-ok"]')?.textContent).toBe('home');
       expect(fallbacks()).toHaveLength(0);
       expect(mounts()).toBe(0);
+      // The committed-route marker still names the painted route, not the URL's.
+      expect(paintedRoutePaths()).toEqual(['/']);
 
       await act(async () => {
         chunks.portfolio.resolve();
@@ -220,12 +227,15 @@ describe('App route error boundary', () => {
       expect(container.querySelector('[data-testid="route-ok"]')?.textContent).toBe('portfolio');
       expect(container.querySelector('.route-transition > [data-testid="route-ok"]')).not.toBeNull();
       expect(mounts()).toBe(0);
+      expect(paintedRoutePaths()).toEqual(['/portfolio-builder']);
     });
 
     it('shows the page-shaped fallback on the first render of a route whose chunk is pending', async () => {
       await renderAt('/ask-genie');
       expect(container.querySelector('.route-transition > [data-route-fallback]')).not.toBeNull();
       expect(container.querySelector('[data-testid="route-ok"]')).toBeNull();
+      // The fallback wrapper names no route: nothing of /ask-genie is painted yet.
+      expect(paintedRoutePaths()).toEqual([]);
 
       await act(async () => {
         chunks.genie.resolve();
