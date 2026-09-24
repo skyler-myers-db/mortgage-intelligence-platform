@@ -9,11 +9,18 @@
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { OPEN_SHORTCUTS_EVENT, openShortcutOverlay, registerKeyBinding } from '../../lib/keymap';
 import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { ShortcutOverlayHost } from './ShortcutOverlayHost';
+
+// The sheet is its own lazy chunk: transform it once up front, so the host's
+// dynamic import resolves in a few microtasks rather than racing a loaded
+// machine's on-demand transform against vi.waitFor's default one second.
+beforeAll(async () => {
+  await import('./ShortcutOverlay');
+}, 60_000);
 
 describe('ShortcutOverlay', () => {
   let container: HTMLDivElement;
@@ -52,7 +59,7 @@ describe('ShortcutOverlay', () => {
   const sheet = () => document.querySelector<HTMLElement>('[data-testid="shortcut-sheet"]');
 
   async function waitForSheet(): Promise<HTMLElement> {
-    await vi.waitFor(() => expect(sheet()).not.toBeNull());
+    await vi.waitFor(() => expect(sheet()).not.toBeNull(), { timeout: 10_000 });
     return sheet()!;
   }
 
