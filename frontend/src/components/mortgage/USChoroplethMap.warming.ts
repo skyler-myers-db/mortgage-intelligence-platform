@@ -5,9 +5,10 @@
  *
  * WarmingUpBlock renders nothing while the health poll reports the same
  * dependency down (R6-11: the banner tells the cold-start story once, not
- * three times). On a cold warehouse that is the normal case: the health
- * probe's `SELECT 1` fails too, so /api/health reports `warehouse: 'down'`
- * and the block inside the map stage vanished, leaving a blank country. The
+ * three times). A routine resume now reports `warehouse: 'resuming'` (not
+ * degraded, so the block renders), but an open breaker or a failed fallback
+ * `SELECT 1` still reports `warehouse: 'down'`, and then the block inside the
+ * map stage would vanish, leaving a blank country. The
  * map cannot hide its stage behind a banner at the top of the page: it keeps
  * one line of status in the stage whenever the block would render nothing.
  *

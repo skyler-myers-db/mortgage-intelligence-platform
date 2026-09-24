@@ -12,7 +12,8 @@ import { planForReason, type RetryPlan } from './retryPlan';
  * reads live Unity Catalog / Lakebase data.
  *
  * Cold-boot symptom (2026-04-23): Databricks SQL warehouses auto-suspend
- * when idle and take ~30–60s to warm. During that window the backend's
+ * when idle; a serverless resume is usually 2–6 s but can run longer. During
+ * that window the backend's
  * `_dependency_down_handler` returns HTTP 503 with
  * `{retryable: true, dependency: "warehouse", reason: "warming_up"}`.
  * `api.ts`'s `_fetchWithRetry` already retries 3× with backoff, but on a
