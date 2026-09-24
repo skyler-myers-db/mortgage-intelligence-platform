@@ -11,10 +11,10 @@
  * selector are fully inside the viewport and covered by nothing (not the
  * Console, not the Genie launcher, not the open Genie panel); scrolling keeps
  * the bar docked; at the end of the page it rests above the footer; focus from
- * below the view stops above it; the reject rationale opens inside it,
- * focused. Under browser zoom (200% and 150%) the bar is in flow, and the
- * offer and every paragraph of the certified copy can be read at some scroll
- * position (WCAG 1.4.10); 1366x768 at 100% still docks.
+ * below the view stops above it; the reject rationale opens inside it, focused,
+ * and Cancel returns focus to Reject. Under browser zoom (200% and 150%) the
+ * bar is in flow, and the offer and every paragraph of the certified copy can
+ * be read at some scroll position (WCAG 1.4.10); 1366x768 at 100% still docks.
  *
  * critic-02 (part 2): the certified copy is framed the way the borrower
  * receives it. Pinned here in both themes: the email frame's From / To (the
@@ -255,7 +255,7 @@ test.describe('decision bar (visual-v1)', () => {
     await expect.poll(shortfall, { message: 'scroll-padding short of the grown bar (px)' }).toBe(0);
   });
 
-  test('Reject opens its rationale inside the bar, focused, and Cancel closes it', async ({ app, page }) => {
+  test('Reject opens its rationale inside the bar, focused, and Cancel closes it back onto Reject', async ({ app, page }) => {
     await app.gotoRoute(ROUTE);
     const { bar, reject } = decisionControls(page);
     await expect(reject).toBeEnabled();
@@ -264,8 +264,12 @@ test.describe('decision bar (visual-v1)', () => {
     await expect(form).toBeVisible();
     await expect(form.getByRole('combobox', { name: /^Reason/ })).toBeFocused();
     await expectInsideViewport(page, form.getByRole('button', { name: 'Confirm reject' }), 'Confirm reject');
-    await form.getByRole('button', { name: 'Cancel' }).click();
+    // Keyboard Cancel: the form unmounts with focus inside it, which used to
+    // drop focus to <body>. It returns to the Reject button that opened it.
+    await form.getByRole('button', { name: 'Cancel' }).focus();
+    await page.keyboard.press('Enter');
     await expect(form).toHaveCount(0);
+    await expect(reject, 'focus returns to Reject, not <body>').toBeFocused();
   });
 
   test('the left column stacks alternatives and thresholds under the primary offer', async ({ app, page }) => {

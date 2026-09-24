@@ -43,6 +43,26 @@ function useActionBarScrollClearance(barRef: RefObject<HTMLElement | null>): voi
   }, [barRef]);
 }
 
+/**
+ * Give focus back to the gate's Reject button when the reject rationale
+ * closes without a decision (Cancel). The form took focus when it opened, so
+ * its unmount would otherwise drop focus to <body> (WCAG 2.4.3). A decision
+ * unmounts the whole bar instead and the decision receipt takes over; focus
+ * the reviewer already moved elsewhere is left where it is.
+ */
+function useRejectReviewFocusReturn(barRef: RefObject<HTMLElement | null>, reviewOpen: boolean): void {
+  const wasOpen = useRef(reviewOpen);
+  useEffect(() => {
+    const closed = wasOpen.current && !reviewOpen;
+    wasOpen.current = reviewOpen;
+    if (!closed) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    // ApprovalBanner renders Reject first in `.approval__actions`, then Approve.
+    barRef.current?.querySelector<HTMLButtonElement>('.approval__actions button')?.focus();
+  }, [barRef, reviewOpen]);
+}
+
 export interface OfferActionBarProps {
   borrowerId: string | null;
   salesTeam: readonly SalesTeamMember[];
@@ -107,6 +127,7 @@ export function OfferActionBar({
 }: OfferActionBarProps) {
   const barRef = useRef<HTMLElement>(null);
   useActionBarScrollClearance(barRef);
+  useRejectReviewFocusReturn(barRef, Boolean(rejectReview));
   useGenieClearance(barRef, genieOpen);
   return (
     <section

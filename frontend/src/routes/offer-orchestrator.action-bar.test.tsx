@@ -112,6 +112,46 @@ describe('OfferActionBar', () => {
     expect(document.activeElement).toBe(form!.querySelector('select'));
   });
 
+  it('returns focus to Reject when the rationale closes without a decision', () => {
+    const review = (
+      <RejectRationalePanel
+        reasonCode="low_intent"
+        rationale=""
+        onReasonChange={vi.fn()}
+        onRationaleChange={vi.fn()}
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+    act(() => root.render(<OfferActionBar {...props({ rejectReview: review })} />));
+    expect(document.activeElement?.tagName).toBe('SELECT');
+
+    act(() => root.render(<OfferActionBar {...props({ rejectReview: false })} />));
+    const reject = bar()!.querySelector('.approval__actions button');
+    expect(reject?.textContent).toContain('Reject');
+    expect(document.activeElement).toBe(reject);
+  });
+
+  it('leaves focus the reviewer moved elsewhere when the rationale closes', () => {
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    const review = (
+      <RejectRationalePanel
+        reasonCode="low_intent"
+        rationale=""
+        onReasonChange={vi.fn()}
+        onRationaleChange={vi.fn()}
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+    act(() => root.render(<OfferActionBar {...props({ rejectReview: review })} />));
+    outside.focus();
+    act(() => root.render(<OfferActionBar {...props({ rejectReview: false })} />));
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
   it('reserves its measured height as scroll-padding on .main and releases it on unmount', () => {
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(132);
     act(() => root.render(<OfferActionBar {...props()} />));
