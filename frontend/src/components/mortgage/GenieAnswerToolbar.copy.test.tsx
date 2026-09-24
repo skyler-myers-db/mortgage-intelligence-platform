@@ -92,8 +92,8 @@ describe('GenieAnswerToolbar', () => {
     installClipboard(undefined);
   });
 
-  const render = (p: GenieAnswerShape, announce?: boolean) =>
-    act(() => root.render(<GenieAnswerToolbar payload={p} announce={announce} />));
+  const render = (p: GenieAnswerShape, onStatus?: (text: string) => void) =>
+    act(() => root.render(<GenieAnswerToolbar payload={p} onStatus={onStatus} />));
   const button = (name: string) => {
     const el = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.trim() === name);
     if (!el) throw new Error(`${name} button not rendered`);
@@ -111,19 +111,26 @@ describe('GenieAnswerToolbar', () => {
     expect(writeText).toHaveBeenCalledWith(SQL);
     expect(status()).toBe('SQL copied');
     expect(container.querySelector('textarea')).toBeNull();
-    // The confirmation is visible text, not a second live region: the
-    // floating panel owns the one announcer (a11y-06).
+    // The confirmation is visible text, not a second live region: each
+    // surface owns the one announcer (a11y-06).
     expect(container.querySelector('[role="status"], [aria-live]')).toBeNull();
   });
 
-  it('on /ask-genie (announce) the confirmation is a polite status region too', async () => {
+  it('hands every confirmation to the surface announcer and never mounts a live region', async () => {
+    const onStatus = vi.fn();
     installClipboard(vi.fn().mockResolvedValue(undefined));
-    render(payload(), true);
+    render(payload(), onStatus);
     await act(async () => button('Copy SQL').click());
     await flush();
-    const region = container.querySelector('[role="status"]');
-    expect(region?.classList.contains('genie-answer__toolbar-status')).toBe(true);
-    expect(region?.textContent).toBe('SQL copied');
+    await act(async () => button('Copy answer').click());
+    await flush();
+    installClipboard(vi.fn().mockRejectedValue(new DOMException('denied', 'NotAllowedError')));
+    await act(async () => button('Copy SQL').click());
+    await flush();
+    expect(onStatus.mock.calls.map((call) => call[0])).toEqual(['SQL copied', 'Answer copied', 'Clipboard blocked']);
+    expect(container.querySelector('[role="status"], [aria-live]')).toBeNull();
+    // Still visible, for sighted users.
+    expect(status()).toBe('Clipboard blocked');
   });
 
   it('Copy answer writes the plain-text answer', async () => {

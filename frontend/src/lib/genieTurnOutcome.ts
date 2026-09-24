@@ -20,6 +20,12 @@ export const GENIE_ANSWER_READY = 'Answer ready';
 export const GENIE_WITHHELD_ANNOUNCEMENT = 'Genie did not answer this question. The reason is shown in the thread.';
 export const GENIE_FAILED_ANNOUNCEMENT = 'Genie could not complete this question.';
 
+/** The one busy reason both surfaces show while a turn from EITHER is in
+ *  flight (audit `genie-v2`): Ask, the chips, Regenerate / Retry, History and
+ *  New thread are held until it lands or the user presses Stop. */
+export const GENIE_BUSY_REASON =
+  'Genie is still answering. Ask unlocks when this answer lands, or press Stop. Leaving this page does not stop it.';
+
 /** The Stopped note. No server cancel exists: the copy never claims one. */
 export const GENIE_STOPPED_REASON =
   'Stopped before the answer arrived. Genie may still finish this turn on the server; that reply is ' +

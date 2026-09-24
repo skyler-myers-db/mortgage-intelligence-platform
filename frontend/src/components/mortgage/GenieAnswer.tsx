@@ -25,11 +25,12 @@ import {
 import { humanizeKey, pickPlan } from './GenieAnswer.logic';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { answerCohortFromActions } from '../../lib/genieCellLinks';
+import { GOVERNED_ACTION_SOURCE } from '../../lib/genieTurnOutcome';
 
 export { stripQuestionRestatement } from './GenieAnswer.markdown';
 export { inferChartFromRows } from './GenieAnswer.logic';
 
-export const GOVERNED_ACTION_SOURCE = 'governed_action';
+export { GOVERNED_ACTION_SOURCE };
 
 /**
  * GenieAnswer — renders the widened Genie payload: metric_value (big tabular
@@ -76,6 +77,9 @@ interface GenieAnswerProps {
    *  reword it. Client-side only; the refusal card shows "Edit question" only
    *  when both this and `question` are present (audit 2026-09-21 `genie-05`). */
   onEditQuestion?: (question: string) => void;
+  /** Speak a copy confirmation ("SQL copied", "Answer copied", "Clipboard
+   *  blocked") through the surface's one persistent announcer (a11y-06). */
+  onAnnounce?: (text: string) => void;
 }
 
 export function GenieAnswer({
@@ -88,6 +92,7 @@ export function GenieAnswer({
   followUpDisabledReason = null,
   announce = true,
   onEditQuestion,
+  onAnnounce,
 }: GenieAnswerProps) {
   const { answer, metric_value, table_rows, follow_up_questions, actions } = payload;
   const { setDrawer } = useApp();
@@ -323,7 +328,7 @@ export function GenieAnswer({
           only: a governed refusal or degraded caveat has no SQL, and its copy
           would be the guardrail's own text. */}
       {isTrustedGenieSource(payload.source) && !isGovernedActionResult && (
-        <GenieAnswerToolbar payload={payload} announce={announce} />
+        <GenieAnswerToolbar payload={payload} onStatus={onAnnounce} />
       )}
       {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
         <>
