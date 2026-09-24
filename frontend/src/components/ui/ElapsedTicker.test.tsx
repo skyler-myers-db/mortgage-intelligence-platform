@@ -69,6 +69,25 @@ describe('ElapsedTicker', () => {
     expect(ticker().textContent, 'a paused mount shows the real elapsed time').toBe('4s');
   });
 
+  it('counts from a new startedAt at once when a mounted ticker is handed one', () => {
+    // A mounted ticker reused for a new wait (GenieProgress restarting a turn
+    // without remounting) must not keep painting the previous wait's count;
+    // while paused no effect ticks, so the stale count would never clear.
+    const first = Date.now() - 9_000;
+    const second = Date.now() - 2_000;
+    act(() => root.render(<ElapsedTicker startedAt={first} paused />));
+    expect(ticker().textContent).toBe('9s');
+
+    act(() => root.render(<ElapsedTicker startedAt={second} paused />));
+    expect(ticker().textContent, 'the new wait, not the previous one').toBe('2s');
+
+    act(() => root.render(<ElapsedTicker startedAt={second} paused={false} />));
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(ticker().textContent).toBe('3s');
+  });
+
   it('takes a class name and an injected clock', () => {
     let clock = 10_000;
     const now = () => clock;

@@ -12,8 +12,11 @@ import { useEffect, useState } from 'react';
  * every second, so the ticker must sit outside any aria text. While `paused`
  * no interval runs; resuming reads the clock first, because it kept running.
  * The first value is read in the state initialiser, so a remount mid-wait
- * paints the real elapsed time instead of flashing "0s" for a frame; the
- * shell pays for one state value and one interval, nothing per render.
+ * paints the real elapsed time instead of flashing "0s" for a frame. The state
+ * remembers which `startedAt` it counted from: a mounted ticker handed a new
+ * `startedAt` derives the new count in that render instead of painting the
+ * previous wait's count until the effect ticks (or, while paused, forever).
+ * The shell pays for one state value and one interval, nothing per render.
  */
 export interface ElapsedTickerProps {
   /** Epoch ms the elapsed time counts from. */
@@ -28,14 +31,19 @@ export interface ElapsedTickerProps {
 const elapsedSeconds = (now: () => number, startedAt: number) => Math.max(0, Math.round((now() - startedAt) / 1000));
 
 export function ElapsedTicker({ startedAt, paused, className = 'mono', now = Date.now }: ElapsedTickerProps) {
-  const [seconds, setSeconds] = useState(() => elapsedSeconds(now, startedAt));
+  const [count, setCount] = useState(() => ({ from: startedAt, seconds: elapsedSeconds(now, startedAt) }));
   useEffect(() => {
     if (paused) return undefined;
-    const tick = () => setSeconds(elapsedSeconds(now, startedAt));
+    const tick = () => {
+      const seconds = elapsedSeconds(now, startedAt);
+      // Same value, same object: React bails out instead of re-rendering.
+      setCount((prev) => (prev.from === startedAt && prev.seconds === seconds ? prev : { from: startedAt, seconds }));
+    };
     tick();
     const timer = window.setInterval(tick, 1_000);
     return () => window.clearInterval(timer);
   }, [paused, now, startedAt]);
+  const seconds = count.from === startedAt ? count.seconds : elapsedSeconds(now, startedAt);
   return (
     <span className={className} aria-hidden="true">
       {seconds}s
