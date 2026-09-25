@@ -160,7 +160,8 @@ describe('GenieHistoryMenu', () => {
     act(() => onlineManager.setOnline(false));
     mocks.genieSessions.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     render(true);
-    await waitUntil(() => container.textContent?.includes('History unavailable') ?? false);
+    // Shorter than the test timeout, so a paused read fails here, by name.
+    await waitUntil(() => container.textContent?.includes('History unavailable') ?? false, 2_000);
     await settle(10);
 
     // The client's default networkMode ('online') would pause here on
