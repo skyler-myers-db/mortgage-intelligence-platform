@@ -14,9 +14,9 @@ import type { IconName } from '../components/Icon';
  *   - app.tsx maps `ROUTE_IDS` to `<Route path={ROUTES[id].pattern}>`, with an
  *     element table typed `satisfies Record<RouteId, ...>`, so a route with no
  *     element is a type error;
- *   - RouteNav renders `NAV_ROUTE_IDS`; the command palette builds its route
- *     actions from `PALETTE_ROUTE_IDS`; both take `name` / `navLabel` / `icon`
- *     from here, so one route has one icon everywhere;
+ *   - RouteNav and the command palette's route actions both render
+ *     `NAVIGATION_ROUTE_IDS`, one ordered list, and take `name` / `navLabel`
+ *     / `icon` from here, so one route has one icon and one place everywhere;
  *   - routePreloaders keys its preload map by each route's `IndexPath`;
  *   - the Topbar breadcrumbs, the document title and the route announcer
  *     resolve a pathname through `resolveRouteMeta`.
@@ -107,23 +107,21 @@ export type RoutePattern = (typeof ROUTES)[RouteId]['pattern'];
 export const ROUTE_IDS = Object.keys(ROUTES) as RouteId[];
 
 /**
- * Route-nav chip order (the product flow: portfolio, segments, leads,
- * borrower, offer). Borrower 360 and Offer link to the last borrower's detail
- * route when there is one; Admin is shown only to an admitted actor.
+ * The ONE navigation order, in product-flow order: build the portfolio,
+ * segment, rank, explain (Borrower 360), recommend (Offer), then the
+ * analytics, Genie, glossary and admin destinations. The route-nav links, and
+ * so their Tab order, and the command palette's "Navigate" group both render
+ * it (audit shell-08: the nav used to put Analytics second, between Home and
+ * Portfolio, interrupting the flow the palette already followed). Borrower
+ * 360 and Offer link to the last borrower's detail route when there is one;
+ * Admin is shown only to an admitted actor.
  */
-export const NAV_ROUTE_IDS = [
-  'home', 'analytics', 'portfolio', 'segments', 'leads',
-  'borrowerIndex', 'offerIndex', 'askGenie', 'glossary', 'admin',
-] as const satisfies readonly RouteId[];
-
-/** Command-palette "Navigate" order. */
-export const PALETTE_ROUTE_IDS = [
+export const NAVIGATION_ROUTE_IDS = [
   'home', 'portfolio', 'segments', 'leads', 'borrowerIndex',
   'offerIndex', 'analytics', 'askGenie', 'glossary', 'admin',
 ] as const satisfies readonly RouteId[];
 
-export type NavRouteId = (typeof NAV_ROUTE_IDS)[number];
-export type PaletteRouteId = (typeof PALETTE_ROUTE_IDS)[number];
+export type NavigationRouteId = (typeof NAVIGATION_ROUTE_IDS)[number];
 
 /** `/borrower-360/<id>`: the dossier of one masked borrower. */
 export function borrowerPath(borrowerId: string): `/borrower-360/${string}` {
