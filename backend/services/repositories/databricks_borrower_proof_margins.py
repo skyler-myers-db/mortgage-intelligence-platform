@@ -5,13 +5,20 @@ already sit on the ``gold.borrower_dossier`` row, through the reviewed
 scoring mirrors in ``backend/services/scoring.py``. Nothing here is a model
 output, a forecast or a credit decision:
 
-- ``spread_screen``     materialized ``rate_spread_bps`` minus the applied
-                        refi-screen minimum;
+- ``spread_screen``     whether the row clears the refi screen, which is
+                        ``in_the_money`` (the ``fn_in_the_money`` mirror):
+                        spread AND equity against their applied minimums.
+                        The quoted margin is the materialized
+                        ``rate_spread_bps`` minus the applied spread minimum;
+                        when equity is under its minimum the copy says so
+                        and never says the row clears the screen;
 - ``par_break_even``    the smallest par move inside the Rate Lever's
-                        +/-``RATE_SCENARIO_MAX_SHIFT_BPS`` grid at which the
-                        refi screen flips, through
+                        +/-``RATE_SCENARIO_MAX_SHIFT_BPS`` grid at which
+                        ``in_the_money`` flips, through
                         ``rate_spread_bps_at_par_shift`` (half-even rounding,
-                        the live ``fn_rate_spread`` mirror);
+                        the live ``fn_rate_spread`` mirror). The Rate Lever
+                        counts the same predicate, so the two never disagree;
+                        with equity under its minimum no par move flips it;
 - ``equity_floor``      ``equity_pct`` against the equity minimum of the
                         displayed offer's branch;
 - ``offer_flip_equity`` the nearest equity level either way at which
@@ -43,6 +50,7 @@ from backend.services.repositories.databricks_shared import _coerce_bool
 from backend.services.scoring import (
     RATE_SCENARIO_MAX_SHIFT_BPS,
     RATE_SPREAD_BPS_PER_UNIT,
+    in_the_money,
     next_best_offer,
     offer_display_label,
     rate_spread_bps,
@@ -183,12 +191,30 @@ def _margin(
     )
 
 
+def _passes_refi_screen(inputs: OfferInputs, spread_bps: int) -> bool:
+    """The refi screen at ``spread_bps``: the dossier chip's and the Rate Lever's predicate."""
+
+    return in_the_money(spread_bps, inputs.equity_pct, inputs.min_spread_bps, inputs.min_equity_pct)
+
+
 def _spread_screen(inputs: OfferInputs) -> ProofMargin:
     margin = inputs.rate_spread_bps - inputs.min_spread_bps
-    clears = margin >= 0
-    if margin == 0:
+    threshold = f"spread {_bps(inputs.rate_spread_bps)} · screen {_bps(inputs.min_spread_bps)}"
+    equity_gap = inputs.min_equity_pct - inputs.equity_pct
+    if equity_gap > 0:
+        # The screen is spread AND equity: a spread over its minimum does not
+        # clear it while equity sits under its own minimum.
+        if margin > 0:
+            spread_text = f"Spread clears the refi screen's spread minimum by {_bps(margin)}"
+        elif margin == 0:
+            spread_text = "Spread meets the refi screen's spread minimum exactly"
+        else:
+            spread_text = f"Spread is {_bps(-margin)} under the refi screen's spread minimum"
+        value_text = f"{spread_text}; equity is {_pts(equity_gap)} under its {inputs.min_equity_pct}% minimum"
+        threshold = f"{threshold} · equity {inputs.equity_pct}% · screen {inputs.min_equity_pct}%"
+    elif margin == 0:
         value_text = "Meets the refi screen exactly"
-    elif clears:
+    elif margin > 0:
         value_text = f"Clears the refi screen by {_bps(margin)}"
     else:
         value_text = f"{_bps(-margin)} below the refi screen"
@@ -196,8 +222,8 @@ def _spread_screen(inputs: OfferInputs) -> ProofMargin:
         "spread_screen",
         "Refi screen",
         value_text,
-        f"spread {_bps(inputs.rate_spread_bps)} · screen {_bps(inputs.min_spread_bps)}",
-        "clears" if clears else "short",
+        threshold,
+        "clears" if _passes_refi_screen(inputs, inputs.rate_spread_bps) else "short",
         "fn_in_the_money",
     )
 
@@ -206,26 +232,23 @@ def _par_break_even(inputs: OfferInputs, par: _Par | str) -> ProofMargin:
     label = "Par break-even"
     if isinstance(par, str):
         return _margin("par_break_even", label, _NOT_COMPUTED, par, "unavailable", "fn_rate_spread")
-    clears = inputs.rate_spread_bps >= inputs.min_spread_bps
-    # The spread falls as par rises, so only one direction can flip the screen.
-    step = 1 if clears else -1
+    threshold = f"par {_par_pct(par.market_rate)}"
+    passes = _passes_refi_screen(inputs, rate_spread_bps_at_par_shift(par.note_rate, par.market_rate, 0))
     for magnitude in range(1, RATE_SCENARIO_MAX_SHIFT_BPS + 1):
-        shift = step * magnitude
-        spread = rate_spread_bps_at_par_shift(par.note_rate, par.market_rate, shift)
-        if (spread >= inputs.min_spread_bps) != clears:
-            action = "Drops below" if clears else "Clears"
-            value_text = f"{action} the refi screen if 30-year {_par_move(par.market_rate, shift)}"
-            return _margin(
-                "par_break_even", label, value_text, f"par {_par_pct(par.market_rate)}", "flips", "fn_rate_spread"
-            )
-    return _margin(
-        "par_break_even",
-        label,
-        f"Holds for any par move within ±{RATE_SCENARIO_MAX_SHIFT_BPS} bps",
-        f"par {_par_pct(par.market_rate)}",
-        "holds",
-        "fn_rate_spread",
-    )
+        for shift in (magnitude, -magnitude):
+            spread = rate_spread_bps_at_par_shift(par.note_rate, par.market_rate, shift)
+            if _passes_refi_screen(inputs, spread) != passes:
+                action = "Drops below" if passes else "Clears"
+                value_text = f"{action} the refi screen if 30-year {_par_move(par.market_rate, shift)}"
+                return _margin("par_break_even", label, value_text, threshold, "flips", "fn_rate_spread")
+    grid = f"±{RATE_SCENARIO_MAX_SHIFT_BPS} bps"
+    if passes:
+        holds_text = f"Holds for any par move within {grid}"
+    elif inputs.equity_pct < inputs.min_equity_pct:
+        holds_text = f"No par move within {grid} clears the refi screen; equity is under its minimum"
+    else:
+        holds_text = f"No par move within {grid} clears the refi screen"
+    return _margin("par_break_even", label, holds_text, threshold, "holds", "fn_rate_spread")
 
 
 def _equity_floor(inputs: OfferInputs, dossier_offer: str) -> ProofMargin:

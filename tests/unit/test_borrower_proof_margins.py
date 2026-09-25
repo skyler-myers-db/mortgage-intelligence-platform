@@ -35,7 +35,13 @@ from backend.services.repositories.databricks_borrower_proof_margins import (
     build_proof_margins,
 )
 from backend.services.repositories.databricks_borrowers import _build_borrower_proof
-from backend.services.scoring import next_best_offer
+from backend.services.scoring import (
+    RATE_SCENARIO_MAX_SHIFT_BPS,
+    in_the_money,
+    next_best_offer,
+    rate_spread_bps,
+    rate_spread_bps_at_par_shift,
+)
 from tests.fixtures import mock_population as mock_data
 
 GOLDEN_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "borrower_proof_margins_golden.json"
@@ -117,6 +123,12 @@ _CASES: dict[str, tuple[dict[str, Any], str]] = {
         {"current_rate": 5.375, "rate_spread_bps": 50, "equity_pct": 10, "is_investor": True, "recommended_offer_code": "investor"},
         "Equity under the refi equity threshold.",
     ),
+    "spread_clears_equity_short": (
+        {"current_rate": 6.625, "market_rate_fraction": 0.05745, "rate_spread_bps": 88, "equity_pct": 10,
+         "recommended_offer_code": "nurture"},
+        "Spread over its minimum, equity under its own: in_the_money is False, so the row does not clear the "
+        "refi screen and no par move inside the grid makes it (the dossier chip reads 'Below refi screen').",
+    ),
 }
 
 _FORBIDDEN_COPY = re.compile(r"deny|declin|adverse|reason|eligib|credit[- ]?score|today", re.IGNORECASE)
@@ -190,6 +202,15 @@ def test_golden_pins_the_behaviours_the_cases_name() -> None:
     wide = _golden_margins("holds_wide_spread")
     assert wide["par_break_even"]["direction"] == "holds"
     assert _golden_margins("equity_short_investor")["equity_floor"]["direction"] == "short"
+    equity_short = _golden_margins("spread_clears_equity_short")
+    assert equity_short["spread_screen"]["direction"] == "short"
+    assert equity_short["spread_screen"]["value_text"] == (
+        "Spread clears the refi screen's spread minimum by 13 bps; equity is 5 pts under its 15% minimum"
+    )
+    assert equity_short["par_break_even"]["direction"] == "holds"
+    assert equity_short["par_break_even"]["value_text"] == (
+        "No par move within ±100 bps clears the refi screen; equity is under its minimum"
+    )
 
 
 def test_offer_inputs_are_next_best_offer_arguments() -> None:
@@ -215,6 +236,102 @@ def _mock_proof_row(borrower_id: str, **overrides: Any) -> dict[str, Any]:
         "score_refreshed_at": "2026-04-20T06:12:00Z",
         **overrides,
     }
+
+
+_PAR_MOVE = re.compile(r"\bpar (rises|falls) (\d+) bps? to ")
+
+
+def _sweep_row(current_rate: float, equity_pct: int, min_spread_bps: int) -> dict[str, Any]:
+    """A gate-passing row whose materialized spread is the note rate's own."""
+
+    note = round(current_rate / 100.0, 7)
+    spread = rate_spread_bps(note, _BASE_ROW["market_rate_fraction"])
+    row = {**_BASE_ROW, "current_rate": current_rate, "rate_spread_bps": spread, "equity_pct": equity_pct,
+           "min_spread_bps_applied": min_spread_bps}
+    row["recommended_offer_code"] = next_best_offer(**_offer_inputs(row)._asdict())
+    return row
+
+
+def _invariant_rows() -> list[tuple[str, dict[str, Any]]]:
+    rows = [(f"golden:{case_id}", _case_row(case_id)) for case_id in _CASES]
+    rows += [(f"mock:{b.borrower_id}", _mock_proof_row(b.borrower_id)) for b in mock_data.BORROWERS]
+    rows += [
+        (f"sweep:{rate}/{equity}/{min_spread}", _sweep_row(rate, equity, min_spread))
+        for rate in (4.75, 5.25, 5.75, 6.25, 6.75)
+        for equity in (0, 10, 14, 15, 16, 46)
+        for min_spread in (71, 75)
+    ]
+    return rows
+
+
+def _first_screen_flip(row: dict[str, Any], inputs: OfferInputs) -> int | None:
+    """Independently: the first grid step at which in_the_money differs from shift 0."""
+
+    note = round(float(row["current_rate"]) / 100.0, 7)
+    market = float(row["market_rate_fraction"])
+
+    def itm(shift: int) -> bool:
+        spread = rate_spread_bps_at_par_shift(note, market, shift)
+        return in_the_money(spread, inputs.equity_pct, inputs.min_spread_bps, inputs.min_equity_pct)
+
+    for magnitude in range(1, RATE_SCENARIO_MAX_SHIFT_BPS + 1):
+        for shift in (magnitude, -magnitude):
+            if itm(shift) != itm(0):
+                return shift
+    return None
+
+
+_INVARIANT_ROWS = _invariant_rows()
+
+
+@pytest.mark.parametrize(("row_id", "row"), _INVARIANT_ROWS, ids=[row_id for row_id, _ in _INVARIANT_ROWS])
+def test_refi_screen_margins_agree_with_in_the_money(row_id: str, row: dict[str, Any]) -> None:
+    """The refi-screen margins say what the dossier chip and the Rate Lever say.
+
+    The chip reads ``why_panel.in_the_money`` and the Rate Lever counts
+    ``in_the_money(rate_spread_bps_at_par_shift(...), equity, ...)``; the
+    margins must agree with that predicate on every row, including a spread
+    that clears its minimum while equity does not.
+    """
+
+    inputs = _offer_inputs(row)
+    passes = in_the_money(inputs.rate_spread_bps, inputs.equity_pct, inputs.min_spread_bps, inputs.min_equity_pct)
+    margins = {margin.key: margin for margin in _build(row)}
+    screen, break_even = margins["spread_screen"], margins["par_break_even"]
+
+    assert (screen.direction == "clears") == passes, row_id
+    if not passes:
+        assert "Clears the refi screen" not in screen.value_text, row_id
+        assert "Meets the refi screen" not in screen.value_text, row_id
+
+    if isinstance(margins_module._par_gate(row, inputs), str):
+        assert break_even.direction == "unavailable", row_id
+        return
+    expected = _first_screen_flip(row, inputs)
+    if expected is None:
+        assert break_even.direction == "holds", row_id
+        assert "Clears the refi screen if" not in break_even.value_text, row_id
+        assert "Drops below the refi screen if" not in break_even.value_text, row_id
+        return
+    assert break_even.direction == "flips", row_id
+    move = _PAR_MOVE.search(break_even.value_text)
+    assert move is not None, break_even.value_text
+    shift = int(move.group(2)) * (1 if move.group(1) == "rises" else -1)
+    assert shift == expected, row_id
+    assert break_even.value_text.startswith("Drops below" if passes else "Clears"), row_id
+
+
+def test_the_invariant_rows_reach_every_refi_screen_branch() -> None:
+    """Non-vacuity: the sweep holds spread-clears/equity-short rows, flips both ways and holds."""
+
+    seen: set[tuple[bool, bool, str]] = set()
+    for _row_id, row in _INVARIANT_ROWS:
+        inputs = _offer_inputs(row)
+        spread_ok = inputs.rate_spread_bps >= inputs.min_spread_bps
+        equity_ok = inputs.equity_pct >= inputs.min_equity_pct
+        seen.add((spread_ok, equity_ok, {m.key: m for m in _build(row)}["par_break_even"].direction))
+    assert {(True, False, "holds"), (True, True, "flips"), (False, True, "flips"), (True, True, "holds")} <= seen
+    assert (True, False, "flips") not in seen and (False, False, "flips") not in seen
 
 
 @pytest.mark.parametrize(
