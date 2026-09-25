@@ -21,10 +21,12 @@ This module owns three things and nothing else:
   endpoint pivots. Its widest step is ``scoring.RATE_SCENARIO_MAX_SHIFT_BPS``.
 * ``NOTE_RATE_GATE_SQL`` / ``SCENARIO_ITM_SQL`` -- the single text of the note
   gate and of the per-step rule. ``sql/transformations/
-  gold_rate_sensitivity_rollup.sql`` (the precomputed addressable grid) and
-  the repository's live contactable aggregate both embed them;
-  ``tests/unit/test_rate_sensitivity_sql_contract.py`` proves both texts
-  carry them verbatim.
+  gold_rate_sensitivity_rollup.sql`` (the precomputed addressable grid)
+  embeds both; ``gold_rate_sensitivity_book.sql`` embeds the gate to build the
+  gated note per CLIP, which the repository's live contactable aggregate
+  reads (so the App never reads ``mip.silver``) before applying the rule.
+  ``tests/unit/test_rate_sensitivity_sql_contract.py`` proves every text
+  carries them verbatim.
 * ``scenario_in_the_money`` -- the Python mirror, composed from the scoring
   helpers so the basis-point scale (``scoring.RATE_SPREAD_BPS_PER_UNIT``) and
   the rounding live in one place. No bps constant is defined here.
@@ -48,7 +50,8 @@ _BPS_SCALE_SQL = f"CAST({int(scoring.RATE_SPREAD_BPS_PER_UNIT)} AS DOUBLE)"
 _BOUNDED_NOTE = f"{qualify('gold', 'fn_bounded_mortgage_rate')}(lc.first_pos_rate)"
 
 # borrower_360's active-lien and clamp gate, over ``gold.borrower_360 AS b``
-# LEFT JOINed to ``silver.lien_current AS lc``. A paid-down lien
+# LEFT JOINed to ``silver.lien_current AS lc`` -- ETL-side SQL only (the two
+# gold CTAS); the App reads the gated value from gold. A paid-down lien
 # (current_rate = 0), a rate AT the 1% / 15% clamp, or a missing lien row
 # yields NULL: fn_rate_spread then returns its no-signal 0 at every step, so
 # the borrower stays in the population and the scenario never moves them.

@@ -16,6 +16,10 @@ over the map's addressable population. Against real Unity Catalog:
    ``SCENARIO_ITM_SQL`` agree with ``rate_scenario.scenario_in_the_money``.
 5. Live contactable -- the endpoint's statement reports, at step 0, exactly
    ``COUNT(in_the_money AND eligible)`` per state.
+6. Note book -- ``gold.rate_sensitivity_book`` is exactly the non-NULL
+   ``NOTE_RATE_GATE_SQL`` set over the rollup's own lien join (both
+   directions, one row per CLIP), and its per-state count is the grid's
+   ``rate_movable_borrowers``. The endpoint reads the book, never silver.
 
 Gated on ``DATABRICKS_HOST`` / ``DATABRICKS_TOKEN`` /
 ``DATABRICKS_WAREHOUSE_ID`` (the sibling live tests' gate). Stdlib-only HTTP;
@@ -47,6 +51,7 @@ pytestmark = pytest.mark.integration
 
 GOLDEN = Path(__file__).resolve().parents[1] / "fixtures" / "rate_scenario_golden.json"
 _GRID = qualify("gold", "rate_sensitivity_rollup")
+_BOOK = qualify("gold", "rate_sensitivity_book")
 _B360 = qualify("gold", "borrower_360")
 _LIEN = qualify("silver", "lien_current")
 _SAMPLE_SIZE = 500
@@ -240,3 +245,42 @@ def test_live_step_zero_contactable_is_the_eligible_in_the_money_count(
     live = {str(state): _int(count) for state, count in rows}
     for state, count in reported.items():
         assert count == live.get(state, 0), state
+
+
+def test_note_book_is_exactly_the_gated_note_set(warehouse: tuple[str, str, str]) -> None:
+    gated = (
+        f"SELECT b.clip, {NOTE_RATE_GATE_SQL} AS note_rate_fraction "
+        f"FROM {_B360} AS b LEFT JOIN {_LIEN} AS lc ON lc.clip = b.clip"
+    )
+    rows = _run_sql(
+        warehouse,
+        "WITH gated AS ( "
+        f"  SELECT clip, note_rate_fraction FROM ({gated}) AS g WHERE note_rate_fraction IS NOT NULL "
+        f"), book AS (SELECT clip, note_rate_fraction FROM {_BOOK}) "
+        "SELECT "
+        "  (SELECT CAST(COUNT(*) AS BIGINT) FROM (SELECT * FROM book EXCEPT ALL SELECT * FROM gated) AS x), "
+        "  (SELECT CAST(COUNT(*) AS BIGINT) FROM (SELECT * FROM gated EXCEPT ALL SELECT * FROM book) AS y), "
+        "  (SELECT CAST(COUNT(*) - COUNT(DISTINCT clip) AS BIGINT) FROM book), "
+        "  (SELECT CAST(COUNT(*) AS BIGINT) FROM book)",
+    )
+    extra, missing, duplicate_clips, total = (_int(value) for value in rows[0])
+    assert total > 0, f"{_BOOK} is empty -- run mip_refresh_scores (ctas_rate_sensitivity_book)"
+    assert (extra, missing, duplicate_clips) == (0, 0, 0)
+
+
+def test_note_book_count_is_the_grids_rate_movable(
+    warehouse: tuple[str, str, str], grid: dict[str, dict[int, dict[str, int]]]
+) -> None:
+    rows = _run_sql(
+        warehouse,
+        f"SELECT b.state, CAST(COUNT(*) AS BIGINT) FROM {_BOOK} AS nb "
+        f"JOIN {_B360} AS b ON b.clip = nb.clip WHERE b.state IS NOT NULL GROUP BY b.state",
+    )
+    movable = {str(state): _int(count) for state, count in rows}
+    for state, by_step in grid.items():
+        assert movable.get(state, 0) == by_step[0]["rate_movable"], state
+
+
+def test_endpoint_statement_reads_the_book_not_silver() -> None:
+    assert _BOOK in RATE_SENSITIVITY_SQL
+    assert ".silver." not in RATE_SENSITIVITY_SQL

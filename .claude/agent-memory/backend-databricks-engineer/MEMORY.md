@@ -20,3 +20,5 @@
 - [Pinned score-threshold literal guard](project_pinned_threshold_literal_guard.md) — a dumb repo-wide grep bans the literal in production source, docstrings and comments included
 - [Cohort criteria never from prose](project_cohort_criteria_never_from_prose.md) — question-wording reader deleted 2026-08-11; measured 10x truncations and one zero-overlap inversion
 - [Dead \b after a quoted literal](project_dead_word_boundary_after_quote.md) — `'cash_out'\b` never matches; it silently killed the SQL product reader and made a bad heuristic look load-bearing
+- [App SQL is gold-only](project_app_sql_gold_only.md) — no silver/raw in App-executed SQL (live-only 403); precompute into gold; keep LEFT JOIN on "non-NULL only" gold tables
+- [Permission refusal fails fast](project_permission_denied_fail_fast.md) — kind permission_denied, retryable False, breaker success; TABLE_OR_VIEW_NOT_FOUND still retried

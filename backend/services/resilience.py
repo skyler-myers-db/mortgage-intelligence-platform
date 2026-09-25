@@ -72,6 +72,7 @@ def with_retry(
     backoff_base: float = 0.2,
     backoff_max: float = 2.0,
     retry_on: tuple[type[BaseException], ...] = (Exception,),
+    give_up_on: tuple[type[BaseException], ...] = (),
     sleep: Callable[[float], None] = time.sleep,
     rand: Callable[[], float] = random.random,
 ) -> T:
@@ -94,6 +95,10 @@ def with_retry(
     dependency that already gave up. Explicit subclass check (not just
     tuple membership) so callers that pass a broader ``retry_on`` like
     ``(Exception,)`` still benefit.
+
+    ``give_up_on`` names failures that are definitive answers rather than
+    flakes (e.g. a permission refusal): they propagate on the first attempt
+    even when they also match ``retry_on`` (a subclass of a retried type).
     """
     if attempts < 1:
         raise ValueError("attempts must be >= 1")
@@ -107,7 +112,7 @@ def with_retry(
             # budget (or the breaker is OPEN). Propagate immediately.
             raise
         except BaseException as exc:  # noqa: BLE001 -- re-raised below
-            if not isinstance(exc, retry_on):
+            if isinstance(exc, give_up_on) or not isinstance(exc, retry_on):
                 raise
             last_exc = exc
             if attempt == attempts - 1:
@@ -144,6 +149,14 @@ class Resilient(Generic[T]):
     exhausted): ``record_failure`` and re-raise as
     ``DependencyDownError`` so the router's one-line ``except`` clause
     works.
+
+    ``permission_denied_on`` names the dependency's authorization refusals.
+    One is a definitive answer from a reachable dependency, not an outage:
+    it is never retried, it counts as a breaker SUCCESS (the dependency
+    answered; counting it as a failure would let one missing grant open the
+    breaker for every caller, and recording nothing would strand a
+    half-open probe slot), and it surfaces as ``DependencyDownError`` of
+    kind ``permission_denied`` (``retryable`` False). The call still fails.
     """
 
     def __init__(
@@ -155,6 +168,7 @@ class Resilient(Generic[T]):
         backoff_base: float = 0.2,
         backoff_max: float = 2.0,
         retry_on: tuple[type[BaseException], ...] = (Exception,),
+        permission_denied_on: tuple[type[BaseException], ...] = (),
     ) -> None:
         self._breaker = breaker
         self._name = dependency_name
@@ -162,6 +176,7 @@ class Resilient(Generic[T]):
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._retry_on = retry_on
+        self._permission_denied_on = permission_denied_on
 
     @property
     def breaker(self) -> CircuitBreaker:
@@ -191,8 +206,17 @@ class Resilient(Generic[T]):
                     backoff_base=self._backoff_base,
                     backoff_max=self._backoff_max,
                     retry_on=self._retry_on,
+                    give_up_on=self._permission_denied_on,
                 )
         except BaseException as exc:
+            if isinstance(exc, self._permission_denied_on):
+                self._breaker.record_success()
+                raise DependencyDownError(
+                    self._name,
+                    reason=f"{type(exc).__name__}: {exc}",
+                    last_error=exc,
+                    kind=DependencyDownError.KIND_PERMISSION_DENIED,
+                ) from exc
             self._breaker.record_failure()
             if isinstance(exc, DependencyDownError):
                 raise

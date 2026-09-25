@@ -20,8 +20,12 @@ when the approved API is this one function.
 from __future__ import annotations
 
 
-def safe_dependency_detail(dep: str) -> str:
+def safe_dependency_detail(dep: str, *, permission_denied: bool = False) -> str:
     """Return a constant, PII-safe 503 detail string for ``dep``.
+
+    ``permission_denied`` selects the one non-transient wording: the
+    dependency answered and refused the app's grant, so "temporarily
+    unavailable" would be false. Still constant; it names no object.
 
     The return value MUST NOT interpolate any value derived from the
     underlying exception. ``dep`` is the short dependency name the UI
@@ -34,6 +38,8 @@ def safe_dependency_detail(dep: str) -> str:
     # ``" warehouse "`` still produces a tidy message. Lowercased for
     # consistency with the existing ``dependency`` field in the body.
     name = (dep or "dependency").strip().lower() or "dependency"
+    if permission_denied:
+        return f"{name} denied the app access to a required object"
     return f"{name} is temporarily unavailable"
 
 
