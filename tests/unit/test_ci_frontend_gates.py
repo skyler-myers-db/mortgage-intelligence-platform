@@ -131,8 +131,22 @@ def test_the_oxlint_ratchet_runs_as_its_own_step_before_lint_and_inside_it() -> 
 
     scripts = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))["scripts"]
     assert scripts["lint:a11y"] == "node ../tools/oxlint_ratchet.mjs --check oxlint-baseline.json"
-    assert scripts["lint"].endswith(" && npm run lint:a11y")
+    # Test-infra PR-2 (audit stack-07 item 2) appends the legacy-spec
+    # typecheck after the ratchet; the ratchet stays inside the chain.
+    assert scripts["lint"].endswith(" && npm run lint:a11y && npm run typecheck:e2e")
     assert (FRONTEND / "oxlint-baseline.json").is_file(), "the ratchet's baseline is committed"
+
+
+def test_the_legacy_specs_are_typechecked_inside_the_lint_chain() -> None:
+    """Audit stack-07 item 2 / quality-10 step 1: tests/e2e/*.ts typecheck with the fixture's options."""
+    scripts = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))["scripts"]
+    assert scripts["typecheck:e2e"] == "tsc -p tests/e2e/tsconfig.json"
+
+    legacy = json.loads((FRONTEND / "tests" / "e2e" / "tsconfig.json").read_text(encoding="utf-8"))
+    fixture = json.loads((FRONTEND / "tests" / "e2e" / "fixture" / "tsconfig.json").read_text(encoding="utf-8"))
+    assert legacy["compilerOptions"] == fixture["compilerOptions"], "only the include differs"
+    assert "./*.ts" in legacy["include"], "the non-recursive legacy glob (fixture/ keeps its own project)"
+    assert "../../playwright.config.ts" in legacy["include"]
 
 
 def test_oxlint_is_an_exact_pin_and_its_config_names_only_jsx_a11y_rules() -> None:

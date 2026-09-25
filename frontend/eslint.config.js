@@ -152,7 +152,8 @@ export default [
   // it may import TYPES from src (so fixtures are checked against the app's
   // own response contracts) but never runtime code: the harness must drive
   // the built app from outside, not link against it. The legacy specs beside
-  // it are not linted yet; their known type errors are tracked separately.
+  // it get the same rules in the next block (and `npm run typecheck:e2e`),
+  // without the type-only import ban.
   {
     files: ["tests/e2e/fixture/**/*.ts"],
     languageOptions: {
@@ -169,6 +170,24 @@ export default [
           patterns: [FIXTURE_SRC_TYPE_ONLY],
         },
       ],
+    },
+  },
+  // The legacy Playwright specs and helpers directly under tests/e2e (audit
+  // stack-07 item 2 / quality-10 step 1): the same recommended rules as the
+  // fixture harness. The glob is non-recursive; fixture/ keeps its own
+  // blocks. No FIXTURE_SRC_TYPE_ONLY here: layout-stability.spec.ts imports
+  // src/mocks/fixtureData at runtime by design, and the contract exporter
+  // never loads a legacy spec.
+  {
+    files: ["tests/e2e/*.ts"],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: { ecmaVersion: "latest", sourceType: "module" },
+    },
+    plugins: { "@typescript-eslint": tsPlugin },
+    rules: {
+      ...tsPlugin.configs.recommended.rules,
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
   // The fixture data the contract exporter loads on bare Node (audit
