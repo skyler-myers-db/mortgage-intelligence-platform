@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import type { DataEstateAsset, DataEstateLane, DataEstateResponse, DataEstateStatus } from '../../types';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
 import { assetHrefForSource, descriptorFor, DRAWER_SOURCES } from '../../lib/drawerSources';
 import { formatTimestamp } from '../../lib/time';
 import { Skeleton } from '../ui/Skeleton';
 import { formatCount } from '../../lib/formatters';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 function statusLabel(status: DataEstateStatus): string {
   if (status === 'demo_synthetic') return 'demo synthetic';

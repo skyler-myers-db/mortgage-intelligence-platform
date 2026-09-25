@@ -7,9 +7,8 @@ import type {
   ActivationSummary,
   ActivationOutboxItem,
 } from '../../types';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 interface SourceSummary {
   name: string;

@@ -30,7 +30,7 @@ import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
-import { Button, Chip, EvidenceChip } from '../Primitives';
+import { Button, Chip, EvidenceChip, SurfaceTitle } from '../Primitives';
 import { Skeleton } from '../ui/Skeleton';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { ScoreBadge } from './ScoreBadge';
@@ -49,7 +49,6 @@ import { copyAuditId, printReceipt } from './DecisionReceipt.actions';
 export { isDecisionReceiptEvent } from './DecisionReceipt.copy';
 import { SCORE_ANATOMY_COPY } from './scoreAnatomy.copy';
 import { proofSealHolds, useBorrowerProof } from './useBorrowerProof';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 import './DecisionReceipt.css';
 
 /** What a queue row remembers about the decision it just made. */

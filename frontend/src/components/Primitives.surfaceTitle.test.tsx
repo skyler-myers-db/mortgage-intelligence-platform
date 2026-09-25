@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { act, createRef, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SurfaceTitle } from './SurfaceTitle';
+import { SurfaceTitle } from './Primitives';
 
 declare const process: { cwd(): string };
 

@@ -1,7 +1,7 @@
 import { Icon } from '../components/Icon';
 import { leadTableColumns, type LeadTableColumnKey } from '../components/mortgage/LeadTable.columns';
 import { useIsOnline } from '../lib/connectivity';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
+import { SurfaceTitle } from '../components/Primitives';
 import './lead-queue.skeleton.css';
 
 /**

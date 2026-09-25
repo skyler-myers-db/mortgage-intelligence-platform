@@ -3,14 +3,13 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { useApp, type Accent, type Density } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { PropertyLookupPanel } from '../mortgage/PropertyLookupPanel';
 import { ThemePreferenceControl } from './ThemePreferenceControl';
 import { api, type ActorAuditEventSummary } from '../../lib/api';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 /**
  * Console — the right-side tweaks panel from the prototype. Theme, accent,

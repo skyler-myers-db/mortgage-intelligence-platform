@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { api } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
-import { Chip } from '../components/Primitives';
+import { Chip, SurfaceTitle } from '../components/Primitives';
 import type {
   SalesAgingLead,
   SalesConversionResponse,
@@ -16,7 +16,6 @@ import type {
   SalesTeamMember,
 } from '../types';
 import { formatCount } from '../lib/formatters';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 /**
  * Sales ops snapshot — relocated from the Lead Queue (2026-07-10) into its own

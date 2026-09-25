@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Button, Chip } from '../components/Primitives';
+import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { formatNumber } from '../lib/formatters';
 import {
@@ -12,7 +12,6 @@ import type {
   GrowthAgentRunResponse,
   GrowthAgentToolStep,
 } from '../types';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 export { DATABRICKS_AGENT_RESPONSES_LABEL, publicAgentResponsesText };
 

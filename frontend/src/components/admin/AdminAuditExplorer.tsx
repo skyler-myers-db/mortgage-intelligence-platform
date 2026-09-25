@@ -12,7 +12,7 @@
  */
 import { useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 import { api, type AuditEventPage } from '../../lib/api';
@@ -32,7 +32,6 @@ import {
 } from './AdminAuditExplorer.params';
 import { AUDIT_TABLE_CONTEXT, AuditEventTableRow, formatAuditTimestamp } from './AdminAuditExplorer.row';
 import { formatCount } from '../../lib/formatters';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 interface AuditRollupRow {
   bucket_start: string;

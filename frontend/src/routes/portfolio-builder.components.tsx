@@ -4,7 +4,7 @@ import { MultiFilterSelect } from '../components/ui/MultiFilterSelect';
 import type { CampaignPerformanceFunnelResponse, PortfolioPreview } from '../types';
 import type { FootprintState } from './portfolio-builder.logic';
 import { formatCount, formatPercent, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
+import { SurfaceTitle } from '../components/Primitives';
 
 /**
  * GEO picker for step one of the product flow. It used to be a private

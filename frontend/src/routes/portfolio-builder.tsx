@@ -14,7 +14,7 @@ import type {
 import { PageShell } from '../components/layout/PageShell';
 import { CampaignPrefillBanner } from '../components/mortgage/CampaignPrefillBanner';
 import { KpiCard } from '../components/mortgage/KpiCard';
-import { Button } from '../components/Primitives';
+import { Button, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { useApp } from '../components/AppContext';
 import { FilterSelect } from '../components/ui/FilterSelect';
@@ -54,7 +54,6 @@ import {
 import { campaignSetupsEqual, portfolioUnsavedMessage } from './portfolio-builder.unsaved';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { populationKpiLabel } from '../lib/populationLabels';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../Icon';
-import { Button } from '../Primitives';
+import { Button, SurfaceTitle } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
@@ -46,7 +46,6 @@ import { ariaKeyShortcuts } from '../../lib/keymap';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import type { LeadTableProps, LeadTableSort, SortDir, SortKey } from './LeadTable.types';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 import './LeadTable.css';
 
 export { buildLeadCsv } from './LeadTable.csv';

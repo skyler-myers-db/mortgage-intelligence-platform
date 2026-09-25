@@ -3,11 +3,10 @@ import { Link } from 'react-router';
 import { ApiError, api } from '../../lib/api';
 import type { PropertyLoanLookupResponse } from '../../types';
 import { segmentName } from '../../lib/segmentMetadata';
-import { Button, Chip } from '../Primitives';
+import { Button, Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { ScoreBadge } from './ScoreBadge';
 import { formatUsd, ratePct } from '../../lib/formatters';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 /**
  * PropertyLookupPanel — the visible app-UI consumer of the governed

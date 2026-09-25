@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { PageShell } from '../components/layout/PageShell';
-import { Chip } from '../components/Primitives';
+import { Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { AccessDenied } from '../components/ui/AccessDenied';
 import { Skeleton } from '../components/ui/Skeleton';
@@ -11,7 +11,6 @@ import { queryKeys } from '../lib/queryKeys';
 import { formatCount } from '../lib/formatters';
 import { formatTimestamp } from '../lib/time';
 import type { AssetFreshness, AssetMetadataResponse } from '../types';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'Unavailable';

@@ -1,4 +1,4 @@
-import { Button, Chip } from '../components/Primitives';
+import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { humanizeAssetMentions } from '../lib/assetLabels';
 import type { GrowthAgentCadence, GrowthAgentSegmentMode } from '../types';
@@ -9,7 +9,6 @@ import {
   renderSourceAssetChip,
   workflowIcon,
 } from './ask-genie.growth-agent.helpers';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 interface GrowthAgentPanelProps {
   agent: GrowthAgentWorkspace;

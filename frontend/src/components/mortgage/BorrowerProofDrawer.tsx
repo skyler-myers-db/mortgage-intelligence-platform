@@ -5,7 +5,7 @@ import { formatTimestamp } from '../../lib/time';
 import { formatFixed } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import type { BorrowerProof, ProofFormulaLine, ProofReproduceQuery, ProofScoreComponentKey } from '../../types';
-import { Button, Chip } from '../Primitives';
+import { Button, Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { Skeleton } from '../ui/Skeleton';
 import { GlossaryTerm } from '../GlossaryTerm';
@@ -13,7 +13,6 @@ import { useTabs } from '../ui/useTabs';
 import { useBorrowerProof } from './useBorrowerProof';
 // Same lazy chunk: ScoreAnatomy is the drawer's only importer.
 import { SCORE_SPINE_COPY } from './scoreSpine.copy';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 type ProofTab = 'math' | 'evidence' | 'lineage' | 'reproduce';
 

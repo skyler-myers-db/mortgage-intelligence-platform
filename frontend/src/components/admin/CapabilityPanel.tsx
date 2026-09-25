@@ -2,9 +2,8 @@ import { useMemo } from 'react';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 /**
  * Agentic capability readiness — renders the honest DAIS-2026 capability

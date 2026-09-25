@@ -1,7 +1,7 @@
 import type { ChangeEvent } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
-import { Button, EvidenceChip } from '../components/Primitives';
+import { Button, EvidenceChip, SurfaceTitle } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';
 import type { CampaignRecommendationResponse } from '../types';
 import { publicAgentResponsesText } from '../lib/agentLabels';
@@ -11,7 +11,6 @@ import {
   type CampaignNumericField,
   type CampaignSetupState,
 } from './portfolio-builder.logic';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 type CampaignField = Exclude<
   keyof CampaignSetupState,

@@ -5,7 +5,7 @@ import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
 import type { GrowthAgentRunOrigin, GrowthAgentWorkspace } from './ask-genie.growth-agent-state';
 import { renderSourceAssetChip } from './ask-genie.growth-agent.helpers';
 import { GrowthAgentRunCard } from './ask-genie.growth-run-card';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
+import { SurfaceTitle } from '../components/Primitives';
 
 /**
  * The run in flight, shown where the result will land (audit 2026-09-21

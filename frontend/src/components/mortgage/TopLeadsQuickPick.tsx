@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { Icon } from '../Icon';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
+import { SurfaceTitle } from '../Primitives';
 
 /**
  * "Today's top leads" — a compact quick-pick for the Borrower 360 and Offer

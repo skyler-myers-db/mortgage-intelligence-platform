@@ -17,7 +17,7 @@ import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule'
 import { DecisionReceipt } from '../components/mortgage/DecisionReceipt';
 import { decisionOutcomeForStatus } from '../components/mortgage/DecisionReceipt.copy';
 import { TopLeadsQuickPick } from '../components/mortgage/TopLeadsQuickPick';
-import { Button, Chip, EvidenceChip } from '../components/Primitives';
+import { Button, Chip, EvidenceChip, SurfaceTitle } from '../components/Primitives';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
@@ -33,7 +33,6 @@ import { useApp } from '../components/AppContext';
 import { LtvEquityValue } from './borrower-360.ltv-field';
 import { BorrowerQueuePager } from './borrower-360.pager';
 import { useQueueContext } from '../lib/queueContext';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 // The proof drawer ships in the lazy Score anatomy chunk (wow-stage-2): the
 // dossier's natural load does not carry it. It is mounted (closed) on the

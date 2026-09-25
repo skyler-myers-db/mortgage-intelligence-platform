@@ -1,9 +1,8 @@
 import { Link, useLocation } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
-import { Chip } from '../components/Primitives';
+import { Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { glossaryEntries, type GlossaryCategory } from '../lib/mortgageGlossary';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 import './glossary.css';
 
 const CATEGORY_LABELS: Record<GlossaryCategory, string> = {

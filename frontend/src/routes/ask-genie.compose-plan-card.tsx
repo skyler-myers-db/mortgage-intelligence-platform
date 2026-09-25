@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Button, Chip } from '../components/Primitives';
+import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import {
   DATABRICKS_AGENT_RESPONSES_LABEL,
@@ -11,7 +11,6 @@ import type {
   GrowthAgentWorkflow,
   PlanStepTrace,
 } from '../types';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 function traceStepIcon(status: PlanStepTrace['status']): 'check' | 'audit' | 'cross' {
   if (status === 'completed') return 'check';

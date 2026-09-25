@@ -5,7 +5,7 @@ import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../typ
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
 import { ScoreAnatomyGate } from '../components/mortgage/ScoreAnatomyGate';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
-import { Button, Chip, EvidenceChip } from '../components/Primitives';
+import { Button, Chip, EvidenceChip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
@@ -20,7 +20,6 @@ import {
 } from './offer-orchestrator.constants';
 import { humanizeThresholdKey, shortSourceLabel } from './offer-orchestrator.helpers';
 import { CertifiedCopyPreview } from './offer-orchestrator.preview';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 export function OfferOrchestratorEmptyState() {
   return (

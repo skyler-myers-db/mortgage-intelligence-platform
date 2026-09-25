@@ -9,9 +9,8 @@ import type {
   ActivationDestinationStatus,
   ActivationOutboxItem,
 } from '../../types';
-import { Button, Chip } from '../Primitives';
+import { Button, Chip, SurfaceTitle } from '../Primitives';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 type Channel = 'email' | 'sms' | 'direct_mail';
 

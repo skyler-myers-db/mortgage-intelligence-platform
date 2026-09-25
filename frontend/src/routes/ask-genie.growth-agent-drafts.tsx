@@ -1,9 +1,8 @@
 import { useId } from 'react';
-import { Chip } from '../components/Primitives';
+import { Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import type { GrowthAgentNotificationDraft } from '../types';
 import { publicAgentResponsesText } from './ask-genie.growth-run-card';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 interface GrowthAgentDraftPanelProps {
   drafts: GrowthAgentNotificationDraft[];

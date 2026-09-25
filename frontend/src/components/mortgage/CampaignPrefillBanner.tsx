@@ -1,9 +1,8 @@
 import { Icon } from '../Icon';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import type { CampaignGeoPrefill } from '../../lib/campaignPrefill';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import { formatCount } from '../../lib/formatters';
-import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 /**
  * Draft-context surface for a geo → campaign handoff (S9).

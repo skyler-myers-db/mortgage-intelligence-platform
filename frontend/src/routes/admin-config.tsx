@@ -5,7 +5,7 @@ import { useLocation } from 'react-router';
 import { useApp, type Accent, type Density } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { ThemePreferenceControl } from '../components/layout/ThemePreferenceControl';
-import { Chip } from '../components/Primitives';
+import { Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { DataOperationsPanel } from '../components/admin/DataOperationsPanel';
@@ -22,7 +22,6 @@ import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import type { DataEstateResponse } from '../types';
 import { formatCount, formatFixed, formatUsd } from '../lib/formatters';
-import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 /**
  * Administration — operator-facing configuration for Module 0.
