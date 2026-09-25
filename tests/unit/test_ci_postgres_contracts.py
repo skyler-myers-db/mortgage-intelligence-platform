@@ -37,20 +37,7 @@ PINNED_IMAGE = (
 )
 DSN = "host=127.0.0.1 port=5432 dbname=postgres user=postgres"
 
-KNOWN_UNRUN_DSN_SUITES: dict[str, dict[str, str]] = {
-    "tests/integration/test_lakebase_schema_upgrade.py::test_campaign_treatment_state_machine_freezes_ready_proof": {
-        "owner": "genie-server (W4a; Lakebase schema-upgrade suite)",
-        "reason": (
-            "the ready_request_hash probe writes '7' * 64, the value _ready_campaign already "
-            "stored, so the treatment trigger correctly sees no change and the probe reports an "
-            "accepted mutation; a test-data defect (first run on real PostgreSQL), not a schema "
-            "or Lakebase difference. Fix: probe with another hash, then delete this entry"
-        ),
-        # What jobs/lakebase_migration_integrity.py raises for this probe.
-        "failure": "'ready_request_hash' accepted a forbidden mutation",
-        "recorded": "2026-09-25",
-    },
-}
+KNOWN_UNRUN_DSN_SUITES: dict[str, dict[str, str]] = {}
 # Shrink-only: the keys recorded when the step was introduced. Never add one.
 _KNOWN_UNRUN_AT_INTRODUCTION = frozenset(
     {

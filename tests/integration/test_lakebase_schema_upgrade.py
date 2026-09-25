@@ -677,7 +677,9 @@ def test_campaign_treatment_state_machine_freezes_ready_proof(
                 "ready_request_hash",
                 "UPDATE mip_app.campaigns SET request_payload_hash = %s "
                 "WHERE campaign_id = %s",
-                ("7" * 64, ready_campaign),
+                # Differs from the "7" * 64 _ready_campaign stored: an equal
+                # value is no change, and the trigger correctly accepts it.
+                ("8" * 64, ready_campaign),
                 ("55000",),
             ),
             (
