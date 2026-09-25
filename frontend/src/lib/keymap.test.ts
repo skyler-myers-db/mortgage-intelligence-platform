@@ -256,6 +256,48 @@ describe('overlay state', () => {
     expect(hasOpenModal(document)).toBe(true);
   });
 
+  /**
+   * Every modal surface is now a native <dialog> with no role attribute
+   * (audit stack-05): the drawers, the palette, the shortcut sheet, the offer
+   * mock. An open one is `dialog[open]`; a closed or closing one (kept
+   * mounted for its exit) has no `open` and is aria-hidden. So Cmd-K over an
+   * open drawer, proof drawer, offer mock or review still opens nothing,
+   * and a closed dialog switches no key off.
+   */
+  it('counts an open <dialog> as a modal and an overlay; a closed or closing one as neither', () => {
+    document.body.innerHTML = '<dialog class="drawer is-open" open aria-label="Data source and lineage"></dialog>';
+    expect(hasOpenModal(document)).toBe(true);
+    expect(hasOpenOverlay(document)).toBe(true);
+
+    // Closing: close() ran at exit start, the retained copy is aria-hidden.
+    document.body.innerHTML = '<dialog class="drawer" aria-hidden="true" inert aria-label="Data source and lineage"></dialog>';
+    expect(hasOpenModal(document)).toBe(false);
+    expect(hasOpenOverlay(document)).toBe(false);
+
+    // An open dialog inside an aria-hidden subtree is not the user's layer.
+    document.body.innerHTML = '<div aria-hidden="true"><dialog open></dialog></div>';
+    expect(hasOpenModal(document)).toBe(false);
+  });
+
+  it('never counts a closed <dialog> without a role attribute, even one holding a listbox, as an overlay', () => {
+    // The always-mounted, closed palette: its listbox lives in the dialog.
+    document.body.innerHTML = [
+      '<dialog class="cmdk" aria-label="Command palette" aria-hidden="true" inert>',
+      '<input role="combobox" aria-expanded="true"><div role="listbox"></div>',
+      '</dialog>',
+    ].join('');
+    expect(hasOpenOverlay(document)).toBe(false);
+    expect(hasOpenModal(document)).toBe(false);
+    // The same palette open: a modal layer, and Cmd-K's own toggle still
+    // closes it (CommandPalette reads its open state before hasOpenModal).
+    const palette = document.querySelector('dialog') as HTMLDialogElement;
+    palette.removeAttribute('aria-hidden');
+    palette.removeAttribute('inert');
+    palette.setAttribute('open', '');
+    expect(hasOpenModal(document)).toBe(true);
+    expect(hasOpenOverlay(document)).toBe(true);
+  });
+
   it('never counts an overlay that is not rendered, such as an always-mounted hidden listbox', () => {
     document.body.innerHTML = '<ul role="listbox" hidden></ul>';
     const listbox = document.querySelector('ul') as HTMLElement;
