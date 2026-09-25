@@ -1,6 +1,6 @@
-/// <reference types="vitest" />
 import path from "node:path";
-import { defineConfig, type Plugin } from "vite";
+import type { Plugin } from "vite";
+import { defineConfig } from "vitest/config";
 import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { bootModulePlugin } from "./src/lib/bootModulePlugin.ts";
@@ -64,6 +64,25 @@ function chunkModulesManifest(): Plugin {
       });
     },
   };
+}
+
+/** The module whose shared chunk carries the Genie answer family (w3 review #88). */
+const GENIE_ANSWER_MODULE = /[\\/]src[\\/]components[\\/]mortgage[\\/]GenieAnswer\.tsx$/;
+
+/**
+ * NAMING ONLY (w3 review #88): Rolldown names a shared chunk after one of its
+ * members, and the Genie answer family's chunk came out as
+ * `useGenieTurnCollapse-*.js`, an arbitrary member. The non-entry chunk that
+ * holds src/components/mortgage/GenieAnswer.tsx is named
+ * `assets/genie-answer-[hash].js`; every other chunk keeps Vite's default
+ * `assets/[name]-[hash].js`. This never moves a module between chunks (a
+ * codeSplitting group would), so only file names and import specifiers change.
+ */
+function chunkFileName(chunk: { isEntry: boolean; moduleIds: readonly string[] }): string {
+  if (!chunk.isEntry && chunk.moduleIds.some((id) => GENIE_ANSWER_MODULE.test(id.split("?")[0]))) {
+    return "assets/genie-answer-[hash].js";
+  }
+  return "assets/[name]-[hash].js";
 }
 
 /** Geist + Geist Mono, one variable woff2 each (src/design-system/tokens.css). */
@@ -135,6 +154,7 @@ export default defineConfig({
     sourcemap: "hidden",
     rolldownOptions: {
       output: {
+        chunkFileNames: chunkFileName,
         // Vendor chunks (audit bundle-03): the framework code that changes
         // only with a lockfile bump gets its own long-cached chunk, so an app
         // edit no longer re-hashes it. Exactly two groups, both limited by

@@ -238,6 +238,22 @@ def test_root_serves_the_home_variant_and_deep_links_the_plain_shell() -> None:
     assert 'rel="preload" as="style"' not in root.text
 
 
+def test_the_genie_answer_chunk_is_named_for_its_family() -> None:
+    """w3 review #88: the shared chunk holding GenieAnswer.tsx is
+    ``genie-answer-*.js`` (a naming-only chunkFileNames rule), not the name of
+    an arbitrary member such as ``useGenieTurnCollapse``."""
+    _built_entry_chunk()
+    modules_file = FRONTEND / "build-meta" / "build-modules.json"
+    if not modules_file.is_file():
+        _skip_unless_required("frontend/build-meta is not built in this checkout")
+    chunks: dict[str, list[str]] = json.loads(modules_file.read_text(encoding="utf-8"))["chunks"]
+
+    holders = [name for name, modules in chunks.items() if "src/components/mortgage/GenieAnswer.tsx" in modules]
+    assert len(holders) == 1
+    assert re.fullmatch(r"assets/genie-answer-[\w-]+\.js", holders[0]), holders[0]
+    assert not [name for name in chunks if name.startswith("assets/useGenieTurnCollapse-")]
+
+
 def _missing_build_outcome() -> str:
     """How a missing build ends a test: 'skip' or 'fail' (never both)."""
     try:
