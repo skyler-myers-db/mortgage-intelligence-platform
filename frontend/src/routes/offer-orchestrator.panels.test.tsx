@@ -6,6 +6,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The Score anatomy disclosure reads the query cache; this test renders
+// without a QueryClientProvider and does not exercise it (its own tests do).
+vi.mock('../components/mortgage/ScoreAnatomyGate', () => ({ ScoreAnatomyGate: () => null }));
 vi.mock('../components/AppContext', () => ({
   useApp: () => ({ setDrawer: vi.fn(), showEvidence: true }),
 }));

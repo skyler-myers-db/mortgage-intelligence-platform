@@ -22,6 +22,9 @@ import { SegmentCard } from './SegmentCard';
 const setDrawer = vi.fn();
 const setLastBorrowerId = vi.fn();
 const saveLead = vi.fn();
+// The Score anatomy disclosure reads the query cache; this test renders
+// without a QueryClientProvider and does not exercise it (its own tests do).
+vi.mock('./ScoreAnatomyGate', () => ({ ScoreAnatomyGate: () => null }));
 vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer, showEvidence: true, setLastBorrowerId, saveLead, isLeadSaved: () => false }),
 }));

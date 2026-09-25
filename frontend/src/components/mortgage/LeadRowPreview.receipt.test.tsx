@@ -4,7 +4,7 @@
 
 import { createRoot, type Root } from 'react-dom/client';
 import { act, type ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { RowPreview } from './LeadRowPreview';
 
@@ -39,6 +39,9 @@ vi.mock('react-router', () => ({
  * the lead payload's score line.
  */
 const receiptMock = vi.hoisted(() => ({ render: vi.fn() }));
+// The Score anatomy disclosure reads the query cache; this test renders
+// without a QueryClientProvider and does not exercise it (its own tests do).
+vi.mock('./ScoreAnatomyGate', () => ({ ScoreAnatomyGate: () => null }));
 vi.mock('./DecisionReceipt', () => ({
   DecisionReceipt: (props: Record<string, unknown>) => {
     receiptMock.render(props);
@@ -68,6 +71,23 @@ const lead: LeadSummary = {
 
 describe('RowPreview decision receipt slot', () => {
   let root: Root;
+
+  // The receipt is a lazily loaded chunk now (Lead Queue route budget, wave 3
+  // score anatomy). Load it once, so every render below is synchronous again,
+  // as it was when the import was static.
+  beforeAll(async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const warm = createRoot(host);
+    act(() => warm.render(<RowPreview lead={lead} decisionReceipt={{ auditEventId: 'warm-up', decision: 'approved' }} />));
+    for (let i = 0; i < 200 && !host.querySelector('[data-testid="decision-receipt-stub"]'); i += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    }
+    act(() => warm.unmount());
+    host.remove();
+  });
 
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';

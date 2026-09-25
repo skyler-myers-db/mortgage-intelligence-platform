@@ -11,9 +11,17 @@ import { useApp } from '../AppContext';
 import { GenieAskAbout } from './GenieAskAbout';
 import { Button, EvidenceChip } from '../Primitives';
 import { ConfidenceMeter } from './ConfidenceMeter';
-import { DecisionReceipt, type LeadDecisionReceipt } from './DecisionReceipt';
+import type { LeadDecisionReceipt } from './DecisionReceipt';
+import { ScoreAnatomyGate } from './ScoreAnatomyGate';
 import { ScoreBadge } from './ScoreBadge';
+import { lazyModule, useLazyModule } from './useLazyModule';
 import { dispositionLabel, outreachLabel } from './LeadTable.logic';
+
+// A row's Decision receipt renders only after a decision in this session, so
+// it loads then (its shared interaction chunk) instead of riding in the Lead
+// Queue's route closure (budget, wave 3). The row's status chip states the
+// outcome meanwhile, and the receipt reads nothing before it mounts.
+const RECEIPT_CHUNK = lazyModule(() => import('./DecisionReceipt'));
 
 /**
  * id of the expanded row's receipt block: the queue's "View receipt" toast
@@ -48,6 +56,7 @@ export function RowPreview({
   decisionReceipt?: LeadDecisionReceipt | null;
 }) {
   const { setLastBorrowerId, saveLead, isLeadSaved } = useApp();
+  const DecisionReceipt = useLazyModule(RECEIPT_CHUNK, Boolean(decisionReceipt?.auditEventId)).module?.DecisionReceipt;
   const queueLinkState = useQueueLinkState(); // shell-04: dossier crumbs + pager
   // Prefer the display-safe Cotality property ref projected by the
   // backend. Raw CLIP is masked server-side for public demo safety.
@@ -75,15 +84,17 @@ export function RowPreview({
           className="tbl__expand-inner tbl__expand-inner--receipt"
           tabIndex={-1}
         >
-          <DecisionReceipt
-            auditEventId={decisionReceipt.auditEventId}
-            decision={decisionReceipt.decision}
-            decidedHere
-            reveal={!decisionReceipt.revealed}
-            onRevealed={decisionReceipt.markRevealed}
-            compact
-            score={{ opportunityScore: lead.opportunity_score, confidence: lead.confidence }}
-          />
+          {DecisionReceipt && (
+            <DecisionReceipt
+              auditEventId={decisionReceipt.auditEventId}
+              decision={decisionReceipt.decision}
+              decidedHere
+              reveal={!decisionReceipt.revealed}
+              onRevealed={decisionReceipt.markRevealed}
+              compact
+              score={{ opportunityScore: lead.opportunity_score, confidence: lead.confidence }}
+            />
+          )}
         </div>
       )}
     <div className="tbl__expand-inner tbl__expand-inner--lead">
@@ -166,6 +177,9 @@ export function RowPreview({
             </div>
             <ScoreBadge value={lead.opportunity_score} />
           </div>
+          {/* wow-stage-2: a disclosure, never read on expand. The chunk mounts
+              its own proof drawer, opened over the cache. */}
+          <ScoreAnatomyGate borrowerId={lead.borrower_id} variant="spine" />
           <p className="muted fs-12 mt-1 flush">
             {offerShortDescription(lead.recommended_offer_code)}
           </p>

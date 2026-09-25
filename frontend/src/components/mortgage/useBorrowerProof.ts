@@ -26,6 +26,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
+import type { BorrowerProof } from '../../types';
 
 export function useBorrowerProof(borrowerId: string, enabled: boolean) {
   return useQuery({
@@ -37,4 +38,13 @@ export function useBorrowerProof(borrowerId: string, enabled: boolean) {
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
   });
+}
+
+/**
+ * The recompute seal's gate (Score anatomy spine, Decision receipt): the
+ * proof is trusted, lists no known data gap and has components to recompute
+ * from. Anything else lists the gaps instead.
+ */
+export function proofSealHolds(proof: BorrowerProof): boolean {
+  return proof.trusted === true && proof.known_data_gaps.length === 0 && proof.score_components.length > 0;
 }
