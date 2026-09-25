@@ -292,6 +292,31 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     expect(bubbles[1].querySelector('.genie-answer')).not.toBeNull();
   });
 
+  it('describes every collapse toggle by its own question, expanded too (w3-genie-reading review)', () => {
+    appendGenieTurn('First question?', answer({ answer: 'First **answer**.', message_id: 'msg-1' }));
+    appendGenieTurn('Second question?', answer({ answer: 'Second answer.', message_id: 'msg-2' }));
+    appendGenieTurn('Third question?', answer({ answer: 'Third answer.', message_id: 'msg-3' }));
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieChat />
+        </MemoryRouter>,
+      );
+    });
+    const toggles = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button.genie-collapse__toggle'));
+    const description = (toggle: HTMLElement) =>
+      (toggle.getAttribute('aria-describedby') ?? '')
+        .split(' ')
+        .filter(Boolean)
+        .map((id) => document.getElementById(id)?.textContent ?? '')
+        .join(' ');
+    expect(toggles().map(description)).toEqual(['First question? First answer.', 'Second question? Second answer.']);
+
+    for (const toggle of toggles()) act(() => toggle.click());
+    expect(toggles().map((toggle) => toggle.textContent)).toEqual(['Collapse answer', 'Collapse answer']);
+    expect(toggles().map(description)).toEqual(['First question?', 'Second question?']);
+  });
+
   it('each bubble keeps its own Show all when the 20-turn cap evicts the head', async () => {
     const rows = (turn: number) => Array.from({ length: 12 }, (_, n) => ({ state: `T${turn}-${n}`, borrowers: n }));
     for (let n = 0; n < 20; n += 1) {
