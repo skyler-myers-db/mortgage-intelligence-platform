@@ -67,6 +67,12 @@ export interface WarmingUpState {
   maxAttempts: number;
   /** Correlation id from the 503 body, if any — for support tickets. */
   correlationId: string | null;
+  /**
+   * The plan's wait between attempts, in ms (audit states-08 part 4): the
+   * block's "next try in N s". Optional so hand-built states still compile;
+   * without it the block shows no next-try clock.
+   */
+  intervalMs?: number;
 }
 
 export interface UseWarmingUpRetryResult<T> {
@@ -88,6 +94,10 @@ export interface UseWarmingUpRetryResult<T> {
   isFetching: boolean;
   /** True when the rendered data is the previous key's payload during a refetch. */
   isPlaceholderData: boolean;
+  /** When `data` was fetched (epoch ms), or null before any success: "Fetched 3 min ago". */
+  dataUpdatedAt: number | null;
+  /** When `error` was last set (epoch ms), or null: a 429's countdown starts here. */
+  errorUpdatedAt: number | null;
 }
 
 export interface UseWarmingUpRetryOpts {
@@ -177,6 +187,7 @@ export function useWarmingUpRetry<T>(
       attempt: Math.min(query.failureCount + 1, Math.max(1, plan.maxAttempts)),
       maxAttempts: plan.maxAttempts,
       correlationId: failureReason.correlationId,
+      intervalMs: plan.intervalMs,
     };
   }, [failureReason, intervalMs, maxAttempts, query.data, query.failureCount, query.isPlaceholderData]);
 
@@ -197,5 +208,7 @@ export function useWarmingUpRetry<T>(
     manualRetry,
     isFetching: query.isFetching,
     isPlaceholderData: query.isPlaceholderData,
+    dataUpdatedAt: query.dataUpdatedAt || null,
+    errorUpdatedAt: query.errorUpdatedAt || null,
   };
 }

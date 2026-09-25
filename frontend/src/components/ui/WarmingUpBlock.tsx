@@ -1,8 +1,11 @@
+import { useState } from 'react';
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
+import { copyLink } from '../../lib/copyLink';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { useOptionalHealth } from '../HealthProvider';
 import { blockDefersToBanner } from '../healthRecovery';
+import { Countdown, WaitClock } from './RetryClock';
 
 /**
  * WarmingUpBlock — shared presentational component for the cold-start
@@ -18,8 +21,11 @@ import { blockDefersToBanner } from '../healthRecovery';
  *                    (the 30 s breaker cool-down is real)
  *
  * The attempt counter renders as "(attempt N of M)" so the operator
- * can see forward progress. Optional `title` slot lets per-page use
- * sites name the specific resource ("Loading B-102FL7THC6Q3L…").
+ * can see forward progress, and the footer says how long the wait has run
+ * and when the next try is due (audit states-08 part 4). The correlation id
+ * sits behind a "Details" disclosure with a Copy button. Optional `title`
+ * slot lets per-page use sites name the specific resource
+ * ("Loading B-102FL7THC6Q3L…").
  */
 
 interface WarmingUpBlockProps {
@@ -108,13 +114,55 @@ export function WarmingUpBlock({
         </p>
         <div className="warming-block__footer">
           <Icon name="db" size={11} />
-          <span className="muted warming-block__meta">
-            {state.correlationId
-              ? `correlation_id: ${state.correlationId}`
-              : cadenceFor(state.label)}
-          </span>
+          <span className="muted warming-block__meta">{cadenceFor(state.label)}</span>
+          <WaitLine attempt={state.attempt} intervalMs={state.intervalMs} />
         </div>
+        {state.correlationId && <ReferenceDetails reference={state.correlationId} />}
       </div>
     </div>
+  );
+}
+
+/**
+ * "Waiting 0:42 · next try in 4 s" (audit states-08 part 4). The wait runs
+ * from when this line mounted with the block; the next try is due one plan
+ * interval after the attempt count last changed (TanStack exposes no failure
+ * times, so the clock lives here, keyed by the attempt, not in the hook).
+ */
+function WaitLine({ attempt, intervalMs }: { attempt: number; intervalMs?: number }) {
+  const [since] = useState(() => Date.now());
+  return (
+    <span className="muted warming-block__meta" data-testid="warming-up-wait">
+      · Waiting <WaitClock since={since} />
+      {intervalMs !== undefined && <NextTry key={attempt} intervalMs={intervalMs} />}
+    </span>
+  );
+}
+
+function NextTry({ intervalMs }: { intervalMs: number }) {
+  const [until] = useState(() => Date.now() + intervalMs);
+  return (
+    <>
+      {' · next try in '}
+      <Countdown until={until} />
+    </>
+  );
+}
+
+/** The support reference, behind a disclosure: a copyable id, never prose. */
+function ReferenceDetails({ reference }: { reference: string }) {
+  return (
+    <details className="warming-block__details">
+      <summary className="muted fs-12">Details</summary>
+      <span className="muted fs-12">Reference </span>
+      <span className="mono fs-12" data-testid="warming-up-reference">{reference}</span>{' '}
+      <button
+        type="button"
+        className="btn btn--ghost btn--sm"
+        onClick={() => void copyLink(reference, { success: 'Reference copied', failure: 'Copy failed' })}
+      >
+        Copy
+      </button>
+    </details>
   );
 }
