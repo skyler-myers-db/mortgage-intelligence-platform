@@ -72,11 +72,19 @@ test.describe('forced colors (css-06 / a11y-10 / responsive-v3)', () => {
         await app.gotoRoute('/lead-queue');
         const highlight = await asComputedRgb(page, 'Highlight');
 
+        // The route nav keeps its state in the underline (visual-05): the
+        // current link's indicator is Highlight, an idle link's is Canvas
+        // (a forced transparent border would line every link).
         const nav = page.getByRole('navigation', { name: 'Main navigation' });
-        const activeLink = nav.locator('.filter.is-active');
-        const idleLink = nav.locator('.filter:not(.is-active)').first();
-        expect(await painted(activeLink)).not.toBe(await painted(idleLink));
-        expect(await activeLink.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(highlight);
+        const activeLink = nav.locator('.route-nav__link[aria-current="page"]');
+        const idleLink = nav.locator('.route-nav__link:not([aria-current])').first();
+        const indicator = (link: Locator) => link.evaluate((el) => {
+          const style = getComputedStyle(el);
+          return `${style.borderBottomWidth} ${style.borderBottomStyle} ${style.borderBottomColor}`;
+        });
+        expect(await indicator(activeLink)).toBe(`2px solid ${highlight}`);
+        expect(await indicator(idleLink)).toBe(`2px solid ${await asComputedRgb(page, 'Canvas')}`);
+        expect(await indicator(activeLink)).not.toBe(await indicator(idleLink));
 
         const bars = page.locator('#main-content .conf__bar');
         await expect(bars.first()).toBeVisible();
@@ -135,6 +143,16 @@ test.describe('forced colors (css-06 / a11y-10 / responsive-v3)', () => {
         const bar = node.locator('.funnel-sankey__bar');
         await settleTransitions(bar);
         expect(await bar.evaluate((el) => getComputedStyle(el).stroke)).toBe(await asComputedRgb(page, 'Highlight'));
+      });
+
+      test('the selected Analytics view tab keeps a Highlight fill (.layout-tabs, visual-05)', async ({ app, page }) => {
+        await app.gotoRoute('/analytics');
+        const tablist = page.getByRole('tablist', { name: 'Analytics views' });
+        const selected = tablist.getByRole('tab', { selected: true });
+        const idle = tablist.getByRole('tab', { selected: false }).first();
+        await settleTransitions(selected);
+        expect(await selected.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(await asComputedRgb(page, 'Highlight'));
+        expect(await painted(selected)).not.toBe(await painted(idle));
       });
 
       test('the score band survives as a border style', async ({ app, page }) => {

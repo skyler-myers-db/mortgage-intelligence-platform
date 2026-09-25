@@ -18,14 +18,15 @@ import { formatDate } from '../lib/time';
 
 export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals' | 'approval-funnel' | 'sales-ops';
 
-export const TABS: Array<{ id: AnalyticsTab; label: string; icon: 'flow' | 'map' | 'money' | 'layers' | 'audit' | 'target' }> = [
-  { id: 'executive', label: 'Executive', icon: 'flow' },
-  { id: 'geography', label: 'Geography', icon: 'map' },
-  { id: 'economics', label: 'Economics', icon: 'money' },
-  { id: 'segments', label: 'Segments', icon: 'layers' },
-  { id: 'signals', label: 'Signals', icon: 'audit' },
-  { id: 'approval-funnel', label: 'Approval funnel', icon: 'flow' },
-  { id: 'sales-ops', label: 'Sales ops', icon: 'target' },
+/** The Analytics view tabs: text-only, as in the prototype's `.layout-tabs`. */
+export const TABS: Array<{ id: AnalyticsTab; label: string }> = [
+  { id: 'executive', label: 'Executive' },
+  { id: 'geography', label: 'Geography' },
+  { id: 'economics', label: 'Economics' },
+  { id: 'segments', label: 'Segments' },
+  { id: 'signals', label: 'Signals' },
+  { id: 'approval-funnel', label: 'Approval funnel' },
+  { id: 'sales-ops', label: 'Sales ops' },
 ];
 
 /**

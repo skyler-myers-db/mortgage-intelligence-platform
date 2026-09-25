@@ -1,0 +1,42 @@
+/* ============================================================
+   LAYOUT TABS: the prototype's `.layout-tabs` tablist
+   (design_files/Module 0 Prototype.html:958-960)
+   ============================================================
+   Shared by the /ask-genie page tabs (visual-07 / genie-09) and the
+   Analytics view tabs (visual-05, M part). Lazy on purpose: imported by
+   routes/ask-genie.tabs.tsx and routes/analytics.tsx, so it ships in those
+   routes' CSS chunks and never in the initial stylesheet (the planner's
+   hoist into 01-app-shell.css was declined for that reason; moved here from
+   routes/ask-genie.css). Tokenized; the one departure is the selected tab's
+   ink: --accent-ink instead of the prototype's --accent, which is 1.75:1 in
+   light + bright (the evidence drawer tab took the same fix, audit a11y-01).
+   The ring is the global :focus-visible one. Forced colors:
+   components/33-contrast-modes.css. */
+.layout-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+.layout-tabs button {
+  min-block-size: calc(var(--sp-6) + var(--sp-1));
+  padding: var(--sp-1) var(--sp-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.layout-tabs button:hover { color: var(--text-1); }
+.layout-tabs button:active { translate: 0 var(--pressed-shift); }
+.layout-tabs button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}

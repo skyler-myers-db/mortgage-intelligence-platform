@@ -100,9 +100,9 @@ describe('Breadcrumbs', () => {
     expect(nav().querySelector('[aria-current="page"]')?.textContent).toBe('Segment Intelligence');
   });
 
-  it('asset detail links to the governed-asset index', async () => {
+  it('asset detail links to the governed-asset index: the Data estate panel on Admin', async () => {
     await renderAt('/data-estate/assets/lead_population');
     expect(items()).toEqual(['Data estate', 'Governed asset']);
-    expect(nav().querySelector('a')?.getAttribute('href')).toBe('/admin-config');
+    expect(nav().querySelector('a')?.getAttribute('href')).toBe('/admin-config#data-estate');
   });
 });

@@ -34,6 +34,7 @@ import {
   type Theme,
   type ThemePreference,
 } from '../lib/themePreference';
+import { changeTheme } from '../lib/themeTransition';
 import type {
   ConfigOptions,
   SavedDraft,
@@ -317,8 +318,17 @@ export function AppProvider({ children }: PropsWithChildren) {
     workspaceQuery.isSuccess,
   ]);
 
-  const setTheme = useCallback((t: Theme) => setThemePreferenceState(t), []);
-  const setThemePreference = useCallback((p: ThemePreference) => setThemePreferenceState(p), []);
+  // A change of the PAINTED theme cross-fades (lib/themeTransition, audit
+  // motion-03); the data-theme effect above has run by the time its
+  // flushSync'd update returns, so the new snapshot shows the new theme.
+  const setTheme = useCallback(
+    (t: Theme) => changeTheme(theme, t, () => setThemePreferenceState(t)),
+    [theme],
+  );
+  const setThemePreference = useCallback(
+    (p: ThemePreference) => changeTheme(theme, resolveTheme(p, systemDark), () => setThemePreferenceState(p)),
+    [systemDark, theme],
+  );
   const setAccent = useCallback((a: Accent) => setAccentState(a), []);
   const setDensity = useCallback((d: Density) => setDensityState(d), []);
   const setConsoleOpen = useCallback((v: boolean) => setConsoleOpenState(v), []);

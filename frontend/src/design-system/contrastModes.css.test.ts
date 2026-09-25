@@ -166,6 +166,7 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
         '.cmdk__row.is-active',
         '.filter-menu__item:is(.is-focused, .is-selected)',
         '.topbar__search-result.is-active',
+        '.layout-tabs.layout-tabs button.is-active',
       ]),
     );
     const rule = declarations.filter((d) => selectorList(d.selector).includes('.drawer__tab.is-active'));
@@ -213,6 +214,14 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
     const carveOut = declarations.filter((d) => d.selector.includes('.filter__remove'));
     expect(carveOut.map((d) => [d.file, d.selector, d.property, d.value])).toEqual([
       ['src/routes/lead-queue.css', '.filter.is-active .filter__remove:is(:hover, :focus-visible) svg', 'color', 'ButtonText !important'],
+    ]);
+  });
+
+  it('keeps the route nav current-page indicator in Highlight and paints no line under idle links', () => {
+    const nav = declarations.filter((d) => d.selector.startsWith('.route-nav__link'));
+    expect(nav.map((d) => [d.selector, d.property, d.value])).toEqual([
+      ['.route-nav__link', 'border-block-end-color', 'Canvas'],
+      ['.route-nav__link[aria-current="page"]', 'border-block-end-color', 'Highlight'],
     ]);
   });
 

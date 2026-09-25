@@ -8,7 +8,7 @@ import { queueCrumbLabel, queueHref, type QueueContext, type QueueLinkState } fr
  *
  *   Borrower 360     Lead Queue · IL · In the Money  /  B-0123456789ABC
  *   Offer            Lead Queue · IL  /  B-0123456789ABC  /  Offer Orchestrator
- *   Governed asset   Data estate  /  Governed asset
+ *   Governed asset   Data estate (#data-estate)  /  Governed asset
  *
  * The Lead Queue crumb returns to the exact filtered queue the dossier was
  * opened from (lib/queueContext), else to the unfiltered queue.
@@ -47,8 +47,10 @@ export function breadcrumbTrail(pathname: string, queue: QueueContext | null): C
     ];
   }
   if (meta.id === 'asset') {
-    // The governed-asset index is the Data estate panel on the admin page.
-    return [{ label: 'Data estate', to: ROUTES.admin.pattern }, { label: meta.name }];
+    // The governed-asset index is the Data estate panel on the admin page:
+    // land on the panel itself (#data-estate, DataEstatePanel), not the top
+    // of Admin (wave-1c follow-up #15).
+    return [{ label: 'Data estate', to: `${ROUTES.admin.pattern}#data-estate` }, { label: meta.name }];
   }
   return [{ label: meta.name }];
 }
