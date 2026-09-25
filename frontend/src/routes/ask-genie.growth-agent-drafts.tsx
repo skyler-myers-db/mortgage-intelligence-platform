@@ -1,21 +1,24 @@
+import { useId } from 'react';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import type { GrowthAgentNotificationDraft } from '../types';
 import { publicAgentResponsesText } from './ask-genie.growth-run-card';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 interface GrowthAgentDraftPanelProps {
   drafts: GrowthAgentNotificationDraft[];
 }
 
 export function GrowthAgentDraftPanel({ drafts }: GrowthAgentDraftPanelProps) {
+  const titleId = useId();
   if (drafts.length === 0) return null;
 
   return (
-    <section className="surface surface--inset mt-3" aria-label="Watchlist notifications">
+    <section className="surface surface--inset mt-3" aria-labelledby={titleId}>
       <div className="surface__hdr">
         <Icon name="doc" size={14} className="icon-accent" />
         <div>
-          <div className="h-4">Watchlist notifications</div>
+          <SurfaceTitle level={3} id={titleId}>Watchlist notifications</SurfaceTitle>
           <div className="muted fs-12">Slack alerts and Teams operations briefs from saved watchlist runs.</div>
         </div>
       </div>

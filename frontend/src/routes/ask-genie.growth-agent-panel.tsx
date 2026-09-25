@@ -9,6 +9,7 @@ import {
   renderSourceAssetChip,
   workflowIcon,
 } from './ask-genie.growth-agent.helpers';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 interface GrowthAgentPanelProps {
   agent: GrowthAgentWorkspace;
@@ -223,7 +224,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
           <div className="growth-agent-custom__head">
             <Icon name="filter" size={14} className="icon-accent" />
             <div>
-              <div className="h-4">Build a custom segment workflow</div>
+              <SurfaceTitle level={3}>Build a custom segment workflow</SurfaceTitle>
               <div className="muted fs-12">
                 Combine reviewed borrower segments, count the borrowers eligible for outreach, then save the filters as a watchlist.
               </div>

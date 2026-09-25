@@ -32,6 +32,7 @@ import {
 } from './AdminAuditExplorer.params';
 import { AUDIT_TABLE_CONTEXT, AuditEventTableRow, formatAuditTimestamp } from './AdminAuditExplorer.row';
 import { formatCount } from '../../lib/formatters';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 interface AuditRollupRow {
   bucket_start: string;
@@ -153,7 +154,7 @@ export function AdminAuditExplorer() {
     >
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4" id="audit-explorer-title">Audit explorer</div>
+          <SurfaceTitle id="audit-explorer-title">Audit explorer</SurfaceTitle>
           <div className="muted fs-12">
             Filter the Lakebase ledger by actor, day, event type, entity or correlation id.
           </div>

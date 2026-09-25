@@ -3,6 +3,7 @@ import type { CallDisposition, SalesTeamMember } from '../../types';
 import { Button } from '../Primitives';
 import { DISPOSITION_OPTIONS, REJECT_REASONS } from './LeadTable.constants';
 import type { RejectReasonCode } from './LeadTable.types';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 export function LeadRejectPanel({
   borrowerId,
@@ -33,7 +34,7 @@ export function LeadRejectPanel({
       }}
     >
       <div>
-        <div className="h-4">Reject rationale</div>
+        <SurfaceTitle level={3}>Reject rationale</SurfaceTitle>
         <div className="muted fs-12">
           Record the committee-visible reason for {borrowerId}.
         </div>
@@ -120,7 +121,7 @@ export function LeadDispositionPanel({
       }}
     >
       <div>
-        <div className="h-4">Call disposition</div>
+        <SurfaceTitle level={3}>Call disposition</SurfaceTitle>
         <div className="muted fs-12">
           Log LO activity for {borrowerId}.
         </div>

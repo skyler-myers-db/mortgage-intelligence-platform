@@ -3,6 +3,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { glossaryEntries, type GlossaryCategory } from '../lib/mortgageGlossary';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 import './glossary.css';
 
 const CATEGORY_LABELS: Record<GlossaryCategory, string> = {
@@ -61,7 +62,7 @@ export default function GlossaryRoute() {
         <aside className="surface glossary-index" aria-label="Glossary categories">
           <div className="surface__hdr">
             <Icon name="filter" size={14} className="icon-accent" />
-            <div className="h-4">Categories</div>
+            <SurfaceTitle>Categories</SurfaceTitle>
           </div>
           <div className="surface__body">
             <div className="chip-row">
@@ -85,7 +86,7 @@ export default function GlossaryRoute() {
               <div className="surface__hdr">
                 <Icon name={category === 'governance' || category === 'principles' ? 'shield' : category === 'evidence' ? 'layers' : 'info'} size={14} className="icon-accent" />
                 <div>
-                  <div className="h-4">{CATEGORY_LABELS[category]}</div>
+                  <SurfaceTitle>{CATEGORY_LABELS[category]}</SurfaceTitle>
                   <div className="muted fs-12">{grouped[category].length} terms</div>
                 </div>
               </div>
@@ -99,7 +100,8 @@ export default function GlossaryRoute() {
                   >
                     <div className="split-row">
                       <div>
-                        <h2 className="glossary-entry__term">{entry.term}</h2>
+                        {/* h3: each term sits under its category's h2 (a11y-03). */}
+                        <h3 className="glossary-entry__term">{entry.term}</h3>
                         {entry.aliases.length > 0 && (
                           <div className="glossary-entry__aliases">
                             {entry.aliases.map((alias) => (

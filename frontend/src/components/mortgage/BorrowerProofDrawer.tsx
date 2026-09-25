@@ -13,6 +13,7 @@ import { useTabs } from '../ui/useTabs';
 import { useBorrowerProof } from './useBorrowerProof';
 // Same lazy chunk: ScoreAnatomy is the drawer's only importer.
 import { SCORE_SPINE_COPY } from './scoreSpine.copy';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 type ProofTab = 'math' | 'evidence' | 'lineage' | 'reproduce';
 
@@ -148,7 +149,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose, focusComponent 
               second click cannot cancel it and send another. */}
           {proofQuery.isError && (
             <div className="proof-callout proof-callout--warning">
-              <div className="h-4">Proof unavailable</div>
+              <SurfaceTitle>Proof unavailable</SurfaceTitle>
               <p className="body flush">
                 The borrower dossier loaded, but the governed proof endpoint did not return. Try again
                 once the warehouse is healthy.

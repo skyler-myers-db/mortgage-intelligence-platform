@@ -22,6 +22,7 @@ import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import type { DataEstateResponse } from '../types';
 import { formatCount, formatFixed, formatUsd } from '../lib/formatters';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 /**
  * Administration — operator-facing configuration for Module 0.
@@ -250,7 +251,7 @@ export default function AdminConfig() {
         {/* Offer rules — clickable to expand threshold table */}
         <div className="surface" id="offer-rules">
           <div className="surface__hdr surface__hdr--split">
-            <div className="h-4">Offer rules</div>
+            <SurfaceTitle>Offer rules</SurfaceTitle>
             <button
               type="button"
               className="chip chip--neutral admin-rules-version"
@@ -346,7 +347,7 @@ export default function AdminConfig() {
         {/* Audit trail — live count + last event timestamp */}
         <div className="surface">
           <div className="surface__hdr surface__hdr--split">
-            <div className="h-4">Audit trail</div>
+            <SurfaceTitle>Audit trail</SurfaceTitle>
             <Chip variant={auditError ? 'warning' : 'success'}>
               {auditError ? 'reconnecting' : 'live'}
             </Chip>
@@ -389,7 +390,7 @@ export default function AdminConfig() {
         {/* Data source readiness — per-source status rows */}
         <div className="surface">
           <div className="surface__hdr surface__hdr--split">
-            <div className="h-4">Data source readiness</div>
+            <SurfaceTitle>Data source readiness</SurfaceTitle>
             <Chip variant={sourcesError ? 'warning' : 'neutral'}>
               {sourcesWarming
                 ? 'warming up…'
@@ -473,7 +474,8 @@ export default function AdminConfig() {
         >
           <div className="appearance-toggle__side">
             <Icon name="tweak" size={14} className="icon-accent" />
-            <div className="h-4">Workspace appearance (per-user)</div>
+            {/* A span, not a SurfaceTitle: no heading inside a <button> (a11y-03). */}
+            <span className="h-4">Workspace appearance (per-user)</span>
           </div>
           <div className="appearance-toggle__side">
             <span className="appearance-toggle__meta">

@@ -11,6 +11,7 @@ import type {
   GrowthAgentWorkflow,
   PlanStepTrace,
 } from '../types';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 function traceStepIcon(status: PlanStepTrace['status']): 'check' | 'audit' | 'cross' {
   if (status === 'completed') return 'check';
@@ -63,11 +64,11 @@ export function ComposePlanCard({
       <div className="growth-agent-run__head">
         <div>
           <div className="eyebrow">Composed plan</div>
-          <div className="h-4">
+          <SurfaceTitle level={3}>
             {publicAgentResponsesText(
               plan ? plan.objective_summary : response.message ?? 'Plan unavailable',
             )}
-          </div>
+          </SurfaceTitle>
         </div>
         {status === 'composed' && (
           <Chip variant={response.executed ? 'success' : 'neutral'} icon="sparkle">

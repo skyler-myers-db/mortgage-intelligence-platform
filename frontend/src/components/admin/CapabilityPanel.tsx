@@ -4,6 +4,7 @@ import { queryKeys } from '../../lib/queryKeys';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
 import { Chip } from '../Primitives';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 /**
  * Agentic capability readiness — renders the honest DAIS-2026 capability
@@ -85,7 +86,7 @@ export function CapabilityPanel() {
     <div className="surface mt-grid" id="capability-readiness">
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Agentic capability readiness</div>
+          <SurfaceTitle>Agentic capability readiness</SurfaceTitle>
           <div className="muted fs-12">
             DAIS-2026 stack. Available rows are live-proven; configured rows require a live probe before claims.
           </div>

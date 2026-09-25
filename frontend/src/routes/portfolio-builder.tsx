@@ -54,6 +54,7 @@ import {
 import { campaignSetupsEqual, portfolioUnsavedMessage } from './portfolio-builder.unsaved';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { populationKpiLabel } from '../lib/populationLabels';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
@@ -447,7 +448,7 @@ export default function PortfolioBuilder() {
               <Icon name="target" size={14} />
             </div>
             <div>
-              <div className="h-4">Filters</div>
+              <SurfaceTitle>Filters</SurfaceTitle>
               <div className="muted fs-12">
                 Filter the population, run the build, review KPIs.
               </div>

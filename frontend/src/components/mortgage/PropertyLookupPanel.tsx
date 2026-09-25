@@ -7,6 +7,7 @@ import { Button, Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { ScoreBadge } from './ScoreBadge';
 import { formatUsd, ratePct } from '../../lib/formatters';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 /**
  * PropertyLookupPanel — the visible app-UI consumer of the governed
@@ -45,9 +46,11 @@ export interface PropertyLookupPanelProps {
   onNavigate?: () => void;
   /** Compact chrome for the narrow Console rail (drops the sub-header copy). */
   compact?: boolean;
+  /** Title heading level (a11y-03): 2 on a page (default), 3 inside a Console group. */
+  headingLevel?: 2 | 3;
 }
 
-export function PropertyLookupPanel({ onNavigate, compact }: PropertyLookupPanelProps) {
+export function PropertyLookupPanel({ onNavigate, compact, headingLevel = 2 }: PropertyLookupPanelProps) {
   const [addressLine, setAddressLine] = useState('');
   const [zip5, setZip5] = useState('');
   const [city, setCity] = useState('');
@@ -105,7 +108,7 @@ export function PropertyLookupPanel({ onNavigate, compact }: PropertyLookupPanel
       <div className="surface__hdr">
         <Icon name="search" size={14} className="icon-accent" />
         <div>
-          <div className="h-4">Property lookup</div>
+          <SurfaceTitle level={headingLevel}>Property lookup</SurfaceTitle>
           {!compact && (
             <div className="muted fs-12">
               Resolve a street address + ZIP to its masked CLIP, loan facts, and governed dossier.

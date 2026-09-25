@@ -11,6 +11,7 @@ import { queryKeys } from '../lib/queryKeys';
 import { formatCount } from '../lib/formatters';
 import { formatTimestamp } from '../lib/time';
 import type { AssetFreshness, AssetMetadataResponse } from '../types';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'Unavailable';
@@ -97,7 +98,7 @@ export default function AssetRoute() {
         <section className="surface">
           <div className="surface__hdr">
             <Icon name="shield" size={14} className="icon-accent" />
-            <div className="h-4">Asset unavailable</div>
+            <SurfaceTitle>Asset unavailable</SurfaceTitle>
           </div>
           <div className="surface__body">
             <p className="body flush">
@@ -119,7 +120,7 @@ export default function AssetRoute() {
               <div className="surface__hdr-main">
                 <div className="surface__icon"><Icon name="db" size={14} /></div>
                 <div>
-                  <div className="h-4">{asset.title}</div>
+                  <SurfaceTitle>{asset.title}</SurfaceTitle>
                   <div className="muted fs-12 mono">{asset.uc_object}</div>
                 </div>
               </div>
@@ -157,7 +158,7 @@ export default function AssetRoute() {
             <div className="surface__hdr">
               <Icon name="info" size={14} className="icon-accent" />
               <div>
-                <div className="h-4">What this proves</div>
+                <SurfaceTitle>What this proves</SurfaceTitle>
                 <div className="muted fs-12">Plain-language source contract</div>
               </div>
             </div>
@@ -177,7 +178,7 @@ export default function AssetRoute() {
             <div className="surface__hdr">
               <Icon name="audit" size={14} className="icon-accent" />
               <div>
-                <div className="h-4">Columns</div>
+                <SurfaceTitle>Columns</SurfaceTitle>
                 <div className="muted fs-12">Sensitive identifiers are omitted from this view.</div>
               </div>
             </div>
@@ -210,7 +211,7 @@ export default function AssetRoute() {
             <div className="surface__hdr">
               <Icon name="doc" size={14} className="icon-accent" />
               <div>
-                <div className="h-4">Sanitized DDL contract</div>
+                <SurfaceTitle>Sanitized DDL contract</SurfaceTitle>
                 <div className="muted fs-12">Storage locations, owners, grants, properties, and sensitive columns are omitted.</div>
               </div>
             </div>
@@ -230,7 +231,7 @@ export default function AssetRoute() {
             <div className="surface__hdr">
               <Icon name="tag" size={14} className="icon-accent" />
               <div>
-                <div className="h-4">Tags and safe properties</div>
+                <SurfaceTitle>Tags and safe properties</SurfaceTitle>
                 <div className="muted fs-12">Only non-sensitive tag/property keys are shown.</div>
               </div>
             </div>
@@ -243,7 +244,7 @@ export default function AssetRoute() {
             <div className="surface__hdr">
               <Icon name="flow" size={14} className="icon-accent" />
               <div>
-                <div className="h-4">Observed lineage</div>
+                <SurfaceTitle>Observed lineage</SurfaceTitle>
                 <div className="muted fs-12">System-table lineage observed in the last 90 days; absence is not proof of no lineage.</div>
               </div>
             </div>

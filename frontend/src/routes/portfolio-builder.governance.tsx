@@ -17,6 +17,7 @@ import {
   savedCampaignLeadQueueUrl,
   savedCampaignVariants,
 } from './portfolio-builder.saved-campaigns';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 type CampaignArchiveFeedback = {
   campaignId: string;
@@ -130,7 +131,7 @@ export function SavedCampaignsPanel({
             <Icon name="doc" size={14} />
           </div>
           <div>
-            <div className="h-4">Saved campaigns</div>
+            <SurfaceTitle>Saved campaigns</SurfaceTitle>
             <div className="muted fs-12">Drafts and review status for portfolio builds.</div>
           </div>
         </div>

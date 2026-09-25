@@ -10,6 +10,7 @@ import { api, type ActorAuditEventSummary } from '../../lib/api';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 /**
  * Console — the right-side tweaks panel from the prototype. Theme, accent,
@@ -135,7 +136,9 @@ export function Console() {
     >
       <div className="tweaks__hdr">
         <Icon name="tweak" size={14} className="tweaks__hdr-icon" />
-        <div className="tweaks__title">Console</div>
+        {/* The Console's own h2, so its group titles (h3) nest under it rather
+            than under the page's last surface (a11y-03). */}
+        <h2 className="tweaks__title">Console</h2>
         <button
           className="drawer__close"
           onClick={() => setConsoleOpen(false)}
@@ -183,7 +186,7 @@ export function Console() {
         </div>
         <div className="tweak-row">
           <label>Property lookup</label>
-          <PropertyLookupPanel compact onNavigate={() => setConsoleOpen(false)} />
+          <PropertyLookupPanel compact headingLevel={3} onNavigate={() => setConsoleOpen(false)} />
         </div>
         <div
           id="console-recent-activity"
@@ -194,7 +197,7 @@ export function Console() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="audit" size={14} className="tweaks__hdr-icon" />
-              <div className="h-4">My recent activity</div>
+              <SurfaceTitle level={3}>My recent activity</SurfaceTitle>
               <div className="topbar__spacer" />
               <button
                 type="button"

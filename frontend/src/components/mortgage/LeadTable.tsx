@@ -46,6 +46,7 @@ import { ariaKeyShortcuts } from '../../lib/keymap';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import type { LeadTableProps, LeadTableSort, SortDir, SortKey } from './LeadTable.types';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 import './LeadTable.css';
 
 export { buildLeadCsv } from './LeadTable.csv';
@@ -397,7 +398,7 @@ export function LeadTable({
             <Icon name="user" size={14} />
           </div>
           <div>
-            <div className="h-4">Ranked borrowers</div>
+            <SurfaceTitle>Ranked borrowers</SurfaceTitle>
             <div className="muted fs-12">
               {/* Keycaps are `<kbd>` (prototype-parity P2); the header's
                   "Keyboard shortcuts" button and `?` list every key. */}

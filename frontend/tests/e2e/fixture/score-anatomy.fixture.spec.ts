@@ -197,7 +197,7 @@ test.describe('score anatomy', () => {
 
     const receipt = page.getByTestId('decision-receipt');
     await expect(receipt).toBeVisible();
-    await expect.poll(() => focused(page), 'focus sits on the receipt heading').toMatch(/^DIV\.h-4: Decision receipt/);
+    await expect.poll(() => focused(page), 'focus sits on the receipt heading').toMatch(/^H2\.h-4: Decision receipt/);
     expect(await focused(page)).not.toBe('BODY');
 
     const routing = receipt.getByTestId('decision-receipt-routing');

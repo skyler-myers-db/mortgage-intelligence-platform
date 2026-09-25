@@ -11,6 +11,7 @@ import type {
 } from '../../types';
 import { Button, Chip } from '../Primitives';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 type Channel = 'email' | 'sms' | 'direct_mail';
 
@@ -136,7 +137,7 @@ export function ActivationLoopPanel({
     <div className="surface mt-grid">
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Customer activation loop</div>
+          <SurfaceTitle>Customer activation loop</SurfaceTitle>
           <div className="muted fs-12">
             Stage approved work for CRM, CDP, LOS/POS, or servicing writeback without auto-sending outreach.
           </div>
@@ -244,7 +245,7 @@ export function ActivationOperationsPanel() {
     <div className="surface mt-grid">
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Activation destinations</div>
+          <SurfaceTitle>Activation destinations</SurfaceTitle>
           <div className="muted fs-12">
             Governed outbox for CRM, CDP, LOS/POS, and servicing handoff. No destination secrets are stored in the browser.
           </div>

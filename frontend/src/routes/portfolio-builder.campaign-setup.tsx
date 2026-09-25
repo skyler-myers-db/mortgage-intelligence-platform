@@ -11,6 +11,7 @@ import {
   type CampaignNumericField,
   type CampaignSetupState,
 } from './portfolio-builder.logic';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 type CampaignField = Exclude<
   keyof CampaignSetupState,
@@ -73,7 +74,7 @@ export function CampaignSetupPanel({
             <Icon name="send" size={14} />
           </div>
           <div>
-            <div className="h-4">Campaign setup</div>
+            <SurfaceTitle>Campaign setup</SurfaceTitle>
             <div className="muted fs-12">
               Evidence-backed variants, measured assumptions, holdout, and delivery controls.
             </div>
@@ -149,7 +150,7 @@ export function CampaignSetupPanel({
                   id="campaign-variant-hypotheses-title"
                   className="h-5"
                   role="heading"
-                  aria-level={4}
+                  aria-level={3}
                 >
                   Message hypotheses
                 </div>

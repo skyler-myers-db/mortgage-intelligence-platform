@@ -8,6 +8,7 @@ import { assetHrefForSource, descriptorFor, DRAWER_SOURCES } from '../../lib/dra
 import { formatTimestamp } from '../../lib/time';
 import { Skeleton } from '../ui/Skeleton';
 import { formatCount } from '../../lib/formatters';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 function statusLabel(status: DataEstateStatus): string {
   if (status === 'demo_synthetic') return 'demo synthetic';
@@ -88,7 +89,7 @@ export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
             <Icon name="layers" size={14} />
           </div>
           <div>
-            <div className="h-4">Data estate under the hood</div>
+            <SurfaceTitle>Data estate under the hood</SurfaceTitle>
             <div className="muted fs-12">
               First-party data, Cotality enrichment, Databricks governance, and Entrada transformations.
             </div>
@@ -293,7 +294,7 @@ export function DataEstatePanelSkeleton() {
             <Icon name="layers" size={14} />
           </div>
           <div>
-            <div className="h-4">Data estate under the hood</div>
+            <SurfaceTitle>Data estate under the hood</SurfaceTitle>
             <div className="muted fs-12">
               Loading source readiness, freshness, and governed lineage proof…
             </div>

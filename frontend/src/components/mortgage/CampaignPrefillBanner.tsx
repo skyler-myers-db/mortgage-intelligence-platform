@@ -3,6 +3,7 @@ import { Chip } from '../Primitives';
 import type { CampaignGeoPrefill } from '../../lib/campaignPrefill';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import { formatCount } from '../../lib/formatters';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 /**
  * Draft-context surface for a geo → campaign handoff (S9).
@@ -43,7 +44,7 @@ export function CampaignPrefillBanner({
             <Icon name="pin" size={14} />
           </div>
           <div>
-            <div className="h-4">Campaign draft from geography drill-down</div>
+            <SurfaceTitle>Campaign draft from geography drill-down</SurfaceTitle>
             <div className="muted fs-12">
               State filter applied to this build. County/ZIP narrowing and segment
               carry-over are saved as draft context — they become build predicates

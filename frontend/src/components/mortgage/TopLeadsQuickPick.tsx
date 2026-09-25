@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { Icon } from '../Icon';
+import { SurfaceTitle } from '../ui/SurfaceTitle';
 
 /**
  * "Today's top leads" — a compact quick-pick for the Borrower 360 and Offer
@@ -31,7 +32,7 @@ export function TopLeadsQuickPick({
       <div className="surface__hdr surface__hdr--split">
         <div className="surface__hdr-main">
           <Icon name="bolt" size={14} className="icon-accent" />
-          <div className="h-4">Today's top leads</div>
+          <SurfaceTitle>Today's top leads</SurfaceTitle>
         </div>
         <Link className="btn btn--ghost btn--sm" to="/lead-queue">
           Open lead queue

@@ -103,10 +103,14 @@ describe('OfferActionBar', () => {
 
     const region = bar()!;
     const alert = region.querySelector('[role="alert"]');
-    const form = region.querySelector('form[aria-label="Reject rationale"]');
+    const form = region.querySelector('form[aria-labelledby]');
     const gate = region.querySelector('.approval');
     expect(alert?.textContent).toBe("Couldn't write approval: audit write failed");
     expect(form).not.toBeNull();
+    // The form is named by its own heading (a11y-03), not a repeated aria-label.
+    const title = document.getElementById(form!.getAttribute('aria-labelledby')!);
+    expect(title?.tagName).toBe('H2');
+    expect(title?.textContent).toBe('Reject rationale');
     expect(form!.compareDocumentPosition(gate!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Reject's first click opened the form: focus lands on its reason.
     expect(document.activeElement).toBe(form!.querySelector('select'));

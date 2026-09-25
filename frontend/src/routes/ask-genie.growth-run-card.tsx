@@ -12,6 +12,7 @@ import type {
   GrowthAgentRunResponse,
   GrowthAgentToolStep,
 } from '../types';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 export { DATABRICKS_AGENT_RESPONSES_LABEL, publicAgentResponsesText };
 
@@ -153,7 +154,7 @@ export function GrowthAgentRunCard({
       <div className="growth-agent-run__head">
         <div>
           <div className="eyebrow">Latest run</div>
-          <div className="h-4">{run.workflow.title}</div>
+          <SurfaceTitle level={3}>{run.workflow.title}</SurfaceTitle>
         </div>
         <Button
           variant="success"

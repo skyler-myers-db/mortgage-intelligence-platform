@@ -33,6 +33,7 @@ import { useApp } from '../components/AppContext';
 import { LtvEquityValue } from './borrower-360.ltv-field';
 import { BorrowerQueuePager } from './borrower-360.pager';
 import { useQueueContext } from '../lib/queueContext';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 // The proof drawer ships in the lazy Score anatomy chunk (wow-stage-2): the
 // dossier's natural load does not carry it. It is mounted (closed) on the
@@ -145,7 +146,7 @@ export default function Borrower360() {
         <div className="surface">
           <div className="surface__hdr">
             <Icon name="user" size={14} className="icon-accent" />
-            <div className="h-4">What you'll see</div>
+            <SurfaceTitle>What you'll see</SurfaceTitle>
           </div>
           <div className="surface__body surface__body--stack-sm">
             <div className="chip-row">
@@ -369,7 +370,7 @@ export default function Borrower360() {
                 <div className="surface__icon">
                   <Icon name="user" size={14} />
                 </div>
-                <div className="h-4">{BORROWER_DOSSIER_LABEL}</div>
+                <SurfaceTitle>{BORROWER_DOSSIER_LABEL}</SurfaceTitle>
               </div>
               {b.first_party_synthetic_demo && (
                 <span
@@ -521,7 +522,7 @@ export default function Borrower360() {
             <div className="surface">
               <div className="surface__hdr">
                 <Icon name="bolt" size={14} className="icon-accent" />
-                <div className="h-4">Trigger timeline</div>
+                <SurfaceTitle>Trigger timeline</SurfaceTitle>
               </div>
               <div className="surface__body">
                 <TriggerTimeline events={b.trigger_timeline} segmentColor={segColor} />
@@ -535,7 +536,7 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="shield" size={14} className="icon-accent" />
-              <div className="h-4">Refi economics check</div>
+              <SurfaceTitle>Refi economics check</SurfaceTitle>
             </div>
             <div className="surface__body">
               <div className="chip-row mb-3">
@@ -584,7 +585,7 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="bolt" size={14} className="icon-accent" />
-              <div className="h-4"><GlossaryTerm term="nextBestOffer">Primary offer</GlossaryTerm></div>
+              <SurfaceTitle><GlossaryTerm term="nextBestOffer">Primary offer</GlossaryTerm></SurfaceTitle>
             </div>
             <div className="surface__body">
               <div className="split-row">
@@ -643,7 +644,7 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="layers" size={14} className="icon-accent" />
-              <div className="h-4"><GlossaryTerm term="supportingEvidence">Supporting evidence</GlossaryTerm></div>
+              <SurfaceTitle><GlossaryTerm term="supportingEvidence">Supporting evidence</GlossaryTerm></SurfaceTitle>
             </div>
             <div className="surface__body surface__body--stack-sm">
               {b.evidence_events.map((e) => (

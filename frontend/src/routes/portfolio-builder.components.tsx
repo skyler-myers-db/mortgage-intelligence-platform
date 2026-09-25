@@ -4,6 +4,7 @@ import { MultiFilterSelect } from '../components/ui/MultiFilterSelect';
 import type { CampaignPerformanceFunnelResponse, PortfolioPreview } from '../types';
 import type { FootprintState } from './portfolio-builder.logic';
 import { formatCount, formatPercent, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 /**
  * GEO picker for step one of the product flow. It used to be a private
@@ -171,7 +172,7 @@ export function RoiProjector({
             <Icon name="money" size={14} />
           </div>
           <div>
-            <div className="h-4">Campaign economics projection</div>
+            <SurfaceTitle>Campaign economics projection</SurfaceTitle>
             <div className="muted fs-12">
               Selected cohort facts projected through the team&apos;s qualified 90-day funnel, or explicit manual overrides.
             </div>

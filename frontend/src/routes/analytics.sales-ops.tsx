@@ -16,6 +16,7 @@ import type {
   SalesTeamMember,
 } from '../types';
 import { formatCount } from '../lib/formatters';
+import { SurfaceTitle } from '../components/ui/SurfaceTitle';
 
 /**
  * Sales ops snapshot — relocated from the Lead Queue (2026-07-10) into its own
@@ -150,7 +151,7 @@ export function SalesOpsSection() {
     <div className="surface">
       <div className="surface__hdr surface__hdr--split">
         <div className="surface__hdr-main">
-          <div className="h-4">Sales ops snapshot</div>
+          <SurfaceTitle>Sales ops snapshot</SurfaceTitle>
           <div className="muted fs-12">
             Shift capacity, stale approvals, yesterday's activity, and imported customer-system outcomes.
           </div>

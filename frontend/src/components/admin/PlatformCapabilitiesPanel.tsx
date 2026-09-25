@@ -95,8 +95,10 @@ export function PlatformCapabilitiesPanel() {
           <Icon name="bolt" size={14} className="icon-accent" />
           <div>
             {/* Title distinguishes this live-probe panel from the buyer-claim
-                "Buyer readiness" panel lower in the console. */}
-            <div className="h-4">Platform capabilities (live probes)</div>
+                "Buyer readiness" panel lower in the console. A span, not a
+                SurfaceTitle: a heading cannot sit inside this <button>, whose
+                text already names the disclosure (a11y-03). */}
+            <span className="h-4">Platform capabilities (live probes)</span>
             <div className="muted fs-12">Live capability and proof status for this workspace</div>
           </div>
         </div>
