@@ -454,20 +454,25 @@ export default function LeadQueue() {
       title="Ranked borrowers"
       lede="Expand a row, then approve or reject. Decisions are audited; nothing is sent automatically."
       heroRight={
-        <LeadQueueHeroFilterChips
-          chips={activeFilterChips}
-          onRemove={(chip) => setSearchParams(searchParamsWithoutFilter(searchParams, chip.params))}
-          focusFallbackRef={moreFiltersToggleRef}
-        />
-      }
-    >
-      <div className="surface mb-grid">
-        <div className="surface__body">
+        // The presets and Copy link sit in the hero's action slot, stacked
+        // over the active-filter chips: a row of their own above the filter
+        // bar pushed the 480px table scroller below the fold at 1440x900.
+        <div className="lead-queue-hero">
           <LeadQueueViews
             searchParams={searchParams}
             showAssignedToMe={actorIsListedLo}
             onCopyLink={copyQueueLink}
           />
+          <LeadQueueHeroFilterChips
+            chips={activeFilterChips}
+            onRemove={(chip) => setSearchParams(searchParamsWithoutFilter(searchParams, chip.params))}
+            focusFallbackRef={moreFiltersToggleRef}
+          />
+        </div>
+      }
+    >
+      <div className="surface mb-grid">
+        <div className="surface__body">
           <div
             className={`lead-queue-scope ${scopeFiltersActive ? '' : 'is-empty'}`}
             role="group"

@@ -28,10 +28,15 @@ describe('lead-queue.css queue presets (audit tables-09)', () => {
     expect(reset).toMatch(/text-decoration:\s*none;/);
   });
 
-  it('lays the row out with tokens only', () => {
+  it('stacks the presets over the hero chips, right-aligned, with tokens only', () => {
+    const stack = block(/\.lead-queue-hero/);
+    expect(stack).toMatch(/flex-direction:\s*column;/);
+    expect(stack).toMatch(/align-items:\s*flex-end;/);
     const row = block(/\.lead-queue-views/);
-    expect(row).toMatch(/margin-block-end:\s*var\(--sp-3\);/);
-    expect(row).not.toMatch(/\d+px|#[0-9a-f]{3,8}\b/i);
-    expect(block(/\.lead-queue-views__copy/)).toMatch(/margin-inline-start:\s*auto;/);
+    expect(row).toMatch(/justify-content:\s*flex-end;/);
+    expect(row).toMatch(/gap:\s*var\(--sp-2\);/);
+    for (const rule of [stack, row, block(/\.lead-queue-views__copy/)]) {
+      expect(rule).not.toMatch(/\d+px|#[0-9a-f]{3,8}\b/i);
+    }
   });
 });
