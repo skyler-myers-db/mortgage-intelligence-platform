@@ -10,8 +10,9 @@ fails when the junit report shows zero tests or any skip.
 
 ``KNOWN_UNRUN_DSN_SUITES`` is the shrink-only list of what that step does not
 run as a gate: a pytest node id (``file::test``) is deselected and re-run
-last, where it must still fail (a pass is a stale entry and fails the step);
-a bare file path would leave a whole suite out of the step. Never add an
+last, where it must still fail with its recorded ``failure`` text (a pass is
+a stale entry, and another failure is a new defect; both fail the step); a
+bare file path would leave a whole suite out of the step. Never add an
 entry to make CI green: fix the test or the schema, then delete the entry in
 ci.yml and here in the same change.
 """
@@ -45,6 +46,8 @@ KNOWN_UNRUN_DSN_SUITES: dict[str, dict[str, str]] = {
             "accepted mutation; a test-data defect (first run on real PostgreSQL), not a schema "
             "or Lakebase difference. Fix: probe with another hash, then delete this entry"
         ),
+        # What jobs/lakebase_migration_integrity.py raises for this probe.
+        "failure": "'ready_request_hash' accepted a forbidden mutation",
         "recorded": "2026-09-25",
     },
 }
@@ -151,11 +154,14 @@ def test_every_dsn_suite_is_matched_by_the_serial_step() -> None:
 def test_known_unrun_entries_are_governed_shrink_only_and_not_stale() -> None:
     assert set(KNOWN_UNRUN_DSN_SUITES) <= _KNOWN_UNRUN_AT_INTRODUCTION, "the list only shrinks"
     step_env = _step(SERIAL_STEP)["env"]
-    listed_nodes = str(step_env.get("KNOWN_UNRUN", "")).split()
-    assert listed_nodes == sorted(key for key in KNOWN_UNRUN_DSN_SUITES if "::" in key)
+    listed = [line for line in str(step_env.get("KNOWN_UNRUN", "")).splitlines() if line.strip()]
+    assert listed == sorted(
+        f"{key}|{entry['failure']}" for key, entry in KNOWN_UNRUN_DSN_SUITES.items() if "::" in key
+    ), "one `<node id>|<failure text>` line per node entry"
 
     for key, entry in KNOWN_UNRUN_DSN_SUITES.items():
-        assert set(entry) == {"owner", "reason", "recorded"}
+        assert set(entry) == {"owner", "reason", "failure", "recorded"}
+        assert "|" not in key and "|" not in entry["failure"]
         assert all(value.strip() for value in entry.values())
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry["recorded"])
         file, _, test_name = key.partition("::")
@@ -168,7 +174,10 @@ def test_known_unrun_entries_are_governed_shrink_only_and_not_stale() -> None:
 
     run = _step(SERIAL_STEP)["run"]
     # Each node is deselected from the gate, then re-run on its own: a pass
-    # is a stale entry and fails the step.
+    # is a stale entry, and a failure without its recorded text is a new
+    # defect; both fail the step.
     assert 'deselect+=(--deselect "$node")' in run
-    assert 'pytest -q -n 0 -p no:cacheprovider "$node"' in run
+    assert 'pytest -q -n 0 -p no:cacheprovider "$node" < /dev/null 2>&1' in run
     assert 'if [ "$status" -eq 0 ]; then' in run
+    assert 'elif ! grep -qF -- "$expected" <<< "$output"; then' in run
+    assert run.count('done <<< "$KNOWN_UNRUN"') == 2

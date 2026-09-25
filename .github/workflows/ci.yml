@@ -110,12 +110,14 @@ jobs:
         # jobs/lakebase_migration_acl.py), a step the suites skip with
         # allow_absent_provider_schema on vanilla PostgreSQL. KNOWN_UNRUN is
         # shrink-only and pinned by tests/unit/test_ci_postgres_contracts.py:
-        # each entry is deselected here, re-run last, and must still fail
-        # (a pass is a stale entry and fails this step). The junit check
-        # makes "ran, not skipped" a gate.
+        # one `<node id>|<text its failure prints>` per line; each node is
+        # deselected here, re-run last, and must still fail WITH that text (a
+        # pass is a stale entry, another failure is a new defect; both fail
+        # this step). The junit check makes "ran, not skipped" a gate.
         env:
           MIP_TEST_POSTGRES_DSN: 'host=127.0.0.1 port=5432 dbname=postgres user=postgres'
-          KNOWN_UNRUN: tests/integration/test_lakebase_schema_upgrade.py::test_campaign_treatment_state_machine_freezes_ready_proof
+          KNOWN_UNRUN: |-
+            tests/integration/test_lakebase_schema_upgrade.py::test_campaign_treatment_state_machine_freezes_ready_proof|'ready_request_hash' accepted a forbidden mutation
         run: |
           python - <<'PY'
           import os
@@ -128,7 +130,9 @@ jobs:
                   conn.execute("REVOKE ALL ON SCHEMA public FROM PUBLIC")
           PY
           deselect=()
-          for node in $KNOWN_UNRUN; do deselect+=(--deselect "$node"); done
+          while IFS='|' read -r node _; do
+            if [ -n "$node" ]; then deselect+=(--deselect "$node"); fi
+          done <<< "$KNOWN_UNRUN"
           pytest -q -n 0 -rs --junitxml=postgres-contracts.xml "${deselect[@]}" \
             tests/integration/test_*_postgres.py tests/integration/test_lakebase_schema_upgrade.py
           python - <<'PY'
@@ -144,20 +148,25 @@ jobs:
               print("::error::the real-PostgreSQL contracts must run, not skip (is the DSN wired?)")
               sys.exit(1)
           PY
-          for node in $KNOWN_UNRUN; do
+          while IFS='|' read -r node expected; do
+            if [ -z "$node" ]; then continue; fi
             set +e
-            pytest -q -n 0 -p no:cacheprovider "$node"
+            output=$(pytest -q -n 0 -p no:cacheprovider "$node" < /dev/null 2>&1)
             status=$?
             set -e
+            printf '%s\n' "$output"
             if [ "$status" -eq 0 ]; then
               echo "::error::$node now passes: remove its KNOWN_UNRUN entry here and in tests/unit/test_ci_postgres_contracts.py"
               exit 1
             elif [ "$status" -ne 1 ]; then
               echo "::error::the KNOWN_UNRUN re-run of $node could not execute (pytest exit $status)"
               exit 1
+            elif ! grep -qF -- "$expected" <<< "$output"; then
+              echo "::error::$node failed without its known failure text ($expected): a new defect, triage it"
+              exit 1
             fi
             echo "::warning::known real-PostgreSQL failure, owner lane to fix: $node"
-          done
+          done <<< "$KNOWN_UNRUN"
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v7
