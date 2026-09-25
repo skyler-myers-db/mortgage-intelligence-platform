@@ -29,6 +29,11 @@
  *   - The `defaultPrevented` check only defers to another capture-phase
  *     `window` listener registered before this one; nothing else runs
  *     earlier.
+ *   - A dismissal that is NOT a keypress (a native `<dialog>` `cancel` from
+ *     the Android back gesture or a CloseWatcher) goes through
+ *     `dismissTopLayer()`: the same walk, run once. A `cancel` the browser
+ *     fires for an Escape this stack already consumed in the same task is
+ *     ignored, so one Escape never closes two layers (audit a11y-07 step 2).
  *
  * Deliberately not a React context: layers live in different subtrees and
  * portals, and the ordering that matters is open order, not tree order.
@@ -44,17 +49,32 @@ interface EscapeLayer {
 const layers: EscapeLayer[] = [];
 let nextLayerId = 1;
 let listening = false;
+/** True from an Escape this stack consumed until the end of that task. */
+let escapeConsumedThisTask = false;
 
-function onWindowKeyDown(event: KeyboardEvent): void {
-  if (event.key !== 'Escape' || event.defaultPrevented) return;
+/** Run the topmost accepting layer. Returns true when one accepted. */
+function runTopLayer(event: KeyboardEvent): boolean {
   // Snapshot: a handler that closes its layer pops the stack while we walk it.
   const ordered = [...layers].reverse();
   for (const layer of ordered) {
     if (layer.handler(event) === false) continue;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    return;
+    return true;
   }
+  return false;
+}
+
+function onWindowKeyDown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+  if (!runTopLayer(event)) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (escapeConsumedThisTask) return;
+  escapeConsumedThisTask = true;
+  // A task, not a microtask: a browser that still fires the dialog's
+  // `cancel` for this keypress does so later in the same task.
+  window.setTimeout(() => {
+    escapeConsumedThisTask = false;
+  }, 0);
 }
 
 function syncListener(): void {
@@ -84,6 +104,18 @@ export function pushEscapeLayer(handler: EscapeLayerHandler): () => void {
     layers.splice(index, 1);
     syncListener();
   };
+}
+
+/**
+ * Close the topmost layer once, for a dismissal that is not an Escape
+ * keypress: the native `cancel` of a modal `<dialog>` (Android back, a
+ * CloseWatcher). Layers see the same Escape they would on a keypress. A
+ * no-op when this task already consumed an Escape keypress. Returns true
+ * when a layer accepted.
+ */
+export function dismissTopLayer(): boolean {
+  if (escapeConsumedThisTask || typeof window === 'undefined') return false;
+  return runTopLayer(new KeyboardEvent('keydown', { key: 'Escape' }));
 }
 
 /** Number of open layers. Diagnostics and tests only. */
