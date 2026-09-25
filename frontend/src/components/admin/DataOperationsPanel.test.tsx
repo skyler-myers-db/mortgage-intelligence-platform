@@ -221,4 +221,37 @@ describe('DataOperationsPanel', () => {
       queryKey: ['mip', 'admin', 'sources'],
     });
   });
+
+  // runtime-03 pins: the launch helper holds the try/catch. A rejection shows
+  // its error and clears the running key (the button reads Run again); each
+  // click sends its own request id.
+  it('a rejected launch shows the error and clears the running key', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    apiMocks.adminRunOperation.mockRejectedValue(new Error('Job launch refused'));
+    await render();
+
+    const runButton = (): HTMLButtonElement =>
+      Array.from(document.querySelectorAll('button')).find((button) =>
+        button.textContent?.includes('Run') || button.textContent?.includes('Starting'),
+      ) as HTMLButtonElement;
+    await act(async () => {
+      runButton().click();
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain('Job launch refused');
+    expect(runButton().textContent).toContain('Run');
+    expect(runButton().disabled).toBe(false);
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['mip', 'admin', 'sources'] });
+
+    await act(async () => {
+      runButton().click();
+    });
+    await settle();
+    const requestIds = apiMocks.adminRunOperation.mock.calls.map(
+      ([body]) => (body as { request_id: string }).request_id,
+    );
+    expect(requestIds).toHaveLength(2);
+    expect(new Set(requestIds).size).toBe(2);
+  });
 });
