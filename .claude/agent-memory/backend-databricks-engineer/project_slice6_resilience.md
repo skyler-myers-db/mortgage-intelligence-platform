@@ -16,4 +16,4 @@ Key surfaces to know:
 
 **Why:** The app is now fully on real data with no silent mock substitution. Visible degraded state is the only honest UI behavior when a dependency is down. Governance also wanted PII blocked at write time, not read time, because the audit ledger is append-only.
 
-**How to apply:** Future slices touching dependency calls should funnel through `get_sql_client()` / `get_lakebase_client()` so they pick up breaker+retry automatically. Do not bypass with a direct `DatabricksSqlClient(...)` constructor. Do not add mock-fallback branches on 503 — the contract is `retryable: true` + DegradedBanner.
+**How to apply:** Future slices touching dependency calls should funnel through `get_sql_client()` / `get_lakebase_client()` so they pick up breaker+retry automatically. Do not bypass with a direct `DatabricksSqlClient(...)` constructor. Do not add mock-fallback branches on 503 — the contract is `retryable: true` + DegradedBanner (except kind `permission_denied`, which is `retryable: false`; see [[permission-denied-fail-fast]]).
