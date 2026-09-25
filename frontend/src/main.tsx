@@ -8,6 +8,7 @@ import { seedBootQueries } from "./lib/bootPrime";
 import { installClientErrorListeners, rootErrorOptions } from "./lib/clientErrorLog";
 import { hasRenderBlockedChunkLoad } from "./lib/lazyPreload";
 import { createMipQueryClient } from "./lib/queryClient";
+import { prefetchRouteData } from "./lib/routeDataPrefetch";
 import { setRumRouteSource } from "./lib/rumBridge";
 import { installStaleChunkRecovery } from "./lib/staleChunkRecovery";
 import "./design-system/tokens.css";
@@ -30,6 +31,12 @@ seedBootQueries(queryClient);
 // in app.tsx, so the unsaved-changes guard can use useBlocker (audit
 // states-05). See appRouter.tsx: no loaders, actions or route objects.
 const router = createAppRouter();
+
+// The landing route's chunk and its non-audited hero reads start now, beside
+// the entry, instead of after the lazy route mounts (lib/routeDataPrefetch,
+// audit delivery-03): Home's KPI and map reads on `/`, the executive and
+// rate-window reads on an unfiltered `/analytics`, no data anywhere else.
+prefetchRouteData(queryClient, router.state.location.pathname, router.state.location.search);
 
 // RUM (lib/rum, lazy and off by default) reports a route_change only when the
 // router COMMITS a new location: a Back the unsaved-changes guard blocks
