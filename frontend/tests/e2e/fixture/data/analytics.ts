@@ -38,7 +38,9 @@ export const SCORE_BUCKETS: ReadonlyArray<readonly [number, number]> = [
  * The canonical display band (backend scoring.score_band, mip.gold.fn_score_band,
  * src/lib/opportunityScore.ts scoreBand: high >= 85, med >= 65, else low).
  * EquitySpreadPoint rejects any other band for a score. Repeated here because
- * the fixture may only `import type` from src.
+ * the fixture may only `import type` from src: keep 85 / 65 in step with
+ * SCORE_BAND_HIGH_MIN / SCORE_BAND_MED_MIN there (the fixture contract test
+ * catches a backend move, not a frontend-only one).
  */
 function canonicalScoreBand(opportunityScore: number): 'high' | 'med' | 'low' {
   if (opportunityScore >= 85) return 'high';
