@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Navigate, useParams } from 'react-router';
-import { api } from '../lib/api';
+import type { ApproveResult, RejectResult } from '../lib/apiTypes';
+import {
+  offerMutationKeys,
+  useOfferApprove,
+  useOfferDraftSave,
+  useOfferReject,
+  type OfferApproveBody,
+  type OfferRejectBody,
+} from '../lib/mutations/offer';
+import { isDecisionPending } from '../lib/mutations/outreach';
+import { intentFingerprint, useIntentRequestIds } from '../lib/mutations/requestIds';
 import { PageShell } from '../components/layout/PageShell';
 import { BorrowerOfferPreviewMock } from '../components/mortgage/BorrowerOfferPreviewMock';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
@@ -10,7 +20,6 @@ import { Button, Chip } from '../components/Primitives';
 import { useApp } from '../components/AppContext';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { approverGateReason } from '../components/mortgage/approverGate';
-import { invalidateOperationalQueries } from '../lib/queryKeys';
 import { offerDisplayLabel } from '../lib/offerLanguage';
 import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } from './offer-orchestrator.constants';
 import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
@@ -32,6 +41,15 @@ import {
 // Keep campaign handoffs on that exact channel until the campaign contract
 // carries and verifies additional stored channel variants.
 const SAVED_CAMPAIGN_OUTREACH_CHANNELS: readonly OutreachChannel[] = ['email'];
+
+/** "Couldn't write approval: …" / "Couldn't record rejection: …", verbatim from before the port. */
+function writeErrorCopy(err: unknown, lead: string): string {
+  return err instanceof Error ? `${lead}: ${err.message}` : `${lead}.`;
+}
+
+function draftSaveErrorCopy(err: unknown): string {
+  return err instanceof Error ? `Couldn't save draft: ${err.message}` : "Couldn't save draft.";
+}
 
 export default function OfferOrchestrator() {
   const { id } = useParams();
@@ -57,10 +75,7 @@ export default function OfferOrchestrator() {
   } | null>(null);
   // Carryover #12: where the approval made here was routed, from its response.
   const [approvalRouting, setApprovalRouting] = useState<{ id: string; assignedTo: string | null; followUpAt: string | null } | null>(null);
-  const [approving, setApproving] = useState<boolean>(false);
   const [draftChannel, setDraftChannel] = useState<OutreachChannel>('email');
-  const [draftSavePending, setDraftSavePending] = useState(false);
-  const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
   const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
   const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>(DEFAULT_REJECT_REASON);
   const salesTeam = useOfferSalesTeam();
@@ -91,6 +106,15 @@ export default function OfferOrchestrator() {
   } = useApp();
   // Audit flow-02: gate the approve controls on the session's can_approve.
   const approverGate = approverGateReason(canApprove, sessionStatus);
+  // Governed writes on the mutation layer (stack-09): pessimistic, one
+  // request_id per intent, pending / failure read from mutation state.
+  const approveMutation = useOfferApprove(queryClient);
+  const rejectMutation = useOfferReject(queryClient);
+  const draftSave = useOfferDraftSave(saveDraft);
+  const requestIds = useIntentRequestIds();
+  const approving = approveMutation.isPending || rejectMutation.isPending;
+  const draftSavePending = draftSave.isPending;
+  const draftSaveError = draftSave.error ? draftSaveErrorCopy(draftSave.error) : null;
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${activeDraftChannel}` : null;
   // The route is the ONE observer of both reads (offer-orchestrator.queries):
@@ -178,27 +202,19 @@ export default function OfferOrchestrator() {
       confidence: b.confidence,
     });
   };
-  const saveCurrentDraft = async () => {
-    if (!id || !draftReady || !draftProof || draftSavePending) return;
-    setDraftSavePending(true);
-    setDraftSaveError(null);
-    try {
-      await saveDraft({
-        borrower_id: id,
-        generation_id: draftProof.generationId,
-        response_hash: draftProof.responseHash,
-      });
-    } catch (err) {
-      setDraftSaveError(
-        err instanceof Error ? `Couldn't save draft: ${err.message}` : "Couldn't save draft.",
-      );
-    } finally {
-      setDraftSavePending(false);
-    }
+  const saveCurrentDraft = () => {
+    if (!id || !draftReady || !draftProof) return;
+    if (queryClient.isMutating({ mutationKey: offerMutationKeys.draftSave }) > 0) return;
+    // mutate (not mutateAsync): a failure is read from draftSave.error.
+    draftSave.mutate({
+      borrower_id: id,
+      generation_id: draftProof.generationId,
+      response_hash: draftProof.responseHash,
+    });
   };
   const resetCurrentDraft = () => {
     if (!id) return;
-    setDraftSaveError(null);
+    draftSave.reset();
     removeSavedDraft(id, activeDraftChannel);
     setLoadGeneration((n) => n + 1);
     rereadSnapshotAndDraft();
@@ -211,6 +227,9 @@ export default function OfferOrchestrator() {
   };
 
   const onApprove = async () => {
+    // Synchronous latch: a decision for this borrower is already on the wire
+    // (a double click, or the Lead Queue's write) — never a second POST.
+    if (isDecisionPending(queryClient, id)) return;
     if (approving || snapshotReconciling || snapshot.reading || approverGate !== null) return;
     setApproveError(null);
     if (campaignBindingError) {
@@ -221,53 +240,49 @@ export default function OfferOrchestrator() {
       setApproveError('Approval is disabled until the audited outreach draft loads from the backend.');
       return;
     }
-    setApproving(true);
+    // Always the on-screen draft: never draftForApproval, never a second /draft.
+    const body: OfferApproveBody = {
+      offer_code: rec?.offer_code ?? b?.recommended_offer_code ?? null,
+      evidence_ids: rec?.evidence_ids ?? b?.evidence_ids ?? [],
+      draft_subject: activeDraftChannel === 'sms' ? null : draftSubject,
+      draft_body: draftText,
+      draft_generation_id: draftProof?.generationId ?? null,
+      draft_response_hash: draftProof?.responseHash ?? null,
+      draft_source_refreshed_at: draftProof?.sourceRefreshedAt ?? null,
+      channel: activeDraftChannel,
+      assigned_to_email: assignedTo || null,
+      follow_up_in_days: followUpDays > 0 ? followUpDays : null,
+      campaign_id: campaignBinding?.campaign_id ?? null,
+      variant_name: campaignBinding?.variant_name ?? null,
+    };
+    const intent = intentFingerprint('approve', id, JSON.stringify(body));
+    const variables = { decision: 'approve' as const, borrowerId: id, requestId: requestIds.idFor(intent), body };
+    let res: ApproveResult;
     try {
-      const offer_code = rec?.offer_code ?? b?.recommended_offer_code ?? null;
-      const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
-      const draft_body = draftText;
-      const draft_subject = activeDraftChannel === 'sms' ? null : draftSubject;
-      const res = await api.approve(id, {
-        offer_code,
-        evidence_ids,
-        draft_subject,
-        draft_body,
-        draft_generation_id: draftProof?.generationId ?? null,
-        draft_response_hash: draftProof?.responseHash ?? null,
-        draft_source_refreshed_at: draftProof?.sourceRefreshedAt ?? null,
-        channel: activeDraftChannel,
-        assigned_to_email: assignedTo || null,
-        follow_up_in_days: followUpDays > 0 ? followUpDays : null,
-        campaign_id: campaignBinding?.campaign_id ?? null,
-        variant_name: campaignBinding?.variant_name ?? null,
-      });
-      if (res.approved) {
-        setApproval(id, 'approved');
-        setDecidedHere({
-          id,
-          generation: loadGeneration,
-          auditId: res.audit_event_id ?? null,
-          approvalId: res.approval_id ?? null,
-        });
-        const routedTo = res.assigned_to_email ?? (assignedTo || null);
-        setApprovalRouting({ id, assignedTo: routedTo, followUpAt: res.follow_up_at ?? null });
-        announceApprovalRouting(routedTo, res.follow_up_at ?? null, res.audit_event_id ?? null);
-        void invalidateOperationalQueries(queryClient);
-      } else {
-        setApproveError('Approval endpoint returned approved=false.');
-      }
+      res = await approveMutation.mutateAsync(variables);
     } catch (err: unknown) {
-      setApproveError(
-        err instanceof Error
-          ? `Couldn't write approval: ${err.message}`
-          : "Couldn't write approval.",
-      );
-    } finally {
-      setApproving(false);
+      setApproveError(writeErrorCopy(err, "Couldn't write approval"));
+      return;
     }
+    if (!res.approved) {
+      setApproveError('Approval endpoint returned approved=false.');
+      return;
+    }
+    requestIds.settle(intent);
+    setApproval(id, 'approved');
+    setDecidedHere({
+      id,
+      generation: loadGeneration,
+      auditId: res.audit_event_id ?? null,
+      approvalId: res.approval_id ?? null,
+    });
+    const routedTo = res.assigned_to_email ?? (assignedTo || null);
+    setApprovalRouting({ id, assignedTo: routedTo, followUpAt: res.follow_up_at ?? null });
+    announceApprovalRouting(routedTo, res.follow_up_at ?? null, res.audit_event_id ?? null);
   };
 
   const onReject = async () => {
+    if (isDecisionPending(queryClient, id)) return;
     if (approving || snapshotReconciling || approverGate !== null) return;
     if (campaignBindingError) {
       setApproveError('Campaign handoff is incomplete. Reopen the saved campaign before rejection.');
@@ -284,38 +299,34 @@ export default function OfferOrchestrator() {
     // Confirm reject waits for this open's snapshot read, like Approve.
     if (snapshot.reading) return;
     setApproveError(null);
-    setApproving(true);
+    const body: OfferRejectBody = {
+      offer_code: rec?.offer_code ?? b?.recommended_offer_code ?? null,
+      evidence_ids: rec?.evidence_ids ?? b?.evidence_ids ?? [],
+      channel: activeDraftChannel,
+      rationale_code: rejectReasonCode,
+      rationale: rejectRationale.trim() || null,
+      campaign_id: campaignBinding?.campaign_id ?? null,
+      variant_name: campaignBinding?.variant_name ?? null,
+    };
+    const intent = intentFingerprint('reject', id, JSON.stringify(body));
+    const variables = { decision: 'reject' as const, borrowerId: id, requestId: requestIds.idFor(intent), body };
+    let res: RejectResult;
     try {
-      const offer_code = rec?.offer_code ?? b?.recommended_offer_code ?? null;
-      const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
-      const res = await api.reject(id, {
-        offer_code,
-        evidence_ids,
-        channel: activeDraftChannel,
-        rationale_code: rejectReasonCode,
-        rationale: rejectRationale.trim() || null,
-        campaign_id: campaignBinding?.campaign_id ?? null,
-        variant_name: campaignBinding?.variant_name ?? null,
-      });
-      if (res.rejected) {
-        setApproval(id, 'rejected');
-        setDecidedHere({ id, generation: loadGeneration, auditId: res.audit_event_id ?? null, approvalId: null });
-        void invalidateOperationalQueries(queryClient);
-        setRejectReviewOpen(false);
-        setRejectReasonCode(DEFAULT_REJECT_REASON);
-        setRejectRationale('');
-      } else {
-        setApproveError('Reject endpoint returned rejected=false.');
-      }
+      res = await rejectMutation.mutateAsync(variables);
     } catch (err: unknown) {
-      setApproveError(
-        err instanceof Error
-          ? `Couldn't record rejection: ${err.message}`
-          : "Couldn't record rejection.",
-      );
-    } finally {
-      setApproving(false);
+      setApproveError(writeErrorCopy(err, "Couldn't record rejection"));
+      return;
     }
+    if (!res.rejected) {
+      setApproveError('Reject endpoint returned rejected=false.');
+      return;
+    }
+    requestIds.settle(intent);
+    setApproval(id, 'rejected');
+    setDecidedHere({ id, generation: loadGeneration, auditId: res.audit_event_id ?? null, approvalId: null });
+    setRejectReviewOpen(false);
+    setRejectReasonCode(DEFAULT_REJECT_REASON);
+    setRejectRationale('');
   };
 
   if (snapshot.warmingUp) {
@@ -417,7 +428,7 @@ export default function OfferOrchestrator() {
         draftProofFresh={draftProofFresh}
         onDraftChannelChange={(channel) => {
           if (allowedDraftChannels && !allowedDraftChannels.includes(channel)) return;
-          setDraftSaveError(null);
+          draftSave.reset();
           setDraftChannel(channel);
           // The old effect re-read the whole snapshot on a channel switch;
           // the draft follows its new key (one POST for the new channel).
