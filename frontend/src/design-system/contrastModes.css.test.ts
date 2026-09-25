@@ -166,6 +166,7 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
         '.cmdk__row.is-active',
         '.filter-menu__item:is(.is-focused, .is-selected)',
         '.topbar__search-result.is-active',
+        '.layout-tabs.layout-tabs button.is-active',
       ]),
     );
     const rule = declarations.filter((d) => selectorList(d.selector).includes('.drawer__tab.is-active'));

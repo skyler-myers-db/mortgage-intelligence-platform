@@ -145,6 +145,16 @@ test.describe('forced colors (css-06 / a11y-10 / responsive-v3)', () => {
         expect(await bar.evaluate((el) => getComputedStyle(el).stroke)).toBe(await asComputedRgb(page, 'Highlight'));
       });
 
+      test('the selected Analytics view tab keeps a Highlight fill (.layout-tabs, visual-05)', async ({ app, page }) => {
+        await app.gotoRoute('/analytics');
+        const tablist = page.getByRole('tablist', { name: 'Analytics views' });
+        const selected = tablist.getByRole('tab', { selected: true });
+        const idle = tablist.getByRole('tab', { selected: false }).first();
+        await settleTransitions(selected);
+        expect(await selected.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(await asComputedRgb(page, 'Highlight'));
+        expect(await painted(selected)).not.toBe(await painted(idle));
+      });
+
       test('the score band survives as a border style', async ({ app, page }) => {
         await app.gotoRoute('/lead-queue');
         // Probes: the fixture queue need not hold all three bands at once.

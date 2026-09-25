@@ -8,6 +8,7 @@ import { Icon } from '../components/Icon';
 import { PageShell } from '../components/layout/PageShell';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { useTabs } from '../components/ui/useTabs';
+import '../components/ui/LayoutTabs.css';
 import { useFootprint } from '../components/FootprintProvider';
 import { api, type AnalyticsQueryOptions } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
@@ -238,15 +239,14 @@ export default function AnalyticsRoute() {
       lede="Command center for portfolio trends, geography, economics, segments, and evidence signals."
       heroRight={<Link className="btn btn--primary" to="/ask-genie"><Icon name="sparkle" size={14} /> Ask Genie</Link>}
     >
-      <div className="analytics-tabs" {...tabs.tabListProps} aria-label="Analytics views">
+      <div className="layout-tabs analytics-tabs" {...tabs.tabListProps} aria-label="Analytics views">
         {TABS.map((item) => (
           <button
             key={item.id}
             {...tabs.tabProps(item.id)}
-            className={`filter analytics-tab ${tab === item.id ? 'is-active' : ''}`}
+            className={tab === item.id ? 'is-active' : undefined}
           >
-            <Icon name={item.icon} size={12} />
-            <span className="filter__value">{item.label}</span>
+            {item.label}
           </button>
         ))}
       </div>
