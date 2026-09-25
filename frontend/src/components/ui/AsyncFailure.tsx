@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { describeApiError } from '../../lib/describeApiError';
+import { describeApiError, inlineSubject } from '../../lib/describeApiError';
 import { copyLink } from '../../lib/copyLink';
 import { useOptionalHealth } from '../HealthProvider';
 import { degradedDependency, friendlyDependencyName, isBanneredOutage } from '../healthRecovery';
@@ -97,7 +97,7 @@ function CountdownRetry({ until, subject, onRetry }: { until: number; subject: s
         type="button"
         className="btn btn--ghost btn--sm"
         aria-disabled={waiting || undefined}
-        aria-label={`Retry loading ${subject.toLowerCase()}`}
+        aria-label={`Retry loading ${inlineSubject(subject)}`}
         onClick={waiting ? undefined : onRetry}
       >
         Retry

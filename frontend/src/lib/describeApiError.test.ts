@@ -37,7 +37,7 @@ const CASES: Array<[string, unknown, Partial<ApiErrorDescription>]> = [
     title: "Your role can't open ranked borrowers", body: 'Ask an administrator for access.',
   }],
   ['a 404', apiError({ path: '/api/leads', status: 404 }), {
-    kind: 'not_found', action: 'none', title: "Ranked borrowers wasn't found",
+    kind: 'not_found', action: 'none', title: "Ranked borrowers weren't found",
   }],
   ['a server 409', apiError({ path: '/api/leads', status: 409 }), {
     kind: 'conflict', action: 'reload', title: 'Ranked borrowers changed since this page loaded',
@@ -63,7 +63,7 @@ const CASES: Array<[string, unknown, Partial<ApiErrorDescription>]> = [
   }],
   ['a missing grant (503 permission_denied)', apiError({ path: '/api/leads', status: 503, retryable: false, dependency: 'warehouse', reason: 'permission_denied' }), {
     kind: 'permission_denied', tone: 'danger', action: 'none',
-    title: "Ranked borrowers isn't available to the app",
+    title: "Ranked borrowers aren't available to the app",
     body: 'The analytics warehouse refused the app access to a required object. An administrator must grant it; retrying will not help.',
   }],
   ['a 503 naming no dependency', apiError({ path: '/api/leads', status: 503, retryable: true, reason: 'breaker_open' }), {
@@ -100,6 +100,15 @@ describe('describeApiError', () => {
     expect(description).toMatchObject(expected);
     expect(allText(description)).not.toContain('SENTINEL');
     expect(allText(description)).not.toMatch(/Internal Server Error|Failed to fetch|\b50[0-9]\b/);
+  });
+
+  it('agrees the verb with a singular or plural subject', () => {
+    expect(describeIt(apiError({ path: '/x', status: 404 }), 'Segment catalog').title).toBe("Segment catalog wasn't found");
+    expect(describeIt(apiError({ path: '/x', status: 404 }), 'Portfolio KPIs').title).toBe("Portfolio KPIs weren't found");
+    const denied = { path: '/x', status: 503, retryable: false, dependency: 'lakebase', reason: 'permission_denied' } as const;
+    expect(describeIt(apiError(denied), 'the audit explorer').title).toBe("The audit explorer isn't available to the app");
+    expect(describeIt(apiError(denied), 'the audit rollups').title).toBe("The audit rollups aren't available to the app");
+    expect(describeIt(apiError(denied), 'the address').title).toBe("The address isn't available to the app");
   });
 
   it('keeps an acronym-led subject\'s case inside a sentence', () => {

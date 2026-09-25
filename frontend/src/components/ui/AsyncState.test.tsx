@@ -181,6 +181,11 @@ describe('AsyncStatus: bannered vs red', () => {
     expect(toastMocks.success).toHaveBeenCalledWith('Reference copied', { detail: null });
   });
 
+  it('names Retry with the subject as a sentence reads it, keeping an acronym', () => {
+    act(() => root.render(<AsyncStatus query={query({ error: new ApiError(SENTINEL, { path: '/x', status: 500 }) })} subject="Portfolio KPIs" />));
+    expect(document.querySelector('button[aria-label="Retry loading portfolio KPIs"]')).not.toBeNull();
+  });
+
   it('never renders the server message', () => {
     act(() => root.render(<AsyncStatus query={query({ error: new ApiError(SENTINEL, { path: '/x', status: 500 }) })} subject="Ranked borrowers" />));
     expect(text()).not.toContain('SENTINEL');

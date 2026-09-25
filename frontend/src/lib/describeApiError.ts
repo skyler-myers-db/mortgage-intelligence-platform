@@ -72,8 +72,17 @@ function sentenceSubject(subject: string): string {
   return subject.charAt(0).toUpperCase() + subject.slice(1);
 }
 
+/**
+ * True for a plural subject ("Ranked borrowers", "Portfolio KPIs", "the audit
+ * rollups"): its last word ends in a single "s". Subjects are caller
+ * constants, so this only has to agree with the verbs below for them.
+ */
+function isPlural(subject: string): boolean {
+  return /[^s]s$/i.test(subject.trim());
+}
+
 /** "ranked borrowers" inside a sentence; an acronym-led subject ("KPIs") keeps its case. */
-function inlineSubject(subject: string): string {
+export function inlineSubject(subject: string): string {
   const firstWord = subject.split(' ', 1)[0] ?? '';
   if (firstWord.length > 1 && firstWord === firstWord.toUpperCase()) return subject;
   return subject.charAt(0).toLowerCase() + subject.slice(1);
@@ -100,7 +109,7 @@ function describeUnavailable(error: ApiError, subject: string): ApiErrorDescript
   if (reason === 'permission_denied') {
     return build('permission_denied', {
       tone: 'danger',
-      title: `${sentenceSubject(subject)} isn't available to the app`,
+      title: `${sentenceSubject(subject)} ${isPlural(subject) ? "aren't" : "isn't"} available to the app`,
       body: `The ${dep} refused the app access to a required object. An administrator must grant it; retrying will not help.`,
       action: 'none',
     }, error);
@@ -214,7 +223,7 @@ export function describeApiError(error: unknown, ctx: DescribeContext): ApiError
     case 404:
       return build('not_found', {
         tone: 'warning',
-        title: `${sentenceSubject(subject)} wasn't found`,
+        title: `${sentenceSubject(subject)} ${isPlural(subject) ? "weren't" : "wasn't"} found`,
         body: 'It may have been removed, or the link is out of date.',
         action: 'none',
       }, error);
