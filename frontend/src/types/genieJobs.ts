@@ -45,6 +45,9 @@ export interface GenieCompletionJobStatus {
   error_hint: string | null;
   /** The governed answer, only once `status` is `succeeded`. */
   response: GenieResult | null;
+  /** Recent median completion seconds of this job's class, while it runs
+   *  (audit genie-01); absent from older servers. */
+  typical_seconds?: number | null;
 }
 
 /** What the progress rail shows of a running job (no id, no answer). */
@@ -53,6 +56,7 @@ export interface GenieJobProgress {
   stage_label: string;
   parts_done: number | null;
   parts_planned: number | null;
+  typical_seconds?: number | null;
 }
 
 /** `POST /api/genie/message/cancel` (audit genie-03). `cancelled`: this app

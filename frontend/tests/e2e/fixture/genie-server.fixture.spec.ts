@@ -1,6 +1,6 @@
 /**
  * Rendered-layer proofs for w4-genie-server (audit 2026-09-21 `genie-03`
- * server cancel): Stop on a job-backed turn sends
+ * server cancel, `genie-01` duration hint): Stop on a job-backed turn sends
  * ONE audited cancel carrying the turn's ids, the job and the submit's
  * 16-hex label (never the question); the Stopped note keeps its honest
  * unconfirmed copy until the server replies, then says what really happened;
@@ -30,6 +30,8 @@ const UNCONFIRMED = 'Genie may still finish this turn on the server';
 const CONFIRMED =
   'Stopped. This answer was not recorded and will not appear later. Genie may keep the question as context for the next turn in this thread.';
 const RECORDED = 'Stopped here, but the answer had already been verified and recorded. Find it in History.';
+/** Linux Chromium sets Geist ~6% wider than macOS (segments-cards precedent). */
+const LINUX_TEXT_EMULATION = '.genie-progress__label, .genie-progress__elapsed { letter-spacing: 0.5px; }';
 /** A running job that never finishes on its own. */
 const RUNNING: GenieJobScript['steps'] = [{ stage: 'queued' }, { stage: 'researching', parts: [1, 7] }];
 
@@ -177,6 +179,36 @@ test('(d) a Stop while Genie is still answering (no job yet) sends no cancel', a
   expect(job.completes).toBe(0);
   expect(job.cancels).toBe(0);
   expect(cancelCalls(mockApi.calls)).toBe(0);
+});
+
+test.describe('(e) the typical duration hint', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: 170 s reads "usually about 3 min" and the panel head does not overflow`, async ({ app, page, mockApi }) => {
+      registerGenieJob(mockApi, { steps: RUNNING, typicalSeconds: 170 });
+      await app.setTheme(theme);
+      await app.gotoRoute('/');
+      if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TEXT_EMULATION });
+      const dialog = await app.openGenie();
+      await askInPanel(dialog);
+
+      const label = dialog.locator('.genie-progress__label');
+      await expect(label).toHaveText(`${QUEUED_LABEL} · usually about 3 min`);
+      const head = await dialog.locator('.genie-progress__head').evaluate((el) => ({
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+      }));
+      expect(head.scroll, 'the progress head never scrolls sideways').toBeLessThanOrEqual(head.client + 2);
+      await expect(page.locator('[data-genie-announcer="panel"]')).not.toContainText('usually');
+    });
+  }
+
+  test('without the field there is no hint', async ({ app, page, mockApi }) => {
+    registerGenieJob(mockApi, { steps: RUNNING });
+    await app.gotoRoute('/ask-genie');
+    await askOnRoute(page);
+
+    await expect(thread(page).locator('.genie-progress__label')).toHaveText(QUEUED_LABEL);
+  });
 });
 
 test.describe('(f) axe', () => {

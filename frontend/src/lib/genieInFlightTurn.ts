@@ -421,6 +421,7 @@ function showJob(gen: number, job: GenieCompletionJobStatus, reveal: boolean): v
       stage_label: job.stage_label,
       parts_done: job.parts_done,
       parts_planned: job.parts_planned,
+      typical_seconds: job.typical_seconds,
     },
   };
   patchTurn(gen, reveal && active ? { progress, question: active.question, revealed: true } : { progress });
