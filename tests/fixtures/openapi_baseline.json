@@ -12566,6 +12566,23 @@
         "title": "PropertyLoanLookupResponse",
         "type": "object"
       },
+      "QueueVersionResponse": {
+        "additionalProperties": false,
+        "description": "Opaque version of the Lakebase decision ledgers behind the Lead Queue.",
+        "properties": {
+          "version": {
+            "description": "32 lowercase hex characters. Changes when an approval, a lead assignment (including its status), a call disposition or a loan officer outcome is recorded; equal versions mean none was.",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "QueueVersionResponse",
+        "type": "object"
+      },
       "RateSensitivityProvenance": {
         "description": "Evidence manifest: every table and rule the grid was read or derived from.",
         "properties": {
@@ -30824,6 +30841,28 @@
         ]
       }
     },
+    "/api/v1/workspace/queue-version": {
+      "get": {
+        "description": "Audit-free Lead Queue change signal (audit states-09).\n\nFail-closed behind an authenticated identity; reads only the Lakebase\ndecision ledgers through a 30 s cache and writes no audit row.",
+        "operationId": "get_api_v1_workspace_queue_version_read_queue_version",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueVersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Queue Version",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/api/workspace": {
       "get": {
         "deprecated": true,
@@ -31064,6 +31103,29 @@
           }
         },
         "summary": "Save Lead",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/queue-version": {
+      "get": {
+        "deprecated": true,
+        "description": "Audit-free Lead Queue change signal (audit states-09).\n\nFail-closed behind an authenticated identity; reads only the Lakebase\ndecision ledgers through a 30 s cache and writes no audit row.",
+        "operationId": "get_api_workspace_queue_version_read_queue_version",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueVersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Queue Version",
         "tags": [
           "workspace"
         ]
