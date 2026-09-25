@@ -57,13 +57,18 @@ type RouteName = (typeof ROUTES)[number]['name'];
  * and failed on run 36104375015, a backend-only change, with samples LCP
  * 2276 / 2164 / 2152 ms (median 2164) and TBT 447 / 453 / 479 (median 453),
  * above both provisional home ceilings. Home re-calibrated from that median
- * x 1.2, rounded up to 100 ms: LCP 2600, TBT 600. Lead-queue has not failed
- * on the runner yet, so it keeps its provisional ceilings. Every run now
- * prints its medians ([lab-vitals]) so the next ratchet has runner data.
+ * x 1.2, rounded up to 100 ms: LCP 2600, TBT 600. The next run (36106009664)
+ * logged runner medians for both routes: home 2156 / 415 and, on its
+ * retry, 2076 / 393 (inside the new ceilings); lead-queue LCP 2220 / 2172
+ * (inside its provisional 2700) but TBT 971 / 904 against 900. Lead-queue
+ * TBT re-calibrated from the higher runner median, 971 x 1.2 -> 1200; its
+ * LCP ceiling already equals its runner median x 1.2 (2220 -> 2700). Every
+ * run prints its medians ([lab-vitals]) so the next ratchet (down only) has
+ * runner data.
  */
 const CEILINGS: Readonly<Record<RouteName, { lcpMs: number; tbtMs: number }>> = {
   home: { lcpMs: 2_600, tbtMs: 600 },
-  'lead-queue': { lcpMs: 2_700, tbtMs: 900 },
+  'lead-queue': { lcpMs: 2_700, tbtMs: 1_200 },
 };
 
 interface Vitals {
