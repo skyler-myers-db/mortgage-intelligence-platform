@@ -78,7 +78,7 @@ describe('the Genie submit (rejected-only)', () => {
   });
 });
 
-describe('every other POST (default policy, unchanged)', () => {
+describe('an idempotent, unkeyed POST read on IDEMPOTENT_UNKEYED_POSTS (default policy)', () => {
   it('is re-sent after a retryable 503', async () => {
     const paths = stubFetch([reply(503, WARMING_503), reply(200, { ok: true })]);
 

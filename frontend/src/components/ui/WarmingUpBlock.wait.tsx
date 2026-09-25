@@ -37,7 +37,7 @@ function NextTry({ intervalMs }: { intervalMs: number }) {
 /** The support reference, behind a disclosure: a copyable id, never prose. */
 export function ReferenceDetails({ reference }: { reference: string }) {
   return (
-    <details className="warming-block__details">
+    <details>
       <summary className="muted fs-12">Details</summary>
       <span className="muted fs-12">Reference </span>
       <span className="mono fs-12" data-testid="warming-up-reference">{reference}</span>{' '}
