@@ -105,54 +105,60 @@ test.describe('a bannered warehouse outage (states-03 a)', () => {
   }
 });
 
-test('a 403 under the same banner stays red, in the buyer-safe copy', async ({ app, mockApi, page }) => {
-  switchHealth(mockApi, HEALTH_WAREHOUSE_DOWN);
-  app.degrade('/api/leads', FORBIDDEN_403);
-  await app.gotoRoute('/lead-queue');
+for (const theme of FIXTURE_THEMES) {
+  test(`a 403 under the same banner stays red, in the buyer-safe copy (${theme})`, async ({ app, mockApi, page }) => {
+    await app.setTheme(theme);
+    switchHealth(mockApi, HEALTH_WAREHOUSE_DOWN);
+    app.degrade('/api/leads', FORBIDDEN_403);
+    await app.gotoRoute('/lead-queue');
 
-  const alert = page.locator(`${MAIN} [role="alert"]`);
-  await expect(alert).toHaveCount(1);
-  await expect(alert).toContainText("Your role can't open ranked borrowers.");
-  await expect(alert).toContainText('Ask an administrator for access.');
-  await expect(alert.getByRole('button', { name: /Retry/ })).toHaveCount(0);
-  await expect(alert.getByTestId('async-status-reference')).toHaveText('fixture-correlation-es03');
-  await expect(page.locator(`${MAIN} [data-async-status="bannered"]`)).toHaveCount(0);
-  await expectBuyerSafe(page);
-  await expectAxeClean(page, { key: { route: 'lead-queue', state: 'es-forbidden' }, theme: 'dark', known: {} });
-});
+    const alert = page.locator(`${MAIN} [role="alert"]`);
+    await expect(alert).toHaveCount(1);
+    await expect(alert).toContainText("Your role can't open ranked borrowers.");
+    await expect(alert).toContainText('Ask an administrator for access.');
+    await expect(alert.getByRole('button', { name: /Retry/ })).toHaveCount(0);
+    await expect(alert.getByTestId('async-status-reference')).toHaveText('fixture-correlation-es03');
+    await expect(page.locator(`${MAIN} [data-async-status="bannered"]`)).toHaveCount(0);
+    await expectBuyerSafe(page);
+    await expectAxeClean(page, { key: { route: 'lead-queue', state: 'es-forbidden' }, theme, known: {} });
+  });
+}
 
 test.describe('timed waits', () => {
   test.use({ fixtureNow: null });
 
-  test('a 429 counts its Retry-After down; Retry is inert until then, then one click is one request', async ({ app, mockApi, page }) => {
-    await page.clock.install();
-    const restore = app.degrade('/api/leads', RATE_LIMITED_429);
-    await app.gotoRoute('/lead-queue');
-    expect(callsTo(mockApi, '/api/leads'), 'a 12 s wait surfaces at once: one request').toBe(1);
+  for (const theme of FIXTURE_THEMES) {
+    test(`a 429 counts its Retry-After down; Retry is inert until then, then one click is one request (${theme})`, async ({ app, mockApi, page }) => {
+      await app.setTheme(theme);
+      await page.clock.install();
+      const restore = app.degrade('/api/leads', RATE_LIMITED_429);
+      await app.gotoRoute('/lead-queue');
+      expect(callsTo(mockApi, '/api/leads'), 'a 12 s wait surfaces at once: one request').toBe(1);
 
-    const alert = page.locator(`${MAIN} [role="alert"]`);
-    await expect(alert).toContainText('Too many requests right now.');
-    const wait = alert.locator('.async-status__wait');
-    await expect(wait).toContainText(/Try again in (1[0-2]|[1-9]) s/);
-    const retry = alert.getByRole('button', { name: 'Retry loading ranked borrowers' });
-    // aria-disabled, never native disabled: it stays focusable and announced.
-    await expect(retry).toHaveAttribute('aria-disabled', 'true');
-    await expect(retry).not.toHaveAttribute('disabled');
-    await expectBuyerSafe(page);
-    await expectAxeClean(page, { key: { route: 'lead-queue', state: 'es-rate-limited' }, theme: 'dark', known: {} });
+      const alert = page.locator(`${MAIN} [role="alert"]`);
+      await expect(alert).toContainText('Too many requests right now.');
+      const wait = alert.locator('.async-status__wait');
+      await expect(wait).toContainText(/Try again in (1[0-2]|[1-9]) s/);
+      const retry = alert.getByRole('button', { name: 'Retry loading ranked borrowers' });
+      // aria-disabled, never native disabled: it stays focusable and announced.
+      await expect(retry).toHaveAttribute('aria-disabled', 'true');
+      await expect(retry).not.toHaveAttribute('disabled');
+      await expectBuyerSafe(page);
+      await expectAxeClean(page, { key: { route: 'lead-queue', state: 'es-rate-limited' }, theme, known: {} });
 
-    // Playwright treats aria-disabled as not actionable; force the click through.
-    await retry.click({ force: true });
-    expect(callsTo(mockApi, '/api/leads'), 'an inert Retry sends nothing').toBe(1);
+      // Playwright treats aria-disabled as not actionable; force the click through.
+      await retry.click({ force: true });
+      expect(callsTo(mockApi, '/api/leads'), 'an inert Retry sends nothing').toBe(1);
 
-    await page.clock.runFor(12_000);
-    await expect(retry).not.toHaveAttribute('aria-disabled', 'true');
-    await expect(wait).not.toContainText('Try again in');
-    restore();
-    await retry.click();
-    await expect(page.locator(`${TABLE} tbody tr`).first()).toBeVisible({ timeout: 30_000 });
-    expect(callsTo(mockApi, '/api/leads'), 'one click, one request').toBe(2);
-  });
+      await page.clock.runFor(12_000);
+      await expect(retry).not.toHaveAttribute('aria-disabled', 'true');
+      await expect(wait).not.toContainText('Try again in');
+      restore();
+      await retry.click();
+      await expect(page.locator(`${TABLE} tbody tr`).first()).toBeVisible({ timeout: 30_000 });
+      expect(callsTo(mockApi, '/api/leads'), 'one click, one request').toBe(2);
+    });
+  }
 
   test('an open breaker is sent once in the first 5 s (no inner re-send)', async ({ app, mockApi, page }) => {
     await page.clock.install();
@@ -251,6 +257,20 @@ test.describe('freshness and the queue version (states-09)', () => {
     const polls = callsTo(mockApi, '/api/workspace/queue-version');
     await page.clock.runFor(180_000);
     expect(callsTo(mockApi, '/api/workspace/queue-version') - polls, 'no poll while hidden').toBe(0);
+  });
+
+  test('"Queue updated" is a status, axe-clean in the light theme too', async ({ app, mockApi, page }) => {
+    await app.setTheme('light');
+    await page.clock.install();
+    await app.gotoRoute('/lead-queue');
+    const header = page.locator(`${MAIN} .surface__hdr:has(.lead-table__header-actions)`);
+    await expect(header.getByTestId('fetched-at')).toContainText('Fetched');
+    await expectAxeClean(page, { key: { route: 'lead-queue', state: 'es-fetched-at' }, theme: 'light', known: {} });
+    mockApi.register('GET', '/api/workspace/queue-version', () => json(QUEUE_VERSION_UPDATED));
+    await page.clock.runFor(61_000);
+    await expect(header.getByTestId('queue-updated')).toContainText('Queue updated');
+    await expect(page.locator(`${MAIN} [role="alert"]`)).toHaveCount(0);
+    await expectAxeClean(page, { key: { route: 'lead-queue', state: 'es-queue-updated' }, theme: 'light', known: {} });
   });
 });
 
