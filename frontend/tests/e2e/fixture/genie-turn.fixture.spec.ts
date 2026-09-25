@@ -9,17 +9,16 @@
  * per-test register() overrides; the counters read the mock's own call log,
  * so they count what the browser really sent. 1440x900, production build.
  */
-import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
-import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
+import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
+import { GENIE_QUESTION, genieAnswerFixture, registerGenieTurn } from './data/genieTurn';
 import { HEALTH_OK } from './data/shell';
 import { json } from './mockApi';
 import { contrastRatio, renderedColors } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 /** The client's progress poll cadence (lib/genieAsk.ts PROGRESS_POLL_MS). */
 const PROGRESS_POLL_MS = 1_500;
 const IN_FLIGHT_KEY = 'mip.genie.inFlightTurn';
@@ -343,6 +342,26 @@ test.describe('one announcer per surface', () => {
     expect(turn.submits).toBe(1);
     expect(turn.completes).toBe(1);
   });
+
+  test('(i) an answer with a metric tile is said with its metric: "Answer ready: 1,284" (Genie residual #5)', async ({ app, page, mockApi }) => {
+    const turn = registerGenieTurn(mockApi, { answer: genieAnswerFixture({ metric_value: '1,284' }) });
+    await app.gotoRoute('/ask-genie');
+    await askOnRoute(page);
+    turn.finishGenieTurn();
+    await expect(thread(page).locator('.genie-answer')).toHaveCount(1);
+    await expect(thread(page)).toContainText('1,284');
+    await expect(routeRegion(page)).toHaveText('Answer ready: 1,284');
+  });
+
+  test('(j) a withheld answer never says a metric, even when the payload carries one', async ({ app, page, mockApi }) => {
+    const turn = registerGenieTurn(mockApi, { answer: genieAnswerFixture({ source: 'data_gap', metric_value: '1,284' }) });
+    await app.gotoRoute('/ask-genie');
+    await askOnRoute(page);
+    turn.finishGenieTurn();
+    await expect(thread(page).locator('.genie-answer')).toHaveCount(1);
+    await expect(routeRegion(page)).toHaveText('Genie did not answer this question. The reason is shown in the thread.');
+    await expect(routeRegion(page)).not.toContainText('1,284');
+  });
 });
 
 test.describe('axe', () => {
@@ -354,13 +373,11 @@ test.describe('axe', () => {
       await askOnRoute(page);
       await expect.poll(() => turn.progressPolls).toBeGreaterThan(0);
 
-      const midTurn = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
-      expect(midTurn.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+      await expectAxeClean(page, { key: { route: 'ask-genie', state: 'genie-mid-turn' }, theme, known: KNOWN_VIOLATIONS });
 
       await main(page).getByRole('button', { name: 'Stop this Genie turn' }).click();
       await expect(thread(page).locator('.genie__msg--stopped')).toBeVisible();
-      const afterStop = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
-      expect(afterStop.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+      await expectAxeClean(page, { key: { route: 'ask-genie', state: 'genie-after-stop' }, theme, known: KNOWN_VIOLATIONS });
     });
   }
 });

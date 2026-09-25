@@ -330,7 +330,7 @@ function landExchange(
   const outcome = genieTurnOutcome(response);
   notifySettled({ surface, question, response, outcome, persistedConversationId });
   appendGenieTurn(question, response);
-  update({ inFlight: null, ...announcing(genieOutcomeAnnouncement(outcome)) });
+  update({ inFlight: null, ...announcing(genieOutcomeAnnouncement(outcome, response)) });
 }
 
 function settleTurn(gen: number, response: GenieAnswerShape): void {

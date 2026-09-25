@@ -500,6 +500,30 @@ describe('settling', () => {
     await advance();
     expect(getGenieTurnSnapshot().announcement).toBe(spoken);
   });
+
+  it.each([
+    ['1,284', 'Answer ready: 1,284'],
+    ['  $4.2M \n in  equity ', 'Answer ready: $4.2M in equity'],
+    ['   ', 'Answer ready'],
+    [null, 'Answer ready'],
+    ['9'.repeat(100), `Answer ready: ${'9'.repeat(79)}…`],
+  ])('an answered turn says its metric tile %j, one line of at most 80 characters (Genie residual #5)', async (metric, spoken) => {
+    mocks.genieSubmit.mockResolvedValue({ completed: true, response: answer({ source: 'trusted_sql', metric_value: metric }) });
+    start();
+    await advance();
+    expect(getGenieTurnSnapshot().announcement).toBe(spoken);
+  });
+
+  it.each([
+    ['refused', 'Genie did not answer this question. The reason is shown in the thread.'],
+    ['data_gap', 'Genie did not answer this question. The reason is shown in the thread.'],
+    ['degraded', 'Genie could not complete this question.'],
+  ])('a %s turn never says its metric', async (source, spoken) => {
+    mocks.genieSubmit.mockResolvedValue({ completed: true, response: answer({ source, metric_value: '1,284' }) });
+    start();
+    await advance();
+    expect(getGenieTurnSnapshot().announcement).toBe(spoken);
+  });
 });
 
 describe('announcements', () => {

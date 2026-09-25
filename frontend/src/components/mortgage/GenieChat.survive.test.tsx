@@ -643,6 +643,33 @@ describe('floating Genie survivability', () => {
     expect(dialog().querySelectorAll('[role="status"]')).toHaveLength(0);
   });
 
+  it('says the metric with "Answer ready", and never on a withheld turn (a11y-06, Genie residual #5)', async () => {
+    render();
+    const settle = async (turn: Awaited<ReturnType<typeof startLiveTurn>>, response: GenieAnswer) => {
+      const completes = mocks.genieComplete.mock.calls.length;
+      await act(async () => {
+        turn.progress.resolve(TERMINAL);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await waitUntil(() => mocks.genieComplete.mock.calls.length === completes + 1);
+      await act(async () => {
+        turn.complete.resolve(response);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    };
+
+    await settle(await startLiveTurn('How many borrowers are in the money?'), answer({ metric_value: ' 1,284\n  borrowers ' }));
+    // The metric tile's text, whitespace collapsed.
+    await waitUntil(() => announcer().textContent === 'Answer ready: 1,284 borrowers');
+
+    await settle(
+      await startLiveTurn('Which zyrplax borrowers are eligible?'),
+      answer({ source: 'refused', metric_value: '1,284', message_id: 'msg-refused' }),
+    );
+    await waitUntil(() => announcer().textContent === 'Genie did not answer this question. The reason is shown in the thread.');
+    expect(announcer().textContent).not.toContain('1,284');
+  });
+
   it('scrolls a landed answer to its START instead of jumping to the end (motion-v2)', async () => {
     render();
     const body = container.querySelector<HTMLElement>('.genie__body');
