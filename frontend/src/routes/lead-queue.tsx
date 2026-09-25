@@ -21,6 +21,7 @@ import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
 import { LeadQueueEmptyState } from './lead-queue.empty';
+import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
 import { copyLink } from '../lib/copyLink';
@@ -315,6 +316,14 @@ export default function LeadQueue() {
   const queueStatusLabel = queueRefetchWarming
     ? `${warming.label} (${warming.attempt}/${warming.maxAttempts})`
     : 'updating';
+  // "Fetched 3m ago · Refresh" / "Queue updated · Refresh" (audit states-09):
+  // an audit-free version poll; Refresh is the one explicit re-read.
+  const freshness = useLeadQueueFreshness({
+    enabled: hasQueue && !leadsPlaceholderData && !meUnresolved,
+    dataUpdatedAt: leadsQueryState.dataUpdatedAt,
+    isFetching: leadsFetching,
+    onRefresh: leadsState.manualRetry,
+  });
 
   // Resolve `?county=FFFFF` → set of ZIPs via /api/geo/zip-rollups for an
   // honest scope chip only. The actual county predicate is server-side in
@@ -742,6 +751,7 @@ export default function LeadQueue() {
                   onViewChange={(next) => setSearchParams(searchParamsWithLeadTableView(searchParams, next))}
                   fillHeight
                   restoreScroll
+                  headerStatus={freshness}
                   // A sort (and Reset to rank) is a new history entry; expand and
                   // collapse replace the current one, so Back leaves the queue.
                   sort={place.sort}

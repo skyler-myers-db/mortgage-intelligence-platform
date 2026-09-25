@@ -65,6 +65,13 @@ vi.mock('../lib/configOptionsQuery', () => {
   return { useConfigOptionsQuery: () => STABLE };
 });
 
+// The audit-free queue-version poll (states-09) is lead-queue.freshness.test's;
+// here it answers nothing, so no request leaves the test.
+vi.mock('../lib/queueVersion', () => {
+  const STABLE = { data: undefined, dataUpdatedAt: 0, refetch: () => Promise.resolve() };
+  return { useQueueVersion: () => STABLE };
+});
+
 vi.mock('../components/FootprintProvider', () => {
   const STABLE = {
     ready: true,
