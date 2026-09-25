@@ -65,7 +65,7 @@ npm --prefix frontend run e2e:fixture:ci                     # CI posture: forbi
 | `E2E_FIXTURE_NESTED=1` | unset | Internal to `runner.fixture.spec.ts`, which spawns a nested run that collects only `fixture/nested/*.nested.ts` (tests that fail on purpose) and starts no web server. Never set it by hand. |
 | `MIP_VRT=1` | unset | Collects `visual.fixture.spec.ts` (every other fixture run ignores it) and writes artifacts to `test-results/vrt` and `playwright-report/vrt`. Only the `e2e-visual` CI job and `tools/update_visual_baselines.sh` set it; see "Visual regression". |
 | `MIP_VRT_IMAGE` | unset | The Playwright image the run is inside. The VRT refuses to capture unless it is `mcr.microsoft.com/playwright:v<installed @playwright/test>-noble` on linux/x64. |
-| `MIP_PERF=1` | unset | Collects `perf-budget.fixture.spec.ts` (w2-build-currency) and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf budget" step of the `e2e-fixture` CI job sets it. |
+| `MIP_PERF=1` | unset | Collects the `PERF_SPEC` specs, `perf-budget.fixture.spec.ts` (bundle-08) and `interaction-budget.fixture.spec.ts` (runtime-09), and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf and interaction budgets" step of the `e2e-fixture` CI job sets it, with the file filters `perf-budget interaction-budget` (without them MIP_PERF=1 also collects every normal fixture spec). See "Perf budget". |
 
 Fixture pages run at 1440x900, `prefers-reduced-motion: reduce`, locale `en-US`, timezone `America/New_York`, with `Date` frozen at `2026-07-14T15:00:00Z` (`test.use({ fixtureNow: null })` restores the real clock). Rebuild after changing anything under `frontend/src`; the harness never rebuilds for you.
 
@@ -177,7 +177,15 @@ One analyze runs the WCAG 2.0/2.1/2.2 A and AA tags plus `best-practice`. A rule
 
 ### Perf budget
 
-`perf-budget.fixture.spec.ts` measures timing, so it runs only in its own single-worker step of the `e2e-fixture` job (`MIP_PERF=1`, `--workers=1`) and is ignored by every other run.
+`PERF_SPEC` in `playwright.config.ts` collects the specs that measure timing: `perf-budget.fixture.spec.ts` (LCP and TBT of cold, throttled loads; bundle-08) and `interaction-budget.fixture.spec.ts` (Lead Queue interactions; runtime-09, owned by the W4b lead-queue lane, which names its spec exactly that). They run only in the single-worker step "Run the perf and interaction budgets (single worker)" of the `e2e-fixture` job and are ignored by every other run:
+
+```bash
+MIP_PERF=1 npm --prefix frontend run e2e:fixture:ci -- perf-budget interaction-budget --workers=1
+```
+
+The file filters are required: `MIP_PERF=1` only stops ignoring `PERF_SPEC`, so without them the step would also run every normal fixture spec. A filter that matches no file yet adds nothing. `perf-motion.fixture.spec.ts` is not a `PERF_SPEC`: it pins motion and performance quick wins functionally and runs in the normal suite.
+
+The contract for a `PERF_SPEC` spec: until its ceilings are calibrated from at least 3 reference-runner medians (median x 1.2, rounded up), it is **report-only**, logging its medians and asserting only functional invariants. `perf-budget` is calibrated on the reference runner (home LCP 2600 / TBT 600 ms, lead-queue LCP 2700 / TBT 1200 ms) and gates; `interaction-budget` starts report-only. A ceiling is ratcheted down, never raised to make a run green.
 
 ### React Compiler coverage gate
 

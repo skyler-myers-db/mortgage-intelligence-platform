@@ -16,7 +16,9 @@ Wave 4 (test-infra PR-1) adds: the e2e-visual container and ``MIP_VRT_IMAGE``
 name the image of the exact ``@playwright/test`` pin, and the lock resolves
 the Playwright trio to it; the oxlint jsx-a11y ratchet is its own
 frontend-tests step before ``lint`` and the tail of the ``lint`` chain, with
-an exact pin and a jsx-a11y-only config.
+an exact pin and a jsx-a11y-only config; the single-worker perf step also
+collects interaction-budget, and PERF_SPEC matches exactly the two budget
+specs.
 
 The backend job's Node + ``MIP_REQUIRE_FIXTURE_CONTRACT`` wiring is pinned by
 tests/unit/test_e2e_fixture_contract.py beside the test it serves.
@@ -48,13 +50,41 @@ def _step_index(steps: list[dict[str, Any]], needle: str) -> int:
     raise AssertionError(f"no step runs or uses {needle!r}")
 
 
+PERF_STEP_RUN = "npm --prefix frontend run e2e:fixture:ci -- perf-budget interaction-budget --workers=1"
+
+
 def test_the_perf_budget_step_is_unconditional() -> None:
     assert PERF_SPEC.is_file(), "the perf budget spec the step runs is committed"
     steps = _jobs()["e2e-fixture"]["steps"]
-    perf = steps[_step_index(steps, "perf-budget --workers=1")]
+    perf = steps[_step_index(steps, "perf-budget interaction-budget --workers=1")]
 
     assert "if" not in perf, "the perf-budget step must not be guarded now that its spec exists"
     assert perf["env"]["MIP_PERF"] == "1"
+    # Audit runtime-09: the same single-worker step collects the lead-queue
+    # interaction budget. The file filters are required (MIP_PERF=1 alone
+    # also collects every normal fixture spec), and perf-budget stays gating.
+    assert perf["name"] == "Run the perf and interaction budgets (single worker)"
+    assert perf["run"] == PERF_STEP_RUN
+    assert "continue-on-error" not in perf, "perf-budget is calibrated on the reference runner and gates"
+
+
+def _playwright_perf_spec() -> re.Pattern[str]:
+    config = (FRONTEND / "playwright.config.ts").read_text(encoding="utf-8")
+    literal = re.search(r"^(?:export )?const PERF_SPEC = /(.+)/;$", config, re.MULTILINE)
+    assert literal, "playwright.config.ts declares PERF_SPEC as a regex literal"
+    return re.compile(literal.group(1))
+
+
+def test_perf_spec_collects_the_perf_and_interaction_budgets_only() -> None:
+    perf_spec = _playwright_perf_spec()
+    for separator in ("/", "\\"):
+        fixture = separator.join(("frontend", "tests", "e2e", "fixture"))
+        assert perf_spec.search(f"{fixture}{separator}perf-budget.fixture.spec.ts")
+        assert perf_spec.search(f"{fixture}{separator}interaction-budget.fixture.spec.ts")
+        # perf-motion pins motion quick wins, not timings: the normal suite runs it.
+        assert not perf_spec.search(f"{fixture}{separator}perf-motion.fixture.spec.ts")
+        assert not perf_spec.search(f"{fixture}{separator}visual.fixture.spec.ts")
+        assert not perf_spec.search(f"{fixture}{separator}my-perf-budget.fixture.spec.ts")
 
 
 def test_the_source_map_upload_fails_when_the_build_emitted_none() -> None:

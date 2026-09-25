@@ -387,14 +387,19 @@ jobs:
         env:
           E2E_FIXTURE_WORKERS: '4'
         run: npm --prefix frontend run e2e:fixture:ci
-      - name: Run the perf budget (single worker)
-        # perf-budget.fixture.spec.ts measures timing, so it runs alone on one
-        # worker and only here (MIP_PERF=1; playwright.config.ts ignores it in
-        # every other run). Its artifacts go to test-results/perf and
+      - name: Run the perf and interaction budgets (single worker)
+        # The specs playwright.config.ts's PERF_SPEC collects measure timing,
+        # so they run alone on one worker and only here (MIP_PERF=1; every
+        # other run ignores them): perf-budget.fixture.spec.ts (calibrated on
+        # this runner, gating) and interaction-budget.fixture.spec.ts (audit
+        # runtime-09, W4b lead-queue; report-only until 3 runner medians
+        # calibrate it). The file filters are required: MIP_PERF=1 alone
+        # also collects every normal fixture spec. A filter that matches no
+        # file yet adds nothing. Artifacts go to test-results/perf and
         # playwright-report/perf, which the upload below already covers.
         env:
           MIP_PERF: '1'
-        run: npm --prefix frontend run e2e:fixture:ci -- perf-budget --workers=1
+        run: npm --prefix frontend run e2e:fixture:ci -- perf-budget interaction-budget --workers=1
       - name: Upload Playwright report
         # Safe to publish: every borrower, id and draft in this suite is
         # synthetic fixture data. (The live suite in nightly.yml does NOT
