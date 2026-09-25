@@ -81,6 +81,8 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/growth-agent/monitors"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/agent/run"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/agent/compose"): "tests/unit/test_growth_agent_api.py",
+    ("POST", "/api/growth-agent/agent/plan/execute"): "tests/unit/test_growth_agent_plan_execute.py",
+    ("GET", "/api/growth-agent/runs"): "tests/unit/test_growth_agent_run_history.py",
     ("POST", "/api/growth-agent/custom/run"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/monitors/run-due"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/monitors/run-due-all"): "tests/unit/test_growth_agent_api.py",

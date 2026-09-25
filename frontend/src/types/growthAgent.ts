@@ -137,9 +137,13 @@ export interface GrowthAgentRunResponse {
   created_at?: string | null;
 }
 
+/**
+ * Compose a plan for review. The server's legacy one-shot `execute` flag is
+ * deliberately absent (audit 2026-09-21 `critic-01`): the UI runs a plan only
+ * through `ExecutePlanRequest`, posting the plan the user reviewed.
+ */
 export interface ComposePlanRequest {
   objective: string;
-  execute?: boolean;
   states?: string[];
   request_id?: string | null;
 }
@@ -178,6 +182,12 @@ export interface ComposePlanResponse {
   planner: 'supervisor_composed';
   model_endpoint: string | null;
   plan: ComposedPlan | null;
+  /**
+   * Server signature over the reviewed plan, actor, objective and state
+   * scope. Null on degraded/invalid responses and when the deployment cannot
+   * sign: the plan can then be reviewed but not run.
+   */
+  plan_digest: string | null;
   trace: PlanStepTrace[];
   approval_required: boolean;
   approval_gate_step_id: string | null;
@@ -189,6 +199,20 @@ export interface ComposePlanResponse {
   message: string | null;
   fallback_workflows: GrowthAgentWorkflow[];
   audit_event_ids: string[];
+}
+
+/**
+ * Run the plan the user reviewed (`POST /api/growth-agent/agent/plan/execute`):
+ * exactly the displayed plan and its digest, with the objective and state
+ * scope it was composed for. The server verifies, re-validates and runs it
+ * without composing a new plan; any mismatch is a 409 and nothing runs.
+ */
+export interface ExecutePlanRequest {
+  objective: string;
+  states: string[];
+  plan: ComposedPlan;
+  plan_digest: string;
+  request_id?: string | null;
 }
 
 export interface GrowthAgentNotificationDraft {

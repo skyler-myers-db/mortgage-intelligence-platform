@@ -1,6 +1,8 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { formatStepParams, type SegmentLabeler } from './ask-genie.compose-plan-params';
+import { CUSTOM_SEGMENTS } from './ask-genie.growth-agent.helpers';
 import {
   DATABRICKS_AGENT_RESPONSES_LABEL,
   formatGrowthAgentCount,
@@ -45,16 +47,92 @@ function shortHash(value: string | null | undefined): string {
   return value.slice(0, 12);
 }
 
+const SEGMENT_LABELS: ReadonlyMap<string, string> = new Map(
+  CUSTOM_SEGMENTS.map((segment) => [segment.code, segment.label]),
+);
+const segmentLabel: SegmentLabeler = (code) => SEGMENT_LABELS.get(code) ?? code;
+
+/** Run controls for a composed, unexecuted plan (audit 2026-09-21 `critic-01`). */
+export interface ComposePlanRunControls {
+  pending: boolean;
+  /** The server answered 409: the plan changed, expired or no longer passes review. */
+  conflict: boolean;
+  errorMessage: string | null;
+  /** Post the displayed plan and its digest. */
+  onRun: () => void;
+  /** Compose the objective again, to review the current plan. */
+  onComposeAgain: () => void;
+}
+
 interface ComposePlanCardProps {
   response: ComposePlanResponse;
   onOpenRoute?: (route: string) => void;
   renderSourceAssetChip?: (asset: string) => ReactNode;
+  run?: ComposePlanRunControls;
+}
+
+function runHint(stepCount: number, signed: boolean): string {
+  if (!signed) {
+    return 'This plan can be reviewed here but not run: this deployment is missing a required security setting. Ask an administrator.';
+  }
+  const steps = stepCount === 1 ? 'the step above' : `the ${stepCount} steps above`;
+  return `Runs exactly ${steps} with the inputs shown. Read-only: it counts and checks, stops at the first approval gate and sends nothing.`;
+}
+
+/**
+ * Run the plan the card shows (audit 2026-09-21 `critic-01`): the Button
+ * posts exactly this plan and its server digest, and nothing renders as run
+ * until the server answers. A 409 means nothing ran; the lender composes
+ * again and reviews the current plan. After a run, the trace replaces this
+ * row: there is no re-run from the same card.
+ */
+function ComposePlanRunRow({ run, stepCount, signed }: { run: ComposePlanRunControls; stepCount: number; signed: boolean }) {
+  const hintId = useId();
+  return (
+    <div className="growth-agent-run__section mt-3">
+      {run.conflict && (
+        <div className="status-callout status-callout--danger" role="alert">
+          This plan was not run. It changed, expired or no longer passes review since it was composed. Compose it
+          again to review the current plan.
+        </div>
+      )}
+      {!run.conflict && run.errorMessage && (
+        <div className="status-callout status-callout--danger" role="alert">
+          {run.errorMessage}
+        </div>
+      )}
+      <div className="growth-agent-card__actions mt-3">
+        <Button
+          variant="primary"
+          size="sm"
+          icon="play"
+          onClick={run.onRun}
+          disabled={!signed || run.pending || run.conflict}
+          aria-describedby={hintId}
+        >
+          {run.pending ? 'Running…' : 'Run this plan'}
+        </Button>
+        {run.conflict && (
+          <Button variant="ghost" size="sm" icon="sparkle" onClick={run.onComposeAgain}>
+            Compose again
+          </Button>
+        )}
+        <span className="sr-only" role="status">
+          {run.pending ? 'Running the plan you reviewed.' : ''}
+        </span>
+      </div>
+      <p id={hintId} className="growth-agent__hint mt-2">
+        {runHint(stepCount, signed)}
+      </p>
+    </div>
+  );
 }
 
 export function ComposePlanCard({
   response,
   onOpenRoute,
   renderSourceAssetChip,
+  run,
 }: ComposePlanCardProps) {
   const { status, plan } = response;
 
@@ -140,6 +218,7 @@ export function ComposePlanCard({
                     <div className="growth-agent-step__detail">
                       {publicAgentResponsesText(step.rationale)}
                     </div>
+                    <div className="growth-agent-step__meta">{formatStepParams(step.params, segmentLabel)}</div>
                     <div className="growth-agent-step__meta">step {step.step_id}</div>
                   </div>
                 </div>
@@ -156,6 +235,10 @@ export function ComposePlanCard({
             <div className="growth-agent-run__intent">
               Risk: {publicAgentResponsesText(plan.risk_notes)}
             </div>
+          )}
+
+          {run && !response.executed && (
+            <ComposePlanRunRow run={run} stepCount={plan.steps.length} signed={Boolean(response.plan_digest)} />
           )}
 
           {response.executed && response.trace.length > 0 && (

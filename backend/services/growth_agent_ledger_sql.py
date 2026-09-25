@@ -42,6 +42,19 @@ WHERE actor_email = %(actor_email)s
 LIMIT 1
 """
 
+# Audit 2026-09-21 genie-09 part 2: the caller's own runs, newest first.
+# Served by idx_growth_agent_runs_actor_created (actor_email, created_at DESC).
+# It never selects criteria or route: a stored route can carry an expiring,
+# actor-bound Lead Queue handoff proof.
+RUN_LIST_SQL = """
+SELECT run_id, workflow_id, workflow_title, status, broad_total, actionable_total,
+       actionable_avg_score, source_assets, audit_event_id, created_at
+FROM mip_app.growth_agent_runs
+WHERE actor_email = %(actor_email)s
+ORDER BY created_at DESC, run_id DESC
+LIMIT %(limit)s
+"""
+
 MONITOR_UPSERT_SQL = """
 INSERT INTO mip_app.growth_agent_monitors (
   actor_email, workflow_id, name, cadence, criteria, route,

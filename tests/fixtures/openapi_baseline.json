@@ -3953,6 +3953,17 @@
               }
             ]
           },
+          "plan_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Digest"
+          },
           "plan_id": {
             "anyOf": [
               {
@@ -5365,6 +5376,52 @@
           "timestamp"
         ],
         "title": "EvidenceEvent",
+        "type": "object"
+      },
+      "ExecutePlanRequest": {
+        "additionalProperties": false,
+        "description": "Run the plan the user reviewed, exactly as composed and signed.\n\n``objective`` and ``states`` pass the same validators as compose, so an\nobjective the guards refuse is a 422 (and its refusal audit row) before\nthe digest is ever checked. ``plan_digest`` is the server signature the\ncompose response carried; the server verifies it, re-validates the plan\nagainst the tool registry and runs it without composing a new one.",
+        "properties": {
+          "objective": {
+            "maxLength": 500,
+            "minLength": 3,
+            "title": "Objective",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PostedComposedPlan"
+          },
+          "plan_digest": {
+            "pattern": "^v1\\.[A-Za-z0-9_-]{1,32}\\.[0-9]{10}\\.[A-Za-z0-9_-]{43}$",
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "States",
+            "type": "array"
+          }
+        },
+        "required": [
+          "objective",
+          "plan",
+          "plan_digest"
+        ],
+        "title": "ExecutePlanRequest",
         "type": "object"
       },
       "ExecutiveAnalyticsResponse": {
@@ -8473,6 +8530,107 @@
           "policy_checks"
         ],
         "title": "GrowthAgentRunResponse",
+        "type": "object"
+      },
+      "GrowthAgentRunSummary": {
+        "additionalProperties": false,
+        "description": "One of the caller's reviewed-workflow runs, newest first.",
+        "properties": {
+          "actionable_avg_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Avg Score"
+          },
+          "actionable_total": {
+            "minimum": 0.0,
+            "title": "Actionable Total",
+            "type": "integer"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "broad_total": {
+            "minimum": 0.0,
+            "title": "Broad Total",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Assets",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "workflow_id": {
+            "enum": [
+              "daily_refi_brief",
+              "borrower_dossier_review",
+              "listing_watch",
+              "competitor_recapture_monitor",
+              "high_equity_heloc_watch",
+              "branch_capacity_review",
+              "source_freshness_sentinel",
+              "custom_segment_watch",
+              "live_analysis"
+            ],
+            "title": "Workflow Id",
+            "type": "string"
+          },
+          "workflow_title": {
+            "title": "Workflow Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "workflow_id",
+          "workflow_title",
+          "status",
+          "broad_total",
+          "actionable_total"
+        ],
+        "title": "GrowthAgentRunSummary",
         "type": "object"
       },
       "GrowthAgentToolStep": {
@@ -12078,6 +12236,83 @@
           }
         },
         "title": "PortfolioPreviewRequest",
+        "type": "object"
+      },
+      "PostedComposedPlan": {
+        "additionalProperties": false,
+        "description": "The reviewed plan as the client posts it back to run.\n\nRequest-only: ``extra=\"forbid\"`` at both levels, so a posted plan cannot\nsmuggle keys past the digest. The fields and their canonical JSON are the\nresponse model's, so the server signs and compares one serialization.",
+        "properties": {
+          "expected_outcome": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Expected Outcome",
+            "type": "string"
+          },
+          "objective_summary": {
+            "maxLength": 300,
+            "title": "Objective Summary",
+            "type": "string"
+          },
+          "requires_approval": {
+            "default": false,
+            "title": "Requires Approval",
+            "type": "boolean"
+          },
+          "risk_notes": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Risk Notes",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PostedPlanStep"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "objective_summary",
+          "steps"
+        ],
+        "title": "PostedComposedPlan",
+        "type": "object"
+      },
+      "PostedPlanStep": {
+        "additionalProperties": false,
+        "description": "A plan step posted back for execution: the same fields, no extra keys.",
+        "properties": {
+          "params": {
+            "title": "Params",
+            "type": "object"
+          },
+          "rationale": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "step_id": {
+            "maxLength": 48,
+            "minLength": 1,
+            "title": "Step Id",
+            "type": "string"
+          },
+          "tool": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_id",
+          "tool"
+        ],
+        "title": "PostedPlanStep",
         "type": "object"
       },
       "ProofEvidenceEvent": {
@@ -19687,6 +19922,62 @@
         ]
       }
     },
+    "/api/growth-agent/agent/plan/execute": {
+      "post": {
+        "deprecated": true,
+        "description": "Run the composed plan the user reviewed, exactly as it was signed.\n\nThe request carries the displayed plan and the compose response's\n``plan_digest``. The server verifies the digest for this actor, objective\nand state scope, re-validates the plan against the reviewed tool registry\nand runs it deterministically with the same per-step audit rows and\napproval gate as a composed run. It never composes a new plan: a plan that\nchanged, expired or no longer passes review is a 409 and nothing runs.",
+        "operationId": "post_api_growth_agent_agent_plan_execute_execute_reviewed_growth_agent_plan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposePlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "The posted plan is not the reviewed plan: the digest does not verify, has expired, or the plan no longer passes review. Nothing ran."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Reviewed Growth Agent Plan",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/growth-agent/agent/run": {
       "post": {
         "deprecated": true,
@@ -20053,6 +20344,57 @@
           }
         },
         "summary": "Rerun Growth Agent Monitor",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/runs": {
+      "get": {
+        "deprecated": true,
+        "description": "List the caller's own recent reviewed-workflow runs, newest first.\n\nRead-only Lakebase app state: it writes no audit row, and each summary\nomits the actor, the stored criteria and the stored route (which can hold\nan expiring, actor-bound Lead Queue handoff proof).",
+        "operationId": "get_api_growth_agent_runs_list_growth_agent_runs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GrowthAgentRunSummary"
+                  },
+                  "title": "Response Get Api Growth Agent Runs List Growth Agent Runs",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Growth Agent Runs",
         "tags": [
           "growth-agent"
         ]
@@ -27477,6 +27819,61 @@
         ]
       }
     },
+    "/api/v1/growth-agent/agent/plan/execute": {
+      "post": {
+        "description": "Run the composed plan the user reviewed, exactly as it was signed.\n\nThe request carries the displayed plan and the compose response's\n``plan_digest``. The server verifies the digest for this actor, objective\nand state scope, re-validates the plan against the reviewed tool registry\nand runs it deterministically with the same per-step audit rows and\napproval gate as a composed run. It never composes a new plan: a plan that\nchanged, expired or no longer passes review is a 409 and nothing runs.",
+        "operationId": "post_api_v1_growth_agent_agent_plan_execute_execute_reviewed_growth_agent_plan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposePlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "The posted plan is not the reviewed plan: the digest does not verify, has expired, or the plan no longer passes review. Nothing ran."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Reviewed Growth Agent Plan",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/v1/growth-agent/agent/run": {
       "post": {
         "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen Databricks Agent Responses is configured, it may suggest exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
@@ -27836,6 +28233,56 @@
           }
         },
         "summary": "Rerun Growth Agent Monitor",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/runs": {
+      "get": {
+        "description": "List the caller's own recent reviewed-workflow runs, newest first.\n\nRead-only Lakebase app state: it writes no audit row, and each summary\nomits the actor, the stored criteria and the stored route (which can hold\nan expiring, actor-bound Lead Queue handoff proof).",
+        "operationId": "get_api_v1_growth_agent_runs_list_growth_agent_runs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GrowthAgentRunSummary"
+                  },
+                  "title": "Response Get Api V1 Growth Agent Runs List Growth Agent Runs",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Growth Agent Runs",
         "tags": [
           "growth-agent"
         ]
