@@ -66,9 +66,11 @@ export function OfferDecisionOutcome({
 }: OfferDecisionOutcomeProps) {
   const scoreAtDecision = justDecided ? score : null;
   const decided = effectiveApproval === 'approved' || effectiveApproval === 'rejected';
-  const receiptChunk = useLazyModule(RECEIPT_CHUNK, decided && auditId !== null);
+  // An empty audit id is no receipt to read back: the plain decision chip.
+  const hasAuditId = Boolean(auditId);
+  const receiptChunk = useLazyModule(RECEIPT_CHUNK, decided && hasAuditId);
   const DecisionReceipt = receiptChunk.module?.DecisionReceipt;
-  const receiptSlot = auditId !== null && !receiptChunk.failed;
+  const receiptSlot = hasAuditId && !receiptChunk.failed;
   return (
     <>
       {effectiveApproval === 'approved' && (

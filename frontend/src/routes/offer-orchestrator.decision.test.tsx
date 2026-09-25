@@ -16,12 +16,10 @@ import type { DecisionReceipt as DecisionReceiptPayload } from '../lib/apiTypes'
 
 const apiMocks = vi.hoisted(() => ({ auditReceipt: vi.fn(), borrowerProof: vi.fn() }));
 
-vi.mock('../lib/api', () => {
-  class ApiError extends Error {
-    status: number | null = null;
-  }
-  return { api: apiMocks, ApiError };
-});
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
+  api: apiMocks,
+}));
 
 vi.mock('../components/AppContext', () => ({
   useApp: () => ({ canAccessAdmin: true, setDrawer: vi.fn(), showEvidence: true, showConfidence: true }),
@@ -127,6 +125,29 @@ describe('OfferDecisionOutcome', () => {
     await render({ effectiveApproval: 'rejected', routing: null });
     expect(document.activeElement).toBe(heading());
     expect(routing()).toBeNull();
+  });
+
+  it.each([
+    { decision: 'approved' as const, chip: 'Approved · governed internal queue' },
+    { decision: 'rejected' as const, chip: 'Rejected' },
+  ])('an empty audit id shows the plain $decision chip and reads nothing back', async ({ decision, chip }) => {
+    apiMocks.auditReceipt.mockResolvedValue(receipt(decision));
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <OfferDecisionOutcome {...BASE} effectiveApproval={decision} auditId="" routing={null} />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(container.querySelector('.surface .chip')?.textContent).toContain(chip);
+    expect(container.querySelector('[data-testid="decision-receipt"]')).toBeNull();
+    expect(container.querySelector('[data-testid="decision-receipt-pending"]')).toBeNull();
+    expect(apiMocks.auditReceipt).not.toHaveBeenCalled();
   });
 
   it('a durable decision from an earlier session neither takes focus nor shows routing', async () => {
