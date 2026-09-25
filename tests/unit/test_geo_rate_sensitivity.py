@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.schemas.geo_rate_sensitivity import RateSensitivityResponse
 from backend.services.audit_store import get_audit_store
-from backend.services.databricks_sql import DatabricksSqlError
+from backend.services.databricks_sql import DatabricksSqlError, _sql_error_class
 from backend.services.rate_scenario import RATE_SCENARIO_STEPS_BPS
 from backend.services.repositories import get_rate_sensitivity_repository
 from backend.services.repositories.databricks_rate_sensitivity import (
@@ -276,12 +276,17 @@ def test_no_usable_state_is_not_built() -> None:
     assert project_rate_sensitivity(rows).built is False
 
 
+def _warehouse_error(message: str) -> DatabricksSqlError:
+    """The error the client raises for ``message``: typed by its classifier."""
+    return _sql_error_class(message)(message)
+
+
 def test_missing_table_is_not_built_not_warming() -> None:
     client = _FakeSqlClient()
     client.error = DependencyDownError(
         "warehouse",
-        reason="DatabricksSqlError: ...",
-        last_error=DatabricksSqlError(
+        reason="DatabricksSqlObjectMissingError: ...",
+        last_error=_warehouse_error(
             "Databricks SQL statement did not succeed (state='FAILED' statement_id='x'): "
             "[TABLE_OR_VIEW_NOT_FOUND] The table or view `mip`.`gold`.`rate_sensitivity_rollup` "
             "cannot be found."
@@ -300,8 +305,8 @@ def test_missing_note_book_is_not_built_not_warming() -> None:
     client = _FakeSqlClient()
     client.error = DependencyDownError(
         "warehouse",
-        reason="DatabricksSqlError: ...",
-        last_error=DatabricksSqlError(
+        reason="DatabricksSqlObjectMissingError: ...",
+        last_error=_warehouse_error(
             "Databricks SQL statement did not succeed (state='FAILED' statement_id='x'): "
             "[TABLE_OR_VIEW_NOT_FOUND] The table or view `mip`.`gold`.`rate_sensitivity_book` "
             "cannot be found. SQLSTATE: 42P01"
@@ -330,7 +335,7 @@ def test_a_permission_error_on_the_book_is_not_mistaken_for_not_built() -> None:
 
 def test_another_missing_object_still_fails() -> None:
     client = _FakeSqlClient()
-    client.error = DatabricksSqlError("[TABLE_OR_VIEW_NOT_FOUND] `mip`.`gold`.`borrower_360` cannot be found.")
+    client.error = _warehouse_error("[TABLE_OR_VIEW_NOT_FOUND] `mip`.`gold`.`borrower_360` cannot be found.")
     repo = DatabricksRateSensitivityRepository(client, cache=TTLCache())
 
     with pytest.raises(DatabricksSqlError):
