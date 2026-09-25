@@ -9,6 +9,8 @@ export const SCORE_ANATOMY_COPY = {
   marginsToggle: 'What would change this?',
   loading: 'Loading score anatomy',
   chunkFailed: 'Score anatomy could not load; reload to update',
+  /** Borrower 360's "Show math": the proof drawer ships in the same lazy chunk. */
+  proofChunkFailed: 'Proof could not load; reload to update',
   /**
    * Shown only when the proof is trusted and has no known data gap. The
    * arithmetic is Python parity over Unity Catalog rows, so it never says

@@ -12,6 +12,7 @@ import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
 import { ScoreAnatomyGate } from '../components/mortgage/ScoreAnatomyGate';
+import { SCORE_ANATOMY_COPY } from '../components/mortgage/scoreAnatomy.copy';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { DecisionReceipt } from '../components/mortgage/DecisionReceipt';
 import { decisionOutcomeForStatus } from '../components/mortgage/DecisionReceipt.copy';
@@ -634,7 +635,7 @@ export default function Borrower360() {
                   Show math
                 </Button>
                 {proofDrawer.failed && (
-                  <span className="muted fs-12" role="status">Proof could not load; reload to update</span>
+                  <span className="muted fs-12" role="status">{SCORE_ANATOMY_COPY.proofChunkFailed}</span>
                 )}
               </div>
             </div>
