@@ -63,17 +63,22 @@ export const CONFIG_OPTIONS: ConfigOptions = {
   target_lender_refs_status: 'live',
 };
 
+/**
+ * The signed-in fixture actor. `lender_name` and `rum_enabled` are the same
+ * settings values CONFIG_OPTIONS carries (delivery-07: the tenant label and
+ * the RUM gate ride the session call), so a helper that turns RUM on turns it
+ * on in both, as the one backend setting does.
+ */
+export const SESSION: SessionResponse = {
+  can_access_admin: true,
+  can_approve: true,
+  actor_email: 'approver@summit-mortgage.example',
+  lender_name: LENDER_NAME,
+  rum_enabled: false,
+};
+
 export const shellFixtures: FixtureEntry[] = [
-  fixture('GET', '/api/session', () =>
-    json<SessionResponse>({
-      can_access_admin: true,
-      can_approve: true,
-      actor_email: 'approver@summit-mortgage.example',
-      // delivery-07: the tenant label and RUM gate ride the session call.
-      lender_name: LENDER_NAME,
-      rum_enabled: false,
-    }),
-  ),
+  fixture('GET', '/api/session', () => json<SessionResponse>(SESSION)),
   fixture('GET', '/api/workspace', () => json<WorkspaceState>({ saved_leads: [], saved_drafts: [] })),
   fixture('GET', '/api/health', () => json<HealthPayload>(HEALTH_OK)),
   fixture('GET', '/api/config/options', () => json<ConfigOptions>(CONFIG_OPTIONS)),

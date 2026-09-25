@@ -5,11 +5,11 @@
  * it needs with `mockApi.register()` through the helpers below.
  */
 import type { Page, Route } from '@playwright/test';
-import type { ConfigOptions } from '../../../../src/types';
+import type { ConfigOptions, SessionResponse } from '../../../../src/types';
 import type { LineageManifestResponse } from '../../../../src/types/lineage';
 import { json, type FixtureEntry, type MockApi } from '../mockApi';
 import { dataEstateFixtures } from './dataEstate';
-import { CONFIG_OPTIONS } from './shell';
+import { CONFIG_OPTIONS, SESSION } from './shell';
 
 /**
  * The evidence-drawer crash hook. `families` is a required array in the
@@ -72,6 +72,8 @@ export function enableRum(mockApi: MockApi): RumCapture {
   mockApi.register<ConfigOptions>('GET', '/api/config/options', () =>
     json({ ...CONFIG_OPTIONS, rum_enabled: true }, { headers: { 'Server-Timing': CONFIG_SERVER_TIMING } }),
   );
+  // The session carries the same setting (delivery-07), and the app reads it first.
+  mockApi.register<SessionResponse>('GET', '/api/session', () => json({ ...SESSION, rum_enabled: true }));
   mockApi.register<{ accepted: number; enabled: boolean }>('POST', '/api/telemetry/rum', ({ body }) => {
     bodies.push(JSON.stringify(body));
     const events = (body as { events?: unknown[] } | null)?.events ?? [];
