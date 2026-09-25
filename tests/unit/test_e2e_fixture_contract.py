@@ -17,9 +17,10 @@ path is version-normalized to ``/api/v1``, and the FIRST canonical APIRoute in
 method and path owns it (so ``/borrowers/search`` beats ``/borrowers/{id}``).
 A 2xx body must validate against that route's model in JSON mode, which runs
 the model validators (score-band canon, governed identifiers, name-shaped
-text, vocabularies). Non-2xx samples are counted and skipped. Every body must
-also stay synthetic: masked borrower ids, ``.example`` email domains and the
-Summit Mortgage sample lender.
+text, vocabularies). A non-2xx sample must still resolve to a route but is not
+validated against a model. Every body must also stay synthetic: masked
+borrower ids, ``.example`` email domains and the Summit Mortgage sample
+lender.
 
 The exporter needs Node >= 22.18. Where Node is missing or older the module
 SKIPS, unless ``MIP_REQUIRE_FIXTURE_CONTRACT=1`` (set in CI's backend job),
@@ -233,13 +234,6 @@ def test_every_default_fixture_yields_a_validated_2xx_sample(samples: list[dict[
     assert sorted(registered - validated) == []
 
 
-def test_non_2xx_samples_are_counted_not_validated(samples: list[dict[str, Any]]) -> None:
-    validated = [sample for sample in samples if 200 <= int(sample["status"]) < 300]
-    skipped = [sample for sample in samples if not 200 <= int(sample["status"]) < 300]
-    assert len(validated) + len(skipped) == len(samples)
-    assert len(validated) > len(skipped)
-
-
 def test_known_drift_is_shrink_only(samples: list[dict[str, Any]]) -> None:
     by_source = {sample["source"]: sample for sample in samples}
     for source, entry in KNOWN_DRIFT.items():
@@ -301,6 +295,19 @@ def test_the_validator_rejects_an_unmasked_borrower_id() -> None:
         "body": {"sessions": [], "borrower_id": "borrower-42"},
     }
     assert any("is not a masked" in problem for problem in contract_problems(sample))
+
+
+def test_a_non_2xx_sample_skips_the_model_but_not_routing_or_the_synthetic_guard() -> None:
+    # A body GenieSessionListResponse rejects (sessions must be a list).
+    down = {**_valid_session_sample(), "status": 503, "body": {"sessions": "fixture: history is down"}}
+    assert contract_problems({**down, "status": 200}), "control: the same body as a 2xx must fail the model"
+    assert contract_problems(down) == []
+    assert any(
+        "no API route answers" in problem
+        for problem in contract_problems({**down, "path": "/api/genie/no-such-endpoint"})
+    )
+    leaking = {**down, "body": {"sessions": "fixture", "borrower_id": "borrower-42"}}
+    assert any("is not a masked" in problem for problem in contract_problems(leaking))
 
 
 def test_the_synthetic_guard_rejects_real_emails_and_other_lenders() -> None:
