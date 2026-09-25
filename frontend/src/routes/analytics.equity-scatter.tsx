@@ -29,6 +29,7 @@ import type {
   EquitySpreadPointsResponse,
   EquitySpreadViewport,
 } from '../types';
+import { niceTicksWithin } from '../lib/chartTicks';
 import { formatCompact } from '../lib/formatters';
 import { LoadState } from './analytics.charts';
 import './analytics.scatter.css';
@@ -38,7 +39,6 @@ import {
   binDensityAlpha,
   binZoomViewport,
   formatAxisTick,
-  makeTicks,
   overviewScatterLayout,
   pct,
   scatterPosition,
@@ -267,8 +267,8 @@ export function EquitySpreadBinsView({
   return (
     <ScatterFrame
       layout={layout}
-      xTicks={makeTicks(overview.equity_domain_min, overview.equity_domain_max)}
-      yTicks={makeTicks(overview.spread_domain_min, overview.spread_domain_max)}
+      xTicks={niceTicksWithin(overview.equity_domain_min, overview.equity_domain_max, 5, { integer: true })}
+      yTicks={niceTicksWithin(overview.spread_domain_min, overview.spread_domain_max, 5, { integer: true })}
       scoreScope="overview"
       overlay={
         <div
@@ -353,8 +353,8 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
   return (
     <ScatterFrame
       layout={layout}
-      xTicks={makeTicks(payload.viewport.equity_min, payload.viewport.equity_max)}
-      yTicks={makeTicks(payload.viewport.spread_min, payload.viewport.spread_max)}
+      xTicks={niceTicksWithin(payload.viewport.equity_min, payload.viewport.equity_max, 5, { integer: true })}
+      yTicks={niceTicksWithin(payload.viewport.spread_min, payload.viewport.spread_max, 5, { integer: true })}
       scoreScope="borrower"
       overlay={
         <div

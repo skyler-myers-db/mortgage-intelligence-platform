@@ -186,17 +186,6 @@ export function activationFunnelStages(stages: ReadonlyArray<FunnelStage>): Funn
     .sort((a, b) => a.stage_order - b.stage_order);
 }
 
-export function makeTicks(min: number, max: number, count = 5): number[] {
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
-  if (max === min) return [min];
-  const ticks: number[] = [];
-  const steps = Math.max(1, count - 1);
-  for (let i = 0; i <= steps; i += 1) {
-    ticks.push(min + ((max - min) * i) / steps);
-  }
-  return ticks;
-}
-
 export function formatAxisTick(value: number, compact = false): string {
   if (!Number.isFinite(value)) return '';
   const rounded = Math.round(value);

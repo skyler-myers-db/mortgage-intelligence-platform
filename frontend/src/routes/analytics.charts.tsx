@@ -17,6 +17,7 @@ import { Icon } from '../components/Icon';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
+import { niceTicks, niceTicksWithin } from '../lib/chartTicks';
 import { fixedAttr } from '../lib/fixedPrecision';
 import { formatCompact, formatCount, formatNumber } from '../lib/formatters';
 import type {
@@ -32,7 +33,6 @@ import {
   formatConversionPct,
   formatShortDate,
   leadQueueHrefForFunnelStage,
-  makeTicks,
   pct,
   type DailyEvidenceTotal,
   type LenderFilterParams,
@@ -346,7 +346,8 @@ export function LineChart({
     const ys = rows.map(y);
     const minX = Math.min(...xs);
     const maxX = Math.max(...xs);
-    const maxY = Math.max(1, ...ys);
+    const yTicks = niceTicks(0, Math.max(0, ...ys), 5, { integer: true });
+    const maxY = yTicks[yTicks.length - 1];
     const plotY = (value: number) => 92 - (Math.max(0, Math.min(1, value / maxY)) * 84);
     const plotted = rows.map((row) => {
       const xValue = x(row);
@@ -364,8 +365,8 @@ export function LineChart({
       maxY,
       plotted,
       points: plotted.map((p) => `${fixedAttr(p.px)},${fixedAttr(p.py)}`).join(' '),
-      xTicks: makeTicks(minX, maxX),
-      yTicks: makeTicks(0, maxY),
+      xTicks: niceTicksWithin(minX, maxX, 5, { integer: true }),
+      yTicks,
       plotY,
     };
   }, [rows, x, y]);
@@ -481,7 +482,8 @@ export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] })
   const clipId = useId();
   const chart = useMemo(() => {
     if (rows.length === 0) return null;
-    const maxY = Math.max(1, ...rows.map((row) => row.event_count));
+    const yTicks = niceTicks(0, Math.max(0, ...rows.map((row) => row.event_count)), 5, { integer: true });
+    const maxY = yTicks[yTicks.length - 1];
     const plotY = (value: number) => 92 - (Math.max(0, Math.min(1, value / maxY)) * 84);
     const points = rows.map((row, idx) => {
       const px = rows.length === 1 ? 50 : (idx / (rows.length - 1)) * 100;
@@ -491,7 +493,7 @@ export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] })
     return {
       maxY,
       points,
-      yTicks: makeTicks(0, maxY),
+      yTicks,
       xTicks: categoricalTickIndexes(rows.length),
       plotY,
     };
