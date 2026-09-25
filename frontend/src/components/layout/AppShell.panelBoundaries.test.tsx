@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rootErrorOptions } from '../../lib/clientErrorLog';
+import { installLocalStorage } from '../../test/installLocalStorage';
 import { useApp } from '../AppContext';
 import { AppShell } from './AppShell';
 
@@ -127,21 +128,17 @@ function AppProbe() {
   return <h1 data-testid="route-content">Lead Queue</h1>;
 }
 
-// The Console and drawer bodies load lazily; on a loaded CI runner a lazy
-// panel can take longer than vi.waitFor's 1 s default to mount its crash
-// surface (CI run 36185829440). The assertion is unchanged, only its budget.
-const LAZY_PANEL_WAIT = { timeout: 5_000 };
-// The bystander test crashes and recovers the drawer twice and the Console
-// once, each a lazy module; on the runner its first dynamic imports alone can
-// exceed vitest's 5 s default test timeout (CI run 36188773509).
-const MULTI_PANEL_TEST_TIMEOUT_MS = 20_000;
-
 describe('AppShell panel boundaries', () => {
   let container: HTMLDivElement;
   let root: Root;
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    // The Console's open state persists (mip.consoleOpen). In a full-suite
+    // worker happy-dom's localStorage is real and outlives a test, so a test
+    // that leaves the Console open would start the next one with it open, and
+    // that test's setConsoleOpen(true) would then be a no-op.
+    installLocalStorage();
     probes.consoleThrows = false;
     probes.drawerThrows = false;
     probes.genieMounts = 0;
@@ -205,7 +202,7 @@ describe('AppShell panel boundaries', () => {
     probes.consoleThrows = true;
     await update(() => app.setConsoleOpen(true));
 
-    await vi.waitFor(() => expect(surfaces()).toHaveLength(1), LAZY_PANEL_WAIT);
+    await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
     const [surface] = surfaces();
     const landmark = container.querySelector('aside#workspace-console');
     expect(landmark?.getAttribute('role')).toBe('complementary');
@@ -248,7 +245,7 @@ describe('AppShell panel boundaries', () => {
     probes.drawerThrows = true;
     await update(() => app.setDrawer({ title: 'Lineage manifest', lineageFamily: 'lead_scoring' }));
 
-    await vi.waitFor(() => expect(surfaces()).toHaveLength(1), LAZY_PANEL_WAIT);
+    await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
     // The frame is the same native modal <dialog> as the drawer (stack-05).
     const frame = container.querySelector<HTMLDialogElement>('dialog.drawer.is-open');
     expect(frame?.open).toBe(true);
@@ -287,7 +284,7 @@ describe('AppShell panel boundaries', () => {
     probes.drawerReadsPayload = true;
     await mount();
     await update(() => app.setDrawer(LINEAGE_SOURCE));
-    await vi.waitFor(() => expect(surfaces()).toHaveLength(1), LAZY_PANEL_WAIT);
+    await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
     expect(surfaces()[0].getAttribute('data-error-boundary')).toBe('drawer');
     expect(probes.drawerFetches).toBe(1);
   }
@@ -344,7 +341,7 @@ describe('AppShell panel boundaries', () => {
       queryClient.removeQueries({ queryKey: ['mip', 'lineage', 'manifest'] });
       await update(() => app.setDrawer(null));
       await update(() => app.setDrawer(LINEAGE_SOURCE));
-      await vi.waitFor(() => expect(surfaces()).toHaveLength(1), LAZY_PANEL_WAIT);
+      await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
       const frame = container.querySelector('dialog.drawer.is-open');
       await update(() => frame?.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')?.click());
       expect(queryClient.getQueryData(bystander), 'drawer Close keeps the bystander').toEqual({ rows: 1 });
@@ -353,17 +350,17 @@ describe('AppShell panel boundaries', () => {
       // The Console: its Try again drops its recent activity, nothing else.
       probes.consoleReadsPayload = true;
       await update(() => app.setConsoleOpen(true));
-      await vi.waitFor(() => expect(surfaces()).toHaveLength(1), LAZY_PANEL_WAIT);
+      await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
       await clickTryAgain();
       await vi.waitFor(() => expect(consoleProbe()?.dataset.families).toBe('1'));
       expect(queryClient.getQueryData(bystander), 'Console Try again keeps the bystander').toEqual({ rows: 1 });
-    }, MULTI_PANEL_TEST_TIMEOUT_MS);
+    });
 
     it("the Console's Try again re-reads the payload and renders the healthy Console", async () => {
       probes.consoleReadsPayload = true;
       await mount();
       await update(() => app.setConsoleOpen(true));
-      await vi.waitFor(() => expect(surfaces()).toHaveLength(1), LAZY_PANEL_WAIT);
+      await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
       expect(surfaces()[0].getAttribute('data-error-boundary')).toBe('console');
       expect(probes.consoleFetches).toBe(1);
 
