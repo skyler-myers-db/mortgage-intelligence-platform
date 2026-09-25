@@ -15,6 +15,7 @@ import { useLocation, useNavigate } from 'react-router';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
+import { DescribedErrorBody as ErrorBody } from '../ui/DescribedError';
 import { api, type AuditEventPage } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
@@ -106,11 +107,9 @@ export function AdminAuditExplorer() {
       ? `${warmingUp.label} (${warmingUp.attempt}/${warmingUp.maxAttempts})`
       : 'Updating audit rows'
     : '';
-  const error = errorObj
-    ? errorObj instanceof Error
-      ? errorObj.message
-      : 'unreachable'
-    : null;
+  // Failures read in the shared vocabulary, never the transport message
+  // (audit states-04).
+  const error = errorObj;
 
   const {
     data: rollups,
@@ -120,11 +119,7 @@ export function AdminAuditExplorer() {
     (signal) => api.auditRollups('week', signal),
     { queryKey: queryKeys.auditRollups('week') },
   );
-  const rollupsError = rollupsErrorObj
-    ? rollupsErrorObj instanceof Error
-      ? rollupsErrorObj.message
-      : 'unreachable'
-    : null;
+  const rollupsError = rollupsErrorObj;
 
   const goToPage = (cursors: Array<string | null>) => {
     setExpandedState({ key: appliedKey, id: null });
@@ -219,7 +214,7 @@ export function AdminAuditExplorer() {
         )}
         {error && !warmingUp && (
           <div className="muted body fs-12 mt-3">
-            Audit explorer unavailable: {error}
+            Audit explorer unavailable: <ErrorBody error={error} subject="the audit explorer" />
           </div>
         )}
         <div className="admin-rollups mt-3">
@@ -228,7 +223,9 @@ export function AdminAuditExplorer() {
             <WarmingUpBlock state={rollupsWarming} title="Audit rollups loading" compact />
           )}
           {rollupsError && !rollupsWarming && (
-            <div className="muted fs-12">Audit rollups unavailable: {rollupsError}</div>
+            <div className="muted fs-12">
+              Audit rollups unavailable: <ErrorBody error={rollupsError} subject="the audit rollups" />
+            </div>
           )}
           {!rollupsWarming && !rollupsError && (
             <div className="admin-rollups__grid">
@@ -258,7 +255,7 @@ export function AdminAuditExplorer() {
             data-status={statusLabel}
           >
             {events.length > 0 && (
-              <table className="tbl" aria-label="Audit events">
+              <table className="tbl tbl--static" aria-label="Audit events">
                 <thead>
                   <tr>
                     <th scope="col" aria-label="Event details" />

@@ -34,24 +34,48 @@ let loadedReceiptModule: ReceiptModule | null = null;
 // Module scope: the React Compiler cannot lower an import() inside a hook.
 const loadReceiptModule = (): Promise<ReceiptModule> => import('../mortgage/DecisionReceipt');
 
-/** The Decision receipt module once `wanted`; null while it loads or if it cannot. */
-function useReceiptModule(wanted: boolean): ReceiptModule | null {
-  const [module, setModule] = useState<ReceiptModule | null>(loadedReceiptModule);
+/**
+ * The event types / actions the receipt endpoint answers, mirrored here so a
+ * row can say its receipt failed to load without importing the receipt
+ * module (a static import would split the Lead Queue's shared chunk).
+ * AdminAuditExplorer.receipt.test.tsx pins this mirror to
+ * DecisionReceipt.copy's DECISION_RECEIPT_EVENT_TYPES / ACTIONS.
+ */
+export const DECISION_RECEIPT_TYPES: readonly string[] = ['APPROVE', 'OUTREACH_APPROVE', 'OUTREACH_REJECT', 'REJECT', 'OUTREACH_HOLD', 'HOLD'];
+export const DECISION_RECEIPT_ACTION_NAMES: readonly string[] = ['outreach.approve', 'outreach.reject', 'outreach.hold'];
+
+function isDecisionRow(event: AuditEventRow): boolean {
+  return DECISION_RECEIPT_TYPES.includes((event.event_type ?? '').trim().toUpperCase())
+    || DECISION_RECEIPT_ACTION_NAMES.includes((event.action ?? '').trim().toLowerCase());
+}
+
+/**
+ * The Decision receipt module once `wanted`; null while it loads. `failed`
+ * after the chunk would not load (a stale deploy), so the row can say so
+ * instead of silently showing no receipt.
+ */
+function useReceiptModule(wanted: boolean): { module: ReceiptModule | null; failed: boolean } {
+  const [state, setState] = useState<{ module: ReceiptModule | null; failed: boolean }>({
+    module: loadedReceiptModule,
+    failed: false,
+  });
   useEffect(() => {
-    if (!wanted || module) return undefined;
+    if (!wanted || state.module || state.failed) return undefined;
     let live = true;
     loadReceiptModule().then(
       (loaded) => {
         loadedReceiptModule = loaded;
-        if (live) setModule(loaded);
+        if (live) setState({ module: loaded, failed: false });
       },
-      () => undefined,
+      () => {
+        if (live) setState({ module: null, failed: true });
+      },
     );
     return () => {
       live = false;
     };
-  }, [wanted, module]);
-  return module;
+  }, [wanted, state]);
+  return state;
 }
 
 export const AUDIT_TABLE_CONTEXT = 'mip_app.action_audit';
@@ -113,8 +137,10 @@ export function AuditEventTableRow({
   const evidenceIds = event.evidence_ids ?? [];
   const label = auditEventLabel(event);
   const code = auditEventCode(event);
-  const receiptModule = useReceiptModule(expanded);
+  const receipt = useReceiptModule(expanded);
+  const receiptModule = receipt.module;
   const Receipt = receiptModule?.isDecisionReceiptEvent(event) ? receiptModule.DecisionReceipt : null;
+  const receiptFailed = receipt.failed && isDecisionRow(event);
 
   return (
     <Fragment>
@@ -224,6 +250,14 @@ export function AuditEventTableRow({
               {Receipt && (
                 <div className="mt-3" data-testid="audit-explorer-receipt">
                   <Receipt auditEventId={event.event_id} compact explorerLink={false} headingLevel={3} />
+                </div>
+              )}
+              {receiptFailed && (
+                <div className="muted fs-12 mt-3" role="status" data-testid="audit-explorer-receipt-failed">
+                  Receipt could not load; reload the page to read it.{' '}
+                  <button type="button" className="btn btn--ghost btn--sm" onClick={() => window.location.reload()}>
+                    Reload
+                  </button>
                 </div>
               )}
 
