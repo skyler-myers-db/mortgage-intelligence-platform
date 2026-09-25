@@ -286,25 +286,38 @@
   outline-offset: var(--focus-ring-offset);
 }
 /* Borrower offer experience PROTOTYPE (auto-offer Module 1 mock). Unmistakably
-   a mock: watermark + warning banner + legal disclaimer. */
-.offer-mock-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-  display: grid;
-  place-items: center;
-  padding: var(--sp-4);
-  background: var(--surface-scrim);
-  backdrop-filter: blur(2px);
-}
+   a mock: watermark + warning banner + legal disclaimer.
+   A native modal <dialog class="offer-mock"> (useModalDialog; 2026-09-21
+   audit stack-05 / a11y-07): the top layer replaces the --z-modal tier, the
+   user-agent `margin: auto` centres it, and `::backdrop` replaces the
+   `.offer-mock-scrim` div with the same --surface-scrim and blur(2px). A
+   modal dialog is already a containing block for the absolute watermark and
+   close button, so `position: relative` is gone. The resets undo the
+   remaining user-agent dialog properties. */
 .offer-mock {
-  position: relative;
-  inline-size: min(34rem, 100%);
+  inline-size: min(34rem, calc(100vw - 2 * var(--sp-4)));
+  max-inline-size: calc(100vw - 2 * var(--sp-4));
+  max-block-size: calc(100dvh - 2 * var(--sp-4));
+  margin: auto;
+  padding: 0;
+  color: var(--text-1);
   border-radius: var(--r-lg);
   border: 1px solid var(--line-1);
   background: var(--bg-1);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
+}
+.offer-mock::backdrop {
+  background: var(--surface-scrim);
+  backdrop-filter: blur(2px);
+  transition: opacity var(--dur-base) var(--ease);
+}
+@starting-style {
+  .offer-mock[open]::backdrop { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The global reduced-motion reset matches `*`, never `::backdrop`. */
+  .offer-mock::backdrop { transition: none; }
 }
 .offer-mock__watermark {
   position: absolute;

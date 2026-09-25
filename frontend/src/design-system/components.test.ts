@@ -249,7 +249,7 @@ describe('layout containment contracts', () => {
     const css = designCss();
     expect(css).toContain('.offer-mock__watermark');
     expect(css).toMatch(/\.offer-mock__banner\s*\{[^}]*color:\s*var\(--status-warning-ink\);/s);
-    expect(css).toMatch(/\.offer-mock-scrim\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
+    expect(css).toMatch(/\.offer-mock::backdrop\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
   });
 
   it('styles the portfolio summary card claim chips + verdict ("Your book today")', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { designCss } from '../test/designCss';
+import { featureStylesheets } from '../test/featureCss';
 
 /**
  * Overlays on the top layer (2026-09-21 audit stack-05 / a11y-07 step 2 /
@@ -96,5 +97,37 @@ describe('the command palette and the shortcut sheet are one full-viewport modal
     expect(block('.cmdk__panel')).toMatch(/transition:\s*translate var\(--dur-exit\) var\(--ease-exit\);/);
     expect(block('.cmdk:not([open]) .cmdk__panel')).toMatch(/translate:\s*0 calc\(-1 \* var\(--sp-2\)\);/);
     expect(css()).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.cmdk,\s*\.cmdk__panel\s*\{\s*animation:\s*none;\s*transition:\s*none;/);
+  });
+});
+
+describe('the borrower offer mock is a modal dialog with the prototype scrim as ::backdrop', () => {
+  it('retires the scrim div and keeps the card centred by the dialog itself', () => {
+    expect(css()).not.toMatch(/\.offer-mock-scrim/);
+    const card = block('.offer-mock');
+    expect(card).not.toMatch(/position:\s*relative/);
+    expect(card).toMatch(/margin:\s*auto;/);
+    expect(card).toMatch(/padding:\s*0;/);
+    expect(card).toMatch(/color:\s*var\(--text-1\);/);
+    expect(card).not.toMatch(/z-index/);
+    const backdrop = block('.offer-mock::backdrop');
+    expect(backdrop).toMatch(/background:\s*var\(--surface-scrim\);/);
+    expect(backdrop).toMatch(/backdrop-filter:\s*blur\(2px\);/);
+    expect(css()).toMatch(/@starting-style\s*\{\s*\.offer-mock\[open\]::backdrop\s*\{\s*opacity:\s*0;/);
+    expect(css()).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.offer-mock::backdrop\s*\{\s*transition:\s*none;/);
+  });
+});
+
+describe('the z-index tiers the top layer replaced', () => {
+  const RETIRED = ['--z-drawer-scrim', '--z-drawer', '--z-palette', '--z-modal'];
+
+  it('are consumed by no component partial and no feature stylesheet', () => {
+    const sheets = [
+      { file: 'design-system components', css: css() },
+      ...featureStylesheets().map(({ file, css: text }) => ({ file, css: text.replace(/\/\*[\s\S]*?\*\//g, '') })),
+    ];
+    const consumers = sheets.flatMap(({ file, css: text }) =>
+      RETIRED.filter((tier) => new RegExp(`var\\(${tier}\\)`).test(text)).map((tier) => `${file}: ${tier}`),
+    );
+    expect(consumers).toEqual([]);
   });
 });
