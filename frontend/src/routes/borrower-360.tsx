@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate, useLocation, useParams } from 'react-router';
-import { api, ApiError } from '../lib/api';
+import { api } from '../lib/api';
 import type { Borrower360 as Borrower360Type, ProofScoreComponentKey } from '../types';
 import { currency, rangeLabel, ratePct, ratePctFromFraction, signedBpsLabel } from '../lib/formatters';
 import { formatDateTimeShort } from '../lib/time';
@@ -39,6 +39,8 @@ import { useQueueContext } from '../lib/queueContext';
 // first hover / focus / click of an opener, so the open still slides in;
 // opening it is the audited VIEW_BORROWER_PROOF read, loading the chunk is not.
 const PROOF_DRAWER_CHUNK = lazyModule(() => import('../components/mortgage/ScoreAnatomy'));
+// A failed read's page (the error vocabulary with it) loads only on a failure.
+const FAILURE_PAGE = lazyModule(() => import('../components/mortgage/DossierFailure'));
 
 /**
  * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
@@ -104,6 +106,7 @@ export default function Borrower360() {
     (signal) => api.borrower(id!, signal),
     { enabled: Boolean(id), queryKey: queryKeys.borrower(id) },
   );
+  const { module: failurePage, failed: failurePageFailed } = useLazyModule(FAILURE_PAGE, error !== null);
   // wow-stage-3: the lifecycle row carries the audit id of the latest
   // decision; when it does, the hero offers the Decision receipt read back
   // from that row. A 403 (actor outside the sales team) simply hides it.
@@ -165,9 +168,9 @@ export default function Borrower360() {
     );
   }
 
-  // Warming-up takes priority over `error` — `useWarmingUpRetry` never
-  // sets both at once, but this ordering makes the intent explicit.
-  if (warmingUp) {
+  // TanStack keeps `failureReason` after the last retry, so `warmingUp`
+  // outlives the loop; once `error` is set the honest surface is the error.
+  if (warmingUp && !error) {
     return (
       <PageShell
         eyebrow={warmingUp.label}
@@ -181,32 +184,28 @@ export default function Borrower360() {
   }
 
   if (error) {
-    const notFound = error instanceof ApiError && error.status === 404;
-    const errorLede = notFound
-      ? `Borrower ${id} was not found. Check the ID, use search, or return to the lead queue.`
-      : `Couldn't load borrower ${id}: ${error.message}`;
-    return (
-      <PageShell
-        eyebrow="Borrower 360"
-        title={notFound ? `Borrower ${id} not found` : `Couldn't load ${id}`}
-        lede={errorLede}
-      >
+    // A 404 keeps its copy; a bannered outage waits calmly; anything else in
+    // the shared vocabulary, never the transport message (DossierFailure).
+    // Until that page's chunk loads (or if it cannot) a neutral line holds
+    // the page: the read did fail, so never a "Loading…" claim; once the
+    // chunk has failed, Retry (an explicit re-read) is the way forward.
+    return failurePage ? (
+      <failurePage.DossierFailure id={id} error={error} pager={pager} onRetry={manualRetry} />
+    ) : (
+      <PageShell eyebrow="Borrower 360" title={`Borrower ${id}`} lede={`Borrower ${id} could not load.`}>
         {pager}
-        <div className="surface">
-          <div className="surface__body surface__body--inline">
-            <Chip variant={notFound ? 'warning' : 'danger'} icon={notFound ? 'search' : 'cross'}>
-              {notFound ? 'Not found' : 'Backend unavailable'}
-            </Chip>
-            {!notFound && (
+        {failurePageFailed && (
+          <div className="surface">
+            <div className="surface__body surface__body--inline">
               <Button onClick={manualRetry} aria-label={`Retry loading borrower ${id}`}>
                 Retry
               </Button>
-            )}
-            <Link className="btn" to="/lead-queue">
-              Back to lead queue
-            </Link>
+              <Link className="btn" to="/lead-queue">
+                Back to lead queue
+              </Link>
+            </div>
           </div>
-        </div>
+        )}
       </PageShell>
     );
   }

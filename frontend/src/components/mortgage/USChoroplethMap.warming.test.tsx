@@ -120,6 +120,26 @@ describe('warming stage under the shared health poll (dataviz-04)', () => {
     expect(document.querySelector('.map-stage--status .map-center-card')).not.toBeNull();
   });
 
+  // The shared rule (audit states-03 part a): the block steps aside exactly
+  // when the banner shows for its dependency. Deliberate changes from the
+  // old private copy, pinned on the real block through the parity loop above
+  // and here on the rule itself.
+  it.each([
+    ['a status-only degraded payload hides nothing (no banner shows then)', 'degraded, every dependency up', null, false],
+    ['genie down defers a genie block like warehouse / lakebase', 'genie down', 'genie', true],
+    ['an open warehouse breaker defers a warehouse block', 'warehouse breaker open', 'warehouse', true],
+    ['warehouse down still keeps a lakebase block', 'warehouse down', 'lakebase', false],
+  ] as const)('%s', (_label, healthName, dependency, expected) => {
+    expect(warmingBlockDefersToBanner(HEALTH[healthName], warming(dependency))).toBe(expected);
+  });
+
+  it.each(['offline', 'unreachable', 'session_expired'] as const)(
+    'never defers while the connection is %s (the banner does not name a dependency then)',
+    (connection) => {
+      expect(warmingBlockDefersToBanner(HEALTH['warehouse down'], warming('warehouse'), connection)).toBe(false);
+    },
+  );
+
   it('outside a HealthProvider the block always renders and the stage adds nothing', async () => {
     const state = warming('warehouse');
     await act(async () => {

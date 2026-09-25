@@ -10,7 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuditEventPage, AuditEventRow } from '../../lib/apiTypes';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -20,6 +20,8 @@ type PageFilters = Record<string, string | null | undefined>;
 const mocks = vi.hoisted(() => ({
   pageCalls: [] as PageFilters[],
   rows: [] as AuditEventRow[],
+  pageError: null as Error | null,
+  rollupsError: null as Error | null,
 }));
 
 vi.mock('../../lib/api', async (importOriginal) => {
@@ -29,17 +31,20 @@ vi.mock('../../lib/api', async (importOriginal) => {
     api: {
       auditEventPage: (_limit: number, _signal: AbortSignal | undefined, filters: PageFilters) => {
         mocks.pageCalls.push(filters);
+        if (mocks.pageError) return Promise.reject(mocks.pageError);
         const rows = filters.event_id
           ? mocks.rows.filter((row) => row.event_id === filters.event_id)
           : mocks.rows;
         return Promise.resolve<AuditEventPage>({ items: rows, next_cursor: null });
       },
-      auditRollups: () => Promise.resolve([]),
+      auditRollups: () => (mocks.rollupsError ? Promise.reject(mocks.rollupsError) : Promise.resolve([])),
     },
   };
 });
 
 import { AdminAuditExplorer } from './AdminAuditExplorer';
+import { ApiError } from '../../lib/api';
+import { preloadDescribedError } from '../ui/DescribedError';
 import { AUDIT_PAGE_CSV_HEADER } from './AdminAuditExplorer.csv';
 import { auditDayBoundary } from './AdminAuditExplorer.params';
 
@@ -133,6 +138,31 @@ describe('AdminAuditExplorer', () => {
     act(() => root.unmount());
     container.remove();
     vi.restoreAllMocks();
+    mocks.pageError = null;
+    mocks.rollupsError = null;
+  });
+
+  // The error vocabulary is its own chunk (loaded with the first failure).
+  beforeAll(async () => {
+    await preloadDescribedError();
+  });
+
+  // css-hygiene: the events table has no row-click action (rows expand from
+  // their own button), so it opts out of the row pointer and hover.
+  it('marks the events table static', async () => {
+    await render('/admin-config');
+    expect(container.querySelector('table[aria-label="Audit events"]')?.className).toBe('tbl tbl--static');
+  });
+
+  // Audit states-04: failures read in the shared vocabulary, never the
+  // transport message.
+  it('says why the explorer and the rollups failed without the transport message', async () => {
+    mocks.pageError = new ApiError('SENTINEL 500 Internal Server Error', { path: '/api/v1/audit/events', status: 500 });
+    mocks.rollupsError = new ApiError('SENTINEL', { path: '/api/v1/audit/rollups', status: 403 });
+    await render('/admin-config');
+    expect(container.textContent).toContain('Audit explorer unavailable: The server hit an unexpected error.');
+    expect(container.textContent).toContain('Audit rollups unavailable: Ask an administrator for access.');
+    expect(container.textContent).not.toContain('SENTINEL');
   });
 
   it('reads every filter from the URL into the request and the controls', async () => {

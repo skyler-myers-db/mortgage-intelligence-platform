@@ -28,6 +28,7 @@ export const API_ROUTE_SEGMENTS = [
   'monitors', 'my-events', 'notification-drafts', 'offers', 'operations', 'options',
   'outbox', 'outcome', 'outcomes', 'outreach', 'page', 'points', 'portfolio',
   'preview', 'progress', 'proof', 'property-loan', 'rate-sensitivity', 'rate-window',
+  'queue-version',
   'receipt',
   'recommend', 'refusal-report', 'reject', 'rollups', 'rules', 'rum', 'run',
   'run-due', 'run-due-all', 'sales', 'search', 'segments', 'session', 'sessions',
@@ -53,6 +54,9 @@ const EXCLUDED_TEMPLATES: ReadonlySet<string> = new Set([
   // The completion-job poll (audit 2026-09-21 genie-01): ~40/min per turn,
   // the same rationale as the progress poll. Its job id never reaches RUM.
   '/api/genie/message/status',
+  // The Lead Queue's change-signal poll (audit states-09): once a minute
+  // while the queue is open; a poll, not a read a person made.
+  '/api/workspace/queue-version',
 ]);
 const EXCLUDED_PREFIX = '/api/telemetry/';
 

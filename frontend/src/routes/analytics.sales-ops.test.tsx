@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -55,6 +55,13 @@ vi.mock('../lib/api', () => ({
 }));
 
 import AnalyticsRoute from './analytics';
+import { ApiError } from '../lib/apiTransport';
+import { preloadDescribedError } from '../components/ui/DescribedError';
+
+// The error vocabulary is its own chunk (loaded with the first failure).
+beforeAll(async () => {
+  await preloadDescribedError();
+});
 
 async function settle(): Promise<void> {
   await act(async () => {
@@ -260,5 +267,36 @@ describe('Analytics Sales ops tab', () => {
     expect(salesOpsTabButton()?.getAttribute('aria-selected')).toBe('true');
     expect(document.body.textContent).toContain('Sales ops snapshot');
     expect(document.querySelector('[aria-label="Analytics filters"]')).toBeNull();
+  });
+
+  // Audit states-04: failures read in the shared vocabulary, never the
+  // transport message or the server's detail.
+  it('says why each read failed without the transport message', async () => {
+    const SENTINEL = 'SENTINEL 500 Internal Server Error';
+    apiMocks.salesTeam.mockRejectedValue(new ApiError(SENTINEL, { path: '/api/v1/sales/team', status: 403 }));
+    apiMocks.salesAging.mockRejectedValue(new ApiError(SENTINEL, { path: '/api/v1/sales/aging', status: 500 }));
+    await act(async () => {
+      renderAt('/analytics?view=sales-ops');
+    });
+    await settle();
+
+    const alerts = [...document.querySelectorAll('[role="alert"]')].map((node) => node.textContent ?? '');
+    expect(alerts).toContain('Sales team unavailable: Ask an administrator for access.');
+    expect(alerts).toContain('Sales operations metrics unavailable: The server hit an unexpected error.');
+    expect(document.body.textContent).not.toContain('SENTINEL');
+    expect(document.body.textContent).not.toContain('Internal Server Error');
+  });
+
+  it('says why the outcome summary failed, apart from the other cards', async () => {
+    apiMocks.salesOutcomeSummary.mockRejectedValue(new ApiError('SENTINEL detail', {
+      path: '/api/v1/sales/outcomes/summary', status: 503, retryable: true, dependency: 'lakebase', reason: 'retries_exhausted',
+    }));
+    await act(async () => {
+      renderAt('/analytics?view=sales-ops');
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain('Outcome summary unavailable: The app already retried; try again shortly.');
+    expect(document.body.textContent).not.toContain('SENTINEL');
   });
 });

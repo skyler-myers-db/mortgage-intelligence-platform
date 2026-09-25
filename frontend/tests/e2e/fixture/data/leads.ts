@@ -14,6 +14,8 @@ import type {
   LeadSummary,
   SegmentCode,
 } from '../../../../src/types';
+import type { QueueVersionBody } from '../../../../src/lib/queueVersion';
+import type { ContractSample } from '../contractSamples';
 import { fixture, json, type FixtureEntry, type FixtureReply, type FixtureRequest } from '../mockApi';
 import { LEADS, borrowerById } from './borrowers';
 import { SNAPSHOT_AT, TOTALS, stateByCode } from './reference';
@@ -122,8 +124,30 @@ function borrowerOr404<T>(borrowerId: string, build: (borrower: Borrower360) => 
   return json<T>(build(borrower));
 }
 
+/**
+ * The audit-free Lead Queue change signal (audit states-09): a constant
+ * version by default, so the queue shows "Fetched …"; a spec that proves
+ * "Queue updated" registers QUEUE_VERSION_UPDATED after the first poll.
+ */
+export const QUEUE_VERSION: QueueVersionBody = { version: '0f1e2d3c4b5a69788796a5b4c3d2e1f0' };
+export const QUEUE_VERSION_UPDATED: QueueVersionBody = { version: '9a8b7c6d5e4f30211203f4e5d6c7b8a9' };
+
+/** The queue-version bodies (the exporter's record shape), for the fixture contract. */
+export function contractSamples(): ContractSample[] {
+  return [QUEUE_VERSION, QUEUE_VERSION_UPDATED].map((body, index) => ({
+    source: `data/leads.ts#QUEUE_VERSION${index === 0 ? '' : '_UPDATED'}`,
+    method: 'GET',
+    pattern: '/api/workspace/queue-version',
+    path: '/api/workspace/queue-version',
+    query: '',
+    status: 200,
+    body,
+  }));
+}
+
 export const leadFixtures: FixtureEntry[] = [
   fixture('GET', '/api/leads', leadsPage),
+  fixture('GET', '/api/workspace/queue-version', () => json<QueueVersionBody>(QUEUE_VERSION)),
   fixture('GET', '/api/borrowers/search', ({ query }) => {
     const needle = (query.get('q') ?? '').trim().toLowerCase();
     const hits = LEADS.filter((lead) =>

@@ -49,6 +49,13 @@ vi.mock('../lib/configOptionsQuery', () => {
   return { useConfigOptionsQuery: () => STABLE };
 });
 
+// The audit-free queue-version poll (states-09) is lead-queue.freshness.test's;
+// here it answers nothing, so no request leaves the test.
+vi.mock('../lib/queueVersion', async (importOriginal) => {
+  const STABLE = { data: undefined, dataUpdatedAt: 0, refetch: () => Promise.resolve() };
+  return { ...(await importOriginal<typeof import('../lib/queueVersion')>()), useQueueVersion: () => STABLE };
+});
+
 vi.mock('../components/FootprintProvider', () => {
   const STABLE = { ready: true, usingFallback: false, states: [] };
   return { useFootprint: () => STABLE };
@@ -315,6 +322,33 @@ describe('LeadQueue cache identity', () => {
 
     expect(apiMocks.leadsPage).not.toHaveBeenCalled();
     expect(document.querySelector('[data-testid="lead-queue-me-unresolved"]')).toBeNull();
+  });
+
+  // w3-queue-place review: an unresolved "Assigned to me" sends no assignee,
+  // so it used to share the UNFILTERED queue's cache key and paint that
+  // page's rows under the Me preset. A key sentinel (only while unresolved),
+  // no placeholder carry-over and a payload-less queue close it.
+  it('never paints the unfiltered queue under an unresolved "Assigned to me"', async () => {
+    appState.sessionStatus = 'loading';
+    await mountAt('/lead-queue');
+    expect(document.querySelector('[data-testid="lead-table"]')?.textContent).toBe('B-NATIONAL');
+
+    await go('/lead-queue?assigned_to=me');
+
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-testid="lead-table"]')).toBeNull();
+    expect(document.querySelector('.lead-queue-skeleton')).not.toBeNull();
+  });
+
+  it('keeps the resolved queue key byte-identical (the sentinel rides only while unresolved)', async () => {
+    appState.actorEmail = 'lo.one@summit.example';
+    await mountAt('/lead-queue?assigned_to=me');
+    const keys = queryClient.getQueryCache().getAll()
+      .map((query) => JSON.stringify(query.queryKey))
+      .filter((key) => key.includes('lead-queue'));
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).not.toContain('me:unresolved');
+    expect(keys[0]).toContain('lo.one@summit.example');
   });
 
   it('reads nothing and says so when a ready session has no email', async () => {

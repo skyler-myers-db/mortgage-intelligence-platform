@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { LeadSummary, SalesTeamMember } from '../../types';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
 import type { LeadTableView } from './LeadTable.columns';
@@ -60,6 +61,12 @@ export interface LeadTableProps {
    * Queue passes it.
    */
   restoreScroll?: boolean;
+  /**
+   * The view's freshness (audit states-09): rendered beside the header title
+   * (never in the action row, which keeps the keyboard hint on one line), e.g.
+   * "Fetched 3 min ago · Refresh" or "Queue updated · Refresh".
+   */
+  headerStatus?: ReactNode;
 }
 
 export type RejectReasonCode =

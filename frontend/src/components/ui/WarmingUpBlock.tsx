@@ -1,7 +1,34 @@
+import { lazy, Suspense, type ComponentType } from 'react';
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
-import { computeDegraded, useOptionalHealth } from '../HealthProvider';
+import { useOptionalHealth } from '../HealthProvider';
+import { blockDefersToBanner } from '../healthRecovery';
+
+type WaitModule = typeof import('./WarmingUpBlock.wait');
+
+const loadWaitExtras = () => import('./WarmingUpBlock.wait') as Promise<WaitModule | undefined>;
+
+/** Load the clocks ahead of need (a test); the first render still resolves the lazy wrappers. */
+export const preloadWarmingExtras = (): Promise<unknown> => loadWaitExtras();
+
+const NOTHING = () => null;
+
+/**
+ * The wait clocks and the reference disclosure, loaded with the first block
+ * that shows: React.lazy (lazy and Suspense ship with React) keeps them and
+ * any loader helper out of every route's natural-load closure. A chunk that
+ * cannot load shows neither; the cadence line stays.
+ */
+function lazyWaitPart<P extends object>(pick: (module: WaitModule) => ComponentType<P>) {
+  return lazy<ComponentType<P>>(() => loadWaitExtras().then(
+    (module) => ({ default: module ? pick(module) : NOTHING }),
+    () => ({ default: NOTHING }),
+  ));
+}
+
+const WaitLine = lazyWaitPart((module) => module.WaitLine);
+const ReferenceDetails = lazyWaitPart((module) => module.ReferenceDetails);
 
 /**
  * WarmingUpBlock — shared presentational component for the cold-start
@@ -17,8 +44,11 @@ import { computeDegraded, useOptionalHealth } from '../HealthProvider';
  *                    (the 30 s breaker cool-down is real)
  *
  * The attempt counter renders as "(attempt N of M)" so the operator
- * can see forward progress. Optional `title` slot lets per-page use
- * sites name the specific resource ("Loading B-102FL7THC6Q3L…").
+ * can see forward progress, and the footer says how long the wait has run
+ * and when the next try is due (audit states-08 part 4). The correlation id
+ * sits behind a "Details" disclosure with a Copy button. Optional `title`
+ * slot lets per-page use sites name the specific resource
+ * ("Loading B-102FL7THC6Q3L…").
  */
 
 interface WarmingUpBlockProps {
@@ -63,28 +93,17 @@ export function WarmingUpBlock({
 }: WarmingUpBlockProps) {
   // R6-11 (2026-04-23): on a deep-link cold-start the DegradedBanner,
   // footprint-fallback chip, and this per-route block all fire at once.
-  // If health is already reporting the dependency as down, the banner
-  // is already telling the story — suppress the route-level duplicate
-  // so the page doesn't stack three cold-start affordances. We only
-  // suppress when the block's dependency matches the degraded one
-  // (warehouse/lakebase mapping) so a genuine per-route warm-up still
-  // shows while an unrelated dep is down.
+  // If the banner is already telling this dependency's story, suppress the
+  // route-level duplicate so the page doesn't stack three cold-start
+  // affordances. One shared rule decides (healthRecovery.blockDefersToBanner,
+  // audit states-03 a): the block steps aside exactly when the banner shows
+  // for its dependency (or it named none), so a genuine per-route warm-up
+  // still shows while an unrelated dependency is down.
   const healthCtx = useOptionalHealth();
-  if (healthCtx && computeDegraded(healthCtx.health)) {
-    const deps = healthCtx.health?.dependencies ?? {};
-    const blockDep = (state.dependency ?? '').toLowerCase();
-    const banneredDep =
-      deps.warehouse === 'down'
-        ? 'warehouse'
-        : deps.lakebase === 'down'
-          ? 'lakebase'
-          : null;
-    // If the banner covers the same dep (or the block didn't name one),
-    // the banner's copy is the single source of truth — drop the block.
-    if (!blockDep || blockDep === banneredDep) {
-      return null;
-    }
-  }
+  const defers = healthCtx
+    ? blockDefersToBanner(state.dependency, healthCtx.health, healthCtx.connection ?? 'online')
+    : false;
+  if (defers) return null;
   return (
     <div
       className={`surface warming-block ${compact ? 'warming-block--compact' : ''}`}
@@ -119,12 +138,16 @@ export function WarmingUpBlock({
         </p>
         <div className="warming-block__footer">
           <Icon name="db" size={11} />
-          <span className="muted warming-block__meta">
-            {state.correlationId
-              ? `correlation_id: ${state.correlationId}`
-              : cadenceFor(state.label)}
-          </span>
+          <span className="muted warming-block__meta">{cadenceFor(state.label)}</span>
+          <Suspense fallback={null}>
+            <WaitLine attempt={state.attempt} intervalMs={state.intervalMs} />
+          </Suspense>
         </div>
+        {state.correlationId && (
+          <Suspense fallback={null}>
+            <ReferenceDetails reference={state.correlationId} />
+          </Suspense>
+        )}
       </div>
     </div>
   );

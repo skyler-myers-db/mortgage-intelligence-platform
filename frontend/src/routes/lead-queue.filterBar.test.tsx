@@ -18,7 +18,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const retryState = vi.hoisted(() => ({
-  data: { leads: [], totalMatching: 0, returnedRows: 0, truncatedAt: null },
+  // One row: LeadTable mounts only for rows (a measured zero is an EmptyState).
+  data: { leads: [{ borrower_id: 'B-0123456789ABC' }], totalMatching: 1, returnedRows: 1, truncatedAt: null },
   warmingUp: null,
   error: null,
   manualRetry: () => undefined,
@@ -41,6 +42,13 @@ vi.mock('../lib/useWarmingUpRetry', () => ({
 vi.mock('../lib/configOptionsQuery', () => {
   const STABLE = { data: { target_lender_refs: ['All', 'Competitor B'] }, isError: false };
   return { useConfigOptionsQuery: () => STABLE };
+});
+
+// The audit-free queue-version poll (states-09) is lead-queue.freshness.test's;
+// here it answers nothing, so no request leaves the test.
+vi.mock('../lib/queueVersion', async (importOriginal) => {
+  const STABLE = { data: undefined, dataUpdatedAt: 0, refetch: () => Promise.resolve() };
+  return { ...(await importOriginal<typeof import('../lib/queueVersion')>()), useQueueVersion: () => STABLE };
 });
 
 vi.mock('../components/FootprintProvider', () => {

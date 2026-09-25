@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 
@@ -49,6 +49,24 @@ import Home, {
   requestHomePortfolioPreview,
 } from './home';
 import { WAREHOUSE_WARMING_BODY } from '../components/ui/WarmingUpBlock';
+import { ApiError } from '../lib/apiTransport';
+import { preloadAsyncFailure } from '../components/ui/AsyncState';
+
+// A server render shows only loaded chunks: load the red callout up front.
+beforeAll(async () => {
+  await preloadAsyncFailure();
+});
+
+/** The backend's retryable 503 for a warehouse whose retry budget is spent. */
+function warehouseOutage(): ApiError {
+  return new ApiError('SENTINEL SQL warehouse unavailable', {
+    path: '/api/v1/portfolio/preview',
+    status: 503,
+    retryable: true,
+    dependency: 'warehouse',
+    reason: 'retries_exhausted',
+  });
+}
 
 const WARMING = {
   dependency: 'warehouse',
@@ -83,14 +101,39 @@ describe('Home through a warehouse warm-up and an outage (audit delivery-01)', (
     expect(html).not.toMatch(DURATION_CLAIM);
   });
 
-  it('promises no duration for a real warehouse outage', () => {
-    reads.preview = { data: null, warmingUp: null, error: new Error('warehouse down') };
+  it('promises no duration for a real warehouse outage, and says it calmly under the banner', () => {
+    reads.preview = { data: null, warmingUp: null, error: warehouseOutage() };
     reads.warehouse = 'down';
     const html = renderHome();
 
-    expect(html).toContain('Portfolio KPIs are waiting on the analytics warehouse');
+    expect(html).toContain('This panel reloads when the analytics warehouse reconnects.');
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain('role="alert"');
     expect(html).not.toMatch(DURATION_CLAIM);
     expect(html).not.toContain('typically');
+    expect(html).not.toContain('SENTINEL');
+  });
+
+  // Audit states-03 a: the shared rule decides, so a failure the banner does
+  // NOT describe (a 500) stays red even while the warehouse is down.
+  it('keeps a 500 red under the warehouse banner, in the buyer-safe copy', () => {
+    reads.preview = { data: null, warmingUp: null, error: new ApiError('SENTINEL 500 Internal Server Error', { path: '/api/v1/portfolio/preview', status: 500 }) };
+    reads.warehouse = 'down';
+    const html = renderHome();
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('Couldn&#x27;t load portfolio KPIs.');
+    expect(html).not.toContain('SENTINEL');
+    expect(html).not.toContain('reloads when');
+  });
+
+  it('keeps the same warehouse outage red when no banner names it', () => {
+    reads.preview = { data: null, warmingUp: null, error: warehouseOutage() };
+    reads.warehouse = 'up';
+    const html = renderHome();
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('The analytics warehouse is unavailable.');
   });
 
   it('says the serverless truth in the shared warming sentence', () => {

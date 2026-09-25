@@ -126,6 +126,7 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "monitors", "my-events", "notification-drafts", "offers", "operations", "options",
     "outbox", "outcome", "outcomes", "outreach", "page", "points", "portfolio",
     "preview", "progress", "proof", "property-loan", "rate-sensitivity", "rate-window",
+    "queue-version",
     "receipt",
     "recommend", "refusal-report", "reject", "rollups", "rules", "rum", "run",
     "run-due", "run-due-all", "sales", "search", "segments", "session", "sessions",

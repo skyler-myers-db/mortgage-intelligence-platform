@@ -118,6 +118,11 @@ export function hasLeadQueueFilters(searchParams: URLSearchParams): boolean {
   return [...searchParams.keys()].some((key) => !DISPLAY_PARAMS.has(key));
 }
 
+/** The queue's filter params only: the column preset and the table place removed. */
+export function leadQueueFilterParams(searchParams: URLSearchParams): URLSearchParams {
+  return new URLSearchParams([...searchParams].filter(([key]) => !DISPLAY_PARAMS.has(key)));
+}
+
 /** Clear all: drop every filter and deep-link param, keep the column preset and the table place. */
 export function searchParamsCleared(searchParams: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams();

@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { api, type LeadsPageResult, type SegmentFilterMode } from '../lib/api';
+import { api, type SegmentFilterMode } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { SegmentCode, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
@@ -12,7 +12,9 @@ import { useMapSelectionParams } from '../components/mortgage/useMapSelectionPar
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { AsyncStatus } from '../components/ui/AsyncState';
+import { FetchedAt } from '../components/ui/FetchedAt';
+import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
 import { leadsQuery } from '../lib/leadsQuery';
@@ -63,6 +65,8 @@ import { formatCount } from '../lib/formatters';
  * only "All" appears instead of exposing generic US-state metadata as if it
  * were tenant coverage.
  */
+const EMPTY_STATE = lazyModule(() => import('../components/ui/EmptyState'));
+
 function buildLocationToStates(
   states: ReadonlyArray<{ state_code: string; state_name: string }>,
 ): Record<string, string[]> {
@@ -152,13 +156,7 @@ export default function SegmentIntelligence() {
     segmentMode: segmentCardMode,
   } = segmentCardQuerySelection(activeSegs, segmentMode);
 
-  const {
-    data: segmentsData,
-    warmingUp: segmentsWarming,
-    error: segmentsError,
-    manualRetry: retrySegments,
-    isFetching: segmentsFetching,
-  } = useWarmingUpRetry<SegmentSummary[]>(
+  const segmentsQuery = useWarmingUpRetry<SegmentSummary[]>(
     (signal) =>
       api.segments(
         signal,
@@ -176,6 +174,12 @@ export default function SegmentIntelligence() {
       keepPreviousData: true,
     },
   );
+  const {
+    data: segmentsData,
+    warmingUp: segmentsWarming,
+    error: segmentsError,
+    isFetching: segmentsFetching,
+  } = segmentsQuery;
   const serverGeo = useMemo(
     () => ({
       state: mapSelection.state ?? selectedLocationState,
@@ -193,16 +197,19 @@ export default function SegmentIntelligence() {
       portfolioCriteria: secondaryPortfolioCriteria,
     },
   });
+  // The page with the headers the client reads, X-Data-Refreshed-At included.
+  const leadsQueryState = useWarmingUpRetry<Awaited<ReturnType<typeof api.leadsPage>>>(
+    leadsPageQuery.fetcher,
+    { queryKey: leadsPageQuery.queryKey, keepPreviousData: true },
+  );
   const {
     data: leadsData,
     warmingUp: leadsWarming,
     error: leadsError,
     manualRetry: retryLeads,
     isFetching: leadsFetching,
-  } = useWarmingUpRetry<LeadsPageResult>(
-    leadsPageQuery.fetcher,
-    { queryKey: leadsPageQuery.queryKey, keepPreviousData: true },
-  );
+    isPlaceholderData: leadsPlaceholder,
+  } = leadsQueryState;
   const segments = useMemo(() => segmentsData ?? [], [segmentsData]);
   const segmentLabelByCode = useMemo(
     () => new Map<SegmentCode, string>(segments.map((s) => [s.code, s.name])),
@@ -233,20 +240,18 @@ export default function SegmentIntelligence() {
   const leads = useMemo(() => leadsData?.leads ?? [], [leadsData]);
   const totalMatching = leadsData?.totalMatching ?? null;
   const truncatedAt = leadsData?.truncatedAt ?? null;
-  const retryAll = useCallback(() => {
-    retrySegments();
-    retryLeads();
-  }, [retrySegments, retryLeads]);
-  const loadErrorMsg =
-    segmentsError
-      ? `Couldn't load segments: ${segmentsError.message}`
-      : leadsError
-        ? `Couldn't load leads: ${leadsError.message}`
-        : null;
+  // Audit states-v2: a MEASURED zero (settled, no error, not warming, not
+  // the previous filters' placeholder) says why; a load never reads as zero.
+  const segmentsMeasuredZero = segmentsData !== null && segmentsData.length === 0
+    && !segmentsQuery.isPlaceholderData && !segmentsError && !segmentsWarming;
 
   // Primary segment and geography filters are pushed down to /api/leads
   // before LIMIT is applied; the secondary predicates run on the returned rows.
   const filtered = useMemo(() => applySecondaryLeadFilters(leads, chipFilters), [leads, chipFilters]);
+  const leadsMeasuredZero = leadsData !== null && filtered.length === 0
+    && !leadsPlaceholder && !leadsError && !leadsWarming;
+  // EmptyState loads only when a measured zero is on screen.
+  const EmptyState = useLazyModule(EMPTY_STATE, segmentsMeasuredZero || leadsMeasuredZero).module?.EmptyState;
   const uniqueCohortTotal = totalMatching ?? filtered.length;
   const rankedScopeEyebrow = hasSelectedSegments
     ? 'Ranked borrowers · selected segment cohort'
@@ -347,59 +352,40 @@ export default function SegmentIntelligence() {
         </Button>
       }
     >
-      {segmentsWarming && segmentsData === null && (
-        <WarmingUpBlock
-          state={segmentsWarming}
-          title="Segment catalog loading"
-          compact
+      {/* Per-region status (audit states-04 / states-03 a): each read says
+          what failed in the shared vocabulary, calmly under a banner that
+          already names the outage. One warming block at a time. */}
+      <AsyncStatus query={segmentsQuery} subject="Segment catalog" compact />
+      {segmentsMeasuredZero ? EmptyState && (
+        <EmptyState
+          cause={filtersDirty ? 'filtered' : 'day-zero'}
+          title={filtersDirty ? 'No segments match these filters.' : undefined}
+          actions={filtersDirty ? [
+            <button key="clear" type="button" className="btn btn--sm" aria-label="Clear all segment filters" onClick={clearAll}>
+              Clear filters
+            </button>,
+          ] : []}
         />
-      )}
-      {leadsWarming && leadsData === null && !segmentsWarming && (
-        <WarmingUpBlock
-          state={leadsWarming}
-          title="Ranked borrowers loading"
-          compact
-        />
-      )}
-      {loadErrorMsg && !segmentsWarming && !leadsWarming && (
+      ) : (
         <div
-          role="alert"
-          className="status-callout status-callout--danger"
+          className={`seg-grid stable-refresh-region ${segmentsUpdating ? 'is-updating' : ''}`}
+          aria-busy={segmentsUpdating || segmentsInitialLoading}
         >
-          <span>{loadErrorMsg}</span>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={retryAll}
-            aria-label="Retry loading segments and leads"
-          >
-            Retry
-          </button>
+          {segments.length > 0
+            ? segments.map((s) => (
+                <SegmentCard
+                  key={s.code}
+                  segment={s}
+                  selected={activeSegs.includes(s.code)}
+                  updating={segmentsUpdating}
+                  onClick={() => toggleSeg(s.code)}
+                />
+              ))
+            : Array.from({ length: VALID_SEGMENT_CODES.length }).map((_, index) => (
+                <SegmentCardSkeleton key={index} />
+              ))}
         </div>
       )}
-      {segments.length === 0 && !loadErrorMsg && !segmentsWarming && !segmentsInitialLoading && (
-        <div className="muted body mb-grid">
-          Loading segments…
-        </div>
-      )}
-      <div
-        className={`seg-grid stable-refresh-region ${segmentsUpdating ? 'is-updating' : ''}`}
-        aria-busy={segmentsUpdating || segmentsInitialLoading}
-      >
-        {segments.length > 0
-          ? segments.map((s) => (
-              <SegmentCard
-                key={s.code}
-                segment={s}
-                selected={activeSegs.includes(s.code)}
-                updating={segmentsUpdating}
-                onClick={() => toggleSeg(s.code)}
-              />
-            ))
-          : Array.from({ length: VALID_SEGMENT_CODES.length }).map((_, index) => (
-              <SegmentCardSkeleton key={index} />
-            ))}
-      </div>
 
       <div
         className="filter-row filter-row--spaced filter-row--stacked"
@@ -599,15 +585,35 @@ export default function SegmentIntelligence() {
         </Link>
       </div>
 
+      {!(segmentsWarming && segmentsData === null) && (
+        <AsyncStatus query={leadsQueryState} subject="Ranked borrowers" compact />
+      )}
       <div
         className={`layoutA-grid layoutA-grid--segment-workbench stable-refresh-region ${leadsUpdating ? 'is-updating' : ''}`}
         aria-busy={leadsUpdating || leadsInitialLoading}
       >
-        <LeadTable
-          leads={filtered}
-          totalMatching={totalMatching}
-          truncatedAt={truncatedAt}
-        />
+        {leadsMeasuredZero ? EmptyState && (
+          <EmptyState cause={leads.length === 0 && activeSegs.length > 1 && segmentMode === 'all' ? 'intersection' : 'filtered'} />
+        ) : (
+          <LeadTable
+            leads={filtered}
+            totalMatching={totalMatching}
+            truncatedAt={truncatedAt}
+            exportContext={{
+              refreshedAt: leadsData?.dataRefreshedAt ?? null,
+              // Placeholder rows belong to the previous filters (keepPreviousData).
+              exportBlockedReason: leadsPlaceholder ? 'Export waits for the rows of the current filters' : null,
+            }}
+            headerStatus={(
+              <FetchedAt
+                at={leadsQueryState.dataUpdatedAt}
+                subject="ranked borrowers"
+                isFetching={leadsFetching}
+                onRefresh={retryLeads}
+              />
+            )}
+          />
+        )}
         <USChoroplethMap
           height={520}
           segmentFilter={activeSegs}
