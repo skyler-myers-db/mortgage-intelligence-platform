@@ -80,7 +80,7 @@ function cursorRow(page: Page): Locator {
 }
 
 function focusInOpenDrawer(page: Page): Promise<boolean> {
-  return page.evaluate(() => document.querySelector('aside.drawer.is-open')?.contains(document.activeElement) ?? false);
+  return page.evaluate(() => document.querySelector('dialog.drawer[open]')?.contains(document.activeElement) ?? false);
 }
 
 /** Let `count` animation frames commit (focus handoffs run on frames). */

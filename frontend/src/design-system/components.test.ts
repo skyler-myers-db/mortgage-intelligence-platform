@@ -439,7 +439,9 @@ describe('layout containment contracts', () => {
     expect(tokens).toMatch(/--dur-exit:\s*216ms;/);
     expect(tokens).toMatch(/--ease-exit:\s*cubic-bezier\(/);
 
-    expect(css).toMatch(/\.drawer\s*\{[^}]*visibility:\s*hidden;[^}]*transition:\s*transform var\(--dur-exit\) var\(--ease-exit\),\s*visibility 0s linear var\(--dur-exit\);/s);
+    // The drawer is a native <dialog> (stack-05): its exit also holds
+    // `display` and `overlay` so the closed dialog stays in the top layer.
+    expect(css).toMatch(/\.drawer\s*\{[^}]*visibility:\s*hidden;[^}]*transition:\s*transform var\(--dur-exit\) var\(--ease-exit\),\s*visibility 0s linear var\(--dur-exit\),\s*display var\(--dur-exit\) allow-discrete,\s*overlay var\(--dur-exit\) allow-discrete;/s);
     expect(css).toMatch(/\.drawer\.is-open\s*\{[^}]*visibility:\s*visible;[^}]*transition:\s*transform var\(--dur-slow\) var\(--ease\),\s*visibility 0s linear 0s;/s);
     expect(css).not.toMatch(/\.drawer:not\(\.is-open\)/);
 

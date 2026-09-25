@@ -78,7 +78,7 @@
     backdrop-filter: none;
   }
   .cmdk,
-  .drawer-scrim,
+  .drawer::backdrop,
   .offer-mock-scrim,
   .session-dialog::backdrop { backdrop-filter: none; }
 }

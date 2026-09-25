@@ -591,7 +591,7 @@ test.describe('Borrower 360 proof drawer (flow-09)', () => {
     await expect(proofControls).toHaveCount(1);
     await expect(proofControls).toHaveAccessibleName(`Show scoring math for borrower ${borrowerId}`);
     await proofControls.click();
-    await expect(page.locator('aside.proof-drawer')).toHaveClass(/is-open/);
+    await expect(page.locator('.proof-drawer')).toHaveClass(/is-open/);
     await expect(page.getByRole('dialog', { name: `Proof for borrower ${borrowerId}` })).toBeVisible();
   });
 });

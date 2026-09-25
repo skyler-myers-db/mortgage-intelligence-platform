@@ -107,9 +107,13 @@ describe('EvidenceDrawer accessibility', () => {
 
     await render();
 
-    const dialog = document.querySelector('.drawer');
-    expect(dialog?.getAttribute('role')).toBe('dialog');
-    expect(dialog?.getAttribute('aria-modal')).toBe('true');
+    // A native modal <dialog> opened through useModalDialog (stack-05): the
+    // role and aria-modal are implicit, so neither attribute is set.
+    const dialog = document.querySelector<HTMLDialogElement>('dialog.drawer');
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.hasAttribute('role')).toBe(false);
+    expect(dialog?.hasAttribute('aria-modal')).toBe(false);
+    expect(dialog?.hasAttribute('aria-hidden')).toBe(false);
 
     const close = document.querySelector<HTMLButtonElement>('.drawer__close');
     const assetLink = Array.from(document.querySelectorAll<HTMLAnchorElement>('a')).find((link) =>
@@ -150,10 +154,21 @@ describe('EvidenceDrawer accessibility', () => {
     await render();
     expect(document.activeElement).toBe(launcher);
 
+    // Closed: the retained dialog is closed, inert and hidden.
+    expect(dialog?.open).toBe(false);
+    expect(dialog?.hasAttribute('inert')).toBe(true);
+    expect(dialog?.getAttribute('aria-hidden')).toBe('true');
+
     appMocks.drawer = SOURCE;
     await render();
+    appMocks.setDrawer.mockClear();
+    // A press on the ::backdrop targets the dialog, outside its own box.
+    const box = DOMRect.fromRect({ x: 980, y: 0, width: 460, height: 900 });
+    const opened = document.querySelector<HTMLDialogElement>('dialog.drawer')!;
+    opened.getBoundingClientRect = () => box;
     await act(async () => {
-      document.querySelector<HTMLElement>('.drawer-scrim')?.click();
+      opened.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 8, clientY: 8 }));
+      opened.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 8, clientY: 8 }));
     });
     expect(appMocks.setDrawer).toHaveBeenCalledWith(null);
   }, 15_000);

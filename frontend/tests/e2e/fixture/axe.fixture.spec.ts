@@ -17,7 +17,6 @@
  * claims. Best-practice rules are reported as advisory attachments. No scan
  * opens an audited read beyond the route's natural load (visual.ts guard).
  */
-import AxeBuilder from '@axe-core/playwright';
 import type { FixtureTheme } from './app';
 import { KNOWN_VIOLATIONS, expectAxeClean, validateKnownViolations, type AxeAccent, type AxeScanTarget } from './axe';
 import { OVERLAY_STATES, enterState, prepareState, type FixtureState } from './fixtureStates';
@@ -91,6 +90,7 @@ test.describe('named groups in the evidence drawer', () => {
   // the drawer mid-render can fail on it while a settled scan passes it.
   // Checking the needs-review results too makes the proof independent of timing.
   test('every aria-label in the open drawer sits on a role that permits it', async ({ app, page }) => {
+    await app.setTheme('dark');
     await app.gotoRoute('/lead-queue');
     const drawer = await app.openEvidenceDrawer(page.locator('.evidence-chip:visible').first());
     await app.settle();
@@ -99,10 +99,17 @@ test.describe('named groups in the evidence drawer', () => {
     await expect(drawer.locator('.source-stat-grid')).toBeVisible();
     await expect(drawer.locator('.governed-assets__list')).toBeVisible();
 
-    const results = await new AxeBuilder({ page }).include('aside.drawer').withRules(['aria-prohibited-attr']).analyze();
-    const flagged = [...results.violations, ...results.incomplete].flatMap((result) =>
-      result.nodes.map((node) => `${node.target.join(' ')} (${result.impact ?? 'n/a'})`),
-    );
+    // The drawer is a native <dialog> (stack-05): scope the gate to it. The
+    // helper fails on any violation; the needs-review results are read here.
+    const r = await expectAxeClean(page, {
+      key: { route: 'lead-queue', state: 'evidence-drawer-groups' },
+      theme: 'dark',
+      known: {},
+      include: 'dialog.drawer:not(.proof-drawer)',
+    });
+    const flagged = r.incomplete
+      .filter((result) => result.id === 'aria-prohibited-attr')
+      .flatMap((result) => result.nodes.map((node) => `${node.target.join(' ')} (${result.impact ?? 'n/a'})`));
     expect(flagged, 'aria-label on a role that prohibits it, inside the drawer').toEqual([]);
   });
 });

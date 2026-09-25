@@ -10,7 +10,7 @@ import {
   evidenceDestinationFor,
 } from '../../lib/drawerSources';
 import { useExitRetained } from '../../hooks/useExitRetained';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import { useTabs } from '../ui/useTabs';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
@@ -217,7 +217,7 @@ export function EvidenceDrawer() {
   // to the trigger the moment the exit starts.
   const open = !!drawer;
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
-  const drawerRef = useRef<HTMLElement | null>(null);
+  const drawerRef = useRef<HTMLDialogElement | null>(null);
   // `d` is what the panel shows. setDrawer(null) used to empty the body in the
   // same commit that started the slide-out, so the drawer animated out blank
   // (2026-09-21 audit css-03). The closing source stays rendered until the
@@ -287,28 +287,24 @@ export function EvidenceDrawer() {
       : null;
   const catalogExplorerUrl =
     destination.kind !== 'lakebase' ? metadata?.catalog_explorer_url ?? null : null;
-  useFocusTrap({
+  // A native modal <dialog> (audit stack-05 / a11y-07 / css-03): showModal()
+  // makes the page, the Console and the Genie panel inert behind it, the
+  // `::backdrop` is the prototype scrim, and focus goes back to the chip.
+  useModalDialog({
     open,
-    containerRef: drawerRef,
+    dialogRef: drawerRef,
     initialFocusRef: closeBtnRef,
-    onClose: () => setDrawer(null),
+    onDismiss: () => setDrawer(null),
+    backdrop: 'outside',
   });
 
   return (
-    <>
-      <div
-        className={`drawer-scrim ${open ? 'is-open' : ''}`}
-        onClick={() => setDrawer(null)}
-        aria-hidden={!open}
-      />
-      <aside
+      <dialog
         ref={drawerRef}
         className={`drawer ${open ? 'is-open' : ''}`}
-        role="dialog"
-        aria-modal="true"
         aria-labelledby={d ? 'evidence-drawer-title' : undefined}
         aria-label={d ? undefined : 'Data source and lineage'}
-        aria-hidden={!open}
+        aria-hidden={!open || undefined}
         // The closing source stays rendered while the panel slides out; inert
         // keeps that retained copy out of the tab order and the pointer path.
         inert={!open}
@@ -665,7 +661,6 @@ export function EvidenceDrawer() {
             <p className="muted">Tap any evidence chip or KPI source line to inspect the lineage.</p>
           )}
         </div>
-      </aside>
-    </>
+      </dialog>
   );
 }

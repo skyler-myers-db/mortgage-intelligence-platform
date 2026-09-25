@@ -237,9 +237,11 @@ describe('AppShell panel boundaries', () => {
     await update(() => app.setDrawer({ title: 'Lineage manifest', lineageFamily: 'lead_scoring' }));
 
     await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
-    const frame = container.querySelector('aside.drawer.is-open[role="dialog"][aria-modal="true"]');
+    // The frame is the same native modal <dialog> as the drawer (stack-05).
+    const frame = container.querySelector<HTMLDialogElement>('dialog.drawer.is-open');
+    expect(frame?.open).toBe(true);
+    expect(frame?.hasAttribute('role')).toBe(false);
     expect(frame?.querySelector('.drawer__body')?.contains(surfaces()[0])).toBe(true);
-    expect(container.querySelector('.drawer-scrim.is-open')).not.toBeNull();
     expect(container.querySelector('[data-testid="drawer-probe"]')).toBeNull();
 
     // Modal like the drawer it stands in for: focus starts on Close and Escape closes.
@@ -292,7 +294,7 @@ describe('AppShell panel boundaries', () => {
     it("closing the crashed drawer's frame lets the next open re-read the payload", async () => {
       await crashTheDrawerOnItsPayload();
 
-      const frame = container.querySelector('aside.drawer.is-open[role="dialog"]');
+      const frame = container.querySelector('dialog.drawer.is-open');
       await update(() => frame?.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')?.click());
       expect(app.drawer).toBeNull();
       expect(surfaces()).toHaveLength(0);

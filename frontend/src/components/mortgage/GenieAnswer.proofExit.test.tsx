@@ -61,7 +61,7 @@ describe('Genie proof drawer exit (motion-01 remainder)', () => {
     vi.restoreAllMocks();
   });
 
-  const drawer = () => document.body.querySelector<HTMLElement>('aside.genie-proof-drawer');
+  const drawer = () => document.body.querySelector<HTMLDialogElement>('dialog.genie-proof-drawer');
 
   it('keeps the closing drawer rendered, closed and inert until its transition ends', async () => {
     act(() => root.render(<GenieAnswer payload={payload()} question="How many borrowers?" />));
@@ -74,6 +74,9 @@ describe('Genie proof drawer exit (motion-01 remainder)', () => {
       await Promise.resolve();
     });
     expect(drawer()?.classList.contains('is-open')).toBe(true);
+    // A native modal dialog, opened through useModalDialog (stack-05).
+    expect(drawer()?.open).toBe(true);
+    expect(drawer()?.hasAttribute('role')).toBe(false);
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Close Genie proof');
 
     await act(async () => {
@@ -86,7 +89,9 @@ describe('Genie proof drawer exit (motion-01 remainder)', () => {
     expect(closing).not.toBeNull();
     expect(closing!.classList.contains('is-open')).toBe(false);
     expect(closing!.hasAttribute('inert')).toBe(true);
-    expect(document.body.querySelector('.drawer-scrim.is-open')).toBeNull();
+    expect(closing!.getAttribute('aria-hidden')).toBe('true');
+    // close() ran at exit start: the exit is the closed dialog's transition.
+    expect((closing as HTMLDialogElement).open).toBe(false);
     // Focus returned at once, when the exit started.
     expect(document.activeElement).toBe(toggle);
 

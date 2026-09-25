@@ -291,11 +291,11 @@ test.describe('overlay exits animate', () => {
   test('the evidence drawer stays visible while it slides out and hides when the exit ends', async ({ app, page }) => {
     await app.gotoRoute('/');
     await page.locator('.kpi .evidence-chip').first().click();
-    const drawer = page.locator('aside.drawer');
+    const drawer = page.locator('dialog.drawer:not(.proof-drawer)');
     await expect(drawer).toHaveClass(/is-open/);
     await expect(drawer).toBeVisible();
 
-    const exit = await closeAndSampleExit(page, 'aside.drawer', 'Close drawer');
+    const exit = await closeAndSampleExit(page, 'dialog.drawer:not(.proof-drawer)', 'Close drawer');
     expect(exit.justClosed.open).toBe(false);
     expect(exit.justClosed.visibility, 'mid-exit the drawer is still visible').toBe('visible');
     const slide = exit.running.find((t) => t.property === 'transform');
@@ -362,8 +362,8 @@ test.describe('overlay exits are instant under reduced motion', () => {
   test('the evidence drawer and the Genie panel hide immediately when closed', async ({ app, page }) => {
     await app.gotoRoute('/');
     await page.locator('.kpi .evidence-chip').first().click();
-    await expect(page.locator('aside.drawer')).toHaveClass(/is-open/);
-    instant(await closeAndSampleExit(page, 'aside.drawer', 'Close drawer'), 'drawer');
+    await expect(page.locator('dialog.drawer:not(.proof-drawer)')).toHaveClass(/is-open/);
+    instant(await closeAndSampleExit(page, 'dialog.drawer:not(.proof-drawer)', 'Close drawer'), 'drawer');
 
     await app.openGenie();
     instant(await closeAndSampleExit(page, '.genie', 'Close Genie'), 'Genie');

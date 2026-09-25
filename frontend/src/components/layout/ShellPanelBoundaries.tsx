@@ -5,7 +5,7 @@
 'use no memo';
 
 import { useCallback, useRef, type ReactNode } from 'react';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import { useApp } from '../AppContext';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { useUnobservedQueryReset } from '../ErrorBoundaryRoute';
@@ -116,7 +116,7 @@ export function DrawerBoundary({ children }: BoundaryProps) {
 function DrawerFrame({ children }: BoundaryProps) {
   const { drawer, setDrawer } = useApp();
   const open = drawer !== null;
-  const drawerRef = useRef<HTMLElement | null>(null);
+  const drawerRef = useRef<HTMLDialogElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const resetUnobservedQueries = useUnobservedQueryReset();
   // This frame renders only in the error state, so every close (Close,
@@ -126,19 +126,16 @@ function DrawerFrame({ children }: BoundaryProps) {
     resetUnobservedQueries();
     setDrawer(null);
   }, [resetUnobservedQueries, setDrawer]);
-  // Modal like the drawer it stands in for: focus starts on Close, Escape
-  // closes, and focus returns to the chip that opened it.
-  useFocusTrap({ open, containerRef: drawerRef, initialFocusRef: closeRef, onClose: close });
+  // Modal like the drawer it stands in for (the same native <dialog>): focus
+  // starts on Close, Escape and a backdrop press close, and focus returns to
+  // the chip that opened it.
+  useModalDialog({ open, dialogRef: drawerRef, initialFocusRef: closeRef, onDismiss: close, backdrop: 'outside' });
   return (
-    <>
-      <div className={`drawer-scrim ${open ? 'is-open' : ''}`} onClick={close} aria-hidden={!open} />
-      <aside
+      <dialog
         ref={drawerRef}
         className={`drawer ${open ? 'is-open' : ''}`}
-        role="dialog"
-        aria-modal="true"
         aria-label="Data source and lineage"
-        aria-hidden={!open}
+        aria-hidden={!open || undefined}
         inert={!open}
       >
         <div className="drawer__hdr">
@@ -153,8 +150,7 @@ function DrawerFrame({ children }: BoundaryProps) {
           </button>
         </div>
         <div className="drawer__body">{children}</div>
-      </aside>
-    </>
+      </dialog>
   );
 }
 
