@@ -9,6 +9,8 @@ UI can state honestly. Never a default.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -111,3 +113,28 @@ def test_a_query_failure_fails_the_economics_response_with_no_default() -> None:
     repo = DatabricksAnalyticsRepository(_EconomicsClient(fail=True))  # type: ignore[arg-type]
     with pytest.raises(RuntimeError, match="warehouse unavailable"):
         repo.economics()
+
+
+_CHART_MODEL = Path(__file__).resolve().parents[2] / "frontend" / "src" / "routes" / "analytics.chart-model.ts"
+_ANALYTICS_REPO = Path(__file__).resolve().parents[2] / "backend" / "services" / "repositories" / "databricks_analytics.py"
+
+
+def _ts_constant(name: str) -> int:
+    match = re.search(rf"export const {name} = (-?\d+);", _CHART_MODEL.read_text())
+    assert match, f"{name} not found in analytics.chart-model.ts"
+    return int(match.group(1))
+
+
+def test_the_chart_bucket_widths_match_the_governed_sql() -> None:
+    """A histogram bin is [start, start + width): the width must be the SQL's FLOOR step."""
+    score = re.search(
+        r"FLOOR\(opportunity_score / (\d+)\) \* (\d+)", DatabricksAnalyticsRepository._SCORE_DISTRIBUTION_SQL
+    )
+    spread = re.search(r"FLOOR\(rate_spread_bps / (\d+)\) \* (\d+)", DatabricksAnalyticsRepository._RATE_SPREAD_HIST_SQL)
+    assert score and spread
+    assert int(score.group(1)) == int(score.group(2)) == _ts_constant("SCORE_BUCKET_WIDTH")
+    assert int(spread.group(1)) == int(spread.group(2)) == _ts_constant("SPREAD_BUCKET_BPS")
+    window = re.search(r"b\.rate_spread_bps BETWEEN (-?\d+) AND (-?\d+)", _ANALYTICS_REPO.read_text())
+    assert window
+    assert int(window.group(1)) == _ts_constant("SPREAD_HISTOGRAM_MIN_BPS")
+    assert int(window.group(2)) == _ts_constant("SPREAD_HISTOGRAM_MAX_BPS")

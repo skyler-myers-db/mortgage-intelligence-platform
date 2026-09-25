@@ -34,6 +34,7 @@ const DATA_MARK_SELECTORS = [
   '.funnel-sankey__bar',
   '.genie-line__path',
   '.genie-line__dot',
+  '.chart-hist__bar--past',
 ];
 
 /** TSX sites that paint a data mark inline. */

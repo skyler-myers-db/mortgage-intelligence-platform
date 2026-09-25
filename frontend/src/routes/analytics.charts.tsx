@@ -5,11 +5,8 @@
 import {
   useId,
   useMemo,
-  useRef,
-  useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -17,14 +14,11 @@ import { Icon } from '../components/Icon';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
-import { niceTicks, niceTicksWithin } from '../lib/chartTicks';
+import { niceTicks } from '../lib/chartTicks';
 import { fixedAttr } from '../lib/fixedPrecision';
-import { formatCompact, formatCount, formatNumber } from '../lib/formatters';
-import type {
-  FunnelStage,
-  RateSpreadBucket,
-  ScoreBucket,
-} from '../types';
+import { formatCompact, formatCount } from '../lib/formatters';
+import type { FunnelStage } from '../types';
+import type { HistogramModel, HistogramModelBin } from './analytics.chart-model';
 import {
   buildFunnelSankeyModel,
   categoricalTickIndexes,
@@ -317,167 +311,6 @@ export function FunnelSankey({
   );
 }
 
-export function LineChart({
-  rows,
-  x,
-  y,
-  xLabel,
-  yLabel,
-  xUnit,
-}: {
-  rows: Array<ScoreBucket | RateSpreadBucket>;
-  x: (row: ScoreBucket | RateSpreadBucket) => number;
-  y: (row: ScoreBucket | RateSpreadBucket) => number;
-  xLabel: string;
-  yLabel: string;
-  /** Unit appended to the x value in the hover readout, e.g. "bps" →
-   *  "125 bps". Omitted for unitless axes (opportunity score). */
-  xUnit?: string;
-}) {
-  const clipId = useId();
-  // Nearest-point hover readout. Index into `plotted` (never the raw row
-  // array) so the crosshair always lands on a coordinate the chart actually
-  // drew. null = pointer is not over the plot.
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const hoverLayerRef = useRef<HTMLDivElement | null>(null);
-  const chart = useMemo(() => {
-    if (rows.length === 0) return null;
-    const xs = rows.map(x);
-    const ys = rows.map(y);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const yTicks = niceTicks(0, Math.max(0, ...ys), 5, { integer: true });
-    const maxY = yTicks[yTicks.length - 1];
-    const plotY = (value: number) => 92 - (Math.max(0, Math.min(1, value / maxY)) * 84);
-    const plotted = rows.map((row) => {
-      const xValue = x(row);
-      const yValue = y(row);
-      return {
-        xValue,
-        yValue,
-        px: maxX === minX ? 50 : ((xValue - minX) / (maxX - minX)) * 100,
-        py: plotY(yValue),
-      };
-    });
-    return {
-      minX,
-      maxX,
-      maxY,
-      plotted,
-      points: plotted.map((p) => `${fixedAttr(p.px)},${fixedAttr(p.py)}`).join(' '),
-      xTicks: niceTicksWithin(minX, maxX, 5, { integer: true }),
-      yTicks,
-      plotY,
-    };
-  }, [rows, x, y]);
-
-  // Pointer -> nearest plotted point. Measured off the live bounding rect so
-  // the mapping stays correct at any container width (the SVG is
-  // `preserveAspectRatio="none"`, so the 0-100 viewBox maps linearly onto
-  // whatever width the responsive layout hands us).
-  const onHoverMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const plotted = chart?.plotted;
-    if (!plotted || plotted.length === 0) return;
-    const rect = (hoverLayerRef.current ?? event.currentTarget).getBoundingClientRect();
-    if (rect.width === 0) return;
-    const ratio = ((event.clientX - rect.left) / rect.width) * 100;
-    let nearest = 0;
-    for (let i = 1; i < plotted.length; i += 1) {
-      if (Math.abs(plotted[i].px - ratio) < Math.abs(plotted[nearest].px - ratio)) nearest = i;
-    }
-    setHoverIndex(nearest);
-  };
-
-  if (!chart) return <div className="analytics-empty">No distribution returned.</div>;
-  const hovered = hoverIndex === null ? null : chart.plotted[hoverIndex] ?? null;
-  return (
-    <div className="analytics-chart" role="img" aria-label={`${yLabel} by ${xLabel}`}>
-      <div className="analytics-chart__plot">
-        <div className="analytics-chart__y-ticks" aria-hidden="true">
-          {[...chart.yTicks].reverse().map((tick) => (
-            <span
-              key={tick}
-              className="analytics-chart__tick analytics-chart__tick--y"
-              style={{ '--tick-pos': `${chart.plotY(tick)}%` } as CSSProperties}
-            >
-              {formatAxisTick(tick, true)}
-            </span>
-          ))}
-        </div>
-        <div className="analytics-chart__canvas">
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-line-chart">
-            <defs>
-              <clipPath id={clipId}>
-                <rect x="0" y="0" width="100" height="100" />
-              </clipPath>
-            </defs>
-            {chart.yTicks.map((tick) => (
-              <line
-                key={`y-${tick}`}
-                x1="0"
-                x2="100"
-                y1={chart.plotY(tick)}
-                y2={chart.plotY(tick)}
-                className="analytics-chart__grid"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-            <polyline points={chart.points} clipPath={`url(#${clipId})`} vectorEffect="non-scaling-stroke" />
-          </svg>
-          {/* Hover readout. Entirely `aria-hidden` + non-focusable: the
-              chart already exposes its meaning through the parent
-              `role="img"` + aria-label and the tick text, so this layer adds
-              a pointer affordance without adding a keyboard/AT trap. */}
-          <div
-            ref={hoverLayerRef}
-            className="analytics-chart__hover"
-            aria-hidden="true"
-            onPointerMove={onHoverMove}
-            onPointerLeave={() => setHoverIndex(null)}
-          >
-            {hovered && (
-              <>
-                <span
-                  className="analytics-chart__crosshair"
-                  style={{ '--hover-x': `${hovered.px}%` } as CSSProperties}
-                />
-                <span
-                  className="analytics-chart__hover-dot"
-                  style={{ '--hover-x': `${hovered.px}%`, '--hover-y': `${hovered.py}%` } as CSSProperties}
-                />
-                <span
-                  className={`analytics-chart__tip${hovered.px > 60 ? ' analytics-chart__tip--flip' : ''}`}
-                  style={{ '--hover-x': `${hovered.px}%`, '--hover-y': `${hovered.py}%` } as CSSProperties}
-                >
-                  <span className="analytics-chart__tip-x">
-                    {formatAxisTick(hovered.xValue)}{xUnit ? ` ${xUnit}` : ''}
-                  </span>
-                  <span className="analytics-chart__tip-y">
-                    {formatNumber(hovered.yValue)} {yLabel.toLowerCase()}
-                  </span>
-                </span>
-              </>
-            )}
-          </div>
-          <div className="analytics-chart__x-ticks" aria-hidden="true">
-            {chart.xTicks.map((tick) => (
-              <span
-                key={tick}
-                className="analytics-chart__tick analytics-chart__tick--x"
-                style={{ '--tick-pos': `${pct(tick - chart.minX, chart.maxX - chart.minX)}%` } as CSSProperties}
-              >
-                {formatAxisTick(tick)}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="analytics-chart__axis analytics-chart__axis--x">{xLabel}</div>
-      <div className="analytics-chart__axis analytics-chart__axis--y">{yLabel}</div>
-    </div>
-  );
-}
-
 export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] }) {
   const clipId = useId();
   const chart = useMemo(() => {
@@ -550,6 +383,34 @@ export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] })
       <div className="analytics-chart__axis analytics-chart__axis--x">Event date</div>
       <div className="analytics-chart__axis analytics-chart__axis--y">Events</div>
     </div>
+  );
+}
+
+/**
+ * The table twin of a histogram (dataviz-10): the same bins the chart plots,
+ * with the threshold partition as a column. `pastLabel` null: no threshold.
+ */
+export function HistogramTable({
+  model,
+  rangeLabel,
+  pastLabel,
+  formatRange,
+}: {
+  model: HistogramModel;
+  rangeLabel: string;
+  pastLabel: string | null;
+  formatRange: (start: number) => string;
+}) {
+  return (
+    <DataTable<HistogramModelBin>
+      rows={model.bins}
+      getKey={(bin) => String(bin.start)}
+      columns={[
+        { key: 'range', label: rangeLabel, render: (bin) => formatRange(bin.start) },
+        { key: 'borrowers', label: 'Borrowers', render: (bin) => formatCount(bin.count) },
+        { key: 'past', label: pastLabel ?? 'At or past the screen', render: (bin) => (pastLabel === null ? '—' : bin.past ? 'Yes' : 'No') },
+      ]}
+    />
   );
 }
 

@@ -124,6 +124,8 @@ const DATA_MARKS = [
   '.map-label',
   '.topbar__pill .dot.dot',
   '.seg-card__facet-bar',
+  '.chart-hist__bar',
+  '.chart-hist__rule',
 ];
 
 describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {

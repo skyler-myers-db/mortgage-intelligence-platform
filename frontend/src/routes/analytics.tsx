@@ -63,7 +63,7 @@ export {
   segmentIntelligenceHref,
   zoomScatterLayout,
 } from './analytics.lib';
-export { DailyEvidenceLineChart, LineChart } from './analytics.charts';
+export { DailyEvidenceLineChart } from './analytics.charts';
 export { EquitySpreadBinsView, EquitySpreadPointsView, EquitySpreadScatter } from './analytics.equity-scatter';
 
 const TAB_IDS: readonly AnalyticsTab[] = TABS.map((item) => item.id);

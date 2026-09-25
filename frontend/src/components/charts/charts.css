@@ -43,3 +43,64 @@
 .analytics-chart__tick--x.analytics-chart__tick--edge-end {
   transform: translateX(-100%);
 }
+
+/* Histogram (dataviz-06, visual-08 item 2). Bins below a threshold are the
+   muted --text-3; bins at or past it, and every bin when there is no
+   threshold, take the data ink. A 1px card-coloured edge separates bins. */
+.chart-hist {
+  display: block;
+  inline-size: 100%;
+  block-size: var(--analytics-chart-h);
+  overflow: hidden;
+}
+.chart-hist__bar {
+  fill: var(--text-3);
+  stroke: var(--bg-2);
+  stroke-width: 1;
+}
+.chart-hist__bar--past {
+  fill: var(--accent-data);
+}
+.chart-hist__rule {
+  stroke: var(--text-2);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.chart-hist__rule-label {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: var(--rule-x);
+  transform: translateX(var(--sp-1));
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: var(--z-raised);
+}
+.chart-hist__rule-label--end {
+  transform: translateX(calc(-100% - var(--sp-1)));
+}
+
+/* Forced colours (a11y-10 / responsive-v3): bins are non-text data marks,
+   so they keep their encoding in system colours. Past = solid CanvasText;
+   the rest = Canvas with a CanvasText edge; the rule stays CanvasText. */
+@media (forced-colors: active) {
+  .chart-hist__bar {
+    forced-color-adjust: none;
+    fill: Canvas;
+    stroke: CanvasText;
+  }
+  .chart-hist__bar.chart-hist__bar--past {
+    fill: CanvasText;
+  }
+  .chart-hist__rule {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+  }
+}
