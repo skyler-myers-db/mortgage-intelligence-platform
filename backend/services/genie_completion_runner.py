@@ -28,6 +28,16 @@ existed. Crash window: a process that dies between the audit write and
 (its lease stops renewing and the next read expires it); the answer is not
 recoverable from the job, so the browser shows the expired hint.
 
+Cancel (audit 2026-09-21 ``genie-03``): a job-backed turn has ONE commit
+point for its governed record, ``commit_governed_record()`` right after the
+FINALIZING stage and before the output-policy audit branch, the RUN_GENIE
+write, token issuance and session recording. A cancel the owner requested
+before it ends the job ``cancelled`` with none of those; one requested after
+it is a no-op (the answer was recorded). Every stage report is also a cancel
+point, read from the process-local ``jobs.CANCELS`` marks, so a stopped deep
+sweep stops planning and launching sub-analyses. The job-less inline path
+(table not provisioned) installs no sink and is unchanged.
+
 The runner never reads identity from ambient state: the enqueuing request
 hands it the actor, the verified question, the live-campaign marker and the
 DI-resolved repository, audit store and Lakebase client, so dependency
@@ -41,6 +51,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import Lock
@@ -50,6 +61,7 @@ from pydantic import Field
 
 from backend.config.settings import settings
 from backend.services import genie_completion_jobs as jobs
+from backend.services import genie_completion_record as record
 from backend.services.audit_store import AuditStore
 from backend.services.backpressure import DependencySlot
 from backend.services.error_sanitizer import safe_dependency_detail
@@ -62,6 +74,8 @@ from backend.services.genie_completion_stages import (
     GenieJobFailureKind,
     GenieJobStage,
     GenieJobStatus,
+    GenieTurnCancelled,
+    commit_governed_record,
     report_stage,
     stage_sink,
 )
@@ -150,6 +164,10 @@ def complete_governed_turn(turn: GovernedTurn) -> GenieMessageResponse:
             kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
         ) from exc
     report_stage(GenieJobStage.FINALIZING)
+    # The ONE commit point of the governed record (job turns only): nothing
+    # below (either audit branch, token issuance, session recording) runs for
+    # a turn whose cancel was requested first.
+    commit_governed_record()
     if genie_response_has_unsafe_visible_text(result):
         blocked = _block_unsafe_genie_output(
             audit,
@@ -290,6 +308,44 @@ def _fail_job(turn: GovernedTurn, job_id: str, exc: BaseException, started: floa
     _finished(job_id, GenieJobStatus.FAILED, started, kind)
 
 
+def _governed_hooks(turn: GovernedTurn, job_id: str) -> tuple[Callable[[], bool], Callable[[], None]]:
+    """The sink's cancel predicate (in-memory marks only) and commit hook."""
+
+    def cancelled() -> bool:
+        return jobs.CANCELS.is_marked(job_id)
+
+    def commit() -> None:
+        outcome = record.commit_governed_record(turn.lakebase, job_id)
+        if outcome == "cancelled":
+            raise GenieTurnCancelled()
+        if outcome == "lost":
+            raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase"))
+
+    return cancelled, commit
+
+
+def _end_cancelled(turn: GovernedTurn, job_id: str, started: float) -> None:
+    """A stopped job: ended ``cancelled`` (never failed), nothing recorded."""
+
+    try:
+        record.end_cancelled(turn.lakebase, job_id)
+    except Exception as exc:  # noqa: BLE001 - the lease then lapses and a read expires it
+        emit(
+            log,
+            "genie_job_cancel_end_failed",
+            level=logging.WARNING,
+            dependency="lakebase",
+            outcome="skipped",
+            error_type=type(exc).__name__,
+            job_id=job_id,
+        )
+    _finished(job_id, GenieJobStatus.CANCELLED, started, None)
+
+
+def _no_stage(stage: GenieJobStage, done: int | None, planned: int | None) -> None:
+    """The legacy inline job publishes no stages; its sink only gates."""
+
+
 def _store_success(turn: GovernedTurn, job_id: str, response: GenieMessageResponse, started: float) -> None:
     stored = jobs.succeed(turn.lakebase, job_id, deauthorized_result(response, turn.question))
     if not stored:
@@ -302,23 +358,31 @@ def _store_success(turn: GovernedTurn, job_id: str, response: GenieMessageRespon
 def _run_job(turn: GovernedTurn, job_id: str, slot: DependencySlot | None, correlation_id: str) -> None:
     started = time.monotonic()
     set_correlation_id(correlation_id)
+    claimed = False
     try:
         if not jobs.claim(turn.lakebase, job_id):
             emit(log, "genie_job_claim_lost", level=logging.WARNING, dependency="lakebase", outcome="lost", job_id=job_id)
             return
+        claimed = True
 
         def write(stage: GenieJobStage, done: int | None, planned: int | None) -> None:
             # Recorded for the stage writer's thread: the governed thread
             # never waits on Lakebase for progress.
             jobs.STAGE_WRITER.submit(turn.lakebase, job_id, stage, done, planned)
 
-        with stage_sink(write):
+        cancelled, commit = _governed_hooks(turn, job_id)
+        with stage_sink(write, cancelled=cancelled, commit=commit):
             response = complete_governed_turn(turn)
         _store_success(turn, job_id, response, started)
+    except GenieTurnCancelled:
+        _end_cancelled(turn, job_id, started)
     except Exception as exc:  # noqa: BLE001 - every failure becomes a canned job failure
         _fail_job(turn, job_id, exc, started)
     finally:
         jobs.HEARTBEAT.untrack(job_id)
+        if claimed:
+            # A claim loser leaves the mark to the runner that holds the job.
+            jobs.CANCELS.discard(job_id)
         if slot is not None:
             slot.release()
 
@@ -351,11 +415,20 @@ def run_inline_job(turn: GovernedTurn, job: GenieCompletionJob) -> GenieMessageR
 
     started = time.monotonic()
     jobs.HEARTBEAT.track(job.job_id, turn.lakebase)
+    claimed = False
     try:
         if not jobs.claim(turn.lakebase, job.job_id):
             raise HTTPException(status_code=503, detail=safe_dependency_detail("genie"))
+        claimed = True
+        cancelled, commit = _governed_hooks(turn, job.job_id)
         try:
-            response = complete_governed_turn(turn)
+            with stage_sink(_no_stage, cancelled=cancelled, commit=commit):
+                response = complete_governed_turn(turn)
+        except GenieTurnCancelled:
+            # Stopped before the record: nothing recorded, and a
+            # non-retryable 503 (the transport must not re-send it).
+            _end_cancelled(turn, job.job_id, started)
+            raise HTTPException(status_code=503, detail=safe_dependency_detail("genie")) from None
         except BaseException as exc:
             _fail_job(turn, job.job_id, exc, started)
             raise
@@ -377,6 +450,8 @@ def run_inline_job(turn: GovernedTurn, job: GenieCompletionJob) -> GenieMessageR
         return response
     finally:
         jobs.HEARTBEAT.untrack(job.job_id)
+        if claimed:
+            jobs.CANCELS.discard(job.job_id)
 
 
 def await_joined_job(turn: GovernedTurn, job: GenieCompletionJob) -> GenieMessageResponse:
@@ -404,8 +479,9 @@ def await_joined_job(turn: GovernedTurn, job: GenieCompletionJob) -> GenieMessag
         )
         if response is not None:
             return response
-    # Failed, expired or still running at the bound: a non-retryable 503 and,
-    # above all, no second completion and no second audit row.
+    # Failed, expired, cancelled or still running at the bound: a
+    # non-retryable 503 and, above all, no second completion and no second
+    # audit row.
     raise HTTPException(status_code=503, detail=safe_dependency_detail("genie"))
 
 

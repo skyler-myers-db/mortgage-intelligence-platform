@@ -8,6 +8,12 @@ heartbeat's uuid[] renewal, compare-and-set expiry on read, the bounded
 ``FOR UPDATE SKIP LOCKED`` sweep, and the closed CHECKs. Skipped unless
 ``MIP_TEST_POSTGRES_DSN`` names a disposable database (the schema-upgrade
 suite's convention); the whole migration's apply is covered there.
+
+Audit genie-03: the fixture also applies the 2026_09_25 cancel block and the
+``action_audit`` DDL, so the commit point, the cancelled end, the heartbeat's
+RETURNING and the cancel route's one transaction run their real SQL, and the cancel-versus-commit race is played in both orders
+on real row locks. The migration's own two-apply re-run contract lives in
+``test_genie_job_cancel_migration_postgres.py``.
 """
 
 from __future__ import annotations
@@ -15,7 +21,10 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Event, Thread
+from time import monotonic, sleep
 from typing import Any
 from uuid import uuid4
 
@@ -25,6 +34,8 @@ from fastapi import HTTPException
 from psycopg.rows import dict_row
 
 from backend.services import genie_completion_jobs as jobs
+from backend.services import genie_completion_record as record
+from backend.services.genie_completion_cancel import _ACCEPT_SQL, GenieCancelRequest, request_cancel
 from backend.services.genie_completion_stages import GenieJobFailureKind, GenieJobStage
 
 pytestmark = pytest.mark.integration
@@ -36,6 +47,18 @@ _HASH = "b" * 64
 def _job_table_ddl() -> str:
     start = _SCHEMA.index("CREATE TABLE IF NOT EXISTS mip_app.genie_completion_jobs (")
     end = _SCHEMA.index("INSERT INTO mip_app.schema_migrations", start)
+    return _SCHEMA[start:end]
+
+
+def _cancel_block_ddl() -> str:
+    start = _SCHEMA.index("-- Genie completion-job cancel ---")
+    end = _SCHEMA.index("INSERT INTO mip_app.schema_migrations", start)
+    return _SCHEMA[start:end]
+
+
+def _action_audit_ddl() -> str:
+    start = _SCHEMA.index("CREATE TABLE IF NOT EXISTS mip_app.action_audit (")
+    end = _SCHEMA.index("-- Audit archival run ledger", start)
     return _SCHEMA[start:end]
 
 
@@ -59,6 +82,11 @@ class _PgLakebase:
         with psycopg.connect(self.dsn) as conn, conn.cursor() as cur:
             cur.execute(sql, params)
 
+    @contextmanager
+    def transaction(self) -> Iterator[psycopg.Connection[dict[str, Any]]]:
+        with psycopg.connect(self.dsn, row_factory=dict_row) as conn:
+            yield conn
+
     def sql(self, statement: str, params: tuple[Any, ...] = ()) -> None:
         with psycopg.connect(self.dsn) as conn, conn.cursor() as cur:
             cur.execute(statement, params)  # type: ignore[arg-type]
@@ -81,6 +109,8 @@ def pg() -> Iterator[_PgLakebase]:
         cur.execute("DROP SCHEMA IF EXISTS mip_app CASCADE")
         cur.execute("CREATE SCHEMA mip_app")
         cur.execute(_job_table_ddl())  # type: ignore[arg-type]
+        cur.execute(_cancel_block_ddl())  # type: ignore[arg-type]
+        cur.execute(_action_audit_ddl())  # type: ignore[arg-type]
     try:
         yield _PgLakebase(dsn)
     finally:
@@ -98,6 +128,7 @@ def _enroll(pg: _PgLakebase, *, actor: str = "lo@example.com", conversation_id: 
         message_id=message_id,
         question_hash=_HASH,
         expires_at_epoch=int(time.time()) + ttl_s,
+        deep=False,
     )
 
 
@@ -127,6 +158,7 @@ def test_one_row_per_turn_a_second_enrollment_joins_it(pg: _PgLakebase) -> None:
             message_id="msg-1",
             question_hash="c" * 64,
             expires_at_epoch=2_000_000_000,
+            deep=False,
         )
     assert mismatch.value.status_code == 400
 
@@ -229,6 +261,11 @@ def test_the_checks_refuse_off_vocabulary_values_and_question_shaped_hashes(pg: 
     for statement in (
         "UPDATE mip_app.genie_completion_jobs SET stage = 'answer ready' WHERE job_id = %s::uuid",
         "UPDATE mip_app.genie_completion_jobs SET status = 'done' WHERE job_id = %s::uuid",
+        # Audit genie-03: a record and a cancel never coexist, and a
+        # cancelled job holds no answer.
+        "UPDATE mip_app.genie_completion_jobs SET cancel_requested_at = now(), recorded_at = now() "
+        "WHERE job_id = %s::uuid",
+        "UPDATE mip_app.genie_completion_jobs SET status = 'cancelled' WHERE job_id = %s::uuid",
         "UPDATE mip_app.genie_completion_jobs SET failure_kind = 'boom' WHERE job_id = %s::uuid",
         "UPDATE mip_app.genie_completion_jobs SET question_hash = 'How many borrowers?' WHERE job_id = %s::uuid",
         "UPDATE mip_app.genie_completion_jobs SET parts_done = -1 WHERE job_id = %s::uuid",
@@ -237,3 +274,162 @@ def test_the_checks_refuse_off_vocabulary_values_and_question_shaped_hashes(pg: 
             pg.sql(statement, (job_id,))
     assert re.fullmatch(r"[0-9a-f-]{36}", job_id)
     assert _read(pg, str(uuid4())) is None
+
+
+# ------------------------------------------ cancel and commit (audit genie-03)
+
+
+def _running_job(pg: _PgLakebase, **kwargs: Any) -> str:
+    job_id = _enroll(pg, **kwargs).job.job_id
+    assert jobs.claim(pg, job_id) is True  # type: ignore[arg-type]
+    return job_id
+
+
+def _cancel_payload(job_id: str) -> GenieCancelRequest:
+    return GenieCancelRequest(
+        conversation_id="conv-1",
+        message_id="msg-1",
+        progress_token="t",
+        job_id=job_id,
+        question_hash=_HASH[:16],
+    )
+
+
+def _audit_rows(pg: _PgLakebase) -> list[dict[str, Any]]:
+    with psycopg.connect(pg.dsn, row_factory=dict_row) as conn:
+        return list(conn.execute("SELECT event_type, entity_id, metadata FROM mip_app.action_audit").fetchall())
+
+
+def test_the_commit_point_and_its_cancel_state_read(pg: _PgLakebase) -> None:
+    job_id = _running_job(pg)
+
+    assert record.commit_governed_record(pg, job_id) == "committed"  # type: ignore[arg-type]
+    assert record.commit_governed_record(pg, job_id) == "lost", "set once"  # type: ignore[arg-type]
+    assert pg.row(job_id)["recorded_at"] is not None
+    assert _read(pg, job_id).recorded is True  # type: ignore[union-attr]
+
+    other = _running_job(pg, message_id="msg-2")
+    pg.sql("UPDATE mip_app.genie_completion_jobs SET cancel_requested_at = now() WHERE job_id = %s::uuid", (other,))
+    assert record.commit_governed_record(pg, other) == "cancelled"  # type: ignore[arg-type]
+    assert pg.row(other)["recorded_at"] is None
+
+
+def test_end_cancelled_only_ends_an_unrecorded_cancel_requested_job_it_owns(pg: _PgLakebase, monkeypatch: pytest.MonkeyPatch) -> None:
+    job_id = _running_job(pg)
+    assert record.end_cancelled(pg, job_id) is False, "no cancel was requested"  # type: ignore[arg-type]
+    pg.sql("UPDATE mip_app.genie_completion_jobs SET cancel_requested_at = now() WHERE job_id = %s::uuid", (job_id,))
+    monkeypatch.setattr(jobs, "PROCESS_ID", "another-process")
+    assert record.end_cancelled(pg, job_id) is False  # type: ignore[arg-type]
+    monkeypatch.undo()
+
+    assert record.end_cancelled(pg, job_id) is True  # type: ignore[arg-type]
+    row = pg.row(job_id)
+    assert (row["status"], row["stage"], row["result_json"]) == ("cancelled", "cancelled", None)
+    assert row["finished_at"] is not None
+    assert _read(pg, job_id).terminal is True  # type: ignore[union-attr]
+
+
+def test_the_heartbeat_returning_reports_a_requested_cancel(pg: _PgLakebase) -> None:
+    requested = _running_job(pg)
+    quiet = _running_job(pg, message_id="msg-2")
+    pg.sql("UPDATE mip_app.genie_completion_jobs SET cancel_requested_at = now() WHERE job_id = %s::uuid", (requested,))
+    beat = jobs._Heartbeat()
+    beat._jobs = {requested: pg, quiet: pg}  # type: ignore[dict-item]
+    try:
+        beat.beat()
+        marked = (jobs.CANCELS.is_marked(requested), jobs.CANCELS.is_marked(quiet))
+    finally:
+        jobs.CANCELS.discard(requested)
+
+    assert marked == (True, False)
+    assert jobs.claim(pg, str(_enroll(pg, message_id="msg-3").job.job_id)) is True  # type: ignore[arg-type]
+
+
+def test_the_probe_requires_the_cancel_columns(pg: _PgLakebase) -> None:
+    assert pg.fetchone(jobs._PROBE_SQL) == {"present": True}
+    pg.sql("ALTER TABLE mip_app.genie_completion_jobs DROP COLUMN deep")
+    assert pg.fetchone(jobs._PROBE_SQL) == {"present": False}
+
+
+def test_request_cancel_real_sql_accepts_once_and_audits_in_the_same_transaction(pg: _PgLakebase) -> None:
+    job_id = _running_job(pg)
+
+    first = request_cancel(pg, actor="lo@example.com", payload=_cancel_payload(job_id), binding_hash=_HASH)  # type: ignore[arg-type]
+    second = request_cancel(pg, actor="lo@example.com", payload=_cancel_payload(job_id), binding_hash=_HASH)  # type: ignore[arg-type]
+
+    assert (first.outcome, first.status.value, second.outcome) == ("cancelled", "running", "cancelled")
+    rows = _audit_rows(pg)
+    assert [row["event_type"] for row in rows] == ["GENIE_TURN_CANCELLED"]
+    assert rows[0]["metadata"]["genie_job_id"] == job_id
+    assert pg.row(job_id)["cancel_requested_at"] is not None
+    assert jobs.CANCELS.is_marked(job_id)
+    jobs.CANCELS.discard(job_id)
+
+    queued = _enroll(pg, message_id="msg-2").job.job_id
+    payload = _cancel_payload(queued).model_copy(update={"message_id": "msg-2"})
+    ended = request_cancel(pg, actor="lo@example.com", payload=payload, binding_hash=_HASH)  # type: ignore[arg-type]
+    assert (ended.outcome, ended.status.value) == ("cancelled", "cancelled")
+    assert jobs.claim(pg, queued) is False  # type: ignore[arg-type]
+
+
+def test_an_audit_failure_rolls_the_cancel_flag_back(pg: _PgLakebase) -> None:
+    job_id = _running_job(pg)
+    pg.sql("ALTER TABLE mip_app.action_audit ADD CONSTRAINT refuse_all CHECK (false) NOT VALID")
+
+    with pytest.raises(HTTPException) as refused:
+        request_cancel(pg, actor="lo@example.com", payload=_cancel_payload(job_id), binding_hash=_HASH)  # type: ignore[arg-type]
+
+    assert refused.value.status_code == 503
+    assert pg.row(job_id)["cancel_requested_at"] is None
+    assert _audit_rows(pg) == []
+
+
+def _blocked_backends(dsn: str) -> int:
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+            "AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()"
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _race(pg: _PgLakebase, first: str, second: str) -> tuple[bool, bool]:
+    """Run ``first`` in an open transaction, start ``second`` in another
+    thread (it blocks on the row lock), then commit ``first``. Returns
+    whether each statement matched the row."""
+
+    job_id = _running_job(pg)
+    statements = {
+        "commit": (record._COMMIT_SQL, {"job_id": job_id, "lease_owner": jobs.PROCESS_ID}),
+        "cancel": (_ACCEPT_SQL, {"job_id": job_id}),
+    }
+    started = Event()
+    second_result: list[bool] = []
+
+    def run_second() -> None:
+        with psycopg.connect(pg.dsn) as conn:
+            started.set()
+            second_result.append(conn.execute(*statements[second]).fetchone() is not None)  # type: ignore[arg-type]
+
+    with psycopg.connect(pg.dsn) as conn:
+        first_matched = conn.execute(*statements[first]).fetchone() is not None  # type: ignore[arg-type]
+        worker = Thread(target=run_second)
+        worker.start()
+        assert started.wait(10)
+        deadline = monotonic() + 10
+        while _blocked_backends(pg.dsn) == 0 and monotonic() < deadline:
+            sleep(0.02)
+        assert _blocked_backends(pg.dsn) == 1, "the second statement must wait on the first's row lock"
+        conn.commit()
+    worker.join(10)
+    row = pg.row(job_id)
+    assert not (row["cancel_requested_at"] is not None and row["recorded_at"] is not None)
+    return first_matched, second_result[0]
+
+
+@pytest.mark.parametrize(("first", "second"), [("commit", "cancel"), ("cancel", "commit")])
+def test_the_cancel_and_commit_race_has_exactly_one_winner(pg: _PgLakebase, first: str, second: str) -> None:
+    first_matched, second_matched = _race(pg, first, second)
+
+    assert (first_matched, second_matched) == (True, False)
+

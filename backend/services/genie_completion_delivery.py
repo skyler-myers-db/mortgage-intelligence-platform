@@ -25,6 +25,7 @@ from backend.services.genie_actions import issue_response_action_tokens
 from backend.services.genie_answers import GenieCompletionJobStatus, GenieMessageResponse
 from backend.services.genie_completion_jobs import GenieCompletionJob
 from backend.services.genie_completion_stages import (
+    GENIE_JOB_CANCELLED_HINT,
     GENIE_JOB_EXPIRED_HINT,
     GENIE_JOB_FAILURE_HINTS,
     GENIE_JOB_STAGE_LABELS,
@@ -77,7 +78,11 @@ def job_status(
     actor: str,
     live_campaign_run_marker: str | None,
 ) -> GenieCompletionJobStatus:
-    """The wire status of ``job``; the answer only once it succeeded."""
+    """The wire status of ``job``; the answer only once it succeeded.
+
+    A cancelled job is terminal and NOT failed (a cancel is not a failure):
+    its hint says the answer was not recorded.
+    """
 
     status = job.status
     stage = job.stage
@@ -103,6 +108,9 @@ def job_status(
         error_hint = GENIE_JOB_FAILURE_HINTS[failure_kind or GenieJobFailureKind.INTERNAL]
     elif status is GenieJobStatus.EXPIRED:
         error_hint = GENIE_JOB_EXPIRED_HINT
+    elif status is GenieJobStatus.CANCELLED:
+        error_hint = GENIE_JOB_CANCELLED_HINT
+    terminal = status in _TERMINAL
     return GenieCompletionJobStatus(
         job_id=job.job_id,
         status=status,
@@ -110,14 +118,16 @@ def job_status(
         stage_label=GENIE_JOB_STAGE_LABELS[stage],
         parts_done=job.parts_done,
         parts_planned=job.parts_planned,
-        terminal=status in _TERMINAL,
+        terminal=terminal,
         failed=status in _FAILED,
         error_hint=error_hint,
         response=response,
     )
 
 
-_TERMINAL = frozenset({GenieJobStatus.SUCCEEDED, GenieJobStatus.FAILED, GenieJobStatus.EXPIRED})
+_TERMINAL = frozenset(
+    {GenieJobStatus.SUCCEEDED, GenieJobStatus.FAILED, GenieJobStatus.EXPIRED, GenieJobStatus.CANCELLED}
+)
 _FAILED = frozenset({GenieJobStatus.FAILED, GenieJobStatus.EXPIRED})
 
 

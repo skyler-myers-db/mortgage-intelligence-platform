@@ -12,6 +12,9 @@
   stage sink reports the real repository's stages from the runner thread
   only and the stage writer puts them on the job row off that thread, so a
   hung or failing stage write never holds or fails the answer.
+* Cancel (audit genie-03): a cancel before the commit point records nothing
+  (0 RUN_GENIE, 0 tokens, 0 session rows) and ends the job ``cancelled``;
+  one after it changes nothing; the legacy inline job honours the same gate.
 """
 
 from __future__ import annotations
@@ -31,17 +34,23 @@ from backend.services import genie_completion_jobs as jobs
 from backend.services import genie_completion_runner as runner
 from backend.services.genie_answers import GenieAnswerSection, GenieMessageResponse
 from backend.services.genie_client import GenieResponse
+from backend.services.genie_completion_stages import GENIE_JOB_CANCELLED_HINT
+from backend.services.genie_progress import genie_question_hash
 from backend.services.repositories.databricks_repo import DatabricksGenieRepository
 from backend.services.resilience import CircuitBreaker
 from tests.fixtures.genie_job_lakebase import FakeJobLakebase
 from tests.fixtures.genie_job_turns import (
     ACTOR,
+    CONV,
+    MSG,
+    QUESTION,
     FakeAudit,
     FakeRepo,
     answer,
     install,
     post_complete,
     post_status,
+    token,
     wait_for_job,
     wait_for_stage_writer,
 )
@@ -479,3 +488,182 @@ def test_failing_stage_writes_never_fail_the_answer_and_warn_once(monkeypatch: A
     assert 1 <= lakebase.job_statements.count("stage") <= len(_PIPELINE)
     warnings = [record for record in caplog.records if record.getMessage() == "genie_job_stage_write_failed"]
     assert len(warnings) == 1
+
+
+# ------------------------------------------ cancel (audit 2026-09-21 genie-03)
+
+
+def _cancel(client: TestClient, job_id: str) -> Any:
+    return client.post(
+        "/api/genie/message/cancel",
+        json={
+            "conversation_id": CONV,
+            "message_id": MSG,
+            "progress_token": token(),
+            "job_id": job_id,
+            "question_hash": genie_question_hash(QUESTION),
+        },
+        headers={"X-Forwarded-Email": ACTOR},
+    )
+
+
+def _cancelled_audit_rows(lakebase: FakeJobLakebase) -> list[dict[str, Any]]:
+    return [row for row in lakebase.audit_rows if row["event_type"] == "GENIE_TURN_CANCELLED"]
+
+
+_ENDED = ("cancelled", "succeeded", "failed")
+
+
+def test_a_cancel_before_the_commit_records_nothing_and_releases_the_slot(monkeypatch: Any, slots: int) -> None:
+    gate = threading.Event()
+    repo, audit, lakebase = FakeRepo(gate=gate), FakeAudit(), FakeJobLakebase()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+    client = TestClient(app)
+
+    job_id = post_complete(client, headers=_bp_headers()).json()["job_id"]
+    assert repo.started.wait(10)
+    cancelled = _cancel(client, job_id)
+    gate.set()
+    job = wait_for_job(lakebase, statuses=_ENDED)
+
+    assert cancelled.json()["outcome"] == "cancelled"
+    assert (job["status"], job["stage"], job["result_json"], job["recorded_at"]) == ("cancelled", "cancelled", None, None)
+    assert audit.run_query_rows() == [], "0 RUN_GENIE"
+    assert audit.writes == []
+    assert lakebase.executed == [], "0 session or message rows"
+    assert "commit" not in lakebase.job_statements, "the FINALIZING stage report ended it"
+    assert len(_cancelled_audit_rows(lakebase)) == 1
+    _await_slots(slots)
+    assert not jobs.CANCELS.is_marked(job_id)
+    assert job_id not in jobs.HEARTBEAT.tracked()
+    status = post_status(client, job_id).json()
+    assert (status["status"], status["terminal"], status["failed"], status["response"]) == ("cancelled", True, False, None)
+    assert status["error_hint"] == GENIE_JOB_CANCELLED_HINT
+
+
+def test_the_commit_point_refuses_a_cancel_this_process_never_saw(monkeypatch: Any) -> None:
+    # Another process accepted the cancel and no heartbeat has marked it yet:
+    # no stage report stops the turn, the DB commit point does.
+    gate = threading.Event()
+    repo, audit, lakebase = FakeRepo(gate=gate), FakeAudit(), FakeJobLakebase()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+    client = TestClient(app)
+
+    job_id = post_complete(client).json()["job_id"]
+    assert repo.started.wait(10)
+    with lakebase._lock:
+        lakebase.rows[job_id]["cancel_requested_at"] = lakebase.now
+    gate.set()
+    job = wait_for_job(lakebase, statuses=_ENDED)
+
+    assert job["status"] == "cancelled"
+    statements = [name for name in lakebase.job_statements if name != "stage"]
+    assert statements[-3:] == ["commit", "cancel_state", "end_cancelled"]
+    assert audit.writes == []
+    assert lakebase.executed == []
+
+
+class _GatedAudit(FakeAudit):
+    """Holds the RUN_GENIE write: the record is committed, the row not yet written."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def write(self, **kwargs: Any) -> None:
+        if kwargs.get("action") == "genie.run_query":
+            self.entered.set()
+            assert self.release.wait(10)
+        super().write(**kwargs)
+
+
+def test_a_cancel_after_the_commit_is_recorded_with_exactly_one_run_genie(monkeypatch: Any) -> None:
+    repo, audit, lakebase = FakeRepo(), _GatedAudit(), FakeJobLakebase()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+    client = TestClient(app)
+
+    job_id = post_complete(client).json()["job_id"]
+    assert audit.entered.wait(10)
+    late = _cancel(client, job_id)
+    audit.release.set()
+    job = wait_for_job(lakebase)
+
+    assert late.json()["outcome"] == "recorded"
+    assert job["status"] == "succeeded"
+    assert job["cancel_requested_at"] is None and job["recorded_at"] is not None
+    assert len(audit.run_query_rows()) == 1
+    assert _cancelled_audit_rows(lakebase) == []
+    assert not jobs.CANCELS.is_marked(job_id)
+
+
+def test_a_stage_boundary_cancel_ends_the_job_at_the_next_report(monkeypatch: Any) -> None:
+    lakebase, genie = FakeJobLakebase(), _StubGenie(gate=threading.Event())
+    reported = _record_reported_stages(monkeypatch)
+    assert genie.gate is not None
+
+    job_id = _real_repo_job(monkeypatch, lakebase, genie=genie).json()["job_id"]
+    assert genie.started.wait(10)
+    assert _cancel(TestClient(app), job_id).json()["outcome"] == "cancelled"
+    genie.gate.set()
+    job = wait_for_job(lakebase, statuses=_ENDED)
+    wait_for_stage_writer()
+
+    assert job["status"] == "cancelled"
+    # Genie answered after the cancel: the next report (VERIFYING) ended it,
+    # before the cross-check, the rewrite and the commit.
+    assert reported == ["collecting", "verifying"]
+    assert "commit" not in lakebase.job_statements
+
+
+def test_a_lost_commit_fails_the_job_with_dependency_down_and_no_run_genie(monkeypatch: Any) -> None:
+    gate = threading.Event()
+    repo, audit, lakebase = FakeRepo(gate=gate), FakeAudit(), FakeJobLakebase()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+
+    job_id = post_complete(TestClient(app)).json()["job_id"]
+    assert repo.started.wait(10)
+    with lakebase._lock:
+        lakebase.rows[job_id]["recorded_at"] = lakebase.now  # recorded elsewhere: the commit matches no row
+    gate.set()
+    job = wait_for_job(lakebase, statuses=("failed", "succeeded"))
+
+    assert (job["status"], job["failure_kind"]) == ("failed", "dependency_down")
+    assert audit.run_query_rows() == []
+    assert lakebase.executed == []
+
+
+def test_the_legacy_inline_job_honours_the_cancel_gate(monkeypatch: Any) -> None:
+    gate = threading.Event()
+    repo, audit, lakebase = FakeRepo(gate=gate), FakeAudit(), FakeJobLakebase()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+    client = TestClient(app)
+    results: list[Any] = []
+    caller = threading.Thread(target=lambda: results.append(post_complete(client, respond_async=False)))
+
+    caller.start()
+    assert repo.started.wait(10)
+    job_id = lakebase.only_job()["job_id"]
+    assert _cancel(client, job_id).json()["outcome"] == "cancelled"
+    gate.set()
+    caller.join(15)
+
+    [res] = results
+    assert res.status_code == 503
+    assert res.json().get("retryable") is not True
+    assert lakebase.only_job()["status"] == "cancelled"
+    assert audit.writes == []
+    assert lakebase.executed == []
+    assert not jobs.CANCELS.is_marked(job_id)
+
+
+def test_the_inline_job_commits_before_its_record(monkeypatch: Any) -> None:
+    repo, audit, lakebase = FakeRepo(), FakeAudit(), FakeJobLakebase()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+
+    res = post_complete(TestClient(app), respond_async=False)
+
+    assert res.status_code == 200
+    assert lakebase.only_job()["recorded_at"] is not None
+    assert "commit" in lakebase.job_statements
+    assert len(audit.run_query_rows()) == 1

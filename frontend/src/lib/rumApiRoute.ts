@@ -19,6 +19,7 @@ export const API_ROUTE_SEGMENTS = [
   'actions', 'activation', 'admin', 'agent', 'aging', 'analytics', 'approve',
   'assets', 'assign', 'assignment', 'assignment-overlay', 'assignments', 'audit',
   'borrowers', 'campaign-performance', 'campaign-recommendation', 'campaigns',
+  'cancel',
   'capabilities', 'complete', 'compose', 'config', 'conversion', 'county-rollups',
   'create', 'custom', 'data-estate', 'destinations', 'disposition', 'distribute',
   'draft', 'drafts', 'economics', 'event', 'events', 'evidence', 'executive',

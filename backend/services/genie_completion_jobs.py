@@ -8,14 +8,18 @@ Lifecycle::
 
     create_or_join  INSERT ... ON CONFLICT DO NOTHING (queued, leased to this
                     process); a conflict joins the existing row instead.
-    claim           queued -> running, only by the lease owner.
+    claim           queued -> running, only by the lease owner, never after a
+                    cancel was requested.
     heartbeat       one daemon thread per process renews lease_until for the
-                    process's own queued/running jobs every 10 s.
+                    process's own queued/running jobs every 10 s, and marks
+                    CANCELS for any whose cancel another process accepted.
     write_stage     best effort; a failure is a throttled WARNING, never an
                     answer failure. The runner's stages go through
                     STAGE_WRITER: one daemon thread per process, latest stage
                     wins per job, never on the governed thread.
-    succeed / fail  terminal, only by the lease owner of a running job.
+    succeed / fail  terminal, only by the lease owner of a running job; the
+                    record's commit point and the cancelled end live in
+                    genie_completion_record (audit ``genie-03``).
     read_for_actor  the status poll: expires a job whose lease went stale (its
                     process died) or whose served answer is past expires_at,
                     then returns it. Any mismatch of job, actor, conversation
@@ -78,9 +82,18 @@ _BINDING_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _LEASE = f"now() + interval '{LEASE_S} seconds'"
 _COLUMNS = """job_id::text AS job_id, status, stage, parts_done, parts_planned,
        failure_kind, result_json, lease_owner, lease_until, expires_at, question_hash,
-       now() AS db_now"""
+       cancel_requested_at IS NOT NULL AS cancel_requested,
+       recorded_at IS NOT NULL AS recorded, deep, now() AS db_now"""
 
-_PROBE_SQL = "SELECT to_regclass('mip_app.genie_completion_jobs') IS NOT NULL AS present"
+# Present only with the 2026_09_25 columns too: an App promoted ahead of that
+# migration completes inline instead of 503ing every job statement.
+_PROBE_SQL = """
+SELECT to_regclass('mip_app.genie_completion_jobs') IS NOT NULL
+   AND (SELECT count(*) FROM pg_attribute
+         WHERE attrelid = to_regclass('mip_app.genie_completion_jobs')
+           AND attname IN ('cancel_requested_at', 'recorded_at', 'deep')
+           AND NOT attisdropped) = 3 AS present
+"""
 
 _SWEEP_SQL = """
 UPDATE mip_app.genie_completion_jobs AS job
@@ -101,11 +114,11 @@ RETURNING job.job_id::text AS job_id, stale.prior_status AS prior_status
 _INSERT_SQL = f"""
 INSERT INTO mip_app.genie_completion_jobs (
   actor_email, conversation_id, message_id, question_hash, status, stage,
-  lease_owner, lease_until, expires_at
+  lease_owner, lease_until, expires_at, deep
 ) VALUES (
   %(actor_email)s, %(conversation_id)s, %(message_id)s, %(question_hash)s,
   'queued', 'queued', %(lease_owner)s, {_LEASE},
-  to_timestamp(%(expires_at_epoch)s::double precision)
+  to_timestamp(%(expires_at_epoch)s::double precision), %(deep)s
 )
 ON CONFLICT (actor_email, conversation_id, message_id) DO NOTHING
 RETURNING {_COLUMNS}
@@ -142,6 +155,7 @@ _CLAIM_SQL = f"""
 UPDATE mip_app.genie_completion_jobs
    SET status = 'running', lease_until = {_LEASE}, updated_at = now()
  WHERE job_id = %(job_id)s::uuid AND status = 'queued' AND lease_owner = %(lease_owner)s
+   AND cancel_requested_at IS NULL
 RETURNING job_id::text AS job_id
 """
 
@@ -151,6 +165,7 @@ UPDATE mip_app.genie_completion_jobs
  WHERE job_id = ANY(%(job_ids)s::uuid[])
    AND lease_owner = %(lease_owner)s
    AND status IN ('queued', 'running')
+RETURNING job_id::text AS job_id, cancel_requested_at IS NOT NULL AS cancel_requested
 """
 
 _STAGE_SQL = """
@@ -195,6 +210,10 @@ class GenieCompletionJob:
     expires_at: datetime
     question_hash: str
     db_now: datetime
+    cancel_requested: bool = False
+    recorded: bool = False
+    #: The submit-time deep flag; None on rows from before 2026_09_25.
+    deep: bool | None = None
 
     @property
     def terminal(self) -> bool:
@@ -207,7 +226,9 @@ class JobEnrollment:
     created: bool
 
 
-_TERMINAL = frozenset({GenieJobStatus.SUCCEEDED, GenieJobStatus.FAILED, GenieJobStatus.EXPIRED})
+_TERMINAL = frozenset(
+    {GenieJobStatus.SUCCEEDED, GenieJobStatus.FAILED, GenieJobStatus.EXPIRED, GenieJobStatus.CANCELLED}
+)
 _LIVE = frozenset({GenieJobStatus.QUEUED, GenieJobStatus.RUNNING})
 
 
@@ -229,6 +250,9 @@ def _job_from_row(row: dict[str, Any]) -> GenieCompletionJob:
         expires_at=cast(datetime, row["expires_at"]),
         question_hash=str(row["question_hash"]),
         db_now=cast(datetime, row["db_now"]),
+        cancel_requested=row.get("cancel_requested") is True,
+        recorded=row.get("recorded") is True,
+        deep=row["deep"] if isinstance(row.get("deep"), bool) else None,
     )
 
 
@@ -247,7 +271,7 @@ _PROBE_LOCK = threading.Lock()
 
 
 def completion_jobs_available(lakebase: LakebaseClient) -> bool:
-    """Whether the job table exists (cached 60 s per client).
+    """Whether the job table and its 2026_09_25 columns exist (cached 60 s).
 
     False when the App was promoted ahead of the Lakebase migration (or the
     probe itself failed; that is not cached): submit tells the browser not to
@@ -339,6 +363,7 @@ def create_or_join(
     message_id: str,
     question_hash: str,
     expires_at_epoch: int,
+    deep: bool,
 ) -> JobEnrollment:
     """Create this turn's job, or join the one that already exists.
 
@@ -355,6 +380,7 @@ def create_or_join(
         "question_hash": question_hash,
         "lease_owner": PROCESS_ID,
         "expires_at_epoch": int(expires_at_epoch),
+        "deep": bool(deep),
     }
     try:
         sweep_expired(lakebase)
@@ -382,10 +408,39 @@ def create_or_join(
 
 
 def claim(lakebase: LakebaseClient, job_id: str) -> bool:
-    """queued -> running, only for this process's lease. False when lost."""
+    """queued -> running, only for this process's lease and never after a
+    cancel was requested. False when lost."""
 
     row = lakebase.fetchone(_CLAIM_SQL, {"job_id": job_id, "lease_owner": PROCESS_ID})
     return row is not None
+
+
+# ----------------------------------------------------------------- cancels
+
+
+class _CancelMarks:
+    """This process's own jobs whose cancel was accepted (by the cancel route
+    here, or by another process as seen through the heartbeat). The governed
+    thread reads only this set, never Lakebase, for its cancel points."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._marked: set[str] = set()
+
+    def mark(self, job_id: str) -> None:
+        with self._lock:
+            self._marked.add(job_id)
+
+    def is_marked(self, job_id: str) -> bool:
+        with self._lock:
+            return job_id in self._marked
+
+    def discard(self, job_id: str) -> None:
+        with self._lock:
+            self._marked.discard(job_id)
+
+
+CANCELS = _CancelMarks()
 
 
 # ------------------------------------------------------------- heartbeat
@@ -418,7 +473,8 @@ class _Heartbeat:
             return set(self._jobs)
 
     def beat(self) -> None:
-        """One renewal pass: one UPDATE per client for all its tracked jobs."""
+        """One renewal pass: one UPDATE per client for all its tracked jobs;
+        its RETURNING marks CANCELS for a cancel another process accepted."""
 
         with self._lock:
             by_client: dict[int, tuple[LakebaseClient, list[str]]] = {}
@@ -426,9 +482,17 @@ class _Heartbeat:
                 by_client.setdefault(id(client), (client, []))[1].append(job_id)
         for client, job_ids in by_client.values():
             try:
-                client.execute(_HEARTBEAT_SQL, {"job_ids": job_ids, "lease_owner": PROCESS_ID})
+                rows = client.fetchall(
+                    _HEARTBEAT_SQL,
+                    {"job_ids": job_ids, "lease_owner": PROCESS_ID},
+                    limit=len(job_ids),
+                )
             except Exception as exc:  # noqa: BLE001 - the next beat retries
                 _warn_throttled("genie_job_heartbeat_failed", error_type=type(exc).__name__)
+                continue
+            for row in rows:
+                if row.get("cancel_requested") is True:
+                    CANCELS.mark(str(row["job_id"]))
 
     def _loop(self) -> None:
         while True:
@@ -632,6 +696,7 @@ def read_for_actor(
 
 
 __all__ = [
+    "CANCELS",
     "HEARTBEAT",
     "JOB_ID_RE",
     "PROCESS_ID",

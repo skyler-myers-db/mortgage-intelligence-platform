@@ -8,6 +8,11 @@ authorization, lease-based expiry on read and in the sweep every new job
 runs, a job-less async complete refused (a legacy one inline), canned
 failure hints only, and a stored
 result that holds neither the question nor any live authorization.
+
+Audit genie-03: the heartbeat marks a cancel another
+process accepted, a cancel-requested job is never claimed, a table without
+the 2026_09_25 columns completes inline, and the submit-time deep flag is
+stored.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from tests.fixtures.genie_job_lakebase import FakeJobLakebase
 from tests.fixtures.genie_job_turns import (
     ACTOR,
     CONV,
+    DEEP_QUESTION,
     HEADERS,
     MSG,
     QUESTION,
@@ -535,3 +541,61 @@ def test_the_browser_resume_window_stays_inside_the_token_that_authorizes_it() -
     resume_window_s = int(match.group(1)) * 60
     assert GENIE_PROGRESS_TOKEN_TTL_S == 15 * 60
     assert 0 < resume_window_s < GENIE_PROGRESS_TOKEN_TTL_S
+
+
+# ------------------------------------------ cancel marks (audit genie-03)
+
+
+def test_the_heartbeat_marks_a_cancel_another_process_accepted(monkeypatch: Any) -> None:
+    _client, _repo, _audit, lakebase = _setup(monkeypatch)
+    mine = _seed_own_job(lakebase, status="running", lease_owner=jobs.PROCESS_ID)
+    other = lakebase.insert_row(status="running", lease_owner=jobs.PROCESS_ID)
+    jobs.HEARTBEAT.track(mine["job_id"], lakebase)
+    jobs.HEARTBEAT.track(other["job_id"], lakebase)
+    try:
+        lakebase.rows[mine["job_id"]]["cancel_requested_at"] = lakebase.now
+        jobs.HEARTBEAT.beat()
+        marked = (jobs.CANCELS.is_marked(mine["job_id"]), jobs.CANCELS.is_marked(other["job_id"]))
+    finally:
+        jobs.HEARTBEAT.untrack(mine["job_id"])
+        jobs.HEARTBEAT.untrack(other["job_id"])
+        jobs.CANCELS.discard(mine["job_id"])
+
+    assert marked == (True, False)
+    assert "heartbeat" in lakebase.job_statements
+
+
+def test_claim_refuses_a_job_whose_cancel_was_requested(monkeypatch: Any) -> None:
+    _client, _repo, _audit, lakebase = _setup(monkeypatch)
+    row = _seed_own_job(lakebase, lease_owner=jobs.PROCESS_ID)
+    lakebase.rows[row["job_id"]]["cancel_requested_at"] = lakebase.now
+
+    assert jobs.claim(lakebase, row["job_id"]) is False
+    assert lakebase.rows[row["job_id"]]["status"] == "queued"
+
+
+def test_a_table_without_the_2026_09_25_columns_advertises_no_jobs_and_completes_inline(monkeypatch: Any) -> None:
+    repo, audit, lakebase = FakeRepo(), FakeAudit(), FakeJobLakebase(cancel_columns=False)
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+    monkeypatch.setattr(genie_api, "get_genie_client", lambda: _SubmitClient())
+    client = TestClient(app)
+
+    submitted = client.post("/api/genie/message/submit", json={"question": QUESTION}, headers=HEADERS)
+    legacy = post_complete(client, respond_async=False)
+
+    assert submitted.json()["completion_jobs"] is False
+    assert legacy.status_code == 200
+    assert lakebase.rows == {}
+    assert lakebase.job_statements == []
+    assert len(audit.run_query_rows()) == 1
+
+
+@pytest.mark.parametrize(("question", "deep"), [(QUESTION, False), (DEEP_QUESTION, True)])
+def test_the_submit_time_deep_flag_is_stored_on_the_job(monkeypatch: Any, question: str, deep: bool) -> None:
+    client, _repo, _audit, lakebase = _setup(monkeypatch)
+
+    assert post_complete(client, question=question).status_code == 202
+    wait_for_job(lakebase)
+
+    assert lakebase.only_job()["deep"] is deep
+
