@@ -481,23 +481,36 @@ def test_the_durations_query_is_the_recent_class_median(pg: _PgLakebase) -> None
     assert single is None
 
 
-def test_the_durations_query_samples_only_delivered_answers(pg: _PgLakebase) -> None:
+def _recorded_deep_job(pg: _PgLakebase, message_id: str, *, took_s: int) -> str:
+    """A running deep job past its real commit point, created ``took_s``
+    seconds before its record."""
+
+    job_id = _running_job(pg, message_id=message_id)
+    assert record.commit_governed_record(pg, job_id) == "committed"  # type: ignore[arg-type]
+    pg.sql(
+        "UPDATE mip_app.genie_completion_jobs SET deep = true, "
+        "created_at = recorded_at - make_interval(secs => %s) WHERE job_id = %s::uuid",
+        (took_s, job_id),
+    )
+    return job_id
+
+
+def test_a_delivered_answer_stays_a_duration_sample_after_the_sweep_expires_it(pg: _PgLakebase) -> None:
+    # The normal lifecycle: record, deliver (succeeded), then the answer
+    # window (the progress token's exp, submit + 15 min) lapses and the
+    # sweep every enrollment runs turns the row 'expired'.
     durations._reset_for_tests()
-    for index in range(durations.MIN_SAMPLES):
-        job_id = _enroll(pg, message_id=f"ok-{index}").job.job_id
-        pg.sql(
-            "UPDATE mip_app.genie_completion_jobs SET status = 'succeeded', stage = 'done', deep = true, "
-            "recorded_at = created_at + interval '60 seconds' WHERE job_id = %s::uuid",
-            (job_id,),
-        )
-    # Recorded, then failed or expired after the commit point: never delivered.
-    for index, status in enumerate(("failed", "expired") * 15):
-        job_id = _enroll(pg, message_id=f"lost-{index}").job.job_id
-        pg.sql(
-            "UPDATE mip_app.genie_completion_jobs SET status = %s, stage = %s, deep = true, "
-            "recorded_at = created_at + interval '900 seconds' WHERE job_id = %s::uuid",
-            (status, status, job_id),
-        )
+    delivered = [_recorded_deep_job(pg, f"ok-{index}", took_s=60) for index in range(durations.MIN_SAMPLES)]
+    for job_id in delivered:
+        assert jobs.succeed(pg, job_id, {"v": 1}) is True  # type: ignore[arg-type]
+    # Recorded, then failed (an audit or finalize failure): never delivered.
+    for index in range(30):
+        failed = _recorded_deep_job(pg, f"lost-{index}", took_s=900)
+        assert jobs.fail(pg, failed, GenieJobFailureKind.INTERNAL) is True  # type: ignore[arg-type]
+    pg.sql("UPDATE mip_app.genie_completion_jobs SET expires_at = now() - interval '1 second' WHERE status = 'succeeded'")
+
+    assert jobs.sweep_expired(pg) == durations.MIN_SAMPLES  # type: ignore[arg-type]
+    assert {pg.row(job_id)["status"] for job_id in delivered} == {"expired"}
     try:
         typical = durations.typical_completion_seconds(pg, deep=True)  # type: ignore[arg-type]
     finally:

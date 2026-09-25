@@ -275,7 +275,7 @@ class FakeJobLakebase:
                 row
                 for row in self.rows.values()
                 if row["recorded_at"] is not None
-                and row["status"] == "succeeded"
+                and row["status"] != "failed"
                 and row["deep"] is deep
                 and row["created_at"] > self.now - timedelta(days=14)
             ),

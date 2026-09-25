@@ -81,19 +81,31 @@ def test_the_classes_are_separate_and_older_rows_do_not_count() -> None:
     assert durations.typical_completion_seconds(lakebase, deep=True) == 170
 
 
-def test_only_delivered_answers_are_samples() -> None:
-    # A job that failed or expired AFTER its commit point has recorded_at
-    # set but never reached the user: it is not a sample.
+def test_a_swept_delivered_answer_is_a_sample_and_a_failed_job_never_is() -> None:
+    # A job that failed AFTER its commit point has recorded_at set but never
+    # delivered: 30 of them do not fill the floor of 19 delivered answers.
     lakebase = FakeJobLakebase()
     _recorded(lakebase, 40, count=19)
-    created = lakebase.now - timedelta(minutes=5)
-    for status in ("failed", "expired") * 15:
-        lakebase.insert_row(status=status, stage=status, deep=False, created_at=created, recorded_at=created + timedelta(seconds=900))
-
+    failed_at = lakebase.now - timedelta(minutes=5)
+    for _ in range(30):
+        lakebase.insert_row(
+            status="failed",
+            stage="failed",
+            failure_kind="internal",
+            deep=False,
+            created_at=failed_at,
+            recorded_at=failed_at + timedelta(seconds=900),
+        )
     assert durations.typical_completion_seconds(lakebase, deep=False) is None
 
+    # Every delivered answer outlives its window (the progress token's exp,
+    # submit + 15 min), and the sweep every new job runs turns it 'expired':
+    # its recorded_at - created_at is still a completion time.
     durations._reset_for_tests()
     _recorded(lakebase, 40)
+    lakebase.advance(16 * 60)
+    assert jobs.sweep_expired(lakebase) == 20
+    assert sorted({row["status"] for row in lakebase.rows.values()}) == ["expired", "failed"]
     assert durations.typical_completion_seconds(lakebase, deep=False) == 40
 
 
