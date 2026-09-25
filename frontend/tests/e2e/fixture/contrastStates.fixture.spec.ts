@@ -26,7 +26,7 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
-import type { AppDriver } from './app';
+import { FIXTURE_ACCENTS, type AppDriver } from './app';
 import { HEALTH_OK } from './data/shell';
 import { json } from './mockApi';
 import { asComputedRgb, contrastRatio, parseRgb, renderedColors, settleTransitions, tokenValue } from './renderedColor';
@@ -34,7 +34,7 @@ import { expect, test, type FixtureTheme } from './test';
 
 const AA_TEXT = 4.5;
 const AA_UI = 3;
-const ACCENTS = ['bright', 'teal', 'navy', 'red'] as const;
+const ACCENTS = FIXTURE_ACCENTS;
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
 
 /**
@@ -59,16 +59,6 @@ async function expectWarningInk(page: Page, target: Locator, min: number): Promi
   expect(ratio, `${painted.color} on rgb(${painted.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(min);
   const ink = await asComputedRgb(page, await tokenValue(target, '--signal-warning-ink'));
   expect(painted.color, 'paints --signal-warning-ink, not the amber fill').toBe(ink);
-}
-
-async function seedAccent(page: Page, accent: string): Promise<void> {
-  await page.addInitScript((value) => {
-    try {
-      window.localStorage.setItem('mip.accent', value);
-    } catch {
-      // about:blank has no storage; the next document seeds it.
-    }
-  }, accent);
 }
 
 test('light: the topbar search error paints the warning ink at AA', async ({ app, page }) => {
@@ -143,7 +133,7 @@ for (const accent of ACCENTS) {
   test(`light + ${accent}: the active evidence-drawer tab reads AA on its fill`, async ({ app, page }) => {
     // The drawer only opens from an evidence chip, so the axe loop never sees the tab.
     await app.setTheme('light');
-    await seedAccent(page, accent);
+    await app.setAccent(accent);
     await app.gotoRoute('/');
     await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
     await page.locator('.kpi__source .evidence-chip').first().click();
@@ -178,7 +168,7 @@ for (const theme of THEMES) {
   for (const accent of ACCENTS) {
     test(`${theme} + ${accent}: accent text and glyphs paint --accent-ink, not the fill hue`, async ({ app, page }) => {
       await app.setTheme(theme);
-      await seedAccent(page, accent);
+      await app.setAccent(accent);
       await app.gotoRoute('/analytics?view=economics');
       await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
       const panel = page.locator('.analytics-chart-panel--scatter');
