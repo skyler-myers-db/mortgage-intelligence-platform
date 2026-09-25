@@ -6,7 +6,8 @@
  *   (a) 20 J presses on the focused table: the cursor walk, which is also
  *       the virtual-window interaction (a wheel scroll carries no
  *       interactionId, so it cannot be measured this way).
- *   (b) a row expand by a click on the borrower button.
+ *   (b) a row expand by a click on the borrower button of the cursor row
+ *       (row 20, rendered wherever the virtual window is).
  *   (c) 20 characters typed into the reject panel's Rationale textarea.
  *       Never submitted: the spec asserts zero reject POSTs.
  *
@@ -142,9 +143,8 @@ test.describe('lab interaction budget: the 500-row Lead Queue (runtime-09, repor
       await flushEntries(page);
       const j = await slowestSince(page, since);
 
-      // (b) Expand the first row with a click on its borrower button.
-      const first = LEAD_QUEUE_500[0].borrower_id;
-      const toggle = page.getByRole('button', { name: `Toggle preview for lead ${first}` });
+      // (b) Expand the cursor row with a click on its borrower button.
+      const toggle = page.getByRole('button', { name: `Toggle preview for lead ${cursorRow}` });
       await toggle.scrollIntoViewIfNeeded();
       since = await now(page);
       await toggle.click();
@@ -152,10 +152,11 @@ test.describe('lab interaction budget: the 500-row Lead Queue (runtime-09, repor
       await flushEntries(page);
       const expand = await slowestSince(page, since);
 
-      // (c) 20 characters into the reject panel's Rationale (never submitted).
-      const target = LEAD_QUEUE_500.find((lead) => lead.approval_status === 'pending' && lead.borrower_id !== first);
-      expect(target, 'precondition: a pending row to reject').toBeTruthy();
-      const reject = page.getByTestId(`lead-reject-${target?.borrower_id ?? ''}`);
+      // (c) 20 characters into the reject panel's Rationale (never submitted),
+      // opened from the pending row just above the cursor row.
+      const target = LEAD_QUEUE_500[PRESSES - 2];
+      expect(target.approval_status, 'precondition: a pending row to reject').toBe('pending');
+      const reject = page.getByTestId(`lead-reject-${target.borrower_id}`);
       await reject.scrollIntoViewIfNeeded();
       await reject.click();
       const rationale = page.locator('form.decision-panel textarea');
