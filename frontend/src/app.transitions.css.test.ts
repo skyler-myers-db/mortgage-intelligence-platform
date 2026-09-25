@@ -106,6 +106,17 @@ describe('app.transitions.css (View Transitions phase 1)', () => {
     expect(specificity('.route-transition.route-transition--fallback')).toEqual([0, 2, 0]);
   });
 
+  it('marks a held navigation with a delayed, non-looping --accent-ink line under the nav (no layout shift)', () => {
+    const rule = declarationsOf(sheet, '.main:has(> .route-transition[aria-busy="true"]) > .route-nav');
+    // Delayed by --dur-base, so a preloaded route never flashes it; one run.
+    expect(rule).toMatch(/animation:\s*mip-route-pending var\(--dur-fast\) var\(--ease\) var\(--dur-base\) both/);
+    expect(rule).not.toMatch(/infinite/);
+    const keyframes = /@keyframes mip-route-pending\s*\{([\s\S]*?)\n\}/.exec(sheet)?.[1] ?? '';
+    // An inset shadow, never a border or height: nothing moves.
+    expect(keyframes).toMatch(/to\s*\{\s*box-shadow:\s*inset 0 -2px 0 var\(--accent-ink\);\s*\}/);
+    expect(keyframes).not.toMatch(/border|height|padding|margin/);
+  });
+
   it('freezes colour transitions while the theme cross-fades', () => {
     expect(declarationsOf(sheet, ':root[data-theme-switching] :is(*, *::before, *::after)')).toMatch(/transition:\s*none !important/);
   });

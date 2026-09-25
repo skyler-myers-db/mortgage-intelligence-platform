@@ -10,7 +10,9 @@
  *  b. a same-path ?query navigation (an Analytics tab) makes none;
  *  c. under reduced motion (the harness default) nothing calls it;
  *  d. a navigation whose chunk is still loading holds the old page with no
- *     call; releasing the chunk makes exactly one and paints the new page;
+ *     call, marks it aria-busy and draws the nav's pending line; releasing
+ *     the chunk makes exactly one call, paints the new page and drops both;
+ *     a preloaded route never shows the line;
  *  e. a page scrolled 1,500+ px resets to 0 before the new snapshot (at
  *     updateCallbackDone) and no group keyframe slides; Back (rendered
  *     synchronously by React, so with no transition) has the offset restored
@@ -58,6 +60,23 @@ async function gateChunk(page: Page, chunk: RegExp): Promise<{ release: () => vo
 
 function newCalls(after: ViewTransitionLog, before: ViewTransitionLog): number {
   return after.calls - before.calls;
+}
+
+/** The route nav's computed box-shadow (the pending line is an inset shadow). */
+function navLine(page: Page): Promise<string> {
+  return page.locator('.route-nav').evaluate((el) => getComputedStyle(el).boxShadow);
+}
+
+/** --accent-ink as a computed rgb(), read where the nav resolves it. */
+function accentInk(page: Page): Promise<string> {
+  return page.locator('.route-nav').evaluate((el) => {
+    const probe = document.createElement('span');
+    probe.style.color = getComputedStyle(el).getPropertyValue('--accent-ink');
+    el.appendChild(probe);
+    const rgb = getComputedStyle(probe).color;
+    probe.remove();
+    return rgb;
+  });
 }
 
 function paintedRoutePath(page: Page): Promise<string | null> {
@@ -119,12 +138,46 @@ test.describe('with motion allowed', () => {
     expect(await paintedRoutePath(page)).toBe('/');
     await expect(page.locator('#main-content h1')).toHaveText(homeHeading ?? '');
     expect(newCalls(await readViewTransitions(page), before), 'nothing starts while the chunk is held').toBe(0);
+    // The pending-navigation indicator (shell-05 remainder): the painted
+    // route is aria-busy and, past --dur-base, the nav carries its line.
+    await expect(page.locator('#main-content .route-transition[data-route-path="/"]')).toHaveAttribute('aria-busy', 'true');
+    expect(await navLine(page), 'the nav draws the --accent-ink pending line').toBe(`${await accentInk(page)} 0px -2px 0px 0px inset`);
 
     chunk.release();
     await expect(page.locator('#main-content h1')).toHaveText('Mortgage intelligence glossary');
     expect(await paintedRoutePath(page)).toBe('/glossary');
+    await expect(page.locator('#main-content .route-transition[data-route-path]')).not.toHaveAttribute('aria-busy', /.*/);
+    expect(await navLine(page), 'the line goes with the hold').toBe('none');
     const log = await waitForViewTransitionsToFinish(page);
     expect(newCalls(log, before)).toBe(1);
+  });
+
+  test('(d) a preloaded route commits at once: no pending line within a 300 ms poll', async ({ app, page }) => {
+    await app.gotoRoute('/');
+    // The idle preloader warms Analytics (lib/routePreloaders); let it land.
+    await page.waitForLoadState('networkidle');
+    await page.evaluate(() => {
+      const win = window as Window & { __pendingSeen?: string[] };
+      win.__pendingSeen = [];
+      const nav = document.querySelector('.route-nav');
+      const started = performance.now();
+      // The route is marked aria-busy while React renders it in the
+      // transition (the router has moved, the commit has not); the line is
+      // what must not show: a painted (non-transparent) inset shadow.
+      const sample = () => {
+        if (nav) {
+          const shadow = getComputedStyle(nav).boxShadow;
+          if (shadow !== 'none' && !shadow.startsWith('rgba(0, 0, 0, 0)')) win.__pendingSeen?.push(shadow);
+        }
+        if (performance.now() - started < 300) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    await nav(page).getByRole('link', { name: 'Analytics' }).click();
+    await expect(page.locator('#main-content h1')).toHaveText('Analytics');
+    await page.waitForTimeout(350);
+    expect(await page.evaluate(() => (window as Window & { __pendingSeen?: string[] }).__pendingSeen), 'no pending line painted').toEqual([]);
+    await expect(page.locator('#main-content .route-transition[data-route-path]')).not.toHaveAttribute('aria-busy', /.*/);
   });
 
   // The brief named the Lead Queue; with the fixture rows it scrolls only

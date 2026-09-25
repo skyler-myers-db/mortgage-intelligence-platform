@@ -5,6 +5,7 @@ import { RouteErrorBoundary } from './components/ErrorBoundaryRoute';
 import { AppShell } from './components/layout/AppShell';
 import { RouteNav } from './components/layout/RouteNav';
 import { RouteFallback } from './components/layout/RouteFallback';
+import { useRoutePending } from './hooks/useRoutePending';
 import {
   AdminConfigRoute,
   AnalyticsRoute,
@@ -143,6 +144,12 @@ const ROUTE_ENTER_CLASS = 'mip-route-enter';
  * tests/e2e/fixture/app.ts; app.error-boundary.test.tsx) compares it with
  * the URL instead of trusting the URL. The fallback wrapper carries none.
  *
+ * Pending navigation (the shell-05 remainder; a DECLARED DEVIATION, the
+ * prototype has none): while a navigation is held, the painted wrapper
+ * carries aria-busy="true" (hooks/useRoutePending) and app.transitions.css
+ * draws a 2px --accent-ink line under the route nav once the hold outlasts
+ * --dur-base, so a preloaded route never flashes it.
+ *
  * The route ErrorBoundary wraps the Suspense (a boundary inside PageShell
  * could not catch a failed lazy chunk or a route-level throw) and resets on
  * pathname, so a broken route leaves the shell usable and navigating away
@@ -153,8 +160,9 @@ const ROUTE_ENTER_CLASS = 'mip-route-enter';
 function RouteTransition() {
   const { pathname } = useLocation();
   const reducedMotion = usePrefersReducedMotion();
+  const pending = useRoutePending();
   const painted = (
-    <div className="route-transition" data-route-path={pathname}>
+    <div className="route-transition" data-route-path={pathname} aria-busy={pending ? 'true' : undefined}>
       <Routes>
         {ROUTE_IDS.map((id) => (
           <Route key={id} path={ROUTES[id].pattern} element={ROUTE_ELEMENTS[id]} />

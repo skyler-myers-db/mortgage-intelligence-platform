@@ -81,6 +81,22 @@
   animation: none;
 }
 
+/* Pending navigation (the shell-05 remainder handed on by w2-error-telemetry).
+   DECLARED DEVIATION for the owner's decision-#10 list: the prototype has
+   no pending-navigation indicator. While a held navigation marks the
+   painted route aria-busy (app.tsx, hooks/useRoutePending), the route nav
+   draws a 2px --accent-ink line on its bottom edge: an inset box-shadow, so
+   nothing shifts and the nav stays static below 40rem. It appears only after
+   --dur-base (a preloaded route commits first and never shows it) and never
+   loops. */
+.main:has(> .route-transition[aria-busy="true"]) > .route-nav {
+  animation: mip-route-pending var(--dur-fast) var(--ease) var(--dur-base) both;
+}
+@keyframes mip-route-pending {
+  from { box-shadow: inset 0 -2px 0 transparent; }
+  to { box-shadow: inset 0 -2px 0 var(--accent-ink); }
+}
+
 /* Theme cross-fade (lib/themeTransition): while <html data-theme-switching>
    is set, the per-selector colour transitions (01-app-shell.css) must not
    tween inside the new snapshot while the root cross-fades. `transition:
