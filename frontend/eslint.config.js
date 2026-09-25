@@ -63,6 +63,10 @@ export const SET_STATE_IN_EFFECT_SCOPE = [
   "src/components/mortgage/GenieHistoryMenu.tsx",
   "src/routes/lead-queue.tsx",
   "src/lib/mutations/*.ts",
+  // Wave 3 queue-place: new hooks born on the query layer.
+  "src/components/mortgage/useLeadBulkRun.ts",
+  "src/components/mortgage/useLeadTableScroll.ts",
+  "src/components/mortgage/LeadTable.selection.ts",
 ];
 
 /** Fixture harness files may import TYPES from frontend/src, never runtime code. */

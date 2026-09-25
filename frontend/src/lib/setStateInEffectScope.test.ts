@@ -32,6 +32,9 @@ const CONVERTED = [
   'src/lib/mutations/outreach.ts',
   'src/lib/mutations/sales.ts',
   'src/lib/mutations/requestIds.ts',
+  'src/components/mortgage/useLeadBulkRun.ts',
+  'src/components/mortgage/useLeadTableScroll.ts',
+  'src/components/mortgage/LeadTable.selection.ts',
 ];
 
 const NOT_YET_CONVERTED = [

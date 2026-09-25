@@ -25,7 +25,7 @@ import type { Borrower360, BorrowerProof, ProofMargin, ProofScoreComponent } fro
 import type { AuditEventPage, AuditEventRow, DecisionReceipt } from '../../../../src/lib/apiTypes';
 import { json, type MockApi } from '../mockApi';
 import { PRIMARY_BORROWER, borrowerById } from './borrowers';
-import { RequestGate, ledgerReceipt } from './decisionReceipt';
+import { type RequestGate, ledgerReceipt } from './decisionReceipt';
 import { ROUTED_APPROVE_AUDIT_ID, routedApproveResult } from './feedbackGuard';
 import { SNAPSHOT_AT } from './reference';
 
