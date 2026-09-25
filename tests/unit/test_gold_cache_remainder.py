@@ -7,10 +7,14 @@ only when the test says so.
 
 * the rate window (``analytics.rate_window``): 60 s soft TTL, default hard
   cap, stale-if-error;
+* the segment source-readiness gates: the list's soft TTL, stale-if-error,
+  and a cold failure gates nothing and is NOT cached (the build used to
+  swallow it, so a failure was stored as ``{}``);
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from concurrent.futures import Executor, Future
 from typing import Any
@@ -18,8 +22,11 @@ from typing import Any
 import pytest
 
 from backend.config.settings import settings
+from backend.schemas.lead import SegmentSummary
 from backend.services.gold_cache import GoldAggregateCache
+from backend.services.repositories.databricks_geo import DatabricksSegmentRepository
 from backend.services.repositories.databricks_rate_window import DatabricksRateWindowRepository
+from backend.services.repositories.databricks_segment_gates import apply_source_gates
 from backend.services.resilience import TTLCache
 
 
@@ -164,3 +171,124 @@ def test_rate_window_defaults_to_the_gold_cache_and_still_accepts_a_ttl_cache() 
     assert isinstance(DatabricksRateWindowRepository(warehouse)._cache, GoldAggregateCache)  # type: ignore[arg-type]
     injected = TTLCache()
     assert DatabricksRateWindowRepository(warehouse, cache=injected)._cache is injected  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# The segment source-readiness gates.
+# ---------------------------------------------------------------------------
+
+_READINESS = "gold.source_readiness"
+
+
+def _listed() -> list[SegmentSummary]:
+    return [
+        SegmentSummary(code="itm", name="itm", count=10, delta="+0%", avg_score=50, description="", color="#000000"),
+        SegmentSummary(code="listed", name="listed", count=5, delta="+0%", avg_score=50, description="", color="#000000"),
+    ]
+
+
+def _gate(cache: Any, warehouse: _Warehouse) -> str:
+    """The ``listed`` card's gate (it needs MLS Listings)."""
+    gated = apply_source_gates(_listed(), client=warehouse, cache=cache, cache_ttl_s=30.0)  # type: ignore[arg-type]
+    return {segment.code: segment.source_status for segment in gated}["listed"]
+
+
+def _readiness(status: str) -> list[dict[str, Any]]:
+    return [{"source_name": "MLS Listings", "status": status}]
+
+
+def test_gates_hit_before_their_soft_ttl() -> None:
+    warehouse, clock, deferred = _Warehouse(), _Clock(), _DeferredExecutor()
+    warehouse.rows[_READINESS] = _readiness("roadmap")
+    cache = _swr(clock, deferred)
+
+    assert _gate(cache, warehouse) == "not_connected"
+    clock.now += 29.0
+    assert _gate(cache, warehouse) == "not_connected"
+    assert warehouse.count(_READINESS) == 1 and deferred.jobs == []
+
+
+def test_gates_serve_stale_with_exactly_one_refresh() -> None:
+    warehouse, clock, deferred = _Warehouse(), _Clock(), _DeferredExecutor()
+    warehouse.rows[_READINESS] = _readiness("roadmap")
+    cache = _swr(clock, deferred)
+    _gate(cache, warehouse)
+    warehouse.rows[_READINESS] = _readiness("live")
+    clock.now += 31.0
+
+    assert _gate(cache, warehouse) == "not_connected"
+    assert _gate(cache, warehouse) == "not_connected"
+    assert len(deferred.jobs) == 1
+
+    deferred.run_all()
+    assert _gate(cache, warehouse) == "connected"
+
+
+def test_gates_recompute_inline_after_the_hard_cap() -> None:
+    warehouse, clock, deferred = _Warehouse(), _Clock(), _DeferredExecutor()
+    warehouse.rows[_READINESS] = _readiness("roadmap")
+    cache = _swr(clock, deferred)
+    _gate(cache, warehouse)
+    warehouse.rows[_READINESS] = _readiness("permission_denied")
+    clock.now += settings.mip_gold_cache_max_stale_s + 1.0
+
+    assert _gate(cache, warehouse) == "not_licensed"
+    assert deferred.jobs == []
+
+
+def test_gates_keep_last_good_when_a_refresh_fails() -> None:
+    warehouse, clock, deferred = _Warehouse(), _Clock(), _DeferredExecutor()
+    warehouse.rows[_READINESS] = _readiness("roadmap")
+    cache = _swr(clock, deferred)
+    _gate(cache, warehouse)
+    clock.now += 31.0
+    _gate(cache, warehouse)
+    warehouse.error = RuntimeError("warehouse down")
+    deferred.run_all()
+
+    assert _gate(cache, warehouse) == "not_connected", "a failed refresh never un-gates a card"
+
+
+def test_a_cold_gate_failure_gates_nothing_and_is_not_cached(caplog: pytest.LogCaptureFixture) -> None:
+    warehouse, clock, deferred = _Warehouse(), _Clock(), _DeferredExecutor()
+    warehouse.rows[_READINESS] = _readiness("roadmap")
+    warehouse.error = RuntimeError("warehouse down")
+    cache = _swr(clock, deferred)
+
+    with caplog.at_level(logging.WARNING):
+        gated = apply_source_gates(_listed(), client=warehouse, cache=cache, cache_ttl_s=30.0)  # type: ignore[arg-type]
+
+    assert [segment.source_status for segment in gated] == ["connected", "connected"]
+    assert [segment.source_name for segment in gated] == [None, None]
+    assert [r for r in caplog.records if getattr(r, "mip_event", None) == "segment_source_readiness_unavailable"]
+
+    warehouse.error = None
+    assert _gate(cache, warehouse) == "not_connected", "the failure was never stored"
+    assert warehouse.count(_READINESS) == 2
+
+
+def test_the_segment_repository_gates_through_its_own_gold_cache() -> None:
+    warehouse, clock, deferred = _Warehouse(), _Clock(), _DeferredExecutor()
+    warehouse.rows[".gold.segment_population"] = [
+        {"segment_code": "listed", "name": "listed", "count": 5, "delta_vs_prior": "+0%",
+         "avg_score": 50, "description": "", "color": "#000000"},
+    ]
+    warehouse.rows[_READINESS] = _readiness("roadmap")
+    gate_cache = _swr(clock, deferred)
+    repo = DatabricksSegmentRepository(
+        warehouse,  # type: ignore[arg-type]
+        cache=TTLCache(now=clock),
+        cache_ttl_s=10.0,
+        gate_cache=gate_cache,
+    )
+    assert repo.list(None)[0].source_status == "not_connected"
+
+    warehouse.rows[_READINESS] = _readiness("live")
+    clock.now += 11.0  # the list's hard expiry; the gates are stale, not expired
+    assert repo.list(None)[0].source_status == "not_connected"
+    assert len(deferred.jobs) == 1
+    deferred.run_all()
+    clock.now += 11.0
+    assert repo.list(None)[0].source_status == "connected"
+
+    assert isinstance(DatabricksSegmentRepository(warehouse)._gate_cache, GoldAggregateCache)  # type: ignore[arg-type]
