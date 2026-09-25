@@ -230,6 +230,21 @@ describe('a real run of the pinned oxlint with the committed config', () => {
     expect(Object.keys(config.rules).filter((rule) => config.rules[rule] === 'off')).toEqual(['jsx-a11y/prefer-tag-over-role']);
   }, OXLINT_TIMEOUT_MS);
 
+  it('bans a config-level disable: an overrides block, an extra ignore pattern, extends or settings is drift', () => {
+    const installed = installedRules();
+    const overrides = { ...config, overrides: [{ files: ['probe.tsx'], rules: { [ALT]: 'off' } }] };
+    expect(validateConfig(overrides, installed)).toEqual([expect.stringMatching(/^overrides: only .* may be set/)]);
+    const ignored = { ...config, ignorePatterns: [...config.ignorePatterns, 'src/routes/not-found.tsx'] };
+    expect(validateConfig(ignored, installed)).toEqual([expect.stringMatching(/^ignorePatterns must be exactly/)]);
+    for (const key of ['extends', 'settings']) {
+      expect(validateConfig({ ...config, [key]: {} }, installed)).toEqual([expect.stringMatching(new RegExp(`^${key}: `))]);
+    }
+    // The real gate refuses to lint with it, so a planted hit cannot pass as OK.
+    write(`${dir}/overrides.oxlintrc.json`, JSON.stringify(overrides));
+    write(`${dir}/probe.tsx`, IMG);
+    expect(() => runOxlint({ targets: ['.'], cwd: dir, root: dir, config: `${dir}/overrides.oxlintrc.json` })).toThrow(/drifted[\s\S]*overrides/);
+  }, OXLINT_TIMEOUT_MS);
+
   it('reports an <img> without alt as exactly one jsx-a11y/alt-text hit', () => {
     const run = lint(IMG);
     expect(run.measured).toEqual({ 'probe.tsx': { [ALT]: 1 } });

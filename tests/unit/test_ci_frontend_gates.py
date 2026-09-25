@@ -85,6 +85,8 @@ def test_perf_spec_collects_the_perf_and_interaction_budgets_only() -> None:
         assert not perf_spec.search(f"{fixture}{separator}perf-motion.fixture.spec.ts")
         assert not perf_spec.search(f"{fixture}{separator}visual.fixture.spec.ts")
         assert not perf_spec.search(f"{fixture}{separator}my-perf-budget.fixture.spec.ts")
+        # Anchored at the end: a snapshot directory beside the spec is not the spec.
+        assert not perf_spec.search(f"{fixture}{separator}perf-budget.fixture.spec.ts-snapshots{separator}home.png")
 
 
 def test_the_source_map_upload_fails_when_the_build_emitted_none() -> None:
@@ -138,6 +140,11 @@ def test_oxlint_is_an_exact_pin_and_its_config_names_only_jsx_a11y_rules() -> No
     assert re.fullmatch(r"\d+\.\d+\.\d+", package["devDependencies"]["oxlint"]), "oxlint must be pinned exactly (no ^ or ~)"
 
     config = json.loads((FRONTEND / ".oxlintrc.json").read_text(encoding="utf-8"))
+    # `overrides`, `extends`, `settings` or an extra ignore pattern would
+    # disable a rule for a file outside the directive scan: a config-level
+    # disable is banned like a directive.
+    assert set(config) == {"$schema", "plugins", "categories", "rules", "ignorePatterns"}
+    assert config["ignorePatterns"] == ["**/*.test.ts", "**/*.test.tsx", "src/test/**", "src/mocks/**"]
     assert config["plugins"] == ["jsx-a11y"]
     assert set(config["categories"]) == {
         "correctness", "suspicious", "pedantic", "perf", "style", "restriction", "nursery",

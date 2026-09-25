@@ -7,12 +7,18 @@
 // jsx-a11y rule the tree carries, keyed by FILE + RULE + COUNT, never by line.
 // The gate fails on an UNLISTED file+rule key, a GROWN count, a STALE entry
 // (a lower count, or no hit left in the file), a baseline recorded with a
-// different oxlint, and any suppression directive. `--ratchet` only lowers;
+// different oxlint, and any suppression: a directive, or a config-level
+// disable (an `overrides` block, an extra ignore pattern). `--ratchet` only lowers;
 // a new hit is fixed in code, never added.
 // ---------------------------------------------------------------------------
 import path from 'node:path';
 
 export const CATEGORIES = ['correctness', 'nursery', 'pedantic', 'perf', 'restriction', 'style', 'suspicious'];
+// The only top-level config keys: `overrides`, `extends`, `settings` and the
+// like would disable a rule for a file outside the source scan, so a
+// config-level disable is banned like a directive.
+export const CONFIG_KEYS = ['$schema', 'categories', 'ignorePatterns', 'plugins', 'rules'];
+export const IGNORE_PATTERNS = ['**/*.test.ts', '**/*.test.tsx', 'src/test/**', 'src/mocks/**'];
 export const BASELINE_FIELDS = ['oxlintVersion', 'config', 'scope', 'policy', 'files'];
 export const CONFIG_REL = 'frontend/.oxlintrc.json';
 export const SCOPE_REL = 'frontend/src';
@@ -44,6 +50,12 @@ export function enabledRules(config) {
 /** Config drift problems; every name in `installed` (the oxlint's jsx-a11y rules) must be named. */
 export function validateConfig(config, installed = []) {
   const problems = [];
+  for (const key of Object.keys(config ?? {})) {
+    if (!CONFIG_KEYS.includes(key)) problems.push(`${key}: only ${CONFIG_KEYS.join(', ')} may be set (a config-level disable is banned)`);
+  }
+  if (JSON.stringify(config?.ignorePatterns) !== JSON.stringify(IGNORE_PATTERNS)) {
+    problems.push(`ignorePatterns must be exactly ${JSON.stringify(IGNORE_PATTERNS)}`);
+  }
   if (JSON.stringify(config?.plugins) !== '["jsx-a11y"]') problems.push('plugins must be exactly ["jsx-a11y"]');
   for (const category of CATEGORIES) {
     if (config?.categories?.[category] !== 'off') problems.push(`category ${category} must be "off"`);
