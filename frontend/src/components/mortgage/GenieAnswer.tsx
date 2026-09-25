@@ -20,6 +20,7 @@ import { isTrustedGenieSource, usePinnedInsights } from '../../lib/pinnedInsight
 import { buildFallbackFollowUps, buildPinFromAnswer } from '../../lib/genieAnswerText';
 import { humanizeKey, pickPlan } from './GenieAnswer.logic';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useExitRetained } from '../../hooks/useExitRetained';
 import { answerCohortFromActions } from '../../lib/genieCellLinks';
 import { GOVERNED_ACTION_SOURCE } from '../../lib/genieTurnOutcome';
 import type { GenieAnswerExportBase } from './GenieAnswer.exportTarget';
@@ -221,6 +222,10 @@ export function GenieAnswer({
     initialFocusRef: proofCloseRef,
     onClose: () => setShowProof(false),
   });
+  // The proof drawer plays the .drawer exit instead of unmounting mid-slide
+  // (audit 2026-09-21 motion-01 remainder). Open, the focus trap and focus
+  // return still follow `showProof`; only the rendering is retained.
+  const proofMounted = useExitRetained(showProof ? true : null, proofDrawerRef) === true;
 
   const sourceDisclosure = isGovernedActionResult
     ? {
@@ -338,19 +343,23 @@ export function GenieAnswer({
       {isTrustedGenieSource(payload.source) && !isGovernedActionResult && (
         <GenieAnswerToolbar payload={payload} onStatus={onAnnounce} />
       )}
-      {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
+      {payload.proof && proofMounted && typeof document !== 'undefined' && createPortal(
         <>
           <div
-            className="drawer-scrim is-open"
+            className={`drawer-scrim${showProof ? ' is-open' : ''}`}
             onClick={() => setShowProof(false)}
             aria-hidden="true"
           />
           <aside
             ref={proofDrawerRef}
-            className="drawer genie-proof-drawer is-open"
+            className={`drawer genie-proof-drawer${showProof ? ' is-open' : ''}`}
             role="dialog"
             aria-modal="true"
             aria-label="Genie answer proof"
+            aria-hidden={!showProof}
+            // The closing drawer stays rendered while it slides out (motion-01);
+            // inert keeps that copy out of the tab order and the pointer path.
+            inert={!showProof}
           >
             <div className="drawer__hdr">
               <div className="drawer__source-icon">
