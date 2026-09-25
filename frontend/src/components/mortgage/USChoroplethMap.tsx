@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useLayoutEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { buildCampaignPrefillSearch, makeCampaignPrefill } from '../../lib/campaignPrefill';
@@ -19,7 +19,7 @@ import {
   type MapSelection,
   type MapSelectionChangeOptions,
 } from './USChoroplethMap.selection';
-import { USChoroplethMapHeader, type MapView } from './USChoroplethMapHeader';
+import { USChoroplethMapHeader, type MapColorMode, type MapView } from './USChoroplethMapHeader';
 import { USChoroplethMapLegend } from './USChoroplethMapLegend';
 import { USChoroplethMapStates } from './USChoroplethMapStates';
 import { USChoroplethMapTable, type MapTableRow } from './USChoroplethMapTable';
@@ -27,7 +27,9 @@ import { MapUnavailable } from './USChoroplethMapUnavailable';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { USChoroplethMapZipLevel } from './USChoroplethMapZipLevel';
 import { useChoroplethLiveFacts, type GeoRead } from './useChoroplethLiveFacts';
+import { indexRateScenario, scenarioView } from './rateScenario.logic';
 import { safeSegmentName } from '../../lib/segmentMetadata';
+import { ratePct } from '../../lib/formatters';
 import './USChoroplethMap.css';
 
 export type { MapSelection } from './USChoroplethMap.selection';
@@ -81,6 +83,17 @@ export type { MapSelection } from './USChoroplethMap.selection';
  * legend now share one token ramp (`--map-ramp-0..4`, tokens.css) with
  * equal OKLab steps in both themes, and the legend prints real breaks.
  *
+ * Rate Lever (audit wow-stage-1): a third colouring, "Rate scenario", over
+ * the whole book (disabled under a segment or portfolio filter). The map owns
+ * the step; the fill, the table and the legend total follow a deferred copy
+ * of it (`useDeferredValue`) while the thumb follows the input, and
+ * `.map-wrap[data-scenario-pending]` marks the gap. The table is the
+ * accessible equivalent of the scenario fill (the hover card and the state
+ * names keep the borrower facts: route-budget cut line). The fill uses one
+ * scale over every state at every step, so a colour change is a count change.
+ * ZIP tiles keep borrower colouring (no sub-state scenario). The Lead Queue
+ * links and "Start campaign" keep today's cohort.
+ *
  * Runtime-06 (map slice): a changed cohort keeps the previous fill up,
  * labelled "Updating…" (`.stable-refresh-region.is-updating` on the stage and
  * the legend, one announcement in `.map-status`), instead of blanking.
@@ -130,7 +143,15 @@ export function USChoroplethMap({
   const level: Level = drillStateId ? 'zip' : 'state';
 
   const [hover, setHover] = useState<HoverState | null>(null);
-  const [overlayOn, setOverlayOn] = useState(false);
+  const [mode, setMode] = useState<MapColorMode>('borrowers');
+  // The rate grid is the whole book: under any cohort filter it would recolour
+  // a different population than the one on screen, so the mode falls back.
+  const rateAvailable = !segmentFilter?.length && !Object.keys(portfolioCriteria ?? {}).length;
+  const effectiveMode: MapColorMode = mode === 'rate' && !rateAvailable ? 'borrowers' : mode;
+  const overlayOn = effectiveMode === 'unattended';
+  const rateOn = effectiveMode === 'rate';
+  const [rateStep, setRateStep] = useState(0);
+  const shownStep = useDeferredValue(rateStep);
   const [view, setView] = useState<MapView>('map');
   // A keyboard drill, and any drill from a table row, removes the control
   // that had focus (the state path, the row's button). Focus then moves on to
@@ -162,12 +183,13 @@ export function USChoroplethMap({
     };
   }, [portfolioCriteria, segmentFilter, segmentFilterMode]);
 
-  const { usaMap, states, zips, overlayData, overlayError, overlayLoading } = useChoroplethLiveFacts({
+  const { usaMap, states, zips, overlayData, overlayError, overlayLoading, rate } = useChoroplethLiveFacts({
     drillState: current.state,
     segmentFilter,
     segmentFilterMode,
     portfolioCriteria,
     overlayOn,
+    rateOn,
   });
   const stateFacts = states.data;
   const zipFacts = zips.data;
@@ -175,6 +197,13 @@ export function USChoroplethMap({
   // The overlay only drives colouring once its payload is loaded; while
   // loading or degraded the base borrower colouring stays up.
   const overlayActive = overlayOn && overlayData !== null;
+  // Rate Lever: the grid drives the state fill once it is indexed; while it
+  // is warming, failed or not built the fill stays on borrowers.
+  // (The React Compiler memoizes both on their inputs.)
+  const rateIndex = rateOn ? indexRateScenario(rate.data) : null;
+  const scenarioAtShown = rateIndex ? scenarioView(rateIndex, shownStep) : null;
+  // ZIP tiles keep borrower colouring: there is no sub-state scenario.
+  const shownScenario = level === 'state' ? scenarioAtShown : null;
   // Overlay units keyed by unit_id (USPS lowercase at state level to match
   // map location ids; ZIP verbatim otherwise) for O(1) lookup.
   const overlayByUnit = useMemo(() => {
@@ -191,10 +220,11 @@ export function USChoroplethMap({
   // fill uses (see USChoroplethMap.scale). The ZIP scale is built over the
   // tiles the grid shows, and the legend says so when ZIPs are left out.
   const scale = useMemo(() => {
+    if (shownScenario) return rateIndex?.scale ?? null;
     if (overlayActive && overlayData) return buildChoroplethScale(overlayData.units.map((u) => u.unattended_count));
     if (level === 'zip') return zipFacts ? buildChoroplethScale(densestZips(zipFacts).map((r) => r.addressable_borrowers)) : null;
     return stateFacts ? buildChoroplethScale(Object.values(stateFacts).map((r) => r.addressable)) : null;
-  }, [level, overlayActive, overlayData, stateFacts, zipFacts]);
+  }, [level, overlayActive, overlayData, rateIndex, shownScenario, stateFacts, zipFacts]);
   const zipCount = zipFacts ? Object.keys(zipFacts).length : 0;
   const scaleScope = level === 'zip' && !overlayActive && zipCount > ZIP_TILE_CAP
     ? `over the ${ZIP_TILE_CAP} densest of ${zipCount.toLocaleString('en-US')} ZIPs`
@@ -320,7 +350,7 @@ export function USChoroplethMap({
   // Table rows for the level on screen: the numbers the map paints.
   const tableRows = useMemo<MapTableRow[]>(() => {
     const value = (count: number, unitKey: string) =>
-      overlayActive ? overlayByUnit[unitKey]?.unattended_count : count;
+      shownScenario ? shownScenario.inTheMoneyById[unitKey] : overlayActive ? overlayByUnit[unitKey]?.unattended_count : count;
     if (level === 'state') {
       if (!stateFacts || !usaMap) return [];
       return usaMap.locations
@@ -334,7 +364,8 @@ export function USChoroplethMap({
             avgScore: rollup.avg_score,
             topSegment: rollup.top_segment_code ? safeSegmentName(rollup.top_segment_code) ?? undefined : undefined,
             contactable: rollup.contactable,
-            unattended: overlayActive ? overlayByUnit[location.id]?.unattended_count ?? null : undefined,
+            // The value the fill encodes when it is not borrowers (table column).
+            extra: shownScenario || overlayActive ? value(0, location.id) ?? null : undefined,
             cls: classify(scale, value(rollup.addressable, location.id)),
             // The row's button is gone after the drill, whatever pressed it.
             onOpen: drillBehavior === 'filter' ? () => activateState(location, true, true) : undefined,
@@ -347,10 +378,10 @@ export function USChoroplethMap({
       count: rollup.addressable_borrowers ?? 0,
       avgScore: rollup.avg_opportunity_score ?? null,
       topSegment: rollup.top_segment_code ? safeSegmentName(rollup.top_segment_code) ?? undefined : undefined,
-      unattended: overlayActive ? overlayByUnit[rollup.zip]?.unattended_count ?? null : undefined,
+      extra: overlayActive ? overlayByUnit[rollup.zip]?.unattended_count ?? null : undefined,
       cls: classify(scale, value(rollup.addressable_borrowers ?? 0, rollup.zip)),
     }));
-  }, [activateState, drillBehavior, level, overlayActive, overlayByUnit, scale, stateFacts, usaMap, zipFacts]);
+  }, [activateState, drillBehavior, level, overlayActive, overlayByUnit, scale, shownScenario, stateFacts, usaMap, zipFacts]);
 
   const renderStage = () => {
     if (!usaMap) {
@@ -381,7 +412,9 @@ export function USChoroplethMap({
             ? `Marketable borrowers by state, ${segmentCaption}`
             : `Marketable borrowers by ZIP in ${drillStateName}, ${segmentCaption}`}
           rows={tableRows}
-          overlayActive={overlayActive}
+          extraColumn={shownScenario
+            ? `In the money at ${ratePct(shownScenario.ratePct)}`
+            : overlayActive ? 'Unattended leads' : null}
           autoFocus={drillFocus}
           onAutoFocused={onDrillFocused}
         />
@@ -394,6 +427,7 @@ export function USChoroplethMap({
           stateFacts={stateFacts}
           scale={scale}
           overlayByUnit={overlayActive ? overlayByUnit : null}
+          scenario={shownScenario}
           footprintStates={footprintStates}
           selectedId={drillBehavior === 'navigate' ? null : drillStateId}
           setHover={setHover}
@@ -428,7 +462,14 @@ export function USChoroplethMap({
   };
 
   return (
-    <div className="map-wrap" style={{ height }} data-map-view={view}>
+    <div
+      className="map-wrap"
+      // Rate mode grows the map by the lever instead of squeezing the stage
+      // (USChoroplethMap.css keeps the stage's floor); `height` stays the floor.
+      style={rateOn ? { minHeight: height } : { height }}
+      data-map-view={view}
+      data-scenario-pending={rateOn && rateStep !== shownStep ? '' : undefined}
+    >
       <USChoroplethMapHeader
         drilled={level === 'zip'}
         drillStateUC={drillStateUC}
@@ -437,8 +478,9 @@ export function USChoroplethMap({
         coverageZipCount={footprint.dataScope?.zip_count ?? null}
         drillHint={primary.warmingUp === null && primary.error === null}
         zipUnassigned={zipUnassignedForDrill}
-        overlayOn={overlayOn}
-        setOverlayOn={setOverlayOn}
+        mode={effectiveMode}
+        setMode={setMode}
+        rateAvailable={rateAvailable}
         view={view}
         setView={setView}
         campaignPrefillPath={campaignPrefillPath}
@@ -488,6 +530,14 @@ export function USChoroplethMap({
         segmentCaption={segmentCaption}
         segmentFilter={segmentFilter}
         updating={updating}
+        rate={rateOn ? {
+          read: rate,
+          index: rateIndex,
+          view: scenarioAtShown,
+          step: rateStep,
+          onStepChange: setRateStep,
+          scope: drillStateId ? { id: drillStateId, name: drillStateName } : null,
+        } : null}
       />
 
       {/* Hover / focus card, portaled to document.body so `.map-wrap

@@ -1,0 +1,85 @@
+/* ============================================================
+   Rate Lever scrubber (audit wow-stage-1). Imported by
+   RateScenarioControl.tsx, so it ships in the control's lazy chunk,
+   never in the initial stylesheet or the map chunk.
+
+   DECLARED APP EXTENSION: block .rate-lever does not exist in the
+   prototype, which has no slider (design_files/Module 0 Prototype.html,
+   map legend ~L1860-1871). Built from the prototype's tokens only: the
+   legend's type sizes, the accent as the native range's accent-color,
+   the shared focus ring. Also the legend's lever host elements
+   (.map-legend__lever / __lever-note), which only rate mode draws:
+   until this chunk arrives the chip row simply flows inline.
+   ============================================================ */
+.map-legend__lever {
+  display: grid;
+  gap: var(--sp-1);
+  inline-size: calc(var(--sp-16) * 6);
+  max-inline-size: 100%;
+  margin-block-start: var(--sp-1);
+}
+.map-legend__lever-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-3);
+}
+/* A wide map's overlay legend would park the lever over the map itself: in
+   rate mode it joins the flow under the stage, as it does for the ZIP grid. */
+.map-wrap:has(.map-legend__lever) .map-legend {
+  position: static;
+  margin: 0 var(--sp-3) var(--sp-3);
+}
+/* Under the stage (a narrow map), the lever takes the strip's full width. */
+@container map-wrap (max-width: 1100px) {
+  .map-legend > .map-legend__lever { inline-size: auto; }
+}
+.rate-lever {
+  display: grid;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+.rate-lever__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-inline-size: 0;
+}
+.rate-lever__label {
+  flex: none;
+  color: var(--text-2);
+  font-weight: 500;
+}
+.rate-lever__range {
+  flex: 1 1 auto;
+  min-inline-size: calc(var(--sp-16) * 2);
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.rate-lever__range:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.rate-lever__output {
+  flex: none;
+  min-inline-size: var(--sp-12);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+.rate-lever__reset { flex: none; }
+.rate-lever__headline {
+  margin: 0;
+  color: var(--text-1);
+  font-size: var(--fs-12);
+  line-height: 1.4;
+}
+.rate-lever__meta {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}

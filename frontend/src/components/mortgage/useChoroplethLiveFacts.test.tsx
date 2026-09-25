@@ -2,9 +2,11 @@
  * @vitest-environment happy-dom
  */
 /**
- * useChoroplethLiveFacts (audit runtime-06 map slice): the read
+ * useChoroplethLiveFacts (audit runtime-06 map slice, wow-stage-1): the read
  * layer under the geography hero.
  *
+ *  - the Rate Lever read is disabled outside rate mode (never on load, never
+ *    prefetched) and issued once when the mode is on;
  *  - a changed cohort keeps the previous state rollups as a labelled
  *    placeholder (`updating`), and a FINAL error ends it: the error is what
  *    renders, never the previous cohort presented as current;
@@ -21,12 +23,14 @@ const mocks = vi.hoisted(() => ({
   stateRollups: vi.fn(),
   zipRollups: vi.fn(),
   assignmentOverlay: vi.fn(),
+  rateSensitivity: vi.fn(),
 }));
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: { stateRollups: mocks.stateRollups, zipRollups: mocks.zipRollups, assignmentOverlay: mocks.assignmentOverlay },
 }));
+vi.mock('../../lib/apiClients/rateScenario', () => ({ rateScenarioApi: { rateSensitivity: mocks.rateSensitivity } }));
 vi.mock('./USStateMapData', () => ({ loadUsaStateMap: () => new Promise(() => undefined) }));
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -73,6 +77,7 @@ const INPUT: UseChoroplethLiveFactsInput = {
   drillState: null,
   segmentFilterMode: 'any',
   overlayOn: false,
+  rateOn: false,
 };
 
 describe('useChoroplethLiveFacts', () => {
@@ -110,6 +115,24 @@ describe('useChoroplethLiveFacts', () => {
     }
     expect(check()).toBe(true);
   }
+
+  it('reads the rate grid only while the rate colouring is on', async () => {
+    mocks.stateRollups.mockResolvedValue(states(100));
+    mocks.rateSensitivity.mockResolvedValue({ built: false, steps_bps: [], scenario_market_rate_pct: [], thresholds: {}, states: [], provenance: {} });
+    await render(INPUT);
+    await until(() => seen.facts?.states.data?.il !== undefined);
+    await render({ ...INPUT, overlayOn: true });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(mocks.rateSensitivity).not.toHaveBeenCalled();
+    expect(seen.facts?.rate.data).toBeNull();
+    expect(seen.facts?.rate.loading).toBe(false);
+
+    await render({ ...INPUT, rateOn: true });
+    await until(() => seen.facts?.rate.data !== null);
+    expect(mocks.rateSensitivity).toHaveBeenCalledTimes(1);
+  });
 
   it('keeps the previous cohort as a labelled placeholder, and a final error replaces it with the error', async () => {
     mocks.stateRollups.mockResolvedValueOnce(states(100));

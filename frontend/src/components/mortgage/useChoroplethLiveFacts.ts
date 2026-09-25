@@ -22,6 +22,9 @@
  * under another. `updating` says a placeholder is on screen (the map labels
  * it), and a final error ends the placeholder: the previous cohort is never
  * presented as current after a failure.
+ *
+ * The Rate Lever read (audit wow-stage-1) is enabled only while the rate
+ * colouring is the effective mode: never on load, never prefetched.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -34,6 +37,8 @@ import {
   type WarmingUpState,
 } from '../../lib/useWarmingUpRetry';
 import type { StateRollup, ZipRollup } from '../../types';
+import type { RateSensitivityResponse } from '../../types/rateScenario';
+import { rateScenarioApi } from '../../lib/apiClients/rateScenario';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { loadUsaStateMap } from './USStateMapData';
 
@@ -46,6 +51,7 @@ export const geoQueryKeys = {
     [...queryKeys.all, 'geo', 'zip-rollups', state, ...cohort] as const,
   assignmentOverlay: (level: GeoOverlayLevel, state: string | null) =>
     [...queryKeys.all, 'geo', 'assignment-overlay', level, state ?? ''] as const,
+  rateSensitivity: () => [...queryKeys.all, 'geo', 'rate-sensitivity'] as const,
 };
 
 /** Where the drilled state sits in a `zipRollups` key. */
@@ -73,6 +79,8 @@ export interface UseChoroplethLiveFactsInput {
   portfolioCriteria?: Criteria;
   /** Whether the "Unattended leads" overlay is on (the overlay is only read then). */
   overlayOn: boolean;
+  /** Whether the rate colouring is the effective mode (the rate grid is only read then). */
+  rateOn: boolean;
 }
 
 function geoRead<T>(result: UseWarmingUpRetryResult<T>, enabled: boolean): GeoRead<T> {
@@ -102,6 +110,7 @@ export function useChoroplethLiveFacts({
   segmentFilterMode,
   portfolioCriteria,
   overlayOn,
+  rateOn,
 }: UseChoroplethLiveFactsInput) {
   const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
 
@@ -171,6 +180,13 @@ export function useChoroplethLiveFacts({
     { queryKey: geoQueryKeys.assignmentOverlay(overlayLevel, drillState), enabled: overlayOn, staleTime: 0 },
   );
   const overlay = geoRead(overlayResult, overlayOn);
+  // The whole book, keyed once: an aggregate over gold plus a live
+  // contactable count, never an audit row, and only in rate mode.
+  const rateResult = useWarmingUpRetry<RateSensitivityResponse>(
+    (signal) => rateScenarioApi.rateSensitivity(signal),
+    [],
+    { queryKey: geoQueryKeys.rateSensitivity(), enabled: rateOn },
+  );
   const overlayDependency = overlay.error instanceof ApiError && overlay.error.dependency
     ? ` (${overlay.error.dependency})`
     : '';
@@ -184,5 +200,6 @@ export function useChoroplethLiveFacts({
     // borrower view stays up — never a silent fallback.
     overlayError: overlay.error ? `Coverage overlay unavailable${overlayDependency}. Showing borrower counts.` : null,
     overlayLoading: overlay.loading || overlay.warmingUp !== null,
+    rate: geoRead(rateResult, rateOn),
   };
 }

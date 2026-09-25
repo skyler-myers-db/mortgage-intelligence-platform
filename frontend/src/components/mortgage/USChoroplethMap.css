@@ -10,7 +10,11 @@
    .map-label (state labels), .map-legend__break / __end / __scale (break
    values between the prototype's Lower / Higher words), .map-table (the
    "View as table" view), .zip-tiles__item (list items around the ZIP
-   buttons), .map-stage--status (warming-up / unavailable stage).
+   buttons), .map-stage--status (warming-up / unavailable stage),
+   .map-legend__lever-slot (the Rate Lever's host in the legend, audit
+   wow-stage-1; .map-legend__lever / __lever-note and the control's block
+   .rate-lever ship in its lazy chunk). The prototype legend (Module 0
+   Prototype.html ~L1860-1871) has no scenario control.
    ============================================================ */
 
 /* USPS labels on populated states. Sized in SVG user units (the Albers
@@ -69,6 +73,28 @@
    and ZIP / table rules that make it static are more specific and still
    win). */
 .map-legend.stable-refresh-region { position: absolute; }
+
+/* Rate Lever host (audit wow-stage-1): the slot reserves the control's
+   height so loading its chunk does not move the stage. The lever's own
+   layout ships with that chunk (RateScenarioControl.css). In rate mode the
+   map's height is a floor, not a size (USChoroplethMap.tsx): the legend
+   strip under a narrow map grows by the lever, and the stage keeps a
+   readable floor instead of being squeezed under it. */
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) + var(--sp-6)); }
+.map-wrap:has(.map-legend__lever) .map-levels {
+  flex: 1 0 auto;
+  min-block-size: calc(var(--sp-16) * 5);
+}
+
+/* Three colourings: a label never breaks inside its button; the group
+   wraps as a whole in the corner tray instead. "Rate scenario" under a
+   cohort filter is aria-disabled (it stays focusable and explains itself),
+   so it takes the disabled-filter look. */
+.map-overlay-toggle .filter { white-space: nowrap; }
+.map-overlay-toggle .filter[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 
 /* The keyboard hint (revealed by .map-wrap:focus-within in 08-map.css) wraps
    at the legend's own width instead of stretching the legend across the map:

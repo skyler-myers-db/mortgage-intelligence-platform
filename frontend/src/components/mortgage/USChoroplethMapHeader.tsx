@@ -1,20 +1,37 @@
 /**
  * USChoroplethMapHeader — the geography map's `.map-hdr`: the breadcrumb
  * trail (US > drilled state), the coverage / ZIP-gap chips, the Borrowers |
- * Unattended leads colouring toggle, the "View as table" switch, the S9
- * "Start campaign" action and "Ask Genie about this state". Extracted from
- * USChoroplethMap.tsx (file-size gate); markup, class names and copy of the
- * existing controls are unchanged.
+ * Unattended leads | Rate scenario colouring toggle, the "View as table"
+ * switch, the S9 "Start campaign" action and "Ask Genie about this state".
+ * Extracted from USChoroplethMap.tsx (file-size gate); markup, class names and
+ * copy of the existing controls are unchanged.
+ *
+ * "Rate scenario" (audit wow-stage-1) covers the whole book, so under a
+ * segment or portfolio filter it is aria-disabled with its reason (it stays
+ * focusable and a click does nothing). Pointing at it or focusing it warms
+ * the lazy control chunk; no API call is made until it is picked.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 import { genieStatePrompt } from '../../lib/genieContext';
 import { GenieAskAbout } from './GenieAskAbout';
 import { claimDrillFocus, drillExitOriginatedInMap } from './USChoroplethMap.a11y';
 import { formatCount } from '../../lib/formatters';
+import { loadRateScenarioControl } from './rateScenario.lazy';
 
 export type MapView = 'map' | 'table';
+/** What the fill encodes: borrowers, the S9 unattended overlay, or the Rate Lever scenario. */
+export type MapColorMode = 'borrowers' | 'unattended' | 'rate';
+
+const COLOR_MODES: ReadonlyArray<readonly [MapColorMode, string]> = [
+  ['borrowers', 'Borrowers'],
+  ['unattended', 'Unattended leads'],
+  ['rate', 'Rate scenario'],
+];
+
+export const RATE_UNAVAILABLE_REASON =
+  'Rate scenarios cover the whole book; clear segment and portfolio filters to use them.';
 
 interface USChoroplethMapHeaderProps {
   drilled: boolean;
@@ -27,8 +44,11 @@ interface USChoroplethMapHeaderProps {
   drillHint: boolean;
   /** Borrowers in the drilled state the ZIP layer cannot show. */
   zipUnassigned: number;
-  overlayOn: boolean;
-  setOverlayOn: (on: boolean) => void;
+  /** The effective colouring (rate falls back to borrowers when unavailable). */
+  mode: MapColorMode;
+  setMode: (mode: MapColorMode) => void;
+  /** False under a segment or portfolio filter: the rate grid is whole-book. */
+  rateAvailable: boolean;
   view: MapView;
   setView: (view: MapView) => void;
   campaignPrefillPath: string | null;
@@ -43,8 +63,9 @@ export function USChoroplethMapHeader({
   coverageZipCount,
   drillHint,
   zipUnassigned,
-  overlayOn,
-  setOverlayOn,
+  mode,
+  setMode,
+  rateAvailable,
   view,
   setView,
   campaignPrefillPath,
@@ -58,6 +79,10 @@ export function USChoroplethMapHeader({
   // disables itself must not send focus, and the scroll, down to the map.
   // Focus the user still holds elsewhere is never taken (claimDrillFocus).
   const usCrumbRef = useRef<HTMLButtonElement | null>(null);
+  const rateReasonId = useId();
+  const warmRateControl = () => {
+    if (rateAvailable) void loadRateScenarioControl();
+  };
   const lastFocused = useRef<Element | null>(null);
   useEffect(() => {
     const doc = usCrumbRef.current?.ownerDocument;
@@ -125,27 +150,37 @@ export function USChoroplethMapHeader({
             {formatCount(zipUnassigned)} borrowers without ZIP assignment
           </Chip>
         )}
-        {/* S9 overlay toggle — two .filter-style buttons in the prototype's
+        {/* Colouring toggle — .filter-style buttons in the prototype's
             vocabulary. "Borrowers" is the default; "Unattended leads"
             recolours + extends the tooltip from the assigned-vs-unattended
-            overlay. */}
+            overlay; "Rate scenario" recolours by the Rate Lever grid. */}
         <div className="map-overlay-toggle" role="group" aria-label="Map coloring">
-          <button
-            type="button"
-            className={`filter filter--compact ${overlayOn ? '' : 'is-active'}`}
-            aria-pressed={!overlayOn}
-            onClick={() => setOverlayOn(false)}
-          >
-            <span className="filter__value">Borrowers</span>
-          </button>
-          <button
-            type="button"
-            className={`filter filter--compact ${overlayOn ? 'is-active' : ''}`}
-            aria-pressed={overlayOn}
-            onClick={() => setOverlayOn(true)}
-          >
-            <span className="filter__value">Unattended leads</span>
-          </button>
+          {COLOR_MODES.map(([value, label]) => {
+            const blocked = value === 'rate' && !rateAvailable;
+            return (
+              <button
+                key={value}
+                type="button"
+                className={`filter filter--compact ${mode === value ? 'is-active' : ''}`}
+                aria-pressed={mode === value}
+                aria-disabled={blocked || undefined}
+                aria-describedby={blocked ? rateReasonId : undefined}
+                title={blocked ? RATE_UNAVAILABLE_REASON : undefined}
+                onClick={() => {
+                  if (!blocked) setMode(value);
+                }}
+                onPointerEnter={value === 'rate' ? warmRateControl : undefined}
+                onFocus={value === 'rate' ? warmRateControl : undefined}
+              >
+                <span className="filter__value">{label}</span>
+              </button>
+            );
+          })}
+          {!rateAvailable && (
+            <span id={rateReasonId} className="sr-only">
+              {RATE_UNAVAILABLE_REASON}
+            </span>
+          )}
         </div>
         {/* The label names the view it switches to (the rate-window pattern:
             one mechanism, no aria-pressed on top). */}
