@@ -28,8 +28,11 @@ import { descriptorFor, descriptorForEvidence } from '../lib/drawerSources';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../lib/offerLanguage';
 import { safeSegmentName, segmentByCode } from '../lib/segmentMetadata';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import { describeApiError, type ApiErrorKind } from '../lib/describeApiError';
 import { queryKeys } from '../lib/queryKeys';
 import { useApp } from '../components/AppContext';
+import { useOptionalHealth } from '../components/HealthProvider';
+import { degradedDependency, friendlyDependencyName, isBanneredOutage } from '../components/healthRecovery';
 import { LtvEquityValue } from './borrower-360.ltv-field';
 import { BorrowerQueuePager } from './borrower-360.pager';
 import { useQueueContext } from '../lib/queueContext';
@@ -48,6 +51,15 @@ const PROOF_DRAWER_CHUNK = lazyModule(() => import('../components/mortgage/Score
  */
 
 export const BORROWER_DOSSIER_LABEL = 'Borrower dossier';
+
+/** The status chip beside a failed dossier (never "Backend unavailable" for a 403). */
+function failureChipLabel(kind: ApiErrorKind | undefined): string {
+  if (kind === 'forbidden' || kind === 'permission_denied') return 'Access required';
+  if (kind === 'session_expired') return 'Session ended';
+  if (kind === 'offline') return 'Offline';
+  if (kind === 'rate_limited') return 'Paused';
+  return 'Unavailable';
+}
 
 function titleCaseStatus(status?: string | null, fallback = 'None'): string {
   if (!status) return fallback;
@@ -104,6 +116,7 @@ export default function Borrower360() {
     (signal) => api.borrower(id!, signal),
     { enabled: Boolean(id), queryKey: queryKeys.borrower(id) },
   );
+  const healthCtx = useOptionalHealth();
   // wow-stage-3: the lifecycle row carries the audit id of the latest
   // decision; when it does, the hero offers the Decision receipt read back
   // from that row. A 403 (actor outside the sales team) simply hides it.
@@ -165,9 +178,9 @@ export default function Borrower360() {
     );
   }
 
-  // Warming-up takes priority over `error` — `useWarmingUpRetry` never
-  // sets both at once, but this ordering makes the intent explicit.
-  if (warmingUp) {
+  // TanStack keeps `failureReason` after the last retry, so `warmingUp`
+  // outlives the loop; once `error` is set the honest surface is the error.
+  if (warmingUp && !error) {
     return (
       <PageShell
         eyebrow={warmingUp.label}
@@ -182,23 +195,35 @@ export default function Borrower360() {
 
   if (error) {
     const notFound = error instanceof ApiError && error.status === 404;
-    const errorLede = notFound
+    // Audit states-03 a / states-04: under a banner that already names this
+    // outage the dossier waits calmly (HealthProvider refetches it on
+    // recovery); any other failure speaks the shared vocabulary, never the
+    // transport message.
+    const bannered = !notFound && isBanneredOutage(error, healthCtx?.health ?? null, healthCtx?.connection ?? 'online');
+    const failure = notFound || bannered ? null : describeApiError(error, { subject: `borrower ${id}` });
+    const reconnecting = friendlyDependencyName(degradedDependency(healthCtx?.health ?? null) ?? '');
+    const title = notFound ? `Borrower ${id} not found` : bannered ? `Loading ${id}…` : failure?.title;
+    const lede = notFound
       ? `Borrower ${id} was not found. Check the ID, use search, or return to the lead queue.`
-      : `Couldn't load borrower ${id}: ${error.message}`;
+      : bannered ? `This dossier reloads when the ${reconnecting} reconnects.` : failure?.body;
+    const canRetry = bannered || failure?.action === 'retry';
     return (
-      <PageShell
-        eyebrow="Borrower 360"
-        title={notFound ? `Borrower ${id} not found` : `Couldn't load ${id}`}
-        lede={errorLede}
-      >
+      <PageShell eyebrow="Borrower 360" title={title} lede={lede}>
         {pager}
         <div className="surface">
           <div className="surface__body surface__body--inline">
-            <Chip variant={notFound ? 'warning' : 'danger'} icon={notFound ? 'search' : 'cross'}>
-              {notFound ? 'Not found' : 'Backend unavailable'}
+            <Chip
+              variant={notFound ? 'warning' : bannered ? 'neutral' : 'danger'}
+              icon={notFound ? 'search' : bannered ? 'bolt' : 'cross'}
+            >
+              {notFound ? 'Not found' : bannered ? 'Reconnecting' : failureChipLabel(failure?.kind)}
             </Chip>
-            {!notFound && (
-              <Button onClick={manualRetry} aria-label={`Retry loading borrower ${id}`}>
+            {canRetry && (
+              <Button
+                variant={bannered ? 'ghost' : undefined}
+                onClick={manualRetry}
+                aria-label={`Retry loading borrower ${id}`}
+              >
                 Retry
               </Button>
             )}
