@@ -6135,7 +6135,7 @@
         "type": "object"
       },
       "GenieCancelResponse": {
-        "description": "``/message/cancel``: what the owner's Stop did (audit genie-03).\n\n``cancelled``: this app will not verify or record the answer; nothing is\nrecorded for the turn (no RUN_GENIE row, no action tokens, no session\nrow). It never means that Genie's own message was cancelled: Genie may\nkeep the question as context. ``recorded``: the answer was already\nverified and recorded before the Stop, so nothing changed. ``ended``: the\njob had already failed or expired. ``status`` is the job's status after\nthe request.",
+        "description": "``/message/cancel``: what the owner's Stop did (audit genie-03).\n\n``cancelled``: this app will not verify or record the answer; nothing is\nrecorded for the turn (no ``genie.run_query`` audit row, no action\ntokens, no session row; the submit's ``genie.message_submitted`` row\nstays). It never means that Genie's own message was cancelled: Genie may\nkeep the question as context. ``recorded``: the answer was already\nverified and recorded before the Stop, so nothing changed. ``ended``: the\njob had already failed or expired. ``status`` is the job's status after\nthe request.",
         "properties": {
           "job_id": {
             "title": "Job Id",
