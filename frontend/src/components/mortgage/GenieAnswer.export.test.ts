@@ -96,6 +96,25 @@ describe('buildGenieAnswerCsv', () => {
     expect(lines[10]).toBe(`TX,75040,${genieCsvCell('segment_code', 'equity')},900.5,"plain, with comma",true`);
   });
 
+  it('keeps every provenance line one cell, whatever the server-supplied values hold', () => {
+    const csv = buildGenieAnswerCsv(
+      request({
+        target: {
+          ...request().target,
+          source: 'trusted_sql\r=cmd',
+          trustedAssets: ['mip.gold.borrower_360,=HYPERLINK("http://example.invalid")'],
+        },
+      }),
+      GENERATED_AT,
+    );
+    const lines = csv.split('\n');
+    expect(csv).not.toContain('\r');
+    expect(lines[1]).toBe('# source=trusted_sql =cmd');
+    // Quoted as one cell: the comma cannot open a formula cell after it.
+    expect(lines[2]).toBe('"# trusted_assets=mip.gold.borrower_360,=HYPERLINK(""http://example.invalid"")"');
+    expect(lines[8]).toBe('state,zip5,segment_code,borrowers,note,flag');
+  });
+
   it('says so when a History replay kept fewer rows than ran', () => {
     const csv = buildGenieAnswerCsv(request({ reportedRowCount: 120 }), GENERATED_AT);
     expect(csv).toContain('# answer_row_count=120');

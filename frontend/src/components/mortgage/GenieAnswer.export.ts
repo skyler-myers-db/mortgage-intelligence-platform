@@ -76,7 +76,10 @@ export function buildGenieAnswerCsv(request: GenieAnswerCsvRequest, generatedAt:
     ['answer_row_count', reportedRowCount ?? 'unknown'],
     ['rows_complete', reportedRowCount === null ? 'unknown' : String(rows.length >= reportedRowCount)],
   ];
-  const lines = provenance.map(([key, value]) => `# ${key}=${String(value).replace(/\r?\n/g, ' ')}`);
+  // Each provenance line is ONE cell through the formula gate: a comma or a
+  // quote in a server-supplied value (the source, a trusted asset name) can
+  // never open a second cell, and no CR or LF can start a new row.
+  const lines = provenance.map(([key, value]) => csvEscape(`# ${key}=${String(value).replace(/[\r\n]+/g, ' ')}`));
   const header = columns.map((column) => csvEscape(column)).join(',');
   const body = rows.map((row) => columns.map((column) => csvEscape(genieCsvCell(column, row[column]))).join(','));
   return [...lines, header, ...body].join('\n');
