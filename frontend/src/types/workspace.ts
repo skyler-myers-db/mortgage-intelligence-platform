@@ -56,6 +56,14 @@ export interface SessionResponse {
    * stay the authorization contract; these are for the identity menu.
    */
   role_labels?: string[];
+  /**
+   * The configured lender's display name, the same settings value
+   * /config/options returns (audit delivery-07): the tenant label reads it
+   * from this zero-dependency call first. Absent from an older backend.
+   */
+  lender_name?: string | null;
+  /** The opt-in RUM gate, the same settings value /config/options returns. */
+  rum_enabled?: boolean | null;
 }
 
 export interface WorkspaceMutationResult {

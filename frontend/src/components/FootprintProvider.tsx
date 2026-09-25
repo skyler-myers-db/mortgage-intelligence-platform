@@ -4,7 +4,7 @@ import {
   useMemo,
   type PropsWithChildren,
 } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { queryOptions, useQuery } from '@tanstack/react-query';
 import { apiPath } from '../lib/apiPaths';
 import { queryKeys } from '../lib/queryKeys';
 
@@ -124,23 +124,26 @@ interface FootprintProviderProps {
   fetchFootprint?: (signal?: AbortSignal) => Promise<FootprintPayload>;
 }
 
-async function defaultFetchFootprint(signal?: AbortSignal): Promise<FootprintPayload> {
+export async function defaultFetchFootprint(signal?: AbortSignal): Promise<FootprintPayload> {
   const res = await fetch(apiPath('/config/footprint'), { signal });
   if (!res.ok) throw new Error(`footprint fetch ${res.status}`);
   return (await res.json()) as FootprintPayload;
 }
 
-export function FootprintProvider({
-  fetchFootprint = defaultFetchFootprint,
-  children,
-}: PropsWithChildren<FootprintProviderProps>) {
-  // Retry once with a 1s backoff before falling back. The previous
-  // single-shot fetch pinned the UI to fallback metadata whenever the
-  // warehouse cold-started and the first /api/config/footprint request
-  // returned 503. One retry is enough to ride out most cold-start
-  // hiccups; anything longer belongs in the service-level warm-start
-  // loop, not here.
-  const query = useQuery({
+/**
+ * The footprint query, shared by the provider and the boot seed
+ * (lib/bootPrime, which passes a fetcher that consumes the boot prime and
+ * falls back to `defaultFetchFootprint`). Retry once with a 1s backoff
+ * before falling back. The previous single-shot fetch pinned the UI to
+ * fallback metadata whenever the warehouse cold-started and the first
+ * /api/config/footprint request returned 503. One retry is enough to ride
+ * out most cold-start hiccups; anything longer belongs in the service-level
+ * warm-start loop, not here.
+ */
+export function footprintQueryOptions(
+  fetchFootprint: (signal?: AbortSignal) => Promise<FootprintPayload> = defaultFetchFootprint,
+) {
+  return queryOptions({
     queryKey: queryKeys.footprint(),
     queryFn: async ({ signal }) => {
       const payload = await fetchFootprint(signal);
@@ -158,6 +161,13 @@ export function FootprintProvider({
     staleTime: Infinity,
     refetchOnWindowFocus: false,
   });
+}
+
+export function FootprintProvider({
+  fetchFootprint = defaultFetchFootprint,
+  children,
+}: PropsWithChildren<FootprintProviderProps>) {
+  const query = useQuery(footprintQueryOptions(fetchFootprint));
 
   const states = query.data?.states ?? FALLBACK_STATES;
   const ready = query.status !== 'pending';

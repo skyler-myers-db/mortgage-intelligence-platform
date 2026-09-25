@@ -42,11 +42,11 @@
 //   node tools/react_compiler_coverage.mjs --ratchet tools/react_compiler_allowlist.json
 //   node tools/react_compiler_coverage.mjs --write-allowlist <new path>   # bootstrap only
 // ---------------------------------------------------------------------------
-import { existsSync, globSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, globSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   bootstrapAllowlist,
   evaluateAllowlist,
@@ -443,6 +443,9 @@ function main() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.join(repoRoot, 'tools', 'react_compiler_coverage.mjs')) {
+// Main-module guard, realpath-safe (audit bundle-08 item 2): Node runs a
+// symlinked script under its real path, so comparing path.resolve(argv[1])
+// silently skipped the gate (exit 0) when invoked through a symlink.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main();
 }

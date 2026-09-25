@@ -19,13 +19,49 @@ export const ROUTE_SOURCE_PREFIX = 'src/routes/';
 
 const CHUNK_FILE = /\.(?:js|css)$/;
 
-/** The single `isEntry` key (the `index.html` entry); throws on zero or several. */
+/** The app entry's manifest key. */
+export const APP_ENTRY_KEY = 'index.html';
+
+/**
+ * The boot module (src/boot/primeBoot.ts, audit bundle-02): the second
+ * manifest entry. The built HTML loads it beside the app entry, so it is part
+ * of every first paint; it must stay a leaf (see bootEntryFile).
+ */
+export const BOOT_ENTRY_KEY = 'src/boot/primeBoot.ts';
+
+/**
+ * The `index.html` entry key. Throws unless the manifest holds exactly two
+ * `isEntry` keys, `index.html` and the boot module.
+ */
 export function manifestEntryKey(manifest) {
-  const entries = Object.keys(manifest).filter((key) => manifest[key].isEntry === true);
-  if (entries.length !== 1) {
-    throw new Error(`build manifest must have exactly one entry, found ${entries.length}: ${entries.join(', ')}`);
+  const entries = Object.keys(manifest).filter((key) => manifest[key].isEntry === true).sort();
+  if (entries.length !== 2 || !entries.includes(APP_ENTRY_KEY) || !entries.includes(BOOT_ENTRY_KEY)) {
+    throw new Error(
+      `build manifest must have exactly two entries (${APP_ENTRY_KEY} and ${BOOT_ENTRY_KEY}), found ${entries.length}: ${entries.join(', ')}`,
+    );
   }
-  return entries[0];
+  return APP_ENTRY_KEY;
+}
+
+/**
+ * The boot module's emitted file. Throws when the boot entry imports anything
+ * (statically or dynamically), carries CSS, or is imported by any chunk: it
+ * must start its reads without waiting on another request, and no app chunk
+ * may depend on it.
+ */
+export function bootEntryFile(manifest) {
+  const boot = manifest[BOOT_ENTRY_KEY];
+  if (!boot || boot.isEntry !== true) throw new Error(`build manifest has no ${BOOT_ENTRY_KEY} entry`);
+  for (const field of ['imports', 'dynamicImports', 'css']) {
+    if ((boot[field] ?? []).length > 0) {
+      throw new Error(`the boot module ${BOOT_ENTRY_KEY} must have no ${field}, found: ${boot[field].join(', ')}`);
+    }
+  }
+  const importers = Object.keys(manifest).filter((key) =>
+    [...(manifest[key].imports ?? []), ...(manifest[key].dynamicImports ?? [])].includes(BOOT_ENTRY_KEY),
+  );
+  if (importers.length > 0) throw new Error(`no chunk may import the boot module ${BOOT_ENTRY_KEY}; imported by: ${importers.join(', ')}`);
+  return boot.file;
 }
 
 /**
@@ -59,13 +95,20 @@ function cssFiles(manifest, keys) {
 
 /**
  * What every first paint loads before the app runs: the entry chunk plus its
- * transitive static imports (never its dynamic imports), and the union of
- * the CSS those chunks need. Files are dist-relative (`assets/...`).
+ * transitive static imports (never its dynamic imports), the boot module the
+ * HTML loads beside it, and the union of the CSS those chunks need. Files are
+ * dist-relative (`assets/...`).
  */
 export function initialClosure(manifest) {
   const entry = manifestEntryKey(manifest);
+  const boot = bootEntryFile(manifest);
   const keys = staticImportClosure(manifest, [entry]);
-  return { entry, keys: [...keys], js: jsFiles(manifest, keys), css: cssFiles(manifest, keys) };
+  return {
+    entry,
+    keys: [...keys, BOOT_ENTRY_KEY],
+    js: [...jsFiles(manifest, keys), boot],
+    css: cssFiles(manifest, keys),
+  };
 }
 
 /**

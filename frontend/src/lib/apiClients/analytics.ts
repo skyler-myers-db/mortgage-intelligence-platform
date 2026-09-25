@@ -19,7 +19,8 @@ import type {
   SignalAnalyticsResponse,
 } from '../../types';
 import type { HealthHint, HealthPayload, AnalyticsQueryOptions } from '../apiTypes';
-import { analyticsPath, isAbortError, getJson } from '../apiTransport';
+import { ApiError, analyticsPath, clientFailureReason, isAbortError, getJson } from '../apiTransport';
+import { markAuthFailedHealth } from '../healthTrust';
 
 /**
  * `/api/health`, plus `?idle_s=<int>` when the shell passes an activity hint:
@@ -40,13 +41,18 @@ export const analyticsApi = {
    * `unknown`, never as synthesized "up". A caller-triggered abort
    * re-throws so `HealthProvider` can cancel in-flight polls on
    * unmount. The optional hint adds only an integer `idle_s` (keep-warm).
+   * An authentication failure (an ended session, 401 included, or a 403) is
+   * the same snapshot, marked for lib/healthTrust: it tells the shell the
+   * actor is nobody, while a transport failure says nothing about the actor.
    */
   health: async (signal?: AbortSignal, hint?: HealthHint): Promise<HealthPayload> => {
     try {
       return await getJson<HealthPayload>(healthPath(hint), signal);
     } catch (err) {
       if (isAbortError(err)) throw err;
-      return { status: 'unreachable', mode: 'unknown', dependencies: {} };
+      const unreachable: HealthPayload = { status: 'unreachable', mode: 'unknown', dependencies: {} };
+      const authFailed = clientFailureReason(err) === 'session_expired' || (err instanceof ApiError && err.status === 403);
+      return authFailed ? markAuthFailedHealth(unreachable) : unreachable;
     }
   },
 

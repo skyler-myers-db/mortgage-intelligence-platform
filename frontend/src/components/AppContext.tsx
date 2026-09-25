@@ -13,6 +13,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
+import { sessionQueryOptions } from '../lib/sessionQuery';
 import {
   ACCENTS,
   ACCENT_STORAGE_KEY,
@@ -142,7 +143,16 @@ function readStoredBool(key: string, fallback: boolean): boolean {
   return fallback;
 }
 
-export function shouldInstallRum(configOptions: Pick<ConfigOptions, 'rum_enabled'> | undefined): boolean {
+/**
+ * The RUM gate: the session's `rum_enabled` when it is a boolean (audit
+ * delivery-07: it rides the zero-dependency session call), else the options
+ * call's. Backward compatible: called with the options alone, it reads them.
+ */
+export function shouldInstallRum(
+  configOptions: Pick<ConfigOptions, 'rum_enabled'> | undefined,
+  session?: Pick<SessionResponse, 'rum_enabled'>,
+): boolean {
+  if (typeof session?.rum_enabled === 'boolean') return session.rum_enabled;
   return configOptions?.rum_enabled === true;
 }
 
@@ -194,12 +204,20 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [density, setDensityState] = useState<Density>(() =>
     readStoredChoice(DENSITY_STORAGE_KEY, DEFAULT_DENSITY, DENSITIES),
   );
+  const sessionQuery = useQuery(sessionQueryOptions());
   // Module 0 does not support arbitrary client-side lender switching.
   // The tenant label is display-only; lender predicates are resolved by
-  // backend configuration and the Unity Catalog gold views.
+  // backend configuration and the Unity Catalog gold views. It reads the
+  // zero-dependency session first (audit delivery-07), so it no longer waits
+  // on the warehouse-backed options call; options stay the fallback.
   const configOptionsQuery = useConfigOptionsQuery();
-  const lender = configOptionsQuery.data?.lender_name?.trim() || 'Configured lender';
-  const rumEnabled = shouldInstallRum(configOptionsQuery.data);
+  const lender = sessionQuery.data?.lender_name?.trim()
+    || configOptionsQuery.data?.lender_name?.trim()
+    || 'Configured lender';
+  // RUM installs once and never uninstalls, so the gate waits for the session
+  // to settle: an options answer that lands first cannot install what the
+  // session would have vetoed. A failed session check falls back to options.
+  const rumEnabled = !sessionQuery.isPending && shouldInstallRum(configOptionsQuery.data, sessionQuery.data);
   const [showEvidence, setShowEvidence] = useState(true);
   const [showConfidence, setShowConfidence] = useState(true);
   // Console is opt-in so the first demo viewport uses the full prototype
@@ -218,11 +236,6 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [workspaceStatus, setWorkspaceStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [workspaceReloadToken, setWorkspaceReloadToken] = useState(0);
-  const sessionQuery = useQuery<SessionResponse>({
-    queryKey: ['session', 'access'],
-    queryFn: ({ signal }) => api.session(signal),
-    retry: false,
-  });
   // TanStack retains the last successful session payload during background
   // refetches. Authorization-sensitive surfaces therefore fail closed on the
   // first load without flickering away after access has been established.

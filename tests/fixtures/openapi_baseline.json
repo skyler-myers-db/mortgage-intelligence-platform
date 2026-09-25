@@ -14221,6 +14221,18 @@
             "title": "Can Approve",
             "type": "boolean"
           },
+          "lender_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured lender's display name (settings.mip_lender_name), the same value /api/config/options returns. Served here too so the shell's tenant label rides this zero-dependency call instead of the warehouse-backed options call (audit delivery-07).",
+            "title": "Lender Name"
+          },
           "role_labels": {
             "description": "Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), else 'Workspace user' for a forwarded identity that holds neither tier. Empty only when the session holds neither tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract.",
             "items": {
@@ -14228,6 +14240,18 @@
             },
             "title": "Role Labels",
             "type": "array"
+          },
+          "rum_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the browser may install the opt-in RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07).",
+            "title": "Rum Enabled"
           }
         },
         "required": [

@@ -35,17 +35,6 @@ const LazyGenieChat = lazyWithPreload(() =>
 
 const preloadConsole = createIdlePreloader(() => LazyConsole.preload(), 5000);
 const preloadGenieChat = createIdlePreloader(() => LazyGenieChat.preload(), 5000);
-// NOTE (2026-06-10 perf audit): rolldown reports INEFFECTIVE_DYNAMIC_IMPORT
-// here because drawerSources is also statically imported by several
-// lazy-side components (EvidenceDrawer, GenieChat, LeadRowPreview, ...),
-// so it lives in their SHARED lazy chunk rather than a chunk of its own.
-// That is fine — the intent of this idle import() is to warm whichever
-// chunk carries the evidence/source mapping before the first drawer
-// open, and it does exactly that at runtime. Initial JS is unaffected
-// (verified: index-*.js byte-stable with/without this line). Do not
-// "fix" the warning by removing the preload or by forcing a separate
-// chunk; both make first-drawer-open slower.
-const preloadDrawerSources = createIdlePreloader(() => import('../../lib/drawerSources'), 5000);
 
 /**
  * AppShell — rail + topbar + main grid.
@@ -131,11 +120,11 @@ export function applyActorScopedStateTransition({
 
 function AppShellInner({ children }: PropsWithChildren) {
   const { clearActorScopedState, consoleOpen, genieOpen, setGenieOpen } = useApp();
-  const { health } = useHealth();
+  const { actorIdentity } = useHealth();
   const queryClient = useQueryClient();
-  // undefined until the first health payload: then seeded from the tab's
-  // stored key, so a reload by a different actor is an actor change (Genie
-  // residual #3), not a first observation.
+  // undefined until the first TRUSTED actor observation: then seeded from the
+  // tab's stored key, so a reload by a different actor is an actor change
+  // (Genie residual #3), not a first observation.
   const actorCacheKeyRef = useRef<string | null | undefined>(undefined);
   const mainRef = useRef<HTMLElement | null>(null);
   const routeAnnouncerRef = useRef<HTMLDivElement | null>(null);
@@ -154,19 +143,24 @@ function AppShellInner({ children }: PropsWithChildren) {
 
   useEffect(() => {
     const cancelConsole = preloadConsole();
-    const cancelDrawer = preloadDrawerSources();
     const cancelGenie = preloadGenieChat();
     return () => {
       cancelConsole();
-      cancelDrawer();
       cancelGenie();
     };
   }, []);
 
-  const healthObserved = health !== null;
+  // The actor boundary keys on HealthProvider's `actorIdentity`, which only a
+  // TRUSTED probe sets (lib/healthTrust): an unreachable, 5xx, offline or
+  // unreadable probe, or a thrown one, is skipped, so a network blip or a
+  // post-deploy 502 never reads as "the actor changed to nobody". A reachable
+  // null or different key clears, and so does an authentication failure
+  // (401, a sign-in redirect, 403). After a reload whose first probes fail,
+  // nothing happens until the first trusted key, which is then compared with
+  // the stored one.
   useEffect(() => {
-    if (!healthObserved) return;
-    const nextKey = health?.actor_cache_key ?? null;
+    if (actorIdentity === null) return;
+    const nextKey = actorIdentity.key;
     const previousKey = actorCacheKeyRef.current === undefined ? readStoredActorCacheKey() : actorCacheKeyRef.current;
     actorCacheKeyRef.current = applyActorScopedStateTransition({
       previousActorCacheKey: previousKey,
@@ -177,7 +171,7 @@ function AppShellInner({ children }: PropsWithChildren) {
       clearMemoryState: clearActorScopedMemoryCaches,
     });
     storeActorCacheKey(actorCacheKeyRef.current);
-  }, [clearActorScopedState, health?.actor_cache_key, healthObserved, queryClient]);
+  }, [actorIdentity, clearActorScopedState, queryClient]);
 
   const openGenie = useCallback(() => {
     setGenieOpen(true);

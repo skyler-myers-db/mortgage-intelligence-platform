@@ -59,6 +59,8 @@ def test_session_identity_matches_the_actor_the_approver_gate_admits(
         "actor_email": _ACTOR,
         "actor_display_name": "Approver One",
         "role_labels": ["Approver"],
+        "lender_name": settings.mip_lender_name,
+        "rum_enabled": settings.mip_rum_enabled,
     }
 
 
@@ -101,6 +103,8 @@ def test_session_ignores_forwarded_identity_when_the_edge_is_untrusted(
         "actor_email": None,
         "actor_display_name": None,
         "role_labels": [],
+        "lender_name": settings.mip_lender_name,
+        "rum_enabled": settings.mip_rum_enabled,
     }
 
 
@@ -226,3 +230,55 @@ def test_session_handler_is_async_and_needs_no_worker_thread() -> None:
     from backend.api import session
 
     assert inspect.iscoroutinefunction(session.get_session)
+
+
+# --- delivery-07: the tenant label and RUM gate ride the zero-dependency call ---
+
+
+def test_session_carries_the_configured_lender_and_rum_gate(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same settings values ``/api/config/options`` returns, so the shell
+    can paint the tenant label without waiting on the warehouse-backed call."""
+    monkeypatch.setattr(settings, "mip_lender_name", "Harbor Point Lending")
+    monkeypatch.setattr(settings, "mip_rum_enabled", True)
+
+    body = client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""}).json()
+
+    assert body["lender_name"] == "Harbor Point Lending"
+    assert body["rum_enabled"] is True
+
+    monkeypatch.setattr(settings, "mip_rum_enabled", False)
+    assert client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""}).json()["rum_enabled"] is False
+
+
+def test_session_identity_fields_touch_no_warehouse_or_lakebase(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The new fields are settings reads: a SQL or Lakebase client that raises
+    is never even asked for, so a warehouse or Lakebase 503 can never block
+    shell identity."""
+    from backend.services import databricks_sql, lakebase
+
+    calls: list[str] = []
+
+    def _refuse(name: str):
+        def _raise(*_args: object, **_kwargs: object) -> None:
+            calls.append(name)
+            raise AssertionError(f"/api/session asked for the {name} client")
+
+        return _raise
+
+    monkeypatch.setattr(databricks_sql, "get_sql_client", _refuse("sql"))
+    monkeypatch.setattr(lakebase, "get_lakebase_client", _refuse("lakebase"))
+
+    response = client.get(
+        "/api/v1/session",
+        headers={"X-Forwarded-Email": _ACTOR, "X-Forwarded-Groups": ""},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["lender_name"] == settings.mip_lender_name
+    assert calls == []

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { initialClosure, routeClosures, staleManifestProblems } from './build_manifest.mjs';
 
 // The manifest maths, re-exported so a test (or another tool) can import the
@@ -723,6 +723,9 @@ function main() {
   console.log('Frontend budget check passed.');
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.join(repoRoot, 'tools', 'check_frontend_budgets.mjs')) {
+// Main-module guard, realpath-safe (audit bundle-08 item 2): Node runs a
+// symlinked script under its real path, so comparing path.resolve(argv[1])
+// silently skipped the gate (exit 0) when invoked through a symlink.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main();
 }

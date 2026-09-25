@@ -22,12 +22,24 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('../lib/api', () => ({ api: apiMocks }));
 
-vi.mock('../lib/configOptionsQuery', () => {
-  const STABLE = { data: { lender_name: 'Summit Mortgage', rum_enabled: false } };
-  return { useConfigOptionsQuery: () => STABLE };
-});
+// A stable object per test (the provider reads it on every render); the
+// delivery-07 cases swap `data` before mounting.
+const configOptions = vi.hoisted(() => ({
+  current: { data: { lender_name: 'Summit Mortgage', rum_enabled: false } as { lender_name?: string; rum_enabled?: boolean } | undefined },
+}));
+
+vi.mock('../lib/configOptionsQuery', () => ({ useConfigOptionsQuery: () => configOptions.current }));
+
+const rum = vi.hoisted(() => ({ installRum: vi.fn() }));
+
+vi.mock('../lib/rum', () => rum);
 
 import { AppProvider, useApp } from './AppContext';
+
+function LenderProbe() {
+  const { lender } = useApp();
+  return <output data-testid="lender">{lender}</output>;
+}
 
 function Probe() {
   const { canApprove, actorEmail, sessionStatus, canAccessAdmin } = useApp();
@@ -47,6 +59,7 @@ describe('AppProvider session fields', () => {
     root = createRoot(document.getElementById('root') as HTMLElement);
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     apiMocks.workspace.mockResolvedValue({ saved_leads: [], saved_drafts: [] });
+    configOptions.current = { data: { lender_name: 'Summit Mortgage', rum_enabled: false } };
   });
 
   afterEach(() => {
@@ -60,7 +73,7 @@ describe('AppProvider session fields', () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <AppProvider><Probe /></AppProvider>
+          <AppProvider><Probe /><LenderProbe /></AppProvider>
         </QueryClientProvider>,
       );
     });
@@ -128,6 +141,95 @@ describe('AppProvider session fields', () => {
 
     expect(probe()).toEqual({
       canApprove: false, actorEmail: null, sessionStatus: 'error', canAccessAdmin: false,
+    });
+  });
+
+  describe('tenant label and RUM gate (audit delivery-07)', () => {
+    const lender = () => document.querySelector('[data-testid="lender"]')?.textContent;
+
+    async function rumInstalls(): Promise<number> {
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        await Promise.resolve();
+      });
+      return rum.installRum.mock.calls.length;
+    }
+
+    it('the session lender wins over the options lender', async () => {
+      configOptions.current = { data: { lender_name: 'Options Lender', rum_enabled: false } };
+      apiMocks.session.mockResolvedValue({ can_access_admin: false, can_approve: false, lender_name: ' Session Lender ' });
+      await mount();
+      await settle();
+
+      expect(lender()).toBe('Session Lender');
+    });
+
+    it('paints the session lender while the options call is still pending', async () => {
+      configOptions.current = { data: undefined } as unknown as typeof configOptions.current;
+      apiMocks.session.mockResolvedValue({ can_access_admin: false, can_approve: false, lender_name: 'Session Lender' });
+      await mount();
+      await settle();
+
+      expect(lender()).toBe('Session Lender');
+    });
+
+    it('falls back to the options lender, then the placeholder, when the session has none', async () => {
+      configOptions.current = { data: { lender_name: 'Options Lender', rum_enabled: false } };
+      apiMocks.session.mockResolvedValue({ can_access_admin: false, can_approve: false });
+      await mount();
+      await settle();
+      expect(lender()).toBe('Options Lender');
+
+      act(() => root.unmount());
+      root = createRoot(document.getElementById('root') as HTMLElement);
+      queryClient.clear();
+      configOptions.current = { data: { rum_enabled: false } };
+      apiMocks.session.mockResolvedValue({ can_access_admin: false, can_approve: false, lender_name: '  ' });
+      await mount();
+      await settle();
+      expect(lender()).toBe('Configured lender');
+    });
+
+    it("the session's rum_enabled wins over the options value, both ways", async () => {
+      configOptions.current = { data: { lender_name: 'Summit Mortgage', rum_enabled: true } };
+      apiMocks.session.mockResolvedValue({ can_access_admin: false, can_approve: false, rum_enabled: false });
+      await mount();
+      await settle();
+      expect(await rumInstalls(), 'session false beats options true').toBe(0);
+
+      act(() => root.unmount());
+      root = createRoot(document.getElementById('root') as HTMLElement);
+      queryClient.clear();
+      configOptions.current = { data: { lender_name: 'Summit Mortgage', rum_enabled: false } };
+      apiMocks.session.mockResolvedValue({ can_access_admin: false, can_approve: false, rum_enabled: true });
+      await mount();
+      await settle();
+      expect(await rumInstalls(), 'session true beats options false').toBe(1);
+    });
+
+    it('reads the options RUM gate when the session carries none', async () => {
+      configOptions.current = { data: { lender_name: 'Summit Mortgage', rum_enabled: true } };
+      apiMocks.session.mockResolvedValue({ can_access_admin: false, can_approve: false });
+      await mount();
+      await settle();
+      expect(await rumInstalls()).toBe(1);
+    });
+
+    it('waits for the session before installing RUM, and falls back to options when it fails', async () => {
+      configOptions.current = { data: { lender_name: 'Summit Mortgage', rum_enabled: true } };
+      let rejectSession: (err: Error) => void = () => undefined;
+      apiMocks.session.mockReturnValue(new Promise((_resolve, reject) => {
+        rejectSession = reject;
+      }));
+      await mount();
+      await settle();
+      expect(await rumInstalls(), 'nothing installs while the session is pending').toBe(0);
+
+      await act(async () => {
+        rejectSession(new Error('session unavailable'));
+      });
+      await settle();
+      expect(await rumInstalls()).toBe(1);
     });
   });
 });
