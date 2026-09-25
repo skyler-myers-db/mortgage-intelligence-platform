@@ -200,8 +200,8 @@ describe('LeadTable bulk run', () => {
     // A preset or filter lands while chunk 1 is held: none of the selected
     // rows is on screen any more, so the visible selection is empty.
     renderTable(OTHER_IDS);
-    expect(q('.bulk-actions__label')?.textContent, 'precondition: nothing selected on screen').toBe('0 leads selected');
     expect(q('[data-testid="lead-bulk-actions"]'), 'the toolbar stays while the run is on the wire').not.toBeNull();
+    expect(q('.bulk-actions__label')?.textContent, 'nothing selected is on screen').toBe('0 leads selected');
     expect(q('[data-testid="lead-bulk-run"]')).not.toBeNull();
     expect(q('[data-testid="lead-bulk-run-count"]')?.textContent).toBe('0 of 9');
     const stop = q<HTMLButtonElement>('[data-testid="lead-bulk-stop"]');
