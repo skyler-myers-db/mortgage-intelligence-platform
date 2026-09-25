@@ -230,10 +230,16 @@ test.describe('(d)-(e) preset views and Copy link', () => {
   test('(e) Copy link carries no row, no email and no proof, and says what it left out', async ({ app, page }) => {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     const row = LEADS[0].borrower_id;
-    await app.gotoRoute(`/lead-queue?sort=equity&dir=asc&row=${row}&assigned_to=lo.bravo%40summit.example`);
+    // A Growth Agent handoff's proof key rides in the address bar too: the
+    // copied link must drop it (the recipient's queue is re-verified).
+    await app.gotoRoute(
+      `/lead-queue?sort=equity&dir=asc&row=${row}&assigned_to=lo.bravo%40summit.example`
+      + '&growth_agent_run_id=11111111-1111-4111-8111-111111111111',
+    );
+    expect(page.url(), 'precondition: the proof key is in the address bar').toContain('growth_agent_run_id=');
     await page.getByTestId('lead-queue-copy-link').click();
     await expect(page.getByText('Queue link copied')).toBeVisible();
-    await expect(page.getByText('Left out: the open row, the assignee email.')).toBeVisible();
+    await expect(page.getByText('Left out: the open row, the assignee email, the Growth Agent proof.')).toBeVisible();
 
     const copied = await page.evaluate(() => navigator.clipboard.readText());
     const origin = new URL(page.url()).origin;
