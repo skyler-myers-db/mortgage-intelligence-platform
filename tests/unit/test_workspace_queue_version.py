@@ -10,8 +10,10 @@ backpressure bucket, and that /api/health never carries the version.
 
 from __future__ import annotations
 
+import inspect
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -27,6 +29,7 @@ from backend.services.lakebase import LakebaseError
 from backend.services.resilience_cache import TTLCache
 from backend.services.workspace_queue_version import (
     QUEUE_VERSION_SQL,
+    QUEUE_VERSION_TTL_S,
     VERSION_INPUTS,
     QueueVersionService,
     get_queue_version_service,
@@ -36,6 +39,7 @@ from backend.services.workspace_queue_version import (
 client = TestClient(app)
 ACTOR_HEADERS = {"X-Forwarded-Email": "approver@summit.example"}
 PATHS = ["/api/workspace/queue-version", "/api/v1/workspace/queue-version"]
+QUEUE_VERSION_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "queueVersion.ts"
 
 T0 = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
 BASE_ROW: dict[str, Any] = {
@@ -158,6 +162,21 @@ def test_a_30_second_cache_serves_two_calls_from_one_read_then_reads_again() -> 
     clock.now += 2.0
     assert service.current() != first
     assert len(fake.statements) == 2
+
+
+def test_the_client_waits_out_exactly_this_cache_after_an_own_write() -> None:
+    """The Lead Queue lets an own write re-baseline the version only from a
+    read asked for a full server-cache TTL after the write
+    (routes/lead-queue.freshness.tsx): an earlier read can be answered from a
+    fill that predates the write, and the next poll would then flag the
+    reader's own approval as someone else's change. The two TTLs must agree.
+    """
+
+    source = QUEUE_VERSION_TS.read_text(encoding="utf-8")
+    match = re.search(r"export const QUEUE_VERSION_SERVER_TTL_MS = ([0-9_]+);", source)
+    assert match is not None, "queueVersion.ts must export QUEUE_VERSION_SERVER_TTL_MS"
+    assert int(match.group(1).replace("_", "")) == round(QUEUE_VERSION_TTL_S * 1000)
+    assert inspect.signature(QueueVersionService).parameters["ttl_s"].default == QUEUE_VERSION_TTL_S
 
 
 def test_a_failed_read_is_not_served_stale() -> None:

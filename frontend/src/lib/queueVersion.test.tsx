@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { QUEUE_VERSION_KEY, fetchQueueVersion, useQueueVersion } from './queueVersion';
+import { QUEUE_VERSION_KEY, fetchQueueVersion, readQueueVersion, useQueueVersion } from './queueVersion';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -24,7 +24,7 @@ let status = 200;
 
 function Probe({ enabled }: { enabled: boolean }) {
   const query = useQueueVersion({ enabled });
-  return <div data-testid="version">{query.data ?? ''}</div>;
+  return <div data-testid="version">{query.data?.version ?? ''}</div>;
 }
 
 beforeEach(() => {
@@ -78,6 +78,15 @@ describe('queue version', () => {
     expect(QUEUE_VERSION_KEY).toEqual(['mip', 'queue-version']);
   });
 
+  it('stamps a reading with when it was asked for, not when it answered', async () => {
+    const asked = new Date('2026-09-25T12:00:00Z').getTime();
+    vi.setSystemTime(asked);
+    const reading = readQueueVersion();
+    vi.setSystemTime(asked + 5_000);
+    await expect(reading).resolves.toEqual({ version: 'a'.repeat(32), requestedAt: asked });
+    expect(paths).toEqual([VERSION_PATH]);
+  });
+
   it('polls once a minute while enabled', async () => {
     await render(true);
     expect(paths).toEqual([VERSION_PATH]);
@@ -124,7 +133,7 @@ describe('queue version', () => {
       const query = useQueueVersion({ enabled: true });
       return (
         <>
-          <div data-testid="version">{query.data ?? ''}</div>
+          <div data-testid="version">{query.data?.version ?? ''}</div>
           <button type="button" data-testid="reread" onClick={() => void query.refetch()} />
         </>
       );

@@ -49,6 +49,10 @@ from backend.services.resilience_cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
+# The Lead Queue waits out this TTL before a read may absorb the reader's own
+# write (frontend/src/lib/queueVersion.ts QUEUE_VERSION_SERVER_TTL_MS, pinned
+# equal by tests/unit/test_workspace_queue_version.py): until then a read can
+# be answered from a fill that predates the write, on any worker.
 QUEUE_VERSION_TTL_S = 30.0
 _CACHE_KEY = "mip.queue-version"
 _VERSION_PREFIX = "mip.queue-version.v1|"

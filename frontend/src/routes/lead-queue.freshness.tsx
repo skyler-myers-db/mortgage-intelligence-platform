@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQueryClient, type MutationCache } from '@tanstack/react-query';
-import { useQueueVersion } from '../lib/queueVersion';
+import { QUEUE_VERSION_POLL_MS, QUEUE_VERSION_SERVER_TTL_MS, useQueueVersion } from '../lib/queueVersion';
 import { FetchedAt, RefreshButton } from '../components/ui/FetchedAt';
 
 /**
@@ -14,18 +14,33 @@ import { FetchedAt, RefreshButton } from '../components/ui/FetchedAt';
  *   - It NEVER re-reads /api/leads by itself (that read writes a VIEW_LEADS
  *     audit row): no invalidation, no refetch on a version change, focus
  *     refetch stays off. Refresh is the reader's explicit click.
- *   - Own writes: when an outreach or sales mutation from THIS tab succeeds,
- *     the version is read once more and that answer becomes the baseline, so
- *     a reader's own approval never reads as someone else's change.
- *     Documented race: another actor's change landing between the own write
- *     and that read is absorbed; FetchedAt still shows the age.
+ *   - Own writes: an outreach or sales mutation from THIS tab never reads as
+ *     someone else's change. The server answers the version from a cache up
+ *     to QUEUE_VERSION_SERVER_TTL_MS old, so a read right after the write can
+ *     still be the PRE-write version; only a read ASKED FOR at least that
+ *     long after the latest own write may absorb it. Until one lands the pill
+ *     stays off (a Refresh in between keeps the write pending), and one
+ *     re-read is scheduled for then (a bulk run's rows push it out, so the
+ *     run re-reads once). A queue write made shortly before the queue
+ *     mounted (an approve on Borrower 360, then back) counts as made at
+ *     mount. Documented race: another actor's change landing in that window
+ *     is absorbed; FetchedAt still shows the age.
  *   - The version is global (single-tenant deploy), so the pill says the
  *     queue was updated, never that this reader's rows changed.
  */
 
+/** When an own write's re-read is due: past the server cache, plus a second for the server's own read. */
+export const OWN_WRITE_REREAD_MS = QUEUE_VERSION_SERVER_TTL_MS + 1_000;
+/**
+ * A write this old can still be missing from a version the queue meets at
+ * mount: a cached answer is re-used for up to a poll, and it was up to a
+ * server cache old when it was read.
+ */
+const PRE_MOUNT_WRITE_WINDOW_MS = QUEUE_VERSION_POLL_MS + QUEUE_VERSION_SERVER_TTL_MS;
+
 interface OwnWrites {
   count: number;
-  /** Date.now() of the latest own write. */
+  /** Date.now() of the latest own write (a pre-mount write counts as made at mount). */
   at: number;
 }
 
@@ -40,7 +55,13 @@ function isQueueWrite(key: readonly unknown[] | undefined): boolean {
 
 /** Successful outreach / sales mutations in this tab, counted from the MutationCache. */
 function createOwnWriteStore(cache: MutationCache): OwnWriteStore {
-  let snapshot: OwnWrites = { count: 0, at: 0 };
+  const mountedAt = Date.now();
+  const recentWrite = cache.getAll().some((mutation) => (
+    mutation.state.status === 'success'
+    && isQueueWrite(mutation.options.mutationKey)
+    && mutation.state.submittedAt >= mountedAt - PRE_MOUNT_WRITE_WINDOW_MS
+  ));
+  let snapshot: OwnWrites = recentWrite ? { count: 1, at: mountedAt } : { count: 0, at: 0 };
   const listeners = new Set<() => void>();
   let unsubscribeCache: (() => void) | null = null;
   return {
@@ -90,32 +111,39 @@ export function useLeadQueueFreshness({ enabled, dataUpdatedAt, isFetching, onRe
   const [store] = useState(() => createOwnWriteStore(queryClient.getMutationCache()));
   const ownWrites = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const versionQuery = useQueueVersion({ enabled });
-  const latest = versionQuery.data ?? null;
-  const versionAt = versionQuery.dataUpdatedAt;
+  const reading = versionQuery.data ?? null;
+  const latest = reading?.version ?? null;
+  // Only a reading asked for a full server-cache TTL after the latest own
+  // write is certain to include it; an earlier one may be the cached
+  // PRE-write version, which the next poll would flag as a change.
+  const coversOwnWrites = reading !== null && reading.requestedAt >= ownWrites.at + QUEUE_VERSION_SERVER_TTL_MS;
+  const absorbed = coversOwnWrites ? ownWrites.count : null;
 
   // Derived during render (no setState in an effect): re-baseline when the
-  // rows settle anew, when a version answers after an own write, or on the
+  // rows settle anew (own writes a covering reading has not absorbed stay
+  // pending), when a covering version answers after an own write, or on the
   // first version polled after the rows.
-  const [baseline, setBaseline] = useState<Baseline>({ leadsAt: dataUpdatedAt, writes: ownWrites.count, version: latest });
+  const [baseline, setBaseline] = useState<Baseline>({ leadsAt: dataUpdatedAt, writes: 0, version: latest });
   if (baseline.leadsAt !== dataUpdatedAt) {
-    setBaseline({ leadsAt: dataUpdatedAt, writes: ownWrites.count, version: latest });
+    setBaseline({ leadsAt: dataUpdatedAt, writes: absorbed ?? baseline.writes, version: latest });
   } else if (baseline.writes !== ownWrites.count) {
-    if (latest !== null && versionAt >= ownWrites.at) {
-      setBaseline({ leadsAt: dataUpdatedAt, writes: ownWrites.count, version: latest });
-    }
+    if (absorbed !== null) setBaseline({ leadsAt: dataUpdatedAt, writes: absorbed, version: latest });
   } else if (baseline.version === null && latest !== null) {
     setBaseline({ ...baseline, version: latest });
   }
 
-  // An own write: ask for the version once more (the answer re-baselines).
+  // Own writes pending: one re-read once the server cache has turned over
+  // (each new write pushes it out, so a bulk run re-reads once).
+  const pending = baseline.writes !== ownWrites.count;
   const { refetch } = versionQuery;
   useEffect(() => {
-    if (ownWrites.count === 0 || !enabled) return;
-    void refetch();
-  }, [ownWrites.count, enabled, refetch]);
+    if (!enabled || !pending) return undefined;
+    const timer = setTimeout(() => void refetch(), Math.max(0, ownWrites.at + OWN_WRITE_REREAD_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [enabled, pending, ownWrites.at, refetch]);
 
   const changed = enabled
-    && baseline.writes === ownWrites.count
+    && !pending
     && baseline.version !== null
     && latest !== null
     && latest !== baseline.version;

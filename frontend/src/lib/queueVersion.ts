@@ -16,14 +16,33 @@ import { getJson } from './apiTransport';
 export const QUEUE_VERSION_KEY = ['mip', 'queue-version'] as const;
 /** One poll a minute while the queue is open (60 s, stated in ms). */
 export const QUEUE_VERSION_POLL_MS = 60_000;
+/**
+ * How old the version a read answers can be: each worker serves it from a
+ * process-local cache for this long after its last fill
+ * (backend/services/workspace_queue_version.py QUEUE_VERSION_TTL_S, pinned
+ * equal by tests/unit/test_workspace_queue_version.py). Only a read asked for
+ * at least this long after a write is certain to include it, on any worker.
+ */
+export const QUEUE_VERSION_SERVER_TTL_MS = 30_000;
 
 /** The route's body (backend/schemas/queue_version.py): 32 lowercase hex. */
 export interface QueueVersionBody {
   version: string;
 }
 
+/** One answer, with when it was asked for (Date.now() before the request left). */
+export interface QueueVersionReading {
+  version: string;
+  requestedAt: number;
+}
+
 export function fetchQueueVersion(signal?: AbortSignal): Promise<string> {
   return getJson<QueueVersionBody>('/api/workspace/queue-version', signal).then((body) => body.version);
+}
+
+export function readQueueVersion(): Promise<QueueVersionReading> {
+  const requestedAt = Date.now();
+  return fetchQueueVersion().then((version) => ({ version, requestedAt }));
 }
 
 /**
@@ -40,7 +59,7 @@ export function fetchQueueVersion(signal?: AbortSignal): Promise<string> {
 export function useQueueVersion({ enabled }: { enabled: boolean }) {
   return useQuery({
     queryKey: QUEUE_VERSION_KEY,
-    queryFn: () => fetchQueueVersion(),
+    queryFn: () => readQueueVersion(),
     enabled,
     refetchInterval: QUEUE_VERSION_POLL_MS,
     refetchIntervalInBackground: false,
