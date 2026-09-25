@@ -407,3 +407,19 @@ test.describe('Runtime-06: the map keeps the previous cohort, visibly', () => {
     await expect(page.locator('button.zip-tile[data-map-unit="60611"]')).toHaveCount(0);
   });
 });
+
+test.describe('css-hygiene review #2: forced colours keep the map edges', () => {
+  test('a hovered state keeps a Highlight edge that the contrast-modes rule used to override', async ({ app, page }) => {
+    await page.emulateMedia({ forcedColors: 'active' });
+    await app.gotoRoute('/');
+    const texas = page.locator('path.map-region[data-map-unit="tx"]');
+    const stroke = (path: Locator) =>
+      path.evaluate((el) => ({ colour: getComputedStyle(el).stroke, width: getComputedStyle(el).strokeWidth }));
+    const resting = await stroke(texas);
+    await texas.hover();
+    await expect.poll(async () => (await stroke(texas)).colour).not.toBe(resting.colour);
+    expect((await stroke(texas)).width).toBe('2px');
+    // An unhovered neighbour keeps the CanvasText edge.
+    expect((await stroke(page.locator('path.map-region[data-map-unit="il"]'))).colour).toBe(resting.colour);
+  });
+});

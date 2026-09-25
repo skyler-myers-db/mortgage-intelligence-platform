@@ -250,3 +250,15 @@
   }
   .map-wrap:focus-within .map-legend__hint { opacity: 1; }
 }
+
+/* css-hygiene review #2 (forced colours): the contrast-modes rule
+   `.map-region.map-region { stroke: CanvasText }` ties the hover and selected
+   strokes' specificity and wins on order, so a forced-colours user saw no
+   hover or selection edge on the map. One more class restores both, in the
+   system Highlight colour. */
+@media (forced-colors: active) {
+  .map-region.map-region:is(:hover, .is-selected) {
+    stroke: Highlight;
+    stroke-width: 2;
+  }
+}
