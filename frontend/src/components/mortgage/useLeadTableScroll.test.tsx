@@ -135,6 +135,28 @@ describe('useLeadTableScroll', () => {
     expect(wrap().scrollTop).toBe(1880);
   });
 
+  // Seen in a real browser: a virtualized table's first commit holds only
+  // its header, so an offset the virtualizer's estimate says is reachable is
+  // clamped to 0 by the scroller. The restore waits for the rendered rows.
+  it('waits for the rendered rows even when the virtualizer estimate says the offset is reachable', async () => {
+    await mount();
+    await userScrollTo(2000);
+    await go(`/borrower-360/${ROW}`);
+    const scrollToOffset = vi.fn<(offset: number) => void>();
+    virtual.current = { scrollToOffset, getTotalSize: () => 7040 };
+    contentHeight = 57;
+
+    await go(-1);
+    expect(scrollToOffset).not.toHaveBeenCalled();
+
+    contentHeight = 7100;
+    await act(async () => {
+      wrap().appendChild(document.createElement('span'));
+    });
+    await flushMutations();
+    expect(scrollToOffset).toHaveBeenCalledWith(2000);
+  });
+
   it('creates a virtualized table at the saved offset, then scrolls it with scrollToOffset', async () => {
     await mount();
     await userScrollTo(2000);

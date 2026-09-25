@@ -12,9 +12,10 @@
  * Rules, keyed on the history entry like `.main` (hooks/scrollOffsetStore):
  *   - POP restores the offset saved for that entry. A virtualized table
  *     (> 120 rows) is created at that offset (`useLeadTableInitialOffset`
- *     feeds the virtualizer's `initialOffset`), then `scrollToOffset` runs
- *     once `getTotalSize` reaches it; a short table sets `scrollTop` once its
- *     rows are tall enough. Both wait at most MAIN_SCROLL_DEADLINE_MS.
+ *     feeds the virtualizer's `initialOffset`, so its first window is the
+ *     saved one), then `scrollToOffset` runs once `getTotalSize` and the
+ *     rendered rows reach it; a short table sets `scrollTop` once its rows
+ *     are tall enough. Both wait at most MAIN_SCROLL_DEADLINE_MS.
  *   - REPLACE (expand / collapse mints a new entry key) carries the current
  *     offset to the new key, so a later Back still restores it.
  *   - PUSH (a sort, a filter, a preset) starts at the top.
@@ -158,10 +159,14 @@ export function useLeadTableScroll({ enabled, tableWrapRef, virtualizer }: UseLe
         if (virtual) virtual.scrollToOffset(offset);
         else wrap.scrollTop = offset;
       };
+      // Ready once the rendered rows reach the offset. A virtualized table's
+      // first commit holds only the header (its window is computed after it
+      // measures the scroller), and scrollToOffset clamps to the scroller's
+      // own scroll range, so both paths wait on the DOM, not on getTotalSize.
       const attempt = () => {
         const virtual = virtualizerRef.current;
-        const height = virtual ? virtual.getTotalSize() : wrap.scrollHeight;
-        if (height - wrap.clientHeight < saved) return false;
+        if (virtual && virtual.getTotalSize() - wrap.clientHeight < saved) return false;
+        if (wrap.scrollHeight - wrap.clientHeight < saved) return false;
         scrollTo(saved);
         finishOnce();
         return true;
