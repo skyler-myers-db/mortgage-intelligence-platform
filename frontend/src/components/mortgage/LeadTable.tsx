@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useSearchParams } from 'react-router';
@@ -15,9 +15,9 @@ import { planLeadCsvExport } from './LeadTable.csv';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import {
   LEAD_EXPANDED_PREVIEW_ESTIMATE_PX,
-  LEAD_ROW_ESTIMATE_PX,
   LEAD_ROW_OVERSCAN,
   LEAD_VIRTUALIZATION_THRESHOLD,
+  leadRowEstimatePx,
 } from './LeadTable.constants';
 import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
 import {
@@ -164,7 +164,7 @@ export function LeadTable({
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const {
     approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity,
-    canApprove, canAccessAdmin, actorEmail, sessionStatus, setDrawer,
+    canApprove, canAccessAdmin, actorEmail, sessionStatus, setDrawer, density,
   } = useApp();
   // Audit flow-02 / shell-06: non-approvers keep a VISIBLE but disabled gate.
   const approverGate = approverGateReason(canApprove, sessionStatus);
@@ -183,7 +183,9 @@ export function LeadTable({
     setApprovalError,
   });
   const { displayLeads, leadsById } = sales;
-  const sortedLeads = sortKey === 'rank'
+  // Audit runtime-04 slice 1: sorted once per (rows, sort), not on every
+  // render; the id list is what the virtualizer keys rows by.
+  const sortedLeads = useMemo(() => (sortKey === 'rank'
     ? displayLeads
     : [...displayLeads].sort((a, b) => {
         const direction = sortDir === 'asc' ? 1 : -1;
@@ -193,12 +195,19 @@ export function LeadTable({
           return (av - bv) * direction;
         }
         return String(av).localeCompare(String(bv)) * direction;
-      });
-  const expandedRowIndex = expanded
-    ? sortedLeads.findIndex((lead) => lead.borrower_id === expanded)
-    : -1;
+      })), [displayLeads, sortKey, sortDir]);
+  const rowIds = useMemo(() => sortedLeads.map((lead) => lead.borrower_id), [sortedLeads]);
+  const expandedRowIndex = expanded ? rowIds.indexOf(expanded) : -1;
   const hasExpandedRow = expandedRowIndex >= 0;
   const shouldVirtualize = sortedLeads.length > LEAD_VIRTUALIZATION_THRESHOLD;
+  // Stable virtualizer inputs: an inline getItemKey is a virtual-core memo
+  // dependency, so a new one on every render rebuilt all 500 measurements.
+  // The row estimate follows the density (responsive-09 item 3).
+  const rowEstimatePx = leadRowEstimatePx(density);
+  const getItemKey = useCallback((index: number) => rowIds[index] ?? index, [rowIds]);
+  const estimateSize = useCallback((index: number) => rowEstimatePx + (
+    index === expandedRowIndex ? LEAD_EXPANDED_PREVIEW_ESTIMATE_PX : 0
+  ), [rowEstimatePx, expandedRowIndex]);
   // Back to this entry: the virtualizer starts at the saved offset (runtime-08).
   const initialTableOffset = useLeadTableInitialOffset(restoreScroll);
   // TanStack Virtual returns imperative instance methods tied to the scroll
@@ -208,10 +217,8 @@ export function LeadTable({
   const rowVirtualizer = useVirtualizer({
     count: sortedLeads.length,
     enabled: shouldVirtualize,
-    estimateSize: (index) => LEAD_ROW_ESTIMATE_PX + (
-      index === expandedRowIndex ? LEAD_EXPANDED_PREVIEW_ESTIMATE_PX : 0
-    ),
-    getItemKey: (index) => sortedLeads[index]?.borrower_id ?? index,
+    estimateSize,
+    getItemKey,
     getScrollElement: () => tableWrapRef.current,
     overscan: LEAD_ROW_OVERSCAN,
     initialOffset: initialTableOffset,
@@ -628,7 +635,7 @@ export function LeadTable({
                       flow.toggleRow(row, open);
                     }}
                     onToggleSelect={(borrowerId, range) => (range
-                      ? approval.selectRange(borrowerId, sortedLeads.map((row) => row.borrower_id))
+                      ? approval.selectRange(borrowerId, rowIds)
                       : approval.toggleSelect(borrowerId))}
                     onApprove={flow.openReview}
                     onReject={flow.openReject}
