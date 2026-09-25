@@ -106,70 +106,10 @@
   background: var(--text-3);
 }
 
-/* Evidence hover micro-preview (re-audit #4 Buyer-Wow #8). Portal-rendered
-   to document.body with position:fixed coords, so it never clips inside the
-   lead table's overflow:auto. Decorative (aria-hidden); the drawer is the
-   real a11y path. */
-.evidence-hovercard {
-  position: fixed;
-  z-index: var(--z-hovercard);
-  inline-size: 15rem;
-  max-inline-size: calc(100vw - var(--sp-6));
-  transform: translateX(-50%);
-  padding: var(--sp-3);
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-md);
-  pointer-events: none; /* never intercepts the click that opens the drawer */
-  animation: evidence-hovercard-in var(--dur-fast) var(--ease);
-}
-.evidence-hovercard--above { transform: translate(-50%, -100%); }
-.evidence-hovercard__title {
-  font-size: var(--fs-12);
-  font-weight: 600;
-  color: var(--text-1);
-  margin-block-end: var(--sp-1);
-}
-.evidence-hovercard__row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  font-size: var(--fs-11);
-  color: var(--text-3);
-  margin-block-end: var(--sp-2);
-}
-.evidence-hovercard__dot {
-  inline-size: 6px;
-  block-size: 6px;
-  border-radius: 50%;
-  background: var(--text-3);
-  flex-shrink: 0;
-}
-.evidence-hovercard__signal {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--sp-2);
-  padding-block: var(--sp-1);
-  border-block-start: 1px solid var(--line-1);
-}
-.evidence-hovercard__signal-label { font-size: var(--fs-11); color: var(--text-3); }
-.evidence-hovercard__signal-value { font-size: var(--fs-12); color: var(--text-1); }
-.evidence-hovercard__cta {
-  margin-block-start: var(--sp-2);
-  font-size: var(--fs-11);
-  color: var(--accent-ink);
-}
-/* Opacity-only so the entrance never fights the placement transform
-   (translateX(-50%) for below, translate(-50%,-100%) for above). */
-@keyframes evidence-hovercard-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .evidence-hovercard { animation: none; }
-}
+/* The evidence hover card (re-audit #4 Buyer-Wow #8) lives with its hook in
+   components/EvidenceHoverCard.css (lazy, with the chunk that renders it);
+   only its freshness-dot modifiers stay here, grouped with the chip and
+   legend dots below (audit motion-10 / css-10). */
 
 /* Freshness legend — tiny inline rail used inside the evidence drawer
    header so operators learn the vocabulary without a tooltip. */

@@ -1,0 +1,105 @@
+/* ============================================================
+   EVIDENCE HOVER CARD (re-audit #4 Buyer-Wow #8; 2026-09-21 audit
+   motion-10 / css-10). Moved here from
+   design-system/components/02-chips-kpi-segments.css with its hook
+   (EvidenceHoverCard.tsx), so it ships in the lazy chunk that renders it.
+   DECLARED EXTENSION: the prototype has no hover preview. Decorative
+   (aria-hidden); the evidence drawer is the real a11y path.
+
+   CASCADE: this lazy sheet lands AFTER the design-system partials. The
+   freshness modifiers (`.evidence-hovercard__dot--fresh/aging/stale`) stay
+   grouped with the chip and legend dots in partial 02, so the dot's default
+   fill below is zero-specificity (`:where`) and can never outrank them.
+   ============================================================ */
+
+/* The card is a `popover="manual"` element in the top layer: reset the UA
+   popover box (inset, margin, overflow, colours; Toaster.css does the
+   same), then place it. */
+.evidence-hovercard {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  overflow: visible;
+  z-index: var(--z-hovercard);
+  inline-size: 15rem;
+  max-inline-size: calc(100vw - var(--sp-6));
+  padding: var(--sp-3);
+  color: var(--text-1);
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  pointer-events: none; /* never intercepts the click that opens the drawer */
+  animation: evidence-hovercard-in var(--dur-fast) var(--ease);
+  /* The exit: an opacity fade while `.is-closing` keeps it mounted
+     (hooks/useExitRetained waits for this transition's end). */
+  transition: opacity var(--dur-instant) var(--ease-exit);
+}
+.evidence-hovercard.is-closing { opacity: 0; }
+
+/* Fixed-coordinate fallback (no CSS anchor positioning): EvidenceHoverCard
+   writes left / top from the chip's rect and the card's measured height. */
+.evidence-hovercard:not([data-anchored]) { transform: translateX(-50%); }
+.evidence-hovercard--above:not([data-anchored]) { transform: translate(-50%, -100%); }
+
+/* Anchor positioning: the card sits above its chip (`position-anchor` is
+   set inline to the chip's per-instance `anchor-name`), flips below when
+   there is no room, follows the chip when its table scrolls and hides once
+   the chip is clipped out of view. */
+@supports (anchor-name: --a) {
+  .evidence-hovercard[data-anchored] {
+    position-area: block-start;
+    position-try-fallbacks: flip-block;
+    position-visibility: anchors-visible;
+    margin-block: var(--sp-2);
+  }
+}
+
+.evidence-hovercard__title {
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--text-1);
+  margin-block-end: var(--sp-1);
+}
+.evidence-hovercard__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  margin-block-end: var(--sp-2);
+}
+.evidence-hovercard__dot {
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+:where(.evidence-hovercard__dot) { background: var(--text-3); }
+.evidence-hovercard__signal {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-block: var(--sp-1);
+  border-block-start: 1px solid var(--line-1);
+}
+.evidence-hovercard__signal-label { font-size: var(--fs-11); color: var(--text-3); }
+.evidence-hovercard__signal-value { font-size: var(--fs-12); color: var(--text-1); }
+.evidence-hovercard__cta {
+  margin-block-start: var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--accent-ink);
+}
+/* Opacity-only so the entrance never fights the placement transform
+   (translateX(-50%) for below, translate(-50%,-100%) for above). */
+@keyframes evidence-hovercard-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .evidence-hovercard { animation: none; transition: none; }
+}
+@media print {
+  .evidence-hovercard { display: none; }
+}

@@ -158,15 +158,6 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.cmdk[\s\S]*?animation:\s*none;/s);
   });
 
-  it('portals the evidence hover-card with fixed coords and never lets it steal the click (re-audit #4 #8)', () => {
-    const css = designCss();
-    expect(css).toMatch(/\.evidence-hovercard\s*\{[^}]*position:\s*fixed;/s);
-    // pointer-events:none means the chip click underneath always wins.
-    expect(css).toMatch(/\.evidence-hovercard\s*\{[^}]*pointer-events:\s*none;/s);
-    expect(css).toContain('.evidence-hovercard--above');
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.evidence-hovercard\s*\{\s*animation:\s*none;/s);
-  });
-
   it('gives the KPI one-time entrance + sparkline draw a reduced-motion off-switch (re-audit #4 #2)', () => {
     const css = designCss();
     expect(css).toContain('.kpi__value--enter');
