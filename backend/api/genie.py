@@ -49,7 +49,11 @@ from backend.services.genie_client import (
     ResilientGenieClient,
     get_genie_client,
 )
-from backend.services.genie_completion_cancel import GenieCancelRequest, request_cancel
+from backend.services.genie_completion_cancel import (
+    GenieCancelRequest,
+    request_cancel,
+    require_completion_jobs,
+)
 from backend.services.genie_completion_delivery import job_status
 from backend.services.genie_completion_durations import typical_seconds_for
 from backend.services.genie_completion_jobs import (
@@ -722,8 +726,7 @@ def genie_message_cancel(
     binding_hash = str(claims.get("question_hash") or "")
     if binding_hash[:16] != payload.question_hash:
         raise HTTPException(status_code=400, detail="question does not match the submitted Genie turn")
-    if not completion_jobs_available(lakebase):
-        raise HTTPException(status_code=404, detail="Genie completion job not found")
+    require_completion_jobs(lakebase)  # 404 without the job table, 503 when Lakebase is down
     return request_cancel(lakebase, actor=actor, payload=payload, binding_hash=binding_hash)
 
 

@@ -27,6 +27,7 @@ label the submit returned, never the question.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Literal
 
 from fastapi import HTTPException
@@ -137,6 +138,20 @@ def _audit_accepted(conn: Any, *, actor: str, payload: GenieCancelRequest, prior
     )
 
 
+def require_completion_jobs(lakebase: LakebaseClient) -> None:
+    """The route's gate on the 2026_09_25 job table: a 404 when it (or a
+    column) is absent, since there is no job to cancel, and a 503 when
+    Lakebase could not answer the probe. An absence is cached; a failed probe
+    never is, so a False with no fresh cache entry behind it is an outage."""
+
+    if jobs.completion_jobs_available(lakebase):
+        return
+    probed = jobs._probe_cache_get(lakebase)
+    if probed is None or probed[0] <= time.monotonic():
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase"))
+    raise HTTPException(status_code=404, detail="Genie completion job not found")
+
+
 def request_cancel(
     lakebase: LakebaseClient,
     *,
@@ -202,4 +217,4 @@ def request_cancel(
     return GenieCancelResponse(job_id=payload.job_id, outcome=_WIRE[outcome], status=status)
 
 
-__all__ = ["GenieCancelRequest", "request_cancel"]
+__all__ = ["GenieCancelRequest", "request_cancel", "require_completion_jobs"]

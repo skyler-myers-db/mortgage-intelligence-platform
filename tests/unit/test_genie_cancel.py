@@ -24,6 +24,7 @@ from backend.services import genie_completion_runner as runner
 from backend.services.audit_metadata_policy import AuditMetadataValueViolation
 from backend.services.audit_store import build_safe_audit_metadata
 from backend.services.genie_progress import genie_question_binding_hash, genie_question_hash
+from backend.services.lakebase import LakebaseError
 from tests.fixtures.genie_job_lakebase import FakeJobLakebase
 from tests.fixtures.genie_job_turns import (
     ACTOR,
@@ -153,6 +154,37 @@ def test_without_the_job_table_there_is_no_job_to_cancel(monkeypatch: Any) -> No
 
     assert res.status_code == 404
     assert lakebase.job_statements == []
+
+
+class _ProbeDownLakebase(FakeJobLakebase):
+    """Lakebase unreachable for the table probe (never cached) until healed."""
+
+    probe_down = True
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        if sql is jobs._PROBE_SQL and self.probe_down:
+            raise LakebaseError("connection refused (fake)")
+        return super().fetchone(sql, params)
+
+
+def test_a_lakebase_outage_at_the_table_probe_is_a_503_not_a_404(monkeypatch: Any) -> None:
+    audit, lakebase = FakeAudit(), _ProbeDownLakebase()
+    install(monkeypatch, repo=FakeRepo(), audit=audit, lakebase=lakebase)
+    client = TestClient(app)
+    row = _seed(lakebase)
+
+    down = _cancel(client, row["job_id"])
+
+    assert down.status_code == 503
+    assert down.json()["detail"] == "lakebase is temporarily unavailable"
+    assert lakebase.rows[row["job_id"]]["cancel_requested_at"] is None
+    assert lakebase.audit_rows == []
+
+    lakebase.probe_down = False
+    healed = _cancel(client, row["job_id"])
+
+    assert (healed.status_code, healed.json()["outcome"]) == (200, "cancelled")
+    assert len(_cancelled_rows(lakebase)) == 1
 
 
 # ----------------------------------------------------------------- accepted
