@@ -23,7 +23,7 @@ import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useExitRetained } from '../../hooks/useExitRetained';
 import { answerCohortFromActions } from '../../lib/genieCellLinks';
 import { GOVERNED_ACTION_SOURCE } from '../../lib/genieTurnOutcome';
-import type { GenieAnswerExportBase } from './GenieAnswer.export';
+import type { GenieAnswerExportBase } from './GenieAnswer.exportTarget';
 import './GenieAnswerReading.css';
 
 export { stripQuestionRestatement } from './GenieAnswer.markdown';

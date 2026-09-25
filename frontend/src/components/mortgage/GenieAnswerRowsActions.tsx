@@ -1,11 +1,21 @@
 import { useId, useRef, useState, type ReactNode } from 'react';
 import { formatCount } from '../../lib/formatters';
+import { postGenieExportReceipt } from '../../lib/apiClients/genieExport';
 import { Icon } from '../Icon';
 import {
-  exportGenieAnswerCsv,
   GENIE_EXPORT_MAX_ROWS,
+  GENIE_EXPORT_NOT_RECORDED,
   type GenieRowsExportTarget,
-} from './GenieAnswer.export';
+} from './GenieAnswer.exportTarget';
+import type { GenieAnswerCsvRequest, GenieExportOutcome } from './GenieAnswer.export';
+
+/** The export flow is an interaction chunk, loaded on the click. Never rejects. */
+function runGenieExport(request: GenieAnswerCsvRequest): Promise<GenieExportOutcome> {
+  return import('./GenieAnswer.export').then(
+    (module) => module.exportGenieAnswerCsv(request, { post: postGenieExportReceipt }),
+    (): GenieExportOutcome => ({ kind: 'refused', message: GENIE_EXPORT_NOT_RECORDED }),
+  );
+}
 
 /**
  * The actions under every Genie rows block (audit 2026-09-21 `genie-06`,
@@ -120,7 +130,7 @@ export function GenieRowsCsvDownload({
     latchRef.current = true;
     setRecording(true);
     setStatus(null);
-    void exportGenieAnswerCsv({ rows, columns, target, reportedRowCount }).then((outcome) => {
+    void runGenieExport({ rows, columns, target, reportedRowCount }).then((outcome) => {
       latchRef.current = false;
       setRecording(false);
       setStatus(outcome.message);

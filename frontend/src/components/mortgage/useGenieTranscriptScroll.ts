@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-
-/** The user's reduced-motion preference, read at the moment of the scroll. */
-export function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
+import { prefersReducedMotion } from './genieMotion';
 
 /** How close to the end still counts as "following" (about one --fs-13 line). */
 export const GENIE_FOLLOW_SLACK_PX = 24;

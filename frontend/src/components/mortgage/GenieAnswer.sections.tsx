@@ -1,7 +1,7 @@
 import { lazy, Suspense, useId, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
-import { prefersReducedMotion } from './useGenieTranscriptScroll';
+import { prefersReducedMotion } from './genieMotion';
 import type {
   GenieAnswer as GenieAnswerShape,
   GenieAnswerSection,
@@ -32,7 +32,7 @@ import {
   heldRowsNote,
   type GenieRowsExtent,
 } from './GenieAnswerRowsActions';
-import type { GenieAnswerExportBase, GenieRowsExportTarget } from './GenieAnswer.export';
+import type { GenieAnswerExportBase, GenieRowsExportTarget } from './GenieAnswer.exportTarget';
 
 // Every row and column, loaded only when the reader asks for it (genie-06).
 const GenieAnswerAllRows = lazy(() => import('./GenieAnswerAllRows'));

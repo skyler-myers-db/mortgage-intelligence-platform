@@ -1,13 +1,27 @@
-import { ApiError } from '../../lib/apiTransport';
 import { csvEscape, downloadCsvText } from '../../lib/csv';
 import { sha256Hex } from '../../lib/apiClients/leadExport';
-import {
-  postGenieExportReceipt,
-  type GenieAnswerExportReceipt,
-  type GenieAnswerExportReceiptRequest,
-  type GenieExportScope,
+import type {
+  GenieAnswerExportReceipt,
+  GenieAnswerExportReceiptRequest,
 } from '../../lib/apiClients/genieExport';
 import { formatCell, formatIdentifier, isIdentifierColumn, isSegmentColumn } from './GenieAnswer.logic';
+import {
+  GENIE_EXPORT_BLOCKED_DOWNLOAD,
+  GENIE_EXPORT_DOWNLOADED,
+  GENIE_EXPORT_MAX_ROWS,
+  GENIE_EXPORT_NOT_IN_HISTORY,
+  GENIE_EXPORT_NOT_RECORDED,
+  type GenieRowsExportTarget,
+} from './GenieAnswer.exportTarget';
+
+export {
+  GENIE_EXPORT_BLOCKED_DOWNLOAD,
+  GENIE_EXPORT_DOWNLOADED,
+  GENIE_EXPORT_MAX_ROWS,
+  GENIE_EXPORT_NOT_IN_HISTORY,
+  GENIE_EXPORT_NOT_RECORDED,
+};
+export type { GenieAnswerExportBase, GenieRowsExportTarget } from './GenieAnswer.exportTarget';
 
 /**
  * The audited Genie answer CSV (audit 2026-09-21 `genie-06`, slice 2).
@@ -21,30 +35,10 @@ import { formatCell, formatIdentifier, isIdentifierColumn, isSegmentColumn } fro
  *   4. only then hand the same text to the download.
  * Any refusal or error means no download, with fixed copy. The flow is a
  * module-level promise that never rejects, so the component that starts it
- * needs no try statement (the React Compiler cannot compile one).
+ * needs no try statement (the React Compiler cannot compile one). This
+ * module is an interaction chunk: GenieAnswerRowsActions imports it on the
+ * click, so the answer chunk carries none of it.
  */
-
-/** Parity with the Lead Queue export cap (MAX_LEAD_LIMIT) and the server. */
-export const GENIE_EXPORT_MAX_ROWS = 5_000;
-
-export const GENIE_EXPORT_DOWNLOADED = 'CSV downloaded. The export is recorded in the audit log.';
-export const GENIE_EXPORT_NOT_IN_HISTORY = "This answer can't be exported: it is not in your Genie history.";
-export const GENIE_EXPORT_NOT_RECORDED = 'Export not recorded, so nothing was downloaded.';
-export const GENIE_EXPORT_BLOCKED_DOWNLOAD = 'The export is recorded, but the browser blocked the download.';
-
-/** Which answer, or which section of it, the rows belong to. */
-export interface GenieRowsExportTarget {
-  conversationId: string;
-  messageId: string;
-  source: string;
-  trustedAssets: readonly string[];
-  scope: GenieExportScope;
-  /** 1-based section number; null for the answer's own rows. */
-  sectionIndex: number | null;
-}
-
-/** The answer-level part of a target; each rows block adds its scope. */
-export type GenieAnswerExportBase = Omit<GenieRowsExportTarget, 'scope' | 'sectionIndex'>;
 
 export interface GenieAnswerCsvRequest {
   rows: ReadonlyArray<Record<string, unknown>>;
@@ -94,41 +88,47 @@ export function genieCsvFilename(target: GenieRowsExportTarget, generatedAt: str
   return `mip-genie-answer${part}-${day}.csv`;
 }
 
+/**
+ * The HTTP status an ApiError carries, read structurally: importing the
+ * transport (or lib/api) from this interaction chunk makes the bundler split
+ * that module out of the entry chunk and grow the initial closure.
+ */
+function httpStatus(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null || !('status' in error)) return null;
+  return typeof error.status === 'number' ? error.status : null;
+}
+
 export type GenieExportOutcome =
   | { kind: 'downloaded'; message: string; receipt: GenieAnswerExportReceipt }
   | { kind: 'refused'; message: string };
 
 export interface GenieExportDeps {
-  hash: (text: string) => Promise<string>;
+  /** The receipt POST (lib/apiClients/genieExport postGenieExportReceipt),
+   *  handed in by the caller so this interaction chunk imports no transport. */
   post: (declaration: GenieAnswerExportReceiptRequest) => Promise<GenieAnswerExportReceipt>;
-  download: (csv: string, filename: string) => void;
-  now: () => Date;
+  hash?: (text: string) => Promise<string>;
+  download?: (csv: string, filename: string) => void;
+  now?: () => Date;
 }
-
-const DEFAULT_DEPS: GenieExportDeps = {
-  hash: sha256Hex,
-  post: (declaration) => postGenieExportReceipt(declaration),
-  download: downloadCsvText,
-  now: () => new Date(),
-};
 
 /** Build, declare, wait for the receipt, then download. Never rejects. */
 export async function exportGenieAnswerCsv(
   request: GenieAnswerCsvRequest,
-  deps: GenieExportDeps = DEFAULT_DEPS,
+  deps: GenieExportDeps,
 ): Promise<GenieExportOutcome> {
+  const { post, hash = sha256Hex, download = downloadCsvText, now = () => new Date() } = deps;
   if (request.rows.length === 0 || request.rows.length > GENIE_EXPORT_MAX_ROWS) {
     return { kind: 'refused', message: GENIE_EXPORT_NOT_RECORDED };
   }
-  const generatedAt = deps.now().toISOString();
+  const generatedAt = now().toISOString();
   const csv = buildGenieAnswerCsv(request, generatedAt);
   let receipt: GenieAnswerExportReceipt;
   try {
     const [csvSha256, columnsSha256] = await Promise.all([
-      deps.hash(csv),
-      deps.hash(JSON.stringify(request.columns)),
+      hash(csv),
+      hash(JSON.stringify(request.columns)),
     ]);
-    receipt = await deps.post({
+    receipt = await post({
       conversation_id: request.target.conversationId,
       message_id: request.target.messageId,
       scope: request.target.scope,
@@ -138,11 +138,10 @@ export async function exportGenieAnswerCsv(
       columns_sha256: columnsSha256,
     });
   } catch (error) {
-    const notInHistory = error instanceof ApiError && error.status === 404;
-    return { kind: 'refused', message: notInHistory ? GENIE_EXPORT_NOT_IN_HISTORY : GENIE_EXPORT_NOT_RECORDED };
+    return { kind: 'refused', message: httpStatus(error) === 404 ? GENIE_EXPORT_NOT_IN_HISTORY : GENIE_EXPORT_NOT_RECORDED };
   }
   try {
-    deps.download(csv, genieCsvFilename(request.target, generatedAt));
+    download(csv, genieCsvFilename(request.target, generatedAt));
   } catch {
     return { kind: 'refused', message: GENIE_EXPORT_BLOCKED_DOWNLOAD };
   }

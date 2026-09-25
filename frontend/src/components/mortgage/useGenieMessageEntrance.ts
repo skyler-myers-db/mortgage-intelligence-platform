@@ -4,7 +4,7 @@ import {
   type GenieInFlightTurn,
   type GenieTurnNote,
 } from '../../lib/genieInFlightTurn';
-import { prefersReducedMotion } from './useGenieTranscriptScroll';
+import { prefersReducedMotion } from './genieMotion';
 
 /** The keyframes name in GenieAnswerReading.css. */
 export const GENIE_MESSAGE_ENTRANCE_ANIMATION = 'genie-msg-in';
