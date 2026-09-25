@@ -14,6 +14,7 @@
  */
 
 import { act, useRef } from 'react';
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +24,7 @@ import { clearGenieTurns } from '../../lib/genieConversationStore';
 import { __resetGenieTurnStoreForTests } from '../../lib/genieInFlightTurn';
 import { getGenieTurnStatus } from '../../lib/genieTurnStatus';
 import { __resetGenieAnnouncerForTests } from './useGenieAnnouncer';
+import { createMipQueryClient } from '../../lib/queryClient';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 
@@ -68,6 +70,14 @@ vi.mock('../AppContext', () => ({
 import { GenieChat } from './GenieChat';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+/** GenieChat reads `/api/genie/start` through the shared query (runtime-06):
+ *  one client per test, retries off. */
+function testQueryClient(): QueryClient {
+  const client = createMipQueryClient();
+  client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } });
+  return client;
+}
 
 const START: GenieStartResult = {
   conversation_id: null,
@@ -159,6 +169,7 @@ function DrawerLayer({ open, onClose }: { open: boolean; onClose: () => void }) 
 describe('floating Genie survivability', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let queryClient: QueryClient;
   let drawerOpen = false;
   // The topbar's Genie toggle (the launcher rendered at every width).
   let topbarToggle = true;
@@ -173,6 +184,7 @@ describe('floating Genie survivability', () => {
     drawerOpen = false;
     topbarToggle = true;
     installLocalStorage();
+    queryClient = testQueryClient();
     clearGenieTurns();
     mocks.genieStart.mockResolvedValue(START);
     mocks.genieFeedback.mockResolvedValue({ accepted: true });
@@ -201,6 +213,7 @@ describe('floating Genie survivability', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    queryClient.clear();
     // The turn lives in a module-level store that outlives the panel.
     __resetGenieTurnStoreForTests();
     __resetGenieAnnouncerForTests();
@@ -210,6 +223,7 @@ describe('floating Genie survivability', () => {
   function render() {
     act(() => {
       root.render(
+        <QueryClientProvider client={queryClient}>
         <MemoryRouter>
           <button type="button" id="page-control">Page control</button>
           {topbarToggle && (
@@ -219,7 +233,8 @@ describe('floating Genie survivability', () => {
           )}
           <GenieChat />
           <DrawerLayer open={drawerOpen} onClose={closeDrawer} />
-        </MemoryRouter>,
+        </MemoryRouter>
+        </QueryClientProvider>,
       );
     });
   }

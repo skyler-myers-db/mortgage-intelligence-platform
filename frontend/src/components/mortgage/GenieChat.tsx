@@ -8,9 +8,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
-import { api } from '../../lib/api';
+import { genieStartQueryOptions } from '../../lib/genieStartQuery';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Button } from '../Primitives';
@@ -103,6 +104,7 @@ export {
  */
 
 const COMPOSER_BUSY_HINT_ID = 'genie-composer-busy';
+const NO_STARTERS: string[] = [];
 const ACTION_REASON = 'A governed action is running. Ask unlocks when it finishes.';
 
 export function GenieChat() {
@@ -141,29 +143,27 @@ export function GenieChat() {
     resumeGenieTurnFromSession();
   }, []);
 
-  const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const bodyRef = useRef<HTMLDivElement>(null);
   const suppressBootstrapConversationRef = useRef(false);
 
+  // The starters and a bootstrap conversation come from `/api/genie/start`,
+  // shared with /ask-genie through one query (audit `runtime-06`): opening
+  // the panel after the route read it sends nothing. The panel mounts on its
+  // first open, so a never-opened panel sends nothing either. A failed read
+  // leaves no starters; asking starts a fresh Genie conversation.
+  const genieStart = useQuery(genieStartQueryOptions());
+  const startData = genieStart.data;
+  const sampleQuestions = Array.isArray(startData?.sample_questions) ? startData.sample_questions : NO_STARTERS;
   useEffect(() => {
-    const controller = new AbortController();
-    api.genieStart(controller.signal)
-      .then((result) => {
-        setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
-        const startConversationId = result.conversation_id;
-        if (!startConversationId || suppressBootstrapConversationRef.current) return;
-        setConversationId((current) => {
-          if (current) return current;
-          writeGenieConversationId(startConversationId);
-          return startConversationId;
-        });
-      })
-      .catch(() => {
-        // Asking a question will start a fresh Databricks Genie conversation.
-      });
-    return () => controller.abort();
-  }, []);
+    const startConversationId = startData?.conversation_id;
+    if (!startConversationId || suppressBootstrapConversationRef.current) return;
+    setConversationId((current) => {
+      if (current) return current;
+      writeGenieConversationId(startConversationId);
+      return startConversationId;
+    });
+  }, [startData]);
 
   useEffect(() => {
     // The turn store aborts the turn and clears its notes and announcement on

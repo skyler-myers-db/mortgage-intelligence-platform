@@ -9,6 +9,7 @@
  */
 
 import { act } from 'react';
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +17,7 @@ import type { GenieLiveProgress, GenieSubmitResult } from '../../lib/api';
 import { appendGenieTurn, clearGenieTurns } from '../../lib/genieConversationStore';
 import { __resetGenieTurnStoreForTests } from '../../lib/genieInFlightTurn';
 import { __resetGenieAnnouncerForTests } from './useGenieAnnouncer';
+import { createMipQueryClient } from '../../lib/queryClient';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 
 const mocks = vi.hoisted(() => ({
@@ -105,6 +107,25 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+/** GenieChat reads `/api/genie/start` through the shared query (runtime-06):
+ *  one client per test, retries off. */
+function testQueryClient(): QueryClient {
+  const client = createMipQueryClient();
+  client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } });
+  return client;
+}
+
+let queryClient: QueryClient;
+
+/** The panel under test, inside the per-test query client. */
+function ChatUnderTest() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <GenieChat />
+    </QueryClientProvider>
+  );
+}
+
 describe('floating Genie panel respects the reader (genie-08)', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -114,6 +135,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     scrollIntoView.mockReset();
     clearGenieTurns();
+    queryClient = testQueryClient();
     mocks.genieStart.mockResolvedValue(START);
     mocks.genieFeedback.mockResolvedValue({ accepted: true });
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
@@ -136,6 +158,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    queryClient.clear();
     __resetGenieTurnStoreForTests();
     __resetGenieAnnouncerForTests();
     clearGenieTurns();
@@ -155,7 +178,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     act(() => {
       root.render(
         <MemoryRouter>
-          <GenieChat />
+          <ChatUnderTest />
         </MemoryRouter>,
       );
     });
@@ -274,7 +297,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     act(() => {
       root.render(
         <MemoryRouter>
-          <GenieChat />
+          <ChatUnderTest />
         </MemoryRouter>,
       );
     });
@@ -299,7 +322,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     act(() => {
       root.render(
         <MemoryRouter>
-          <GenieChat />
+          <ChatUnderTest />
         </MemoryRouter>,
       );
     });
@@ -332,7 +355,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     act(() => {
       root.render(
         <MemoryRouter>
-          <GenieChat />
+          <ChatUnderTest />
         </MemoryRouter>,
       );
     });
@@ -394,7 +417,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     act(() => {
       root.render(
         <MemoryRouter>
-          <GenieChat />
+          <ChatUnderTest />
         </MemoryRouter>,
       );
     });

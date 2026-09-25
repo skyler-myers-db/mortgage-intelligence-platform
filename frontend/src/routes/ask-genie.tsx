@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import { api } from '../lib/api';
 import type {
   GenieActionSuggestion,
   GenieAnswer as GenieAnswerShape,
@@ -31,7 +30,7 @@ import {
   startGenieTurn,
   subscribeGenieTurnSettled,
 } from '../lib/genieInFlightTurn';
-import { queryKeys } from '../lib/queryKeys';
+import { genieStartQueryOptions } from '../lib/genieStartQuery';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 import { GrowthAgentMonitorsPanel } from './ask-genie.growth-agent-monitors';
 import { GrowthAgentPanel } from './ask-genie.growth-agent-panel';
@@ -86,12 +85,8 @@ export default function AskGenie() {
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const growthAgent = useGrowthAgentWorkspace();
 
-  const genieStartQuery = useQuery({
-    queryKey: queryKeys.genieStart(),
-    queryFn: ({ signal }) => api.genieStart(signal),
-    staleTime: 5 * 60_000,
-    refetchOnWindowFocus: false,
-  });
+  // Shared with the floating panel (lib/genieStartQuery, audit `runtime-06`).
+  const genieStartQuery = useQuery(genieStartQueryOptions());
 
   useEffect(() => {
     const result = genieStartQuery.data;
