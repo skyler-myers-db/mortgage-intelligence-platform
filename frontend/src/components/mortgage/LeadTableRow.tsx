@@ -53,11 +53,16 @@ interface LeadTableRowProps {
   /** The approve review, when it is open inline for this (expanded) row. */
   reviewSlot?: ReactNode;
   onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
-  onToggleSelect: (borrowerId: string) => void;
+  /** `range`: Shift was held (audit tables-07): select from the anchor to this row. */
+  onToggleSelect: (borrowerId: string, range: boolean) => void;
   onApprove: (borrowerId: string) => void;
   onReject: (borrowerId: string) => void;
   onOpenDisposition: (borrowerId: string) => void;
   onAssignmentUpdate: (borrowerId: string, update: Partial<LeadSummary>) => void;
+}
+
+function ignoreChange(): void {
+  // The row checkbox toggles in onClick (see the select cell).
 }
 
 const SEGMENT_SOURCE = {
@@ -126,8 +131,14 @@ export function LeadTableRow({
           aria-label={`Select lead ${lead.borrower_id}`}
           checked={isSelected}
           disabled={!isSelectable || bulkApproving}
-          onChange={() => onToggleSelect(lead.borrower_id)}
-          onClick={stop}
+          // The toggle runs on click, where Shift is readable (a Shift-click
+          // selects a range); Space on the focused box dispatches the same
+          // click. onChange stays for React's controlled-input contract.
+          onChange={ignoreChange}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleSelect(lead.borrower_id, event.shiftKey);
+          }}
           aria-keyshortcuts={rowKeys ? 'X' : undefined}
           data-testid={`lead-select-${lead.borrower_id}`}
         />

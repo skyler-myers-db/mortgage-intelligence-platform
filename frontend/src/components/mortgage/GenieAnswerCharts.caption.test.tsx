@@ -115,13 +115,13 @@ describe('chart captions', () => {
     act(() => root.render(<GenieRowsVisual rows={answerRows} plan={plan} />));
 
     const shownTableRows = container.querySelectorAll('.genie-answer__table tbody tr').length;
-    const more = Array.from(container.querySelectorAll('.genie-answer__more'))
-      .map((el) => el.textContent ?? '')
-      .find((text) => text.startsWith('+'));
-    expect(more).toBe('+20 more rows');
-    const hiddenTableRows = Number(/^\+(\d+)/.exec(more ?? '')?.[1]);
-    // The caption's table count is the table's own: shown + "+N more".
-    expect(caption()).toContain(`the table below shows ${shownTableRows} of ${shownTableRows + hiddenTableRows} rows`);
+    // The inert "+20 more rows" became the control that shows them (genie-06
+    // slice 2); its label carries the answer's full row count.
+    const showAll = container.querySelector('button.genie-answer__show-all')?.textContent;
+    expect(showAll).toBe('Show all 30 rows');
+    const allRows = Number(/(\d+) rows/.exec(showAll ?? '')?.[1]);
+    // The caption's table count is the table's own: shown of all.
+    expect(caption()).toContain(`the table below shows ${shownTableRows} of ${allRows} rows`);
     expect(caption()).toBe(
       `Chart shows the first ${MAX_BAR_POINTS} of 28 charted rows (2 rows have no value to chart); the table below shows ${MAX_TABLE_ROWS} of 30 rows.`,
     );

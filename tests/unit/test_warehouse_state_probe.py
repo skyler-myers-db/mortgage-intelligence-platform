@@ -189,6 +189,25 @@ def test_legacy_boolean_probes_still_normalise(monkeypatch: pytest.MonkeyPatch) 
     assert (status, deps["warehouse"]) == ("degraded", "down")
 
 
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (True, True),
+        ("up", True),
+        (False, False),
+        ("down", False),
+        ("resuming", False),
+        (None, False),
+        ("UP", False),
+        (1, False),
+    ],
+)
+def test_cached_probe_is_up_only_for_true_or_the_up_state(result: Any, expected: bool) -> None:
+    """A state-returning probe's "down" must not read as up through truthiness."""
+
+    assert health_probes.cached_probe(f"fixture-{result!r}", lambda: result) is expected
+
+
 def test_anonymous_health_stays_status_and_mode_and_runs_no_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     def forbidden() -> bool:
         raise AssertionError("anonymous liveness must not probe a billable dependency")

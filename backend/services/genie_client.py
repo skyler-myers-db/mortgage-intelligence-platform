@@ -137,11 +137,11 @@ class GenieClient:
     returns under ~3s.
     """
 
-    # Conservative poll schedule: starts fast (so a warm Genie returns
-    # snappily) and grows slowly (so a cold-start Genie doesn't get
-    # hammered). Values tuned against the Slice-7 scope -- single
-    # interactive questions; not a bulk workload.
-    _POLL_INITIAL_S: float = 0.5
+    # Conservative poll schedule: starts at the floor of Databricks' documented
+    # 1-5 s Conversation API guidance and grows slowly (so a cold-start Genie
+    # doesn't get hammered). The start was 0.5 s, below that guidance (audit
+    # 2026-09-21 delivery-04); 1.0 s costs a warm single turn at most 0.5 s.
+    _POLL_INITIAL_S: float = 1.0
     _POLL_MAX_S: float = 2.0
     _POLL_BACKOFF: float = 1.35
     # Single-GET budget for the live-progress peek; a hung peek must not

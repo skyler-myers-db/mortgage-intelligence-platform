@@ -8,8 +8,18 @@
  * row, and its correlation id to every row of the same request. A masked
  * borrower entity (`B-` + 13) links to its Borrower 360 on click only (that
  * read writes its own VIEW_BORROWER row, so nothing here prefetches it).
+ *
+ * wow-stage-3: an EXPANDED decision row (the event types / actions the
+ * receipt endpoint answers, isDecisionReceiptEvent) also reads its Decision
+ * receipt back, compact and without the explorer link it would point at
+ * itself. The receipt module (its existing shared chunk) loads on the first
+ * expanded row, a static chunk and no read; the row asks that module whether
+ * it is a decision, so the explorer imports nothing of it up front (a static
+ * import would split the Lead Queue's shared chunk). GET /api/audit/receipt
+ * writes no audit row, and a collapsed or non-decision row makes no receipt
+ * request at all. The explorer itself stays admin-gated (app.tsx).
  */
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
@@ -18,6 +28,31 @@ import { auditCorrelationHref, auditEventHref } from '../../lib/auditLinks';
 import { borrower360Path, isMaskedBorrowerId } from '../../lib/genieCellLinks';
 import { formatTimestamp } from '../../lib/time';
 import { auditEventCode, auditEventLabel } from './AdminAuditExplorer.labels';
+
+type ReceiptModule = typeof import('../mortgage/DecisionReceipt');
+let loadedReceiptModule: ReceiptModule | null = null;
+// Module scope: the React Compiler cannot lower an import() inside a hook.
+const loadReceiptModule = (): Promise<ReceiptModule> => import('../mortgage/DecisionReceipt');
+
+/** The Decision receipt module once `wanted`; null while it loads or if it cannot. */
+function useReceiptModule(wanted: boolean): ReceiptModule | null {
+  const [module, setModule] = useState<ReceiptModule | null>(loadedReceiptModule);
+  useEffect(() => {
+    if (!wanted || module) return undefined;
+    let live = true;
+    loadReceiptModule().then(
+      (loaded) => {
+        loadedReceiptModule = loaded;
+        if (live) setModule(loaded);
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [wanted, module]);
+  return module;
+}
 
 export const AUDIT_TABLE_CONTEXT = 'mip_app.action_audit';
 
@@ -78,6 +113,8 @@ export function AuditEventTableRow({
   const evidenceIds = event.evidence_ids ?? [];
   const label = auditEventLabel(event);
   const code = auditEventCode(event);
+  const receiptModule = useReceiptModule(expanded);
+  const Receipt = receiptModule?.isDecisionReceiptEvent(event) ? receiptModule.DecisionReceipt : null;
 
   return (
     <Fragment>
@@ -183,6 +220,12 @@ export function AuditEventTableRow({
                 <AuditDetailValue label="Masked subject reference" value={event.subject_clip} />
                 <AuditDetailValue label="Subject segment" value={event.subject_segment} />
               </div>
+
+              {Receipt && (
+                <div className="mt-3" data-testid="audit-explorer-receipt">
+                  <Receipt auditEventId={event.event_id} compact explorerLink={false} />
+                </div>
+              )}
 
               <div className="mt-3">
                 <div className="field__label">EVIDENCE IDS</div>

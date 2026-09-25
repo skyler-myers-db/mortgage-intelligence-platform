@@ -13,6 +13,7 @@ import {
   chordKeycaps,
   hasOpenModal,
   hasOpenOverlay,
+  isEditableElement,
   isModifierChord,
   keyBindingsVersion,
   listKeyBindings,
@@ -143,6 +144,38 @@ describe('registry dispatch', () => {
 
     expect(letter).not.toHaveBeenCalled();
     expect(palette).toHaveBeenCalledOnce();
+  });
+
+  // Wave-3 review #9: a focused row checkbox (or radio) takes no typing, so
+  // it must not switch the table's J / K / X / Enter off. Text fields,
+  // select, textarea, contenteditable and range inputs still do.
+  it('a focused checkbox or radio is not an editable target; typing fields and range still are', () => {
+    const next = vi.fn();
+    register({ id: 'j', scope: 'lead-queue', keys: ['j'], description: 'next', run: next });
+    for (const type of ['checkbox', 'radio']) {
+      const box = document.createElement('input');
+      box.type = type;
+      document.body.appendChild(box);
+      box.focus();
+      press(box, { key: 'j' });
+    }
+    expect(next).toHaveBeenCalledTimes(2);
+    expect(isEditableElement(Object.assign(document.createElement('input'), { type: 'checkbox' }))).toBe(false);
+
+    for (const make of [
+      () => document.createElement('input'),
+      () => Object.assign(document.createElement('input'), { type: 'range' }),
+      () => Object.assign(document.createElement('input'), { type: 'search' }),
+      () => document.createElement('textarea'),
+      () => document.createElement('select'),
+    ]) {
+      const field = make();
+      document.body.appendChild(field);
+      field.focus();
+      press(field, { key: 'j' });
+      expect(isEditableElement(field), field.outerHTML).toBe(true);
+    }
+    expect(next).toHaveBeenCalledTimes(2);
   });
 
   it('skips an event another handler already consumed', () => {

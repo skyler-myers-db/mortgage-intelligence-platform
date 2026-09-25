@@ -145,11 +145,13 @@ export interface GenieStartResult {
 }
 
 /** One row of `GET /api/genie/sessions` — a past conversation the actor can
- *  reopen from the Genie panel's History menu. */
+ *  reopen from the Genie panel's History menu. Wire-exact (audit quality-04):
+ *  backend GenieSessionSummary serializes every field, and last_activity_at
+ *  is `str | None`, so a session with no recorded activity arrives as null. */
 export interface GenieSessionSummary {
   conversation_id: string;
   title: string;
-  last_activity_at: string;
+  last_activity_at: string | null;
   turn_count: number;
 }
 

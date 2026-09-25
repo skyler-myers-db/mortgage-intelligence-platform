@@ -688,16 +688,36 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
   it('never approves from an editable element', async () => {
     mount();
     expandViaBorrowerButton();
-    const checkbox = container.querySelector<HTMLInputElement>(
-      'input[type="checkbox"]',
-    );
-    if (!checkbox) throw new Error('row checkbox not rendered');
-    checkbox.focus();
+    // A text field inside the table region (the row checkbox is no longer
+    // an editable target, wave-3 review #9): typing "a" must never act.
+    const cell = container.querySelector('.tbl__expand td');
+    if (!cell) throw new Error('expanded row not rendered');
+    const field = document.createElement('input');
+    field.type = 'text';
+    cell.appendChild(field);
+    field.focus();
 
-    pressKey(checkbox, 'a');
+    pressKey(field, 'a');
     await flush();
 
     expect(draftOutreach).not.toHaveBeenCalled();
     expect(approve).not.toHaveBeenCalled();
+  });
+
+  // Wave-3 review #9: a focused row checkbox takes no typing, so J / K / X
+  // / Enter act from it (they used to be switched off there).
+  it('J and X act from a focused row checkbox', () => {
+    mount('/lead-queue', null, [lead('B-AAAAAAAAAAAA1'), lead('B-AAAAAAAAAAAA2')]);
+    const checkbox = container.querySelector<HTMLInputElement>('[data-testid="lead-select-B-AAAAAAAAAAAA1"]');
+    if (!checkbox) throw new Error('row checkbox not rendered');
+    checkbox.focus();
+
+    pressKey(checkbox, 'j');
+    expect(container.querySelector('tr.is-cursor')?.getAttribute('data-borrower-row')).toBe('B-AAAAAAAAAAAA1');
+    pressKey(document.activeElement ?? checkbox, 'j');
+    expect(container.querySelector('tr.is-cursor')?.getAttribute('data-borrower-row')).toBe('B-AAAAAAAAAAAA2');
+    pressKey(document.activeElement ?? checkbox, 'x');
+    expect(container.querySelector<HTMLInputElement>('[data-testid="lead-select-B-AAAAAAAAAAAA2"]')?.checked).toBe(true);
+    expect(draftOutreach).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type CSSProperties, type ReactElement, type
 import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate, useLocation, useParams } from 'react-router';
 import { api, ApiError } from '../lib/api';
-import type { Borrower360 as Borrower360Type } from '../types';
+import type { Borrower360 as Borrower360Type, ProofScoreComponentKey } from '../types';
 import { currency, rangeLabel, ratePct, ratePctFromFraction, signedBpsLabel } from '../lib/formatters';
 import { formatDateTimeShort } from '../lib/time';
 import { PageShell } from '../components/layout/PageShell';
@@ -11,7 +11,9 @@ import { BorrowerStoryCard } from '../components/mortgage/BorrowerStoryCard';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
-import { BorrowerProofDrawer } from '../components/mortgage/BorrowerProofDrawer';
+import { ScoreAnatomyGate } from '../components/mortgage/ScoreAnatomyGate';
+import { SCORE_ANATOMY_COPY } from '../components/mortgage/scoreAnatomy.copy';
+import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { DecisionReceipt } from '../components/mortgage/DecisionReceipt';
 import { decisionOutcomeForStatus } from '../components/mortgage/DecisionReceipt.copy';
 import { TopLeadsQuickPick } from '../components/mortgage/TopLeadsQuickPick';
@@ -31,6 +33,12 @@ import { useApp } from '../components/AppContext';
 import { LtvEquityValue } from './borrower-360.ltv-field';
 import { BorrowerQueuePager } from './borrower-360.pager';
 import { useQueueContext } from '../lib/queueContext';
+
+// The proof drawer ships in the lazy Score anatomy chunk (wow-stage-2): the
+// dossier's natural load does not carry it. It is mounted (closed) on the
+// first hover / focus / click of an opener, so the open still slides in;
+// opening it is the audited VIEW_BORROWER_PROOF read, loading the chunk is not.
+const PROOF_DRAWER_CHUNK = lazyModule(() => import('../components/mortgage/ScoreAnatomy'));
 
 /**
  * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
@@ -69,6 +77,16 @@ export default function Borrower360() {
   const queue = useQueueContext(location.state, id ?? null);
   const pager = id ? <BorrowerQueuePager borrowerId={id} queue={queue} /> : null;
   const [proofOpen, setProofOpen] = useState(false);
+  // A Score anatomy segment opens the same drawer on that component's card.
+  const [proofFocus, setProofFocus] = useState<ProofScoreComponentKey | null>(null);
+  const [proofDrawerWanted, setProofDrawerWanted] = useState(false);
+  const proofDrawer = useLazyModule(PROOF_DRAWER_CHUNK, proofDrawerWanted);
+  const ProofDrawer = proofDrawer.module?.BorrowerProofDrawer;
+  const openProof = (focus: ProofScoreComponentKey | null) => {
+    setProofDrawerWanted(true);
+    setProofFocus(focus);
+    setProofOpen(true);
+  };
 
   useEffect(() => {
     if (id) setLastBorrowerId(id);
@@ -576,6 +594,17 @@ export default function Borrower360() {
               </div>
               <p className="body mt-2">{offerDescription}</p>
               <p className="muted fs-12 mt-1">{offerRationale(b.recommended_offer_code, b.why_now)}</p>
+              {/* wow-stage-2: the spine sits in the Primary offer card, the
+                  dossier's one proof entry since flow-09, not in the hero
+                  (ScoreBadge, ConfidenceMeter, two chips and Latest decision
+                  already fill it at 1440). A disclosure, not a drawer opener:
+                  the /proof read (an audited VIEW_BORROWER_PROOF) waits for a
+                  click, or renders from a cache "Show math" already filled. */}
+              <ScoreAnatomyGate
+                borrowerId={b.borrower_id}
+                variant="spine"
+                onOpenComponent={openProof}
+              />
               <div className="chip-row mt-3">
                 <Link
                   className="btn btn--primary"
@@ -598,11 +627,16 @@ export default function Borrower360() {
                 <Button
                   variant="ghost"
                   icon="audit"
-                  onClick={() => setProofOpen(true)}
+                  onPointerEnter={() => setProofDrawerWanted(true)}
+                  onFocus={() => setProofDrawerWanted(true)}
+                  onClick={() => openProof(null)}
                   aria-label={`Show scoring math for borrower ${b.borrower_id}`}
                 >
                   Show math
                 </Button>
+                {proofDrawer.failed && (
+                  <span className="muted fs-12" role="status">{SCORE_ANATOMY_COPY.proofChunkFailed}</span>
+                )}
               </div>
             </div>
           </div>
@@ -623,11 +657,14 @@ export default function Borrower360() {
           </div>
         </div>
       </div>
-      <BorrowerProofDrawer
-        borrowerId={b.borrower_id}
-        open={proofOpen}
-        onClose={() => setProofOpen(false)}
-      />
+      {ProofDrawer && (
+        <ProofDrawer
+          borrowerId={b.borrower_id}
+          open={proofOpen}
+          focusComponent={proofFocus}
+          onClose={() => setProofOpen(false)}
+        />
+      )}
     </PageShell>
   );
 }

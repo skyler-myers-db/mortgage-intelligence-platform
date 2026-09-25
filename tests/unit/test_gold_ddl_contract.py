@@ -47,6 +47,8 @@ GOLD_DDL_FILES: tuple[str, ...] = (
     "gold_equity_spread_points.sql",
     # dataviz-08: why-now rate window (weekly market rate vs. the current book).
     "gold_rate_window_weekly.sql",
+    # wow-stage-1: the Rate Lever's per-state par-rate scenario grid.
+    "gold_rate_sensitivity_rollup.sql",
 )
 
 GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
@@ -63,6 +65,7 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
     "gold_source_readiness.sql",
     "gold_equity_spread_points.sql",
     "gold_rate_window_weekly.sql",
+    "gold_rate_sensitivity_rollup.sql",
 )
 
 # Target UC paths. The manifest (003_gold_tables.sql) must reference each.
@@ -85,6 +88,7 @@ GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.source_readiness",
     "mip.gold.equity_spread_points",
     "mip.gold.rate_window_weekly",
+    "mip.gold.rate_sensitivity_rollup",
 )
 
 FORBIDDEN_PII_COLUMNS: tuple[str, ...] = (
@@ -369,6 +373,7 @@ _TIMESTAMP_SHARED_CTAS_FILES: tuple[str, ...] = (
     "gold_zip_rollup.sql",
     "gold_source_readiness.sql",
     "gold_rate_window_weekly.sql",
+    "gold_rate_sensitivity_rollup.sql",
 )
 
 

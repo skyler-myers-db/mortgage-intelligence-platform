@@ -63,7 +63,8 @@ function lead(borrowerId: string): LeadSummary {
   } as unknown as LeadSummary;
 }
 const LEADS = IDS.map(lead);
-const LEADS_BY_ID = new Map(LEADS.map((row) => [row.borrower_id, row]));
+/** The rows the harness renders; a test may swap them to model a refetch. */
+let harnessLeads: LeadSummary[] = LEADS;
 
 function draft(generationId: string): OutreachDraftResult {
   return {
@@ -84,8 +85,8 @@ const setApprovalError = vi.fn();
 function Harness({ client }: { client: QueryClient }) {
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   const current = useLeadApprovalActions({
-    displayLeads: LEADS,
-    leadsById: LEADS_BY_ID,
+    displayLeads: harnessLeads,
+    leadsById: new Map(harnessLeads.map((row) => [row.borrower_id, row])),
     approvals: {},
     setApproval,
     queryClient: client,
@@ -100,6 +101,14 @@ function Harness({ client }: { client: QueryClient }) {
     actions = current;
   });
   return <div ref={tableWrapRef} />;
+}
+
+/** How many times the leads cache was invalidated (invalidateOperationalQueries marks 8 roots). */
+function leadInvalidations(spy: { mock: { calls: unknown[][] } }): number {
+  return spy.mock.calls.filter((call) => {
+    const key = (call[0] as { queryKey?: readonly unknown[] } | undefined)?.queryKey;
+    return key?.[0] === 'mip' && key?.[1] === 'leads';
+  }).length;
 }
 
 function requestIdOf(call: unknown[]): string {
@@ -134,6 +143,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     container.remove();
     client.clear();
     actions = null;
+    harnessLeads = LEADS;
   });
 
   function mount() {
@@ -226,7 +236,99 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     const bodies = apiMocks.approve.mock.calls.map((call) => call[1] as { bulk_id: string; request_id: string });
     expect(new Set(bodies.map((body) => body.bulk_id)).size).toBe(1);
     expect(new Set(bodies.map((body) => body.request_id)).size).toBe(IDS.length);
-    expect(actions!.bulkToast).toEqual({ ok: 7, fail: 0, network: 0, aborted: 0 });
+    // A finished run reports through the run's result; the static toast is
+    // only the unmount stash (R5-21).
+    expect(actions!.bulkRun.result).toMatchObject({ ok: 7, failed: [], skipped: [], notStarted: [], stopped: false });
+    expect(actions!.bulkToast).toBeNull();
+    expect(actions!.selectionCount).toBe(0);
+  });
+
+  it('Stop after this batch: exactly one batch is sent, nothing is aborted, the rest stay selected and undrafted', async () => {
+    const held: Array<() => void> = [];
+    const signals: AbortSignal[] = [];
+    apiMocks.approve.mockImplementation((_id: string, _body: unknown, signal?: AbortSignal) => {
+      if (signal) signals.push(signal);
+      return new Promise((resolve) => {
+        held.push(() => resolve({ approved: true, audit_event_id: 'audit-bulk' }));
+      });
+    });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    mount();
+    act(() => actions!.toggleSelectAll());
+    act(() => actions!.setBulkRationale('Q3 refinance push'));
+    let run: Promise<void> = Promise.resolve();
+    await act(async () => {
+      run = actions!.bulkApprove();
+    });
+    await flush();
+    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
+    expect(actions!.bulkRun.progress).toMatchObject({ total: 7, settled: 0 });
+
+    act(() => actions!.bulkRun.requestStop());
+    await act(async () => {
+      held.splice(0).forEach((release) => release());
+      await run;
+    });
+    await flush();
+
+    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
+    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(3);
+    expect(signals.every((signal) => !signal.aborted)).toBe(true);
+    expect(actions!.bulkRun.result?.notStarted).toEqual(IDS.slice(3));
+    expect([...actions!.selectedIds].sort()).toEqual(IDS.slice(3));
+    // One invalidation for the whole run, not one per row.
+    expect(leadInvalidations(invalidate)).toBe(1);
+  });
+
+  it('a failed approve is listed with its reason and stays selected', async () => {
+    apiMocks.approve.mockImplementation((borrowerId: string) => (borrowerId === IDS[4]
+      ? Promise.reject(new ApiError('Draft proof is stale.', { path: '/api/outreach/approve', status: 500 }))
+      : Promise.resolve({ approved: true, audit_event_id: 'audit-bulk' })));
+    mount();
+    act(() => actions!.toggleSelectAll());
+    act(() => actions!.setBulkRationale('Q3 refinance push'));
+    await act(async () => {
+      await actions!.bulkApprove();
+    });
+
+    expect(actions!.bulkRun.result?.failed).toEqual([
+      { borrowerId: IDS[4], outcome: 'backend', message: 'Draft proof is stale.' },
+    ]);
+    expect([...actions!.selectedIds]).toEqual([IDS[4]]);
+    // Bulk rows report in the run's result, not the table's single alert.
+    expect(setApprovalError).not.toHaveBeenCalledWith(expect.stringContaining("Couldn't approve"));
+  });
+
+  it('certifies the evidence and offer each row had when the run started, not a refetch mid-run', async () => {
+    const held: Array<() => void> = [];
+    apiMocks.approve.mockImplementation(() => new Promise((resolve) => {
+      held.push(() => resolve({ approved: true, audit_event_id: 'audit-bulk' }));
+    }));
+    mount();
+    act(() => actions!.toggleSelectAll());
+    act(() => actions!.setBulkRationale('Q3 refinance push'));
+    let run: Promise<void> = Promise.resolve();
+    await act(async () => {
+      run = actions!.bulkApprove();
+    });
+    await flush();
+    // A refetch lands mid-run with different evidence for a row not sent yet.
+    harnessLeads = LEADS.map((row) => (row.borrower_id === IDS[5]
+      ? { ...row, evidence_ids: ['ev-refetched'], recommended_offer_code: 'heloc' } as LeadSummary
+      : row));
+    mount();
+    for (let batch = 0; batch < 3; batch += 1) {
+      await act(async () => {
+        held.splice(0).forEach((release) => release());
+      });
+      await flush();
+    }
+    await act(async () => {
+      await run;
+    });
+
+    const body = apiMocks.approve.mock.calls.find((call) => call[0] === IDS[5])?.[1] as { evidence_ids: string[] };
+    expect(body.evidence_ids).toEqual(['ev-1']);
   });
 
   it('stashes an unmount-aborted run, never re-selects it, and flashes it once on the next mount', async () => {
@@ -259,6 +361,25 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     // Aborted rows are audit-ambiguous: nothing is re-selected for a retry.
     expect(actions!.selectionCount).toBe(0);
     expect(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled')).toBeNull();
+  });
+
+  it('clears a flashed run with nothing aborted after 4 s, and keeps an aborted one until it is resolved', () => {
+    vi.useFakeTimers();
+    try {
+      window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 3, aborted: 0, ts: Date.now() }));
+      mount();
+      expect(actions!.bulkToast).toEqual({ ok: 3, fail: 0, network: 0, aborted: 0 });
+      act(() => vi.advanceTimersByTime(4000));
+      expect(actions!.bulkToast, 'nothing is ambiguous: no dismiss control needed').toBeNull();
+
+      // Aborted rows may have committed: that flash waits for Recent activity.
+      window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 1, aborted: 2, ts: Date.now() }));
+      remount();
+      act(() => vi.advanceTimersByTime(60_000));
+      expect(actions!.bulkToast).toEqual({ ok: 1, fail: 0, network: 0, aborted: 2 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sends one reject POST for a double submit and replays its request_id after a failure', async () => {

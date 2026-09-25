@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate, useSearchParams, type NavigateOptions } from 'react-router';
+import '../components/ui/LayoutTabs.css';
 
 /**
  * Page tabs for `/ask-genie` (audit 2026-09-21 `visual-07` / `genie-09`):

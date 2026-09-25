@@ -399,6 +399,10 @@ type GenieTurnRequest = { question?: string; conversation_id?: string | null };
  *    resolve deterministically (guardrail refusal, sales-ops, footprint,
  *    degraded fallback), which never reach `/complete` and instead return
  *    `{completed: true, response}` on `/submit` itself.
+ *  - when the server runs completion jobs (audit 2026-09-21 `genie-01`),
+ *    `/message/complete` answers 202 with the job's status and the answer
+ *    arrives on the `/message/status` poll whose job `status` is terminal,
+ *    as `{kind: 'genie_completion_job', status: 'succeeded', response}`.
  *
  * Accept whichever terminal call the turn actually makes and hand back the
  * unwrapped GenieMessageResponse, so callers assert on one payload shape.
@@ -409,6 +413,8 @@ async function captureGenieTurn(
   timeout = 120_000,
 ): Promise<{ request: GenieTurnRequest; payload: LiveGeniePayload }> {
   const isSubmit = (url: string) => /\/api\/(?:v1\/)?genie\/message\/submit$/.test(url);
+  const isComplete = (url: string) => /\/api\/(?:v1\/)?genie\/message\/complete$/.test(url);
+  const isJobStatus = (url: string) => /\/api\/(?:v1\/)?genie\/message\/status$/.test(url);
   const submitPromise = page.waitForResponse(
     (candidate) => candidate.request().method() === 'POST' && isSubmit(candidate.url()),
     { timeout },
@@ -416,7 +422,16 @@ async function captureGenieTurn(
   const terminalPromise = page.waitForResponse(async (candidate) => {
     if (candidate.request().method() !== 'POST') return false;
     const url = candidate.url();
-    if (/\/api\/(?:v1\/)?genie\/message\/complete$/.test(url)) return true;
+    // A 202 names a job; its answer arrives on a terminal status poll.
+    if (isComplete(url)) return candidate.status() !== 202;
+    if (isJobStatus(url)) {
+      try {
+        const job = (await candidate.json()) as { status?: string };
+        return job.status === 'succeeded' || job.status === 'failed' || job.status === 'expired';
+      } catch {
+        return false;
+      }
+    }
     if (!isSubmit(url)) return false;
     try {
       return ((await candidate.json()) as { completed?: boolean }).completed === true;
@@ -433,9 +448,18 @@ async function captureGenieTurn(
   expect(terminal.status(), 'Genie terminal call returned non-200').toBe(200);
   const raw = (await terminal.json()) as LiveGeniePayload & {
     completed?: boolean;
-    response?: LiveGeniePayload;
+    kind?: string;
+    status?: string;
+    response?: LiveGeniePayload | null;
   };
-  const payload = raw.completed === true && raw.response ? raw.response : (raw as LiveGeniePayload);
+  if (raw.kind === 'genie_completion_job') {
+    expect(raw.status, 'Genie completion job did not succeed').toBe('succeeded');
+    expect(raw.response, 'a succeeded Genie completion job carries its answer').toBeTruthy();
+  }
+  const payload =
+    (raw.kind === 'genie_completion_job' || raw.completed === true) && raw.response
+      ? raw.response
+      : (raw as LiveGeniePayload);
   return { request: submit.request().postDataJSON() as GenieTurnRequest, payload };
 }
 
@@ -1043,10 +1067,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // We assert the answer region renders at least one non-empty character
     // that is NOT the spinner glyph. The component uses `genie__msg--ai`
     // for assistant bubbles (see components/mortgage/GenieChat.tsx).
-    // The pending indicator specifically -- not "any role=status in the
-    // panel". The rendered answer keeps an sr-only role="status" live region
-    // so screen readers hear the answer when it lands, and matching on the
-    // role would wait forever for that (correct) element to disappear.
+    // The pending indicator specifically: the progress card. It carries no
+    // role="status" since a11y-06; each Genie surface speaks through its one
+    // persistent announcer ([data-genie-announcer]), which stays mounted after
+    // the answer lands, so waiting for "no status region" would never finish.
     await expect(panel.locator('.genie-progress')).toHaveCount(0, { timeout: 60_000 });
     const aiMessage = panel.locator('.genie__msg--ai').last();
     const answer = aiMessage.locator('.bubble');

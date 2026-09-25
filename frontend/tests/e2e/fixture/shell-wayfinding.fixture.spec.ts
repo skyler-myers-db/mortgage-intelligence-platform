@@ -226,7 +226,9 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
 
       const crumbs = page.getByRole('banner').getByRole('navigation', { name: 'Breadcrumb' });
       const queueLink = crumbs.getByRole('link', { name: 'Lead Queue · IL' });
-      await expect(queueLink).toHaveAttribute('href', '/lead-queue?state=IL');
+      // The published queue search carries the reader's place (wave 3,
+      // shell-03): the row they opened the dossier from.
+      await expect(queueLink).toHaveAttribute('href', `/lead-queue?state=IL&row=${ids[1]}`);
       const current = crumbs.locator('[aria-current="page"]');
       await expect(current).toHaveText(ids[1]);
       // The trail fits the left track: whole labels, clear of the search.
@@ -236,9 +238,10 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
         const clipped = await crumb.evaluate((el) => el.scrollWidth > el.clientWidth);
         expect(clipped, `${await crumb.textContent()} is not ellipsized`).toBe(false);
       }
-      // The crumb returns to the exact filtered queue.
+      // The crumb returns to the exact filtered queue, that row still open.
       await queueLink.click();
-      await expect(page).toHaveURL(/\/lead-queue\?state=IL$/);
+      await expect(page).toHaveURL(new RegExp(`/lead-queue\\?state=IL&row=${ids[1]}$`));
+      await expect(page.locator(`tr.is-expanded[data-borrower-row="${ids[1]}"]`)).toBeVisible();
       await expect(page.locator('[aria-label^="STATE:"]').first()).toHaveAttribute('aria-label', /^STATE: IL\b/);
       expect(await queueIds(page)).toEqual(ids);
     });
@@ -297,7 +300,7 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[1]}$`));
     // The crumb still returns to the exact filtered queue after paging.
     await expect(page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'Lead Queue · IL' }))
-      .toHaveAttribute('href', '/lead-queue?state=IL');
+      .toHaveAttribute('href', `/lead-queue?state=IL&row=${ids[1]}`);
   });
 
   test('a dossier opened by URL keeps its queue through the session fallback; Offer and asset crumbs link to real indexes', async ({ app, page }) => {
@@ -321,8 +324,26 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
 
     await app.gotoRoute('/data-estate/assets/borrower_360');
     const assetCrumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
-    await expect(assetCrumbs.getByRole('link', { name: 'Data estate' })).toHaveAttribute('href', '/admin-config');
+    await expect(assetCrumbs.getByRole('link', { name: 'Data estate' })).toHaveAttribute('href', '/admin-config#data-estate');
     await expect(assetCrumbs.locator('[aria-current="page"]')).toHaveText('Governed asset');
+  });
+
+  // Wave-1c follow-up #15: the crumb used to land on the top of Admin, far
+  // above the governed-asset index it names.
+  test('the asset crumb "Data estate" lands on the Data estate panel, just under the sticky nav (admin session)', async ({ app, page }) => {
+    await app.gotoRoute('/data-estate/assets/borrower_360');
+    await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'Data estate' }).click();
+    await expect(page).toHaveURL(/\/admin-config#data-estate$/);
+    await app.settle();
+    const panel = page.locator('#data-estate');
+    await expect(panel).toHaveClass(/\bdata-estate\b/);
+    await expect.poll(async () => {
+      const [panelTop, navBottom] = await Promise.all([
+        panel.evaluate((el) => el.getBoundingClientRect().top),
+        page.locator('.route-nav').evaluate((el) => el.getBoundingClientRect().bottom),
+      ]);
+      return Math.abs(panelTop - navBottom);
+    }, { message: "#data-estate's top sits within 8 px of the nav's bottom edge" }).toBeLessThanOrEqual(8);
   });
 });
 

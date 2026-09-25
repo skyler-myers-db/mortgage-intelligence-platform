@@ -189,7 +189,10 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
         "genie.run_query",
     ),
     "genie_message_progress": ("AUDIT EXEMPT: read-only progress poll",),
-    "genie_message_complete": ("_required_audit_write", "_finalize_genie_response("),
+    # Completion runs once per turn through its job (audit genie-01); the
+    # runner's audit write + finalize are pinned in test_genie_completion_runner.
+    "genie_message_complete": ("create_or_join", "complete_governed_turn("),
+    "genie_message_status": ("AUDIT EXEMPT: read-only poll of the caller's own completion job",),
     "genie_action": ("handle_genie_action(",),
     "genie_feedback": ("record_genie_feedback(",),
     "genie_refusal_report": ("record_genie_refusal_report(",),
@@ -204,6 +207,8 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "log_event": ("store.write(",),
     # LEAD_EXPORT receipt: the whole route body is the audited write.
     "create_lead_export_receipt": ("write_lead_export_receipt(",),
+    # GENIE_ANSWER_EXPORT receipt: the whole route body is the audited write.
+    "create_genie_answer_export_receipt": ("write_genie_answer_export_receipt(",),
     "save_lead": ("store.save_lead(",),
     "delete_lead": ("store.delete_lead(",),
     "save_draft": ("store.save_draft(",),

@@ -23,6 +23,37 @@ export const ACTOR_SCOPED_SESSION_STORAGE_KEYS = [
   QUEUE_CONTEXT_STORAGE_KEY,
 ] as const;
 
+/**
+ * The last trusted `actor_cache_key` (/api/health) this tab observed
+ * (Genie-turn residual #3). The shell kept it only in memory, so the first
+ * key after a reload always looked like "no change" and an actor switch
+ * across a reload kept the previous actor's transcript, pins, in-flight turn
+ * and last borrower. The key is already opaque and actor-scoped, so it is
+ * safe to keep in sessionStorage; a first key that differs from it is an
+ * actor change. It is deliberately NOT in the cleared lists above: the
+ * shell rewrites it with the new actor's key after clearing.
+ */
+export const ACTOR_CACHE_KEY_STORAGE_KEY = 'mip.actorCacheKey';
+
+export function readStoredActorCacheKey(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function storeActorCacheKey(key: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (key === null) window.sessionStorage.removeItem(ACTOR_CACHE_KEY_STORAGE_KEY);
+    else window.sessionStorage.setItem(ACTOR_CACHE_KEY_STORAGE_KEY, key);
+  } catch {
+    // Storage can be unavailable in privacy-restricted contexts.
+  }
+}
+
 export function clearActorScopedBrowserState(): void {
   if (typeof window === 'undefined') return;
   try {

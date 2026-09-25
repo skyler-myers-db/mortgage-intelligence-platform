@@ -7,9 +7,9 @@
  * lane):
  *
  *  - Approve through the review, the POST held; navigate away and back (a
- *    new LeadTable, the same MutationCache). A on the cursor row, or the
- *    toolbar's "Approve 1 eligible", opens no review and calls
- *    `/outreach/draft` no second time: a draft writes a DRAFT_OUTREACH audit
+ *    new LeadTable, the same MutationCache). A on the cursor row opens no
+ *    review, and the toolbar counts the row out ("Approve 0 eligible"), so
+ *    `/outreach/draft` is called no second time: a draft writes a DRAFT_OUTREACH audit
  *    row, so only the lock checked BEFORE the draft keeps the trail to one.
  *    The remounted table's own refs are empty; only the MutationCache knows.
  *  - Same mount: A on a row whose reject is still on the wire drafts nothing.
@@ -289,13 +289,16 @@ describe('LeadTable: a decision on the wire locks its row\'s review, across a re
     expect(approve).toHaveBeenCalledTimes(1);
   });
 
-  it('the toolbar "Approve 1 eligible" after a remount drafts nothing for that row', async () => {
+  it('after a remount the toolbar counts that row out ("Approve 0 eligible") and drafts nothing for it', async () => {
     const held = await approveFirstRowThroughReviewHeld();
 
     remount();
     act(() => container.querySelector<HTMLInputElement>(`[data-testid="lead-select-${IDS[0]}"]`)!.click());
     const toolbarApprove = container.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-approve"]')!;
-    expect(toolbarApprove.textContent, 'precondition: the row still counts as eligible').toBe('Approve 1 eligible');
+    // A row whose approve is on the wire is no longer approval-eligible
+    // (wave 3, W2 queue residual): the toolbar offers nothing to approve.
+    expect(toolbarApprove.textContent).toBe('Approve 0 eligible');
+    expect(toolbarApprove.disabled).toBe(true);
     act(() => toolbarApprove.click());
     await flush();
 

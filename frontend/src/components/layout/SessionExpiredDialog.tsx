@@ -40,6 +40,7 @@ const UNRECORDED_COPY: Record<UnrecordedWrite, string> = {
   approval: 'Your approval was not recorded. Approve it again after you sign in.',
   rejection: 'Your rejection was not recorded. Reject it again after you sign in.',
   change: 'Your last change was not recorded. Make it again after you sign in.',
+  bulk_approval: 'Your bulk approval stopped part-way. Rows already approved stay approved; the rest were not recorded. After you sign in, check Recent activity before approving them again.',
 };
 
 function reloadPage(): void {

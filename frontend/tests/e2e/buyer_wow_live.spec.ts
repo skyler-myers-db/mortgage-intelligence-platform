@@ -92,16 +92,16 @@ async function openGeniePanel(page: Page) {
 }
 
 test.describe('Buyer-Wow live inspection @desktop', () => {
-  test('#6 morning briefing is removed; Approval queue panel carries the honest nudge', async ({ page }) => {
+  test('#6 morning briefing is removed; the review queue panel carries the honest nudge', async ({ page }) => {
     // The morning briefing was cut: its only non-redundant content (workflow
-    // counts + Review CTA) is already the Approval queue panel, and no honest
+    // counts + Review CTA) is already the review queue panel, and no honest
     // "what changed" signal exists in the current data (triggers are refresh-
     // stamped, segment "movement" is a detection-rollout artifact). Guard that
     // the redundant card stays gone and the real nudge remains.
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: /Who should we contact/i })).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('.briefing')).toHaveCount(0);
-    const queue = page.getByRole('region', { name: 'Approval queue' });
+    const queue = page.getByRole('region', { name: 'Refinance review queue' });
     await expect(queue).toBeVisible({ timeout: 15_000 });
     await expect(queue.getByRole('link', { name: /review queue/i })).toBeVisible();
   });

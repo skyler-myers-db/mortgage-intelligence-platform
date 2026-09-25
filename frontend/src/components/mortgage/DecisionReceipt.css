@@ -52,6 +52,19 @@
   align-items: center;
   gap: var(--sp-2);
 }
+/* wow-stage-3 remainder: the recompute seal, shown only from a cached,
+   trusted, gap-free proof whose score is the one on the receipt. */
+.decision-receipt__seal {
+  color: var(--status-success-ink);
+  font-size: var(--fs-11);
+}
+/* Carryover #12: where the approval was routed, captioned as the approve
+   response's (the ledger read-back carries no assignee). */
+.decision-receipt__routing {
+  margin: 0 0 var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
 .decision-receipt__actions {
   display: flex;
   flex-wrap: wrap;

@@ -15,7 +15,11 @@ import { ShellToaster } from '../feedback/ShellToaster';
 import { UnsavedChangesGuard } from '../feedback/UnsavedChangesGuard';
 import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
-import { clearActorScopedBrowserState } from '../../lib/actorScopedBrowserState';
+import {
+  clearActorScopedBrowserState,
+  readStoredActorCacheKey,
+  storeActorCacheKey,
+} from '../../lib/actorScopedBrowserState';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
 import { useExitRetained } from '../../hooks/useExitRetained';
 import { useMainScroll } from '../../hooks/useMainScroll';
@@ -129,7 +133,10 @@ function AppShellInner({ children }: PropsWithChildren) {
   const { clearActorScopedState, consoleOpen, genieOpen, setGenieOpen } = useApp();
   const { health } = useHealth();
   const queryClient = useQueryClient();
-  const actorCacheKeyRef = useRef<string | null>(null);
+  // undefined until the first health payload: then seeded from the tab's
+  // stored key, so a reload by a different actor is an actor change (Genie
+  // residual #3), not a first observation.
+  const actorCacheKeyRef = useRef<string | null | undefined>(undefined);
   const mainRef = useRef<HTMLElement | null>(null);
   const routeAnnouncerRef = useRef<HTMLDivElement | null>(null);
   useMainScroll(mainRef);
@@ -156,9 +163,11 @@ function AppShellInner({ children }: PropsWithChildren) {
     };
   }, []);
 
+  const healthObserved = health !== null;
   useEffect(() => {
+    if (!healthObserved) return;
     const nextKey = health?.actor_cache_key ?? null;
-    const previousKey = actorCacheKeyRef.current;
+    const previousKey = actorCacheKeyRef.current === undefined ? readStoredActorCacheKey() : actorCacheKeyRef.current;
     actorCacheKeyRef.current = applyActorScopedStateTransition({
       previousActorCacheKey: previousKey,
       nextActorCacheKey: nextKey,
@@ -167,7 +176,8 @@ function AppShellInner({ children }: PropsWithChildren) {
       clearBrowserState: clearActorScopedBrowserState,
       clearMemoryState: clearActorScopedMemoryCaches,
     });
-  }, [clearActorScopedState, health?.actor_cache_key, queryClient]);
+    storeActorCacheKey(actorCacheKeyRef.current);
+  }, [clearActorScopedState, health?.actor_cache_key, healthObserved, queryClient]);
 
   const openGenie = useCallback(() => {
     setGenieOpen(true);

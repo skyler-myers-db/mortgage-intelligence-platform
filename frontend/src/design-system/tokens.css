@@ -728,3 +728,30 @@ input[type="checkbox"] {
   }
   :root { --focus-ring-width: 3px; }
 }
+
+/* ---------- Score anatomy parts (wave 3, wow-stage-2) ----------
+ * Five categorical hues for the Score anatomy spine's weighted components
+ * (components/mortgage/ScoreSpine.css), in weight order: economic incentive,
+ * intent trigger, product fit, relationship, evidence coverage. Their own
+ * tokens on purpose: --seg-* name segments and --signal-* name state, and a
+ * score part is neither. Each theme's set was validated as an ordered
+ * categorical palette against that theme's own surface (adjacent colour-
+ * vision-deficiency and normal-vision separation, lightness band, chroma),
+ * and every hue clears 3:1 on --bg-1 and --bg-2 (ScoreSpine.css.test.ts).
+ * The visible label beside each swatch carries the meaning; colour only
+ * helps. Additive: no existing token changes.
+ */
+:root {
+  --score-part-economic: #3987E5;
+  --score-part-intent: #D95926;
+  --score-part-fit: #199E70;
+  --score-part-relationship: #C98500;
+  --score-part-evidence: #D55181;
+}
+[data-theme="light"] {
+  --score-part-economic: #2A78D6;
+  --score-part-intent: #C7541F;
+  --score-part-fit: #0F8A6A;
+  --score-part-relationship: #9A6A00;
+  --score-part-evidence: #C4457A;
+}

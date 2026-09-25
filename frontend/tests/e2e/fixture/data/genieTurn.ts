@@ -65,9 +65,18 @@ function narrative(): string {
   );
 }
 
+/**
+ * A completed turn as the wire carries it: backend GenieMessageResponse
+ * always echoes the validated `question` (a required field), which the
+ * hand-written GenieAnswer type does not declare yet (quality-04 remainder).
+ * The fixture widens the type rather than drop a required field.
+ */
+export type WireGenieAnswer = GenieAnswer & { question: string };
+
 /** A single-turn answer: narrative, verified rows, chart plan, proof. */
-export function genieAnswerFixture(overrides: Partial<GenieAnswer> = {}): GenieAnswer {
+export function genieAnswerFixture(overrides: Partial<WireGenieAnswer> = {}): WireGenieAnswer {
   return {
+    question: GENIE_QUESTION,
     answer: narrative(),
     source: 'genie',
     trusted_assets: SOURCE_ASSETS,
@@ -105,7 +114,7 @@ export function genieAnswerFixture(overrides: Partial<GenieAnswer> = {}): GenieA
 }
 
 /** A deep-research answer: an executive summary first, then titled sections. */
-export function genieDeepAnswerFixture(): GenieAnswer {
+export function genieDeepAnswerFixture(): WireGenieAnswer {
   const top = STATES.slice(0, 3);
   return genieAnswerFixture({
     summary:

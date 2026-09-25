@@ -3128,6 +3128,14 @@
           "ltv_formula": {
             "$ref": "#/components/schemas/ProofFormulaLine"
           },
+          "margins": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ProofMargin"
+            },
+            "title": "Margins",
+            "type": "array"
+          },
           "offer_branches": {
             "items": {
               "$ref": "#/components/schemas/ProofOfferBranch"
@@ -5883,6 +5891,124 @@
         "title": "GenieActionSuggestion",
         "type": "object"
       },
+      "GenieAnswerExportReceipt": {
+        "description": "The ledger entry the download waits for.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "columns_sha256": {
+            "title": "Columns Sha256",
+            "type": "string"
+          },
+          "csv_sha256": {
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "event_type": {
+            "const": "GENIE_ANSWER_EXPORT",
+            "default": "GENIE_ANSWER_EXPORT",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "answer",
+              "section"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "actor",
+          "scope",
+          "row_count",
+          "csv_sha256",
+          "columns_sha256",
+          "recorded_at"
+        ],
+        "title": "GenieAnswerExportReceipt",
+        "type": "object"
+      },
+      "GenieAnswerExportReceiptRequest": {
+        "additionalProperties": false,
+        "description": "What the browser declares about the file it is about to download.",
+        "properties": {
+          "answer_row_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The row count the answer (scope 'answer') or section (scope 'section') reports; above row_count only for a History replay that kept fewer rows.",
+            "title": "Answer Row Count"
+          },
+          "columns_sha256": {
+            "description": "SHA-256 (hex) of the compact JSON array of the file's column keys.",
+            "title": "Columns Sha256",
+            "type": "string"
+          },
+          "conversation_id": {
+            "pattern": "^[A-Za-z0-9-]{1,128}$",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "csv_sha256": {
+            "description": "SHA-256 (hex) of the exact CSV text handed to the download.",
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "message_id": {
+            "pattern": "^[A-Za-z0-9-]{1,128}$",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "row_count": {
+            "description": "Rows the file holds: the rows the answer (or section) carries.",
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "answer",
+              "section"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "scope",
+          "row_count",
+          "csv_sha256",
+          "columns_sha256"
+        ],
+        "title": "GenieAnswerExportReceiptRequest",
+        "type": "object"
+      },
       "GenieAnswerSection": {
         "description": "One planned sub-analysis of a deep-research sweep, with its own data.\n\nThe sweep used to fold every section into one markdown ``answer`` and\nship only the largest section's rows, so a seven-part research answer\nrendered as one chart and one table. Each section now carries its own\nverified rows and chart plan so the reader gets a visual per finding.\n``title`` is Genie-authored (planner-supplied) and, like every other\nfield here, is scanned by the visible-text guard before it renders.",
         "properties": {
@@ -5965,13 +6091,146 @@
         "title": "GenieAnswerSection",
         "type": "object"
       },
-      "GenieCompleteRequest": {
-        "description": "Finish an in-flight Genie message into a governed answer.\n\n``question`` must hash-match the token minted at submit, which makes the\nguarded prompt and the completed answer cryptographically the same turn.",
+      "GenieCompleteAsyncRequest": {
+        "description": "``/message/complete`` body. ``respond_async`` opts in to the 202 job.\n\nOlder servers ignore the extra field and answer 200, which the browser\nrecognises (deploy-skew safety in both directions).",
         "properties": {
           "conversation_id": {
             "maxLength": 256,
             "minLength": 1,
             "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "progress_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Progress Token",
+            "type": "string"
+          },
+          "question": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "respond_async": {
+            "default": false,
+            "title": "Respond Async",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "progress_token",
+          "question"
+        ],
+        "title": "GenieCompleteAsyncRequest",
+        "type": "object"
+      },
+      "GenieCompletionJobStatus": {
+        "description": "Where the governed completion of one live Genie turn is (audit genie-01).\n\nReturned with 202 by ``/message/complete`` when the browser asked for a\njob, and by every ``/message/status`` poll. Server-owned vocabulary only:\n``status`` and ``stage`` are closed enums, ``stage_label`` and\n``error_hint`` are fixed server copy (never exception or model text).\n``parts_done`` / ``parts_planned`` count the deep-research sweep's\ngoverned sub-analyses while it runs. ``response`` is the finished\ngoverned answer, present only when ``status`` is ``succeeded``; its\naction confirmation tokens are signed afresh for the caller at delivery.",
+        "properties": {
+          "error_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Hint"
+          },
+          "failed": {
+            "default": false,
+            "title": "Failed",
+            "type": "boolean"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "genie_completion_job",
+            "default": "genie_completion_job",
+            "title": "Kind",
+            "type": "string"
+          },
+          "parts_done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Done"
+          },
+          "parts_planned": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Planned"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenieMessageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage": {
+            "$ref": "#/components/schemas/GenieJobStage"
+          },
+          "stage_label": {
+            "title": "Stage Label",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GenieJobStatus"
+          },
+          "terminal": {
+            "default": false,
+            "title": "Terminal",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "job_id",
+          "status",
+          "stage",
+          "stage_label"
+        ],
+        "title": "GenieCompletionJobStatus",
+        "type": "object"
+      },
+      "GenieCompletionJobStatusRequest": {
+        "description": "``/message/status`` body: a POST so the token never lands in a URL.\n\n``question`` is hash-checked against the progress token exactly as on\ncomplete, and is how the answer gets its question back: the stored job\nresult never holds it.",
+        "properties": {
+          "conversation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "job_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "title": "Job Id",
             "type": "string"
           },
           "message_id": {
@@ -5997,9 +6256,10 @@
           "conversation_id",
           "message_id",
           "progress_token",
-          "question"
+          "question",
+          "job_id"
         ],
-        "title": "GenieCompleteRequest",
+        "title": "GenieCompletionJobStatusRequest",
         "type": "object"
       },
       "GenieDataFreshness": {
@@ -6097,6 +6357,38 @@
         ],
         "title": "GenieFeedbackResponse",
         "type": "object"
+      },
+      "GenieJobStage": {
+        "description": "Where a completion job is; the ``stage`` CHECK in lakebase/schema.sql.",
+        "enum": [
+          "queued",
+          "collecting",
+          "repairing",
+          "verifying",
+          "cross_checking",
+          "rewriting",
+          "planning",
+          "researching",
+          "synthesizing",
+          "finalizing",
+          "done",
+          "failed",
+          "expired"
+        ],
+        "title": "GenieJobStage",
+        "type": "string"
+      },
+      "GenieJobStatus": {
+        "description": "Lifecycle of a completion job; the ``status`` CHECK in lakebase/schema.sql.",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "expired"
+        ],
+        "title": "GenieJobStatus",
+        "type": "string"
       },
       "GenieMessageRequest": {
         "properties": {
@@ -6832,6 +7124,11 @@
         "properties": {
           "completed": {
             "title": "Completed",
+            "type": "boolean"
+          },
+          "completion_jobs": {
+            "default": false,
+            "title": "Completion Jobs",
             "type": "boolean"
           },
           "conversation_id": {
@@ -11862,6 +12159,65 @@
         "title": "ProofFormulaLine",
         "type": "object"
       },
+      "ProofMargin": {
+        "description": "One deterministic 'what would change this?' margin (wow-ai-1 phase 1).\n\nRecomputed from the thresholds and inputs already on the dossier row\nthrough the reviewed scoring mirrors: never a model output, never a\nknown data gap, and never a change to ``trusted``. ``source`` is one of\nthe governed proof assets.",
+        "properties": {
+          "direction": {
+            "enum": [
+              "clears",
+              "short",
+              "flips",
+              "holds",
+              "unavailable"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "spread_screen",
+              "par_break_even",
+              "equity_floor",
+              "offer_flip_equity",
+              "offer_flip_par"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "string"
+          },
+          "value_text": {
+            "title": "Value Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "value_text",
+          "threshold",
+          "direction"
+        ],
+        "title": "ProofMargin",
+        "type": "object"
+      },
       "ProofOfferBranch": {
         "properties": {
           "code": {
@@ -12208,6 +12564,209 @@
           "audit_event_id"
         ],
         "title": "PropertyLoanLookupResponse",
+        "type": "object"
+      },
+      "RateSensitivityProvenance": {
+        "description": "Evidence manifest: every table and rule the grid was read or derived from.",
+        "properties": {
+          "book_as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Refresh anchor of the book.",
+            "title": "Book As Of"
+          },
+          "book_source": {
+            "description": "The book the grid was measured over.",
+            "title": "Book Source",
+            "type": "string"
+          },
+          "contactable_source": {
+            "description": "Where the live contactable subset comes from.",
+            "title": "Contactable Source",
+            "type": "string"
+          },
+          "gold_source": {
+            "description": "The precomputed gold grid the endpoint reads.",
+            "title": "Gold Source",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          },
+          "rule_source": {
+            "description": "The UC functions re-run at each scenario par rate.",
+            "title": "Rule Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gold_source",
+          "book_source",
+          "rule_source",
+          "contactable_source",
+          "note"
+        ],
+        "title": "RateSensitivityProvenance",
+        "type": "object"
+      },
+      "RateSensitivityResponse": {
+        "properties": {
+          "base_market_rate_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The par rate this refresh scored with, in percent (step 0). None when not built.",
+            "title": "Base Market Rate Pct"
+          },
+          "built": {
+            "description": "False until the gold refresh has built mip.gold.rate_sensitivity_rollup.",
+            "title": "Built",
+            "type": "boolean"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/RateSensitivityProvenance"
+          },
+          "scenario_market_rate_pct": {
+            "description": "The par rate each step describes, in percent, aligned to steps_bps.",
+            "items": {
+              "type": "number"
+            },
+            "title": "Scenario Market Rate Pct",
+            "type": "array"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/RateSensitivityState"
+            },
+            "title": "States",
+            "type": "array"
+          },
+          "steps_bps": {
+            "description": "The scenario grid in basis points of par move (positive = par rises); empty when not built.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Steps Bps",
+            "type": "array"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/RateSensitivityThresholds"
+          }
+        },
+        "required": [
+          "built",
+          "steps_bps",
+          "scenario_market_rate_pct",
+          "thresholds",
+          "states",
+          "provenance"
+        ],
+        "title": "RateSensitivityResponse",
+        "type": "object"
+      },
+      "RateSensitivityState": {
+        "description": "One state's scenario row, aligned to ``RateSensitivityResponse.steps_bps``.",
+        "properties": {
+          "addressable": {
+            "description": "Addressable borrowers in the state (the same at every step).",
+            "minimum": 0.0,
+            "title": "Addressable",
+            "type": "integer"
+          },
+          "contactable_in_the_money": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The contact-eligible subset of in_the_money at each step (live aggregate, clamped to in_the_money). None when not reported.",
+            "title": "Contactable In The Money"
+          },
+          "in_the_money": {
+            "description": "Borrowers clearing the refi screen at each step, aligned to steps_bps; each <= addressable.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "In The Money",
+            "type": "array"
+          },
+          "rate_movable": {
+            "description": "Addressable borrowers with a gated note rate (active lien, bounded rate strictly inside 1%..15%): the only ones a scenario can move. Never above addressable.",
+            "minimum": 0.0,
+            "title": "Rate Movable",
+            "type": "integer"
+          },
+          "state": {
+            "description": "2-char USPS state code (uppercase).",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "addressable",
+          "rate_movable",
+          "in_the_money"
+        ],
+        "title": "RateSensitivityState",
+        "type": "object"
+      },
+      "RateSensitivityThresholds": {
+        "description": "The refresh's in-the-money thresholds the whole grid was evaluated with.",
+        "properties": {
+          "min_equity_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Equity Pct"
+          },
+          "min_spread_bps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Spread Bps"
+          }
+        },
+        "title": "RateSensitivityThresholds",
         "type": "object"
       },
       "RateSpreadBucket": {
@@ -17499,6 +18058,59 @@
         ]
       }
     },
+    "/api/genie/export-receipt": {
+      "post": {
+        "deprecated": true,
+        "description": "Write the ``GENIE_ANSWER_EXPORT`` ledger row a Genie CSV download waits for.\n\nAudit 2026-09-21 genie-06: the answer must be a trusted message of the\ncaller's own conversation (404 and no write otherwise), the declared row\ncounts must describe it (422 and no write otherwise), and then exactly one\naudit row is written. The path uses only existing route segments\n(``genie``, ``export-receipt``).",
+        "operationId": "post_api_genie_export_receipt_create_genie_answer_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieAnswerExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieAnswerExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Genie Answer Export Receipt",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
     "/api/genie/feedback": {
       "post": {
         "deprecated": true,
@@ -17607,13 +18219,13 @@
     "/api/genie/message/complete": {
       "post": {
         "deprecated": true,
-        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nThe token proves the same actor's submit created this exact message and\nthe hash check pins ``question`` to the prompt that passed the guard\nbattery there, so the output-policy check, audit write, action-token\nissuance, and session recording below stay byte-identical in meaning to\nthe synchronous endpoint's live tail. No conversation-ownership lookup\nhere: for a fresh conversation the Lakebase row intentionally does not\nexist until this very call finalizes \u2014 the token is the authorization.",
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nOne job per (actor, conversation, message) makes the output-policy\ncheck, the RUN_GENIE audit write, action-token issuance and session\nrecording single-shot: a reloaded or retried complete joins the job.\n``respond_async`` answers 202 with the job's status (the browser polls\n``/message/status``); older tabs get today's 200 answer. Without the job\ntable (App ahead of its migration) an older tab's tail runs inline with no\njob; an async request is refused with a non-retryable 503, because the\nbrowser re-sends it and a job-less run could not be joined. No\nconversation-ownership lookup here: for a fresh conversation the Lakebase\nrow intentionally does not exist until this very call finalizes \u2014 the\ntoken is the authorization.",
         "operationId": "post_api_genie_message_complete_genie_message_complete",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GenieCompleteRequest"
+                "$ref": "#/components/schemas/GenieCompleteAsyncRequest"
               }
             }
           },
@@ -17629,6 +18241,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCompletionJobStatus"
+                }
+              }
+            },
+            "description": "Accepted"
           },
           "415": {
             "content": {
@@ -17705,6 +18327,59 @@
           }
         },
         "summary": "Genie Message Progress",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/message/status": {
+      "post": {
+        "deprecated": true,
+        "description": "Poll the caller's own completion job; the answer once it succeeded.\n\nNo Genie call. The stored answer is not re-scanned: it passed the output\nguard before it was stored, the same posture as history replay. Its\nquestion comes back from this hash-checked request and its actions are\nre-signed for the caller, since the job row holds neither.",
+        "operationId": "post_api_genie_message_status_genie_message_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCompletionJobStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCompletionJobStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Status",
         "tags": [
           "genie"
         ]
@@ -18298,6 +18973,29 @@
           }
         },
         "summary": "County Rollups",
+        "tags": [
+          "geo"
+        ]
+      }
+    },
+    "/api/geo/rate-sensitivity": {
+      "get": {
+        "deprecated": true,
+        "description": "Per-state in-the-money counts across the par-rate scenario grid.\n\nA scenario, not a forecast: each step re-runs ``fn_rate_spread`` /\n``fn_in_the_money`` at the refresh's par rate plus the step. ``built`` is\nFalse until the gold refresh job has built the grid. A cold warehouse\nsurfaces as the resilience layer's 503 ``warming_up``; there is no\nfallback grid, and the route writes no audit row.",
+        "operationId": "get_api_geo_rate_sensitivity_rate_sensitivity",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateSensitivityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rate Sensitivity",
         "tags": [
           "geo"
         ]
@@ -25168,6 +25866,58 @@
         ]
       }
     },
+    "/api/v1/genie/export-receipt": {
+      "post": {
+        "description": "Write the ``GENIE_ANSWER_EXPORT`` ledger row a Genie CSV download waits for.\n\nAudit 2026-09-21 genie-06: the answer must be a trusted message of the\ncaller's own conversation (404 and no write otherwise), the declared row\ncounts must describe it (422 and no write otherwise), and then exactly one\naudit row is written. The path uses only existing route segments\n(``genie``, ``export-receipt``).",
+        "operationId": "post_api_v1_genie_export_receipt_create_genie_answer_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieAnswerExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieAnswerExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Genie Answer Export Receipt",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
     "/api/v1/genie/feedback": {
       "post": {
         "description": "Record thumbs up/down feedback for a Genie answer.\n\nThe exact actor/conversation/message ownership is checked before a durable\nidempotency intent is claimed. The native rating is sent only after that\ntransaction commits; final state and the ``GENIE_FEEDBACK`` audit row are\nthen committed together. Free-text feedback is rejected so names or other\nborrower details cannot be forwarded to the native Genie comment system.",
@@ -25273,13 +26023,13 @@
     },
     "/api/v1/genie/message/complete": {
       "post": {
-        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nThe token proves the same actor's submit created this exact message and\nthe hash check pins ``question`` to the prompt that passed the guard\nbattery there, so the output-policy check, audit write, action-token\nissuance, and session recording below stay byte-identical in meaning to\nthe synchronous endpoint's live tail. No conversation-ownership lookup\nhere: for a fresh conversation the Lakebase row intentionally does not\nexist until this very call finalizes \u2014 the token is the authorization.",
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nOne job per (actor, conversation, message) makes the output-policy\ncheck, the RUN_GENIE audit write, action-token issuance and session\nrecording single-shot: a reloaded or retried complete joins the job.\n``respond_async`` answers 202 with the job's status (the browser polls\n``/message/status``); older tabs get today's 200 answer. Without the job\ntable (App ahead of its migration) an older tab's tail runs inline with no\njob; an async request is refused with a non-retryable 503, because the\nbrowser re-sends it and a job-less run could not be joined. No\nconversation-ownership lookup here: for a fresh conversation the Lakebase\nrow intentionally does not exist until this very call finalizes \u2014 the\ntoken is the authorization.",
         "operationId": "post_api_v1_genie_message_complete_genie_message_complete",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GenieCompleteRequest"
+                "$ref": "#/components/schemas/GenieCompleteAsyncRequest"
               }
             }
           },
@@ -25295,6 +26045,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCompletionJobStatus"
+                }
+              }
+            },
+            "description": "Accepted"
           },
           "415": {
             "content": {
@@ -25370,6 +26130,58 @@
           }
         },
         "summary": "Genie Message Progress",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/message/status": {
+      "post": {
+        "description": "Poll the caller's own completion job; the answer once it succeeded.\n\nNo Genie call. The stored answer is not re-scanned: it passed the output\nguard before it was stored, the same posture as history replay. Its\nquestion comes back from this hash-checked request and its actions are\nre-signed for the caller, since the job row holds neither.",
+        "operationId": "post_api_v1_genie_message_status_genie_message_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCompletionJobStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCompletionJobStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Status",
         "tags": [
           "genie"
         ]
@@ -25956,6 +26768,28 @@
           }
         },
         "summary": "County Rollups",
+        "tags": [
+          "geo"
+        ]
+      }
+    },
+    "/api/v1/geo/rate-sensitivity": {
+      "get": {
+        "description": "Per-state in-the-money counts across the par-rate scenario grid.\n\nA scenario, not a forecast: each step re-runs ``fn_rate_spread`` /\n``fn_in_the_money`` at the refresh's par rate plus the step. ``built`` is\nFalse until the gold refresh job has built the grid. A cold warehouse\nsurfaces as the resilience layer's 503 ``warming_up``; there is no\nfallback grid, and the route writes no audit row.",
+        "operationId": "get_api_v1_geo_rate_sensitivity_rate_sensitivity",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateSensitivityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rate Sensitivity",
         "tags": [
           "geo"
         ]

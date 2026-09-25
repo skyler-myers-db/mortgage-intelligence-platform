@@ -81,3 +81,38 @@
 @media (forced-colors: active) {
   .filter.is-active .filter__remove:is(:hover, :focus-visible) svg { color: ButtonText !important; }
 }
+
+/* ============================================================
+   QUEUE PRESETS + COPY LINK (audit tables-09 phase 1). A `.filter-row`
+   of `.filter` pills (design_files/index.html:822-838) in the hero's
+   right-side action slot (the prototype's `.proto-hero` slot), stacked
+   over the active-filter chips. Declared deviation from "a row above the
+   filter bar": a row of its own there pushed the 480px table scroller
+   below the fold at 1440x900 (queue-keyboard / queue-layout fixture
+   specs), while the hero's left block is taller than this stack.
+   BEM extension: `.lead-queue-hero` (the stack), `.lead-queue-views`
+   (the presets row) and `.lead-queue-views__copy` (its Copy link
+   button). The pills are <Link> anchors and tokens.css sets only
+   `a { color: inherit }`, so they would render with the browser's
+   underline (the visual-05 defect; the route-nav reset in
+   01-app-shell.css never covered this row). The chip's own border /
+   colour step carries hover and the global ring carries focus, so
+   neither state relies on the underline.
+   ============================================================ */
+.lead-queue-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+.lead-queue-views {
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+.lead-queue-views .filter,
+.lead-queue-views .filter:hover,
+.lead-queue-views .filter:focus-visible { text-decoration: none; }
+.lead-queue-views__copy { flex-shrink: 0; }

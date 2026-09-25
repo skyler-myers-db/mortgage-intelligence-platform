@@ -29,11 +29,9 @@ import {
   useRejectLead,
 } from '../../lib/mutations/outreach';
 import { intentFingerprint, useIntentRequestIds } from '../../lib/mutations/requestIds';
-import { BULK_APPROVE_CONCURRENCY } from './LeadTable.constants';
 import {
   _newBulkId,
   bulkActionFocusTarget,
-  chunk,
   isLeadApprovalEligible,
   isLeadSelectableForSalesOps,
   type CampaignBinding,
@@ -41,7 +39,11 @@ import {
 import type { RejectReasonCode } from './LeadTable.types';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { APPROVER_ROLE_REQUIRED } from './approverGate';
-import { clearCancelledBulk, readCancelledBulk, stashCancelledBulk } from './bulkApproveStash';
+import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
+import { useLeadBulkRun, type BulkRowReport, type BulkRunResult } from './useLeadBulkRun';
+import { pruneTo, rangeIds } from './LeadTable.selection';
+
+const BULK_TOAST_DISMISS_MS = 4000;
 
 /** Verification state of a `?campaign_id=&variant_name=` URL binding. */
 export type CampaignBindingState = 'absent' | 'invalid' | 'verified' | 'validating';
@@ -54,6 +56,21 @@ export interface BulkToast {
 }
 
 export type LeadDecisionOutcome = 'ok' | 'network' | 'backend' | 'aborted' | 'duplicate';
+
+/** What an approval certifies about its row, snapshotted when a bulk run starts. */
+interface DecisionSnapshot {
+  evidenceIds: readonly string[];
+  offerCode: string | null;
+}
+
+interface ApproveExtras {
+  rationale?: string | null;
+  bulk_id?: string | null;
+  bulk_rationale?: string | null;
+  suppressInvalidation?: boolean;
+  /** A bulk row: the evidence and offer read when the run started, never live mid-run. */
+  snapshot?: DecisionSnapshot;
+}
 
 export interface UseLeadApprovalActionsInput {
   displayLeads: LeadSummary[];
@@ -111,15 +128,15 @@ export function useLeadApprovalActions({
   const requestIds = useIntentRequestIds();
   // Bulk-approve state. `selectedIds` is a Set so toggling is O(1); we
   // copy-on-write when updating to keep React's reference check happy.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
-  const [bulkApproving, setBulkApproving] = useState<boolean>(false);
-  // R5-04 (2026-04-23): synchronous in-flight latches. `setState` is
-  // async so two rapid clicks can both read `bulkApproving=false` before
-  // either commit schedules, producing two parallel approve loops that
-  // each write an audit row per borrower. `useRef` gives us a
-  // synchronous read/write we can flip before returning from the click
-  // handler; the existing React state still drives the disabled UI.
-  const bulkInFlightRef = useRef<boolean>(false);
+  const [storedSelection, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const currentIds = new Set(displayLeads.map((lead) => lead.borrower_id));
+  // The last plain toggle: where a Shift range starts (audit tables-07).
+  const selectionAnchorRef = useRef<string | null>(null);
+  // The bulk run (useLeadBulkRun): its R5-04 latch, progress, cooperative
+  // Stop, per-row report and the R5-21 unmount abort + stash.
+  const bulkRun = useLeadBulkRun();
+  const bulkApproving = bulkRun.progress !== null;
+  // R5-04 synchronous latch per row: flipped before any await.
   const rowInFlightRef = useRef<Record<string, boolean>>({});
   // Wave 1c (flow-03): an approve review can stay open while its row is
   // decided another way (the row's Reject panel, a bulk run). These two
@@ -129,28 +146,12 @@ export function useLeadApprovalActions({
   // mount, `bulkRunIdsRef` the rows of the bulk run on the wire.
   const decidedRef = useRef<Set<string>>(new Set());
   const bulkRunIdsRef = useRef<ReadonlySet<string>>(new Set());
-  // Tracks the bulk-approve loop's AbortController so unmount can
-  // cancel the remaining in-flight POSTs. Round-2 hole-finder #10/#11,
-  // 2026-04-23.
-  const bulkAbortRef = useRef<AbortController | null>(null);
-  // Last bulk result surfaced as a compact toast. Clears on the next bulk
-  // run or when the user dismisses it (auto-dismiss after 4s).
-  //
-  // `network` is the subset of `fail` that failed with an unreachable
-  // backend (ApiError.status === null) — these rows never reached the
-  // audit table and the approver should retry them explicitly.
-  // Hole-finder finding #2, 2026-04-23.
-  //
-  // `aborted` rows fall in an ambiguous state: the client cancelled the
-  // POST mid-flight on unmount, but the server may have already
-  // committed the audit row. Server-side idempotency protects retries
-  // that reuse the original request_id; this bulk UI does not persist
-  // those per-row ids after unmount, so the honest operator guidance is
-  // still to review their actor-scoped recent activity instead of blindly
-  // retrying. R5-21
-  // (2026-04-23). A run the last unmount cut short is flashed once on this
-  // mount (read in the initializer, so StrictMode's double render is safe;
-  // the effect below only removes the key).
+  // R5-21: a run the last unmount cut short is flashed once on this mount
+  // (read in the initializer, so StrictMode's double render is safe; the
+  // effect below only removes the key). Aborted rows are audit-ambiguous: the
+  // server may have committed them, so the toast sends the operator to Recent
+  // activity instead of offering a blind retry. A run that finished reports
+  // through bulkRun.result instead.
   const [bulkToast, setBulkToast] = useState<BulkToast | null>(() => {
     const cancelled = readCancelledBulk();
     return cancelled ? { ok: cancelled.ok, fail: 0, network: 0, aborted: cancelled.aborted } : null;
@@ -212,6 +213,11 @@ export function useLeadApprovalActions({
     return rowInFlightRef.current[borrowerId] === true || isDecisionPending(queryClient, borrowerId);
   }
 
+  /** R, Reject or a reject panel's Submit on a row whose decision is on the wire. */
+  function reportDecisionInFlight(borrowerId: string): void {
+    setApprovalError(`A decision for ${borrowerId} is already being recorded.`);
+  }
+
   /**
    * Approve from the queue without leaving the page. Uses the same
    * `/api/outreach/approve` endpoint Offer Orchestrator calls. The row is
@@ -235,67 +241,86 @@ export function useLeadApprovalActions({
   function approveLead(
     borrowerId: string,
     signal?: AbortSignal,
-    extras: {
-      rationale?: string | null;
-      bulk_id?: string | null;
-      bulk_rationale?: string | null;
-      suppressInvalidation?: boolean;
-    } = {},
+    extras: ApproveExtras = {},
     reviewedDraft: OutreachDraftResult | null = null,
   ): Promise<LeadDecisionOutcome> {
-    if (decisionInFlight(borrowerId)) return Promise.resolve('duplicate');
-    if (!canStartApproval()) return Promise.resolve('backend');
+    return approveWithReport(borrowerId, signal, extras, reviewedDraft).then(
+      ({ outcome }) => (outcome === 'session_expired' ? 'backend' : outcome),
+    );
+  }
+
+  /**
+   * approveLead with the per-row report a bulk run lists: the outcome
+   * (session_expired told apart) and the server's reason. A bulk row reports
+   * into the run's result, not the table's single alert, and certifies the
+   * evidence and offer snapshotted when the run started.
+   */
+  function approveWithReport(
+    borrowerId: string,
+    signal: AbortSignal | undefined,
+    extras: ApproveExtras,
+    reviewedDraft: OutreachDraftResult | null,
+  ): Promise<BulkRowReport> {
+    if (decisionInFlight(borrowerId)) return Promise.resolve({ outcome: 'duplicate', message: null });
+    if (!canStartApproval()) return Promise.resolve({ outcome: 'backend', message: null });
     rowInFlightRef.current[borrowerId] = true;
-    setApprovalError(null);
+    const inBulk = Boolean(extras.bulk_id);
+    if (!inBulk) setApprovalError(null);
     const lead = leadsById.get(borrowerId);
+    const snapshot = extras.snapshot ?? {
+      evidenceIds: lead?.evidence_ids ?? [],
+      offerCode: lead?.recommended_offer_code ?? null,
+    };
     const intent = extras.bulk_id
       ? intentFingerprint('approve-bulk', extras.bulk_id, borrowerId)
       : intentFingerprint('approve', borrowerId, reviewedDraft?.generation_id);
-    const outcome = approveMutation.mutateAsync({
+    const report = approveMutation.mutateAsync({
       decision: 'approve',
       borrowerId,
       requestId: requestIds.idFor(intent),
       reviewedDraft,
       campaignBinding,
-      evidenceIds: lead?.evidence_ids ?? [],
-      offerCode: lead?.recommended_offer_code ?? null,
+      evidenceIds: [...snapshot.evidenceIds],
+      offerCode: snapshot.offerCode,
       rationale: extras.rationale ?? null,
       bulkId: extras.bulk_id ?? null,
       bulkRationale: extras.bulk_rationale ?? null,
       signal,
       suppressInvalidation: extras.suppressInvalidation,
     }).then(
-      (res): LeadDecisionOutcome => {
+      (res): BulkRowReport => {
         if (!res.approved) {
-          setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
-          return 'backend';
+          if (!inBulk) setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
+          return { outcome: 'backend', message: 'The endpoint returned approved=false.' };
         }
         requestIds.settle(intent);
         decidedRef.current.add(borrowerId);
         setApproval(borrowerId, 'approved');
         recordDecision(borrowerId, { auditEventId: res.audit_event_id ?? null, decision: 'approved' });
-        return 'ok';
+        return { outcome: 'ok', message: null };
       },
-      (err: unknown): LeadDecisionOutcome => {
+      (err: unknown): BulkRowReport => {
         const failure = decisionFailure(err);
-        if (failure === 'aborted') return 'aborted';
+        if (failure === 'aborted') return { outcome: 'aborted', message: null };
+        const message = err instanceof Error ? err.message : null;
+        if (!inBulk) {
+          setApprovalError(message ? `Couldn't approve ${borrowerId}: ${message}` : `Couldn't approve ${borrowerId}.`);
+        }
         // The session ended mid-click (on the draft step or the approve POST):
         // the session dialog must say this approval was NOT recorded.
-        if (clientFailureReason(err) === 'session_expired') markUnrecordedWrite('approval');
-        setApprovalError(
-          err instanceof Error
-            ? `Couldn't approve ${borrowerId}: ${err.message}`
-            : `Couldn't approve ${borrowerId}.`,
-        );
-        return failure;
+        if (clientFailureReason(err) === 'session_expired') {
+          markUnrecordedWrite('approval');
+          return { outcome: 'session_expired', message };
+        }
+        return { outcome: failure, message };
       },
     );
     // Released before the caller sees the outcome (this reaction is first).
     const release = () => {
       rowInFlightRef.current[borrowerId] = false;
     };
-    void outcome.then(release, release);
-    return outcome;
+    void report.then(release, release);
+    return report;
   }
 
   /**
@@ -315,7 +340,10 @@ export function useLeadApprovalActions({
     reasonCode: RejectReasonCode,
     rationale: string | null = null,
   ): Promise<boolean> {
-    if (decisionInFlight(borrowerId)) return Promise.resolve(false);
+    if (decisionInFlight(borrowerId)) {
+      reportDecisionInFlight(borrowerId);
+      return Promise.resolve(false);
+    }
     if (!passesDecisionGate('rejection')) return Promise.resolve(false);
     rowInFlightRef.current[borrowerId] = true;
     setApprovalError(null);
@@ -372,15 +400,37 @@ export function useLeadApprovalActions({
   }
 
   /**
-   * Toggle one row's selection. Called by the row checkbox onChange; the
-   * checkbox click is stopped from bubbling in the markup so the row
-   * still expands/collapses independently.
+   * Toggle one row's selection (the row checkbox, X). The checkbox click is
+   * stopped from bubbling in the markup so the row still expands/collapses
+   * independently. A plain toggle is the anchor a Shift range starts from.
+   * Every selection write also drops ids no longer on screen (pruneTo).
    */
   function toggleSelect(borrowerId: string) {
+    selectionAnchorRef.current = borrowerId;
     setSelectedIds((cur) => {
-      const next = new Set(cur);
+      const next = pruneTo(cur, currentIds);
       if (next.has(borrowerId)) next.delete(borrowerId);
       else next.add(borrowerId);
+      return next;
+    });
+  }
+
+  /**
+   * Shift-click on a row checkbox, Shift+X on the cursor row (audit
+   * tables-07): select every selectable row from the anchor (the last plain
+   * toggle) to `target`, in the on-screen order `orderedIds`. Without an
+   * anchor it is a plain toggle.
+   */
+  function selectRange(target: string, orderedIds: readonly string[]) {
+    const anchor = selectionAnchorRef.current;
+    if (anchor === null || !orderedIds.includes(anchor)) {
+      toggleSelect(target);
+      return;
+    }
+    const range = rangeIds(orderedIds, anchor, target, new Set(selectableIds));
+    setSelectedIds((cur) => {
+      const next = pruneTo(cur, currentIds);
+      for (const id of range) next.add(id);
       return next;
     });
   }
@@ -396,12 +446,20 @@ export function useLeadApprovalActions({
   const selectableIds = displayLeads
     .filter((l) => isLeadSelectableForSalesOps(l.approval_status, approvals[l.borrower_id], l))
     .map((l) => l.borrower_id);
+  // A row whose approve or reject is on the wire is not eligible: a sample
+  // or a bulk run must never draft (DRAFT_OUTREACH) or decide it again.
   const approvalEligibleIds = displayLeads
     .filter((l) => {
       const localStatus = approvals[l.borrower_id];
-      return isLeadApprovalEligible(l.approval_status, localStatus, l);
+      return isLeadApprovalEligible(l.approval_status, localStatus, l) && !pendingDecisions.has(l.borrower_id);
     })
     .map((l) => l.borrower_id);
+  // Audit tables-07: the selection a render may act on is the stored set
+  // intersected with the rows on screen, derived here (never pruned in an
+  // effect). Counts, the header checkbox, the Cmd-K verbs, the CSV scope,
+  // assign and a bulk run all read this, so a row a filter change took off
+  // screen can no longer be counted or acted on.
+  const selectedIds = pruneTo(storedSelection, currentIds);
 
   // Indeterminate state for the header checkbox: some (but not all)
   // eligible rows selected. We also reflect "all eligible selected" as
@@ -434,13 +492,41 @@ export function useLeadApprovalActions({
     requestAnimationFrame(() => bulkRationaleRef.current?.focus());
   }
 
+  /** What each row of a run certifies, read once when the run starts. */
+  function snapshotRows(ids: readonly string[]): Map<string, DecisionSnapshot> {
+    return new Map(ids.map((borrowerId) => {
+      const lead = leadsById.get(borrowerId);
+      return [borrowerId, {
+        evidenceIds: [...(lead?.evidence_ids ?? [])],
+        offerCode: lead?.recommended_offer_code ?? null,
+      }];
+    }));
+  }
+
   /**
-   * Bulk-approve: loop `api.approve()` per selected id in chunks of
-   * BULK_APPROVE_CONCURRENCY. We deliberately do NOT invent a server-side
-   * bulk endpoint — the audit trail wants one row per approval.
-   *
-   * Successes drop out of the selection set; failures stay selected so
-   * the operator can retry. A compact toast summarizes ok/fail counts.
+   * After a run: successes drop out of the selection; the rows that failed
+   * (safe to retry: the server did not commit them) and the rows that never
+   * started stay selected. Skipped rows (a decision already on the wire) and
+   * unmount-aborted rows are not re-selected (R5-21). One invalidation for
+   * the whole run, then focus goes back to the trigger when the toolbar
+   * survives, else to the table region.
+   */
+  function settleRun(result: BulkRunResult) {
+    const keep = [...result.failed.map((issue) => issue.borrowerId), ...result.notStarted];
+    setSelectedIds(new Set(keep));
+    if (result.ok > 0) void invalidateOperationalQueries(queryClient);
+    const focusTarget = bulkActionFocusTarget(keep.length);
+    requestAnimationFrame(() => {
+      if (focusTarget === 'trigger' && bulkApproveBtnRef.current) bulkApproveBtnRef.current.focus();
+      else tableWrapRef.current?.focus();
+    });
+  }
+
+  /**
+   * Bulk-approve: one approve POST (one audit row) per selected eligible
+   * row, BULK_APPROVE_CONCURRENCY at a time, through useLeadBulkRun. We
+   * deliberately do NOT invent a server-side bulk endpoint: every approval
+   * keeps its own governed draft proof and audit row.
    *
    * @param sampleDrafts drafts the approver previewed through "Preview 3
    *   sample drafts": those rows are approved with exactly that copy, so
@@ -448,110 +534,39 @@ export function useLeadApprovalActions({
    *   is generated for them.
    */
   async function bulkApprove(sampleDrafts?: ReadonlyMap<string, OutreachDraftResult>) {
-    // R5-04: synchronous latch. React setState is async, so two rapid
-    // clicks can both read `bulkApproving=false` before either commit
-    // schedules — producing two parallel loops with the same selection
-    // and two audit rows per borrower. Flip the ref before any await.
-    if (bulkInFlightRef.current || bulkApproving) return;
+    // R5-04: the run's synchronous latch, read before any await.
+    if (bulkRun.isRunning() || bulkApproving) return;
     if (!passesDecisionGate('approval')) return;
     const drafts = sampleDrafts ?? new Map<string, OutreachDraftResult>();
-    bulkInFlightRef.current = true;
     // Snapshot which ids to run: skip already-decided rows silently.
     const eligibleForApproval = new Set(approvalEligibleIds);
     const ids = [...selectedIds].filter((id) => eligibleForApproval.has(id));
-    if (ids.length === 0) {
-      bulkInFlightRef.current = false;
-      return;
-    }
+    if (ids.length === 0) return;
     const bulkId = ids.length > 1 ? _newBulkId() : null;
     const sharedRationale = ids.length > 1 ? bulkRationale.trim() : '';
     if (ids.length > 1 && sharedRationale.length === 0) {
       openBulkRationale();
-      bulkInFlightRef.current = false;
       return;
     }
+    const snapshots = snapshotRows(ids);
     bulkRunIdsRef.current = new Set(ids);
-    // One controller for the whole bulk loop; unmount aborts every
-    // still-inflight POST. sessionStorage stashes the partial result so
-    // the next mount can flash "N landed, rest aborted" — otherwise
-    // the user sees no feedback that their bulk action got cut short.
-    const ctrl = new AbortController();
-    bulkAbortRef.current = ctrl;
-    setBulkApproving(true);
     setBulkToast(null);
-    let ok = 0;
-    let fail = 0;
-    let network = 0;
-    let aborted = 0;
-    // `failedIds` is only the subset safe to retry (backend/network
-    // rejections — the server definitely did not commit). Aborted ids
-    // stay out of this list because the server may have committed and
-    // a retry would duplicate the audit row. R5-21.
-    const failedIds: string[] = [];
-    const abortedIds: string[] = [];
-    for (const group of chunk(ids, BULK_APPROVE_CONCURRENCY)) {
-      if (ctrl.signal.aborted) {
-        aborted += group.length;
-        abortedIds.push(...group);
-        continue;
-      }
-      const results = await Promise.all(group.map((id) => approveLead(id, ctrl.signal, {
+    const result = await bulkRun.start({
+      kind: 'approve',
+      rows: ids.map((borrowerId) => ({ borrowerId, posts: drafts.has(borrowerId) ? 1 : 2 })),
+      decide: (borrowerId, signal) => approveWithReport(borrowerId, signal, {
         bulk_id: bulkId,
         bulk_rationale: sharedRationale || null,
         suppressInvalidation: true,
-      }, drafts.get(id) ?? null)));
-      results.forEach((outcome, i) => {
-        if (outcome === 'ok') {
-          ok += 1;
-        } else if (outcome === 'aborted') {
-          aborted += 1;
-          abortedIds.push(group[i]);
-        } else {
-          fail += 1;
-          if (outcome === 'network') network += 1;
-          failedIds.push(group[i]);
-        }
-      });
-    }
-    if (ctrl.signal.aborted) {
-      // Stash the partial result so the next mount can flash it. We
-      // accept that the user may never come back to this page; the
-      // alternative (loud toast on unmount) wouldn't render anyway.
-      stashCancelledBulk(ok, aborted);
-      bulkRunIdsRef.current = new Set();
-      bulkInFlightRef.current = false;
-      return;
-    }
-    // Quieten unused-var lint: abortedIds is tracked for future reuse
-    // (R5-01 idempotency can retry by id) but not needed in this frame.
-    void abortedIds;
-    // Replace selection with the retryable subset so retries are
-    // trivial. Aborted ids are deliberately NOT re-selected — the
-    // server may have committed them and a blind re-click would
-    // duplicate the audit row. R5-21 (2026-04-23).
-    setSelectedIds(new Set(failedIds));
-    if (ok > 0) void invalidateOperationalQueries(queryClient);
+        snapshot: snapshots.get(borrowerId),
+      }, drafts.get(borrowerId) ?? null),
+    });
+    bulkRunIdsRef.current = new Set();
+    // null: unmount cut the run short (stashed, R5-21) or one was running.
+    if (!result) return;
     setBulkRationaleOpen(false);
     setBulkRationale('');
-    setBulkApproving(false);
-    setBulkToast({ ok, fail, network, aborted });
-    bulkAbortRef.current = null;
-    bulkRunIdsRef.current = new Set();
-    bulkInFlightRef.current = false;
-    // A11y: restore keyboard focus once React commits the cleared/retained
-    // selection. `failedIds` is exactly what drives the next selection, so
-    // we can pick the target synchronously, then defer the .focus() to the
-    // next frame so the toolbar's mount/unmount has settled. On a full
-    // success the toolbar unmounts -> focus the always-present table region;
-    // on a partial outcome the trigger button survives -> refocus it.
-    const focusTarget = bulkActionFocusTarget(failedIds.length);
-    requestAnimationFrame(() => {
-      if (focusTarget === 'trigger' && bulkApproveBtnRef.current) {
-        bulkApproveBtnRef.current.focus();
-      } else {
-        tableWrapRef.current?.focus();
-      }
-    });
+    settleRun(result);
   }
 
   // The bulkToast initializer read any partial run the previous mount left
@@ -561,20 +576,14 @@ export function useLeadApprovalActions({
     clearCancelledBulk();
   }, []);
 
-  // Abort the bulk-approve loop on unmount so the remaining POSTs
-  // cancel cleanly.
+  // A flashed run with nothing aborted (the unmount landed after its last
+  // POST returned) clears itself after 4 s, as before the run moved to
+  // useLeadBulkRun; an audit-ambiguous one (aborted > 0) stays until the
+  // operator opens Recent activity.
   useEffect(() => {
-    return () => {
-      bulkAbortRef.current?.abort();
-    };
-  }, []);
-
-  // Auto-dismiss settled results after 4s. Ambiguous cancelled requests stay
-  // visible until the operator opens Recent activity to resolve them.
-  useEffect(() => {
-    if (!bulkToast || bulkToast.aborted > 0) return;
-    const t = window.setTimeout(() => setBulkToast(null), 4000);
-    return () => window.clearTimeout(t);
+    if (!bulkToast || bulkToast.aborted > 0) return undefined;
+    const timer = window.setTimeout(() => setBulkToast(null), BULK_TOAST_DISMISS_MS);
+    return () => window.clearTimeout(timer);
   }, [bulkToast]);
 
   /**
@@ -588,7 +597,7 @@ export function useLeadApprovalActions({
 
   /** A bulk run is on the wire (the synchronous latch, not the render state). */
   function isBulkRunInFlight(): boolean {
-    return bulkInFlightRef.current;
+    return bulkRun.isRunning();
   }
 
   const selectionCount = selectedIds.size;
@@ -610,6 +619,7 @@ export function useLeadApprovalActions({
     selectedIds,
     selectionCount,
     toggleSelect,
+    selectRange,
     clearSelection,
     toggleSelectAll,
     selectableIds,
@@ -619,8 +629,10 @@ export function useLeadApprovalActions({
     bulkApprove,
     openBulkRationale,
     bulkApproving,
+    bulkRun,
     isDecisionLocked,
     isDecisionInFlight: decisionInFlight,
+    reportDecisionInFlight,
     isBulkRunInFlight,
     bulkApproveBtnRef,
     bulkRationaleRef,

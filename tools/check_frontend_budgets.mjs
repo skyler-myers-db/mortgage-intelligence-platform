@@ -267,8 +267,18 @@ const budgets = {
   // (+1.78 gzip: 64 -> 67 chunks, and lazy chunks import two more
   // specifiers), which left it 4.47%; raw kept 4.65% (+2.40). Measured:
   // 1487.44 / 492.91.
-  totalJsBytes: 1560 * KiB, // actual 1487.44 (67 chunks)
-  totalJsGzipBytes: 518 * KiB, // actual 492.91
+  // Re-baselined 2026-09-25 at the wave-3 integration (UI/UX audit wave 3),
+  // attributed by building every first-parent merge step of ux/wave-3 (br
+  // KiB, total JS): api-contract -0.02, score-anatomy +6.88 (score spine,
+  // proof margins, receipt seal, explorer receipts), rate-lever +4.45 (the
+  // Rate Lever scrubber and map facts), genie-jobs +0.91 (job polling client),
+  // genie-reading +7.41 (markdown grammar, collapse, audited CSV export),
+  // queue-place +5.33 (URL place, system views, bulk progress), motion-nav
+  // +1.19 (View Transitions, anchored hover card, nav). 437.77 -> 463.92 br,
+  // 1526.70 -> 1603.11 raw, 507.53 -> 537.66 gzip, 67 -> 77 chunks; every new
+  // surface is a lazy chunk (initial JS moved +0.76 br). ~5% headroom.
+  totalJsBytes: 1684 * KiB, // actual 1603.11 (77 chunks, wave-3 integration)
+  totalJsGzipBytes: 565 * KiB, // actual 537.66 (wave-3 integration)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -283,8 +293,12 @@ const budgets = {
   // TanStack mutations (lib/mutations, useMutation / useMutationState /
   // MutationObserver, which stay lazy: see LAZY_ONLY_VENDOR_MODULES), the
   // decision-on-the-wire guard and the export provenance read. ~5% headroom.
-  maxLazyJsBytes: 126 * KiB, // actual 119.36 (LeadTable, wave-2 integration)
-  maxLazyJsGzipBytes: 41 * KiB, // actual 38.37 (LeadTable, wave-2 integration)
+  // Re-baselined 2026-09-25 at the wave-3 integration: LeadTable grew
+  // 119.36 -> 127.27 raw / 38.37 -> 41.07 gzip / 33.08 -> 35.32 br with the
+  // w3-queue-place lane (sort, focused row and scroll in the URL, honest
+  // bulk-run progress, range selection); +2.19 br of it is that lane's.
+  maxLazyJsBytes: 134 * KiB, // actual 127.27 (LeadTable, wave-3 integration)
+  maxLazyJsGzipBytes: 44 * KiB, // actual 41.07 (LeadTable, wave-3 integration)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -313,8 +327,8 @@ const budgets = {
   // left it 4.3%. Measured: 22.96 br; +~5% rounded up to a whole KiB.
   initialJsBrBytes: 152 * KiB, // actual 143.92 (5 chunks; 142.81 before the vendor split)
   initialCssBrBytes: 25 * KiB, // actual 22.96 (22.89 before the bold fallback faces; 22.82 with the static @fontsource CSS)
-  totalJsBrBytes: 447 * KiB, // actual 425.43 (67 chunks; 423.50 before the vendor split)
-  maxLazyJsBrBytes: 35 * KiB, // actual 33.08 (LeadTable, wave-2 integration)
+  totalJsBrBytes: 488 * KiB, // actual 463.92 (77 chunks, wave-3 integration; see totalJsBytes)
+  maxLazyJsBrBytes: 38 * KiB, // actual 35.32 (LeadTable, wave-3 integration)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
@@ -323,21 +337,35 @@ const budgets = {
   // the dependency batch; the actuals below are the lane's final tree
   // (vendor split + variable fonts), each within 0.3 KiB of the baseline.
   routes: {
-    'src/routes/admin-config.access-denied.tsx': 5 * KiB, // actual 4.53
+    // wave-3 integration: 4.52 -> 5.01, w3-motion-nav's icon stroke floor
+    // and audit glyph in the shared Icon module. ~5% headroom.
+    'src/routes/admin-config.access-denied.tsx': 6 * KiB, // actual 5.01
     'src/routes/admin-config.tsx': 35 * KiB, // actual 32.79
     'src/routes/analytics.tsx': 44 * KiB, // actual 41.60
     // wave-2 integration: 50.03 -> 53.12, the w2-genie-turn lane's in-flight
     // turn store, route Stop and single announcer. ~5% headroom.
-    'src/routes/ask-genie.tsx': 56 * KiB, // actual 53.12
+    // wave-3 integration: 53.01 -> 59.82, w3-genie-reading +5.13 (markdown
+    // grammar, collapse, audited CSV), w3-genie-jobs +0.94 (job polling),
+    // w3-motion-nav +0.53. ~5% headroom.
+    'src/routes/ask-genie.tsx': 63 * KiB, // actual 59.82
     'src/routes/asset.tsx': 8 * KiB, // actual 7.08
     'src/routes/borrower-360.tsx': 38 * KiB, // actual 35.62
     'src/routes/glossary.tsx': 9 * KiB, // actual 8.42
-    'src/routes/home.tsx': 43 * KiB, // actual 40.42
-    'src/routes/lead-queue.tsx': 67 * KiB, // actual 63.11
+    // wave-3 integration: 40.40 -> 43.24, w3-rate-lever +2.37 (the Rate
+    // Lever on the geography hero), w3-motion-nav +0.49. ~5% headroom.
+    'src/routes/home.tsx': 46 * KiB, // actual 43.24
+    // wave-3 integration: 66.10 -> 67.13 net: w3-score-anatomy moved the
+    // proof out (-4.23), w3-queue-place added place + bulk progress (+4.22).
+    'src/routes/lead-queue.tsx': 71 * KiB, // actual 67.13
     'src/routes/not-found.tsx': 4 * KiB, // actual 3.44
-    'src/routes/offer-orchestrator.tsx': 36 * KiB, // actual 33.96
+    // wave-3 integration: ratcheted DOWN, 34.29 -> 31.29 (w3-score-anatomy
+    // moved the proof surfaces into lazy chunks). ~5% headroom.
+    'src/routes/offer-orchestrator.tsx': 33 * KiB, // actual 31.29
     'src/routes/portfolio-builder.tsx': 34 * KiB, // actual 31.76
-    'src/routes/segment-intelligence.tsx': 84 * KiB, // actual 79.37
+    // wave-3 integration: 82.46 -> 83.57 (w3-rate-lever map facts +1.95,
+    // w3-queue-place +2.39, w3-score-anatomy -4.24), 0.5% left: restored
+    // to ~5% headroom.
+    'src/routes/segment-intelligence.tsx': 88 * KiB, // actual 83.57
   },
 };
 

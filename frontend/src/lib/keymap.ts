@@ -13,8 +13,9 @@
  *     (`lead-queue` over `global`), then the latest registration. A binding
  *     whose `when` predicate fails is skipped; a handler that returns
  *     `false` declines and the next candidate runs.
- *   - Editable targets (input, textarea, select, contenteditable) are
- *     ignored unless a binding opts in (`allowInEditable`, for Cmd-K).
+ *   - Editable targets (input other than a checkbox or radio, textarea,
+ *     select, contenteditable) are ignored unless a binding opts in
+ *     (`allowInEditable`, for Cmd-K).
  *   - The per-actor "Single-key shortcuts" preference (keymapPreference.ts,
  *     WCAG 2.1.4) switches off every chord without Ctrl / Cmd / Alt; the
  *     modifier chords stay on.
@@ -185,11 +186,20 @@ export function ariaKeyShortcuts(keys: readonly string[]): string {
     .join(' ');
 }
 
-/** Input, textarea, select or contenteditable: where typing must win. */
+/**
+ * Inputs that take no typing: a focused row checkbox or radio must not
+ * switch the table's J / K / X / Enter keys off (wave-3 review #9). Every
+ * other input type stays editable, `range` included (the Rate Lever's
+ * scrubber owns its arrow keys).
+ */
+const NON_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set(['checkbox', 'radio']);
+
+/** Input (but not a checkbox or radio), textarea, select or contenteditable: where typing must win. */
 export function isEditableElement(el: Element | null | undefined): boolean {
   if (!el) return false;
   const tag = (el as HTMLElement).tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (tag === 'INPUT') return !NON_TEXT_INPUT_TYPES.has(((el as HTMLInputElement).type ?? '').toLowerCase());
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
   return (el as HTMLElement).isContentEditable === true;
 }
 

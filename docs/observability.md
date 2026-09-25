@@ -501,3 +501,49 @@ cap), and every later stale read schedules one more background refresh per key
 makes each attempt fail fast). A repeated `gold_cache_refresh_failed` WARNING
 for the same key during an outage is that retry, not a new problem; it stops
 once the warehouse is back.
+
+## 9. Genie completion jobs
+
+A live Genie turn's governed completion (verification, the output policy,
+the RUN_GENIE audit row, session recording and, for deep asks, the planned
+sweep) runs as a server-side job (2026-09-21 audit `genie-01`,
+`backend/services/genie_completion_runner.py`). The browser opts in with
+`respond_async` on `POST /api/v1/genie/message/complete`, gets `202` with the
+job's status, and polls `POST /api/v1/genie/message/status` about every 1.5 s.
+One `mip_app.genie_completion_jobs` row exists per (actor, conversation,
+message), so a reloaded or retried complete joins the job instead of running
+the tail, and the audit row, a second time.
+
+Events (logger `mip-genie-jobs` unless noted). None carries question text, an
+answer, SQL, or exception text; ids are the job UUID only:
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `genie_job_enqueued` | INFO | `outcome` created / joined, `joined`, `status`, `job_id` | A complete created the turn's job or joined the existing one. A `joined` burst for one job is a reload or a retry, not extra Genie work. |
+| `genie_job_stage_write_failed` | WARNING, at most once a minute per process | `stage`, `error_type` | A progress-stage write failed. Best effort: the answer is unaffected; the rail just shows an older stage. Stage writes run on one background thread per process (the latest stage wins per job), so a slow Lakebase never delays the governed completion. |
+| `genie_job_expired` | INFO | `reason` stale_lease / past_expiry, `via` read / sweep, `job_id` | A job was expired: its runner stopped renewing the lease (the process died or restarted), or a served answer passed `expires_at` and its stored result was NULLed. |
+| `genie_job_finished` (logger `mip-genie`) | INFO | `status` succeeded / failed / expired, `duration_ms`, `failure_kind`, `job_id` | The runner finished. `failure_kind` is dependency_down, upstream_error or internal; the browser gets the canned hint for it. `expired` here means the runner lost its lease before it could store the answer. |
+| `genie_job_internal_error` (logger `mip-genie`) | ERROR | `error_type`, `job_id` | An unexpected exception inside a job, logged with the enqueuing request's correlation id. |
+| `genie_jobs_table_absent` | WARNING, once per absence | — | The App runs ahead of the Lakebase migration: submit advertises no jobs and an older tab's completion stays inline (no job) until `mip_lakebase_migrate` has run; the probe re-checks every 60 s. |
+| `genie_complete_async_refused` (logger `mip-genie`) | WARNING | `outcome` refused | An async complete arrived while the turn could not get a job (the probe failed or found no table). It got a non-retryable 503 before any Genie work or audit row: the browser re-sends an async complete, and a job-less run could not be joined, so the re-send would complete the turn twice. |
+
+Leases and expiry. Postgres `now()` is the only clock. A job is leased to its
+process for 45 s; one daemon thread per process renews its own queued and
+running jobs every 10 s. Nothing expires jobs at startup: the next status
+read (on any worker) expires a job whose lease went stale, and every new job
+first runs one bounded sweep (at most 50 rows, any actor) that expires stale
+leases and served answers past `expires_at`, NULLing their `result_json`. So
+no stored answer outlives its 15-minute window by more than one later turn,
+even when its tab never polls again. Rows are never deleted.
+
+What a row holds. `question_hash` is the progress token's binding digest; no
+column holds question text. `result_json` is the governed answer de-authorized
+before it is stored: `question` blanked and every action's
+`confirmation_token` dropped (its `request_id` kept). The status poll puts the
+question back from its own hash-checked request and re-signs the actions for
+the polling actor, so a leaked row authorizes nothing.
+
+The status poll is budgeted as `genie-job` (the default read rate and a
+Lakebase slot, never the 30/min Genie budget or a Genie slot). The complete
+call's Genie slot is adopted by the job and released when the job ends. The
+poll is also excluded from RUM `api_call` events, like the progress poll.

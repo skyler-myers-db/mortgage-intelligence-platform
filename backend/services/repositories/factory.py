@@ -23,6 +23,7 @@ from backend.services.repositories.protocols import (
     OfferRepository,
     OutreachRepository,
     PortfolioRepository,
+    RateSensitivityRepository,
     RateWindowRepository,
     SegmentRepository,
 )
@@ -40,6 +41,7 @@ _OUTREACH_REPO: OutreachRepository | None = None
 _GENIE_REPO: GenieAnswerRepository | None = None
 _GEO_REPO: GeoRepository | None = None
 _RATE_WINDOW_REPO: RateWindowRepository | None = None
+_RATE_SENSITIVITY_REPO: RateSensitivityRepository | None = None
 _LOCK = Lock()
 
 
@@ -221,6 +223,27 @@ def get_rate_window_repository() -> RateWindowRepository:
         return _RATE_WINDOW_REPO
 
 
+def get_rate_sensitivity_repository() -> RateSensitivityRepository:
+    """Return the Databricks-backed Rate Lever repository (audit wow-stage-1).
+
+    Used by ``/api/geo/rate-sensitivity`` to read the precomputed
+    ``mip.gold.rate_sensitivity_rollup`` grid plus the live contactable
+    subset, through the geography rollups' gold-cache posture.
+    """
+    global _RATE_SENSITIVITY_REPO
+    if _RATE_SENSITIVITY_REPO is not None:
+        return _RATE_SENSITIVITY_REPO
+    from backend.services.databricks_sql import get_sql_client
+    from backend.services.repositories.databricks_rate_sensitivity import (
+        DatabricksRateSensitivityRepository,
+    )
+
+    with _LOCK:
+        if _RATE_SENSITIVITY_REPO is None:
+            _RATE_SENSITIVITY_REPO = DatabricksRateSensitivityRepository(get_sql_client())
+        return _RATE_SENSITIVITY_REPO
+
+
 def get_genie_answer_repository() -> GenieAnswerRepository:
     """Return the live Genie repository backed by the real Mortgage
     Lead Intelligence space.
@@ -257,6 +280,7 @@ def _reset_singletons_for_tests() -> None:
     global _PORTFOLIO_REPO, _ANALYTICS_REPO, _SEGMENT_REPO, _LEAD_REPO
     global _BORROWER_REPO
     global _OFFER_REPO, _OUTREACH_REPO, _GENIE_REPO, _GEO_REPO, _RATE_WINDOW_REPO
+    global _RATE_SENSITIVITY_REPO
     with _LOCK:
         _PORTFOLIO_REPO = None
         _ANALYTICS_REPO = None
@@ -268,3 +292,4 @@ def _reset_singletons_for_tests() -> None:
         _GENIE_REPO = None
         _GEO_REPO = None
         _RATE_WINDOW_REPO = None
+        _RATE_SENSITIVITY_REPO = None

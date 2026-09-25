@@ -5,6 +5,7 @@
  */
 import type { IconName } from '../Icon';
 import type { DecisionOutcome } from '../../lib/apiTypes';
+import { formatDate, parseBackendTimestamp } from '../../lib/time';
 import { REJECT_REASONS } from './LeadTable.constants';
 
 export const DECISION_RECEIPT_COPY = {
@@ -46,7 +47,45 @@ export const DECISION_RECEIPT_COPY = {
   print: 'Print receipt',
   retry: 'Retry read-back',
   openExplorer: 'Open in audit explorer',
+  routingPrefix: 'Routing:',
+  /** The routing line is the approve response's, not the ledger row's (no staff email enters the read-back). */
+  routingSource: '(from the approval response)',
 } as const;
+
+/**
+ * Audit event types and actions whose ledger row is a decision a receipt can
+ * be read back for. Mirrors backend/services/audit_store_receipt.py
+ * `_DECISION_BY_EVENT_TYPE` / `_DECISION_BY_ACTION`, and normalizes the way
+ * `decision_outcome_for` does; tests/unit/test_decision_receipt_event_parity.py
+ * pins the parity by reading this file.
+ */
+export const DECISION_RECEIPT_EVENT_TYPES = ['APPROVE', 'OUTREACH_APPROVE', 'OUTREACH_REJECT', 'REJECT', 'OUTREACH_HOLD', 'HOLD'] as const;
+export const DECISION_RECEIPT_ACTIONS = ['outreach.approve', 'outreach.reject', 'outreach.hold'] as const;
+
+export function isDecisionReceiptEvent(event: { event_type?: string | null; action?: string | null }): boolean {
+  const eventType = (event.event_type ?? '').trim().toUpperCase();
+  if ((DECISION_RECEIPT_EVENT_TYPES as readonly string[]).includes(eventType)) return true;
+  const action = (event.action ?? '').trim().toLowerCase();
+  return (DECISION_RECEIPT_ACTIONS as readonly string[]).includes(action);
+}
+
+/** Where an approval was routed, as the approve response returned it (carryover #12). */
+export interface DecisionRouting {
+  assignedTo: string | null;
+  followUpAt: string | null;
+}
+
+/**
+ * "Routing: Assigned to X · follow-up Jul 19 (from the approval response)",
+ * or null when the approval was not routed (the same rule as the toast).
+ */
+export function decisionRoutingLine(routing: DecisionRouting | null | undefined): string | null {
+  if (!routing || (!routing.assignedTo && !routing.followUpAt)) return null;
+  const followUp = parseBackendTimestamp(routing.followUpAt);
+  const parts = [routing.assignedTo ? `Assigned to ${routing.assignedTo}` : 'Unassigned'];
+  if (followUp) parts.push(`follow-up ${formatDate(followUp, { withYear: false })}`);
+  return `${DECISION_RECEIPT_COPY.routingPrefix} ${parts.join(' · ')} ${DECISION_RECEIPT_COPY.routingSource}`;
+}
 
 /**
  * The decision a durable lifecycle / approval status states, for a caller

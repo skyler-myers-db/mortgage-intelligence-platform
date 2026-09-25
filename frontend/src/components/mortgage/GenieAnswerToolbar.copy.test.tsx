@@ -69,6 +69,17 @@ describe('answer plain text', () => {
     expect(text).not.toContain('ignored');
   });
 
+  it('cleans the wider grammar the bubble renders: numbering kept, headings, italics and links flattened', () => {
+    const text = answerPlainText(
+      payload({
+        metric_value: null,
+        table_rows: [],
+        answer: '### Top states\n1. *Texas* leads\n2. See [rates](https://example.com/r)\n---\n| a | b |\n| 1 | 2 |',
+      }),
+    );
+    expect(text).toBe('Top states\n1. Texas leads\n2. See rates\n| a | b |\n| 1 | 2 |');
+  });
+
   it('reads the SQL from the proof, then the top-level field, else nothing', () => {
     expect(answerSql(payload())).toBe(SQL);
     expect(answerSql(payload({ proof: null, sql_query: ' SELECT 1 ' }))).toBe('SELECT 1');

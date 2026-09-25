@@ -31,6 +31,9 @@ vi.mock('./ConfidenceMeter', () => ({
   ConfidenceMeter: ({ value }: { value: number }) => <span>{value}</span>,
 }));
 
+// The Score anatomy disclosure reads the query cache; this test renders
+// without a QueryClientProvider and does not exercise it (its own tests do).
+vi.mock('./ScoreAnatomyGate', () => ({ ScoreAnatomyGate: () => null }));
 vi.mock('../AppContext', () => ({
   useApp: () => ({
     setLastBorrowerId: () => undefined,

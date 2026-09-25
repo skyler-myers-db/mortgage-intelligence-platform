@@ -69,9 +69,18 @@ export function refusalReportHash(question: string): string {
   return createHash('sha256').update(validated, 'utf8').digest('hex');
 }
 
-export function refusedTurn(reason: GenieRefusalReason, question: string): GenieResult {
+/**
+ * The wire's GenieMessageResponse always echoes the validated `question`
+ * (required in backend/services/genie_answers.py); the hand-written
+ * GenieResult type does not declare it yet (quality-04 remainder), so the
+ * fixture widens the type rather than dropping a required field.
+ */
+export type RefusedGenieResult = GenieResult & { question: string };
+
+export function refusedTurn(reason: GenieRefusalReason, question: string): RefusedGenieResult {
   const source = reason === 'output_policy' ? 'policy_blocked' : 'refused';
   return {
+    question: question.replace(/\s+/g, ' ').trim(),
     conversation_id: '',
     answer: REFUSAL_ANSWERS[reason],
     source,

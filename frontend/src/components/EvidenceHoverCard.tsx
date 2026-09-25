@@ -1,28 +1,61 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useExitRetained } from '../hooks/useExitRetained';
 import type { DrawerSource } from './AppContext';
 import { freshnessBucket, FRESHNESS_LABEL } from './freshness';
+import './EvidenceHoverCard.css';
 
 /**
  * Evidence hover micro-preview (re-audit #4 Buyer-Wow #8, done the safe
- * way). EvidenceChip lives inside overflow:auto scroll containers (the lead
- * table), so a CSS-only popover would clip; this renders through a PORTAL to
- * document.body with viewport-fixed coordinates, so it never clips and never
- * shifts layout. It is a progressive enhancement over the chip's existing
- * behavior: click still opens the full drawer; the card is purely visual
- * (aria-hidden — the chip already carries an accessible name and the
- * freshness dot its own aria-label) and shows on hover OR keyboard focus.
- * Reduced-motion is honored in CSS. Touch devices (no hover/focus tooltip)
- * are unaffected — they tap to open the drawer as before.
+ * way; timing, placement and exit reworked by 2026-09-21 audit motion-10 /
+ * css-10). It is a PASSIVE preview: aria-hidden (the chip already carries an
+ * accessible name and the freshness dot its own aria-label), pointer-events
+ * none, and it never requests anything. Click still opens the full drawer.
+ * Touch devices (no hover / focus tooltip) are unaffected.
+ *
+ * Top layer: the card is a `popover="manual"` portal, shown with
+ * showPopover() in a layout effect after it mounts, so it sits above every
+ * overflow clip and stacking context without a z-index race. Manual, never
+ * `auto` (that light-dismisses an open menu) and never `hint`.
+ *
+ * Placement, two modes picked in JS and recorded as `data-anchored`:
+ *  - CSS anchor positioning (`CSS.supports('anchor-name: --a')`): while its
+ *    card is open the chip carries a per-instance `anchor-name` and the card
+ *    the matching `position-anchor`; EvidenceHoverCard.css places it above
+ *    the chip, flips it below when there is no room and hides it once the
+ *    chip scrolls out of its clip. It follows the chip on scroll.
+ *  - Elsewhere, fixed viewport coordinates from the chip's rect, placed
+ *    above or below by the card's MEASURED height (a layout effect, before
+ *    paint, while the card is still visibility:hidden), and hidden on any
+ *    scroll or resize instead of drifting.
+ *
+ * Timing: hover waits SHOW_DELAY_MS so sweeping the pointer across a table
+ * does not pop a card per chip; once a card has closed, the next one opens
+ * at once for REOPEN_GRACE_MS (a user scanning chips one by one). Keyboard
+ * focus shows immediately. Closing fades out over --dur-instant through
+ * hooks/useExitRetained (instant under reduced motion and where no
+ * transition runs, such as the test DOM).
  */
 
-const SHOW_DELAY_MS = 110;
-const ESTIMATED_CARD_H = 132;
+const SHOW_DELAY_MS = 350;
+const REOPEN_GRACE_MS = 300;
+/** Gap between the chip and the card, and the room kept above the card. */
+const CARD_GAP_PX = 8;
+const VIEWPORT_MARGIN_PX = 4;
 
-interface HoverCoords {
+/** When the last card began to close (module-wide; read only in handlers). */
+let lastClosedAt = Number.NEGATIVE_INFINITY;
+
+interface RectPlacement {
   x: number;
   y: number;
-  placement: 'above' | 'below';
+  side: 'above' | 'below';
+}
+
+interface OpenCard {
+  anchored: boolean;
+  /** Rect mode only: null until the card has been measured. */
+  placement: RectPlacement | null;
 }
 
 export interface EvidenceHoverApi {
@@ -41,56 +74,94 @@ export interface EvidenceHoverOptions {
   cta?: string;
 }
 
+function supportsAnchorPositioning(): boolean {
+  return typeof CSS !== 'undefined' && CSS.supports('anchor-name: --a');
+}
+
+function measuredPlacement(anchor: HTMLElement, card: HTMLElement): RectPlacement {
+  const rect = anchor.getBoundingClientRect();
+  const height = card.getBoundingClientRect().height;
+  const above = rect.top >= height + CARD_GAP_PX + VIEWPORT_MARGIN_PX;
+  return {
+    x: rect.left + rect.width / 2,
+    y: above ? rect.top - CARD_GAP_PX : rect.bottom + CARD_GAP_PX,
+    side: above ? 'above' : 'below',
+  };
+}
+
 export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHoverOptions = {}): EvidenceHoverApi {
   const anchorElRef = useRef<HTMLElement | null>(null);
+  const cardRef = useRef<HTMLDivElement | null>(null);
   const timerRef = useRef<number | null>(null);
-  const [coords, setCoords] = useState<HoverCoords | null>(null);
+  const [open, setOpen] = useState<OpenCard | null>(null);
+  // The card stays mounted (`.is-closing`) until its own exit transition ends.
+  const shown = useExitRetained(open, cardRef);
+  const anchorName = `--evidence-anchor${useId().replace(/[^\w-]/g, '-')}`;
 
   const anchorRef = useCallback((el: HTMLElement | null) => {
     anchorElRef.current = el;
   }, []);
 
-  const clearTimer = () => {
+  const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-  };
+  }, []);
 
-  const computeAndShow = useCallback(() => {
-    const el = anchorElRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const above = rect.top > ESTIMATED_CARD_H + 12;
-    setCoords({
-      x: rect.left + rect.width / 2,
-      y: above ? rect.top - 8 : rect.bottom + 8,
-      placement: above ? 'above' : 'below',
-    });
+  const show = useCallback(() => {
+    if (!anchorElRef.current) return;
+    setOpen({ anchored: supportsAnchorPositioning(), placement: null });
   }, []);
 
   const hide = useCallback(() => {
     clearTimer();
-    setCoords(null);
-  }, []);
+    if (open) lastClosedAt = Date.now();
+    setOpen(null);
+  }, [clearTimer, open]);
 
   const onMouseEnter = useCallback(() => {
     if (!source) return;
     clearTimer();
-    timerRef.current = window.setTimeout(computeAndShow, SHOW_DELAY_MS);
-  }, [source, computeAndShow]);
+    if (Date.now() - lastClosedAt < REOPEN_GRACE_MS) {
+      show();
+      return;
+    }
+    timerRef.current = window.setTimeout(show, SHOW_DELAY_MS);
+  }, [clearTimer, show, source]);
 
   const onFocus = useCallback(() => {
     if (!source) return;
     // Keyboard focus shows immediately (no hover-intent delay needed).
     clearTimer();
-    computeAndShow();
-  }, [source, computeAndShow]);
+    show();
+  }, [clearTimer, show, source]);
 
-  // A fixed-position card would drift on scroll/resize — hide it instead of
-  // chasing the anchor (the card is transient and re-shows on next hover).
+  // Before paint, once per change: promote the card to the top layer; in
+  // anchor mode the chip carries the name only while its card is mounted
+  // (its exit fade included); in rect mode, measure the rendered card, then
+  // place it (it stays visibility:hidden until then).
+  useLayoutEffect(() => {
+    const card = cardRef.current;
+    const anchor = anchorElRef.current;
+    if (!shown || !card || !anchor) return undefined;
+    if (card.showPopover && !card.matches(':popover-open')) card.showPopover();
+    if (shown.anchored) {
+      anchor.style.setProperty('anchor-name', anchorName);
+      return () => {
+        anchor.style.removeProperty('anchor-name');
+      };
+    }
+    // An open card is measured in the commit that mounts it, so a closing
+    // (retained) card always has its placement already.
+    if (!shown.placement) setOpen({ anchored: false, placement: measuredPlacement(anchor, card) });
+    return undefined;
+  }, [anchorName, shown]);
+
+  // Rect mode only: a fixed card would drift on scroll / resize, so it hides
+  // (it re-shows on the next hover). An anchored card follows its chip.
   useEffect(() => {
-    if (!coords) return;
+    if (!open || open.anchored) return undefined;
     const onMove = () => hide();
     window.addEventListener('scroll', onMove, true);
     window.addEventListener('resize', onMove);
@@ -98,20 +169,31 @@ export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHov
       window.removeEventListener('scroll', onMove, true);
       window.removeEventListener('resize', onMove);
     };
-  }, [coords, hide]);
+  }, [hide, open]);
 
   // Clean up a pending timer on unmount.
-  useEffect(() => () => clearTimer(), []);
+  useEffect(() => () => clearTimer(), [clearTimer]);
 
   const bucket = freshnessBucket(source?.updatedAt);
   const signal = source?.signals?.[0];
+  const placement = shown?.placement ?? null;
+  const className = `evidence-hovercard${placement ? ` evidence-hovercard--${placement.side}` : ''}${open === null ? ' is-closing' : ''}`;
 
   const hoverCard =
-    coords && source && typeof document !== 'undefined'
+    shown && source && typeof document !== 'undefined'
       ? createPortal(
           <div
-            className={`evidence-hovercard evidence-hovercard--${coords.placement}`}
-            style={{ left: coords.x, top: coords.y }}
+            ref={cardRef}
+            className={className}
+            popover="manual"
+            data-anchored={shown.anchored ? '' : undefined}
+            style={
+              shown.anchored
+                ? { positionAnchor: anchorName }
+                : placement
+                  ? { left: placement.x, top: placement.y }
+                  : { visibility: 'hidden' }
+            }
             aria-hidden="true"
           >
             <div className="evidence-hovercard__title">{source.title}</div>

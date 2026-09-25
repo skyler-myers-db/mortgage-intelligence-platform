@@ -47,6 +47,7 @@ describe('useLeadApproveReview eligibility re-check', () => {
   let root: Root;
   let hook: Review | null;
   let eligible: boolean;
+  let inFlight: boolean;
   const draftForApproval = vi.fn<(borrowerId: string, signal?: AbortSignal) => Promise<OutreachDraftResult>>();
   const approveLead = vi.fn<(...args: unknown[]) => Promise<'ok' | 'network' | 'backend' | 'aborted' | 'duplicate'>>();
   const onApproved = vi.fn();
@@ -57,6 +58,7 @@ describe('useLeadApproveReview eligibility re-check', () => {
       draftForApproval,
       approveLead,
       isEligible: () => eligible,
+      isDecisionInFlight: () => inFlight,
       onApproved,
     });
     return null;
@@ -66,6 +68,7 @@ describe('useLeadApproveReview eligibility re-check', () => {
     vi.clearAllMocks();
     hook = null;
     eligible = true;
+    inFlight = false;
     approveLead.mockResolvedValue('ok');
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -134,6 +137,35 @@ describe('useLeadApproveReview eligibility re-check', () => {
 
     expect(draftForApproval).toHaveBeenCalledTimes(1);
     expect(hook!.review).toBeNull();
+  });
+
+  it('"Generate draft again" refuses while a decision for the row is on the wire, then drafts once it settles', async () => {
+    draftForApproval.mockRejectedValueOnce(new Error('draft service unavailable'));
+    act(() => {
+      hook!.open(BORROWER, 'inline');
+    });
+    await settle();
+    expect(hook!.review?.phase).toBe('error');
+
+    inFlight = true;
+    act(() => {
+      hook!.retryDraft();
+    });
+    await settle();
+    expect(draftForApproval).toHaveBeenCalledTimes(1);
+    expect(hook!.review?.phase).toBe('error');
+    expect(hook!.review?.error).toBe(
+      'Not drafted: another decision for this borrower is still being recorded. Wait for it to finish, then check the row.',
+    );
+
+    inFlight = false;
+    draftForApproval.mockResolvedValue(DRAFT);
+    act(() => {
+      hook!.retryDraft();
+    });
+    await settle();
+    expect(draftForApproval).toHaveBeenCalledTimes(2);
+    expect(hook!.review?.phase).toBe('ready');
   });
 
   it('a failed Confirm keeps the review open and says the draft stays on record', async () => {

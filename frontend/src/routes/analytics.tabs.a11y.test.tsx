@@ -3,12 +3,14 @@
  *
  * The Analytics view tabs must expose their visible label as their accessible
  * name. A 2026-08-08 UX walk reported the tab elements as having EMPTY
- * accessible names; the component renders `<Icon aria-hidden>` plus a
- * `.filter__value` span carrying the real label, so the name is the label and
- * the empty reading was a tooling artifact. This pins that: the day someone
- * hides `.filter__value` behind a breakpoint or swaps it for a pseudo-element,
- * the tabs really would go nameless, and that must fail here rather than in a
- * screen reader.
+ * accessible names (they were `.filter` chips holding an icon and a
+ * `.filter__value` span). Since the 2026-09-21 audit (visual-05, M part) the
+ * tabs are the prototype's `.layout-tabs` tablist with text-only buttons, as
+ * in design_files/Module 0 Prototype.html:958-960: the button's own text is
+ * the name. This pins that: the day someone wraps the label in a hidden span,
+ * swaps it for a pseudo-element or brings back a chip value, the tabs would
+ * go nameless or noisy, and that must fail here rather than in a screen
+ * reader.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -65,7 +67,7 @@ describe('Analytics view tabs accessibility', () => {
     vi.clearAllMocks();
   });
 
-  it('names every tab with its visible label and keeps the icon out of the name', async () => {
+  it('names every tab with its visible label, text only, on the .layout-tabs tablist', async () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -85,12 +87,17 @@ describe('Analytics view tabs accessibility', () => {
       // from the label the user can see.
       expect(tab.getAttribute('aria-label')).toBeNull();
       expect(tab.textContent?.trim()).not.toBe('');
-      // Decorative icon must not leak into the computed name.
-      expect(tab.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+      // Text-only, as in the prototype: no glyph and no chip value span.
+      expect(tab.querySelector('svg')).toBeNull();
+      expect(tab.querySelector('.filter__value')).toBeNull();
+      expect(tab.classList.contains('filter')).toBe(false);
     }
 
     const tablist = document.querySelector('[role="tablist"]');
     expect(tablist?.getAttribute('aria-label')).toBe('Analytics views');
-    expect(tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true').length).toBe(1);
+    expect(tablist?.className).toBe('layout-tabs analytics-tabs');
+    const selected = tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true');
+    expect(selected.length).toBe(1);
+    expect(selected[0].className, 'the selected tab wears the prototype is-active').toBe('is-active');
   });
 });

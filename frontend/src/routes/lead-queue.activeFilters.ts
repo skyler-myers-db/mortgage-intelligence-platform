@@ -1,5 +1,5 @@
 import type { LeadFunnelStage } from '../lib/api';
-import { FUNNEL_STAGE_LABELS, LEAD_TABLE_VIEW_PARAM } from './lead-queue.filters';
+import { FUNNEL_STAGE_LABELS, LEAD_TABLE_PLACE_PARAMS, LEAD_TABLE_VIEW_PARAM } from './lead-queue.filters';
 
 /**
  * Active NON-core Lead Queue filters, rendered as removable `.filter` chips in
@@ -78,7 +78,8 @@ export function leadQueueActiveFilterChips(input: LeadQueueActiveFilterInput): L
     if (label) push(key, label, value);
   }
   if (input.outreachStatus !== 'any') push('outreach_status', 'OUTREACH', titleCase(input.outreachStatus));
-  if (input.assignedTo) push('assigned_to', 'ASSIGNED', input.assignedTo);
+  // `me` (the "Assigned to me" preset) reads "Me", never the resolved email.
+  if (input.assignedTo) push('assigned_to', 'ASSIGNED', input.assignedTo.toLowerCase() === 'me' ? 'Me' : input.assignedTo);
   if (input.agedDays) push('aged_days', 'AGING', `Aged >${input.agedDays}d`);
   if (input.funnelStage) push('funnel_stage', 'STAGE', FUNNEL_STAGE_LABELS[input.funnelStage]);
   if (input.zipFilter) push('zip', 'ZIP', input.zipFilter);
@@ -106,15 +107,22 @@ export function searchParamsWithoutFilter(
   return next;
 }
 
-/** True when the URL carries anything but the column preset. */
+/**
+ * Display state, not filters: the column preset and the table place (sort,
+ * direction, expanded row). They never enable Clear all and survive it.
+ */
+const DISPLAY_PARAMS: ReadonlySet<string> = new Set([LEAD_TABLE_VIEW_PARAM, ...LEAD_TABLE_PLACE_PARAMS]);
+
+/** True when the URL carries anything but the column preset and the table place. */
 export function hasLeadQueueFilters(searchParams: URLSearchParams): boolean {
-  return [...searchParams.keys()].some((key) => key !== LEAD_TABLE_VIEW_PARAM);
+  return [...searchParams.keys()].some((key) => !DISPLAY_PARAMS.has(key));
 }
 
-/** Clear all: drop every filter and deep-link param, keep the column preset. */
+/** Clear all: drop every filter and deep-link param, keep the column preset and the table place. */
 export function searchParamsCleared(searchParams: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams();
-  const view = searchParams.get(LEAD_TABLE_VIEW_PARAM);
-  if (view) next.set(LEAD_TABLE_VIEW_PARAM, view);
+  for (const [key, value] of searchParams) {
+    if (DISPLAY_PARAMS.has(key)) next.append(key, value);
+  }
   return next;
 }

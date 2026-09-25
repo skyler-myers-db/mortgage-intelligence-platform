@@ -27,7 +27,8 @@ export const API_ROUTE_SEGMENTS = [
   'lineage', 'loan-officers', 'lookup', 'manifest', 'message', 'metadata',
   'monitors', 'my-events', 'notification-drafts', 'offers', 'operations', 'options',
   'outbox', 'outcome', 'outcomes', 'outreach', 'page', 'points', 'portfolio',
-  'preview', 'progress', 'proof', 'property-loan', 'rate-window', 'receipt',
+  'preview', 'progress', 'proof', 'property-loan', 'rate-sensitivity', 'rate-window',
+  'receipt',
   'recommend', 'refusal-report', 'reject', 'rollups', 'rules', 'rum', 'run',
   'run-due', 'run-due-all', 'sales', 'search', 'segments', 'session', 'sessions',
   'settings', 'signals', 'sources', 'stage', 'standup', 'start', 'state-rollups',
@@ -49,6 +50,9 @@ const EXCLUDED_TEMPLATES: ReadonlySet<string> = new Set([
   '/api/health',
   '/api/admin/health',
   '/api/genie/message/progress',
+  // The completion-job poll (audit 2026-09-21 genie-01): ~40/min per turn,
+  // the same rationale as the progress poll. Its job id never reaches RUM.
+  '/api/genie/message/status',
 ]);
 const EXCLUDED_PREFIX = '/api/telemetry/';
 
@@ -62,7 +66,7 @@ const EXCLUDED_PREFIX = '/api/telemetry/';
  * way. No mounted route comes near the limit (ten of the longest literal
  * segment would); this keeps one odd path from costing a batch.
  */
-export function templateApiPath(path: string): string | null {
+function templateApiPath(path: string): string | null {
   const pathOnly = path.split(/[?#]/, 1)[0] ?? '';
   const canonical = pathOnly.replace(/^\/api\/v\d+(?=\/|$)/, '/api');
   if (!canonical.startsWith('/api/')) return null;

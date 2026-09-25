@@ -1,6 +1,8 @@
 import type { AssignmentLifecycleStatus, LeadAssignment } from './types/loanOfficer';
+import type { ProofMargin } from './types/proofMargins';
 
 export type { CampaignRecommendationResponse } from './types/campaign';
+export type { ProofMargin, ProofMarginDirection, ProofMarginKey } from './types/proofMargins';
 
 export type SegmentCode =
   | 'itm'
@@ -452,6 +454,7 @@ export interface BorrowerProof {
   evidence_rows: ProofEvidenceEvent[];
   source_assets: string[];
   reproduce: ProofReproduceQuery[];
+  margins?: ProofMargin[];
 }
 
 export interface KpiTrend {

@@ -10,7 +10,11 @@
    .map-label (state labels), .map-legend__break / __end / __scale (break
    values between the prototype's Lower / Higher words), .map-table (the
    "View as table" view), .zip-tiles__item (list items around the ZIP
-   buttons), .map-stage--status (warming-up / unavailable stage).
+   buttons), .map-stage--status (warming-up / unavailable stage),
+   .map-legend__lever / __lever-note / __lever-slot (the Rate Lever's host
+   in the legend, audit wow-stage-1; the control's block .rate-lever ships
+   in its lazy chunk). The prototype legend (Module 0 Prototype.html
+   ~L1860-1871) has no scenario control.
    ============================================================ */
 
 /* USPS labels on populated states. Sized in SVG user units (the Albers
@@ -61,6 +65,62 @@
 .map-legend__break--2 { grid-column: 4; }
 .map-legend__break--3 { grid-column: 5; }
 .map-legend__scale { color: var(--text-3); }
+
+/* Runtime-06: the stage and the legend are stable-refresh regions, so a
+   placeholder cohort desaturates under an "Updating..." pill instead of
+   blanking. The shared region rule sets position: relative, which must not
+   pull the overlay legend out of its absolute corner (the container-query
+   and ZIP / table rules that make it static are more specific and still
+   win). */
+.map-legend.stable-refresh-region { position: absolute; }
+
+/* Rate Lever host (audit wow-stage-1): the slot reserves the control's
+   height so loading its chunk does not move the stage. The host is laid out
+   here, not in the control's chunk: the legend draws it (the scenario chip,
+   and the "could not load" line) before that chunk arrives and after it
+   failed, so neither the first pick nor a failure moves the legend. In rate
+   mode the map's height is a floor, not a size (USChoroplethMap.tsx): the
+   legend strip under a narrow map grows by the lever, and the stage keeps a
+   readable floor instead of being squeezed under it. */
+.map-legend__lever {
+  display: grid;
+  gap: var(--sp-1);
+  inline-size: calc(var(--sp-16) * 6);
+  max-inline-size: 100%;
+  margin-block-start: var(--sp-1);
+}
+.map-legend__lever-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-3);
+}
+/* A wide map's overlay legend would park the lever over the map itself: in
+   rate mode it joins the flow under the stage, as it does for the ZIP grid. */
+.map-wrap:has(.map-legend__lever) .map-legend {
+  position: static;
+  margin: 0 var(--sp-3) var(--sp-3);
+}
+/* Under the stage (a narrow map), the lever takes the strip's full width. */
+@container map-wrap (max-width: 1100px) {
+  .map-legend > .map-legend__lever { inline-size: auto; }
+}
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) + var(--sp-6)); }
+.map-wrap:has(.map-legend__lever) .map-levels {
+  flex: 1 0 auto;
+  min-block-size: calc(var(--sp-16) * 5);
+}
+
+/* Three colourings: a label never breaks inside its button; the group
+   wraps as a whole in the corner tray instead. "Rate scenario" under a
+   cohort filter is aria-disabled (it stays focusable and explains itself),
+   so it takes the disabled-filter look. */
+.map-overlay-toggle .filter { white-space: nowrap; }
+.map-overlay-toggle .filter[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 
 /* The keyboard hint (revealed by .map-wrap:focus-within in 08-map.css) wraps
    at the legend's own width instead of stretching the legend across the map:
@@ -215,4 +275,16 @@
     opacity: 0;
   }
   .map-wrap:focus-within .map-legend__hint { opacity: 1; }
+}
+
+/* css-hygiene review #2 (forced colours): the contrast-modes rule
+   `.map-region.map-region { stroke: CanvasText }` ties the hover and selected
+   strokes' specificity and wins on order, so a forced-colours user saw no
+   hover or selection edge on the map. One more class restores both, in the
+   system Highlight colour. */
+@media (forced-colors: active) {
+  .map-region.map-region:is(:hover, .is-selected) {
+    stroke: Highlight;
+    stroke-width: 2;
+  }
 }

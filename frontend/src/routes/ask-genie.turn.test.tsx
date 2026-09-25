@@ -268,7 +268,7 @@ describe('/ask-genie on the in-flight turn store', () => {
     window.sessionStorage.setItem(
       GENIE_IN_FLIGHT_TURN_KEY,
       JSON.stringify({
-        v: 1,
+        v: 2,
         question: 'A question from before the reload',
         conversationId: 'conv-1',
         surface: 'route',

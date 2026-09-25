@@ -11,10 +11,14 @@ import {
   sourceAssetsFor,
   warningLabelForSource,
 } from './GenieChat.helpers';
+import { GenieCollapsedTurn } from './GenieCollapsedTurn';
 import { GenieProgress } from './GenieProgress';
 import { GenieTurnActions } from './GenieTurnActions';
 import { GENIE_RESUMING_LABEL, GenieStopRow, GenieTurnNote } from './GenieTurnNote';
+import { useGenieTurnCollapse } from './useGenieTurnCollapse';
+import type { GenieMessageEntrance } from './useGenieMessageEntrance';
 import './GenieTurnActions.css';
+import './GenieAnswerReading.css';
 
 /**
  * Transcript body of the floating Genie panel: settled bubbles, the pending
@@ -53,6 +57,12 @@ export interface GenieChatBodyProps {
   onStop: () => void;
   /** Speak a copy confirmation through the panel's one announcer. */
   onAnnounce: (text: string) => void;
+  /** An answer landed while the reader was reading further up (genie-08). */
+  newAnswer: boolean;
+  /** Bring that answer's start into view and focus it. */
+  onJumpToNewAnswer: () => void;
+  /** Which new bubbles play their one-shot entrance (motion-v2). */
+  entrance: GenieMessageEntrance;
 }
 
 /** Retry for a failed turn, Regenerate for an answered one; nothing else. */
@@ -61,6 +71,22 @@ function answerReask(payload: GenieAnswerShape): 'retry' | 'regenerate' | null {
   // Refusals, data gaps and out-of-footprint answers would only repeat
   // themselves; the question's Edit is the way forward there.
   return warningLabelForSource(payload.source) === null ? 'regenerate' : null;
+}
+
+// Transcript keys follow the response OBJECT, as useGenieTurnCollapse does,
+// never the index: the 20-turn cap evicts from the head and shifts every
+// index, which would hand a bubble's own state (Show all, closed sections)
+// to the next turn. The store keeps each response's identity.
+const turnKeys = new WeakMap<GenieAnswerShape, string>();
+let turnKeySeq = 0;
+function turnKey(payload: GenieAnswerShape): string {
+  let key = turnKeys.get(payload);
+  if (key === undefined) {
+    turnKeySeq += 1;
+    key = `turn-${turnKeySeq}`;
+    turnKeys.set(payload, key);
+  }
+  return key;
 }
 
 export function GenieChatBody({
@@ -78,8 +104,13 @@ export function GenieChatBody({
   onEdit,
   onStop,
   onAnnounce,
+  newAnswer,
+  onJumpToNewAnswer,
+  entrance,
 }: GenieChatBodyProps) {
   const lastAnswerIndex = msgs.reduce((last, m, i) => (m.who === 'ai' ? i : last), -1);
+  // Earlier turns this panel never saw land render as their digest (genie-08).
+  const collapse = useGenieTurnCollapse(msgs.flatMap((m) => (m.who === 'ai' ? [m.payload] : [])));
   const reask = (question: string) => onAsk(question, undefined);
   const turnNote = (note: GenieTurnNoteShape, key: string) => (
     <GenieTurnNote
@@ -89,6 +120,8 @@ export function GenieChatBody({
       disabledReason={busyReason}
       onEdit={onEdit}
       onAskAgain={reask}
+      entering={entrance.entering(note)}
+      onEntered={entrance.onEntered(note)}
     />
   );
 
@@ -105,8 +138,9 @@ export function GenieChatBody({
       });
     }
     if (m.who === 'user') {
+      const answered = msgs[i + 1];
       transcript.push(
-        <Fragment key={i}>
+        <Fragment key={answered?.who === 'ai' ? `q-${turnKey(answered.payload)}` : `q-at-${i}`}>
           <div className="genie__msg genie__msg--user">{m.text}</div>
           <GenieTurnActions placement="question" question={m.text} onEdit={onEdit} />
         </Fragment>,
@@ -117,23 +151,40 @@ export function GenieChatBody({
     const prev = msgs[i - 1];
     const question = prev && prev.who === 'user' ? prev.text : undefined;
     const reaskKind = question ? answerReask(m.payload) : null;
+    const presentation = collapse.presentation(m.payload);
+    const fullAnswer = (
+      <GenieAnswer
+        payload={m.payload}
+        question={question}
+        onFollowUp={(q, followUpConversationId) => onAsk(q, followUpConversationId)}
+        followUpDisabledReason={busyReason}
+        onAction={(action) => onAction(action, m.payload)}
+        onEditQuestion={onEdit}
+        onAnnounce={onAnnounce}
+        dense
+      />
+    );
     transcript.push(
       <div
-        key={i}
+        key={turnKey(m.payload)}
         ref={i === lastAnswerIndex ? lastAnswerRef : undefined}
-        className="genie__msg genie__msg--ai"
+        className={`genie__msg genie__msg--ai${entrance.entering(m.payload) ? ' genie__msg--entering' : ''}`}
+        onAnimationEnd={entrance.onEntered(m.payload)}
+        // "New answer" moves focus here (genie-08); never a Tab stop.
+        tabIndex={i === lastAnswerIndex ? -1 : undefined}
       >
         <div className="bubble">
-          <GenieAnswer
-            payload={m.payload}
-            question={question}
-            onFollowUp={(q, followUpConversationId) => onAsk(q, followUpConversationId)}
-            followUpDisabledReason={busyReason}
-            onAction={(action) => onAction(action, m.payload)}
-            onEditQuestion={onEdit}
-            onAnnounce={onAnnounce}
-            dense
-          />
+          {presentation === 'full' ? (
+            fullAnswer
+          ) : (
+            <GenieCollapsedTurn
+              payload={m.payload}
+              expanded={presentation === 'expanded'}
+              onToggle={() => collapse.toggle(m.payload)}
+            >
+              {fullAnswer}
+            </GenieCollapsedTurn>
+          )}
         </div>
         {/* Source chip row. The backend emits "genie" (live)
             or governed refusal/degraded source values. Warning
@@ -203,7 +254,12 @@ export function GenieChatBody({
     <div className="genie__body" ref={bodyRef}>
       {transcript}
       {inFlight?.revealed && (
-        <div className="genie__msg genie__msg--user">{inFlight.question}</div>
+        <div
+          className={`genie__msg genie__msg--user${entrance.userEntering(inFlight.generation) ? ' genie__msg--entering' : ''}`}
+          onAnimationEnd={entrance.onEntered(inFlight.generation)}
+        >
+          {inFlight.question}
+        </div>
       )}
       {typing && (
         <div className="genie__msg genie__msg--ai">
@@ -249,6 +305,16 @@ export function GenieChatBody({
             </button>
           ))}
         </div>
+      )}
+      {/* Reading an earlier turn when an answer lands (genie-08): nothing
+          scrolls; this offers the jump instead. `.genie__jump` is a
+          documented BEM extension of `.genie`, sticky at the bottom of the
+          transcript (GenieAnswerReading.css). */}
+      {newAnswer && (
+        <button type="button" className="genie__jump" onClick={onJumpToNewAnswer}>
+          New answer
+          <Icon name="down" size={12} />
+        </button>
       )}
     </div>
   );

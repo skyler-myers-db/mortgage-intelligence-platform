@@ -48,6 +48,28 @@ async function expectReadable(
   return inks;
 }
 
+/** The painted colour in the middle of a route nav link's 2px bottom indicator. */
+async function indicatorPixel(page: Page, link: Locator): Promise<Rgb> {
+  const rect = await link.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.bottom - 1 };
+  });
+  const png = await page.screenshot({ clip: { x: rect.x - 0.5, y: rect.y - 0.5, width: 1, height: 1 } });
+  return page.evaluate(async (base64) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${base64}`;
+    await image.decode();
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = image.width;
+    canvasEl.height = image.height;
+    const context = canvasEl.getContext('2d');
+    if (!context) throw new Error('2d canvas unavailable');
+    context.drawImage(image, 0, 0);
+    const [r, g, b] = context.getImageData(Math.floor(image.width / 2), Math.floor(image.height / 2), 1, 1).data;
+    return [r, g, b] as Rgb;
+  }, png.toString('base64'));
+}
+
 /** A detached class probe (no drawer or borrower read is opened): a state label with a glyph. */
 async function probe(page: Page, className: string, label: string): Promise<Locator> {
   await page.locator('#main-content').evaluate(
@@ -85,9 +107,19 @@ test.describe('forced colors paints every Highlight state legibly (responsive-v3
         const fill = await paintedSystemFill(page, 'Highlight');
         const both = { text: true, glyph: true, fill };
 
+        // The route nav keeps its state in an underline, not a fill
+        // (visual-05): the current link reads on Canvas and its indicator
+        // paints Highlight; an idle link paints Canvas where that line is.
         const nav = page.getByRole('navigation', { name: 'Main navigation' });
-        const current = await expectReadable(page, 'current-page route-nav link', nav.locator('.filter.is-active'), both);
-        expect(current.map((ink) => ink.what)).toContain('filter__value "Leads"');
+        const canvas = await paintedSystemFill(page, 'Canvas');
+        const currentLink = nav.locator('.route-nav__link[aria-current="page"]');
+        const current = await expectReadable(page, 'current-page route-nav link', currentLink, { text: true, glyph: true, fill: canvas });
+        expect(current.map((ink) => ink.what)).toContain('route-nav__label "Leads"');
+        expect(sameColor(await indicatorPixel(page, currentLink), fill), 'the current indicator paints Highlight').toBe(true);
+        expect(
+          sameColor(await indicatorPixel(page, nav.locator('.route-nav__link:not([aria-current])').first()), canvas),
+          'an idle link paints no indicator',
+        ).toBe(true);
         await expectReadable(page, 'current rail item', page.locator('.rail__item.is-active'), both);
 
         const statePill = page.getByRole('combobox', { name: 'STATE: IL' });

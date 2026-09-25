@@ -28,9 +28,9 @@
  * Holds are RequestGates, never wall-clock waits, so the in-flight
  * assertions hold under any machine load.
  */
-import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import type { FixtureTheme } from './app';
+import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { LEADS } from './data/borrowers';
 import {
   REVIEW_AUDIT_ID,
@@ -43,8 +43,6 @@ import {
 } from './data/queueKeyboard';
 import type { MockApi } from './mockApi';
 import { expect, test } from './test';
-
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 function draftRequests(mockApi: MockApi): number {
   return mockApi.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/outreach/draft')).length;
@@ -307,6 +305,47 @@ test.describe('approve review', () => {
     expect(echo.calls).toEqual([target.borrower_id]);
   });
 
+  // Wave-3 integration: the expanded row lives in the URL (w3-queue-place),
+  // and the data router commits a URL write in a transition. A pressed in the
+  // same task as the Enter that expands a row once read the previous row and
+  // opened the review as a dialog (CI run 36094178177). The keys go in one
+  // task with microtasks between them, after the review chunk has loaded,
+  // which is that timing exactly rather than by chance.
+  test('A in the same task as the Enter that expands the row opens the review in that row, not a dialog', async ({ app, mockApi, page }) => {
+    registerDraftEcho(mockApi);
+    registerHeldDecision(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await scrollRegion(page).focus();
+    await page.keyboard.press('j');
+    // Warm the review chunk (an Approve waiting on the chunk decides its
+    // mode later, after the URL has caught up): open it once, abandon it.
+    await page.keyboard.press('a');
+    const dialog = page.locator('dialog.lead-approve-dialog');
+    await expect(dialog.getByTestId('lead-approve-review-confirm')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(scrollRegion(page)).toBeFocused();
+
+    // Separate key events with only microtasks between them, as real input
+    // has: React's synchronous state for Enter commits (a microtask), while
+    // the router's transition-scheduled URL commit (a scheduler task) is
+    // still pending when A arrives.
+    await scrollRegion(page).evaluate(async (region) => {
+      const press = (key: string) => {
+        region.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+        region.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }));
+      };
+      press('Enter');
+      for (let hop = 0; hop < 8; hop += 1) await Promise.resolve();
+      press('a');
+    });
+
+    const inline = page.locator('table.tbl tr.tbl__expand').getByTestId('lead-approve-review');
+    await expect(inline.getByTestId('lead-approve-review-confirm')).toBeFocused();
+    await expect(dialog).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`[?&]row=${LEADS[0].borrower_id}(&|$)`));
+  });
+
   for (const how of ['keyboard', 'pointer'] as const) {
     test(`an evidence chip in the review dialog (${how}) opens the drawer holding focus: Enter there approves nothing, Escape returns into the inline review`, async ({ app, mockApi, page }) => {
       const echo = registerDraftEcho(mockApi);
@@ -366,16 +405,24 @@ test.describe('approve review', () => {
       await page.keyboard.press('j');
       await page.keyboard.press('a');
       await expect(page.locator('dialog.lead-approve-dialog').getByTestId('lead-approve-review-confirm')).toBeFocused();
-      const reviewScan = await new AxeBuilder({ page }).include('dialog.lead-approve-dialog').withTags(WCAG_TAGS).analyze();
-      expect(reviewScan.violations.map((violation) => violation.id)).toEqual([]);
+      await expectAxeClean(page, {
+        key: { route: 'lead-queue', state: 'approve-review-dialog' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: 'dialog.lead-approve-dialog',
+      });
       await page.keyboard.press('Escape');
 
       await scrollRegion(page).focus();
       await page.keyboard.press('?');
       const sheet = page.getByTestId('shortcut-sheet');
       await expect(sheet).toBeVisible();
-      const sheetScan = await new AxeBuilder({ page }).include('[data-testid="shortcut-sheet"]').withTags(WCAG_TAGS).analyze();
-      expect(sheetScan.violations.map((violation) => violation.id)).toEqual([]);
+      await expectAxeClean(page, {
+        key: { route: 'lead-queue', state: 'shortcut-sheet' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: '[data-testid="shortcut-sheet"]',
+      });
     });
   }
 });

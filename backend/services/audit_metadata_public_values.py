@@ -455,7 +455,7 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
     for field, value in _metadata_values_for(
         metadata,
-        {"csv_sha256", "borrower_ids_sha256", "filter_fingerprint"},
+        {"csv_sha256", "borrower_ids_sha256", "filter_fingerprint", "columns_sha256"},
     ):
         if value is not None and re.fullmatch(r"[0-9a-f]{64}", str(value)) is None:
             raise AuditMetadataValueViolation(field, "must be a SHA-256 hex digest")

@@ -9,11 +9,11 @@
  * pinned Approval column, under the Console, or clipped by the table's
  * scrollport does not pass.
  */
-import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import type { LeadSummary } from '../../../src/types';
 import { DNC_LEAD, QUEUE_LAYOUT_LEADS, UNRESOLVED_OWNER_LEAD, registerQueueLayoutLeads } from './data/queueLayout';
+import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
@@ -442,11 +442,11 @@ test.describe('axe stays clean on the new queue states', () => {
       await page.getByTestId('lead-queue-more-filters').click();
       await page.getByTestId('lead-status-sort').click();
       await expect(page.getByRole('menu', { name: 'Sort the Status column by' })).toBeVisible();
-      const results = await new AxeBuilder({ page })
-        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-        .analyze();
-      const found = results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(' ; ')}`);
-      expect(found).toEqual([]);
+      await expectAxeClean(page, {
+        key: { route: 'lead-queue', state: 'more-filters-status-menu' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+      });
     });
   }
 });

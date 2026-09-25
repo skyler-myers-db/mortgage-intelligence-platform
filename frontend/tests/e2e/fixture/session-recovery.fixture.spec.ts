@@ -341,7 +341,10 @@ test.describe('a change attempted offline', () => {
 
   test('an Approve while offline, before the review has ever loaded, says to reconnect rather than reload', async ({ app, page, context, hygiene }) => {
     // The review's code chunk cannot load offline: this test's own doing.
-    hygiene.allow('request-failed', /LeadApproveReview-[\w-]+\.(js|css) failed: net::ERR_INTERNET_DISCONNECTED$/);
+    // That is its whole static closure, whatever the bundler splits out of it
+    // (wave 3 added a shared Skeleton chunk), so allow any asset chunk that
+    // fails for being offline; the UI assertions below are the test.
+    hygiene.allow('request-failed', /\/assets\/[\w-]+\.(js|css) failed: net::ERR_INTERNET_DISCONNECTED$/);
     hygiene.allow('console.error', /ERR_INTERNET_DISCONNECTED|Failed to fetch dynamically imported module|Unable to preload CSS/);
     hygiene.allow('pageerror', /Failed to fetch dynamically imported module|Unable to preload CSS/);
     await app.gotoRoute('/lead-queue');

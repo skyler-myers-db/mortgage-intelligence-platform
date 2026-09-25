@@ -19,6 +19,13 @@ carries exactly one county FIPS per state, so ``county_fips_5`` is NULL on
 every gold row and a county-keyed drill dead-ends. ``?county_fips=NNNNN``
 is still accepted (and returns [] today) so a licensed county dataset can
 light the county grain back up without a contract change.
+
+/api/geo/rate-sensitivity — the Rate Lever (audit wow-stage-1): per state and
+per par-rate step (-100 .. +100 bps), the addressable borrowers that would
+clear this refresh's refi screen, from ``mip.gold.rate_sensitivity_rollup``,
+plus the live contactable subset. The whole book, no query parameters. It is
+read only after the user picks the rate colouring, never prefetched, and it
+writes no audit row.
 """
 from typing import Annotated, Literal
 
@@ -30,6 +37,7 @@ from backend.schemas.geo import (
     ZipRollupResponse,
 )
 from backend.schemas.geo_overlay import GeoAssignmentOverlayResponse
+from backend.schemas.geo_rate_sensitivity import RateSensitivityResponse
 from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.error_sanitizer import safe_dependency_detail
@@ -38,11 +46,19 @@ from backend.services.geo_assignment_overlay import (
     get_geo_assignment_overlay_service,
 )
 from backend.services.lakebase import LakebaseError
-from backend.services.repositories import GeoRepository, get_geo_repository
+from backend.services.repositories import (
+    GeoRepository,
+    RateSensitivityRepository,
+    get_geo_repository,
+    get_rate_sensitivity_repository,
+)
 
 router = APIRouter(prefix="/geo", tags=["geo"])
 
 RepoDep = Annotated[GeoRepository, Depends(get_geo_repository)]
+RateSensitivityRepoDep = Annotated[
+    RateSensitivityRepository, Depends(get_rate_sensitivity_repository)
+]
 OverlayDep = Annotated[
     GeoAssignmentOverlayService, Depends(get_geo_assignment_overlay_service)
 ]
@@ -427,3 +443,16 @@ def zip_rollups(
             recency=recency,
         ),
     )
+
+
+@router.get("/rate-sensitivity", response_model=RateSensitivityResponse)
+def rate_sensitivity(repo: RateSensitivityRepoDep) -> RateSensitivityResponse:
+    """Per-state in-the-money counts across the par-rate scenario grid.
+
+    A scenario, not a forecast: each step re-runs ``fn_rate_spread`` /
+    ``fn_in_the_money`` at the refresh's par rate plus the step. ``built`` is
+    False until the gold refresh job has built the grid. A cold warehouse
+    surfaces as the resilience layer's 503 ``warming_up``; there is no
+    fallback grid, and the route writes no audit row.
+    """
+    return repo.rate_sensitivity()

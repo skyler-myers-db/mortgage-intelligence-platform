@@ -22,6 +22,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LeadTable } from './LeadTable';
 import type { LeadSummary } from '../../types';
+import type { LeadTableSort } from './LeadTable.types';
 
 vi.mock('../AppContext', () => ({
   useApp: () => ({
@@ -152,5 +153,109 @@ describe('LeadTable sort-scope disclosure', () => {
     expect(
       Array.from(container.querySelectorAll('th[aria-sort]')).map((th) => th.getAttribute('aria-sort')),
     ).toEqual(Array(5).fill('none'));
+  });
+});
+
+/**
+ * Controlled place (audit shell-03 / runtime-08): the Lead Queue owns the
+ * sort and the expanded row (in the URL); without the props the table keeps
+ * its own state, so Segment Intelligence is unchanged.
+ */
+describe('LeadTable controlled vs uncontrolled place', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  interface Place {
+    sort?: LeadTableSort | null;
+    onSortChange?: (next: LeadTableSort | null) => void;
+    expandedId?: string | null;
+    onExpandedChange?: (id: string | null) => void;
+  }
+
+  function mount(place: Place = {}) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <LeadTable leads={RANKED} {...place} />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+  }
+
+  const rowOrder = () => Array.from(container.querySelectorAll('.lead-table__borrower')).map((node) => node.textContent);
+  const expandedRows = () => container.querySelectorAll('tr.tbl__expand').length;
+  const toggle = (id: string) => {
+    const button = container.querySelector<HTMLButtonElement>(`button[aria-label="Toggle preview for lead ${id}"]`);
+    if (!button) throw new Error(`row not rendered: ${id}`);
+    act(() => button.click());
+  };
+  const click = (selector: string) => {
+    const element = container.querySelector<HTMLElement>(selector);
+    if (!element) throw new Error(`not rendered: ${selector}`);
+    act(() => element.click());
+  };
+
+  it('keeps its own sort and expanded row without the props', () => {
+    mount();
+    click('button[aria-label="Sort by Equity"]');
+    expect(rowOrder()).toEqual(['B-AAAAAAAAAAAA2', 'B-AAAAAAAAAAAA3', 'B-AAAAAAAAAAAA1']);
+    toggle('B-AAAAAAAAAAAA3');
+    expect(expandedRows()).toBe(1);
+    expect(container.querySelector('tr.is-expanded')?.getAttribute('data-borrower-row')).toBe('B-AAAAAAAAAAAA3');
+  });
+
+  it('renders the controlled sort and expanded row, and makes the restored row the cursor', () => {
+    mount({
+      sort: { key: 'equity', dir: 'asc' },
+      onSortChange: vi.fn(),
+      expandedId: 'B-AAAAAAAAAAAA3',
+      onExpandedChange: vi.fn(),
+    });
+
+    expect(rowOrder()).toEqual(['B-AAAAAAAAAAAA1', 'B-AAAAAAAAAAAA3', 'B-AAAAAAAAAAAA2']);
+    expect(container.querySelector('button[aria-label="Sort by Equity"]')?.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
+    expect(container.querySelector('tr.is-expanded')?.getAttribute('data-borrower-row')).toBe('B-AAAAAAAAAAAA3');
+    expect(container.querySelector('tr.is-cursor')?.getAttribute('data-borrower-row')).toBe('B-AAAAAAAAAAAA3');
+    expect(container.querySelector('[data-testid="lead-sort-scope"]')?.textContent).toContain('sorted within the loaded 3');
+  });
+
+  it('reports sort, reset and expand through the handlers instead of changing itself', () => {
+    const onSortChange = vi.fn();
+    const onExpandedChange = vi.fn();
+    mount({ sort: { key: 'equity', dir: 'desc' }, onSortChange, expandedId: null, onExpandedChange });
+
+    click('button[aria-label="Sort by Equity"]');
+    expect(onSortChange).toHaveBeenLastCalledWith({ key: 'equity', dir: 'asc' });
+    click('button[aria-label="Sort by Score"]');
+    expect(onSortChange).toHaveBeenLastCalledWith({ key: 'score', dir: 'desc' });
+    click('[data-testid="lead-sort-reset"]');
+    expect(onSortChange).toHaveBeenLastCalledWith(null);
+    // The parent did not apply any of them: still equity descending.
+    expect(rowOrder()).toEqual(['B-AAAAAAAAAAAA2', 'B-AAAAAAAAAAAA3', 'B-AAAAAAAAAAAA1']);
+
+    toggle('B-AAAAAAAAAAAA1');
+    expect(onExpandedChange).toHaveBeenLastCalledWith('B-AAAAAAAAAAAA1');
+    expect(expandedRows()).toBe(0);
+  });
+
+  it('collapses a controlled row through the handler too', () => {
+    const onExpandedChange = vi.fn();
+    mount({ expandedId: 'B-AAAAAAAAAAAA2', onExpandedChange });
+    toggle('B-AAAAAAAAAAAA2');
+    expect(onExpandedChange).toHaveBeenLastCalledWith(null);
   });
 });

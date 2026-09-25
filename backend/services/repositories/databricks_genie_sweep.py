@@ -29,6 +29,7 @@ from backend.services.genie_answers import (
     GenieReasoningStep,
     default_follow_up_questions,
 )
+from backend.services.genie_completion_stages import GenieJobStage, report_stage
 from backend.services.genie_message_policy import (
     identity_prompt_match,
     protected_prompt_match,
@@ -593,6 +594,7 @@ def run_planned_sweep(
     """
 
     started = time.monotonic()
+    report_stage(GenieJobStage.PLANNING)
     planned_items, dropped = plan_sub_analyses(repo, question, deep=deep)
     planned = [question_text for _, question_text in planned_items]
     titles = {question_text: title for title, question_text in planned_items}
@@ -611,6 +613,7 @@ def run_planned_sweep(
     )
     if len(planned) < plan_floor:
         return None
+    report_stage(GenieJobStage.RESEARCHING, 0, len(planned))
 
     def _one(sub_question: str) -> GenieMessageResponse | None:
         turn_started = time.monotonic()
@@ -662,6 +665,7 @@ def run_planned_sweep(
                     results[futures[future]] = future.result()
                 except Exception:  # noqa: BLE001 - becomes a disclosed gap
                     results[futures[future]] = None
+            report_stage(GenieJobStage.RESEARCHING, len(planned) - len(pending), len(planned))
         for future in pending:
             future.cancel()
 
@@ -728,6 +732,7 @@ def run_planned_sweep(
     # disclosed in the process trace and the proof drawer, not in the body
     # (user feedback 2026-09-08: the method preamble read as internal
     # pipeline thoughts to a business reader).
+    report_stage(GenieJobStage.SYNTHESIZING)
     synthesis, synthesis_gap = _synthesize_closing(repo, question, sections, deep=deep)
     if synthesis_gap:
         gaps.append(synthesis_gap)

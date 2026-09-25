@@ -294,15 +294,20 @@ def breaker_states() -> dict[str, str]:
 
 
 def cached_probe(name: str, probe: Callable[[], Any]) -> bool:
-    """Return the probe result through the shared SWR cache."""
+    """Return whether the dependency is up, through the shared SWR cache.
 
-    return bool(
-        _probe_cache.get_or_refresh(
-            name,
-            probe,
-            wait_timeout_s=settings.mip_health_cold_wait_budget_s,
-        )
+    Fail-closed: only ``True`` or the state ``"up"`` count as up. A state
+    probe's ``"down"`` or ``"resuming"``, ``None`` or any other value reads as
+    not up; ``bool(result)`` would have turned the truthy string ``"down"``
+    into up for a state-returning probe such as ``probe_warehouse``.
+    """
+
+    result = _probe_cache.get_or_refresh(
+        name,
+        probe,
+        wait_timeout_s=settings.mip_health_cold_wait_budget_s,
     )
+    return _dependency_state(result) == "up"
 
 
 def _dependency_state(result: Any) -> DependencyState:

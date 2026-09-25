@@ -18,8 +18,13 @@
  * query), so the store is a module singleton read with useSyncExternalStore.
  */
 
-/** What the dialog must say was not recorded, when a write failed on expiry. */
-export type UnrecordedWrite = 'approval' | 'rejection' | 'change';
+/**
+ * What the dialog must say was not recorded, when a write failed on expiry.
+ * `bulk_approval` (audit tables-07 / states-08, #8): a Lead Queue bulk approve
+ * the session ended part-way through, where some rows WERE recorded and the
+ * rest were not, so the dialog cannot say "your approval was not recorded".
+ */
+export type UnrecordedWrite = 'approval' | 'rejection' | 'change' | 'bulk_approval';
 
 export interface SessionStatusSnapshot {
   expired: boolean;
@@ -57,9 +62,18 @@ export function unrecordedWriteFor(method: string, path: string): UnrecordedWrit
   return UPDATE_METHODS.has(verb) ? 'change' : null;
 }
 
-const PRECEDENCE: Record<UnrecordedWrite, number> = { change: 1, rejection: 2, approval: 3 };
+const PRECEDENCE: Record<UnrecordedWrite, number> = {
+  change: 1,
+  rejection: 2,
+  approval: 3,
+  bulk_approval: 4,
+};
 
-/** An approval outranks a rejection outranks a generic change; never downgrade. */
+/**
+ * A partly recorded bulk approval outranks a single decision (its approve
+ * POSTs report 'approval' first, and the run then says more); an approval
+ * outranks a rejection outranks a generic change; never downgrade.
+ */
 function upgraded(current: UnrecordedWrite | null, write: UnrecordedWrite | null): UnrecordedWrite | null {
   if (!write) return current;
   return !current || PRECEDENCE[write] > PRECEDENCE[current] ? write : current;

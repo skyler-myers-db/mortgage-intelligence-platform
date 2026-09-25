@@ -45,7 +45,7 @@ function warming(dependency: string | null): WarmingUpState {
 }
 
 function warmingRead(state: WarmingUpState): GeoRead<unknown> {
-  return { data: null, warmingUp: state, error: null, loading: false, retry: () => undefined };
+  return { data: null, warmingUp: state, error: null, loading: false, updating: false, retry: () => undefined };
 }
 
 /** Publishes what the hook decides, and whether the provider has answered yet. */

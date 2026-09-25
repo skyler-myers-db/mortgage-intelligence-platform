@@ -196,6 +196,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "csv_sha256",
         "borrower_ids_sha256",
         "filter_fingerprint",
+        # GENIE_ANSWER_EXPORT receipt (backend/api/genie_feedback_routes.py):
+        # the SHA-256 of the CSV's column keys. The receipt reuses
+        # exported_row_count and csv_sha256 above and conversation_id,
+        # message_id and row_count below.
+        "columns_sha256",
         "approval_status",
         "outreach_status",
         "assigned_to_email",

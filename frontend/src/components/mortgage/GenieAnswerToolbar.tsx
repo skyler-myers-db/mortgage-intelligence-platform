@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
+import { flattenGenieMarkdown } from '../../lib/genieAnswerText';
 import { formatCell, humanizeKey } from './GenieAnswer.logic';
 import { stripQuestionRestatement } from './GenieAnswer.markdown';
 import './GenieAnswerToolbar.css';
@@ -17,14 +18,10 @@ import './GenieAnswerToolbar.css';
  * downloads a file: the audited CSV export is a later wave.
  * ---------------------------------------------------------------------- */
 
-/** Markdown the answer prose carries, flattened for a plain-text copy. */
+/** Markdown the answer prose carries, flattened for a plain-text copy through
+ *  the same grammar the bubble renders (lib/genieAnswerText). */
 function plainText(text: string): string {
-  return text
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/^\s*[-*]\s+/gm, '- ')
-    .replace(/[ \t]+\n/g, '\n')
-    .trim();
+  return flattenGenieMarkdown(text, 'lines');
 }
 
 function rowsAsText(rows: Array<Record<string, unknown>>): string {

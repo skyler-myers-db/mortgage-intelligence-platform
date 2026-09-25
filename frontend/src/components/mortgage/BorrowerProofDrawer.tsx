@@ -1,18 +1,18 @@
 import { useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../../lib/api';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
 import { formatFixed } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
-import type { BorrowerProof, ProofFormulaLine, ProofReproduceQuery } from '../../types';
+import type { BorrowerProof, ProofFormulaLine, ProofReproduceQuery, ProofScoreComponentKey } from '../../types';
 import { Button, Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { Skeleton } from '../ui/Skeleton';
 import { GlossaryTerm } from '../GlossaryTerm';
 import { useTabs } from '../ui/useTabs';
+import { useBorrowerProof } from './useBorrowerProof';
+// Same lazy chunk: ScoreAnatomy is the drawer's only importer.
+import { SCORE_SPINE_COPY } from './scoreSpine.copy';
 
 type ProofTab = 'math' | 'evidence' | 'lineage' | 'reproduce';
 
@@ -20,6 +20,12 @@ interface BorrowerProofDrawerProps {
   borrowerId: string;
   open: boolean;
   onClose: () => void;
+  /**
+   * Opened from a Score anatomy segment: the drawer selects the Math tab and
+   * moves focus to that component's card (wow-stage-2). "Show math" passes
+   * nothing and focuses the close button, as before.
+   */
+  focusComponent?: ProofScoreComponentKey | null;
 }
 
 const TABS: Array<{ id: ProofTab; label: string; icon: 'audit' | 'layers' | 'flow' | 'db' }> = [
@@ -44,22 +50,32 @@ function formulaRows(proof: BorrowerProof): ProofFormulaLine[] {
   ];
 }
 
-export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProofDrawerProps) {
+export function BorrowerProofDrawer({ borrowerId, open, onClose, focusComponent = null }: BorrowerProofDrawerProps) {
   const [tab, setTab] = useState<ProofTab>('math');
+  // A segment-opened drawer lands on the Math tab, where its card lives.
+  const [openLatch, setOpenLatch] = useState(open);
+  if (openLatch !== open) {
+    setOpenLatch(open);
+    if (open && focusComponent) setTab('math');
+  }
   // APG tabs (audit a11y-02): arrow keys, Home/End, roving tabindex, and the
   // body is the tabpanel the selected tab controls.
   const tabs = useTabs({ tabs: TAB_IDS, selected: tab, onSelect: setTab, idBase: 'proof-drawer' });
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const focusCardRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
-  const proofQuery = useQuery({
-    queryKey: queryKeys.borrowerProof(borrowerId),
-    queryFn: ({ signal }) => api.borrowerProof(borrowerId, signal),
-    enabled: open && borrowerId.length > 0,
-    staleTime: 60_000,
-  });
+  // The one proof query (critic fix 16): opening the drawer is the explicit
+  // act that may read; a re-open over a cached proof is a pure cache read,
+  // even after an approve invalidated ['mip', 'borrower', ...].
+  const proofQuery = useBorrowerProof(borrowerId, open);
 
-  useFocusTrap({ open, containerRef: panelRef, initialFocusRef: closeBtnRef, onClose });
+  useFocusTrap<HTMLElement, HTMLElement>({
+    open,
+    containerRef: panelRef,
+    initialFocusRef: focusComponent ? focusCardRef : closeBtnRef,
+    onClose,
+  });
 
   const proof = proofQuery.data;
   const copySql = async (query: ProofReproduceQuery) => {
@@ -125,13 +141,21 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
             </div>
           )}
 
+          {/* The proof query is static (useBorrowerProof), so a health
+              recovery never re-reads it: every read writes a
+              VIEW_BORROWER_PROOF row, and only an explicit act may. "Try
+              again" is that act, disabled while a read is in flight so a
+              second click cannot cancel it and send another. */}
           {proofQuery.isError && (
             <div className="proof-callout proof-callout--warning">
               <div className="h-4">Proof unavailable</div>
               <p className="body flush">
-                The borrower dossier loaded, but the governed proof endpoint did not return. Retry after
-                the warehouse is healthy.
+                The borrower dossier loaded, but the governed proof endpoint did not return. Try again
+                once the warehouse is healthy.
               </p>
+              <Button size="sm" className="mt-2" disabled={proofQuery.isFetching} onClick={() => void proofQuery.refetch()}>
+                {SCORE_SPINE_COPY.retry}
+              </Button>
             </div>
           )}
 
@@ -169,8 +193,16 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                   </div>
                   <div className="eyebrow">Score components</div>
                   <div className="proof-components">
-                    {proof.score_components.map((component) => (
-                      <div key={component.key} className="proof-component">
+                    {proof.score_components.map((component) => {
+                      const focused = component.key === focusComponent;
+                      return (
+                      <div
+                        key={component.key}
+                        ref={focused ? focusCardRef : undefined}
+                        className={`proof-component${focused ? ' proof-component--focused' : ''}`}
+                        tabIndex={focused ? -1 : undefined}
+                        data-component-key={component.key}
+                      >
                         <div className="proof-component__top">
                           <div>
                             <div className="proof-component__label">{component.label}</div>
@@ -200,7 +232,8 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose }: BorrowerProof
                           </div>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <div className="eyebrow">Primary offer branch</div>
                   <div className="proof-branches">

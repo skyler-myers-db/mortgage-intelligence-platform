@@ -1,12 +1,24 @@
-import { Fragment, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
+import {
+  Fragment,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type AnimationEventHandler,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../types';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
+import { GenieCollapsedTurn } from '../components/mortgage/GenieCollapsedTurn';
 import { GenieHistoryMenu } from '../components/mortgage/GenieHistoryMenu';
 import { GenieProgress } from '../components/mortgage/GenieProgress';
 import { GenieTurnActions } from '../components/mortgage/GenieTurnActions';
 import { GENIE_RESUMING_LABEL, GenieStopRow, GenieTurnNote } from '../components/mortgage/GenieTurnNote';
+import { useGenieTurnCollapse, type GenieTurnPresentation } from '../components/mortgage/useGenieTurnCollapse';
+import { useGenieMessageEntrance } from '../components/mortgage/useGenieMessageEntrance';
+import { isGenieRouteAskVisible } from '../components/mortgage/useGenieAnnouncer';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { drawerForAsset } from '../lib/drawerSources';
 import {
@@ -133,17 +145,42 @@ function GenieThreadTurn({
   onAction,
   onEditQuestion,
   followUpDisabledReason,
+  presentation,
+  onToggleCollapse,
+  entering,
+  onEntered,
 }: {
   turn: GenieTurn;
   onFollowUp: (question: string, conversationId: string | null) => void;
   onAction: (action: GenieActionSuggestion, payload: GenieAnswerShape) => void | Promise<void>;
   onEditQuestion?: (question: string) => void;
   followUpDisabledReason: string | null;
+  /** An earlier turn this route never saw land shows its digest (genie-08). */
+  presentation: GenieTurnPresentation;
+  onToggleCollapse: () => void;
+  /** A just-landed answer plays the one-shot entrance (motion-v2). */
+  entering: boolean;
+  onEntered: AnimationEventHandler<HTMLElement>;
 }) {
   const chip = sourceChipFor(turn.response);
   const drawerForSource = chip ? drawerForAsset(chip.label) : null;
+  const fullAnswer = (
+    <GenieAnswer
+      payload={turn.response}
+      question={turn.question || undefined}
+      onFollowUp={onFollowUp}
+      followUpDisabledReason={followUpDisabledReason}
+      onAction={(action) => onAction(action, turn.response)}
+      onEditQuestion={onEditQuestion}
+      onAnnounce={announceGenie}
+      withChart
+    />
+  );
   return (
-    <div className="surface surface--inset">
+    <div
+      className={`surface surface--inset genie-thread__answer${entering ? ' genie-thread__answer--entering' : ''}`}
+      onAnimationEnd={onEntered}
+    >
       <div className="surface__body">
         {chip && (
           <div className="chip-row mb-3">
@@ -175,16 +212,17 @@ function GenieThreadTurn({
             chart for top-N / per-state-style table_rows payloads. The floating
             bubble does NOT pass this prop, so its compact form is unchanged.
             An action is bound to THIS turn's answer, never the latest one. */}
-        <GenieAnswer
-          payload={turn.response}
-          question={turn.question || undefined}
-          onFollowUp={onFollowUp}
-          followUpDisabledReason={followUpDisabledReason}
-          onAction={(action) => onAction(action, turn.response)}
-          onEditQuestion={onEditQuestion}
-          onAnnounce={announceGenie}
-          withChart
-        />
+        {presentation === 'full' ? (
+          fullAnswer
+        ) : (
+          <GenieCollapsedTurn
+            payload={turn.response}
+            expanded={presentation === 'expanded'}
+            onToggle={onToggleCollapse}
+          >
+            {fullAnswer}
+          </GenieCollapsedTurn>
+        )}
       </div>
     </div>
   );
@@ -208,6 +246,9 @@ export function AskGenieAnswerPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const thread = useSyncExternalStore(subscribeGenieTurns, getGenieTurns, getGenieTurnsServerSnapshot);
   const { inFlight, notes } = useGenieTurn();
+  const collapse = useGenieTurnCollapse(thread.map((turn) => turn.response));
+  // New messages enter once, and only while the Ask tab is shown (motion-v2).
+  const entrance = useGenieMessageEntrance({ isVisible: isGenieRouteAskVisible, inFlight, notes });
   const busyReason = inFlight ? GENIE_BUSY_REASON : null;
 
   const turnKey = (turn: GenieTurn, index: number) =>
@@ -298,6 +339,8 @@ export function AskGenieAnswerPanel({
       disabledReason={busyReason}
       onEdit={editQuestion}
       onAskAgain={onAsk}
+      entering={entrance.entering(note)}
+      onEntered={entrance.onEntered(note)}
     />
   );
 
@@ -317,6 +360,10 @@ export function AskGenieAnswerPanel({
           onAction={onAction}
           onEditQuestion={onEditQuestion}
           followUpDisabledReason={busyReason}
+          presentation={collapse.presentation(turn.response)}
+          onToggleCollapse={() => collapse.toggle(turn.response)}
+          entering={entrance.entering(turn.response)}
+          onEntered={entrance.onEntered(turn.response)}
         />
       </Fragment>,
     );
@@ -389,7 +436,13 @@ export function AskGenieAnswerPanel({
                 {/* A resumed turn keeps its question hidden until the first
                     progress poll proves it is still this actor's turn. */}
                 {inFlight.revealed ? (
-                  <div ref={latestAnchorRef} className="genie__msg genie__msg--user">{inFlight.question}</div>
+                  <div
+                    ref={latestAnchorRef}
+                    className={`genie__msg genie__msg--user${entrance.userEntering(inFlight.generation) ? ' genie__msg--entering' : ''}`}
+                    onAnimationEnd={entrance.onEntered(inFlight.generation)}
+                  >
+                    {inFlight.question}
+                  </div>
                 ) : (
                   <div ref={latestAnchorRef} className="muted fs-11">{GENIE_RESUMING_LABEL}</div>
                 )}

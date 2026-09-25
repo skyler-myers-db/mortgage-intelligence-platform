@@ -15,16 +15,21 @@ import {
 import type { SessionResponse } from '../../types';
 
 /**
- * Secondary route nav — chip strip matching the prototype's `.filter` /
- * `.layout-tabs` styling. The prototype is a single screen; our app splits
- * Module 0 across eight routes for the linear user flow (portfolio → segments →
- * leads → borrower → offer → …). This sub-nav is the only deviation from the
- * prototype's composition, and uses prototype-native chip styling so it still
- * reads as part of the same design system.
+ * Secondary route nav. APP-ADDED ELEMENT: the prototype is a single screen
+ * with a rail plus `.segmented` (design_files/index.html:926-935) and has no
+ * route nav; our app splits Module 0 across routes for the linear user flow
+ * (portfolio → segments → leads → borrower → offer → …).
+ *
+ * Underline links (`.route-nav__link` / `.route-nav__label`; 2026-09-21
+ * audit visual-05, M part): Geist sans 13/500 with a 2px --accent-ink
+ * indicator under the current page, built from the prototype's token
+ * vocabulary. It used to be a strip of bordered Geist Mono `.filter` chips,
+ * which made navigation read like one more filter row; `.filter` /
+ * `.filter__value` stay reserved for real filter pills.
  */
 
 /**
- * Where a nav chip points. Labels and icons come from the route registry
+ * Where a nav link points. Labels and icons come from the route registry
  * (lib/routeMeta, audit shell-08); only the two detail destinations are
  * resolved here, to the last borrower the actor opened.
  */
@@ -66,10 +71,10 @@ export function RouteNav() {
             end={end}
             onMouseEnter={() => preloadRouteForPath(i.to)}
             onFocus={() => preloadRouteForPath(i.to)}
-            className={({ isActive }) => `filter ${isActive ? 'is-active' : ''}`}
+            className="route-nav__link"
           >
             <Icon name={i.route.icon} size={12} />
-            <span className="filter__value">{i.route.navLabel}</span>
+            <span className="route-nav__label">{i.route.navLabel}</span>
           </NavLink>
         );
       })}

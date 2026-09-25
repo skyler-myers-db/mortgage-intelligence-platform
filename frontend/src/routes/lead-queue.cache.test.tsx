@@ -15,7 +15,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, useNavigate } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,10 +30,18 @@ const apiMocks = vi.hoisted(() => ({
   leadsPage: vi.fn(),
 }));
 
-const appState = vi.hoisted(() => ({ canAccessAdmin: false }));
+const appState = vi.hoisted(() => ({
+  canAccessAdmin: false,
+  actorEmail: null as string | null,
+  sessionStatus: 'ready' as 'loading' | 'ready' | 'error',
+}));
 
 vi.mock('../components/AppContext', () => ({
-  useApp: () => ({ canAccessAdmin: appState.canAccessAdmin }),
+  useApp: () => ({
+    canAccessAdmin: appState.canAccessAdmin,
+    actorEmail: appState.actorEmail,
+    sessionStatus: appState.sessionStatus,
+  }),
 }));
 
 vi.mock('../lib/configOptionsQuery', () => {
@@ -50,10 +58,21 @@ vi.mock('../components/mortgage/PropertyLookupPanel', () => ({
   PropertyLookupPanel: () => null,
 }));
 
+interface PlaceProps {
+  sort?: { key: string; dir: string } | null;
+  onSortChange?: (next: { key: 'equity'; dir: 'desc' } | null) => void;
+  expandedId?: string | null;
+  onExpandedChange?: (id: string | null) => void;
+}
+
+/** The place props the route last handed the (stubbed) LeadTable. */
+const tablePlace = vi.hoisted(() => ({ current: null as PlaceProps | null }));
+
 vi.mock('../components/mortgage/LeadTable', () => ({
-  LeadTable: ({ leads }: { leads: Array<{ borrower_id: string }> }) => (
-    <div data-testid="lead-table">{leads.map((lead) => lead.borrower_id).join(',')}</div>
-  ),
+  LeadTable: ({ leads, ...place }: { leads: Array<{ borrower_id: string }> } & PlaceProps) => {
+    tablePlace.current = place;
+    return <div data-testid="lead-table">{leads.map((lead) => lead.borrower_id).join(',')}</div>;
+  },
 }));
 
 vi.mock('../lib/api', () => ({
@@ -64,14 +83,20 @@ vi.mock('../lib/api', () => ({
 }));
 
 import LeadQueue from './lead-queue';
+import { clearToasts, getToasts } from '../lib/toast';
 
 let navigateTo: (url: string) => void = () => {};
+let currentSearch = '';
 
 function NavProbe() {
   const navigate = useNavigate();
+  const { search } = useLocation();
   useEffect(() => {
     navigateTo = (url: string) => void navigate(url);
   }, [navigate]);
+  useEffect(() => {
+    currentSearch = search;
+  }, [search]);
   return null;
 }
 
@@ -122,6 +147,8 @@ describe('LeadQueue cache identity', () => {
     document.body.innerHTML = '';
     vi.clearAllMocks();
     appState.canAccessAdmin = false;
+    appState.actorEmail = null;
+    appState.sessionStatus = 'ready';
   });
 
   // Audit delivery-08: every visit used to POST a whole-book
@@ -235,5 +262,113 @@ describe('LeadQueue cache identity', () => {
 
     expect(apiMocks.leadsPage).toHaveBeenCalledTimes(2);
     expect(tableText()).toBe('B-CHICAGO~IL');
+  });
+  // Audit shell-03 / runtime-08: the table place (sort, expanded row) rides
+  // in the URL but is not a filter. A sort (push) and an expand (replace)
+  // must reuse the leads cache entry: one GET /api/leads, no refetch, and the
+  // place never reaches the request.
+  it('reuses the leads cache entry when the sort or the expanded row changes', async () => {
+    const row = 'B-P5YP9ESW32R7Z';
+    apiMocks.leadsPage.mockImplementation(() => Promise.resolve({
+      ...rowsFor(undefined),
+      leads: [{ borrower_id: row }, { borrower_id: 'B-AAAAAAAAAAAA2' }],
+    }));
+    await mountAt('/lead-queue?state=IL');
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+
+    await act(async () => tablePlace.current?.onSortChange?.({ key: 'equity', dir: 'desc' }));
+    await settle();
+    expect(currentSearch).toBe('?state=IL&sort=equity&dir=desc');
+    expect(tablePlace.current?.sort).toEqual({ key: 'equity', dir: 'desc' });
+
+    await act(async () => tablePlace.current?.onExpandedChange?.(row));
+    await settle();
+    expect(currentSearch).toBe(`?state=IL&sort=equity&dir=desc&row=${row}`);
+    expect(tablePlace.current?.expandedId).toBe(row);
+
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+    const request = JSON.stringify(apiMocks.leadsPage.mock.calls[0].filter((arg: unknown) => !(arg instanceof AbortSignal)));
+    expect(request).not.toMatch(/equity|sort|B-P5YP9ESW32R7Z/);
+  });
+
+  it('ignores a ?row= that names no loaded row, with no extra read', async () => {
+    await mountAt('/lead-queue?row=B-ZZZZZZZZZZZZZ');
+    expect(tablePlace.current?.expandedId).toBeNull();
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+  });
+  // Audit tables-09 (critic fix 23): "Assigned to me" is `assigned_to=me` in
+  // the URL, resolved to the signed-in email at request time only.
+  it('sends the signed-in email for assigned_to=me while the URL keeps "me"', async () => {
+    appState.actorEmail = 'lo.one@summit.example';
+    await mountAt('/lead-queue?assigned_to=me');
+
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+    expect((apiMocks.leadsPage.mock.calls[0][3] as { assignedTo?: string }).assignedTo).toBe('lo.one@summit.example');
+    expect(currentSearch).toBe('?assigned_to=me');
+    // The hero chip reads "Me", never the email.
+    expect(document.querySelector('[aria-label="Remove ASSIGNED: Me filter"]')).toBeTruthy();
+  });
+
+  it('holds the leads read while the session is loading', async () => {
+    appState.sessionStatus = 'loading';
+    await mountAt('/lead-queue?assigned_to=me');
+
+    expect(apiMocks.leadsPage).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="lead-queue-me-unresolved"]')).toBeNull();
+  });
+
+  it('reads nothing and says so when a ready session has no email', async () => {
+    await mountAt('/lead-queue?assigned_to=me');
+
+    expect(apiMocks.leadsPage).not.toHaveBeenCalled();
+    const callout = document.querySelector('[data-testid="lead-queue-me-unresolved"]');
+    expect(callout?.textContent).toContain('needs your signed-in email');
+    expect(callout?.querySelector('button')?.textContent).toBe('Clear filters');
+  });
+  it('Copy link writes this path plus the share params: no row, no email, no proof', async () => {
+    appState.actorEmail = 'lo.one@summit.example';
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...window.navigator, clipboard: { writeText } });
+    try {
+      await mountAt(
+        '/lead-queue?state=IL&sort=equity&dir=desc&row=B-P5YP9ESW32R7Z&assigned_to=lo.one%40summit.example'
+        + '&growth_agent_run_id=11111111-1111-4111-8111-111111111111',
+      );
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-testid="lead-queue-copy-link"]')?.click();
+      });
+      await settle();
+
+      expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/lead-queue?state=IL&sort=equity&dir=desc`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('a blocked clipboard never tells the reader to share the address bar instead', async () => {
+    clearToasts();
+    const writeText = vi.fn<(text: string) => Promise<void>>()
+      .mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
+    vi.stubGlobal('navigator', { ...window.navigator, clipboard: { writeText } });
+    try {
+      await mountAt('/lead-queue?state=IL&row=B-P5YP9ESW32R7Z');
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-testid="lead-queue-copy-link"]')?.click();
+      });
+      await settle();
+
+      // The address bar holds exactly what Copy link leaves out (the open
+      // row, an assignee email, a Growth Agent proof).
+      const [failure] = getToasts();
+      expect(failure).toMatchObject({ tone: 'error', title: 'Copy failed' });
+      expect(failure.detail).toBe(
+        'The browser blocked clipboard access. Try again rather than sharing the address bar: '
+        + 'it can hold the open row and private filters.',
+      );
+      expect(failure.detail).not.toMatch(/copy the address bar/i);
+    } finally {
+      vi.unstubAllGlobals();
+      clearToasts();
+    }
   });
 });

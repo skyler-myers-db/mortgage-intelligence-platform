@@ -4,6 +4,8 @@ import { SEGMENT_DEFINITIONS } from '../lib/segmentMetadata';
 import type { SegmentCode } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import type { LeadTableView } from '../components/mortgage/LeadTable.columns';
+import type { LeadTableSort, LeadTableSortKey, SortDir } from '../components/mortgage/LeadTable.types';
+import { QUEUE_MASKED_ID_RE } from '../lib/queueContext';
 
 // S1.3: codes, labels, and filter options derive from SEGMENT_DEFINITIONS
 // (the canonical presentation registry) so a segment added there appears in
@@ -341,6 +343,12 @@ export interface LeadQueueExportFiltersInput {
 }
 
 export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput): string {
+  const rendered = leadQueueFilterParams(input).toString();
+  return rendered.length > 0 ? rendered : 'none';
+}
+
+/** The allowlisted, sanitized filter grammar, as URL params (export and share). */
+function leadQueueFilterParams(input: LeadQueueExportFiltersInput): URLSearchParams {
   const params = new URLSearchParams();
   if (input.segment) params.set('segment', input.segment);
   if (input.segmentCodes?.length) {
@@ -377,8 +385,88 @@ export function buildLeadQueueExportFilters(input: LeadQueueExportFiltersInput):
   if (input.cohortId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.cohortId)) {
     params.set('cohort_id', input.cohortId);
   }
+  return params;
+}
+
+/**
+ * The six URL params a Growth Agent handoff carries its cohort proof in.
+ * They bind the rows to one agent run for THIS session: a shared link never
+ * carries them (the recipient's queue is re-verified on its own).
+ */
+export const GROWTH_AGENT_PROOF_PARAMS = [
+  'growth_agent_run_id',
+  'actionable_total',
+  'actionable_cohort_fingerprint',
+  'actionable_snapshot_id',
+  'tool_result_hash',
+  'growth_handoff',
+] as const;
+
+/**
+ * `?assigned_to=me`: the "Assigned to me" preset (audit tables-09). Resolved
+ * to the signed-in actor's email at request time, so the URL, the history
+ * and a copied link never hold an email the preset wrote.
+ */
+export const ASSIGNED_TO_ME = 'me';
+
+export function isAssignedToMe(value: string | null | undefined): boolean {
+  return value?.trim().toLowerCase() === ASSIGNED_TO_ME;
+}
+
+/** Every param the queue reads; anything else in a URL is unrecognized. */
+const KNOWN_QUEUE_PARAMS: readonly string[] = [
+  'segment', 'segment_codes', 'segment_mode', 'state', 'zip', 'states', 'zips', 'cities',
+  'borrower_ids', 'county', 'counties', 'approval_status', 'outreach_status', 'assigned_to',
+  'aged_days', 'funnel_stage', 'cohort_id', ...PORTFOLIO_FILTER_KEYS,
+  'sort', 'dir', 'row', 'view', 'campaign_id', 'variant_name', ...GROWTH_AGENT_PROOF_PARAMS,
+];
+
+export interface LeadQueueShare {
+  /** `?...` or '' — the query string a copied link carries. */
+  search: string;
+  /** What the link leaves out, in plain words (for the toast). */
+  omitted: string[];
+}
+
+/**
+ * The query a "Copy link" carries (audit tables-09): the allowlisted,
+ * sanitized filter grammar (the export's own), the segment mode, the sort
+ * and direction, the column preset, the campaign binding, and `assigned_to`
+ * only when it is `me`. Left out: the open row (a place, not a view), an
+ * `assigned_to` that holds an email, the Growth Agent proof and unknown
+ * params. `filters.assignedTo` is the RAW URL value, never the resolved one.
+ */
+export function leadQueueShareParams(
+  raw: URLSearchParams,
+  filters: LeadQueueExportFiltersInput,
+): LeadQueueShare {
+  const params = leadQueueFilterParams({
+    ...filters,
+    assignedTo: isAssignedToMe(filters.assignedTo) ? ASSIGNED_TO_ME : undefined,
+  });
+  const { sort } = parseLeadTablePlace(raw);
+  if (sort) {
+    params.set('sort', sort.key);
+    params.set('dir', sort.dir);
+  }
+  const view = parseLeadTableView(raw.get(LEAD_TABLE_VIEW_PARAM));
+  if (view !== 'default') params.set(LEAD_TABLE_VIEW_PARAM, view);
+  for (const key of ['campaign_id', 'variant_name'] as const) {
+    const value = raw.get(key)?.trim();
+    if (value) params.set(key, value);
+  }
+  const omitted = new Set<string>();
+  let unknown = 0;
+  for (const key of new Set(raw.keys())) {
+    if (params.has(key)) continue;
+    if (key === 'row') omitted.add('the open row');
+    else if (key === 'assigned_to' && raw.get(key)?.trim()) omitted.add('the assignee email');
+    else if ((GROWTH_AGENT_PROOF_PARAMS as readonly string[]).includes(key)) omitted.add('the Growth Agent proof');
+    else if (!KNOWN_QUEUE_PARAMS.includes(key)) unknown += 1;
+  }
+  if (unknown > 0) omitted.add(unknown === 1 ? '1 unrecognized parameter' : `${unknown} unrecognized parameters`);
   const rendered = params.toString();
-  return rendered.length > 0 ? rendered : 'none';
+  return { search: rendered ? `?${rendered}` : '', omitted: [...omitted] };
 }
 
 /**
@@ -401,6 +489,79 @@ export function searchParamsWithLeadTableView(
   const next = new URLSearchParams(searchParams);
   if (view === 'default') next.delete(LEAD_TABLE_VIEW_PARAM);
   else next.set(LEAD_TABLE_VIEW_PARAM, view);
+  return next;
+}
+
+/**
+ * The reader's PLACE in the ranked table (audit shell-03, runtime-08,
+ * tables-09 phase 1): the client-side sort and the expanded borrower, kept in
+ * the URL so Back from a dossier, a reload and "Return to results" land where
+ * the reader left. Like `?view=`, these are NOT filters: they never reach
+ * `/api/leads`, the leads query key, the Growth Agent proof key or the export
+ * filter string (the export states its own `rowOrder`), and they never enable
+ * Clear all.
+ *
+ *   sort  a sortable column key; rank order is the absence of `sort` and is
+ *         never written. An unknown value is dropped.
+ *   dir   `asc` or `desc` (default `desc`); ignored without `sort`.
+ *   row   the expanded borrower's masked id (`B-` + 13); anything else is
+ *         dropped. Restoring it only re-opens the in-memory preview: no
+ *         borrower, proof or draft request.
+ */
+export const LEAD_TABLE_PLACE_PARAMS = ['sort', 'dir', 'row'] as const;
+
+const LEAD_TABLE_SORT_KEYS: ReadonlySet<LeadTableSortKey> = new Set<LeadTableSortKey>([
+  'relationship',
+  'assignment',
+  'outreach',
+  'equity',
+  'rate',
+  'score',
+  'confidence',
+]);
+
+export interface LeadTablePlace {
+  sort: LeadTableSort | null;
+  row: string | null;
+}
+
+function isLeadTableSortKey(value: string): value is LeadTableSortKey {
+  return LEAD_TABLE_SORT_KEYS.has(value as LeadTableSortKey);
+}
+
+export function parseLeadTablePlace(searchParams: URLSearchParams): LeadTablePlace {
+  const rawSort = searchParams.get('sort')?.trim().toLowerCase() ?? '';
+  const dir: SortDir = searchParams.get('dir')?.trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+  const rawRow = searchParams.get('row')?.trim() ?? '';
+  return {
+    sort: isLeadTableSortKey(rawSort) ? { key: rawSort, dir } : null,
+    row: QUEUE_MASKED_ID_RE.test(rawRow) ? rawRow : null,
+  };
+}
+
+/**
+ * Write the table place into a copy of `searchParams`; every other param is
+ * kept. A patch names only what it changes: `sort: null` returns to rank
+ * order (drops `sort` and `dir`), `row: null` collapses.
+ */
+export function searchParamsWithLeadTablePlace(
+  searchParams: URLSearchParams,
+  patch: Partial<LeadTablePlace>,
+): URLSearchParams {
+  const next = new URLSearchParams(searchParams);
+  if (patch.sort !== undefined) {
+    if (patch.sort === null) {
+      next.delete('sort');
+      next.delete('dir');
+    } else {
+      next.set('sort', patch.sort.key);
+      next.set('dir', patch.sort.dir);
+    }
+  }
+  if (patch.row !== undefined) {
+    if (patch.row !== null && QUEUE_MASKED_ID_RE.test(patch.row)) next.set('row', patch.row);
+    else next.delete('row');
+  }
   return next;
 }
 

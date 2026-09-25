@@ -68,12 +68,20 @@ function assetDomId(laneId: string, assetName: string, index: number): string {
   return `data-estate-asset-${index}-${slug || 'asset'}`;
 }
 
+/**
+ * The fragment the Admin crumb "Data estate" lands on (wave-1c follow-up
+ * #15; lib/breadcrumbs). On the panel root itself, never a wrapper: the
+ * `.main__inner > .surface` spacing needs the surface as a direct child.
+ * useMainScroll scrolls a #hash target under the sticky route nav.
+ */
+const DATA_ESTATE_ANCHOR_ID = 'data-estate';
+
 export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
   const { setDrawer } = useApp();
   const [expandedAssetKey, setExpandedAssetKey] = useState<string | null>(null);
 
   return (
-    <div className="surface data-estate">
+    <div className="surface data-estate" id={DATA_ESTATE_ANCHOR_ID}>
       <div className="surface__hdr surface__hdr--split">
         <div className="surface__hdr-main">
           <div className="surface__icon">
@@ -278,7 +286,7 @@ function AssetDetail({
 
 export function DataEstatePanelSkeleton() {
   return (
-    <div className="surface data-estate" aria-busy="true" role="status">
+    <div className="surface data-estate" id={DATA_ESTATE_ANCHOR_ID} aria-busy="true" role="status">
       <div className="surface__hdr surface__hdr--split">
         <div className="surface__hdr-main">
           <div className="surface__icon">

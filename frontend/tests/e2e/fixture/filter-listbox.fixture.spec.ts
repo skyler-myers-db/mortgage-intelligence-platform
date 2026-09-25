@@ -13,7 +13,7 @@
  *    keyboard alone.
  */
 import type { Locator, Page } from '@playwright/test';
-import { asComputedRgb, tokenValue } from './renderedColor';
+import { asComputedRgb, settleTransitions, tokenValue } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
@@ -147,6 +147,10 @@ for (const theme of FIXTURE_THEMES) {
       await expect(second).toHaveAttribute('aria-selected', 'true');
       await expect(search).toHaveAttribute('aria-activedescendant', (await second.getAttribute('id')) ?? 'missing');
       await expect(search, 'focus stays in the input').toBeFocused();
+      // The ring arrives as a (reduced-motion 0.01ms) outline transition from
+      // the UA's 3px medium width; wait it out before reading the width
+      // (css-hygiene review flake).
+      await settleTransitions(second);
       await expectFocusRing(page, second);
       const borrowerId = (await second.locator('.mono').textContent())?.trim() ?? '';
       expect(borrowerId).toMatch(/^B-[0-9A-Z]{13}$/);
@@ -241,3 +245,29 @@ test('Analytics view tabs switch with the arrow keys', async ({ app, page }) => 
   await expect(page).not.toHaveURL(/view=/);
   await app.settle();
 });
+
+/**
+ * The Analytics view tabs are the prototype's `.layout-tabs` tablist
+ * (design_files/Module 0 Prototype.html:958-960; audit visual-05, M part):
+ * text-only buttons, the selected one on --accent-soft with --accent-ink
+ * (the declared ink departure from the prototype's --accent). Their rules
+ * ship lazily with the route (components/ui/LayoutTabs.css).
+ */
+for (const theme of FIXTURE_THEMES) {
+  test(`Analytics view tabs paint the prototype selected tab: --accent-soft fill, --accent-ink label (${theme})`, async ({ app, page }) => {
+    await app.setTheme(theme);
+    await app.gotoRoute('/analytics');
+    const tablist = page.getByRole('tablist', { name: 'Analytics views' });
+    await expect(tablist).toHaveClass('layout-tabs analytics-tabs');
+    const selected = tablist.getByRole('tab', { selected: true });
+    const idle = tablist.getByRole('tab', { selected: false }).first();
+    await settleTransitions(selected);
+    const paint = (tab: Locator) => tab.evaluate((el) => ({ bg: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color }));
+    expect(await paint(selected)).toEqual({
+      bg: await asComputedRgb(page, await tokenValue(selected, '--accent-soft')),
+      color: await asComputedRgb(page, await tokenValue(selected, '--accent-ink')),
+    });
+    expect((await paint(idle)).bg, 'an idle tab is unfilled').toBe('rgba(0, 0, 0, 0)');
+    expect(await selected.locator('svg, .filter__value').count(), 'text only').toBe(0);
+  });
+}

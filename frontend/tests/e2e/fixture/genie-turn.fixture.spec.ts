@@ -91,7 +91,7 @@ test.describe('one turn that survives the route', () => {
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);
     await expect.poll(() => turn.progressPolls).toBeGreaterThan(0);
-    expect(JSON.parse((await inFlightRecord(page)) ?? '{}')).toMatchObject({ v: 1, phase: 'polling' });
+    expect(JSON.parse((await inFlightRecord(page)) ?? '{}')).toMatchObject({ v: 2, phase: 'polling' });
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await app.settle();

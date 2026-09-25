@@ -1,14 +1,12 @@
 /* ============================================================
    NATIVE ANALYTICS
    ============================================================ */
+/* The view tablist is the prototype's `.layout-tabs` (components/ui/
+   LayoutTabs.css, lazy with the route); this keeps only its place in the
+   page and lets the seven tabs wrap. */
 .analytics-tabs {
-  display: flex;
-  gap: var(--sp-2);
   flex-wrap: wrap;
   margin-bottom: var(--gap-grid);
-}
-.analytics-tab {
-  appearance: none;
 }
 .analytics-filters {
   margin-block: 0 var(--gap-grid);

@@ -10,7 +10,11 @@ const AUTH_HEADERS: Record<string, string> = BEARER
   ? { Authorization: `Bearer ${BEARER}` }
   : {};
 
-test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
+test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS, contextOptions: { reducedMotion: 'reduce' } });
+// Reduced motion (2026-09-21 audit stack-04 / runtime-10): route and theme
+// changes now run View Transitions where motion is allowed; this spec
+// measures layout, not a transition, so it opts out the way the fixture
+// harness does.
 
 type MapDrillTarget = {
   state: string;

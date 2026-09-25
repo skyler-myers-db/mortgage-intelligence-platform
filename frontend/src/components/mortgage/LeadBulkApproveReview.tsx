@@ -7,6 +7,9 @@ import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { Button, Chip } from '../Primitives';
 import './LeadBulkApproveReview.css';
 
+// A bulk run's progress and report ride this lazy chunk too (tables-07).
+export { LeadBulkRunProgress, LeadBulkRunResult } from './LeadBulkRunStatus';
+
 /**
  * The bulk approve gate's review block (audit states-06): shown under the
  * required shared rationale while the gate is open for two or more rows.
