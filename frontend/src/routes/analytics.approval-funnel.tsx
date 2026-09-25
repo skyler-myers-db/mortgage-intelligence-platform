@@ -10,6 +10,7 @@ import { queryKeys } from '../lib/queryKeys';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { Chip } from '../components/Primitives';
+import { DescribedErrorBody } from '../components/ui/DescribedError';
 import {
   assignmentStatusLabel,
   assignmentStatusVariant,
@@ -160,7 +161,9 @@ function LoanOfficerDrill({ loanOfficerId }: { loanOfficerId: string }) {
   if (detailQuery.isError || !detailQuery.data) {
     return (
       <div className="status-callout status-callout--warning" role="alert">
-        Officer drill-down unavailable: {detailQuery.error instanceof Error ? detailQuery.error.message : 'request failed'}
+        {/* The shared, buyer-safe vocabulary, never the transport message (audit states-04). */}
+        Officer drill-down unavailable:{' '}
+        <DescribedErrorBody error={detailQuery.error} subject="the officer detail" />
       </div>
     );
   }
