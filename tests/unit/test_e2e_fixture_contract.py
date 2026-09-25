@@ -381,6 +381,53 @@ def test_the_exporter_names_the_pattern_of_an_unknown_param(node: str) -> None:
     assert ":nope" in completed.stderr and "/api/things/:nope" in completed.stderr
 
 
+FIXTURE_REL = Path("frontend", "tests", "e2e", "fixture")
+# What the exporter loads, and the package.json that makes the .ts modules ESM.
+EXPORTER_CLOSURE = (
+    FIXTURE_REL / "registry.ts",
+    FIXTURE_REL / "mockApi.ts",
+    FIXTURE_REL / "contractSamples.ts",
+    FIXTURE_REL / "data",
+    Path("frontend", "package.json"),
+)
+
+
+def test_the_exporter_runs_on_the_fixture_modules_alone(
+    node: str, samples: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    """CI's backend job has no node_modules, and the exporter must not load
+    frontend/src: run it on a copy of the modules it loads and nothing else.
+    A package or src module that survives type stripping (for example an
+    all-inline ``import { type X } from '@playwright/test'``) fails here with
+    ERR_MODULE_NOT_FOUND even where a developer's node_modules would hide it."""
+    isolated = tmp_path / "isolated"
+    for relative in (Path("tools", EXPORTER.name), *EXPORTER_CLOSURE):
+        source, target = ROOT / relative, isolated / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+    reachable = [parent / "node_modules" for parent in (isolated, *isolated.parents) if (parent / "node_modules").exists()]
+    assert reachable == [], f"the isolated copy can still resolve packages from {reachable}"
+    assert not (isolated / "frontend" / "src").exists()
+
+    out = tmp_path / "isolated.json"
+    completed = subprocess.run(
+        [node, str(isolated / "tools" / EXPORTER.name), "--out", str(out)],
+        cwd=isolated,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        "the exporter needs more than the fixture modules (a runtime import of a package or of "
+        f"frontend/src survived type stripping):\n{completed.stderr}"
+    )
+    assert json.loads(out.read_text(encoding="utf-8")) == samples
+
+
 # --- CI pin -------------------------------------------------------------------
 
 
