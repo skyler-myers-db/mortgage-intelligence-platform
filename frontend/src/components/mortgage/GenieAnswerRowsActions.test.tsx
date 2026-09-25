@@ -7,6 +7,11 @@
  * GENIE_ANSWER_EXPORT receipt resolves; a 404 or 503 downloads nothing and
  * says why through the surface announcer; a latch holds a second POST while
  * the first is recording; above 5,000 rows it is disabled with a reason.
+ *
+ * A click crosses the lazy export chunk, two digests and the POST, so every
+ * test waits for the observable outcome instead of a fixed number of ticks
+ * (one `setTimeout(0)` flush was flaky on a loaded machine), and the digest
+ * is stubbed so the chain holds no WebCrypto round trip.
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -36,6 +41,12 @@ vi.mock('../../lib/apiClients/genieExport', async () => {
 vi.mock('../../lib/csv', async () => {
   const actual = await vi.importActual<typeof import('../../lib/csv')>('../../lib/csv');
   return { ...actual, downloadCsvText: mocks.downloadCsvText };
+});
+vi.mock('../../lib/apiClients/leadExport', async () => {
+  const actual = await vi.importActual<typeof import('../../lib/apiClients/leadExport')>(
+    '../../lib/apiClients/leadExport',
+  );
+  return { ...actual, sha256Hex: async () => 'c'.repeat(64) };
 });
 
 import { ApiError } from '../../lib/apiTransport';
@@ -78,8 +89,26 @@ function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   } as GenieAnswerShape;
 }
 
-async function flush() {
-  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+/** One act-wrapped tick, so state set by a settling promise renders. */
+async function tick(ms = 10) {
+  await act(async () => new Promise((resolve) => setTimeout(resolve, ms)));
+}
+
+/**
+ * Retry `check` on act-wrapped ticks until it stops throwing: the positive
+ * outcome a test waits for before it makes any negative assertion.
+ */
+async function eventually(check: () => void, timeoutMs = 10_000) {
+  const startedAt = Date.now();
+  for (;;) {
+    try {
+      check();
+      return;
+    } catch (error) {
+      if (Date.now() - startedAt > timeoutMs) throw error;
+    }
+    await tick();
+  }
 }
 
 describe('Genie answer CSV download (genie-06 slice 2)', () => {
@@ -125,8 +154,7 @@ describe('Genie answer CSV download (genie-06 slice 2)', () => {
     expect(downloadButton()?.textContent).toBe('Download CSV');
 
     await act(async () => downloadButton()!.click());
-    await flush();
-    expect(mocks.postGenieExportReceipt).toHaveBeenCalledTimes(1);
+    await eventually(() => expect(mocks.postGenieExportReceipt).toHaveBeenCalledTimes(1));
     expect(mocks.downloadCsvText).not.toHaveBeenCalled();
     expect(downloadButton()!.disabled).toBe(true);
     expect(downloadButton()!.textContent).toBe('Recording export…');
@@ -134,7 +162,9 @@ describe('Genie answer CSV download (genie-06 slice 2)', () => {
     expect(JSON.stringify(mocks.postGenieExportReceipt.mock.calls[0][0])).not.toContain('Which states');
 
     await act(async () => resolveReceipt(RECEIPT));
-    await flush();
+    await eventually(() =>
+      expect(container.querySelector('[data-export-status]')?.textContent).toBe(GENIE_EXPORT_DOWNLOADED),
+    );
     expect(mocks.downloadCsvText).toHaveBeenCalledTimes(1);
     const [csv] = mocks.downloadCsvText.mock.calls[0] as [string, string];
     expect(csv.split('\n')).toContain('state,borrowers');
@@ -151,7 +181,9 @@ describe('Genie answer CSV download (genie-06 slice 2)', () => {
       button.click();
       button.click();
     });
-    await flush();
+    await eventually(() => expect(mocks.postGenieExportReceipt).toHaveBeenCalled());
+    // Both clicks started in the same tick; give a second chain time to land.
+    for (let i = 0; i < 5; i += 1) await tick();
     expect(mocks.postGenieExportReceipt).toHaveBeenCalledTimes(1);
   });
 
@@ -165,10 +197,13 @@ describe('Genie answer CSV download (genie-06 slice 2)', () => {
     );
     render(payload());
     await act(async () => downloadButton()!.click());
-    await flush();
+    await eventually(() => {
+      expect(onAnnounce).toHaveBeenCalledWith(message);
+      expect(container.querySelector('[data-export-status]')?.textContent).toBe(message);
+    });
+    expect(mocks.postGenieExportReceipt).toHaveBeenCalledTimes(1);
     expect(mocks.downloadCsvText).not.toHaveBeenCalled();
-    expect(onAnnounce).toHaveBeenCalledWith(message);
-    expect(container.querySelector('[data-export-status]')?.textContent).toBe(message);
+    expect(downloadButton()!.disabled).toBe(false);
   });
 
   it('is not offered without a live message id, on a governed action result, or on a withheld answer', () => {
@@ -205,7 +240,9 @@ describe('Genie answer CSV download (genie-06 slice 2)', () => {
     const buttons = container.querySelectorAll<HTMLButtonElement>('button.genie-answer__download');
     expect(buttons).toHaveLength(2);
     await act(async () => buttons[1].click());
-    await flush();
+    await eventually(() => expect(onAnnounce).toHaveBeenCalledWith(GENIE_EXPORT_DOWNLOADED));
+    expect(mocks.postGenieExportReceipt).toHaveBeenCalledTimes(1);
+    expect(mocks.downloadCsvText).toHaveBeenCalledTimes(1);
     expect(mocks.postGenieExportReceipt.mock.calls[0][0]).toMatchObject({
       scope: 'section',
       row_count: 1,
