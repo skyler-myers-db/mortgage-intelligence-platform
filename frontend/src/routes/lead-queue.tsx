@@ -723,7 +723,10 @@ export default function LeadQueue() {
           query={leadsQueryState}
           subject="Ranked borrowers"
           loading={<LeadQueueTableSkeleton />}
-          isEmpty={(page) => page.leads.length === 0}
+          // A Growth Agent handoff is never "empty": its cohort proof and
+          // verification status render in LeadTable's status chips, and a
+          // verified cohort whose rows the filters hide must still show them.
+          isEmpty={(page) => page.leads.length === 0 && !page.growthAgentVerification}
           empty={countyLoading ? (
             <div className="muted body mb-grid">Resolving county ZIPs…</div>
           ) : emptyModule && (
