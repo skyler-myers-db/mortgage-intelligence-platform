@@ -58,6 +58,7 @@ function stage(stageKey: string, label: string, terminal = false): GenieLiveProg
 
 const ANSWER: GenieAnswer = {
   answer: 'Illinois leads.',
+  question: 'Which state leads?',
   source: 'genie',
   trusted_assets: ['mip.gold.borrower_360'],
   conversation_id: 'conv-1',

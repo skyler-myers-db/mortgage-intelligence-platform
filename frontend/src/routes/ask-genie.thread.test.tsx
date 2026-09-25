@@ -83,6 +83,7 @@ const START: GenieStartResult = {
 function answer(text: string, id: string): GenieAnswer {
   return {
     answer: text,
+    question: `Question for ${id}`,
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-1',

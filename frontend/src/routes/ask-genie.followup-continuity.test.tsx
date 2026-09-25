@@ -82,6 +82,7 @@ const START: GenieStartResult = {
 function answer(followUpQuestions: string[] = []): GenieAnswer {
   return {
     answer: 'The governed opportunity result is ready.',
+    question: 'Show current opportunity volume',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-native-1',

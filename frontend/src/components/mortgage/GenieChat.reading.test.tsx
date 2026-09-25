@@ -81,6 +81,7 @@ const TERMINAL: GenieLiveProgress = {
 function answer(overrides: Partial<GenieAnswer> = {}): GenieAnswer {
   return {
     answer: 'There are 124,946 borrowers passing the screen.',
+    question: 'How many borrowers pass the screen?',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-live',

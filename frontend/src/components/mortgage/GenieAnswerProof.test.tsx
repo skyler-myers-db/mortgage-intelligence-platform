@@ -11,6 +11,7 @@ import { GenieProofPanel } from './GenieAnswerProof';
 function payload(elapsedMs: number | null): GenieAnswerShape {
   return {
     answer: 'Trusted SQL answer.',
+    question: 'Which states lead?',
     source: 'trusted_sql',
     trusted_assets: [],
     proof: {

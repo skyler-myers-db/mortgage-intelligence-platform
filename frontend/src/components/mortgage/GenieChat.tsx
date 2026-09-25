@@ -408,7 +408,7 @@ export function GenieChat() {
     return runGenieActionRequest(action, payload, conversationId)
       .then((outcome) => {
         if (outcome.kind !== 'ok') {
-          landActionBubble({ answer: outcome.message, source: 'degraded', trusted_assets: [] }, outcome.message);
+          landActionBubble({ answer: outcome.message, question: '', source: 'degraded', trusted_assets: [] }, outcome.message);
           return;
         }
         if (action.action_type === 'save_borrowers') refreshWorkspace();
@@ -416,6 +416,8 @@ export function GenieChat() {
         landActionBubble(
           {
             answer: confirmed,
+            // A governed action result answers no question (its turn's is '').
+            question: '',
             source: GOVERNED_ACTION_SOURCE,
             trusted_assets: [],
             conversation_id: payload.conversation_id,

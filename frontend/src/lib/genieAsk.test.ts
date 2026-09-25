@@ -43,7 +43,7 @@ describe('askGenieLive', () => {
   it('returns the inline response for deterministically completed turns', async () => {
     vi.spyOn(api, 'genieSubmit').mockResolvedValue({
       completed: true,
-      response: { answer: 'refused', source: 'refused', trusted_assets: [] },
+      response: { answer: 'refused', question: 'question?', source: 'refused', trusted_assets: [] },
     });
     const progressSpy = vi.spyOn(api, 'genieProgress');
 
@@ -76,6 +76,7 @@ describe('askGenieLive', () => {
     );
     const complete = vi.spyOn(api, 'genieComplete').mockResolvedValue({
       answer: 'final answer',
+      question: 'question?',
       source: 'genie',
       trusted_assets: [],
     });
@@ -95,6 +96,7 @@ describe('askGenieLive', () => {
     const terminal = progressOf({ status: 'COMPLETED', stage: 'complete', terminal: true });
     vi.spyOn(api, 'genieComplete').mockResolvedValue({
       answer: 'final answer',
+      question: 'question?',
       source: 'genie',
       trusted_assets: [],
     });
@@ -167,6 +169,7 @@ describe('askGenieLive', () => {
     });
     vi.spyOn(api, 'genieComplete').mockResolvedValue({
       answer: 'recovered',
+      question: 'question?',
       source: 'genie',
       trusted_assets: [],
     });
@@ -214,7 +217,7 @@ describe('submitGenieTurn / pollGenieTurn (runtime-01 split)', () => {
     });
     submit.mockResolvedValueOnce({
       completed: true,
-      response: { answer: 'inline', source: 'refused', trusted_assets: [] },
+      response: { answer: 'inline', question: 'question?', source: 'refused', trusted_assets: [] },
     });
     await expect(submitGenieTurn('question?', null)).resolves.toMatchObject({
       kind: 'completed',
@@ -313,7 +316,7 @@ function jobOf(partial: Partial<GenieCompletionJobStatus> = {}): GenieCompletion
   };
 }
 
-const ANSWER = { answer: 'final answer', source: 'genie', trusted_assets: [] };
+const ANSWER = { answer: 'final answer', question: 'question?', source: 'genie', trusted_assets: [] };
 
 describe('requestGenieCompletion (genie-01)', () => {
   it('discriminates a 202 job from a 200 answer an older server sends', async () => {

@@ -71,6 +71,7 @@ function progress(terminal: boolean): GenieLiveProgress {
 function answer(overrides: Partial<GenieAnswer> = {}): GenieAnswer {
   return {
     answer: 'Illinois leads with 3,080 candidates.',
+    question: 'Which states have the most prime refi candidates?',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-1',
@@ -189,6 +190,7 @@ describe('the submit is never re-POSTed', () => {
         question: QUESTION,
         response: {
           answer: 'Genie is waking the SQL warehouse. Ask again in a moment.',
+          question: QUESTION,
           source: 'degraded',
           trusted_assets: [],
         },

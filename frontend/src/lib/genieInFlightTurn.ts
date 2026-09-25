@@ -392,7 +392,7 @@ function failTurn(gen: number, err: unknown, deferred = false): void {
   landExchange(
     inFlight.surface,
     turn.question,
-    { answer: failureAnswer(err), source: 'degraded', trusted_assets: [] },
+    { answer: failureAnswer(err), question: turn.question, source: 'degraded', trusted_assets: [] },
     null,
   );
 }
