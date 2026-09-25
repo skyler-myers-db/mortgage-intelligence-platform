@@ -9,12 +9,17 @@ import {
 } from './GenieAnswer.exportTarget';
 import type { GenieAnswerCsvRequest, GenieExportOutcome } from './GenieAnswer.export';
 
-/** The export flow is an interaction chunk, loaded on the click. Never rejects. */
+const EXPORT_REFUSED: GenieExportOutcome = { kind: 'refused', message: GENIE_EXPORT_NOT_RECORDED };
+
+/**
+ * The export flow is an interaction chunk, loaded on the click. Never
+ * rejects: a failed chunk load or a rejection from inside the flow ends as a
+ * refusal, so the latch always releases and nothing is left unhandled.
+ */
 function runGenieExport(request: GenieAnswerCsvRequest): Promise<GenieExportOutcome> {
-  return import('./GenieAnswer.export').then(
-    (module) => module.exportGenieAnswerCsv(request, { post: postGenieExportReceipt }),
-    (): GenieExportOutcome => ({ kind: 'refused', message: GENIE_EXPORT_NOT_RECORDED }),
-  );
+  return import('./GenieAnswer.export')
+    .then((module) => module.exportGenieAnswerCsv(request, { post: postGenieExportReceipt }))
+    .catch(() => EXPORT_REFUSED);
 }
 
 /**

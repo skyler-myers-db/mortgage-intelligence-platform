@@ -206,6 +206,33 @@ describe('Genie answer CSV download (genie-06 slice 2)', () => {
     expect(downloadButton()!.disabled).toBe(false);
   });
 
+  it('a throw while the file is built releases the latch: refused, no POST, the button re-enabled', async () => {
+    render(payload());
+    // A bad clock from the click on (the answer itself rendered fine):
+    // `new Date(NaN).toISOString()` throws a RangeError.
+    const clock = vi.spyOn(Date.prototype, 'toISOString').mockImplementation(() => {
+      throw new RangeError('Invalid time value');
+    });
+    const rejections: unknown[] = [];
+    const onRejection = (event: PromiseRejectionEvent) => rejections.push(event.reason);
+    window.addEventListener('unhandledrejection', onRejection);
+    try {
+      await act(async () => downloadButton()!.click());
+      await eventually(() => {
+        expect(onAnnounce).toHaveBeenCalledWith(GENIE_EXPORT_NOT_RECORDED);
+        expect(container.querySelector('[data-export-status]')?.textContent).toBe(GENIE_EXPORT_NOT_RECORDED);
+      });
+    } finally {
+      clock.mockRestore();
+      window.removeEventListener('unhandledrejection', onRejection);
+    }
+    expect(mocks.postGenieExportReceipt).not.toHaveBeenCalled();
+    expect(mocks.downloadCsvText).not.toHaveBeenCalled();
+    expect(downloadButton()!.disabled).toBe(false);
+    expect(downloadButton()!.textContent).toBe('Download CSV');
+    expect(rejections).toEqual([]);
+  });
+
   it('is not offered without a live message id, on a governed action result, or on a withheld answer', () => {
     render(payload({ message_id: null, proof: null }));
     expect(downloadButton()).toBeNull();
