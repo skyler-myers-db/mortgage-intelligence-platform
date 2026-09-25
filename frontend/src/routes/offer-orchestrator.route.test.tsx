@@ -92,7 +92,6 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({
 
 import { ApiError } from '../lib/api';
 import OfferOrchestrator from './offer-orchestrator';
-import { clearBorrowerCache } from './offer-orchestrator.cache';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -224,7 +223,6 @@ describe('OfferOrchestrator route behavior', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearBorrowerCache();
     appMocks.approvals = {};
     appMocks.savedDrafts = {};
     appMocks.canApprove = true;
@@ -287,7 +285,6 @@ describe('OfferOrchestrator route behavior', () => {
     act(() => root.unmount());
     queryClient.clear();
     container.remove();
-    clearBorrowerCache();
     vi.useRealTimers();
   });
 
@@ -778,6 +775,9 @@ describe('OfferOrchestrator route behavior', () => {
 
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
     expect(apiMocks.borrower).toHaveBeenCalledTimes(2);
+    // TanStack delivers observer updates on a 0 ms timer (the reads are on
+    // the query layer since wave 4b), so let that fake timer run too.
+    await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(container.textContent).toContain('Review and approve outreach');
   });
 

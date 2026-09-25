@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Navigate, useParams } from 'react-router';
-import { api, ApiError, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
-import type { WarmingUpState } from '../lib/useWarmingUpRetry';
-import type { Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation } from '../types';
+import { api } from '../lib/api';
 import { PageShell } from '../components/layout/PageShell';
 import { BorrowerOfferPreviewMock } from '../components/mortgage/BorrowerOfferPreviewMock';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
@@ -14,12 +12,12 @@ import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { approverGateReason } from '../components/mortgage/approverGate';
 import { invalidateOperationalQueries } from '../lib/queryKeys';
 import { offerDisplayLabel } from '../lib/offerLanguage';
-import { BORROWER_CACHE, clearBorrowerCache, readBorrowerCache } from './offer-orchestrator.cache';
 import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } from './offer-orchestrator.constants';
 import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
 import { OfferReviewGrid, RejectRationalePanel } from './offer-orchestrator.panels';
 import { OfferActionBar } from './offer-orchestrator.action-bar';
-import { draftProofMatchesSnapshot, offerSnapshotMatches, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
+import { useOfferDraft, useOfferSnapshot } from './offer-orchestrator.queries';
+import { draftProofMatchesSnapshot, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
 import { OfferDecisionOutcome } from './offer-orchestrator.decision';
 import { announceApprovalRouting, offerUnsavedMessage } from './offer-orchestrator.feedback';
@@ -39,49 +37,30 @@ export default function OfferOrchestrator() {
   const { id } = useParams();
   const { campaignBinding, campaignBindingError } = useOfferCampaignBinding();
   const queryClient = useQueryClient();
-  const [b, setB] = useState<Borrower360Type | null>(null);
-  const [rec, setRec] = useState<OfferRecommendation | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [loadErrorStatus, setLoadErrorStatus] = useState<number | null>(null);
-  const [warmingUp, setWarmingUp] = useState<WarmingUpState | null>(null);
-  const [snapshotReconciling, setSnapshotReconciling] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
-  const [auditId, setAuditId] = useState<string | null>(null);
-  const [approvalId, setApprovalId] = useState<string | null>(null);
+  // Counts this view's explicit re-reads (Regenerate / Retry draft, a saved
+  // draft's reset, the load-error Retry): the old effect's reloadToken, kept
+  // only so a decision's one-shot receipt reveal is tied to the load it was
+  // made on.
+  const [loadGeneration, setLoadGeneration] = useState(0);
   // The decision the user just made in THIS view (borrower + load
-  // generation). The Decision receipt's one-shot reveal keys off this, never
-  // off durable approval_status, so a stale decision never celebrates again
-  // on load and a reload of the same borrower does not replay it (audit
-  // motion-06; the receipt replaced the .burst chip in wave 1).
-  const [justDecided, setJustDecided] = useState<{ id: string; reloadToken: number } | null>(null);
+  // generation), with the audit / approval ids its write returned. The
+  // Decision receipt's one-shot reveal keys off this, never off durable
+  // approval_status, so a stale decision never celebrates again on load and
+  // a reload of the same borrower does not replay it (audit motion-06; the
+  // receipt replaced the .burst chip in wave 1).
+  const [decidedHere, setDecidedHere] = useState<{
+    id: string;
+    generation: number;
+    auditId: string | null;
+    approvalId: string | null;
+  } | null>(null);
   // Carryover #12: where the approval made here was routed, from its response.
   const [approvalRouting, setApprovalRouting] = useState<{ id: string; assignedTo: string | null; followUpAt: string | null } | null>(null);
-  const [lifecycle, setLifecycle] = useState<BorrowerLifecycle | null>(null);
   const [approving, setApproving] = useState<boolean>(false);
-  const [reloadToken, setReloadToken] = useState<number>(0);
-  const [draftBody, setDraftBody] = useState<string>('');
-  const [draftSubject, setDraftSubject] = useState<string>('');
   const [draftChannel, setDraftChannel] = useState<OutreachChannel>('email');
-  const [draftLoaded, setDraftLoaded] = useState<boolean>(false);
-  const [draftPending, setDraftPending] = useState<boolean>(true);
-  const [draftError, setDraftError] = useState<string | null>(null);
   const [draftSavePending, setDraftSavePending] = useState(false);
   const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
-  const [draftBaselineBody, setDraftBaselineBody] = useState('');
-  const [draftBaselineSubject, setDraftBaselineSubject] = useState('');
-  const [draftDisclosureVersion, setDraftDisclosureVersion] = useState<string | null>(null);
-  const [draftDisclosureState, setDraftDisclosureState] = useState<string | null>(null);
-  const [draftGeneratorLabel, setDraftGeneratorLabel] = useState<string | null>(null);
-  const [draftGenerationMode, setDraftGenerationMode] = useState<'supervisor' | 'governed_fallback' | null>(null);
-  const [draftStrategy, setDraftStrategy] = useState<string | null>(null);
-  const [draftEvidence, setDraftEvidence] = useState<string[]>([]);
-  const [draftEvidenceAssets, setDraftEvidenceAssets] = useState<string[]>([]);
-  const [draftProof, setDraftProof] = useState<{
-    generationId: string;
-    responseHash: string;
-    sourceRefreshedAt: string;
-  } | null>(null);
-  const [draftWarming, setDraftWarming] = useState<WarmingUpState | null>(null);
   const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
   const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>(DEFAULT_REJECT_REASON);
   const salesTeam = useOfferSalesTeam();
@@ -114,268 +93,39 @@ export default function OfferOrchestrator() {
   const approverGate = approverGateReason(canApprove, sessionStatus);
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${activeDraftChannel}` : null;
+  // The route is the ONE observer of both reads (offer-orchestrator.queries):
+  // every child below gets them as props.
+  const snapshot = useOfferSnapshot(id, campaignBinding);
+  const draft = useOfferDraft(id, activeDraftChannel, campaignBinding, campaignBindingError);
+  const b = snapshot.data?.borrower ?? null;
+  const rec = snapshot.data?.recommendation ?? null;
+  const lifecycle = snapshot.data?.lifecycle ?? null;
+  const snapshotReconciling = snapshot.reconciling;
+  const draftLoaded = draft.loaded;
+  const draftSubject = draft.subject;
+  const draftProof = draft.proof;
+  const decisionHere = decidedHere !== null && decidedHere.id === id && decidedHere.generation === loadGeneration
+    ? decidedHere
+    : null;
+  const justDecided = decisionHere !== null;
+  // A decision made here cites its own write's ids; otherwise the lifecycle
+  // row's (a durable decision reads its receipt back without the reveal).
+  const auditId = decisionHere ? decisionHere.auditId : lifecycle?.audit_event_id ?? null;
+  const approvalId = decisionHere ? decisionHere.approvalId : lifecycle?.approval_id ?? null;
+  /** An explicit re-read: this open's snapshot and a new audited draft. */
+  const rereadSnapshotAndDraft = () => {
+    snapshot.refetch();
+    draft.reset();
+  };
 
   useEffect(() => {
     if (id) setLastBorrowerId(id);
   }, [id, setLastBorrowerId]);
 
-  useEffect(() => {
-    if (!id) return;
-    const ctrl = new AbortController();
-    let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const MAX_ATTEMPTS = 6;
-    const INTERVAL_MS = 5000;
-
-    const cached = readBorrowerCache(id);
-    if (
-      cached
-      && reloadToken === 0
-      && offerSnapshotMatches(cached.borrower, cached.recommendation)
-    ) {
-      setB(cached.borrower);
-      setRec(cached.recommendation);
-      setLifecycle(null);
-      setApprovalId(null);
-      setAuditId(null);
-      setLoadError(null);
-      setLoadErrorStatus(null);
-      setWarmingUp(null);
-      setDraftBody('');
-      setDraftSubject('');
-      setDraftLoaded(false);
-      setDraftPending(true);
-      setDraftBaselineBody('');
-      setDraftBaselineSubject('');
-      setDraftDisclosureVersion(null);
-      setDraftDisclosureState(null);
-      setDraftProof(null);
-    } else {
-      setB(null);
-      setRec(null);
-      setLifecycle(null);
-      setApprovalId(null);
-      setAuditId(null);
-      setLoadError(null);
-      setLoadErrorStatus(null);
-      setWarmingUp(null);
-      setDraftBody('');
-      setDraftSubject('');
-      setDraftLoaded(false);
-      setDraftPending(true);
-      setDraftBaselineBody('');
-      setDraftBaselineSubject('');
-      setDraftProof(null);
-    }
-
-    const runAttempt = async (attempt: number): Promise<void> => {
-      if (cancelled) return;
-      try {
-        const [borrower, recommendation, loadedLifecycle] = await Promise.all([
-          api.borrower(id, ctrl.signal, attempt > 1),
-          api.recommendOffer(id, ctrl.signal),
-          api.borrowerLifecycle(id, ctrl.signal).catch(() => null),
-        ]);
-        if (cancelled) return;
-        if (!offerSnapshotMatches(borrower, recommendation)) {
-          if (attempt < MAX_ATTEMPTS) {
-            setSnapshotReconciling(true);
-            timeoutId = setTimeout(() => {
-              void runAttempt(attempt + 1);
-            }, 750);
-            return;
-          }
-          throw new Error(
-            'The borrower and offer snapshots changed while loading. Retry after the data refresh completes.',
-          );
-        }
-        setB(borrower);
-        setRec(recommendation);
-        setSnapshotReconciling(false);
-        setLifecycle(loadedLifecycle);
-        if (loadedLifecycle?.approval_id) {
-          setApprovalId(loadedLifecycle.approval_id);
-        }
-        // A durable decision's audit row: the receipt reads it back without
-        // the reveal (justDecided stays null on load).
-        if (loadedLifecycle?.audit_event_id) {
-          setAuditId(loadedLifecycle.audit_event_id);
-        }
-        setWarmingUp(null);
-        setLoadError(null);
-        setLoadErrorStatus(null);
-        const prev = BORROWER_CACHE.get(id);
-        BORROWER_CACHE.set(id, {
-          borrower,
-          recommendation,
-          draftSubject: !campaignBinding && prev?.draftChannel === activeDraftChannel ? (prev?.draftSubject ?? null) : null,
-          draftBody: !campaignBinding && prev?.draftChannel === activeDraftChannel ? (prev?.draftBody ?? null) : null,
-          draftChannel: !campaignBinding && prev?.draftChannel === activeDraftChannel ? activeDraftChannel : null,
-          fetched: Date.now(),
-        });
-      } catch (err: unknown) {
-        if (cancelled || isAbortError(err)) return;
-        setSnapshotReconciling(false);
-        if (isWarmingUpError(err) && attempt < MAX_ATTEMPTS) {
-          setWarmingUp({
-            dependency: err.dependency,
-            label: `${dependencyLabel(err.dependency)} warming up`,
-            attempt: attempt + 1,
-            maxAttempts: MAX_ATTEMPTS,
-            correlationId: err.correlationId,
-          });
-          setLoadError(null);
-          setLoadErrorStatus(null);
-          timeoutId = setTimeout(() => {
-            void runAttempt(attempt + 1);
-          }, INTERVAL_MS);
-          return;
-        }
-        setWarmingUp(null);
-        setLoadErrorStatus(err instanceof ApiError ? err.status : null);
-        setLoadError(
-          err instanceof Error
-            ? `Couldn't load borrower or offer: ${err.message}`
-            : "Couldn't load borrower or offer.",
-        );
-      }
-    };
-
-    void runAttempt(1);
-
-    let draftTimeoutId: ReturnType<typeof setTimeout> | null = null;
-    setDraftWarming(null);
-    setDraftError(null);
-
-    const runDraftAttempt = async (attempt: number): Promise<void> => {
-      if (cancelled) return;
-      if (campaignBindingError) {
-        setDraftLoaded(false);
-        setDraftPending(false);
-        setDraftError(
-          'Campaign handoff is incomplete. Reopen the saved campaign and select a variant.',
-        );
-        return;
-      }
-      try {
-        const draft = campaignBinding
-          ? await api.draftOutreach(id, activeDraftChannel, ctrl.signal, campaignBinding)
-          : await api.draftOutreach(id, activeDraftChannel, ctrl.signal);
-        if (cancelled) return;
-        if (
-          campaignBinding
-          && (
-            draft.campaign_id !== campaignBinding.campaign_id
-            || draft.variant_name !== campaignBinding.variant_name
-            || draft.channel !== activeDraftChannel
-          )
-        ) {
-          throw new Error(
-            'Campaign variant proof is stale. Reopen the saved campaign before approval.',
-          );
-        }
-        setDraftWarming(null);
-        if (draft?.body && draft.body.trim().length > 0) {
-          const body = draft.body;
-          const subject = draft.subject ?? '';
-          setDraftBody(body);
-          setDraftSubject(subject);
-          setDraftLoaded(true);
-          setDraftPending(false);
-          setDraftBaselineBody(draft.body);
-          setDraftBaselineSubject(draft.subject ?? '');
-          setDraftProof({
-            generationId: draft.generation_id,
-            responseHash: draft.response_hash,
-            sourceRefreshedAt: draft.source_refreshed_at,
-          });
-          setDraftDisclosureVersion(draft.disclosure_version);
-          setDraftDisclosureState(draft.disclosure_state);
-          setDraftGeneratorLabel(draft.generator_label);
-          setDraftGenerationMode(draft.generation_mode);
-          setDraftStrategy(draft.strategy_summary);
-          setDraftEvidence(draft.evidence_summary);
-          setDraftEvidenceAssets(draft.evidence_assets);
-          const prev = BORROWER_CACHE.get(id);
-          if (prev && !campaignBinding) {
-            BORROWER_CACHE.set(id, {
-              ...prev,
-              draftSubject: subject || null,
-              draftBody: body,
-              draftChannel: activeDraftChannel,
-              fetched: Date.now(),
-            });
-          }
-        } else {
-          setDraftLoaded(false);
-          setDraftPending(false);
-          setDraftSubject('');
-          setDraftDisclosureVersion(null);
-          setDraftDisclosureState(null);
-          setDraftGeneratorLabel(null);
-          setDraftGenerationMode(null);
-          setDraftStrategy(null);
-          setDraftEvidence([]);
-          setDraftEvidenceAssets([]);
-          setDraftProof(null);
-          setDraftError('Offer draft endpoint returned an empty draft. Approval is disabled until an audited draft loads.');
-        }
-      } catch (err: unknown) {
-        if (cancelled || isAbortError(err)) return;
-        if (isWarmingUpError(err) && attempt < MAX_ATTEMPTS) {
-          setDraftWarming({
-            dependency: err.dependency,
-            label: `${dependencyLabel(err.dependency)} warming up`,
-            attempt: attempt + 1,
-            maxAttempts: MAX_ATTEMPTS,
-            correlationId: err.correlationId,
-          });
-          draftTimeoutId = setTimeout(() => {
-            void runDraftAttempt(attempt + 1);
-          }, INTERVAL_MS);
-          return;
-        }
-        setDraftWarming(null);
-        setDraftLoaded(false);
-        setDraftPending(false);
-        setDraftDisclosureVersion(null);
-        setDraftDisclosureState(null);
-        setDraftGeneratorLabel(null);
-        setDraftGenerationMode(null);
-        setDraftStrategy(null);
-        setDraftEvidence([]);
-        setDraftEvidenceAssets([]);
-        setDraftProof(null);
-        setDraftError(
-          err instanceof Error
-            ? `Offer draft unavailable: ${err.message}`
-            : 'Offer draft unavailable.',
-        );
-      }
-    };
-
-    void runDraftAttempt(1);
-
-    return () => {
-      cancelled = true;
-      if (timeoutId !== null) clearTimeout(timeoutId);
-      if (draftTimeoutId !== null) clearTimeout(draftTimeoutId);
-      ctrl.abort();
-    };
-  }, [
-    campaignBinding,
-    campaignBindingError,
-    activeDraftChannel,
-    id,
-    reloadToken,
-  ]);
-
-  const draftDirty = draftLoaded && (
-    draftBody !== draftBaselineBody
-    || (activeDraftChannel !== 'sms' && draftSubject !== draftBaselineSubject)
-  );
+  // The draft is review-only since critic-02: its copy only ever comes from
+  // the server, so there is no edited draft to guard.
   // Audit states-05: unsaved typed work asks before a route leave or tab close.
-  const unsavedMessage = offerUnsavedMessage(draftDirty, rejectReviewOpen && rejectRationale.trim().length > 0);
+  const unsavedMessage = offerUnsavedMessage(false, rejectReviewOpen && rejectRationale.trim().length > 0);
   useUnsavedGuard(unsavedMessage !== null, unsavedMessage ?? undefined);
 
   if (!id && lastBorrowerId) {
@@ -398,7 +148,7 @@ export default function OfferOrchestrator() {
   // The docked decision bar (routing + the approval gate) shows until the
   // borrower is decided; the decision outcome then takes its place.
   const decisionPending = effectiveApproval !== 'approved' && effectiveApproval !== 'rejected';
-  const draftText = draftLoaded ? draftBody : '';
+  const draftText = draftLoaded ? draft.body : '';
   const subjectReady = activeDraftChannel === 'sms' || draftSubject.trim().length > 0;
   const draftProofFresh = draftProofMatchesSnapshot(b, rec, draftProof?.sourceRefreshedAt);
   const draftReady = Boolean(
@@ -429,7 +179,7 @@ export default function OfferOrchestrator() {
     });
   };
   const saveCurrentDraft = async () => {
-    if (!id || !draftReady || draftDirty || !draftProof || draftSavePending) return;
+    if (!id || !draftReady || !draftProof || draftSavePending) return;
     setDraftSavePending(true);
     setDraftSaveError(null);
     try {
@@ -450,49 +200,18 @@ export default function OfferOrchestrator() {
     if (!id) return;
     setDraftSaveError(null);
     removeSavedDraft(id, activeDraftChannel);
-    const cached = BORROWER_CACHE.get(id);
-    if (cached) {
-      BORROWER_CACHE.set(id, { ...cached, draftSubject: null, draftBody: null, fetched: 0 });
-    }
-    setDraftBody('');
-    setDraftSubject('');
-    setDraftLoaded(false);
-    setDraftPending(true);
-    setDraftBaselineBody('');
-    setDraftBaselineSubject('');
-    setDraftDisclosureVersion(null);
-    setDraftDisclosureState(null);
-    setDraftGeneratorLabel(null);
-    setDraftGenerationMode(null);
-    setDraftStrategy(null);
-    setDraftEvidence([]);
-    setDraftEvidenceAssets([]);
-    setDraftProof(null);
-    setReloadToken((n) => n + 1);
+    setLoadGeneration((n) => n + 1);
+    rereadSnapshotAndDraft();
   };
 
   const regenerateDraft = () => {
     if (!id || approving) return;
-    const cached = BORROWER_CACHE.get(id);
-    if (cached) BORROWER_CACHE.set(id, { ...cached, draftSubject: null, draftBody: null, fetched: 0 });
-    setDraftLoaded(false);
-    setDraftPending(true);
-    setDraftBody('');
-    setDraftSubject('');
-    setDraftBaselineBody('');
-    setDraftBaselineSubject('');
-    setDraftError(null);
-    setDraftGeneratorLabel(null);
-    setDraftGenerationMode(null);
-    setDraftStrategy(null);
-    setDraftEvidence([]);
-    setDraftEvidenceAssets([]);
-    setDraftProof(null);
-    setReloadToken((n) => n + 1);
+    setLoadGeneration((n) => n + 1);
+    rereadSnapshotAndDraft();
   };
 
   const onApprove = async () => {
-    if (approving || snapshotReconciling || approverGate !== null) return;
+    if (approving || snapshotReconciling || snapshot.reading || approverGate !== null) return;
     setApproveError(null);
     if (campaignBindingError) {
       setApproveError('Campaign handoff is incomplete. Reopen the saved campaign before approval.');
@@ -524,13 +243,15 @@ export default function OfferOrchestrator() {
       });
       if (res.approved) {
         setApproval(id, 'approved');
-        setAuditId(res.audit_event_id ?? null);
-        setApprovalId(res.approval_id ?? null);
-        setJustDecided({ id, reloadToken });
+        setDecidedHere({
+          id,
+          generation: loadGeneration,
+          auditId: res.audit_event_id ?? null,
+          approvalId: res.approval_id ?? null,
+        });
         const routedTo = res.assigned_to_email ?? (assignedTo || null);
         setApprovalRouting({ id, assignedTo: routedTo, followUpAt: res.follow_up_at ?? null });
         announceApprovalRouting(routedTo, res.follow_up_at ?? null, res.audit_event_id ?? null);
-        clearBorrowerCache(id);
         void invalidateOperationalQueries(queryClient);
       } else {
         setApproveError('Approval endpoint returned approved=false.');
@@ -560,6 +281,8 @@ export default function OfferOrchestrator() {
       setApproveError('Rejection reason "Other" requires a rationale note.');
       return;
     }
+    // Confirm reject waits for this open's snapshot read, like Approve.
+    if (snapshot.reading) return;
     setApproveError(null);
     setApproving(true);
     try {
@@ -576,9 +299,7 @@ export default function OfferOrchestrator() {
       });
       if (res.rejected) {
         setApproval(id, 'rejected');
-        setAuditId(res.audit_event_id ?? null);
-        setJustDecided({ id, reloadToken });
-        clearBorrowerCache(id);
+        setDecidedHere({ id, generation: loadGeneration, auditId: res.audit_event_id ?? null, approvalId: null });
         void invalidateOperationalQueries(queryClient);
         setRejectReviewOpen(false);
         setRejectReasonCode(DEFAULT_REJECT_REASON);
@@ -597,17 +318,20 @@ export default function OfferOrchestrator() {
     }
   };
 
-  if (warmingUp) {
-    return <OfferWarmingRoute borrowerId={id} warmingUp={warmingUp} />;
+  if (snapshot.warmingUp) {
+    return <OfferWarmingRoute borrowerId={id} warmingUp={snapshot.warmingUp} />;
   }
 
-  if (loadError) {
+  if (snapshot.loadError) {
     return (
       <OfferLoadErrorRoute
         borrowerId={id}
-        loadError={loadError}
-        notFound={loadErrorStatus === 404}
-        onRetry={() => setReloadToken((n) => n + 1)}
+        loadError={snapshot.loadError}
+        notFound={snapshot.notFound}
+        onRetry={() => {
+          setLoadGeneration((n) => n + 1);
+          rereadSnapshotAndDraft();
+        }}
       />
     );
   }
@@ -664,8 +388,8 @@ export default function OfferOrchestrator() {
             campaign {campaignBinding.campaign_id.slice(0, 12)}
           </span>
           <span>variant {campaignBinding.variant_name}</span>
-          {draftGeneratorLabel && <span>{draftGeneratorLabel}</span>}
-          {draftGenerationMode && <span>{draftGenerationMode.replace(/_/g, ' ')}</span>}
+          {draft.generatorLabel && <span>{draft.generatorLabel}</span>}
+          {draft.generationMode && <span>{draft.generationMode.replace(/_/g, ' ')}</span>}
           {draftProof && (
             <span className="mono" title={draftProof.responseHash}>
               draft proof {draftProof.responseHash.slice(0, 12)}
@@ -682,43 +406,31 @@ export default function OfferOrchestrator() {
         productLabel={productLabel}
         leadIsSaved={leadIsSaved}
         saveCurrentLead={saveCurrentLead}
-        draftWarming={draftWarming}
-        draftPending={draftPending}
+        draftWarming={draft.warming}
+        draftPending={draft.pending}
         draftLoaded={draftLoaded}
-        draftError={draftError}
+        draftError={draft.error}
         draftSubject={draftSubject}
         draftText={draftText}
         draftChannel={activeDraftChannel}
         allowedDraftChannels={allowedDraftChannels}
-        draftDirty={draftDirty}
         draftProofFresh={draftProofFresh}
         onDraftChannelChange={(channel) => {
           if (allowedDraftChannels && !allowedDraftChannels.includes(channel)) return;
           setDraftSaveError(null);
           setDraftChannel(channel);
-          setDraftLoaded(false);
-          setDraftPending(true);
-          setDraftBody('');
-          setDraftSubject('');
-          setDraftBaselineBody('');
-          setDraftBaselineSubject('');
-          setDraftDisclosureVersion(null);
-          setDraftDisclosureState(null);
-          setDraftGeneratorLabel(null);
-          setDraftGenerationMode(null);
-          setDraftStrategy(null);
-          setDraftEvidence([]);
-          setDraftEvidenceAssets([]);
-          setDraftProof(null);
+          // The old effect re-read the whole snapshot on a channel switch;
+          // the draft follows its new key (one POST for the new channel).
+          snapshot.refetch();
         }}
         approving={approving}
-        draftDisclosureVersion={draftDisclosureVersion}
-        draftDisclosureState={draftDisclosureState}
-        draftGeneratorLabel={draftGeneratorLabel}
-        draftGenerationMode={draftGenerationMode}
-        draftStrategy={draftStrategy}
-        draftEvidence={draftEvidence}
-        draftEvidenceAssets={draftEvidenceAssets}
+        draftDisclosureVersion={draft.disclosureVersion}
+        draftDisclosureState={draft.disclosureState}
+        draftGeneratorLabel={draft.generatorLabel}
+        draftGenerationMode={draft.generationMode}
+        draftStrategy={draft.strategy}
+        draftEvidence={draft.evidence}
+        draftEvidenceAssets={draft.evidenceAssets}
         regenerateDraft={regenerateDraft}
         draftIsSaved={draftIsSaved}
         saveCurrentDraft={saveCurrentDraft}
@@ -737,7 +449,7 @@ export default function OfferOrchestrator() {
         channel={activeDraftChannel}
         effectiveApproval={effectiveApproval}
         auditId={auditId}
-        justDecided={justDecided?.id === id && justDecided.reloadToken === reloadToken}
+        justDecided={justDecided}
         approvalId={approvalId}
         approveError={decisionPending ? null : approveError}
         score={b ? { opportunityScore: b.opportunity_score, confidence: b.confidence } : null}
@@ -754,7 +466,7 @@ export default function OfferOrchestrator() {
           approving={approving}
           onApprove={() => void onApprove()}
           onReject={() => void onReject()}
-          approveDisabled={snapshotReconciling || !draftReady}
+          approveDisabled={snapshotReconciling || snapshot.reading || !draftReady}
           isSubmitting={approving || snapshotReconciling}
           approverGate={approverGate}
           actorEmail={actorEmail}
@@ -772,6 +484,7 @@ export default function OfferOrchestrator() {
                 setRejectReasonCode(DEFAULT_REJECT_REASON);
               }}
               onSubmit={() => void onReject()}
+              submitDisabled={snapshot.reading}
             />
           )}
         />
