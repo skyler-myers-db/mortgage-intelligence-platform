@@ -47,18 +47,6 @@ function recordGenieFeedback(body: Parameters<typeof api.genieFeedback>[0]): Pro
   );
 }
 
-/**
- * Votes recorded in this tab, by `conversationId:messageId`. A collapsed
- * earlier turn unmounts its answer (audit `genie-08`), so the control's own
- * state does not survive a collapse/expand; this makes sure a recorded vote
- * is never offered again. It holds opaque ids only and lives with the tab.
- */
-const recordedVotes = new Set<string>();
-
-export function __resetGenieFeedbackMemoryForTests(): void {
-  recordedVotes.clear();
-}
-
 export const GENIE_FEEDBACK_RECORDED = 'Feedback recorded';
 
 interface GenieAnswerFeedbackProps {
@@ -76,7 +64,7 @@ export function GenieAnswerFeedback({
 }: GenieAnswerFeedbackProps) {
   const identity = `${conversationId ?? ''}:${messageId ?? ''}`;
   const [pending, setPending] = useState<Vote | null>(null);
-  const [recorded, setRecorded] = useState(() => recordedVotes.has(identity));
+  const [recorded, setRecorded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Async latch: guards against a double-submit before React re-renders the
   // disabled state. Mirrors the approval handler latch pattern.
@@ -94,7 +82,7 @@ export function GenieAnswerFeedback({
     inFlightRef.current = false;
     requestIdsRef.current = {};
     setPending(null);
-    setRecorded(recordedVotes.has(identity));
+    setRecorded(false);
     setError(null);
   }, [identity]);
 
@@ -130,7 +118,6 @@ export function GenieAnswerFeedback({
       helpful,
       request_id: requestId,
     }).then((outcome) => {
-      if (outcome.ok) recordedVotes.add(submittedIdentity);
       // A vote for an answer the control no longer shows changes nothing.
       if (identityRef.current !== submittedIdentity) return;
       if (outcome.ok) {
