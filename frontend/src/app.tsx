@@ -26,6 +26,10 @@ import { ROUTE_IDS, ROUTES, type RouteId } from './lib/routeMeta';
 import { usePrefersReducedMotion } from './lib/usePrefersReducedMotion';
 import type { SessionResponse } from './types';
 import './app.transitions.css';
+// The evidence hover card's sheet ships with the initial CSS (it was in
+// partial 02 before): every route renders evidence chips, and as a lazy sheet
+// with its hook it counted against every route closure (+0.56 KiB br each).
+import './components/EvidenceHoverCard.css';
 
 // Lazy: the denied page must not cost the initial bundle anything.
 const AdminAccessDeniedRoute = lazy(() => import('./routes/admin-config.access-denied'));

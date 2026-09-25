@@ -75,16 +75,7 @@ export interface EvidenceHoverOptions {
 }
 
 function supportsAnchorPositioning(): boolean {
-  return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('anchor-name: --a');
-}
-
-function promoteToTopLayer(card: HTMLElement): void {
-  if (typeof card.showPopover !== 'function') return;
-  try {
-    if (!card.matches(':popover-open')) card.showPopover();
-  } catch {
-    // A DOM without the Popover API selector keeps the fixed-position card.
-  }
+  return typeof CSS !== 'undefined' && CSS.supports('anchor-name: --a');
 }
 
 function measuredPlacement(anchor: HTMLElement, card: HTMLElement): RectPlacement {
@@ -146,32 +137,26 @@ export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHov
     show();
   }, [clearTimer, show, source]);
 
-  const mounted = shown !== null;
-  const anchored = shown?.anchored === true;
-
-  // Top layer, before the first paint of each card.
-  useLayoutEffect(() => {
-    const card = cardRef.current;
-    if (mounted && card) promoteToTopLayer(card);
-  }, [mounted]);
-
-  // Anchor mode: the chip carries the name only while its card is mounted.
-  useLayoutEffect(() => {
-    const anchor = anchorElRef.current;
-    if (!mounted || !anchored || !anchor) return undefined;
-    anchor.style.setProperty('anchor-name', anchorName);
-    return () => {
-      anchor.style.removeProperty('anchor-name');
-    };
-  }, [anchorName, anchored, mounted]);
-
-  // Rect mode: measure the rendered card, then place it, all before paint.
+  // Before paint, once per change: promote the card to the top layer; in
+  // anchor mode the chip carries the name only while its card is mounted
+  // (its exit fade included); in rect mode, measure the rendered card, then
+  // place it (it stays visibility:hidden until then).
   useLayoutEffect(() => {
     const card = cardRef.current;
     const anchor = anchorElRef.current;
-    if (!open || open.anchored || open.placement || !card || !anchor) return;
-    setOpen({ anchored: false, placement: measuredPlacement(anchor, card) });
-  }, [open]);
+    if (!shown || !card || !anchor) return undefined;
+    if (card.showPopover && !card.matches(':popover-open')) card.showPopover();
+    if (shown.anchored) {
+      anchor.style.setProperty('anchor-name', anchorName);
+      return () => {
+        anchor.style.removeProperty('anchor-name');
+      };
+    }
+    // An open card is measured in the commit that mounts it, so a closing
+    // (retained) card always has its placement already.
+    if (!shown.placement) setOpen({ anchored: false, placement: measuredPlacement(anchor, card) });
+    return undefined;
+  }, [anchorName, shown]);
 
   // Rect mode only: a fixed card would drift on scroll / resize, so it hides
   // (it re-shows on the next hover). An anchored card follows its chip.
@@ -192,12 +177,7 @@ export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHov
   const bucket = freshnessBucket(source?.updatedAt);
   const signal = source?.signals?.[0];
   const placement = shown?.placement ?? null;
-  const closing = open === null && shown !== null;
-  const className = [
-    'evidence-hovercard',
-    placement ? `evidence-hovercard--${placement.side}` : '',
-    closing ? 'is-closing' : '',
-  ].filter(Boolean).join(' ');
+  const className = `evidence-hovercard${placement ? ` evidence-hovercard--${placement.side}` : ''}${open === null ? ' is-closing' : ''}`;
 
   const hoverCard =
     shown && source && typeof document !== 'undefined'

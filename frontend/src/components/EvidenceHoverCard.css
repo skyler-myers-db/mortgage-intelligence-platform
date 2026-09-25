@@ -1,15 +1,18 @@
 /* ============================================================
    EVIDENCE HOVER CARD (re-audit #4 Buyer-Wow #8; 2026-09-21 audit
    motion-10 / css-10). Moved here from
-   design-system/components/02-chips-kpi-segments.css with its hook
-   (EvidenceHoverCard.tsx), so it ships in the lazy chunk that renders it.
-   DECLARED EXTENSION: the prototype has no hover preview. Decorative
-   (aria-hidden); the evidence drawer is the real a11y path.
+   design-system/components/02-chips-kpi-segments.css, colocated with its
+   hook (EvidenceHoverCard.tsx). DECLARED EXTENSION: the prototype has no
+   hover preview. Decorative (aria-hidden); the evidence drawer is the real
+   a11y path.
 
-   CASCADE: this lazy sheet lands AFTER the design-system partials. The
-   freshness modifiers (`.evidence-hovercard__dot--fresh/aging/stale`) stay
-   grouped with the chip and legend dots in partial 02, so the dot's default
-   fill below is zero-specificity (`:where`) and can never outrank them.
+   It stays in the INITIAL CSS: app.tsx imports it too, because the hook's
+   chunk is lazy and shared by every route, where it counted against every
+   route closure. That import lands it BEFORE the design-system partials,
+   so the freshness modifiers (`.evidence-hovercard__dot--fresh/aging/stale`,
+   grouped with the chip and legend dots in partial 02) come later and win;
+   the dot's default fill is zero-specificity (`:where`) as well, so it can
+   never outrank them wherever the sheet lands.
    ============================================================ */
 
 /* The card is a `popover="manual"` element in the top layer: reset the UA

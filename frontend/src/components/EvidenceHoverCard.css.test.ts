@@ -80,8 +80,8 @@ describe('EvidenceHoverCard.css', () => {
   });
 
   it('never lets its default dot fill outrank the freshness modifiers in partial 02', () => {
-    // This lazy sheet lands after the partials: the default is :where(), and
-    // the modifiers stay grouped in 02.
+    // The default is :where() and the modifiers stay grouped in 02, so the
+    // modifiers win whichever order the sheets land in.
     expect(rule(':where(.evidence-hovercard__dot)')).toMatch(/background:\s*var\(--text-3\);/);
     expect(rule('.evidence-hovercard__dot')).not.toMatch(/background/);
     const partials = designCss();
