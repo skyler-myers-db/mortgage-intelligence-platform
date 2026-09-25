@@ -110,7 +110,10 @@ vi.mock('../components/mortgage/DataEstatePanel', () => ({
   DataEstatePanel: () => null,
   DataEstatePanelSkeleton: () => null,
 }));
-vi.mock('../lib/api', () => ({
+// Spread the real module so every other export (ApiError, which lazily
+// preloaded route modules import) stays real; only `api` is mocked.
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: apiMocks,
 }));
 
