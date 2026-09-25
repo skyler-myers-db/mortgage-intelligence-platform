@@ -30,18 +30,24 @@ import './Toaster.css';
  *   - The region is `popover="manual"`, shown when it mounts, so toasts sit
  *     in the top layer above the Console and the Genie panel without a
  *     z-index race. Where the Popover API is missing the same element is a
- *     fixed-position region on `--z-toast`.
+ *     fixed-position region on `--z-toast`. It renders through a portal into
+ *     one container element that lives at the end of <body>.
  *   - Over a modal (audit 2026-09-21 a11y-07, correction 3): showModal()
  *     makes everything outside the dialog inert and paints the dialog above
  *     a popover shown earlier, so a shell region would sit unreachable,
- *     unannounced and beneath it. While lib/modalLayers holds a dialog, the
- *     SAME section renders inside the topmost one (a portal): not inert, and
- *     shown as a popover after the dialog, so it sits on top. A new host is a
- *     new element, so the popover is shown again per element. Toasts already
- *     on screen when the host changes are carried over without being
- *     announced again (no role=alert, outside the live list); a toast raised
- *     in the new host lands in its live list, which exists before it does,
- *     and is announced once.
+ *     unannounced and beneath it. The container therefore MOVES into the
+ *     topmost dialog of lib/modalLayers (and back to <body> once none is
+ *     open), synchronously, in the layers' own subscription: the SAME section
+ *     element, never a re-mount, so a control a dialog recorded as its
+ *     opener (a toast's audit link held by "Leave without saving?") is still
+ *     there when that dialog hands focus back, and nothing is re-created.
+ *     Inside the dialog it is not inert, and it is shown as a popover again
+ *     after the dialog (a moved popover closes), so it sits on top. A move
+ *     re-inserts the region: an inserted role=alert is announced, so a
+ *     failure already on screen is carried over without its role (the same
+ *     card element, still shown); the polite list's existing content is not
+ *     a change, and a toast raised after the move lands in that list, which
+ *     exists before it does, and is announced once.
  *   - Success toasts render inside one persistent `role="status"` polite
  *     live region (it exists before any toast is inserted, so additions are
  *     announced). A failure toast carries `role="alert"` itself: an inserted
@@ -155,7 +161,7 @@ interface ToastCardProps {
   toast: Toast;
   paused: boolean;
   canOpenAudit: boolean;
-  /** False for a failure already announced in an earlier host (see Toaster). */
+  /** False for a failure already on screen before the region last moved (see Toaster). */
   announce: boolean;
   /** `clickDetail` is the click's `detail`: 0 for Enter / Space, 1+ for a pointer. */
   onDismiss: (id: number, clickDetail: number) => void;
@@ -231,24 +237,40 @@ export function Toaster() {
     setCarried(new Set(toasts.map(toastKey)));
   }
   const regionRef = useRef<HTMLElement | null>(null);
+  // The portal container the region lives in; it is moved, React never is.
+  // `display: contents` keeps it out of the layout of whatever holds it
+  // (a flex or grid dialog).
+  const [portal] = useState(() => {
+    const element = document.createElement('div');
+    element.style.display = 'contents';
+    return element;
+  });
   /** Where focus was before it last entered the region (see focusAwayFrom). */
   const originRef = useRef<HTMLElement | null>(null);
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
   const { pathname, search } = useLocation();
 
-  // Promote the region to the top layer; it stays open (and empty) for the
-  // life of its host, so the polite live region is always present. Each host
-  // renders a new element, so this runs again per element: inside a modal it
-  // is shown AFTER the dialog, which puts it on top of it.
+  // Place the container in the topmost modal dialog, else at the end of
+  // <body>, and promote the region to the top layer; it stays open (and
+  // empty) for the life of the shell, so the polite live region is always
+  // present. This runs in the modal-layer subscription itself, before a
+  // closing dialog hands focus back, and shows the popover again after each
+  // move: inside a modal it is shown AFTER the dialog, which puts it on top.
   useLayoutEffect(() => {
-    const region = regionRef.current;
-    if (!region || !supportsPopover(region)) return undefined;
-    if (!region.matches(':popover-open')) region.showPopover();
-    return () => {
-      if (region.matches(':popover-open')) region.hidePopover();
+    const place = () => {
+      const host = topModalLayer() ?? document.body;
+      if (portal.parentNode !== host) host.appendChild(portal);
+      const region = regionRef.current;
+      if (region && supportsPopover(region) && !region.matches(':popover-open')) region.showPopover();
     };
-  }, [layer]);
+    place();
+    const unsubscribe = subscribeModalLayers(place);
+    return () => {
+      unsubscribe();
+      portal.remove();
+    };
+  }, [portal]);
 
   const onFocus = (event: FocusEvent<HTMLElement>) => {
     setFocusWithin(true);
@@ -326,8 +348,6 @@ export function Toaster() {
   const paused = hovered || focusWithin;
   const failures = toasts.filter((toast) => toast.tone === 'error');
   const confirmations = toasts.filter((toast) => toast.tone !== 'error');
-  const settled = confirmations.filter((toast) => carried.has(toastKey(toast)));
-  const fresh = confirmations.filter((toast) => !carried.has(toastKey(toast)));
   const card = (toast: Toast) => (
     <ToastCard
       key={toast.id}
@@ -351,12 +371,10 @@ export function Toaster() {
       onBlur={onBlur}
     >
       {failures.map(card)}
-      {/* Carried over from the previous host: still shown, not re-announced. */}
-      {settled.length > 0 && <div className="toast-region__list">{settled.map(card)}</div>}
       <div className="toast-region__list" role="status" aria-live="polite" aria-atomic="false">
-        {fresh.map(card)}
+        {confirmations.map(card)}
       </div>
     </section>
   );
-  return layer ? createPortal(section, layer) : section;
+  return createPortal(section, portal);
 }
