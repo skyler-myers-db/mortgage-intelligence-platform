@@ -29,12 +29,14 @@
  * Month names are pinned to en-US like every number (lib/formatters): the
  * product copy is English, so a browser locale must not re-spell one field
  * of a screen. The ZONE stays the viewer's own unless a caller pins one.
+ *
+ * The parsing half lives in lib/timeParse (responsive-07), re-exported here
+ * so importers are unchanged: a module that only needs an instant (the
+ * evidence chips' freshness buckets) imports it without the formatters.
  */
+import { calendarDate, parseBackendTimestamp, type TimestampInput } from './timeParse';
 
-const NAIVE_SQL_TIMESTAMP_RE =
-  /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
-/** A calendar date with no clock ("2026-07-14", e.g. a gold snapshot_date). */
-const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+export { calendarDate, parseBackendTimestamp };
 
 const DEFAULT_LOCALE = 'en-US';
 const MINUTE_MS = 60_000;
@@ -43,37 +45,6 @@ const DAY_MS = 24 * HOUR_MS;
 const AVG_MONTH_MS = (365.2425 / 12) * DAY_MS;
 /** Past this distance from now, a short date carries its year. */
 const YEAR_VISIBLE_AFTER_MS = 11 * AVG_MONTH_MS;
-
-type TimestampInput = string | number | Date | null | undefined;
-
-export function parseBackendTimestamp(
-  value: TimestampInput,
-): Date | null {
-  if (value === null || value === undefined) return null;
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
-  }
-  if (typeof value === 'number') {
-    const fromEpoch = new Date(value);
-    return Number.isNaN(fromEpoch.getTime()) ? null : fromEpoch;
-  }
-  const raw = value.trim();
-  if (!raw) return null;
-  const iso = NAIVE_SQL_TIMESTAMP_RE.test(raw)
-    ? `${raw.replace(' ', 'T')}Z`
-    : raw;
-  const parsed = new Date(iso);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-/** A calendar date string, or null when `value` carries a clock or no date. */
-function calendarDate(value: TimestampInput): Date | null {
-  if (typeof value !== 'string') return null;
-  const match = DATE_ONLY_RE.exec(value.trim());
-  if (!match) return null;
-  const parsed = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
 
 const FORMATS = new Map<string, Intl.DateTimeFormat>();
 
