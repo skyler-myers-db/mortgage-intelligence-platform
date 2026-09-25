@@ -350,14 +350,19 @@ const budgets = {
     'src/routes/ask-genie.tsx': 63 * KiB, // actual 59.82
     'src/routes/asset.tsx': 8 * KiB, // actual 7.08
     'src/routes/borrower-360.tsx': 38 * KiB, // actual 35.62
-    'src/routes/glossary.tsx': 9 * KiB, // actual 8.42
+    // w4 pre-cut: 8.42 -> 8.99 on the CI (Linux) build, which measures ~0.1
+    // KiB br more per route than the macOS builds these gates were set on;
+    // SurfaceTitle folded into the shared Primitives chunk adds ~0.1 (a
+    // separate chunk cost +0.29). Re-baselined from the CI number, ~5%.
+    'src/routes/glossary.tsx': 10 * KiB, // actual 8.99 (CI build)
     // wave-3 integration: 40.40 -> 43.24, w3-rate-lever +2.37 (the Rate
     // Lever on the geography hero), w3-motion-nav +0.49. ~5% headroom.
     'src/routes/home.tsx': 46 * KiB, // actual 43.24
     // wave-3 integration: 66.10 -> 67.13 net: w3-score-anatomy moved the
     // proof out (-4.23), w3-queue-place added place + bulk progress (+4.22).
     'src/routes/lead-queue.tsx': 71 * KiB, // actual 67.13
-    'src/routes/not-found.tsx': 4 * KiB, // actual 3.44
+    // w4 pre-cut: 3.93 (wave 3) -> 4.00 on the CI build (see glossary above).
+    'src/routes/not-found.tsx': 5 * KiB, // actual 4.00 (CI build)
     // wave-3 integration: ratcheted DOWN, 34.29 -> 31.29 (w3-score-anatomy
     // moved the proof surfaces into lazy chunks). ~5% headroom.
     'src/routes/offer-orchestrator.tsx': 33 * KiB, // actual 31.29
