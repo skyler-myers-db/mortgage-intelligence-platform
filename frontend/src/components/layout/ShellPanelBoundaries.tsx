@@ -5,10 +5,11 @@
 'use no memo';
 
 import { useCallback, useRef, type ReactNode } from 'react';
+import { useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { useModalDialog } from '../../hooks/useModalDialog';
+import { queryKeys } from '../../lib/queryKeys';
 import { useApp } from '../AppContext';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { useUnobservedQueryReset } from '../ErrorBoundaryRoute';
 import { Icon } from '../Icon';
 import { useGeniePanelDismissal } from '../mortgage/useGeniePanelDismissal';
 
@@ -30,13 +31,16 @@ import { useGeniePanelDismissal } from '../mortgage/useGeniePanelDismissal';
  * query when it re-mounts (the evidence drawer reads the lineage manifest
  * with `staleTime: Infinity`; any cached query hands its data to the first
  * render before a refetch starts). So the Console's and the drawer's Try
- * again, and the drawer frame's Close, first drop every cached query no
- * mounted component observes (`useUnobservedQueryReset`, the route
- * boundary's reset): the crashed panel is unmounted, so its queries are among
- * them. Removing a query never fetches it; the panel reads again only when
- * the user's Try again or next open re-mounts it. The Genie chat reads no
- * query (its transcript lives in lib/genieConversationStore), so its Try
- * again only re-mounts it.
+ * again, and the drawer frame's Close, first drop the panel's OWN cached
+ * queries that no mounted component observes: the crashed panel is
+ * unmounted, so its queries have no observer. The reset is scoped to the
+ * panel's key prefixes (`DRAWER_RESET_SCOPES`, `CONSOLE_RESET_SCOPES`); the
+ * route boundary's app-wide reset (ErrorBoundaryRoute) used to drop every
+ * unobserved query in the app, other routes' warm caches included (wave-3
+ * error-telemetry review). Removing a query never fetches it; the panel
+ * reads again only when the user's Try again or next open re-mounts it. The
+ * Genie chat reads no query (its transcript lives in
+ * lib/genieConversationStore), so its Try again only re-mounts it.
  *
  * This module is in the initial chunk on purpose: it must render when the
  * panel's lazy chunk (Console, GenieChat) is the thing that failed.
@@ -46,15 +50,34 @@ interface BoundaryProps {
   children: ReactNode;
 }
 
+/** The evidence drawer's reads: the lineage manifest and the admin asset metadata. */
+export const DRAWER_RESET_SCOPES: readonly QueryKey[] = [queryKeys.lineageManifest(), ['mip', 'asset']];
+/** The Console's read: the actor's recent activity. */
+export const CONSOLE_RESET_SCOPES: readonly QueryKey[] = [['audit', 'my-events']];
+
+/**
+ * Drop the cached queries under `scopes` that no mounted component observes.
+ * Zero observers, not `type: 'inactive'`: a query held only by a disabled
+ * observer is inactive yet still mounted. Never fetches.
+ */
+function useScopedQueryReset(scopes: readonly QueryKey[]): () => void {
+  const queryClient = useQueryClient();
+  return useCallback(() => {
+    for (const queryKey of scopes) {
+      queryClient.removeQueries({ queryKey, predicate: (query) => query.getObserversCount() === 0 });
+    }
+  }, [queryClient, scopes]);
+}
+
 /** The Console rail. Keeps `#workspace-console` so the skip link and the exit animation still find it. */
 export function ConsoleBoundary({ children }: BoundaryProps) {
-  const resetUnobservedQueries = useUnobservedQueryReset();
+  const resetConsoleQueries = useScopedQueryReset(CONSOLE_RESET_SCOPES);
   return (
     <ErrorBoundary
       boundary="console"
       variant="panel"
       routeLabel="The Console"
-      onRetry={resetUnobservedQueries}
+      onRetry={resetConsoleQueries}
       frame={(surface) => <ConsoleFrame>{surface}</ConsoleFrame>}
     >
       {children}
@@ -93,18 +116,19 @@ function ConsoleFrame({ children }: BoundaryProps) {
 
 /**
  * The evidence drawer. Closing it resets the boundary (resetKey) after the
- * frame's Close has dropped the unobserved cached queries, so the next open
- * renders the drawer afresh and re-reads its payload instead of re-throwing.
+ * frame's Close has dropped the drawer's unobserved cached queries, so the
+ * next open renders the drawer afresh and re-reads its payload instead of
+ * re-throwing.
  */
 export function DrawerBoundary({ children }: BoundaryProps) {
   const { drawer } = useApp();
-  const resetUnobservedQueries = useUnobservedQueryReset();
+  const resetDrawerQueries = useScopedQueryReset(DRAWER_RESET_SCOPES);
   return (
     <ErrorBoundary
       boundary="drawer"
       variant="panel"
       routeLabel="The evidence drawer"
-      onRetry={resetUnobservedQueries}
+      onRetry={resetDrawerQueries}
       resetKey={drawer ? 'open' : 'closed'}
       frame={(surface) => <DrawerFrame>{surface}</DrawerFrame>}
     >
@@ -118,14 +142,14 @@ function DrawerFrame({ children }: BoundaryProps) {
   const open = drawer !== null;
   const drawerRef = useRef<HTMLDialogElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
-  const resetUnobservedQueries = useUnobservedQueryReset();
+  const resetDrawerQueries = useScopedQueryReset(DRAWER_RESET_SCOPES);
   // This frame renders only in the error state, so every close (Close,
-  // Escape, the scrim) drops the crashed drawer's cached payload before the
-  // resetKey re-mounts it closed; its next open reads again.
+  // Escape, the backdrop) drops the crashed drawer's cached payload before
+  // the resetKey re-mounts it closed; its next open reads again.
   const close = useCallback(() => {
-    resetUnobservedQueries();
+    resetDrawerQueries();
     setDrawer(null);
-  }, [resetUnobservedQueries, setDrawer]);
+  }, [resetDrawerQueries, setDrawer]);
   // Modal like the drawer it stands in for (the same native <dialog>): focus
   // starts on Close, Escape and a backdrop press close, and focus returns to
   // the chip that opened it.
