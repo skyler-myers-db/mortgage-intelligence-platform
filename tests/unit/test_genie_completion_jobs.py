@@ -566,6 +566,37 @@ def test_the_heartbeat_marks_a_cancel_another_process_accepted(monkeypatch: Any)
     assert "heartbeat" in lakebase.job_statements
 
 
+class _RunnerEndsDuringTheBeat(FakeJobLakebase):
+    """The job's runner finishes (untrack, then discard its mark) while the
+    heartbeat's renewal UPDATE is in flight, after the beat's snapshot."""
+
+    def fetchall(self, sql: str, params: dict[str, Any] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        rows = super().fetchall(sql, params, limit)
+        if sql is jobs._HEARTBEAT_SQL:
+            for job_id in (params or {})["job_ids"]:
+                jobs.HEARTBEAT.untrack(job_id)
+                jobs.CANCELS.discard(job_id)
+        return rows
+
+
+def test_the_heartbeat_never_marks_a_job_whose_runner_ended_during_the_beat() -> None:
+    lakebase = _RunnerEndsDuringTheBeat()
+    row = lakebase.insert_row(status="running", lease_owner=jobs.PROCESS_ID)
+    lakebase.rows[row["job_id"]]["cancel_requested_at"] = lakebase.now
+    jobs.HEARTBEAT.track(row["job_id"], lakebase)
+    try:
+        jobs.HEARTBEAT.beat()
+        marked = jobs.CANCELS.is_marked(row["job_id"])
+    finally:
+        jobs.CANCELS.discard(row["job_id"])
+
+    # The renewal returned cancel_requested for it, but nobody runs it any
+    # more: a mark now would outlive its job in the process set.
+    assert "heartbeat" in lakebase.job_statements
+    assert row["job_id"] not in jobs.HEARTBEAT.tracked()
+    assert not marked
+
+
 def test_claim_refuses_a_job_whose_cancel_was_requested(monkeypatch: Any) -> None:
     _client, _repo, _audit, lakebase = _setup(monkeypatch)
     row = _seed_own_job(lakebase, lease_owner=jobs.PROCESS_ID)

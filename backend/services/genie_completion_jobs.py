@@ -443,9 +443,9 @@ class _CancelMarks:
         self._lock = threading.Lock()
         self._marked: set[str] = set()
 
-    def mark(self, job_id: str) -> None:
+    def mark(self, *job_ids: str) -> None:
         with self._lock:
-            self._marked.add(job_id)
+            self._marked.update(job_ids)
 
     def is_marked(self, job_id: str) -> bool:
         with self._lock:
@@ -514,9 +514,9 @@ class _Heartbeat:
             except Exception as exc:  # noqa: BLE001 - the next beat retries
                 _warn_throttled("genie_job_heartbeat_failed", error_type=type(exc).__name__)
                 continue
-            for row in rows:
-                if row.get("cancel_requested") is True:
-                    CANCELS.mark(str(row["job_id"]))
+            with self._lock:  # never mark a job whose runner untracked it since the snapshot
+                cancelled = {str(row["job_id"]) for row in rows if row.get("cancel_requested") is True}
+                CANCELS.mark(*(cancelled & self._jobs.keys()))
 
     def _loop(self) -> None:
         while True:
