@@ -18,9 +18,12 @@ How to apply:
 - `ApiError` exposes `status`, `retryable`, `dependency`,
   `correlationId`, `aborted`. Use `isWarmingUpError(err)` instead of
   string-matching `err.message`.
-- For single-fetch routes, call `useWarmingUpRetry(fetcher, deps,
-  opts)` from `frontend/src/lib/useWarmingUpRetry.ts` — returns
+- For single-fetch routes, call `useWarmingUpRetry(fetcher, opts)` from
+  `frontend/src/lib/useWarmingUpRetry.ts` — returns
   `{ data, warmingUp, error, manualRetry }` and handles 6×/5s retry.
+  `opts.queryKey` is REQUIRED and is the only refetch trigger (the old
+  `deps` array was dead once a key was passed; removed 2026-09-25,
+  audit runtime-02). Build the key from the object the fetcher reads.
 - For multi-fetch routes (Offer Orchestrator's
   `Promise.all([borrower, recommend])`), inline the attempt loop —
   see `offer-orchestrator.tsx` for the pattern. Track `warmingUp`

@@ -38,7 +38,7 @@ import { planForReason, type RetryPlan } from './retryPlan';
  * ("Circuit breaker cooling" vs "Warehouse warming up").
  *
  * Behavior otherwise:
- *   - runs `fetcher(signal)` on mount and when `deps` change.
+ *   - runs `fetcher(signal)` on mount and whenever `opts.queryKey` changes.
  *   - on a retryable `ApiError`: show the warming-up block and schedule
  *     the next attempt at the reason-appropriate cadence.
  *   - on any other error: surface it as `error` and stop retrying.
@@ -49,7 +49,7 @@ import { planForReason, type RetryPlan } from './retryPlan';
  * kick the fetch back to attempt 1 after exhaustion.
  *
  * `AbortController` is wired so the in-flight fetch is cancelled on
- * unmount or when `deps` change (prevents setState-after-unmount and
+ * unmount or when `opts.queryKey` changes (prevents setState-after-unmount and
  * prevents a stale response from clobbering a newer one).
  */
 
@@ -97,8 +97,15 @@ export interface UseWarmingUpRetryOpts {
   intervalMs?: number;
   /** If false, the hook is a no-op (used when an id param is missing). */
   enabled?: boolean;
-  /** Stable cache key. Pass a semantic key so unrelated fetchers never collide. */
-  queryKey?: QueryKey;
+  /**
+   * Stable cache key, required. It is the ONLY thing that decides when the
+   * fetch re-runs and which cache entry it lands in, so it must carry every
+   * input the fetcher reads. Build it from the same object the fetcher reads
+   * (see `lib/leadsQuery.ts`) rather than keeping a second hand-written list:
+   * a second list is how the Lead Queue once served one city's rows under
+   * another city's chip (audit runtime-02, 2026-09-21).
+   */
+  queryKey: QueryKey;
   /** Query freshness window. Default comes from the app QueryClient. */
   staleTime?: number;
   /** Override focus refetch for expensive one-shot calls such as Genie answers. */
@@ -115,27 +122,15 @@ export interface UseWarmingUpRetryOpts {
   keepPreviousWhen?: (previousKey: QueryKey) => boolean;
 }
 
-/**
- * `deps` is IGNORED whenever `opts.queryKey` is passed — and every production
- * caller passes one. It only seeds the fallback key `['warming-up-retry',
- * ...deps]`. A value listed in `deps` but missing from `queryKey` therefore
- * does NOT refetch and does NOT get its own cache entry: that is exactly how
- * the Lead Queue served one city's rows under another city's chip (audit
- * runtime-02, 2026-09-21). Build the key from the same object the fetcher
- * reads (see `lib/leadsQuery.ts`) instead of maintaining two lists. The
- * parameter stays for now because 25 call sites pass it.
- */
 export function useWarmingUpRetry<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
-  deps: unknown[],
-  opts: UseWarmingUpRetryOpts = {},
+  opts: UseWarmingUpRetryOpts,
 ): UseWarmingUpRetryResult<T> {
   const maxAttempts = opts.maxAttempts ?? 6;
   const intervalMs = opts.intervalMs ?? 5000;
   const enabled = opts.enabled ?? true;
 
-  const queryKey: QueryKey = opts.queryKey ?? ['warming-up-retry', ...deps];
-  const keepPreviousWhen = opts.keepPreviousWhen;
+  const { queryKey, keepPreviousWhen } = opts;
 
   const query = useQuery<T, ApiError | Error>({
     queryKey,

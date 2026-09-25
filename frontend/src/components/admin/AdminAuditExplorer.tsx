@@ -90,7 +90,6 @@ export function AdminAuditExplorer() {
       ...auditEventPageQuery(applied),
       cursor: pageCursor,
     }),
-    [appliedKey, pageCursor],
     {
       queryKey: queryKeys.auditEvents(['explorer', appliedKey, pageCursor]),
       keepPreviousData: false,
@@ -119,7 +118,6 @@ export function AdminAuditExplorer() {
     error: rollupsErrorObj,
   } = useWarmingUpRetry<AuditRollupRow[]>(
     (signal) => api.auditRollups('week', signal),
-    [],
     { queryKey: queryKeys.auditRollups('week') },
   );
   const rollupsError = rollupsErrorObj

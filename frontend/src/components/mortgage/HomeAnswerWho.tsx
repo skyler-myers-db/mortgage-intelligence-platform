@@ -63,7 +63,6 @@ const WHO_SOURCE: DrawerSource = {
 export function HomeAnswerWho() {
   const { data, warmingUp, error } = useWarmingUpRetry<EconomicsAnalyticsResponse>(
     requestHomeEconomics,
-    ['home', 'who'],
     { queryKey: queryKeys.analytics('economics', HOME_ECONOMICS_CRITERIA), staleTime: 60_000 },
   );
   const rows = homeTopBorrowers(data?.top_borrowers);

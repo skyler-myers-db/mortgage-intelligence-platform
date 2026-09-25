@@ -102,7 +102,6 @@ export default function Borrower360() {
   // error path with the existing "Back to lead queue" CTA.
   const { data: b, warmingUp, error, manualRetry } = useWarmingUpRetry<Borrower360Type>(
     (signal) => api.borrower(id!, signal),
-    [id],
     { enabled: Boolean(id), queryKey: queryKeys.borrower(id) },
   );
   // wow-stage-3: the lifecycle row carries the audit id of the latest

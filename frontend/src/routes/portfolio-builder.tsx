@@ -186,7 +186,6 @@ export default function PortfolioBuilder() {
       signal,
       campaignBuildConfig,
     ),
-    [committedKey],
     { queryKey: queryKeys.portfolioPreview([committedKey]), keepPreviousData: true },
   );
   const building = preview === null && warmingUp === null && error === null;

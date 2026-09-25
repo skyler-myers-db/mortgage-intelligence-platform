@@ -24,8 +24,8 @@ const hook = vi.hoisted(() => ({
 }));
 
 vi.mock('../../lib/useWarmingUpRetry', () => ({
-  useWarmingUpRetry: (_loader: unknown, _dependencies: unknown, options?: { queryKey?: readonly unknown[] }) => {
-    const key = options?.queryKey ?? [];
+  useWarmingUpRetry: (_loader: unknown, options: { queryKey: readonly unknown[] }) => {
+    const key = options.queryKey;
     hook.keys.push(key);
     const secondPage = key.includes('cursor-page-2');
     const data = key.includes('explorer')

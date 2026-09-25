@@ -64,7 +64,6 @@ export function ActivationLoopPanel({
     error: destinationsError,
   } = useWarmingUpRetry<ActivationDestination[]>(
     (signal) => api.activationDestinations(signal),
-    [],
     { queryKey: queryKeys.activationDestinations() },
   );
   const {
@@ -73,7 +72,6 @@ export function ActivationLoopPanel({
     error: outboxError,
   } = useWarmingUpRetry<ActivationOutboxItem[]>(
     (signal) => api.activationOutbox({ borrowerId, limit: 6 }, signal),
-    [borrowerId],
     {
       enabled: Boolean(borrowerId),
       queryKey: queryKeys.activationOutbox(['borrower', borrowerId ?? '']),
@@ -239,7 +237,6 @@ export function ActivationOperationsPanel() {
     error,
   } = useWarmingUpRetry(
     (signal) => api.activationSummary(signal),
-    [],
     { queryKey: queryKeys.activationSummary() },
   );
   const connectedCount = data ? data.destinations.filter((destination) => destination.status === 'connected').length : 0;

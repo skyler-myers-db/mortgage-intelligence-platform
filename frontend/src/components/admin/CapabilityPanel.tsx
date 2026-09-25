@@ -73,7 +73,6 @@ export function toCapabilityViews(rows: CapabilityRow[] | undefined): Capability
 export function CapabilityPanel() {
   const { data, warmingUp, error } = useWarmingUpRetry<CapabilitiesResponse>(
     (signal) => api.adminCapabilities<CapabilitiesResponse>(signal),
-    [],
     { queryKey: queryKeys.adminCapabilities() },
   );
   const views = useMemo(() => toCapabilityViews(data?.capabilities), [data]);

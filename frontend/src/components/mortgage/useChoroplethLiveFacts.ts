@@ -147,7 +147,6 @@ export function useChoroplethLiveFacts({
         for (const rollup of payload.rollups) byCode[rollup.state.toLowerCase()] = rollup;
         return byCode;
       }),
-    [], // ignored: the key below carries every input the fetcher reads
     { queryKey: geoQueryKeys.stateRollups(cohort), keepPreviousData: true },
   );
 
@@ -159,7 +158,6 @@ export function useChoroplethLiveFacts({
         for (const rollup of payload.rollups) byZip[rollup.zip] = rollup;
         return byZip;
       }),
-    [],
     {
       queryKey: geoQueryKeys.zipRollups(drillState ?? '', cohort),
       enabled: zipEnabled,
@@ -176,7 +174,6 @@ export function useChoroplethLiveFacts({
   const overlayLevel: GeoOverlayLevel = drillState ? 'zip' : 'state';
   const overlayResult = useWarmingUpRetry<GeoAssignmentOverlayResponse>(
     (signal) => api.assignmentOverlay(overlayLevel, { state: drillState, signal }),
-    [],
     { queryKey: geoQueryKeys.assignmentOverlay(overlayLevel, drillState), enabled: overlayOn, staleTime: 0 },
   );
   const overlay = geoRead(overlayResult, overlayOn);
@@ -184,7 +181,6 @@ export function useChoroplethLiveFacts({
   // contactable count, never an audit row, and only in rate mode.
   const rateResult = useWarmingUpRetry<RateSensitivityResponse>(
     (signal) => rateScenarioApi.rateSensitivity(signal),
-    [],
     { queryKey: geoQueryKeys.rateSensitivity(), enabled: rateOn },
   );
   const overlayDependency = overlay.error instanceof ApiError && overlay.error.dependency

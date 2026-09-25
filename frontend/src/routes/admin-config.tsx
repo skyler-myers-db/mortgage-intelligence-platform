@@ -151,7 +151,6 @@ export default function AdminConfig() {
     error: rulesErrorObj,
   } = useWarmingUpRetry<RulesResponse>(
     (signal) => api.adminRules<RulesResponse>(signal),
-    [],
     { queryKey: queryKeys.adminRules() },
   );
   const rulesLoading = rules === null && rulesWarming === null && rulesErrorObj === null;
@@ -183,7 +182,6 @@ export default function AdminConfig() {
     error: sourcesErrorObj,
   } = useWarmingUpRetry<SourceRow[]>(
     (signal) => api.adminSources<SourceRow[]>(signal),
-    [],
     { queryKey: queryKeys.adminSources() },
   );
   const sourcesLoading =
@@ -198,7 +196,6 @@ export default function AdminConfig() {
     error: auditErrorObj,
   } = useWarmingUpRetry<AuditEventRow[]>(
     (signal) => api.auditEvents(1, signal),
-    [],
     { queryKey: queryKeys.auditEvents(['latest', 1]) },
   );
   const auditLoading =

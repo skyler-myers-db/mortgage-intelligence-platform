@@ -41,10 +41,9 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock('../lib/useWarmingUpRetry', () => ({
   useWarmingUpRetry: (
     _loader: unknown,
-    _dependencies: unknown,
-    options?: { queryKey?: readonly unknown[] },
+    options: { queryKey: readonly unknown[] },
   ) => {
-    const key = options?.queryKey ?? [];
+    const key = options.queryKey;
     apiMocks.hookKeys.push(key);
     const data = key.includes('explorer')
       ? {

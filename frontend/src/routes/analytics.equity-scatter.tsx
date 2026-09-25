@@ -72,7 +72,6 @@ export function EquitySpreadScatter({
     : [...filterCriteria];
   const points = useWarmingUpRetry<EquitySpreadPointsResponse>(
     (signal) => api.analyticsEconomicsPoints(signal, filters, viewport ?? undefined),
-    ['analytics', 'economics-points', ...zoomCriteria],
     {
       enabled: viewport !== null,
       queryKey: queryKeys.analytics('economics-points', zoomCriteria),

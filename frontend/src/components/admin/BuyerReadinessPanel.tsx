@@ -205,7 +205,6 @@ export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesEr
     error,
   } = useWarmingUpRetry<ActivationSummary>(
     (signal) => api.activationSummary(signal),
-    [],
     { queryKey: queryKeys.activationSummary() },
   );
   const items = useMemo(

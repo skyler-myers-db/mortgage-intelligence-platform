@@ -32,7 +32,6 @@ import './analytics.rate-window.css';
 export function useRateWindowQuery(enabled = true) {
   return useWarmingUpRetry<RateWindowResponse>(
     (signal) => api.analyticsRateWindow(signal),
-    ['analytics', 'rate-window'],
     {
       enabled,
       queryKey: queryKeys.analytics('rate-window'),
