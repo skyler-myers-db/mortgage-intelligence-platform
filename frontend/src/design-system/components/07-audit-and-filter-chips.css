@@ -294,15 +294,3 @@
 [data-theme="light"] .filter.is-active .filter__label,
 [data-theme="light"] .filter.is-active .filter__value { color: var(--accent-ink); }
 
-/* Route nav chips sit over Home's dark hero surface during theme flips.
- * Keep their light-theme surface explicit so dark text never resolves
- * against the underlying navy page chrome. */
-[data-theme="light"] .route-nav .filter:not(.is-active) {
-  background-color: var(--bg-1);
-  background-image: none;
-  color: var(--text-2);
-}
-[data-theme="light"] .route-nav .filter:not(.is-active) .filter__value {
-  color: var(--text-1);
-}
-

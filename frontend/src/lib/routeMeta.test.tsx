@@ -160,7 +160,7 @@ describe('route tables stay pinned to routeMeta', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    const chips = [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>.*?<span class="filter__value">([^<]+)<\/span><\/a>/g)]
+    const chips = [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>.*?<span class="route-nav__label">([^<]+)<\/span><\/a>/g)]
       .map((match) => ({ to: match[1], label: match[2] }));
     expect(chips.length).toBe(10);
     expect(chips.length).toBe(NAV_ROUTE_IDS.length);
@@ -192,7 +192,7 @@ describe('route tables stay pinned to routeMeta', () => {
       </QueryClientProvider>,
     );
     const chipIcons = new Map(
-      [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>(<svg[\s\S]*?<\/svg>)<span class="filter__value">/g)]
+      [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>(<svg[\s\S]*?<\/svg>)<span class="route-nav__label">/g)]
         .map((match) => [match[1], match[2]] as const),
     );
     const paletteRoutes = COMMAND_ACTIONS.flatMap((action) =>

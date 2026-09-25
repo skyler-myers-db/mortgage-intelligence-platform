@@ -348,16 +348,36 @@
     z-index: var(--z-sticky);
   }
 }
-/* The route nav is an app-added element (the prototype has a rail plus
-   `.segmented`, design_files/index.html:926-935) that RouteNav.tsx builds
-   from `.filter` anchors; tokens.css only sets `a { color: inherit }`, so
-   the labels rendered with the browser's default underline and read as raw
-   links (2026-09-21 audit visual-05, S part). Hover keeps the chip's own
-   border/colour step and focus keeps the global ring, so neither state
-   relies on the underline. */
-.route-nav .filter,
-.route-nav .filter:hover,
-.route-nav .filter:focus-visible { text-decoration: none; }
+/* Route nav links (2026-09-21 audit visual-05, M part). APP-ADDED ELEMENT:
+   the prototype has a rail plus `.segmented` (design_files/index.html:
+   926-935) and no route nav, so this is built from its token vocabulary:
+   Geist sans 13/500 in every state (the width never shifts), no border but
+   a 2px bottom indicator, --accent-ink under the current page. The block
+   size is the bordered chip's it replaces (32px), so the nav keeps its
+   height. Hover changes the ink, not the indicator; focus keeps the global
+   ring; the transition is the shared control list under BUTTONS. */
+.route-nav__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-block-size: var(--sp-8);
+  padding-inline: var(--sp-2);
+  border: 0;
+  border-block-end: 2px solid transparent;
+  background: none;
+  color: var(--text-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.route-nav__link:hover { color: var(--text-1); }
+.route-nav__link[aria-current="page"] {
+  color: var(--text-1);
+  border-block-end-color: var(--accent-ink);
+}
+.route-nav__link:active { translate: 0 var(--pressed-shift); }
 
 /* Left rail */
 .rail {
@@ -561,7 +581,8 @@
 .topbar__icon-btn,
 .rail__item,
 .evidence-chip,
-.filter {
+.filter,
+.route-nav__link {
   transition:
     background-color var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease),

@@ -6,6 +6,7 @@
  * production build; nothing is pinned as a known defect.
  */
 import type { Locator, Page } from '@playwright/test';
+import { expectAxeClean } from './axe';
 import { expect, test } from './test';
 
 interface Box {
@@ -396,23 +397,82 @@ test.describe('pressed states', () => {
   });
 });
 
+/**
+ * The route nav as underline links (2026-09-21 audit visual-05, M part):
+ * Geist sans 13/500, no borders but a 2px bottom indicator in --accent-ink
+ * under the current page, hover changes the ink (not the indicator), focus
+ * draws the ring, and nothing is underlined. It used to be bordered Geist
+ * Mono `.filter` chips.
+ */
 test.describe('route navigation links', () => {
-  test('nav labels render without the browser underline and still show hover and focus', async ({ app, page }) => {
-    await app.gotoRoute('/lead-queue');
-    const links = page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link');
-    const count = await links.count();
-    expect(count).toBeGreaterThan(3);
-    for (let index = 0; index < count; index += 1) {
-      await expect(links.nth(index)).toHaveCSS('text-decoration-line', 'none');
-    }
-    const idle = links.filter({ hasText: 'Home' });
-    const before = await idle.evaluate((link) => getComputedStyle(link).borderColor);
-    await idle.hover();
-    await expect.poll(() => idle.evaluate((link) => getComputedStyle(link).borderColor), 'hover changes the chip border').not.toBe(before);
-    await expect(idle).toHaveCSS('text-decoration-line', 'none');
-    await idle.focus();
-    await expect(idle).toBeFocused();
-    await expect(idle, 'keyboard focus draws the ring, not an underline').toHaveCSS('outline-style', 'solid');
-    await expect(idle).toHaveCSS('text-decoration-line', 'none');
-  });
+  for (const theme of ['dark', 'light'] as const) {
+    test(`underline links: Geist 13/500, an --accent-ink current indicator, hover ink and a focus ring (${theme})`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      const nav = page.getByRole('navigation', { name: 'Main navigation' });
+      const links = nav.getByRole('link');
+      const count = await links.count();
+      expect(count).toBeGreaterThan(3);
+      const accentInk = await nav.evaluate((el) => {
+        const probe = document.createElement('span');
+        probe.style.color = getComputedStyle(el).getPropertyValue('--accent-ink');
+        el.appendChild(probe);
+        const rgb = getComputedStyle(probe).color;
+        probe.remove();
+        return rgb;
+      });
+      for (let index = 0; index < count; index += 1) {
+        const link = links.nth(index);
+        const style = await link.evaluate((el) => {
+          const s = getComputedStyle(el);
+          return {
+            current: el.getAttribute('aria-current'),
+            decoration: s.textDecorationLine,
+            family: s.fontFamily,
+            size: s.fontSize,
+            weight: s.fontWeight,
+            top: s.borderTopWidth,
+            left: s.borderLeftWidth,
+            right: s.borderRightWidth,
+            bottom: `${s.borderBottomWidth} ${s.borderBottomStyle}`,
+            bottomColor: s.borderBottomColor,
+            labelFamily: getComputedStyle(el.querySelector('.route-nav__label') ?? el).fontFamily,
+          };
+        });
+        const name = await link.textContent();
+        expect(style.decoration, `${name}: no underline`).toBe('none');
+        expect(style.family, `${name}: Geist sans`).toMatch(/^"?Geist(?! Mono)/);
+        expect(style.labelFamily, `${name}: the label is not Geist Mono`).not.toMatch(/Mono/);
+        expect([style.size, style.weight], name ?? '').toEqual(['13px', '500']);
+        expect([style.top, style.left, style.right], `${name}: no inline or top border`).toEqual(['0px', '0px', '0px']);
+        expect(style.bottom, `${name}: a 2px bottom indicator`).toBe('2px solid');
+        if (style.current === 'page') expect(style.bottomColor, `${name}: the current page wears --accent-ink`).toBe(accentInk);
+        else expect(style.bottomColor, `${name}: idle links paint no indicator`).toBe('rgba(0, 0, 0, 0)');
+      }
+      await expect(nav.locator('[aria-current="page"]')).toHaveText('Leads');
+      // The links keep the 32px block of the chips they replace, so the nav
+      // keeps its height (and every sticky offset measured from it).
+      expect(await nav.evaluate((el) => Math.round(el.getBoundingClientRect().height)), 'the nav keeps its height').toBe(57);
+
+      const idle = links.filter({ hasText: 'Home' });
+      const before = await idle.evaluate((link) => ({ color: getComputedStyle(link).color, border: getComputedStyle(link).borderBottomColor }));
+      await idle.hover();
+      await expect.poll(() => idle.evaluate((link) => getComputedStyle(link).color), 'hover changes the ink').not.toBe(before.color);
+      expect(await idle.evaluate((link) => getComputedStyle(link).borderBottomColor), 'hover does not draw the indicator').toBe(before.border);
+      await expect(idle).toHaveCSS('text-decoration-line', 'none');
+      await idle.focus();
+      await expect(idle).toBeFocused();
+      await expect(idle, 'keyboard focus draws the ring, not an underline').toHaveCSS('outline-style', 'solid');
+      await expect(idle).toHaveCSS('text-decoration-line', 'none');
+    });
+  }
+
+  for (const [theme, accent] of [['dark', 'bright'], ['light', 'bright'], ['light', 'navy']] as const) {
+    test(`the nav passes axe (${theme}/${accent})`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.setAccent(accent);
+      await app.gotoRoute('/lead-queue');
+      await expectAxeClean(page, { key: { route: 'route-nav', state: 'lead-queue' }, theme, accent, known: {}, include: '.route-nav' });
+    });
+  }
 });

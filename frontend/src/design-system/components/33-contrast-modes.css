@@ -22,6 +22,11 @@
   .filter-menu__item:is(.is-focused, .is-selected) svg { color: HighlightText !important; }
   /* The cursor's inset ring. */
   .filter-menu__item.is-focused { --focus-ring-color: HighlightText; }
+  /* Route nav links (visual-05) carry their state in an underline, not a
+     fill. A forced transparent border would surface as a line under every
+     link, so the idle one is named Canvas and the current one Highlight. */
+  .route-nav__link { border-block-end-color: Canvas; }
+  .route-nav__link[aria-current="page"] { border-block-end-color: Highlight; }
   .tweak-row .sw.is-active,
   .zip-tile.is-selected { border-color: Highlight; }
   .segmented,

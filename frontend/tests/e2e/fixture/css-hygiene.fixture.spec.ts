@@ -110,7 +110,7 @@ test.describe('with motion allowed', () => {
       ['.btn', button],
       ['.evidence-chip', page.locator('.kpi .evidence-chip').first()],
       ['.kpi', page.locator('.kpi').first()],
-      ['.filter', page.locator('.route-nav .filter').first()],
+      ['.route-nav__link', page.locator('.route-nav .route-nav__link').first()],
     ];
     for (const [name, site] of sites) {
       const property = await site.evaluate((el) => getComputedStyle(el).transitionProperty);
@@ -118,6 +118,14 @@ test.describe('with motion allowed', () => {
       expect(property, `${name} names what it changes`).toMatch(/border-color/);
     }
     await page.mouse.up();
+
+    // `.filter` is a real filter pill now (the route nav left it, visual-05).
+    await app.gotoRoute('/lead-queue');
+    const pill = page.locator('#main-content button.filter[aria-haspopup="listbox"]').first();
+    await expect(pill).toBeVisible();
+    const pillProperty = await pill.evaluate((el) => getComputedStyle(el).transitionProperty);
+    expect(pillProperty, '.filter').not.toMatch(/(^|,\s*)all(,|$)/);
+    expect(pillProperty, '.filter names what it changes').toMatch(/border-color/);
   });
 
   test('the remaining sites (segment card, swatch, switch knob) name their properties too', async ({ app, page }) => {

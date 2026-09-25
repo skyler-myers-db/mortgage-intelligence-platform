@@ -492,6 +492,7 @@ describe('layout containment contracts', () => {
       '.growth-agent-monitor:active',
       '.segment-mode-control .segmented button:active',
       '.filter:active',
+      '.route-nav__link:active',
       '.tweak-row .segmented button:active',
       '.saved-workspace__item:active',
       '.trusted-asset--button:active',
@@ -522,12 +523,25 @@ describe('layout containment contracts', () => {
     expect((css.match(/:active/g) ?? []).length).toBeGreaterThanOrEqual(30);
   });
 
-  /** 2026-09-21 audit visual-05 (S part): route-nav anchors had no
-   * text-decoration reset. Prototype-contract `.chip` and `.filter__value`
-   * styling stays untouched; only the app-added nav loses the underline. */
-  it('renders route-nav links without the browser underline', () => {
+  /** 2026-09-21 audit visual-05 (M part): the app-added route nav is a row of
+   * Geist sans underline links, not bordered Geist Mono `.filter` chips.
+   * Prototype-contract `.chip`, `.filter` and `.filter__value` styling stays
+   * untouched; the nav no longer wears it (so the route-nav-scoped `.filter`
+   * underline reset and its two light overrides are gone). */
+  it('renders route-nav links as borderless Geist underline links with an --accent-ink current indicator', () => {
     const css = designCss();
-    expect(css).toMatch(/\.route-nav \.filter,\s*\.route-nav \.filter:hover,\s*\.route-nav \.filter:focus-visible\s*\{\s*text-decoration:\s*none;/s);
+    const link = /\n\.route-nav__link\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(link).toMatch(/font-family:\s*var\(--font-sans\);/);
+    expect(link).toMatch(/font-size:\s*var\(--fs-13\);/);
+    expect(link).toMatch(/font-weight:\s*500;/);
+    expect(link).toMatch(/text-decoration:\s*none;/);
+    expect(link).toMatch(/border:\s*0;/);
+    expect(link).toMatch(/border-block-end:\s*2px solid transparent;/);
+    expect(link).toMatch(/color:\s*var\(--text-2\);/);
+    expect(css).toMatch(/\.route-nav__link\[aria-current="page"\]\s*\{[^}]*border-block-end-color:\s*var\(--accent-ink\);/);
+    // One weight in every state: the width never shifts on hover or current.
+    expect(css).not.toMatch(/\.route-nav__link[^{]*\{[^}]*font-weight:\s*(?!500)\d+/);
+    expect(css).not.toMatch(/\.route-nav \.filter/);
   });
 
   /** Wave-1c follow-up #14: at 400% zoom the sticky nav covered `.main`. */

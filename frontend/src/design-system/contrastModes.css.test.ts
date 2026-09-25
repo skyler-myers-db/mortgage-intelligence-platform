@@ -216,6 +216,14 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
     ]);
   });
 
+  it('keeps the route nav current-page indicator in Highlight and paints no line under idle links', () => {
+    const nav = declarations.filter((d) => d.selector.startsWith('.route-nav__link'));
+    expect(nav.map((d) => [d.selector, d.property, d.value])).toEqual([
+      ['.route-nav__link', 'border-block-end-color', 'Canvas'],
+      ['.route-nav__link[aria-current="page"]', 'border-block-end-color', 'Highlight'],
+    ]);
+  });
+
   it('rings the listbox cursor in HighlightText, since its inset ring sits on the shared fill', () => {
     const cursor = declarations.filter((d) => d.selector === '.filter-menu__item.is-focused');
     expect(cursor.map((d) => [d.property, d.value])).toEqual([['--focus-ring-color', 'HighlightText']]);
