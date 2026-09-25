@@ -73,6 +73,22 @@ function answerReask(payload: GenieAnswerShape): 'retry' | 'regenerate' | null {
   return warningLabelForSource(payload.source) === null ? 'regenerate' : null;
 }
 
+// Transcript keys follow the response OBJECT, as useGenieTurnCollapse does,
+// never the index: the 20-turn cap evicts from the head and shifts every
+// index, which would hand a bubble's own state (Show all, closed sections)
+// to the next turn. The store keeps each response's identity.
+const turnKeys = new WeakMap<GenieAnswerShape, string>();
+let turnKeySeq = 0;
+function turnKey(payload: GenieAnswerShape): string {
+  let key = turnKeys.get(payload);
+  if (key === undefined) {
+    turnKeySeq += 1;
+    key = `turn-${turnKeySeq}`;
+    turnKeys.set(payload, key);
+  }
+  return key;
+}
+
 export function GenieChatBody({
   open,
   bodyRef,
@@ -122,8 +138,9 @@ export function GenieChatBody({
       });
     }
     if (m.who === 'user') {
+      const answered = msgs[i + 1];
       transcript.push(
-        <Fragment key={i}>
+        <Fragment key={answered?.who === 'ai' ? `q-${turnKey(answered.payload)}` : `q-at-${i}`}>
           <div className="genie__msg genie__msg--user">{m.text}</div>
           <GenieTurnActions placement="question" question={m.text} onEdit={onEdit} />
         </Fragment>,
@@ -149,7 +166,7 @@ export function GenieChatBody({
     );
     transcript.push(
       <div
-        key={i}
+        key={turnKey(m.payload)}
         ref={i === lastAnswerIndex ? lastAnswerRef : undefined}
         className={`genie__msg genie__msg--ai${entrance.entering(m.payload) ? ' genie__msg--entering' : ''}`}
         onAnimationEnd={entrance.onEntered(m.payload)}

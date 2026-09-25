@@ -291,6 +291,49 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     expect(bubbles[1].querySelector('.genie-answer')).not.toBeNull();
   });
 
+  it('each bubble keeps its own Show all when the 20-turn cap evicts the head', async () => {
+    const rows = (turn: number) => Array.from({ length: 12 }, (_, n) => ({ state: `T${turn}-${n}`, borrowers: n }));
+    for (let n = 0; n < 20; n += 1) {
+      appendGenieTurn(
+        `Question ${n}?`,
+        answer({
+          answer: `Answer ${n}.`,
+          message_id: `msg-${n}`,
+          ...(n === 1 || n === 2 ? { table_rows: rows(n), row_count: 12 } : {}),
+        }),
+      );
+    }
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieChat />
+        </MemoryRouter>,
+      );
+    });
+    const bubble = (n: number) =>
+      Array.from(container.querySelectorAll<HTMLElement>('.genie__msg--ai')).find((b) =>
+        b.textContent?.includes(`Answer ${n}.`),
+      );
+    const showAll = (n: number) => bubble(n)?.querySelector<HTMLButtonElement>('button.genie-answer__show-all');
+    // Restored turns are collapsed; the reader opens turns 1 and 2 again and
+    // shows every row of turn 1.
+    for (const n of [1, 2]) act(() => bubble(n)!.querySelector<HTMLButtonElement>('button.genie-collapse__toggle')!.click());
+    act(() => showAll(1)!.click());
+    await waitUntil(() => bubble(1)?.querySelector('.genie-answer__all-rows') != null);
+    expect(showAll(2)?.getAttribute('aria-expanded')).toBe('false');
+
+    // A 21st turn lands: the store evicts turn 0 and every index shifts.
+    act(() => {
+      appendGenieTurn('Question 20?', answer({ answer: 'Answer 20.', message_id: 'msg-20' }));
+    });
+
+    expect(bubble(0)).toBeUndefined();
+    expect(showAll(1)?.getAttribute('aria-expanded')).toBe('true');
+    expect(bubble(1)?.querySelector('.genie-answer__all-rows')).not.toBeNull();
+    expect(showAll(2)?.getAttribute('aria-expanded')).toBe('false');
+    expect(bubble(2)?.querySelector('.genie-answer__all-rows')).toBeNull();
+  });
+
   function animationEnd(element: Element, animationName = 'genie-msg-in') {
     const event = new Event('animationend', { bubbles: true });
     Object.defineProperty(event, 'animationName', { value: animationName });
