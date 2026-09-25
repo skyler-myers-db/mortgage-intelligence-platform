@@ -6,14 +6,13 @@
  *
  * 1440x900 (the harness default) unless a test says otherwise.
  */
-import AxeBuilder from '@axe-core/playwright';
+import { expectAxeClean } from './axe';
 import type { Page } from '@playwright/test';
 import { registerHeldWorkflowRun } from './data/askGenieRoute';
 import { GENIE_QUESTION, genieDeepAnswerFixture, registerGenieTurn } from './data/genieTurn';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 function tab(page: Page, name: string) {
   return page.getByRole('tablist', { name: 'Ask Genie views' }).getByRole('tab', { name, exact: true });
@@ -572,9 +571,7 @@ test.describe('axe on the Workflows and Saved monitors tabs', () => {
       test(`?tab=${view} · ${theme} has no WCAG A/AA violation`, async ({ app, page }) => {
         await app.setTheme(theme);
         await app.gotoRoute(`/ask-genie?tab=${view}`);
-        const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
-        expect(results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(' ; ')}`)).toEqual([]);
-        expect(results.passes.length).toBeGreaterThan(0);
+        await expectAxeClean(page, { key: { route: 'ask-genie', state: `tab-${view}` }, theme, known: {} });
       });
     }
   }
