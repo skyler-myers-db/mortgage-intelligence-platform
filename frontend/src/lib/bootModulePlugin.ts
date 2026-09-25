@@ -12,6 +12,13 @@
  *    No inline script (CSP `script-src 'self'`), no `preload as=fetch`
  *    (Firefox does not reuse a non-cacheable fetch preload, so each read
  *    would go twice), and no reliance on 103 Early Hints behind the proxy.
+ * 3. `generateBundle` (post) writes `index.home.html`: the built index.html
+ *    plus a `<link rel="modulepreload" crossorigin>` for every JS file of the
+ *    Home route's closure that the initial closure does not already load, so a
+ *    cold `/` fetches the Home chunks beside the entry instead of after it.
+ *    No CSS preload. backend/services/spa_shell.py serves it for exactly `/`
+ *    and plain index.html for every deep link (a deep link must not pay for
+ *    Home's chunks).
  *
  * tools/build_manifest.mjs then requires exactly two manifest entries
  * (index.html and the boot module), fails when the boot chunk imports
@@ -21,6 +28,8 @@
 
 export const BOOT_ENTRY_SOURCE = 'src/boot/primeBoot.ts';
 export const BOOT_CHUNK_NAME = 'boot';
+export const HOME_ROUTE_SOURCE = 'src/routes/home.tsx';
+export const HOME_SHELL_FILE = 'index.home.html';
 
 /** The fields of a Rollup/Rolldown output chunk this plugin reads. */
 export interface BootBundleChunk {
@@ -31,7 +40,13 @@ export interface BootBundleChunk {
   imports: string[];
 }
 
-export type BootBundle = Record<string, BootBundleChunk | { type: string; fileName: string }>;
+export interface BootBundleAsset {
+  type: 'asset';
+  fileName: string;
+  source: string | Uint8Array;
+}
+
+export type BootBundle = Record<string, BootBundleChunk | BootBundleAsset | { type: string; fileName: string }>;
 
 /**
  * The slice of Vite's plugin API this plugin uses, typed locally: importing
@@ -50,6 +65,10 @@ export interface BootModulePlugin {
   transformIndexHtml: {
     order: 'post';
     handler(html: string, ctx: { bundle?: unknown; chunk?: { fileName: string } }): string;
+  };
+  generateBundle: {
+    order: 'post';
+    handler(this: EmitContext, options: unknown, bundle: unknown): void;
   };
 }
 
@@ -77,6 +96,36 @@ export function appEntryChunkOf(bundle: BootBundle): BootBundleChunk {
   return found[0];
 }
 
+/** `start` plus every chunk file it reaches through static imports. */
+export function staticChunkClosure(bundle: BootBundle, start: string): Set<string> {
+  const byFile = new Map(chunks(bundle).map((chunk) => [chunk.fileName, chunk]));
+  const seen = new Set<string>();
+  const queue = [start];
+  while (queue.length > 0) {
+    const file = queue.shift() as string;
+    if (seen.has(file)) continue;
+    const chunk = byFile.get(file);
+    if (!chunk) throw new Error(`bundle has no chunk ${file}`);
+    seen.add(file);
+    queue.push(...chunk.imports);
+  }
+  return seen;
+}
+
+/**
+ * The Home route's JS beyond the initial closure: the chunk whose facade is
+ * src/routes/home.tsx plus its transitive static imports, minus the entry's
+ * static closure. Sorted.
+ */
+export function homeRouteClosure(bundle: BootBundle): string[] {
+  const home = chunks(bundle).filter((chunk) => normalizeId(chunk.facadeModuleId).endsWith(`/${HOME_ROUTE_SOURCE}`));
+  if (home.length !== 1) throw new Error(`expected exactly one ${HOME_ROUTE_SOURCE} chunk, found ${home.length}`);
+  const initial = staticChunkClosure(bundle, appEntryChunkOf(bundle).fileName);
+  return [...staticChunkClosure(bundle, home[0].fileName)]
+    .filter((file) => !initial.has(file) && file.endsWith('.js'))
+    .sort();
+}
+
 const entryScriptTag = (base: string, file: string) => `<script type="module" crossorigin src="${base}${file}"></script>`;
 
 /** Puts the boot module's script tag immediately before the entry's; throws unless the entry tag occurs once. */
@@ -87,6 +136,15 @@ export function insertBootScript(html: string, { base, entryFile, bootFile }: { 
     throw new Error(`expected the entry script tag exactly once in index.html: ${entryTag}`);
   }
   return `${html.slice(0, at)}${entryScriptTag(base, bootFile)}\n    ${html.slice(at)}`;
+}
+
+/** index.html plus one modulepreload link per file, before `</head>`. */
+export function homeVariantHtml(html: string, { base, files }: { base: string; files: string[] }): string {
+  const at = html.indexOf('</head>');
+  if (at === -1) throw new Error('index.html has no </head>');
+  const lineStart = html.lastIndexOf('\n', at) + 1;
+  const links = files.map((file) => `    <link rel="modulepreload" crossorigin href="${base}${file}">\n`).join('');
+  return `${html.slice(0, lineStart)}${links}${html.slice(lineStart)}`;
 }
 
 export function bootModulePlugin(): BootModulePlugin {
@@ -110,6 +168,21 @@ export function bootModulePlugin(): BootModulePlugin {
           base,
           entryFile: ctx.chunk.fileName,
           bootFile: bootChunkOf(ctx.bundle as BootBundle).fileName,
+        });
+      },
+    },
+    generateBundle: {
+      order: 'post',
+      handler(_options, bundle) {
+        const view = bundle as BootBundle;
+        const index = view['index.html'];
+        if (!index || index.type !== 'asset') throw new Error('mip:boot-module: the bundle has no index.html asset');
+        const { source } = index as BootBundleAsset;
+        const html = typeof source === 'string' ? source : new TextDecoder().decode(source);
+        this.emitFile({
+          type: 'asset',
+          fileName: HOME_SHELL_FILE,
+          source: homeVariantHtml(html, { base, files: homeRouteClosure(view) }),
         });
       },
     },

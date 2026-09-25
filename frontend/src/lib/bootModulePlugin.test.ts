@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   BOOT_CHUNK_NAME,
   BOOT_ENTRY_SOURCE,
+  HOME_SHELL_FILE,
   appEntryChunkOf,
   bootChunkOf,
   bootModulePlugin,
+  homeRouteClosure,
+  homeVariantHtml,
   insertBootScript,
   type BootBundle,
   type BootBundleChunk,
@@ -82,6 +85,44 @@ describe('bootModulePlugin', () => {
     const twice = BUILT_HTML.replace('</head>', '<script type="module" crossorigin src="/assets/index-A.js"></script></head>');
     expect(() => insertBootScript(twice, { base: '/', entryFile: 'assets/index-A.js', bootFile: 'assets/boot-B.js' }))
       .toThrow(/exactly once/);
+  });
+
+  it("computes the Home closure: home.tsx plus its static imports, minus the entry's static closure", () => {
+    expect(homeRouteClosure(syntheticBundle())).toEqual(['assets/home-H.js', 'assets/map-M.js']);
+  });
+
+  it('never follows a dynamic import into the Home closure', () => {
+    const bundle = syntheticBundle();
+    bundle['assets/geometry-G.js'] = chunk('assets/geometry-G.js', null);
+    // As Rolldown reports it: the lazily loaded geometry is a dynamic import of Home.
+    const home = { ...chunk('assets/home-H.js', `${ROOT}/src/routes/home.tsx`, ['assets/index-A.js', 'assets/map-M.js']) };
+    bundle['assets/home-H.js'] = Object.assign(home, { dynamicImports: ['assets/geometry-G.js'] });
+    expect(homeRouteClosure(bundle)).toEqual(['assets/home-H.js', 'assets/map-M.js']);
+  });
+
+  it('writes the variant HTML: the built HTML plus one modulepreload per Home file, and no CSS preload', () => {
+    const withBoot = insertBootScript(BUILT_HTML, { base: '/', entryFile: 'assets/index-A.js', bootFile: 'assets/boot-B.js' });
+    const variant = homeVariantHtml(withBoot, { base: '/', files: homeRouteClosure(syntheticBundle()) });
+
+    const preloads = [...variant.matchAll(/<link rel="modulepreload" crossorigin href="\/([^"]+)">/g)].map((m) => m[1]);
+    expect(preloads).toEqual(['assets/vendor-react-V.js', 'assets/home-H.js', 'assets/map-M.js']);
+    expect(variant).not.toMatch(/rel="preload"[^>]*as="style"/);
+    expect(variant.indexOf('assets/boot-B.js')).toBeLessThan(variant.indexOf('src="/assets/index-A.js"'));
+    expect(variant.replace(/ {4}<link rel="modulepreload" crossorigin href="\/assets\/(?:home-H|map-M)\.js">\n/g, '')).toBe(withBoot);
+  });
+
+  it('emits index.home.html from the bundle in generateBundle', () => {
+    const plugin = bootModulePlugin();
+    plugin.configResolved({ root: ROOT, base: '/' });
+    const bundle: BootBundle = { ...syntheticBundle(), 'index.html': { type: 'asset', fileName: 'index.html', source: BUILT_HTML } };
+    const emitted: Array<{ type: string; fileName?: string; source?: string }> = [];
+    plugin.generateBundle.handler.call({ emitFile: (file) => {
+      emitted.push(file);
+      return 'ref';
+    } }, {}, bundle);
+
+    expect(emitted.map((file) => file.fileName)).toEqual([HOME_SHELL_FILE]);
+    expect(emitted[0].source).toContain('<link rel="modulepreload" crossorigin href="/assets/home-H.js">');
   });
 
   it('emits src/boot/primeBoot.ts as the `boot` chunk, build only', () => {
