@@ -9,7 +9,6 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router';
-import { focusableElements } from '../../hooks/useFocusTrap';
 import { AUDIT_EVENT_ID_PARAM, AUDIT_EXPLORER_PATH, auditEventHref } from '../../lib/auditLinks';
 import { subscribeModalLayers, topModalLayer } from '../../lib/modalLayers';
 import { dismissToast, getToasts, subscribeToasts, type Toast } from '../../lib/toast';
@@ -73,6 +72,19 @@ function supportsPopover(element: HTMLElement): boolean {
 }
 
 /**
+ * The first control of `host` (an open modal dialog) outside the toast
+ * region. A local query, not useFocusTrap's list: this lazy chunk importing
+ * that shell hook made the bundler split lib/escapeStack out of the entry
+ * chunk into an extra initial request. A candidate that cannot take focus
+ * falls through to the next one (see focusAwayFrom).
+ */
+function firstControlOutside(host: HTMLElement, region: HTMLElement): HTMLElement | undefined {
+  return [...host.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].find((element) => !region.contains(element) && element.closest('[inert]') === null);
+}
+
+/**
  * Move focus off `card` before it is removed (a removed element drops focus
  * to <body>): the next toast's dismiss button (the previous toast's for the
  * last one), else `origin`, the element focus came from when it entered the
@@ -104,7 +116,7 @@ function focusAwayFrom(
   // In a modal, everything outside the dialog is inert: the last resorts
   // are the dialog's own first tab stop, then the dialog itself.
   const lastResorts: Array<HTMLElement | null | undefined> = host
-    ? [focusableElements(host).find((element) => !region.contains(element)), host]
+    ? [firstControlOutside(host, region), host]
     : [main?.querySelector<HTMLElement>('h1[tabindex]'), main];
   const candidates: Array<[HTMLElement | null | undefined, boolean]> = [
     [neighbour?.querySelector<HTMLElement>('.toast__close'), pointer],
