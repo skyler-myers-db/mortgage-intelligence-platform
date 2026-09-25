@@ -3586,3 +3586,77 @@ VALUES (
     'Hash-only Genie refusal false-positive reports: coarse refusal family, full question digest, actor, audit link; one row per actor/hash/family'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Genie completion jobs ------------------------------------------------
+-- Audit 2026-09-21 genie-01 / delivery-04. The governed completion of one
+-- submitted live Genie turn (verification, output policy, the RUN_GENIE audit
+-- row, session recording and, for deep asks, the planned sweep) runs as a
+-- server-side job instead of inside one blocking POST. One row per
+-- (actor, conversation, message): a reloaded or retried complete joins the
+-- existing job, so the turn is completed and audited exactly once.
+-- No column holds question text: question_hash is the progress token's
+-- full-strength binding digest. result_json is the finalized governed answer
+-- DE-AUTHORIZED before it is stored (question blanked, every action's
+-- confirmation token dropped; actions are re-signed at delivery), served only
+-- to the owning actor and only until expires_at. Expiry is lease-based and
+-- happens on read: a job whose runner stopped renewing lease_until, or a
+-- served answer past expires_at, is marked expired and its result_json NULLed
+-- by the next read of it or by the bounded sweep every new job runs. There is
+-- no DELETE grant, like every app table.
+CREATE TABLE IF NOT EXISTS mip_app.genie_completion_jobs (
+    job_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email      TEXT NOT NULL,
+    -- Opaque server-issued ids, token-verified before any write. Deliberately
+    -- broader than the 32-hex Genie grammar: a wrong guess here would 503
+    -- every live turn. The 256 bound is length(), never a regex repetition
+    -- count: PostgreSQL caps those at 255, and a larger one fails at the
+    -- first INSERT (not at CREATE TABLE).
+    conversation_id  TEXT NOT NULL CHECK (
+                         conversation_id ~ '^[A-Za-z0-9_-]+$' AND length(conversation_id) <= 256
+                     ),
+    message_id       TEXT NOT NULL CHECK (
+                         message_id ~ '^[A-Za-z0-9_-]+$' AND length(message_id) <= 256
+                     ),
+    question_hash    TEXT NOT NULL CHECK (question_hash ~ '^[0-9a-f]{64}$'),
+    status           TEXT NOT NULL CHECK (status IN (
+                         'queued', 'running', 'succeeded', 'failed', 'expired'
+                     )),
+    stage            TEXT NOT NULL CHECK (stage IN (
+                         'queued', 'collecting', 'repairing', 'verifying', 'cross_checking',
+                         'rewriting', 'planning', 'researching', 'synthesizing', 'finalizing',
+                         'done', 'failed', 'expired'
+                     )),
+    parts_done       SMALLINT CHECK (parts_done IS NULL OR parts_done >= 0::smallint),
+    parts_planned    SMALLINT CHECK (parts_planned IS NULL OR parts_planned >= 0::smallint),
+    failure_kind     TEXT CHECK (failure_kind IS NULL OR failure_kind IN (
+                         'dependency_down', 'upstream_error', 'internal'
+                     )),
+    result_json      JSONB CHECK (
+                         result_json IS NULL OR pg_column_size(result_json) <= 8388608
+                     ),
+    lease_owner      TEXT NOT NULL,
+    lease_until      TIMESTAMPTZ NOT NULL,
+    expires_at       TIMESTAMPTZ NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at      TIMESTAMPTZ,
+    CONSTRAINT uq_genie_completion_jobs_turn
+        UNIQUE (actor_email, conversation_id, message_id)
+);
+-- Stale-lease sweep (queued/running rows whose runner stopped renewing).
+CREATE INDEX IF NOT EXISTS idx_genie_completion_jobs_live_lease
+    ON mip_app.genie_completion_jobs (lease_until)
+    WHERE status IN ('queued', 'running');
+-- Served-answer expiry sweep (succeeded rows still holding result_json).
+CREATE INDEX IF NOT EXISTS idx_genie_completion_jobs_served_expiry
+    ON mip_app.genie_completion_jobs (expires_at)
+    WHERE status = 'succeeded';
+COMMENT ON TABLE mip_app.genie_completion_jobs IS
+    'Server-side completion jobs for submitted live Genie turns, one per actor/conversation/message. No question text is stored (question_hash is the token binding digest). result_json is the de-authorized governed answer (question blanked, action confirmation tokens dropped, re-signed at delivery), served only to the owning actor until expires_at and NULLed when the job expires.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_09_24_genie_completion_jobs',
+    'Server-side Genie completion jobs: one per actor/conversation/message, lease-based expiry on read, de-authorized question-free result served to the owning actor until expires_at'
+)
+ON CONFLICT (version) DO NOTHING;

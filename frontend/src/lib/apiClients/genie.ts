@@ -31,11 +31,15 @@ export const genieApi = {
       signal,
     ),
 
+  /** Creates a Genie message and carries no Idempotency-Key: re-sent only
+   *  after a 429 the middleware returned before the handler ran. */
   genieSubmit: (question: string, conversationId?: string | null, signal?: AbortSignal) =>
     postJson<GenieSubmitResult, { question: string; conversation_id?: string | null }>(
       '/api/genie/message/submit',
       { question, conversation_id: conversationId ?? null },
       signal,
+      undefined,
+      { retry: 'rejected-only' },
     ),
 
   genieProgress: (

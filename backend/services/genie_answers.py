@@ -9,10 +9,11 @@ question when Genie is idle or degraded.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from backend.services.genie_completion_stages import GenieJobStage, GenieJobStatus
 from backend.services.genie_refusal_reason import GenieRefusalReason
 
 
@@ -212,6 +213,12 @@ class GenieSubmitResponse(BaseModel):
     #: only number the server holds is a wall budget for one phase of the
     #: sweep, which is a ceiling, not an expected duration.
     deep: bool = False
+    #: True when the server can run this live turn's completion as a job
+    #: (``respond_async`` on complete answers 202 and the browser polls
+    #: ``/message/status``). False while the job table is not provisioned yet
+    #: (an App promoted ahead of its Lakebase migration): the browser then
+    #: makes the one blocking complete call, the governed inline path.
+    completion_jobs: bool = False
     response: GenieMessageResponse | None = None
 
 
@@ -266,6 +273,32 @@ class GenieProgressResponse(BaseModel):
     reasoning_trace: list[GenieReasoningStep] = Field(default_factory=list)
     sql_preview: str | None = None
     error_hint: str | None = None
+
+
+class GenieCompletionJobStatus(BaseModel):
+    """Where the governed completion of one live Genie turn is (audit genie-01).
+
+    Returned with 202 by ``/message/complete`` when the browser asked for a
+    job, and by every ``/message/status`` poll. Server-owned vocabulary only:
+    ``status`` and ``stage`` are closed enums, ``stage_label`` and
+    ``error_hint`` are fixed server copy (never exception or model text).
+    ``parts_done`` / ``parts_planned`` count the deep-research sweep's
+    governed sub-analyses while it runs. ``response`` is the finished
+    governed answer, present only when ``status`` is ``succeeded``; its
+    action confirmation tokens are signed afresh for the caller at delivery.
+    """
+
+    kind: Literal["genie_completion_job"] = "genie_completion_job"
+    job_id: str
+    status: GenieJobStatus
+    stage: GenieJobStage
+    stage_label: str
+    parts_done: int | None = None
+    parts_planned: int | None = None
+    terminal: bool = False
+    failed: bool = False
+    error_hint: str | None = None
+    response: GenieMessageResponse | None = None
 
 
 _SAMPLE_QUESTIONS_CACHE: tuple[list[str], ...] | None = None

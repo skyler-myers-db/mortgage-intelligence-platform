@@ -93,7 +93,7 @@ function storeRecord(overrides: Record<string, unknown> = {}): void {
   window.sessionStorage.setItem(
     GENIE_IN_FLIGHT_TURN_KEY,
     JSON.stringify({
-      v: 1,
+      v: 2,
       question: QUESTION,
       conversationId: 'conv-1',
       surface: 'route',

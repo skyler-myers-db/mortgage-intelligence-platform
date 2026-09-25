@@ -17,6 +17,7 @@ from backend.services.genie_client import (
     GenieResponse,
     ResilientGenieClient,
 )
+from backend.services.genie_completion_stages import GenieJobStage, report_stage
 from backend.services.genie_message_policy import (
     _without_allowed_literals,
     governed_row_literals,
@@ -327,8 +328,10 @@ class DatabricksGenieRepository:
                 return sweep
         repaired = False
         try:
+            report_stage(GenieJobStage.COLLECTING)
             result = self._genie.resume_message(conversation_id, message_id)
             if _needs_genie_sql_repair(question, result):
+                report_stage(GenieJobStage.REPAIRING)
                 regenerated = self._repair_text_only_genie_answer(
                     question=question,
                     original=result,
@@ -340,6 +343,7 @@ class DatabricksGenieRepository:
             return self._degraded(question, kind=exc.kind)
         except GenieClientError:
             raise
+        report_stage(GenieJobStage.VERIFYING)
         adapted = _adapt_genie_response(
             question,
             result,
@@ -389,6 +393,7 @@ class DatabricksGenieRepository:
         if not (unverified or guarded):
             return adapted
         reason = "figure" if unverified else "wording"
+        report_stage(GenieJobStage.REWRITING)
         try:
             turn = self._genie.ask(
                 _narrative_repair_prompt(question, rows, reason=reason),
@@ -686,6 +691,7 @@ def _adapt_genie_response(
     # canonical framing and disclose material divergence. Genie's work stays
     # the answer either way; only a metric that contradicts the governed
     # unique-borrower definition additionally withholds the prose below.
+    report_stage(GenieJobStage.CROSS_CHECKING)
     cross = _governed_cross_check(question, rows, sql_client, trace)
     cross_check_gaps = list(cross.gaps)
     # Trusted SQL is a floor, not a coin flip: from here the governed query,

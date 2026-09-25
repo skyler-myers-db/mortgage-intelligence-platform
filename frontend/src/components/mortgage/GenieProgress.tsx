@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import type { GenieLiveProgress } from '../../lib/api';
+import type { GenieTurnProgress } from '../../types/genieJobs';
 import { Icon } from '../Icon';
 import { ElapsedTicker } from '../ui/ElapsedTicker';
 
@@ -42,17 +42,21 @@ export function genieStatusLabel(status: string | null | undefined): string | nu
 
 /** True once Genie's own turn finished cleanly and the client is waiting on
  * the governed completion call. */
-function awaitingCompletion(progress: GenieLiveProgress | null | undefined): boolean {
+function awaitingCompletion(progress: GenieTurnProgress | null | undefined): boolean {
   return Boolean(progress?.terminal && !progress.failed);
 }
 
 /** The one line that names what is happening right now. Shared with each
  * surface's persistent screen-reader announcer (useGenieAnnouncer) so the
- * card and the announcer say the same thing. */
+ * card and the announcer say the same thing. Once the completion runs as a
+ * server-side job (audit 2026-09-21 `genie-01`) that line is the server's own
+ * stage label; the sub-analysis count is NOT part of it, so the announcer
+ * speaks stage changes, never every count tick. */
 export function genieProgressLabel(
-  progress: GenieLiveProgress | null | undefined,
+  progress: GenieTurnProgress | null | undefined,
   status?: string | null,
 ): string {
+  if (progress?.job) return progress.job.stage_label;
   if (awaitingCompletion(progress)) {
     return progress?.deep ? GENIE_DEEP_WAIT_LABEL : GENIE_VERIFY_WAIT_LABEL;
   }
@@ -78,6 +82,15 @@ const STAGE_KEYS = stagesFor(false).map((stage) => stage.key);
 function stageIndex(stage: string | null | undefined): number {
   if (!stage) return -1;
   return STAGE_KEYS.indexOf(stage);
+}
+
+/** "3 of 7 sub-analyses finished" while the deep sweep runs; shown on the
+ * card only (see genieProgressLabel). */
+export function genieJobPartsLabel(progress: GenieTurnProgress | null | undefined): string | null {
+  const done = progress?.job?.parts_done;
+  const planned = progress?.job?.parts_planned;
+  if (typeof done !== 'number' || typeof planned !== 'number' || planned <= 0) return null;
+  return `${done} of ${planned} sub-analyses finished`;
 }
 
 function dedupeTrace(trace: Array<{ kind: string; content: string }>): string[] {
@@ -109,8 +122,9 @@ export function GenieProgress({
   dense?: boolean;
   /** A raw Genie message status for callers without the live lifecycle. */
   status?: string | null;
-  /** Live lifecycle payload from `/api/genie/message/progress`. */
-  progress?: GenieLiveProgress | null;
+  /** Live lifecycle payload from `/api/genie/message/progress`, plus the
+   *  completion job's stage once there is one. */
+  progress?: GenieTurnProgress | null;
   /** Epoch ms when the ask started; renders the elapsed ticker when set. */
   startedAt?: number | null;
   /** Stop the elapsed clock's interval while the card is not visible (the
@@ -119,6 +133,7 @@ export function GenieProgress({
   paused?: boolean;
 }) {
   const label = genieProgressLabel(progress, status);
+  const parts = genieJobPartsLabel(progress);
   const stages = stagesFor(Boolean(progress?.deep));
   // Monotonic rail: Genie legitimately revisits earlier statuses (e.g. a
   // text-only repair turn re-enters ASKING_AI after EXECUTING_QUERY), but a
@@ -157,7 +172,10 @@ export function GenieProgress({
     <div className={`genie-progress ${dense ? 'genie-progress--dense' : ''}`}>
       <div className="genie-progress__head">
         <Icon name="sparkle" size={12} className="icon-accent" />
-        <span className="genie-progress__label">{label}</span>
+        <span className="genie-progress__label">
+          {label}
+          {parts ? ` · ${parts}` : null}
+        </span>
         {/* aria-hidden and OUTSIDE every live region (audit 2026-09-21 genie-v1 /
             a11y-06): a once-a-second text change inside role="status"
             re-queued the whole card to screen readers for the full turn. */}

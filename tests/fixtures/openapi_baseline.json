@@ -5973,13 +5973,146 @@
         "title": "GenieAnswerSection",
         "type": "object"
       },
-      "GenieCompleteRequest": {
-        "description": "Finish an in-flight Genie message into a governed answer.\n\n``question`` must hash-match the token minted at submit, which makes the\nguarded prompt and the completed answer cryptographically the same turn.",
+      "GenieCompleteAsyncRequest": {
+        "description": "``/message/complete`` body. ``respond_async`` opts in to the 202 job.\n\nOlder servers ignore the extra field and answer 200, which the browser\nrecognises (deploy-skew safety in both directions).",
         "properties": {
           "conversation_id": {
             "maxLength": 256,
             "minLength": 1,
             "title": "Conversation Id",
+            "type": "string"
+          },
+          "message_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "progress_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Progress Token",
+            "type": "string"
+          },
+          "question": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "respond_async": {
+            "default": false,
+            "title": "Respond Async",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "progress_token",
+          "question"
+        ],
+        "title": "GenieCompleteAsyncRequest",
+        "type": "object"
+      },
+      "GenieCompletionJobStatus": {
+        "description": "Where the governed completion of one live Genie turn is (audit genie-01).\n\nReturned with 202 by ``/message/complete`` when the browser asked for a\njob, and by every ``/message/status`` poll. Server-owned vocabulary only:\n``status`` and ``stage`` are closed enums, ``stage_label`` and\n``error_hint`` are fixed server copy (never exception or model text).\n``parts_done`` / ``parts_planned`` count the deep-research sweep's\ngoverned sub-analyses while it runs. ``response`` is the finished\ngoverned answer, present only when ``status`` is ``succeeded``; its\naction confirmation tokens are signed afresh for the caller at delivery.",
+        "properties": {
+          "error_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Hint"
+          },
+          "failed": {
+            "default": false,
+            "title": "Failed",
+            "type": "boolean"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "genie_completion_job",
+            "default": "genie_completion_job",
+            "title": "Kind",
+            "type": "string"
+          },
+          "parts_done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Done"
+          },
+          "parts_planned": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Planned"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenieMessageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage": {
+            "$ref": "#/components/schemas/GenieJobStage"
+          },
+          "stage_label": {
+            "title": "Stage Label",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GenieJobStatus"
+          },
+          "terminal": {
+            "default": false,
+            "title": "Terminal",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "job_id",
+          "status",
+          "stage",
+          "stage_label"
+        ],
+        "title": "GenieCompletionJobStatus",
+        "type": "object"
+      },
+      "GenieCompletionJobStatusRequest": {
+        "description": "``/message/status`` body: a POST so the token never lands in a URL.\n\n``question`` is hash-checked against the progress token exactly as on\ncomplete, and is how the answer gets its question back: the stored job\nresult never holds it.",
+        "properties": {
+          "conversation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "job_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "title": "Job Id",
             "type": "string"
           },
           "message_id": {
@@ -6005,9 +6138,10 @@
           "conversation_id",
           "message_id",
           "progress_token",
-          "question"
+          "question",
+          "job_id"
         ],
-        "title": "GenieCompleteRequest",
+        "title": "GenieCompletionJobStatusRequest",
         "type": "object"
       },
       "GenieDataFreshness": {
@@ -6105,6 +6239,38 @@
         ],
         "title": "GenieFeedbackResponse",
         "type": "object"
+      },
+      "GenieJobStage": {
+        "description": "Where a completion job is; the ``stage`` CHECK in lakebase/schema.sql.",
+        "enum": [
+          "queued",
+          "collecting",
+          "repairing",
+          "verifying",
+          "cross_checking",
+          "rewriting",
+          "planning",
+          "researching",
+          "synthesizing",
+          "finalizing",
+          "done",
+          "failed",
+          "expired"
+        ],
+        "title": "GenieJobStage",
+        "type": "string"
+      },
+      "GenieJobStatus": {
+        "description": "Lifecycle of a completion job; the ``status`` CHECK in lakebase/schema.sql.",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "expired"
+        ],
+        "title": "GenieJobStatus",
+        "type": "string"
       },
       "GenieMessageRequest": {
         "properties": {
@@ -6840,6 +7006,11 @@
         "properties": {
           "completed": {
             "title": "Completed",
+            "type": "boolean"
+          },
+          "completion_jobs": {
+            "default": false,
+            "title": "Completion Jobs",
             "type": "boolean"
           },
           "conversation_id": {
@@ -17877,13 +18048,13 @@
     "/api/genie/message/complete": {
       "post": {
         "deprecated": true,
-        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nThe token proves the same actor's submit created this exact message and\nthe hash check pins ``question`` to the prompt that passed the guard\nbattery there, so the output-policy check, audit write, action-token\nissuance, and session recording below stay byte-identical in meaning to\nthe synchronous endpoint's live tail. No conversation-ownership lookup\nhere: for a fresh conversation the Lakebase row intentionally does not\nexist until this very call finalizes \u2014 the token is the authorization.",
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nOne job per (actor, conversation, message) makes the output-policy\ncheck, the RUN_GENIE audit write, action-token issuance and session\nrecording single-shot: a reloaded or retried complete joins the job.\n``respond_async`` answers 202 with the job's status (the browser polls\n``/message/status``); older tabs get today's 200 answer. Without the job\ntable (App ahead of its migration) an older tab's tail runs inline with no\njob; an async request is refused with a non-retryable 503, because the\nbrowser re-sends it and a job-less run could not be joined. No\nconversation-ownership lookup here: for a fresh conversation the Lakebase\nrow intentionally does not exist until this very call finalizes \u2014 the\ntoken is the authorization.",
         "operationId": "post_api_genie_message_complete_genie_message_complete",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GenieCompleteRequest"
+                "$ref": "#/components/schemas/GenieCompleteAsyncRequest"
               }
             }
           },
@@ -17899,6 +18070,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCompletionJobStatus"
+                }
+              }
+            },
+            "description": "Accepted"
           },
           "415": {
             "content": {
@@ -17975,6 +18156,59 @@
           }
         },
         "summary": "Genie Message Progress",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/message/status": {
+      "post": {
+        "deprecated": true,
+        "description": "Poll the caller's own completion job; the answer once it succeeded.\n\nNo Genie call. The stored answer is not re-scanned: it passed the output\nguard before it was stored, the same posture as history replay. Its\nquestion comes back from this hash-checked request and its actions are\nre-signed for the caller, since the job row holds neither.",
+        "operationId": "post_api_genie_message_status_genie_message_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCompletionJobStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCompletionJobStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Status",
         "tags": [
           "genie"
         ]
@@ -25566,13 +25800,13 @@
     },
     "/api/v1/genie/message/complete": {
       "post": {
-        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nThe token proves the same actor's submit created this exact message and\nthe hash check pins ``question`` to the prompt that passed the guard\nbattery there, so the output-policy check, audit write, action-token\nissuance, and session recording below stay byte-identical in meaning to\nthe synchronous endpoint's live tail. No conversation-ownership lookup\nhere: for a fresh conversation the Lakebase row intentionally does not\nexist until this very call finalizes \u2014 the token is the authorization.",
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nOne job per (actor, conversation, message) makes the output-policy\ncheck, the RUN_GENIE audit write, action-token issuance and session\nrecording single-shot: a reloaded or retried complete joins the job.\n``respond_async`` answers 202 with the job's status (the browser polls\n``/message/status``); older tabs get today's 200 answer. Without the job\ntable (App ahead of its migration) an older tab's tail runs inline with no\njob; an async request is refused with a non-retryable 503, because the\nbrowser re-sends it and a job-less run could not be joined. No\nconversation-ownership lookup here: for a fresh conversation the Lakebase\nrow intentionally does not exist until this very call finalizes \u2014 the\ntoken is the authorization.",
         "operationId": "post_api_v1_genie_message_complete_genie_message_complete",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GenieCompleteRequest"
+                "$ref": "#/components/schemas/GenieCompleteAsyncRequest"
               }
             }
           },
@@ -25588,6 +25822,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCompletionJobStatus"
+                }
+              }
+            },
+            "description": "Accepted"
           },
           "415": {
             "content": {
@@ -25663,6 +25907,58 @@
           }
         },
         "summary": "Genie Message Progress",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/message/status": {
+      "post": {
+        "description": "Poll the caller's own completion job; the answer once it succeeded.\n\nNo Genie call. The stored answer is not re-scanned: it passed the output\nguard before it was stored, the same posture as history replay. Its\nquestion comes back from this hash-checked request and its actions are\nre-signed for the caller, since the job row holds neither.",
+        "operationId": "post_api_v1_genie_message_status_genie_message_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCompletionJobStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCompletionJobStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Status",
         "tags": [
           "genie"
         ]

@@ -50,6 +50,61 @@ class _Bucket:
     last_seen: float
 
 
+class DependencySlot:
+    """One acquired dependency-semaphore slot, released exactly once.
+
+    The middleware stores the slot it acquired on ``request.state``. A
+    handler that hands its work to a background runner (the Genie completion
+    job, audit genie-01) ADOPTS the slot: the middleware then skips its own
+    release when the response goes out, and the runner releases when the
+    work is really over. ``release`` is idempotent, so a runner that finishes
+    before the middleware's ``finally`` runs can never free the slot twice.
+    """
+
+    def __init__(self, semaphore: Semaphore, dependency: str) -> None:
+        self.dependency = dependency
+        self._semaphore = semaphore
+        self._lock = Lock()
+        self._adopted = False
+        self._released = False
+
+    @property
+    def adopted(self) -> bool:
+        with self._lock:
+            return self._adopted
+
+    def adopt(self) -> DependencySlot:
+        """Take ownership away from the middleware; the adopter must release."""
+        with self._lock:
+            self._adopted = True
+        return self
+
+    def release(self) -> bool:
+        """Free the slot once. Returns True only for the call that freed it."""
+        with self._lock:
+            if self._released:
+                return False
+            self._released = True
+        self._semaphore.release()
+        return True
+
+
+_REQUEST_SLOT_ATTR = "mip_dependency_slot"
+
+
+def adopt_request_slot(request: Request) -> DependencySlot | None:
+    """Adopt the dependency slot the middleware acquired for ``request``.
+
+    ``None`` when the request holds no slot: backpressure is off (or not
+    opted in under pytest), or the route's budget names no dependency. That
+    is exactly today's disabled path, where there is nothing to hold.
+    """
+    slot = getattr(request.state, _REQUEST_SLOT_ATTR, None)
+    if not isinstance(slot, DependencySlot):
+        return None
+    return slot.adopt()
+
+
 class BackpressureController:
     """Token-bucket rate limiter + non-blocking dependency semaphores."""
 
@@ -113,6 +168,18 @@ class BackpressureController:
             return RouteBudget(
                 "genie-progress", settings.mip_rate_limit_default_per_minute, None
             )
+        if path == "/api/genie/message/status":
+            # Completion-job poll (audit 2026-09-21 genie-01): a ~1.5 s
+            # browser poll of the caller's own job row. It reads Lakebase
+            # only, never Genie, so it takes the default read bucket and a
+            # Lakebase slot; inside the 30/min "genie" budget it would 429
+            # within a minute and hold a Genie slot per poll.
+            return RouteBudget("genie-job", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "POST" and path == "/api/genie/export-receipt":
+            # The audited Genie answer-export receipt (w3-genie-reading) is a
+            # Lakebase ledger write, not a Genie call: the mutation budget and
+            # a Lakebase slot, never the Genie budget or a Genie slot.
+            return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, "lakebase")
         if path.startswith("/api/genie"):
             return RouteBudget("genie", settings.mip_rate_limit_genie_per_minute, "genie")
         if method.upper() == "POST" and path in self._READ_ONLY_POSTS:
@@ -246,11 +313,16 @@ class BackpressureMiddleware(BaseHTTPMiddleware):
                 reason="dependency_saturated",
                 retry_after=2,
             )
+        slot = DependencySlot(token, budget.dependency or "app") if token is not None else None
+        if slot is not None:
+            setattr(request.state, _REQUEST_SLOT_ATTR, slot)
         try:
             return await call_next(request)
         finally:
-            if token is not None:
-                token.release()
+            # An adopted slot belongs to the background runner the handler
+            # enqueued; that runner releases it when the work is over.
+            if slot is not None and not slot.adopted:
+                slot.release()
 
     @staticmethod
     def _too_many_requests(
@@ -291,6 +363,8 @@ class BackpressureMiddleware(BaseHTTPMiddleware):
 __all__ = [
     "BackpressureController",
     "BackpressureMiddleware",
+    "DependencySlot",
     "RouteBudget",
     "actor_key_for_request",
+    "adopt_request_slot",
 ]
