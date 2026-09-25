@@ -24,7 +24,10 @@ import { preloadDescribedError } from '../ui/DescribedError';
 /** Server detail the panel must never print (audit states-04). */
 const SENTINEL = 'SENTINEL server detail 500 Internal Server Error';
 
-const makeApiError = (status: number, opts: { dependency?: string; validationIssues?: ApiValidationIssue[] } = {}) =>
+const makeApiError = (
+  status: number,
+  opts: { dependency?: string; validationIssues?: ApiValidationIssue[]; retryable?: boolean; reason?: string } = {},
+) =>
   new ApiError(SENTINEL, { path: '/api/v1/lookup/property-loan', status, ...opts });
 
 // The error vocabulary is its own chunk (loaded with the first failure).
@@ -179,7 +182,7 @@ describe('PropertyLookupPanel', () => {
   });
 
   it('shows a degraded, retryable state on a 503 dependency-down, naming the dependency as the banner does', async () => {
-    propertyLookup.mockRejectedValue(makeApiError(503, { dependency: 'lakebase' }));
+    propertyLookup.mockRejectedValue(makeApiError(503, { dependency: 'lakebase', retryable: true, reason: 'retries_exhausted' }));
     render();
     fillValidForm();
     await submit();
@@ -202,5 +205,43 @@ describe('PropertyLookupPanel', () => {
     expect(alert!.textContent).toContain("Couldn't complete the lookup: The server hit an unexpected error.");
     expect(container.textContent).not.toContain('SENTINEL');
     expect(container.textContent).not.toContain('Internal Server Error');
+    await flushLazy();
+    expect(container.querySelector('button[aria-label="Retry property lookup"]'), 'a 500 is worth retrying').not.toBeNull();
+  });
+
+  // PR #255: a missing grant answers 503 {retryable:false, reason:'permission_denied'}.
+  // It is not "warming up", and a Retry would be one more audited
+  // PROPERTY_LOOKUP that cannot succeed.
+  it('says a missing grant is not temporary and offers no Retry (503 permission_denied)', async () => {
+    propertyLookup.mockRejectedValue(makeApiError(503, { dependency: 'warehouse', retryable: false, reason: 'permission_denied' }));
+    render();
+    fillValidForm();
+    await submit();
+    await flushLazy();
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert!.textContent).toContain('refused the app access to a required object');
+    expect(alert!.textContent).toContain('retrying will not help');
+    expect(alert!.textContent).not.toContain('warming');
+    expect(container.querySelector('button[aria-label="Retry property lookup"]')).toBeNull();
+    expect(container.textContent).not.toContain('SENTINEL');
+  });
+
+  it('offers no Retry for a 403 (the role cannot run it)', async () => {
+    propertyLookup.mockRejectedValue(makeApiError(403));
+    render();
+    fillValidForm();
+    await submit();
+    await flushLazy();
+
+    expect(container.querySelector('[role="alert"]')!.textContent).toContain('Ask an administrator for access.');
+    expect(container.querySelector('button[aria-label="Retry property lookup"]')).toBeNull();
   });
 });
+
+/** Let the lazy error vocabulary resolve (the failure chunk and its wrappers). */
+async function flushLazy() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}

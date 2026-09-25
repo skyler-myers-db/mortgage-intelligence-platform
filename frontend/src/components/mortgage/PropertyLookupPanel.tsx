@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { lazy, Suspense, useState, type ComponentType, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ApiError, api } from '../../lib/api';
 import type { PropertyLoanLookupResponse } from '../../types';
@@ -40,18 +40,33 @@ type LookupState =
 
 /**
  * A failed lookup in buyer-safe words (audit 2026-09-21 `states-04`): a 422
- * shows its validation issue text, a 503 names the dependency the way the
- * banner does, anything else renders through describeApiError (never the
- * transport message).
+ * shows its validation issue text, a RETRYABLE 503 names the dependency the
+ * way the banner does, anything else (a permission_denied 503 included)
+ * renders through describeApiError (never the transport message).
  */
 function failedLookup(err: unknown): LookupState {
   if (err instanceof ApiError && err.status === 422) {
     const issues = err.validationIssues.map((issue) => `${issue.field}: ${issue.message}`).join('; ');
     return { status: 'validation', message: issues ? `${issues}.` : 'Check the address and ZIP, then try again.' };
   }
-  if (err instanceof ApiError && err.status === 503) return { status: 'degraded', dependency: err.dependency };
+  if (err instanceof ApiError && err.status === 503 && err.retryable) return { status: 'degraded', dependency: err.dependency };
   return { status: 'error', error: err };
 }
+
+type FailureModule = typeof import('../ui/AsyncFailure');
+type RetryGateProps = { error: unknown; children: ReactNode };
+const NoRetry = () => null;
+
+/**
+ * Retry, only when describeApiError says retrying can help: never for a 403
+ * or a permission_denied 503, where each Retry would be one more audited
+ * PROPERTY_LOOKUP that cannot succeed. Until the vocabulary loads (or if it
+ * cannot) no Retry shows; the form's own Look up stays available.
+ */
+const RetryWhenUseful = lazy<ComponentType<RetryGateProps>>(() => (import('../ui/AsyncFailure') as Promise<FailureModule | undefined>).then(
+  (module) => ({ default: module?.RetryWhenUseful ?? NoRetry }),
+  () => ({ default: NoRetry }),
+));
 
 function isZip5(value: string): boolean {
   return /^[0-9]{5}$/.test(value.trim());
@@ -217,14 +232,18 @@ export function PropertyLookupPanel({ onNavigate, compact, headingLevel = 2 }: P
               Couldn&apos;t complete the lookup:{' '}
               <DescribedErrorBody error={lookup.error} subject="the property lookup" />
             </span>
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={() => void runLookup()}
-              aria-label="Retry property lookup"
-            >
-              Retry
-            </button>
+            <Suspense fallback={null}>
+              <RetryWhenUseful error={lookup.error}>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => void runLookup()}
+                  aria-label="Retry property lookup"
+                >
+                  Retry
+                </button>
+              </RetryWhenUseful>
+            </Suspense>
           </div>
         )}
 

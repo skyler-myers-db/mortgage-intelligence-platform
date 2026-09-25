@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { describeApiError } from '../../lib/describeApiError';
 import { copyLink } from '../../lib/copyLink';
 import { useOptionalHealth } from '../HealthProvider';
@@ -26,6 +27,11 @@ import './AsyncState.css';
 /** A failure's describeApiError body sentence, for DescribedErrorBody. */
 export function FailureBody({ error, subject }: { error: unknown; subject: string }) {
   return describeApiError(error, { subject }).body;
+}
+
+/** `children` (a Retry) only when describeApiError's action for `error` is retry. */
+export function RetryWhenUseful({ error, children }: { error: unknown; children: ReactNode }) {
+  return describeApiError(error, { subject: '' }).action === 'retry' ? children : null;
 }
 
 export interface AsyncFailureProps {
