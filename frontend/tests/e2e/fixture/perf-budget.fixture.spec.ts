@@ -51,9 +51,18 @@ type RouteName = (typeof ROUTES)[number]['name'];
  * single-worker CI run (w2-safety-net's step) calibrates them once, in
  * either direction, from its own median x 1.2. After that, ratchet down,
  * never up.
+ *
+ * CI calibration (2026-09-25, the step's first runs on the reference runner,
+ * after wave 3 made it run on every PR): home passed once on run 36096436271
+ * and failed on run 36104375015, a backend-only change, with samples LCP
+ * 2276 / 2164 / 2152 ms (median 2164) and TBT 447 / 453 / 479 (median 453),
+ * above both provisional home ceilings. Home re-calibrated from that median
+ * x 1.2, rounded up to 100 ms: LCP 2600, TBT 600. Lead-queue has not failed
+ * on the runner yet, so it keeps its provisional ceilings. Every run now
+ * prints its medians ([lab-vitals]) so the next ratchet has runner data.
  */
 const CEILINGS: Readonly<Record<RouteName, { lcpMs: number; tbtMs: number }>> = {
-  home: { lcpMs: 2_100, tbtMs: 400 },
+  home: { lcpMs: 2_600, tbtMs: 600 },
   'lead-queue': { lcpMs: 2_700, tbtMs: 900 },
 };
 
@@ -149,6 +158,8 @@ test.describe('lab performance: throttled cold loads (bundle-08)', () => {
         tbtMs: median(taken.map((sample) => sample.tbtMs)),
         samples: taken,
       };
+      // The runner's own numbers, in the job log even when the step passes.
+      console.log(`[lab-vitals] ${route.name} ${JSON.stringify(result)}`);
       await testInfo.attach(`${route.name}-lab-vitals.json`, {
         body: JSON.stringify(result, null, 2),
         contentType: 'application/json',
