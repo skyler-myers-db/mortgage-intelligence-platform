@@ -478,4 +478,36 @@ describe('LeadTable approve review guards', () => {
     });
     await flush();
   });
+
+  // Brief item 8(d), second half: a reject panel opened BEFORE the approve
+  // went on the wire. Its Submit says the same thing and sends nothing.
+  it('an already-open reject panel\'s Submit on a row whose approve is on the wire says so and sends no reject', async () => {
+    const held = holdApprovals();
+    mount();
+    act(() => container.querySelector<HTMLButtonElement>(`[data-testid="lead-reject-${IDS[0]}"]`)!.click());
+    const panel = container.querySelector<HTMLFormElement>('.decision-panel');
+    expect(panel?.textContent, 'precondition: the reject panel is open').toContain(IDS[0]);
+
+    await openInlineReviewOnFirstRow();
+    act(() => confirmButton()!.click());
+    await flush();
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.decision-panel'), 'precondition: the panel is still open').toBe(panel);
+
+    await act(async () => {
+      panel!.requestSubmit();
+    });
+    await flush();
+
+    expect(tableAlert()).toBe(`A decision for ${IDS[0]} is already being recorded.`);
+    expect(reject).not.toHaveBeenCalled();
+    // Nothing was recorded, so the panel stays for the reader to cancel.
+    expect(container.querySelector('.decision-panel')).toBe(panel);
+    await act(async () => {
+      held.releaseAll();
+    });
+    await flush();
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(reject).not.toHaveBeenCalled();
+  });
 });
