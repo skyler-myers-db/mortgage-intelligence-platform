@@ -491,6 +491,7 @@ resources:
     #  13. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
     #  14. rate_window_weekly            (needs borrower_360 + silver.lien_current + silver.market_rates_weekly -- why-now rate window)
     #  15. rate_sensitivity_rollup       (needs borrower_360 + silver.lien_current -- Rate Lever scenario grid)
+    #  16. rate_sensitivity_book         (needs borrower_360 + silver.lien_current -- Rate Lever gated notes, so the App reads gold only)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
@@ -790,6 +791,21 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_rate_sensitivity_rollup.sql
+        # Rate Lever gated notes: one row per borrower_360 CLIP whose note
+        # passes the rollup's own gate (NOTE_RATE_GATE_SQL over
+        # silver.lien_current). The endpoint's live contactable aggregate
+        # LEFT JOINs it, so the App reads gold only (mip.silver is ETL-only,
+        # docs/security/GRANTS.md section 5). Same inputs as the rollup,
+        # behind the same sentinel; writes its own sibling table, so it
+        # parallelizes with the rollups.
+        - task_key: ctas_rate_sensitivity_book
+          description: "Rebuild mip.gold.rate_sensitivity_book via CTAS (Rate Lever: gated note rate per CLIP, read by the live contactable aggregate)."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_rate_sensitivity_book.sql
         # Governed property loan lookup spine (address -> CLIP -> loan). Reads
         # the SAME raw share sources silver_property_master + silver_lien_current
         # read (ETL identity), plus mip.ref.refresh_run_state for the anchor, so

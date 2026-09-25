@@ -12,9 +12,11 @@ subset. Pins:
   ``rate_movable <= addressable``;
 * an incomplete state grid is dropped with an observability event, never
   zero-filled; no rows (or no usable state) is ``built=False``;
-* a missing table is ``built=False``, not a 503 (the deploy that introduces
-  it promotes the App before the refresh builds it); any other missing
-  object still fails;
+* a missing lane table (the grid or the gated-note book) is ``built=False``,
+  not a 503 (the deploy that introduces it promotes the App before the
+  refresh builds it); any other missing object still fails;
+* the statement the repository executes reads gold only (the App holds no
+  ``mip.silver`` grant);
 * the cache is single-flight and stale-if-error, and a cold failure
   propagates to the 503 path.
 """
@@ -165,6 +167,8 @@ def test_route_returns_the_aligned_grid_and_its_evidence(stub_repo: _StubRepo) -
     assert "mip.silver.lien_current" in provenance["book_source"]
     assert "fn_in_the_money" in provenance["rule_source"]
     assert "live" in provenance["contactable_source"]
+    assert "mip.gold.rate_sensitivity_book" in provenance["contactable_source"]
+    assert "silver" not in provenance["contactable_source"]
     assert "not a forecast" in provenance["note"]
     assert stub_repo.calls == 1
 
@@ -292,6 +296,38 @@ def test_missing_table_is_not_built_not_warming() -> None:
     assert result.states == []
 
 
+def test_missing_note_book_is_not_built_not_warming() -> None:
+    client = _FakeSqlClient()
+    client.error = DependencyDownError(
+        "warehouse",
+        reason="DatabricksSqlError: ...",
+        last_error=DatabricksSqlError(
+            "Databricks SQL statement did not succeed (state='FAILED' statement_id='x'): "
+            "[TABLE_OR_VIEW_NOT_FOUND] The table or view `mip`.`gold`.`rate_sensitivity_book` "
+            "cannot be found. SQLSTATE: 42P01"
+        ),
+        kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
+    )
+    repo = DatabricksRateSensitivityRepository(client, cache=TTLCache())
+
+    result = repo.rate_sensitivity()
+
+    assert result.built is False
+    assert result.states == []
+
+
+def test_a_permission_error_on_the_book_is_not_mistaken_for_not_built() -> None:
+    client = _FakeSqlClient()
+    client.error = DatabricksSqlError(
+        "[INSUFFICIENT_PERMISSIONS] Insufficient privileges: User does not have SELECT on Table "
+        "'mip.gold.rate_sensitivity_book'. SQLSTATE: 42501"
+    )
+    repo = DatabricksRateSensitivityRepository(client, cache=TTLCache())
+
+    with pytest.raises(DatabricksSqlError, match="INSUFFICIENT_PERMISSIONS"):
+        repo.rate_sensitivity()
+
+
 def test_another_missing_object_still_fails() -> None:
     client = _FakeSqlClient()
     client.error = DatabricksSqlError("[TABLE_OR_VIEW_NOT_FOUND] `mip`.`gold`.`borrower_360` cannot be found.")
@@ -310,6 +346,8 @@ def test_repository_reads_one_statement_and_projects() -> None:
 
     assert len(client.calls) == 1
     assert "mip.gold.rate_sensitivity_rollup" in client.calls[0]
+    assert "mip.gold.rate_sensitivity_book" in client.calls[0]
+    assert ".silver." not in client.calls[0] and ".raw." not in client.calls[0]
     assert result.states[0].contactable_in_the_money == [9] * len(STEPS)
 
 

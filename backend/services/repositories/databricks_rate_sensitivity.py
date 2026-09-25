@@ -5,9 +5,12 @@ gold refresh job precomputes by re-running ``fn_rate_spread`` /
 ``fn_in_the_money`` at ``par + step / 10000`` -- and, in the SAME statement,
 LEFT JOINs a live contactable aggregate onto it. Contactability cannot be a
 gold column: its predicate has one owner (``eligibility.eligible_sql_predicate``)
-and reads the current time. The live CTE reuses the note gate and the
-per-step rule from ``rate_scenario`` verbatim, and takes its steps from the
-gold table itself, so the two grids align by construction.
+and reads the current time. The live CTE reads each borrower's gated note from
+``mip.gold.rate_sensitivity_book`` -- built by the same refresh from the same
+``NOTE_RATE_GATE_SQL`` text over the same lien join -- reuses the per-step
+rule from ``rate_scenario`` verbatim, and takes its steps from the gold table
+itself, so the two grids align by construction. The statement reads gold only:
+``mip.silver`` is ETL-only (``docs/security/GRANTS.md`` section 5).
 
 Projection rules (the endpoint's honesty contract):
 
@@ -18,8 +21,9 @@ Projection rules (the endpoint's honesty contract):
   relationship, the same reasoning as the geo repository's contactable clamp);
 * a state whose grid is incomplete is DROPPED with an observability event,
   never zero-filled; no usable state means ``built=False``;
-* a missing table (the deploy that introduces it promotes the App before the
-  refresh job builds it) is ``built=False``, never a 503 "warming".
+* a missing lane table -- the grid or the note book (the deploy that
+  introduces one promotes the App before the refresh job builds it) -- is
+  ``built=False``, never a 503 "warming".
 
 Cache posture matches the geography rollups: ``GoldAggregateCache`` with a 60 s
 soft TTL, single-flight and stale-if-error. A cold failure propagates so the
@@ -44,7 +48,6 @@ from backend.services.eligibility import eligible_sql_predicate
 from backend.services.gold_cache import AggregateCache, GoldAggregateCache
 from backend.services.observability import emit
 from backend.services.rate_scenario import (
-    NOTE_RATE_GATE_SQL,
     RATE_SCENARIO_STEPS_BPS,
     SCENARIO_ITM_SQL,
 )
@@ -52,12 +55,16 @@ from backend.services.rate_scenario import (
 log = logging.getLogger("backend.services.repositories.databricks_repo")
 
 _GOLD_SOURCE = qualify("gold", "rate_sensitivity_rollup")
+_NOTE_BOOK = qualify("gold", "rate_sensitivity_book")
 _BORROWER_360 = qualify("gold", "borrower_360")
-_LIEN_CURRENT = qualify("silver", "lien_current")
-_BOOK_SOURCE = f"{_BORROWER_360} + {_LIEN_CURRENT}"
+# Provenance text only: the grid's book as the ETL refresh read it. Never
+# interpolated into an executed statement (the App holds no silver grant).
+_BOOK_SOURCE = f"{_BORROWER_360} + {qualify('silver', 'lien_current')}"
 _RULE_SOURCE = f"{qualify('gold', 'fn_rate_spread')} + {qualify('gold', 'fn_in_the_money')}"
-_CONTACTABLE_SOURCE = f"{_BORROWER_360} (live eligibility predicate, per request)"
+_CONTACTABLE_SOURCE = f"{_BORROWER_360} + {_NOTE_BOOK} (live eligibility predicate, per request)"
 _MISSING_TABLE_MARKER = "TABLE_OR_VIEW_NOT_FOUND"
+# The lane's own tables: either one missing is "not built yet".
+_LANE_TABLES = ("rate_sensitivity_rollup", "rate_sensitivity_book")
 
 _PROVENANCE_NOTE = (
     "A scenario, not a forecast: each step re-runs fn_rate_spread and fn_in_the_money "
@@ -68,23 +75,31 @@ _PROVENANCE_NOTE = (
 
 # One statement: the precomputed addressable grid LEFT JOIN a live eligible
 # aggregate at the gold table's own steps. The eligibility predicate is the
-# unaliased text, embedded verbatim over borrower_360 before the lien join.
+# unaliased text, embedded verbatim over borrower_360 before the note join.
+#
+# The note join is a LEFT JOIN on purpose. The book holds a row only for a
+# borrower whose gated note is non-NULL, so a missing row reads as exactly the
+# NULL note the rollup keeps for a gated borrower. Such a borrower scores the
+# no-signal 0 bps at every step; it cannot clear a positive spread screen, but
+# it DOES clear one at min_spread_bps <= 0 (a governed threshold the admin
+# rules accept), where the rollup still counts it. An INNER JOIN would then
+# drop it from the contactable subset only, so it is never used here.
 RATE_SENSITIVITY_SQL = (
     "WITH eligible_book AS ( "
     "  SELECT "
     "    b.state, "
-    f"    {NOTE_RATE_GATE_SQL} AS note_rate_fraction, "
+    "    nb.note_rate_fraction, "
     "    b.equity_pct, "
     "    b.min_spread_bps_applied, "
     "    b.min_equity_pct_applied, "
     "    b.market_rate_fraction "
     "  FROM ( "
-    "    SELECT clip, state, current_rate, equity_pct, min_spread_bps_applied, "
+    "    SELECT clip, state, equity_pct, min_spread_bps_applied, "
     "      min_equity_pct_applied, market_rate_fraction "
     f"    FROM {_BORROWER_360} "
     f"    WHERE {eligible_sql_predicate()} "
     "  ) AS b "
-    f"  LEFT JOIN {_LIEN_CURRENT} AS lc ON lc.clip = b.clip "
+    f"  LEFT JOIN {_NOTE_BOOK} AS nb ON nb.clip = b.clip "
     "  WHERE b.state IS NOT NULL "
     "), eligible_cells AS ( "
     "  SELECT state, note_rate_fraction, equity_pct, min_spread_bps_applied, "
@@ -151,19 +166,19 @@ def _clamp(value: int | None, upper: int) -> int:
 
 
 def _is_missing_table(exc: BaseException) -> bool:
-    """True when the failure is the Rate Lever table not existing yet.
+    """True when the failure is a Rate Lever table not existing yet.
 
     The resilient SQL client wraps the warehouse error in a
     ``DependencyDownError`` (``last_error``); the raw client raises it bare.
-    Only this table's absence is "not built": any other missing object is a
-    real failure and keeps its 503.
+    Only the lane's own tables (the grid and the note book) missing is "not
+    built": any other missing object is a real failure and keeps its 503.
     """
     seen: set[int] = set()
     node: BaseException | None = exc
     while node is not None and id(node) not in seen:
         seen.add(id(node))
         text = str(node)
-        if _MISSING_TABLE_MARKER in text and "rate_sensitivity_rollup" in text:
+        if _MISSING_TABLE_MARKER in text and any(table in text for table in _LANE_TABLES):
             return True
         next_node = getattr(node, "last_error", None)
         node = next_node if isinstance(next_node, BaseException) else node.__cause__
@@ -274,7 +289,11 @@ def project_rate_sensitivity(rows: list[dict[str, Any]]) -> RateSensitivityRespo
 
 
 class DatabricksRateSensitivityRepository:
-    """Typed read model over ``mip.gold.rate_sensitivity_rollup`` + live contactable."""
+    """Typed read model over ``mip.gold.rate_sensitivity_rollup`` + live contactable.
+
+    The live contactable subset reads ``mip.gold.rate_sensitivity_book`` for
+    the gated notes; the statement touches gold only.
+    """
 
     _SQL = RATE_SENSITIVITY_SQL
     _CACHE_KEY = "geo.rate_sensitivity"
