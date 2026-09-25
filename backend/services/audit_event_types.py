@@ -11,6 +11,7 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "DELETE_DRAFT",
         "DRAFT_OUTREACH",
         "FORCE_DEGRADED",
+        "GENIE_ANSWER_EXPORT",
         "GENIE_FEEDBACK",
         "GENIE_FEEDBACK_INTENT",
         "GENIE_REFUSAL_REPORT",

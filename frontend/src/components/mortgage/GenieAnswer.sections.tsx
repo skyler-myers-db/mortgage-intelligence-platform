@@ -1,4 +1,6 @@
+import { lazy, Suspense, useId, useState } from 'react';
 import { Link } from 'react-router';
+import { Icon } from '../Icon';
 import type {
   GenieAnswer as GenieAnswerShape,
   GenieAnswerSection,
@@ -19,9 +21,20 @@ import {
   MAX_TABLE_COLS,
   MAX_TABLE_ROWS,
   pickPlan,
+  unionColumns,
   type GenieVisualizationPlan,
 } from './GenieAnswer.logic';
 import { genieCellHref, type GenieAnswerCohort } from '../../lib/genieCellLinks';
+import {
+  GenieAnswerRowsActions,
+  GenieRowsCsvDownload,
+  heldRowsNote,
+  type GenieRowsExtent,
+} from './GenieAnswerRowsActions';
+import type { GenieAnswerExportBase, GenieRowsExportTarget } from './GenieAnswer.exportTarget';
+
+// Every row and column, loaded only when the reader asks for it (genie-06).
+const GenieAnswerAllRows = lazy(() => import('./GenieAnswerAllRows'));
 
 /**
  * Deep-research presentation for a Genie answer.
@@ -34,20 +47,35 @@ import { genieCellHref, type GenieAnswerCohort } from '../../lib/genieCellLinks'
  *
  * `GenieRowsVisual` is the rows→visual block lifted out of GenieAnswer so the
  * top-level answer and every section render through one implementation
- * (chart plan, single-row stat strip, capped table, "+N more rows").
+ * (chart plan, single-row stat strip, capped table, and the row actions:
+ * "Show all" rows and columns in place, genie-06 slice 2).
  */
 
 export function GenieRowsVisual({
   rows,
   plan,
   cellCohort,
+  reportedRowCount = null,
+  dense = false,
+  exportTarget = null,
+  onAnnounce,
 }: {
   rows: Array<Record<string, unknown>>;
   plan: GenieVisualizationPlan;
   /** The answer's own filters, so a row link opens the population the row
    *  reports rather than every borrower in that geography. */
   cellCohort?: GenieAnswerCohort;
+  /** The row count the answer (or section) reports: above rows.length only
+   *  for a History replay that kept fewer rows than the query returned. */
+  reportedRowCount?: number | null;
+  /** The floating panel: the all-rows region is shorter. */
+  dense?: boolean;
+  /** Set on a trusted, live answer: offers the audited CSV download. */
+  exportTarget?: GenieRowsExportTarget | null;
+  /** The surface's one announcer (a11y-06). */
+  onAnnounce?: (text: string) => void;
 }) {
+  const [showAll, setShowAll] = useState(false);
   const chart = plan.chart;
   const visibleRows = rows.slice(0, MAX_TABLE_ROWS);
   const hiddenRows = Math.max(0, rows.length - MAX_TABLE_ROWS);
@@ -58,6 +86,14 @@ export function GenieRowsVisual({
   // as the headers, so the reader knows what the answer holds that the
   // compact table does not show.
   const hiddenColumns = allColumns.slice(MAX_TABLE_COLS);
+  const everyColumn = unionColumns(rows);
+  const extent: GenieRowsExtent = {
+    held: rows.length,
+    reported: reportedRowCount,
+    hiddenRows,
+    columns: everyColumn.length,
+    hiddenColumns: everyColumn.length - columns.length,
+  };
   const hiddenColumnsNote =
     hiddenColumns.length > 0 ? (
       <div className="genie-answer__more genie-answer__hidden-columns">
@@ -99,8 +135,19 @@ export function GenieRowsVisual({
           "count + avg spread + refreshed at" read at a glance. A single
           RECORD row (identifier columns, e.g. a borrower id) keeps the
           table: masked ids as KPI headlines misread, and borrower_list
-          plans already render their own list above (QA M6). */}
-      {visibleRows.length === 1 &&
+          plans already render their own list above (QA M6).
+          "Show all" replaces either compact form in place (genie-06). */}
+      {showAll ? (
+        <Suspense fallback={<div className="genie-answer__more">Loading every row…</div>}>
+          <GenieAnswerAllRows
+            rows={rows}
+            columns={everyColumn}
+            cellCohort={cellCohort}
+            dense={dense}
+            heldNote={heldRowsNote(extent)}
+          />
+        </Suspense>
+      ) : visibleRows.length === 1 &&
       columns.length > 0 &&
       plan.kind === 'none' &&
       columns.every((c) => !isIdentifierColumn(c)) &&
@@ -171,12 +218,23 @@ export function GenieRowsVisual({
                 </tbody>
               </table>
             </div>
-            {hiddenRows > 0 && (
-              <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
-            )}
             {hiddenColumnsNote}
           </>
         )
+      )}
+      {/* The inert "+N more rows" became the control that shows them. */}
+      {rows.length > 0 && (
+        <GenieAnswerRowsActions extent={extent} expanded={showAll} onToggle={() => setShowAll((open) => !open)}>
+          {exportTarget && (
+            <GenieRowsCsvDownload
+              rows={rows}
+              columns={everyColumn}
+              target={exportTarget}
+              reportedRowCount={reportedRowCount}
+              onAnnounce={onAnnounce}
+            />
+          )}
+        </GenieAnswerRowsActions>
       )}
     </>
   );
@@ -191,9 +249,15 @@ export function GenieRowsVisual({
 export function GenieSectionVisual({
   section,
   cellCohort,
+  dense = false,
+  exportTarget = null,
+  onAnnounce,
 }: {
   section: GenieAnswerSection;
   cellCohort?: GenieAnswerCohort;
+  dense?: boolean;
+  exportTarget?: GenieRowsExportTarget | null;
+  onAnnounce?: (text: string) => void;
 }) {
   const rows = Array.isArray(section.table_rows) ? section.table_rows : [];
   if (rows.length === 0) return null;
@@ -203,50 +267,123 @@ export function GenieSectionVisual({
     rows,
     chartColumns,
   );
-  return <GenieRowsVisual rows={rows} plan={plan} cellCohort={cellCohort} />;
+  return (
+    <GenieRowsVisual
+      rows={rows}
+      plan={plan}
+      cellCohort={cellCohort}
+      reportedRowCount={section.row_count ?? null}
+      dense={dense}
+      exportTarget={exportTarget}
+      onAnnounce={onAnnounce}
+    />
+  );
 }
 
+/** Sections from which a long sweep gets collapsible bodies. */
+export const GENIE_ACCORDION_MIN_SECTIONS = 4;
+
+/**
+ * Deep-research body (audit 2026-09-21 `genie-08`). The Summary and every
+ * section title are REAL h3 headings (the same classes the old <p> carried,
+ * so the pixels match), and the prose inside a section heads at h4.
+ *
+ * A sweep of four or more sections also gets collapsible bodies. The APG
+ * accordion pattern is used rather than <details>: a heading inside
+ * <summary> loses its heading semantics in Firefox (its children are
+ * presentational). Every section starts open; the open/closed state is
+ * presentation only and is never written to any store. (The outline above
+ * the sections is held for wave 4 by the lane's JS budget cut line.)
+ */
 export function GenieAnswerSections({
   summary,
   sections,
   workspaceHost,
   cellCohort,
+  dense = false,
+  exportBase = null,
+  onAnnounce,
 }: {
   summary?: string | null;
   sections: GenieAnswerSection[];
   workspaceHost?: string | null;
   cellCohort?: GenieAnswerCohort;
+  /** The floating panel. */
+  dense?: boolean;
+  /** Set on a trusted, live answer: each section offers the audited CSV. */
+  exportBase?: GenieAnswerExportBase | null;
+  onAnnounce?: (text: string) => void;
 }) {
   const summaryText = (summary ?? '').trim();
+  const collapsible = sections.length >= GENIE_ACCORDION_MIN_SECTIONS;
+  const idBase = useId();
+  const [closed, setClosed] = useState<ReadonlySet<number>>(() => new Set());
+  const titleOf = (section: GenieAnswerSection) => section.title || section.question;
+  const setOpen = (index: number, open: boolean) =>
+    setClosed((current) => {
+      const next = new Set(current);
+      if (open) next.delete(index);
+      else next.add(index);
+      return next;
+    });
   return (
     <div className="genie-answer__sections">
       {summaryText && (
         <>
-          <p className="genie-md-p genie-md-p--heading genie-md-p--first">Summary</p>
-          <MarkdownAnswer text={summaryText} workspaceHost={workspaceHost} />
+          <h3 className="genie-md-p genie-md-p--heading genie-md-p--first">Summary</h3>
+          <MarkdownAnswer text={summaryText} workspaceHost={workspaceHost} headingLevel={4} />
         </>
       )}
-      {sections.map((section, i) => (
-        <section
-          className="genie-answer__section"
-          key={`${section.title || 'section'}-${i}`}
-        >
-          {/* A section whose narrative failed verification still renders its
-              prose here — the reason is disclosed in the proof drawer's
-              known data gaps, not duplicated as an inline notice. */}
-          <p
-            className={`genie-md-p genie-md-p--heading${
-              !summaryText && i === 0 ? ' genie-md-p--first' : ''
-            }`}
-          >
-            {section.title || section.question}
-          </p>
-          {(section.answer ?? '').trim() && (
-            <MarkdownAnswer text={section.answer} workspaceHost={workspaceHost} />
-          )}
-          <GenieSectionVisual section={section} cellCohort={cellCohort} />
-        </section>
-      ))}
+      {sections.map((section, i) => {
+        const headingClass = `genie-md-p genie-md-p--heading${!summaryText && i === 0 ? ' genie-md-p--first' : ''}`;
+        const bodyId = `${idBase}-section-${i}`;
+        const open = !closed.has(i);
+        // A section whose narrative failed verification still renders its
+        // prose here — the reason is disclosed in the proof drawer's known
+        // data gaps, not duplicated as an inline notice.
+        const body = (
+          <>
+            {(section.answer ?? '').trim() && (
+              <MarkdownAnswer text={section.answer} workspaceHost={workspaceHost} headingLevel={4} />
+            )}
+            <GenieSectionVisual
+              section={section}
+              cellCohort={cellCohort}
+              dense={dense}
+              exportTarget={exportBase ? { ...exportBase, scope: 'section', sectionIndex: i + 1 } : null}
+              onAnnounce={onAnnounce}
+            />
+          </>
+        );
+        return (
+          <section className="genie-answer__section" key={`${section.title || 'section'}-${i}`}>
+            {collapsible ? (
+              <>
+                <h3 className={headingClass}>
+                  <button
+                    type="button"
+                    className="genie-answer__section-toggle"
+                    aria-expanded={open}
+                    aria-controls={bodyId}
+                    onClick={() => setOpen(i, !open)}
+                  >
+                    <span>{titleOf(section)}</span>
+                    <Icon name="chevdown" size={12} />
+                  </button>
+                </h3>
+                <div id={bodyId} className="genie-answer__section-body" hidden={!open}>
+                  {body}
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className={headingClass}>{titleOf(section)}</h3>
+                {body}
+              </>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }

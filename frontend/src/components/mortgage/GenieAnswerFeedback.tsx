@@ -47,15 +47,22 @@ function recordGenieFeedback(body: Parameters<typeof api.genieFeedback>[0]): Pro
   );
 }
 
+export const GENIE_FEEDBACK_RECORDED = 'Feedback recorded';
+
 interface GenieAnswerFeedbackProps {
   conversationId?: string | null;
   messageId?: string | null;
+  /** Speak the done state through the surface's ONE persistent announcer
+   *  (audit `a11y-06`): the done label is not a live region of its own. */
+  onAnnounce?: (text: string) => void;
 }
 
 export function GenieAnswerFeedback({
   conversationId,
   messageId,
+  onAnnounce,
 }: GenieAnswerFeedbackProps) {
+  const identity = `${conversationId ?? ''}:${messageId ?? ''}`;
   const [pending, setPending] = useState<Vote | null>(null);
   const [recorded, setRecorded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,8 +70,12 @@ export function GenieAnswerFeedback({
   // disabled state. Mirrors the approval handler latch pattern.
   const inFlightRef = useRef(false);
   const requestIdsRef = useRef<Partial<Record<Vote, string>>>({});
-  const identity = `${conversationId ?? ''}:${messageId ?? ''}`;
   const identityRef = useRef(identity);
+  // The vote button unmounts on success; focus follows to the done label
+  // only when it was on a vote button (GenieRefusalCard does the same).
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const doneRef = useRef<HTMLSpanElement | null>(null);
+  const focusDoneRef = useRef(false);
 
   useEffect(() => {
     identityRef.current = identity;
@@ -75,13 +86,26 @@ export function GenieAnswerFeedback({
     setError(null);
   }, [identity]);
 
+  useEffect(() => {
+    if (!recorded || !focusDoneRef.current) return;
+    focusDoneRef.current = false;
+    doneRef.current?.focus();
+  }, [recorded]);
+
   // Feedback needs a message to attach to. Without the audit key there is
   // nothing to record, so render nothing rather than a dead control.
   if (!conversationId || !messageId) return null;
 
+  const focusInRow = () => {
+    const active = typeof document === 'undefined' ? null : document.activeElement;
+    return Boolean(active && rowRef.current?.contains(active));
+  };
+
   const submit = (helpful: boolean) => {
     if (inFlightRef.current || recorded) return;
     inFlightRef.current = true;
+    // Read before the buttons disable: was the vote made with focus on it?
+    const voteButtonHadFocus = focusInRow();
     setPending(helpful ? 'up' : 'down');
     setError(null);
     const vote: Vote = helpful ? 'up' : 'down';
@@ -96,25 +120,36 @@ export function GenieAnswerFeedback({
     }).then((outcome) => {
       // A vote for an answer the control no longer shows changes nothing.
       if (identityRef.current !== submittedIdentity) return;
-      if (outcome.ok) setRecorded(true);
-      else setError(outcome.message);
+      if (outcome.ok) {
+        // Follow only if focus is still on the row, or was dropped to <body>
+        // when the pressed button disabled; never pull it back from elsewhere.
+        focusDoneRef.current = voteButtonHadFocus && (focusInRow() || document.activeElement === document.body);
+        setRecorded(true);
+        onAnnounce?.(GENIE_FEEDBACK_RECORDED);
+      } else {
+        setError(outcome.message);
+      }
       inFlightRef.current = false;
       setPending(null);
     });
   };
 
   if (recorded) {
+    // Not a live region (audit `a11y-06`): a region mounted already
+    // populated is unreliably spoken; the surface announcer says it.
     return (
-      <div className="genie-feedback genie-feedback--done" role="status">
+      <div className="genie-feedback genie-feedback--done">
         <Icon name="check" size={12} className="icon-accent" />
-        <span className="genie-feedback__done-label">Feedback recorded</span>
+        <span ref={doneRef} className="genie-feedback__done-label" tabIndex={-1}>
+          {GENIE_FEEDBACK_RECORDED}
+        </span>
       </div>
     );
   }
 
   return (
     <div className="genie-feedback">
-      <div className="genie-feedback__row">
+      <div className="genie-feedback__row" ref={rowRef}>
         <span className="genie-feedback__prompt">Was this helpful?</span>
         <button
           type="button"

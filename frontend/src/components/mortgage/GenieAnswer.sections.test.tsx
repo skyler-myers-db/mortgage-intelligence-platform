@@ -154,6 +154,50 @@ describe('GenieAnswer deep-research sections', () => {
     expect(container.textContent).not.toContain('withheld');
   });
 
+  it('makes the Summary and every section title a real h3, prose headings inside at h4 (genie-08)', () => {
+    render(
+      payload({
+        summary: 'Refinance demand concentrates in three states.',
+        sections: [section({ answer: '**A finding inside the section**\n\nTexas leads.' }), section({ title: 'Second' })],
+      }),
+    );
+    const titled = Array.from(container.querySelectorAll('.genie-md-p--heading')).map((el) => [el.tagName, el.textContent]);
+    expect(titled).toEqual([
+      ['H3', 'Summary'],
+      ['H3', 'Where the opportunity sits'],
+      ['H4', 'A finding inside the section'],
+      ['H3', 'Second'],
+    ]);
+    expect(container.querySelectorAll('p.genie-md-p--heading')).toHaveLength(0);
+    // Three or fewer sections: plain headings, no toggles.
+    expect(container.querySelector('.genie-answer__section-toggle')).toBeNull();
+  });
+
+  it('gives a 4-section sweep accordion headings, every section open', () => {
+    const titles = ['Market size', 'Rate spread', 'Equity', 'What this adds up to'];
+    render(payload({ summary: 'Summary text.', sections: titles.map((title) => section({ title })) }));
+    const toggles = Array.from(container.querySelectorAll<HTMLButtonElement>('h3 > button.genie-answer__section-toggle'));
+    expect(toggles.map((t) => t.textContent)).toEqual(titles);
+    for (const toggle of toggles) {
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      const body = document.getElementById(toggle.getAttribute('aria-controls') ?? '');
+      expect(body?.hidden).toBe(false);
+      expect(body?.querySelector('.genie-answer__table')).not.toBeNull();
+    }
+  });
+
+  it('collapses and re-opens a section from its toggle', () => {
+    render(payload({ sections: ['A', 'B', 'C', 'D'].map((title) => section({ title })) }));
+    const toggle = container.querySelectorAll<HTMLButtonElement>('.genie-answer__section-toggle')[1];
+    const body = () => document.getElementById(toggle.getAttribute('aria-controls') ?? '');
+    act(() => toggle.click());
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(body()?.hidden).toBe(true);
+    act(() => toggle.click());
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(body()?.hidden).toBe(false);
+  });
+
   it('leaves a single-turn answer exactly as it was', () => {
     render(payload());
 

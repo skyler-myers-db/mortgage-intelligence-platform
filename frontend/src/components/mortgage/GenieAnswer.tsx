@@ -16,16 +16,14 @@ import { GenieProofPanel } from './GenieAnswerProof';
 import { GenieAnswerFeedback } from './GenieAnswerFeedback';
 import { GenieRefusalCard } from './GenieRefusalCard';
 import { isWithheldGenieSource } from './genieRefusal';
-import {
-  buildFallbackFollowUps,
-  buildPinFromAnswer,
-  isTrustedGenieSource,
-  usePinnedInsights,
-} from '../../lib/pinnedInsights';
+import { isTrustedGenieSource, usePinnedInsights } from '../../lib/pinnedInsights';
+import { buildFallbackFollowUps, buildPinFromAnswer } from '../../lib/genieAnswerText';
 import { humanizeKey, pickPlan } from './GenieAnswer.logic';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { answerCohortFromActions } from '../../lib/genieCellLinks';
 import { GOVERNED_ACTION_SOURCE } from '../../lib/genieTurnOutcome';
+import type { GenieAnswerExportBase } from './GenieAnswer.exportTarget';
+import './GenieAnswerReading.css';
 
 export { stripQuestionRestatement } from './GenieAnswer.markdown';
 export { inferChartFromRows } from './GenieAnswer.logic';
@@ -134,6 +132,18 @@ export function GenieAnswer({
   const reasoningSummaries = hasApiReasoning && Array.isArray(payload.reasoning_trace)
     ? payload.reasoning_trace
     : [];
+  // The audited CSV (genie-06 slice 2) is offered only on a trusted answer
+  // with a live conversation and message id: the receipt route proves the
+  // caller owns exactly that message. Never on a governed action result.
+  const exportBase: GenieAnswerExportBase | null =
+    isTrustedGenieSource(payload.source) && !isGovernedActionResult && liveConversationId && liveMessageId
+      ? {
+          conversationId: liveConversationId,
+          messageId: liveMessageId,
+          source: String(payload.source),
+          trustedAssets: Array.isArray(payload.trusted_assets) ? payload.trusted_assets : [],
+        }
+      : null;
   // "Pin to Home" (Buyer-Wow #9): only a genuine, trusted data answer is
   // pinnable — never a degraded/policy-blocked caveat. Trust is the app's
   // denylist (`isTrustedGenieSource`), so canonical `trusted_sql`/`sales_ops`
@@ -259,6 +269,9 @@ export function GenieAnswer({
           sections={sections}
           workspaceHost={workspaceHost}
           cellCohort={cellCohort}
+          dense={dense}
+          exportBase={exportBase}
+          onAnnounce={onAnnounce}
         />
       ) : (
         cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} workspaceHost={workspaceHost} />
@@ -309,7 +322,15 @@ export function GenieAnswer({
           renders one visual PER section instead (above), so this block
           would otherwise repeat the last sub-query's rows. */}
       {!hasSections && (
-        <GenieRowsVisual rows={rows} plan={plan} cellCohort={cellCohort} />
+        <GenieRowsVisual
+          rows={rows}
+          plan={plan}
+          cellCohort={cellCohort}
+          reportedRowCount={payload.row_count ?? null}
+          dense={dense}
+          exportTarget={exportBase ? { ...exportBase, scope: 'answer', sectionIndex: null } : null}
+          onAnnounce={onAnnounce}
+        />
       )}
       {/* Copy SQL / Copy answer (genie-06) under the data, on genuine answers
           only: a governed refusal or degraded caveat has no SQL, and its copy
@@ -405,6 +426,7 @@ export function GenieAnswer({
         <GenieAnswerFeedback
           conversationId={liveConversationId}
           messageId={liveMessageId}
+          onAnnounce={onAnnounce}
         />
       )}
     </div>

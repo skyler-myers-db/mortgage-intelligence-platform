@@ -1,0 +1,192 @@
+/* ============================================================
+   GENIE ANSWER READING (audit 2026-09-21 wave 3: stack-02, genie-07,
+   genie-08, motion-v2, genie-06 slice 2)
+
+   Lazy stylesheet: imported by GenieAnswer.tsx and GenieChatBody.tsx, so it
+   loads with the Genie answer chunk, never in the initial CSS (the
+   GenieAnswerToolbar.css precedent). Tokens only: no literal colors or
+   pixel values.
+   ============================================================ */
+
+/* Real headings (genie-08): an h3/h4 carrying the paragraph classes renders
+   exactly like the <p> it replaced once the UA bold is reset; a bold-only
+   title stays bold through its own <strong>. Size and margins already come
+   from .genie-md-p / .genie-md-p--heading (14-genie-markdown-and-proof.css). */
+:is(h3, h4).genie-md-p { font-weight: inherit; }
+
+/* Deep-research sections (genie-08), for a sweep of four or more: an
+   accordion toggle inside each h3. `.genie-answer__section-toggle` and
+   `__section-body` are documented BEM extensions of `.genie-answer`; the
+   prototype's Genie bubble (design_files/index.html:741-760) has no
+   multi-section answer. */
+.genie-answer__section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  inline-size: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.genie-answer__section-toggle svg {
+  flex: none;
+  color: var(--text-3);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.genie-answer__section-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+
+/* Verbatim narrative text (stack-02 / genie-07): a prose pipe table or a
+   fenced block, shown as written and scrolled sideways inside itself. A
+   documented BEM extension, `.genie-md-pre`: the prototype's Genie bubble
+   (design_files/index.html:741-760) has no preformatted block. A pipe table
+   is never styled as a <table>: LLM-written numbers must not read as
+   governed rows. */
+.genie-md-pre { margin: var(--sp-2) 0 0; }
+.genie-md-pre__label {
+  margin-bottom: var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.genie-md-pre pre {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  margin: 0;
+  overflow-x: auto;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  white-space: pre;
+}
+
+/* Row actions and every row (genie-06 slice 2): "Show all" and the audited
+   CSV download under every rows block, and the all-rows region that replaces
+   the capped table in place. `.genie-answer__rows-actions`, `__show-all`,
+   `__rows-note` and `__all-rows(--dense)` are documented BEM extensions of
+   `.genie-answer`; the prototype's bubble (design_files/index.html:741-760)
+   has no row controls. The region scrolls inside the answer, so the panel
+   keeps its size; its cells stay on one line, which keeps every windowed row
+   the same height. */
+.genie-answer__rows-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.genie-answer__rows-note {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+/* The download outcome or its size limit: visible text, never a live region
+   (the surface's one announcer speaks it). */
+.genie-answer__rows-status {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+.genie-answer__all-rows {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  max-block-size: calc(var(--sp-16) * 6);
+  margin-top: var(--sp-3);
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-1);
+}
+.genie-answer__all-rows--dense { max-block-size: calc(var(--sp-16) * 4); }
+.genie-answer__all-rows th,
+.genie-answer__all-rows td { white-space: nowrap; }
+.genie-answer__all-rows thead th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--z-raised);
+  background: var(--bg-1);
+}
+.genie-answer__all-rows-spacer td {
+  padding: 0;
+  border: 0;
+}
+
+/* A collapsed earlier turn (genie-08): its digest under a disclosure toggle,
+   the full answer unmounted. `.genie-collapse` is a documented new block;
+   the prototype (design_files/index.html:741-760) shows every turn in full. */
+.genie-collapse {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.genie-collapse__toggle { align-self: flex-start; }
+.genie-collapse__toggle svg { transition: transform var(--dur-fast) var(--ease); }
+.genie-collapse:not(.is-expanded) .genie-collapse__toggle svg { transform: rotate(-90deg); }
+.genie-collapse__digest {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: var(--lh-body);
+}
+
+/* "New answer" (genie-08): an answer landed while the reader was reading an
+   earlier turn, so nothing scrolled. A documented BEM extension of `.genie`
+   (design_files/index.html:741-760 has no such control), sticky at the
+   bottom of the `.genie__body` scroller. */
+.genie__jump {
+  position: sticky;
+  inset-block-end: 0;
+  z-index: var(--z-raised);
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.genie__jump:hover { background: var(--bg-4); }
+
+/* Message entrance (motion-v2): one fade and a --sp-1 rise for a message
+   that just arrived -- a landed answer (the panel bubble, the route's answer
+   card), the question just sent, a Stopped note. Never a restored or
+   hydrated transcript: useGenieMessageEntrance only marks what it saw land,
+   and drops the class on animationend so a reopened panel never replays it.
+   `.genie__msg--entering` and `.genie-thread__answer(--entering)` are
+   additive to the prototype (design_files/index.html:741-760 has no
+   message motion). No overflow-anchor rule: auto is the default. */
+@keyframes genie-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--sp-1));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.genie__msg--entering,
+.genie-thread__answer--entering {
+  animation: genie-msg-in var(--dur-base) var(--ease) both;
+}
+
+/* Reduced motion: every transition and animation in this sheet stops. */
+@media (prefers-reduced-motion: reduce) {
+  .genie-answer__section-toggle svg,
+  .genie-collapse__toggle svg { transition: none; }
+  .genie__msg--entering,
+  .genie-thread__answer--entering { animation: none; }
+}
