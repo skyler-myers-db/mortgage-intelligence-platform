@@ -131,6 +131,10 @@ function AppProbe() {
 // panel can take longer than vi.waitFor's 1 s default to mount its crash
 // surface (CI run 36185829440). The assertion is unchanged, only its budget.
 const LAZY_PANEL_WAIT = { timeout: 5_000 };
+// The bystander test crashes and recovers the drawer twice and the Console
+// once, each a lazy module; on the runner its first dynamic imports alone can
+// exceed vitest's 5 s default test timeout (CI run 36188773509).
+const MULTI_PANEL_TEST_TIMEOUT_MS = 20_000;
 
 describe('AppShell panel boundaries', () => {
   let container: HTMLDivElement;
@@ -353,7 +357,7 @@ describe('AppShell panel boundaries', () => {
       await clickTryAgain();
       await vi.waitFor(() => expect(consoleProbe()?.dataset.families).toBe('1'));
       expect(queryClient.getQueryData(bystander), 'Console Try again keeps the bystander').toEqual({ rows: 1 });
-    });
+    }, MULTI_PANEL_TEST_TIMEOUT_MS);
 
     it("the Console's Try again re-reads the payload and renders the healthy Console", async () => {
       probes.consoleReadsPayload = true;
