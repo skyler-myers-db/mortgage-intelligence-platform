@@ -51,16 +51,13 @@ export function leadTableHotkeys(actions: LeadTableKeymapActions): LeadTableHotk
       run: (event, scope) => (isNativeActivation(event, scope) ? false : actions.toggleCursorRow()),
     },
     {
+      // One row on the `?` sheet for X and Shift+X (a separate row made the
+      // sheet's list scroll at 1440x900, and a scrolling list is a keyboard
+      // trap for axe's scrollable-region-focusable).
       id: 'select',
-      keys: LEAD_TABLE_KEYS.select,
-      description: 'Select or clear the borrower',
-      run: () => actions.toggleSelectCursorRow(),
-    },
-    {
-      id: 'extend-select',
-      keys: LEAD_TABLE_KEYS.extendSelect,
-      description: 'Select every borrower from the last one you selected to this one',
-      run: () => actions.extendSelectionToCursor(),
+      keys: [...LEAD_TABLE_KEYS.select, ...LEAD_TABLE_KEYS.extendSelect],
+      description: 'Select or clear the borrower; with Shift, select every borrower from the last one you selected',
+      run: (event) => (event.shiftKey ? actions.extendSelectionToCursor() : actions.toggleSelectCursorRow()),
     },
   ];
   if (!actions.approverActive) return hotkeys;
