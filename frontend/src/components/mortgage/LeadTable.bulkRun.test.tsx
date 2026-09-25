@@ -6,7 +6,9 @@
  * batch" while the run is on the wire (the button still reads "Approving…");
  * Stop leaves the rest unsent and selected; the result lists what failed or
  * did not start and stays until dismissed. The live region is always
- * mounted.
+ * mounted. The toolbar (and with it the progress and the only Stop) stays
+ * mounted while a run is on the wire, even when a filter change takes every
+ * selected row off screen (brief item 5(e)).
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -55,6 +57,8 @@ beforeAll(async () => {
 }, 60_000);
 
 const IDS = Array.from({ length: 9 }, (_, index) => `B-AAAAAAAAAAAA${index + 1}`);
+/** The rows a filter change brings on screen: none of them is selected. */
+const OTHER_IDS = Array.from({ length: 3 }, (_, index) => `B-BBBBBBBBBBBB${index + 1}`);
 
 function lead(borrowerId: string): LeadSummary {
   return {
@@ -78,6 +82,7 @@ function lead(borrowerId: string): LeadSummary {
 describe('LeadTable bulk run', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let queryClient: QueryClient;
   let held: Array<() => void>;
 
   beforeEach(() => {
@@ -98,17 +103,22 @@ describe('LeadTable bulk run', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderTable(IDS);
+  });
+
+  /** (Re-)render the table with these rows: a filter change re-renders the same table. */
+  function renderTable(ids: readonly string[]) {
     act(() => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <MemoryRouter>
-            <LeadTable leads={IDS.map(lead)} />
+            <LeadTable leads={ids.map(lead)} />
           </MemoryRouter>
         </QueryClientProvider>,
       );
     });
-  });
+  }
 
   afterEach(() => {
     act(() => root.unmount());
@@ -181,5 +191,34 @@ describe('LeadTable bulk run', () => {
     expect(q('.bulk-actions__label')?.textContent).toBe('6 leads selected');
     act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-result-dismiss"]')!.click());
     expect(q('[data-testid="lead-bulk-result"]')).toBeNull();
+  });
+
+  it('keeps the toolbar, its progress and Stop mounted when a filter change takes every selected row off screen mid-run', async () => {
+    await startApproveRun();
+    expect(approve).toHaveBeenCalledTimes(3);
+
+    // A preset or filter lands while chunk 1 is held: none of the selected
+    // rows is on screen any more, so the visible selection is empty.
+    renderTable(OTHER_IDS);
+    expect(q('.bulk-actions__label')?.textContent, 'precondition: nothing selected on screen').toBe('0 leads selected');
+    expect(q('[data-testid="lead-bulk-actions"]'), 'the toolbar stays while the run is on the wire').not.toBeNull();
+    expect(q('[data-testid="lead-bulk-run"]')).not.toBeNull();
+    expect(q('[data-testid="lead-bulk-run-count"]')?.textContent).toBe('0 of 9');
+    const stop = q<HTMLButtonElement>('[data-testid="lead-bulk-stop"]');
+    expect(stop, 'the only way out of the run is still on screen').not.toBeNull();
+
+    act(() => stop!.click());
+    expect(q('[data-testid="lead-bulk-stop"]')?.textContent).toBe('Stopping after this batch…');
+    await act(async () => {
+      held.splice(0).forEach((release) => release());
+    });
+    await flush(5);
+
+    // Stop held: the batch on the wire finished, nothing else was sent.
+    expect(approve).toHaveBeenCalledTimes(3);
+    expect(draftOutreach).toHaveBeenCalledTimes(3);
+    expect(q('[data-testid="lead-bulk-result"]')?.textContent).toContain('3 of 9 approved, 6 not started. Stopped.');
+    // The run is over and no selected row is on screen: now the toolbar goes.
+    expect(q('[data-testid="lead-bulk-actions"]')).toBeNull();
   });
 });
