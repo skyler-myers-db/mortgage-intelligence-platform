@@ -1,6 +1,7 @@
 import { Icon } from '../components/Icon';
 import { leadTableColumns, type LeadTableColumnKey } from '../components/mortgage/LeadTable.columns';
 import { useIsOnline } from '../lib/connectivity';
+import { SurfaceTitle } from '../components/Primitives';
 import './lead-queue.skeleton.css';
 
 /**
@@ -61,7 +62,7 @@ export function LeadQueueTableSkeleton() {
             <Icon name="user" size={14} />
           </div>
           <div>
-            <div className="h-4">{online ? 'Loading ranked borrowers' : 'Waiting for a connection'}</div>
+            <SurfaceTitle>{online ? 'Loading ranked borrowers' : 'Waiting for a connection'}</SurfaceTitle>
             <div className="mt-2">
               <span className="muted fs-12">
                 {online

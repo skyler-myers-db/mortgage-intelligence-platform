@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Button, Chip } from '../components/Primitives';
+import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import {
   DATABRICKS_AGENT_RESPONSES_LABEL,
@@ -63,11 +63,11 @@ export function ComposePlanCard({
       <div className="growth-agent-run__head">
         <div>
           <div className="eyebrow">Composed plan</div>
-          <div className="h-4">
+          <SurfaceTitle level={3}>
             {publicAgentResponsesText(
               plan ? plan.objective_summary : response.message ?? 'Plan unavailable',
             )}
-          </div>
+          </SurfaceTitle>
         </div>
         {status === 'composed' && (
           <Chip variant={response.executed ? 'success' : 'neutral'} icon="sparkle">

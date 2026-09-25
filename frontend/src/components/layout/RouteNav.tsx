@@ -5,12 +5,12 @@ import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import {
-  NAV_ROUTE_IDS,
+  NAVIGATION_ROUTE_IDS,
   ROUTES,
   borrowerPath,
   offerPath,
   type AppPath,
-  type NavRouteId,
+  type NavigationRouteId,
 } from '../../lib/routeMeta';
 import type { SessionResponse } from '../../types';
 
@@ -33,7 +33,7 @@ import type { SessionResponse } from '../../types';
  * (lib/routeMeta, audit shell-08); only the two detail destinations are
  * resolved here, to the last borrower the actor opened.
  */
-function navTargetFor(id: NavRouteId, lastBorrowerId: string | null): AppPath {
+function navTargetFor(id: NavigationRouteId, lastBorrowerId: string | null): AppPath {
   if (id === 'borrowerIndex' && lastBorrowerId) return borrowerPath(lastBorrowerId);
   if (id === 'offerIndex' && lastBorrowerId) return offerPath(lastBorrowerId);
   return ROUTES[id].pattern;
@@ -57,7 +57,7 @@ export function useAdminNavigationAccess(): boolean {
 export function RouteNav() {
   const { lastBorrowerId } = useApp();
   const canAccessAdmin = useAdminNavigationAccess();
-  const items = NAV_ROUTE_IDS
+  const items = NAVIGATION_ROUTE_IDS
     .filter((id) => canAccessAdmin || id !== 'admin')
     .map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] }));
   return (

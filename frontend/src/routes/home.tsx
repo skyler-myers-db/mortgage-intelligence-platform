@@ -88,7 +88,6 @@ export default function Home() {
     manualRetry: retryPreview,
   } = useWarmingUpRetry<PortfolioPreview>(
     requestHomePortfolioPreview,
-    ['home'],
     { queryKey: queryKeys.homePreview() },
   );
   const previewError = previewErrorObj
@@ -104,7 +103,7 @@ export default function Home() {
     data: summary,
     warmingUp: summaryWarming,
     error: summaryError,
-  } = useWarmingUpRetry<HomeSummary>(requestHomeSummary, ['home', 'summary'], {
+  } = useWarmingUpRetry<HomeSummary>(requestHomeSummary, {
     queryKey: queryKeys.homeSummary(),
   });
   const summaryLoading = !summary && !summaryError && !summaryWarming;

@@ -26,9 +26,8 @@ import { routePreloaders } from './routePreloaders';
 import { MASKED_BORROWER_ID_RE as GENIE_MASKED_BORROWER_ID_RE } from './genieCellLinks';
 import {
   MASKED_BORROWER_ID_RE,
-  NAV_ROUTE_IDS,
+  NAVIGATION_ROUTE_IDS,
   NOT_FOUND_ROUTE_META,
-  PALETTE_ROUTE_IDS,
   ROUTES,
   ROUTE_IDS,
   ROUTE_META,
@@ -141,7 +140,7 @@ describe('route tables stay pinned to routeMeta', () => {
     for (const { label, to } of routeActions) {
       expect({ to, label }).toEqual({ to, label: resolveRouteMeta(to).name });
     }
-    expect(routeActions.map((action) => action.to)).toEqual(PALETTE_ROUTE_IDS.map((id) => ROUTES[id].pattern));
+    expect(routeActions.map((action) => action.to)).toEqual(NAVIGATION_ROUTE_IDS.map((id) => ROUTES[id].pattern));
   });
 
   it('route-nav chip labels are the routeMeta nav labels', () => {
@@ -163,10 +162,44 @@ describe('route tables stay pinned to routeMeta', () => {
     const chips = [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>.*?<span class="route-nav__label">([^<]+)<\/span><\/a>/g)]
       .map((match) => ({ to: match[1], label: match[2] }));
     expect(chips.length).toBe(10);
-    expect(chips.length).toBe(NAV_ROUTE_IDS.length);
+    expect(chips.length).toBe(NAVIGATION_ROUTE_IDS.length);
     for (const { to, label } of chips) {
       expect({ to, label }).toEqual({ to, label: resolveRouteMeta(to).navLabel });
     }
+  });
+
+  /**
+   * Audit shell-08: the nav put Analytics second, between Home and Portfolio,
+   * while the palette followed the product flow. One constant now orders both,
+   * so the nav links (and their Tab order) and the palette's Navigate group
+   * read build -> segment -> rank -> explain -> recommend, then the rest.
+   */
+  it('the nav links and the palette list the destinations in the same product-flow order', () => {
+    expect(NAVIGATION_ROUTE_IDS).toEqual([
+      'home', 'portfolio', 'segments', 'leads', 'borrowerIndex',
+      'offerIndex', 'analytics', 'askGenie', 'glossary', 'admin',
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    queryClient.setQueryData<SessionResponse>(['session', 'access'], {
+      can_access_admin: true,
+      can_approve: true,
+      actor_email: null,
+    });
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/']}>
+          <RouteNav />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const navOrder = [...html.matchAll(/<a[^>]*href="([^"]+)"/g)].map((match) => match[1]);
+    const paletteOrder = COMMAND_ACTIONS.flatMap((action) => (action.target.kind === 'route' ? [action.target.to] : []));
+    const flowOrder = NAVIGATION_ROUTE_IDS.map((id) => ROUTES[id].pattern);
+    expect(navOrder).toEqual(flowOrder);
+    expect(paletteOrder).toEqual(flowOrder);
+    expect(navOrder.indexOf('/analytics'), 'Analytics follows Offer').toBe(navOrder.indexOf('/offer-orchestrator') + 1);
   });
 
   /**

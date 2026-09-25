@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 
 /**
@@ -73,7 +73,6 @@ export function toCapabilityViews(rows: CapabilityRow[] | undefined): Capability
 export function CapabilityPanel() {
   const { data, warmingUp, error } = useWarmingUpRetry<CapabilitiesResponse>(
     (signal) => api.adminCapabilities<CapabilitiesResponse>(signal),
-    [],
     { queryKey: queryKeys.adminCapabilities() },
   );
   const views = useMemo(() => toCapabilityViews(data?.capabilities), [data]);
@@ -86,7 +85,7 @@ export function CapabilityPanel() {
     <div className="surface mt-grid" id="capability-readiness">
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Agentic capability readiness</div>
+          <SurfaceTitle>Agentic capability readiness</SurfaceTitle>
           <div className="muted fs-12">
             DAIS-2026 stack. Available rows are live-proven; configured rows require a live probe before claims.
           </div>

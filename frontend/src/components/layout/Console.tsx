@@ -3,7 +3,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { useApp, type Accent, type Density } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { PropertyLookupPanel } from '../mortgage/PropertyLookupPanel';
 import { ThemePreferenceControl } from './ThemePreferenceControl';
 import { api, type ActorAuditEventSummary } from '../../lib/api';
@@ -135,7 +135,9 @@ export function Console() {
     >
       <div className="tweaks__hdr">
         <Icon name="tweak" size={14} className="tweaks__hdr-icon" />
-        <div className="tweaks__title">Console</div>
+        {/* The Console's own h2, so its group titles (h3) nest under it rather
+            than under the page's last surface (a11y-03). */}
+        <h2 className="tweaks__title">Console</h2>
         <button
           className="drawer__close"
           onClick={() => setConsoleOpen(false)}
@@ -183,7 +185,7 @@ export function Console() {
         </div>
         <div className="tweak-row">
           <label>Property lookup</label>
-          <PropertyLookupPanel compact onNavigate={() => setConsoleOpen(false)} />
+          <PropertyLookupPanel compact headingLevel={3} onNavigate={() => setConsoleOpen(false)} />
         </div>
         <div
           id="console-recent-activity"
@@ -194,7 +196,7 @@ export function Console() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="audit" size={14} className="tweaks__hdr-icon" />
-              <div className="h-4">My recent activity</div>
+              <SurfaceTitle level={3}>My recent activity</SurfaceTitle>
               <div className="topbar__spacer" />
               <button
                 type="button"

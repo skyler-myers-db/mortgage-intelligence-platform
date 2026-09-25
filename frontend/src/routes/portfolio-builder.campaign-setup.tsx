@@ -1,7 +1,7 @@
 import type { ChangeEvent } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
-import { Button, EvidenceChip } from '../components/Primitives';
+import { Button, EvidenceChip, SurfaceTitle } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';
 import type { CampaignRecommendationResponse } from '../types';
 import { publicAgentResponsesText } from '../lib/agentLabels';
@@ -73,7 +73,7 @@ export function CampaignSetupPanel({
             <Icon name="send" size={14} />
           </div>
           <div>
-            <div className="h-4">Campaign setup</div>
+            <SurfaceTitle>Campaign setup</SurfaceTitle>
             <div className="muted fs-12">
               Evidence-backed variants, measured assumptions, holdout, and delivery controls.
             </div>
@@ -149,7 +149,7 @@ export function CampaignSetupPanel({
                   id="campaign-variant-hypotheses-title"
                   className="h-5"
                   role="heading"
-                  aria-level={4}
+                  aria-level={3}
                 >
                   Message hypotheses
                 </div>

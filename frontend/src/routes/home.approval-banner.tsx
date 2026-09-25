@@ -74,7 +74,6 @@ export function ApprovalQueueBanner({ screenCount, approvedCount, inOutreachCoun
   // second callout — the banner just says what it still knows to be true.
   const { data: contactablePreview } = useWarmingUpRetry<PortfolioPreview>(
     requestHomeContactablePreview,
-    ['home', 'contactable'],
     { queryKey: queryKeys.portfolioPreview(['home', 'contactable']) },
   );
   const reported = contactablePreview?.high_intent_leads;

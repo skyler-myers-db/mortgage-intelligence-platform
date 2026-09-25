@@ -166,7 +166,6 @@ export default function SegmentIntelligence() {
         segmentCardMode,
         secondaryPortfolioCriteria,
       ),
-    [activeSegsKey, segmentCardCodes, segmentCardMode, secondaryPortfolioCriteria],
     {
       queryKey: queryKeys.segments([
         hasSelectedSegments ? 'selected-cohort' : 'standalone',
@@ -202,7 +201,6 @@ export default function SegmentIntelligence() {
     isFetching: leadsFetching,
   } = useWarmingUpRetry<LeadsPageResult>(
     leadsPageQuery.fetcher,
-    [leadsPageQuery.queryKey], // ignored while queryKey is passed
     { queryKey: leadsPageQuery.queryKey, keepPreviousData: true },
   );
   const segments = useMemo(() => segmentsData ?? [], [segmentsData]);

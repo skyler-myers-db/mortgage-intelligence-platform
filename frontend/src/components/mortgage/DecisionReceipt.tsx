@@ -30,7 +30,7 @@ import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
-import { Button, Chip, EvidenceChip } from '../Primitives';
+import { Button, Chip, EvidenceChip, SurfaceTitle } from '../Primitives';
 import { Skeleton } from '../ui/Skeleton';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { ScoreBadge } from './ScoreBadge';
@@ -102,6 +102,12 @@ export interface DecisionReceiptProps {
   routing?: DecisionRouting | null;
   /** "Open in audit explorer" (default on); the explorer's own receipt turns it off. */
   explorerLink?: boolean;
+  /**
+   * The receipt title's heading level (a11y-03): 2 where the receipt is a
+   * page-level surface (Borrower 360, Offer), 3 where it sits inside another
+   * surface (a queue row, an audit-explorer row).
+   */
+  headingLevel?: 2 | 3;
   className?: string;
 }
 
@@ -208,12 +214,13 @@ export function DecisionReceipt({
   focusHeading = false,
   routing = null,
   explorerLink = true,
+  headingLevel = 2,
   className = '',
 }: DecisionReceiptProps) {
   const { canAccessAdmin } = useApp();
   const titleId = useId();
   const cardRef = useRef<HTMLElement | null>(null);
-  const headingRef = useRef<HTMLDivElement | null>(null);
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   // The copy result is announced through the receipt's one live region.
   // It is tied to the audit id and the card state it was made in, so a
@@ -300,7 +307,7 @@ export function DecisionReceipt({
         >
           <div className="surface__hdr">
             <Icon name="audit" size={14} className="icon-accent" />
-            <div className="h-4" ref={headingRef} tabIndex={headingFocus}>{pendingTitle}</div>
+            <SurfaceTitle level={headingLevel} ref={headingRef} tabIndex={headingFocus}>{pendingTitle}</SurfaceTitle>
             <span className="decision-receipt__hdr-note">{pendingNote}</span>
           </div>
           <div className="surface__body decision-receipt__skeleton">
@@ -352,7 +359,7 @@ export function DecisionReceipt({
             ) : (
               <Chip variant="neutral" icon="shield">{DECISION_RECEIPT_COPY.recorded}</Chip>
             )}
-            <div className="h-4" id={titleId} ref={headingRef} tabIndex={headingFocus}>{title}</div>
+            <SurfaceTitle level={headingLevel} id={titleId} ref={headingRef} tabIndex={headingFocus}>{title}</SurfaceTitle>
           </div>
           <div className="surface__body">
             <p className="muted fs-12 flush">{explanation}</p>
@@ -401,7 +408,7 @@ export function DecisionReceipt({
       >
         <div className="surface__hdr">
           <Icon name="audit" size={14} className="icon-accent" />
-          <div className="h-4" id={titleId} ref={headingRef} tabIndex={headingFocus}>{DECISION_RECEIPT_COPY.title}</div>
+          <SurfaceTitle level={headingLevel} id={titleId} ref={headingRef} tabIndex={headingFocus}>{DECISION_RECEIPT_COPY.title}</SurfaceTitle>
           <Chip variant={chip.variant} icon={chip.icon}>{chip.label}</Chip>
           <span className="decision-receipt__hdr-note">{DECISION_RECEIPT_COPY.readBackNote}</span>
         </div>

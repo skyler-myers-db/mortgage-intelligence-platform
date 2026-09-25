@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { api } from '../../lib/api';
 import { DEFAULT_QUERY_STALE_MS } from '../../lib/queryClient';
@@ -256,7 +256,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
     >
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4" id="data-operations-title">Data operations</div>
+          <SurfaceTitle id="data-operations-title">Data operations</SurfaceTitle>
           <div className="muted fs-12">
             Governed refresh jobs for rates, source features, scoring snapshots, and workflow state.
           </div>

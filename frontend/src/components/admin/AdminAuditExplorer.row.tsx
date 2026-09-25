@@ -223,7 +223,7 @@ export function AuditEventTableRow({
 
               {Receipt && (
                 <div className="mt-3" data-testid="audit-explorer-receipt">
-                  <Receipt auditEventId={event.event_id} compact explorerLink={false} />
+                  <Receipt auditEventId={event.event_id} compact explorerLink={false} headingLevel={3} />
                 </div>
               )}
 

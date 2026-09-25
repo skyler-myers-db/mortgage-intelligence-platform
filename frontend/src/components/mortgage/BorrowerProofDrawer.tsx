@@ -5,7 +5,7 @@ import { formatTimestamp } from '../../lib/time';
 import { formatFixed } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import type { BorrowerProof, ProofFormulaLine, ProofReproduceQuery, ProofScoreComponentKey } from '../../types';
-import { Button, Chip } from '../Primitives';
+import { Button, Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { Skeleton } from '../ui/Skeleton';
 import { GlossaryTerm } from '../GlossaryTerm';
@@ -148,7 +148,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose, focusComponent 
               second click cannot cancel it and send another. */}
           {proofQuery.isError && (
             <div className="proof-callout proof-callout--warning">
-              <div className="h-4">Proof unavailable</div>
+              <SurfaceTitle>Proof unavailable</SurfaceTitle>
               <p className="body flush">
                 The borrower dossier loaded, but the governed proof endpoint did not return. Try again
                 once the warehouse is healthy.

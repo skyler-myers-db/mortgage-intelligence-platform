@@ -14,7 +14,7 @@ import type {
 import { PageShell } from '../components/layout/PageShell';
 import { CampaignPrefillBanner } from '../components/mortgage/CampaignPrefillBanner';
 import { KpiCard } from '../components/mortgage/KpiCard';
-import { Button } from '../components/Primitives';
+import { Button, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { useApp } from '../components/AppContext';
 import { FilterSelect } from '../components/ui/FilterSelect';
@@ -186,7 +186,6 @@ export default function PortfolioBuilder() {
       signal,
       campaignBuildConfig,
     ),
-    [committedKey],
     { queryKey: queryKeys.portfolioPreview([committedKey]), keepPreviousData: true },
   );
   const building = preview === null && warmingUp === null && error === null;
@@ -448,7 +447,7 @@ export default function PortfolioBuilder() {
               <Icon name="target" size={14} />
             </div>
             <div>
-              <div className="h-4">Filters</div>
+              <SurfaceTitle>Filters</SurfaceTitle>
               <div className="muted fs-12">
                 Filter the population, run the build, review KPIs.
               </div>

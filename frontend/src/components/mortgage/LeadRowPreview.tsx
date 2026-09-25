@@ -92,6 +92,7 @@ export function RowPreview({
               reveal={!decisionReceipt.revealed}
               onRevealed={decisionReceipt.markRevealed}
               compact
+              headingLevel={3}
               score={{ opportunityScore: lead.opportunity_score, confidence: lead.confidence }}
             />
           )}

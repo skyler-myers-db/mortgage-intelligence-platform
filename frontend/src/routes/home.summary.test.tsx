@@ -85,10 +85,9 @@ const SUMMARY: HomeSummary = {
 vi.mock('../lib/useWarmingUpRetry', () => ({
   useWarmingUpRetry: (
     _fetcher: unknown,
-    _deps: unknown[],
-    opts: { queryKey?: readonly unknown[] } = {},
+    opts: { queryKey: readonly unknown[] },
   ) => {
-    const key = (opts.queryKey ?? []).join('.');
+    const key = opts.queryKey.join('.');
     return {
       data: key === 'mip.home.summary' ? SUMMARY : PREVIEW,
       warmingUp: null,

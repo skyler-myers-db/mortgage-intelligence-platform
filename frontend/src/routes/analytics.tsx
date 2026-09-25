@@ -180,7 +180,6 @@ export default function AnalyticsRoute() {
 
   const executive = useWarmingUpRetry<ExecutiveAnalyticsResponse>(
     (signal) => api.analyticsExecutive(signal, baseFilters),
-    ['analytics', 'executive', ...baseCriteria],
     {
       enabled: tab === 'executive',
       queryKey: queryKeys.analytics('executive', baseCriteria),
@@ -193,7 +192,6 @@ export default function AnalyticsRoute() {
   const executiveFiltersActive = Boolean(states.length || segmentCodes.length || lenderRelationship !== 'All' || targetLenderRef);
   const geography = useWarmingUpRetry<GeographyAnalyticsResponse>(
     (signal) => api.analyticsGeography(signal, baseFilters),
-    ['analytics', 'geography', ...baseCriteria],
     {
       enabled: tab === 'geography',
       queryKey: queryKeys.analytics('geography', baseCriteria),
@@ -203,7 +201,6 @@ export default function AnalyticsRoute() {
   );
   const economics = useWarmingUpRetry<EconomicsAnalyticsResponse>(
     (signal) => api.analyticsEconomics(signal, baseFilters),
-    ['analytics', 'economics', ...baseCriteria],
     {
       enabled: tab === 'economics',
       queryKey: queryKeys.analytics('economics', baseCriteria),
@@ -213,7 +210,6 @@ export default function AnalyticsRoute() {
   );
   const segments = useWarmingUpRetry<SegmentAnalyticsResponse>(
     (signal) => api.analyticsSegments(signal, baseFilters),
-    ['analytics', 'segments', ...baseCriteria],
     {
       enabled: tab === 'segments',
       queryKey: queryKeys.analytics('segments', baseCriteria),
@@ -223,7 +219,6 @@ export default function AnalyticsRoute() {
   );
   const signals = useWarmingUpRetry<SignalAnalyticsResponse>(
     (signal) => api.analyticsSignals(signal, signalFilters),
-    ['analytics', 'signals', ...signalCriteria],
     {
       enabled: tab === 'signals',
       queryKey: queryKeys.analytics('signals', signalCriteria),

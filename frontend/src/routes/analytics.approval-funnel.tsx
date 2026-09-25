@@ -293,7 +293,6 @@ function PerLoanOfficerFunnel({ officers }: { officers: LoanOfficerFunnelRow[] }
 export function ApprovalFunnelSection() {
   const funnel = useWarmingUpRetry<ApprovalFunnelResponse>(
     (signal) => api.approvalFunnel(signal),
-    ['analytics', 'funnel'],
     {
       queryKey: queryKeys.analytics('funnel'),
       keepPreviousData: true,

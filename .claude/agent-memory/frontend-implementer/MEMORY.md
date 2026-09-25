@@ -15,3 +15,6 @@
 - [Shared checkout branch race](project_shared_checkout_branch_race.md) — peer agents share the main checkout; their `checkout -b` steals your commits. Work in a worktree.
 - [Shared display formatters](project_shared_formatters.md) — lib/formatters.ts owns bps/currency/rate units; never hand-roll a unit in JSX.
 - [Population labels are not synonyms](project_population_labels.md) — addressable (~5.16M, no gate) vs marketable (~76K, contactability gate); pinned in lib/populationLabels.ts.
+- [Route-closure budget vs tiny shared chunks](project_route_closure_budget.md) — a new shared component costs ~0.3 KiB br per importing route; glossary gate is tightest; baseline via git archive.
+- [Pixel-neutrality probe](project_pixel_neutrality_probe.md) — prove "no VRT change" with a throwaway fixture spec dumping geometry before/after, plus a clone text-range check.
+- [Worktree command shape](project_worktree_command_shape.md) — isolated agents' Bash refuses shell vars/nested constructs; write scripts to scratchpad; perl -pi vs -0pi trap.

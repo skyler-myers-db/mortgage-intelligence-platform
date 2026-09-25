@@ -20,9 +20,10 @@ in the worktree.
 1. Tests / lint / build — symlink node_modules first (diff `package-lock.json`
    against the main checkout; identical when you branched off `origin/main`):
    `ln -s <main-repo>/frontend/node_modules <worktree>/frontend/node_modules`,
-   then `npm --prefix frontend run test|lint|build` behaves normally. Remove the
-   symlink before you finish — `.gitignore` has `frontend/node_modules/` **with a
-   trailing slash**, which does not match a symlink, so it shows as untracked.
+   then `npm --prefix frontend run test|lint|build` behaves normally. As of
+   2026-09-25 `.git/info/exclude` ignores the `frontend/node_modules` symlink
+   (the `.gitignore` entry has a trailing slash and would not), so it no
+   longer shows as untracked; check `git status` anyway before committing.
 2. Visual / browser verification — don't fight the dev server. Run
    `npm --prefix frontend run build` (a required validation anyway) and serve it:
    `python3 -m http.server 5174 --directory <worktree>/frontend/dist`, then point

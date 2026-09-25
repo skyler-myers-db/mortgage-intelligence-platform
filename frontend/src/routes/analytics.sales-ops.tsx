@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { api } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
-import { Chip } from '../components/Primitives';
+import { Chip, SurfaceTitle } from '../components/Primitives';
 import type {
   SalesAgingLead,
   SalesConversionResponse,
@@ -150,7 +150,7 @@ export function SalesOpsSection() {
     <div className="surface">
       <div className="surface__hdr surface__hdr--split">
         <div className="surface__hdr-main">
-          <div className="h-4">Sales ops snapshot</div>
+          <SurfaceTitle>Sales ops snapshot</SurfaceTitle>
           <div className="muted fs-12">
             Shift capacity, stale approvals, yesterday's activity, and imported customer-system outcomes.
           </div>

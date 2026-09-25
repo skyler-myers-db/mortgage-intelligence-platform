@@ -107,9 +107,12 @@ export function WarmingUpBlock({
           </span>
         </div>
         {title && (
-          <div className="h-4 warming-block__title">
+          // A caption of this status message, not a section heading: the
+          // block comes and goes with each retry inside whatever surface is
+          // loading, so it stays out of the heading outline (a11y-03).
+          <p className="h-4 warming-block__title">
             {title}
-          </div>
+          </p>
         )}
         <p className="body muted warming-block__copy">
           {body ?? defaultBodyFor(state.label)}

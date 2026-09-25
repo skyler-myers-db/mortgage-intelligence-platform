@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Button, Chip } from '../components/Primitives';
+import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { formatNumber } from '../lib/formatters';
 import {
@@ -153,7 +153,7 @@ export function GrowthAgentRunCard({
       <div className="growth-agent-run__head">
         <div>
           <div className="eyebrow">Latest run</div>
-          <div className="h-4">{run.workflow.title}</div>
+          <SurfaceTitle level={3}>{run.workflow.title}</SurfaceTitle>
         </div>
         <Button
           variant="success"

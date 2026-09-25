@@ -51,7 +51,7 @@
   display: flex; align-items: center;
 }
 .tweaks__hdr-icon { color: var(--accent-ink); }
-.tweaks__title { font-size: var(--fs-13); font-weight: 600; }
+.tweaks__title { font-size: var(--fs-13); font-weight: 600; margin: 0; }
 .tweaks__body {
   padding: var(--sp-4); display: grid; gap: var(--sp-4);
   /* One constrained track. The prototype body is a flex column

@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
 import { ScoreAnatomyGate } from '../components/mortgage/ScoreAnatomyGate';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
-import { Button, Chip, EvidenceChip } from '../components/Primitives';
+import { Button, Chip, EvidenceChip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
@@ -26,7 +26,7 @@ export function OfferOrchestratorEmptyState() {
     <div className="surface">
       <div className="surface__hdr">
         <Icon name="bolt" size={14} className="icon-accent" />
-        <div className="h-4">What you'll see</div>
+        <SurfaceTitle>What you'll see</SurfaceTitle>
       </div>
       <div className="surface__body surface__body--stack-sm">
         <div className="chip-row">
@@ -81,13 +81,14 @@ export function RejectRationalePanel({
   onSubmit,
 }: RejectRationalePanelProps) {
   const reasonRef = useRef<HTMLSelectElement>(null);
+  const titleId = useId();
   useEffect(() => {
     reasonRef.current?.focus();
   }, []);
   return (
     <form
       className="surface"
-      aria-label="Reject rationale"
+      aria-labelledby={titleId}
       onSubmit={(e) => {
         e.preventDefault();
         onSubmit();
@@ -95,7 +96,7 @@ export function RejectRationalePanel({
     >
       <div className="decision-panel">
         <div>
-          <div className="h-4">Reject rationale</div>
+          <SurfaceTitle id={titleId}>Reject rationale</SurfaceTitle>
           <div className="muted fs-12">
             Capture a committee-visible reason before dropping this lead.
           </div>
@@ -289,7 +290,7 @@ function PrimaryOfferPanel({
     <div className="surface">
       <div className="surface__hdr">
         <Icon name="bolt" size={14} className="icon-accent" />
-        <div className="h-4">Primary offer</div>
+        <SurfaceTitle>Primary offer</SurfaceTitle>
       </div>
       <div className="surface__body">
         <div className="split-row">
@@ -438,7 +439,7 @@ function DraftOutreachPanel({
     <div className="surface">
       <div className="surface__hdr">
         <Icon name="doc" size={14} className="icon-accent" />
-        <div className="h-4">Governed outreach · exact audited copy</div>
+        <SurfaceTitle>Governed outreach · exact audited copy</SurfaceTitle>
       </div>
       <div className="surface__body">
         {draftWarming && (
@@ -709,9 +710,9 @@ function AlternativesPanel({ recommendation }: OfferDetailsProps) {
         <Icon name="doc" size={14} className="icon-accent" />
         <div>
           <div className="eyebrow">Considered alternatives</div>
-          <div className="h-4 mt-1">
+          <SurfaceTitle className="mt-1">
             {recommendation ? `${recommendation.alternatives.length} other product${recommendation.alternatives.length === 1 ? '' : 's'} ruled out` : 'Loading…'}
-          </div>
+          </SurfaceTitle>
         </div>
       </div>
       <div className="surface__body">
@@ -750,7 +751,7 @@ function ThresholdsPanel({ recommendation }: OfferDetailsProps) {
         <Icon name="shield" size={14} className="icon-accent" />
         <div>
           <div className="eyebrow">Thresholds applied</div>
-          <div className="h-4 mt-1">Admin config at decision time</div>
+          <SurfaceTitle className="mt-1">Admin config at decision time</SurfaceTitle>
         </div>
       </div>
       <div className="surface__body">

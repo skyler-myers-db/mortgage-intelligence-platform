@@ -12,7 +12,7 @@
  */
 import { useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 import { api, type AuditEventPage } from '../../lib/api';
@@ -90,7 +90,6 @@ export function AdminAuditExplorer() {
       ...auditEventPageQuery(applied),
       cursor: pageCursor,
     }),
-    [appliedKey, pageCursor],
     {
       queryKey: queryKeys.auditEvents(['explorer', appliedKey, pageCursor]),
       keepPreviousData: false,
@@ -119,7 +118,6 @@ export function AdminAuditExplorer() {
     error: rollupsErrorObj,
   } = useWarmingUpRetry<AuditRollupRow[]>(
     (signal) => api.auditRollups('week', signal),
-    [],
     { queryKey: queryKeys.auditRollups('week') },
   );
   const rollupsError = rollupsErrorObj
@@ -155,7 +153,7 @@ export function AdminAuditExplorer() {
     >
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4" id="audit-explorer-title">Audit explorer</div>
+          <SurfaceTitle id="audit-explorer-title">Audit explorer</SurfaceTitle>
           <div className="muted fs-12">
             Filter the Lakebase ledger by actor, day, event type, entity or correlation id.
           </div>

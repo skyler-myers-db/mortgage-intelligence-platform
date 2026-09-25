@@ -286,9 +286,6 @@ export default function LeadQueue() {
     isPlaceholderData: leadsPlaceholderData,
   } = useWarmingUpRetry<LeadsPage>(
     leadsPageQuery.fetcher,
-    // Ignored while `queryKey` is passed (see useWarmingUpRetry); kept equal
-    // to the key's inputs so the fallback key stays correct if that changes.
-    [leadsRequest, growthAgentProofKey],
     { queryKey: leadsPageQuery.queryKey, keepPreviousData: true, enabled: !meUnresolved },
   );
   // Audit states-v1 (2026-09-21): the queue used to mount LeadTable with an

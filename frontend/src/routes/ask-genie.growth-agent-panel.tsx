@@ -1,4 +1,4 @@
-import { Button, Chip } from '../components/Primitives';
+import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { humanizeAssetMentions } from '../lib/assetLabels';
 import type { GrowthAgentCadence, GrowthAgentSegmentMode } from '../types';
@@ -223,7 +223,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
           <div className="growth-agent-custom__head">
             <Icon name="filter" size={14} className="icon-accent" />
             <div>
-              <div className="h-4">Build a custom segment workflow</div>
+              <SurfaceTitle level={3}>Build a custom segment workflow</SurfaceTitle>
               <div className="muted fs-12">
                 Combine reviewed borrower segments, count the borrowers eligible for outreach, then save the filters as a watchlist.
               </div>

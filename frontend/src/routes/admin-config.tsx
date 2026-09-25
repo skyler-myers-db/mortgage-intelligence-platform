@@ -5,7 +5,7 @@ import { useLocation } from 'react-router';
 import { useApp, type Accent, type Density } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { ThemePreferenceControl } from '../components/layout/ThemePreferenceControl';
-import { Chip } from '../components/Primitives';
+import { Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { DataOperationsPanel } from '../components/admin/DataOperationsPanel';
@@ -151,7 +151,6 @@ export default function AdminConfig() {
     error: rulesErrorObj,
   } = useWarmingUpRetry<RulesResponse>(
     (signal) => api.adminRules<RulesResponse>(signal),
-    [],
     { queryKey: queryKeys.adminRules() },
   );
   const rulesLoading = rules === null && rulesWarming === null && rulesErrorObj === null;
@@ -183,7 +182,6 @@ export default function AdminConfig() {
     error: sourcesErrorObj,
   } = useWarmingUpRetry<SourceRow[]>(
     (signal) => api.adminSources<SourceRow[]>(signal),
-    [],
     { queryKey: queryKeys.adminSources() },
   );
   const sourcesLoading =
@@ -198,7 +196,6 @@ export default function AdminConfig() {
     error: auditErrorObj,
   } = useWarmingUpRetry<AuditEventRow[]>(
     (signal) => api.auditEvents(1, signal),
-    [],
     { queryKey: queryKeys.auditEvents(['latest', 1]) },
   );
   const auditLoading =
@@ -253,7 +250,7 @@ export default function AdminConfig() {
         {/* Offer rules — clickable to expand threshold table */}
         <div className="surface" id="offer-rules">
           <div className="surface__hdr surface__hdr--split">
-            <div className="h-4">Offer rules</div>
+            <SurfaceTitle>Offer rules</SurfaceTitle>
             <button
               type="button"
               className="chip chip--neutral admin-rules-version"
@@ -349,7 +346,7 @@ export default function AdminConfig() {
         {/* Audit trail — live count + last event timestamp */}
         <div className="surface">
           <div className="surface__hdr surface__hdr--split">
-            <div className="h-4">Audit trail</div>
+            <SurfaceTitle>Audit trail</SurfaceTitle>
             <Chip variant={auditError ? 'warning' : 'success'}>
               {auditError ? 'reconnecting' : 'live'}
             </Chip>
@@ -392,7 +389,7 @@ export default function AdminConfig() {
         {/* Data source readiness — per-source status rows */}
         <div className="surface">
           <div className="surface__hdr surface__hdr--split">
-            <div className="h-4">Data source readiness</div>
+            <SurfaceTitle>Data source readiness</SurfaceTitle>
             <Chip variant={sourcesError ? 'warning' : 'neutral'}>
               {sourcesWarming
                 ? 'warming up…'
@@ -476,7 +473,8 @@ export default function AdminConfig() {
         >
           <div className="appearance-toggle__side">
             <Icon name="tweak" size={14} className="icon-accent" />
-            <div className="h-4">Workspace appearance (per-user)</div>
+            {/* A span, not a SurfaceTitle: no heading inside a <button> (a11y-03). */}
+            <span className="h-4">Workspace appearance (per-user)</span>
           </div>
           <div className="appearance-toggle__side">
             <span className="appearance-toggle__meta">

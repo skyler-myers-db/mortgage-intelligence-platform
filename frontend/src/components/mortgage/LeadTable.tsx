@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../Icon';
-import { Button } from '../Primitives';
+import { Button, SurfaceTitle } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
@@ -397,7 +397,7 @@ export function LeadTable({
             <Icon name="user" size={14} />
           </div>
           <div>
-            <div className="h-4">Ranked borrowers</div>
+            <SurfaceTitle>Ranked borrowers</SurfaceTitle>
             <div className="muted fs-12">
               {/* Keycaps are `<kbd>` (prototype-parity P2); the header's
                   "Keyboard shortcuts" button and `?` list every key. */}

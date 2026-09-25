@@ -9,7 +9,7 @@ import type {
   ActivationDestinationStatus,
   ActivationOutboxItem,
 } from '../../types';
-import { Button, Chip } from '../Primitives';
+import { Button, Chip, SurfaceTitle } from '../Primitives';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 
 type Channel = 'email' | 'sms' | 'direct_mail';
@@ -64,7 +64,6 @@ export function ActivationLoopPanel({
     error: destinationsError,
   } = useWarmingUpRetry<ActivationDestination[]>(
     (signal) => api.activationDestinations(signal),
-    [],
     { queryKey: queryKeys.activationDestinations() },
   );
   const {
@@ -73,7 +72,6 @@ export function ActivationLoopPanel({
     error: outboxError,
   } = useWarmingUpRetry<ActivationOutboxItem[]>(
     (signal) => api.activationOutbox({ borrowerId, limit: 6 }, signal),
-    [borrowerId],
     {
       enabled: Boolean(borrowerId),
       queryKey: queryKeys.activationOutbox(['borrower', borrowerId ?? '']),
@@ -138,7 +136,7 @@ export function ActivationLoopPanel({
     <div className="surface mt-grid">
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Customer activation loop</div>
+          <SurfaceTitle>Customer activation loop</SurfaceTitle>
           <div className="muted fs-12">
             Stage approved work for CRM, CDP, LOS/POS, or servicing writeback without auto-sending outreach.
           </div>
@@ -239,7 +237,6 @@ export function ActivationOperationsPanel() {
     error,
   } = useWarmingUpRetry(
     (signal) => api.activationSummary(signal),
-    [],
     { queryKey: queryKeys.activationSummary() },
   );
   const connectedCount = data ? data.destinations.filter((destination) => destination.status === 'connected').length : 0;
@@ -247,7 +244,7 @@ export function ActivationOperationsPanel() {
     <div className="surface mt-grid">
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Activation destinations</div>
+          <SurfaceTitle>Activation destinations</SurfaceTitle>
           <div className="muted fs-12">
             Governed outbox for CRM, CDP, LOS/POS, and servicing handoff. No destination secrets are stored in the browser.
           </div>

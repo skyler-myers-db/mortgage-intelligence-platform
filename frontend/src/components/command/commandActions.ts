@@ -1,5 +1,5 @@
 import type { IconName } from '../Icon';
-import { PALETTE_ROUTE_IDS, ROUTES, type PaletteRouteId } from '../../lib/routeMeta';
+import { NAVIGATION_ROUTE_IDS, ROUTES, type NavigationRouteId } from '../../lib/routeMeta';
 import type { CommandSelectionContext, CommandVerb } from './commandSelection';
 
 /**
@@ -63,9 +63,9 @@ const ROUTE_ACTION_TERMS = {
   askGenie: { id: 'nav-genie', keywords: ['ai', 'question', 'chat', 'natural language', 'sql'] },
   glossary: { id: 'nav-glossary', keywords: ['terms', 'definitions', 'clip', 'owner link', 'help'] },
   admin: { id: 'nav-admin', keywords: ['config', 'audit log', 'offer rules', 'governance'] },
-} as const satisfies Record<PaletteRouteId, { id: string; keywords: readonly string[] }>;
+} as const satisfies Record<NavigationRouteId, { id: string; keywords: readonly string[] }>;
 
-function routeAction(routeId: PaletteRouteId): CommandAction {
+function routeAction(routeId: NavigationRouteId): CommandAction {
   const route = ROUTES[routeId];
   const terms = ROUTE_ACTION_TERMS[routeId];
   return {
@@ -81,7 +81,7 @@ function routeAction(routeId: PaletteRouteId): CommandAction {
 
 export const COMMAND_ACTIONS: readonly CommandAction[] = [
   // --- Navigate (the eight product-flow routes + analytics/glossary/admin) ---
-  ...PALETTE_ROUTE_IDS.map(routeAction),
+  ...NAVIGATION_ROUTE_IDS.map(routeAction),
   // --- Workspace commands ---
   { id: 'cmd-genie', label: 'Open Genie panel', hint: 'Floating assistant', icon: 'sparkle', group: 'Workspace',
     keywords: ['ai', 'assistant', 'chat'], target: { kind: 'command', command: 'open-genie' } },

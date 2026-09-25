@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import type { DataEstateAsset, DataEstateLane, DataEstateResponse, DataEstateStatus } from '../../types';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
 import { assetHrefForSource, descriptorFor, DRAWER_SOURCES } from '../../lib/drawerSources';
@@ -88,7 +88,7 @@ export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
             <Icon name="layers" size={14} />
           </div>
           <div>
-            <div className="h-4">Data estate under the hood</div>
+            <SurfaceTitle>Data estate under the hood</SurfaceTitle>
             <div className="muted fs-12">
               First-party data, Cotality enrichment, Databricks governance, and Entrada transformations.
             </div>
@@ -293,7 +293,7 @@ export function DataEstatePanelSkeleton() {
             <Icon name="layers" size={14} />
           </div>
           <div>
-            <div className="h-4">Data estate under the hood</div>
+            <SurfaceTitle>Data estate under the hood</SurfaceTitle>
             <div className="muted fs-12">
               Loading source readiness, freshness, and governed lineage proof…
             </div>

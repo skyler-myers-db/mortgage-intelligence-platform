@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import type { Borrower360 } from '../../types';
 import { Icon } from '../Icon';
 import { buildBorrowerStory } from '../../lib/borrowerStory';
+import { SurfaceTitle } from '../Primitives';
 
 /**
  * "The story" (re-audit Buyer-Wow #3) — the system EXPLAINS a lead in plain
@@ -24,7 +25,7 @@ export function BorrowerStoryCard({ borrower }: { borrower: Borrower360 }) {
         <div className="surface__hdr-main">
           <div className="surface__icon"><Icon name="sparkle" size={14} /></div>
           <div>
-            <div className="h-4">The story</div>
+            <SurfaceTitle>The story</SurfaceTitle>
             <div className="muted fs-12">
               Plain-English explanation, grounded in this dossier&apos;s evidence.
             </div>

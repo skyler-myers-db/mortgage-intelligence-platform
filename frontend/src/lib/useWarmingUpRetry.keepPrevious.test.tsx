@@ -35,7 +35,6 @@ function Probe({
       new Promise<string>((resolve) => {
         resolvers[queryId] = resolve;
       }),
-    [queryId],
     {
       queryKey: ['keep-previous-probe', queryId],
       keepPreviousData: true,
@@ -64,7 +63,6 @@ function KeyAwareProbe({
       new Promise<string>((resolve) => {
         resolvers[`${group}:${queryId}`] = resolve;
       }),
-    [],
     {
       queryKey: ['key-aware-probe', group, queryId],
       keepPreviousWhen: (previousKey) => previousKey[1] === group,
@@ -91,7 +89,6 @@ function WarmingProbe({ queryId }: { queryId: 'first' | 'second' }) {
         }),
       );
     },
-    [queryId],
     {
       queryKey: ['keep-previous-warming-probe', queryId],
       keepPreviousData: true,

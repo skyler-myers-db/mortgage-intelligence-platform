@@ -22,8 +22,10 @@ vi.mock('../lib/api', () => ({
   isWarmingUpError: vi.fn(),
 }));
 vi.mock('../lib/useWarmingUpRetry', () => ({
-  useWarmingUpRetry: (_fetcher: unknown, key: string[]) =>
-    key.join('/') === 'home'
+  // Route by query key: only the Home preview (queryKeys.homePreview()) reads
+  // the fixture; every other read on the page stays idle.
+  useWarmingUpRetry: (_fetcher: unknown, opts: { queryKey: readonly unknown[] }) =>
+    opts.queryKey.join('/') === 'mip/portfolio/preview/home'
       ? { ...reads.preview, manualRetry: vi.fn() }
       : { data: null, warmingUp: null, error: null, manualRetry: vi.fn() },
 }));

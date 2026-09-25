@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { useApp } from '../components/AppContext';
 import { Icon } from '../components/Icon';
-import { Button } from '../components/Primitives';
+import { Button, SurfaceTitle } from '../components/Primitives';
 import { api } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { formatCount } from '../lib/formatters';
@@ -130,7 +130,7 @@ export function SavedCampaignsPanel({
             <Icon name="doc" size={14} />
           </div>
           <div>
-            <div className="h-4">Saved campaigns</div>
+            <SurfaceTitle>Saved campaigns</SurfaceTitle>
             <div className="muted fs-12">Drafts and review status for portfolio builds.</div>
           </div>
         </div>

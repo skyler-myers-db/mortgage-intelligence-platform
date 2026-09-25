@@ -7,7 +7,7 @@ import type {
   ActivationSummary,
   ActivationOutboxItem,
 } from '../../types';
-import { Chip } from '../Primitives';
+import { Chip, SurfaceTitle } from '../Primitives';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 
 interface SourceSummary {
@@ -205,7 +205,6 @@ export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesEr
     error,
   } = useWarmingUpRetry<ActivationSummary>(
     (signal) => api.activationSummary(signal),
-    [],
     { queryKey: queryKeys.activationSummary() },
   );
   const items = useMemo(
@@ -225,7 +224,7 @@ export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesEr
     <div className="surface mt-grid" id="buyer-readiness">
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Buyer readiness</div>
+          <SurfaceTitle>Buyer readiness</SurfaceTitle>
           <div className="muted fs-12">
             Live, staged, or customer-configured.
           </div>
