@@ -12,17 +12,24 @@ pinned fail-closed:
   right after its build with ``MIP_REQUIRE_FRONTEND_DIST=1``, so the
   served-layer and build-meta checks fail rather than skip.
 
+Wave 4 (test-infra PR-1) adds: the e2e-visual container and ``MIP_VRT_IMAGE``
+name the image of the exact ``@playwright/test`` pin, and the lock resolves
+the Playwright trio to it.
+
 The backend job's Node + ``MIP_REQUIRE_FIXTURE_CONTRACT`` wiring is pinned by
 tests/unit/test_e2e_fixture_contract.py beside the test it serves.
 """
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+FRONTEND = ROOT / "frontend"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PERF_SPEC = ROOT / "frontend" / "tests" / "e2e" / "fixture" / "perf-budget.fixture.spec.ts"
 BUILD_ARTIFACTS_TEST = "tests/unit/test_frontend_build_artifacts.py"
@@ -54,6 +61,28 @@ def test_the_source_map_upload_fails_when_the_build_emitted_none() -> None:
 
     assert upload["with"]["path"] == "frontend/sourcemaps/**"
     assert upload["with"]["if-no-files-found"] == "error"
+
+
+def test_the_vrt_container_is_the_image_of_the_playwright_pin() -> None:
+    """Audit stack-10 / a11y-05 item 5: the renderer, its image and the lock move together.
+
+    The e2e-visual job runs inside the Playwright image, and the VRT spec
+    refuses any host whose MIP_VRT_IMAGE is not the image of the installed
+    @playwright/test. Both literals must name the package.json pin, and the
+    lock must resolve the whole Playwright trio to that same version.
+    """
+    package = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))
+    pin = package["devDependencies"]["@playwright/test"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pin), f"@playwright/test must be an exact pin, got {pin!r}"
+    visual = _jobs()["e2e-visual"]
+    expected = f"mcr.microsoft.com/playwright:v{pin}-noble"
+
+    assert visual["container"]["image"] == expected
+    assert visual["env"]["MIP_VRT_IMAGE"] == expected
+
+    lock = json.loads((FRONTEND / "package-lock.json").read_text(encoding="utf-8"))["packages"]
+    for name in ("@playwright/test", "playwright", "playwright-core"):
+        assert lock[f"node_modules/{name}"]["version"] == pin, f"{name} in the lock is not the {pin} pin"
 
 
 def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:

@@ -415,11 +415,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: mcr.microsoft.com/playwright:v1.59.1-noble
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
       options: --ipc=host
     env:
       MIP_VRT: '1'
-      MIP_VRT_IMAGE: mcr.microsoft.com/playwright:v1.59.1-noble
+      MIP_VRT_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

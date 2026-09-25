@@ -88,8 +88,11 @@ a batch lands, check each of these:
   --only-issues`, and compare the summary with the previous batch.
 - **Playwright is held to the VRT container image.** `@playwright/test`
   stays at the version of the pinned visual-regression image
-  (`mcr.microsoft.com/playwright:v1.59.1-noble`). A Playwright bump moves the
-  image and regenerates the baselines in the same change.
+  (`mcr.microsoft.com/playwright:v1.63.0-noble`; both the `e2e-visual`
+  `container.image` and its `MIP_VRT_IMAGE`, pinned by
+  `tests/unit/test_ci_frontend_gates.py`). A Playwright bump moves the image
+  in the same change, and the baselines are regenerated once, from that
+  bump PR's pinned-image CI renders (never on a developer host).
 - **typescript-eslint gates TypeScript 7.** typescript-eslint 8.70.1 peers
   `typescript >=4.8.4 <6.1.0`. TypeScript 7 waits until a typescript-eslint
   release admits it; check the peer range with `npm view
