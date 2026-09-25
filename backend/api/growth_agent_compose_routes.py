@@ -8,8 +8,9 @@ Behavior is unchanged and pinned by the compose tests in
 ``/growth-agent`` prefix.
 
 Audit 2026-09-21 ``critic-01`` / ``genie-09``: compose signs every composed
-plan (``plan_digest``) and ``POST /growth-agent/agent/plan/execute`` runs
-exactly that reviewed plan. It mounts here because ``backend/api`` modules may
+plan (``plan_digest``); ``POST /growth-agent/agent/plan/execute`` runs exactly
+that reviewed plan, and ``GET /growth-agent/runs`` lists the caller's own
+reviewed-workflow runs. Both mount here because ``backend/api`` modules may
 not import each other and this router is already registered.
 """
 
@@ -18,13 +19,14 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from backend.schemas.agent_plan import (
     ComposePlanRequest,
     ComposePlanResponse,
     ExecutePlanRequest,
 )
+from backend.schemas.growth_agent_run_history import GrowthAgentRunSummary
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
@@ -37,6 +39,11 @@ from backend.services.growth_agent_plan_digest import (
 )
 from backend.services.growth_agent_plan_executor import execute_plan
 from backend.services.growth_agent_reviewed_plan import execute_reviewed_plan
+from backend.services.growth_agent_run_history import (
+    DEFAULT_RUN_LIST_LIMIT,
+    MAX_RUN_LIST_LIMIT,
+    list_runs,
+)
 from backend.services.growth_agent_workflows import WORKFLOWS as _WORKFLOWS
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, get_lakebase_client
@@ -192,3 +199,18 @@ def execute_reviewed_growth_agent_plan(
             detail=safe_dependency_detail("plan signing"),
         ) from exc
 
+
+@router.get("/runs", response_model=list[GrowthAgentRunSummary])
+def list_growth_agent_runs(
+    request: Request,
+    lakebase: LakebaseDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_RUN_LIST_LIMIT)] = DEFAULT_RUN_LIST_LIMIT,
+) -> list[GrowthAgentRunSummary]:
+    """List the caller's own recent reviewed-workflow runs, newest first.
+
+    Read-only Lakebase app state: it writes no audit row, and each summary
+    omits the actor, the stored criteria and the stored route (which can hold
+    an expiring, actor-bound Lead Queue handoff proof).
+    """
+
+    return list_runs(lakebase, actor=resolve_actor(request), limit=limit)

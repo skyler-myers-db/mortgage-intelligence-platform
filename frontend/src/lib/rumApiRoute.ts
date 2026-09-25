@@ -32,6 +32,7 @@ export const API_ROUTE_SEGMENTS = [
   'preview', 'progress', 'proof', 'property-loan', 'rate-sensitivity', 'rate-window',
   'receipt',
   'recommend', 'refusal-report', 'reject', 'rollups', 'rules', 'rum', 'run',
+  'runs',
   'run-due', 'run-due-all', 'sales', 'search', 'segments', 'session', 'sessions',
   'settings', 'signals', 'sources', 'stage', 'standup', 'start', 'state-rollups',
   'status', 'submit', 'summary', 'team', 'telemetry', 'workflows', 'workspace',
