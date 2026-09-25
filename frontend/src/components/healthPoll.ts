@@ -3,6 +3,7 @@ import { onlineManager, type QueryClient } from '@tanstack/react-query';
 import { isAbortError, type HealthPayload } from '../lib/api';
 import type { HealthHint } from '../lib/apiTypes';
 import { subscribeNetworkFailures } from '../lib/apiFailure';
+import { healthActorObservation, type ActorIdentity } from '../lib/healthTrust';
 import { isSessionExpired, subscribeSessionStatus } from '../lib/sessionStatus';
 import { recoveredDependencies, refetchRecoveredQueries } from './healthRecovery';
 import {
@@ -153,6 +154,7 @@ export interface HealthPollOptions {
   setUpdateAvailable: Dispatch<SetStateAction<boolean>>;
   setConnection: Dispatch<SetStateAction<ConnectionStatus>>;
   setWarehouseResumingSince: Dispatch<SetStateAction<number | null>>;
+  setActorIdentity: Dispatch<SetStateAction<ActorIdentity | null>>;
 }
 
 /** Starts the poll (the first probe runs at once) and returns its cleanup. */
@@ -174,6 +176,7 @@ export function startHealthPoll({
   setUpdateAvailable,
   setConnection,
   setWarehouseResumingSince,
+  setActorIdentity,
 }: HealthPollOptions): () => void {
   const ctrl = new AbortController();
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -247,6 +250,11 @@ export function startHealthPoll({
       const rawPayload = await fetchHealth(ctrl.signal, idleHint());
       if (cancelled) return;
       observeConnection(rawPayload.status !== 'unreachable');
+      // Only a trusted observation may say who the actor is (lib/healthTrust):
+      // a transport failure keeps the last actor, and the object is replaced
+      // only when the key changes, so the shell's actor effect runs once per change.
+      const actor = healthActorObservation(rawPayload);
+      if (actor.trusted) setActorIdentity((prior) => (prior !== null && prior.key === actor.key ? prior : { key: actor.key }));
       const elapsed = Math.round(performance.now() - t0);
       const { payload, next } = applyDownUpDebounce(
         rawPayload,

@@ -10,6 +10,7 @@ import {
 import { QueryClientContext } from '@tanstack/react-query';
 import { api, type HealthPayload } from '../lib/api';
 import type { HealthHint } from '../lib/apiTypes';
+import type { ActorIdentity } from '../lib/healthTrust';
 import { normalizeWorkspaceHost } from '../lib/ucAssetLinks';
 import { INITIAL_CONNECTION, type ConnectionStatus } from './connectionState';
 import { startHealthPoll, type DebounceState } from './healthPoll';
@@ -72,6 +73,13 @@ interface HealthContextValue {
   connection: ConnectionStatus;
   /** `Date.now()` when the warehouse entered `resuming`; null otherwise. */
   warehouseResumingSince: number | null;
+  /**
+   * The actor the last TRUSTED probe observed (lib/healthTrust): null until
+   * the first one. An unreachable or thrown probe never changes it; the
+   * object is replaced only when the key changes. The shell's actor boundary
+   * keys on this, never on `health.actor_cache_key`.
+   */
+  actorIdentity: ActorIdentity | null;
 }
 
 const HealthContext = createContext<HealthContextValue | null>(null);
@@ -133,6 +141,7 @@ export function HealthProvider({
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [connection, setConnection] = useState<ConnectionStatus>(INITIAL_CONNECTION.status);
   const [warehouseResumingSince, setWarehouseResumingSince] = useState<number | null>(null);
+  const [actorIdentity, setActorIdentity] = useState<ActorIdentity | null>(null);
   // Optional on purpose: isolated mounts (unit tests, stories) have no
   // QueryClientProvider, and `useQueryClient()` would throw there.
   const queryClient = useContext(QueryClientContext);
@@ -186,6 +195,7 @@ export function HealthProvider({
         setUpdateAvailable,
         setConnection,
         setWarehouseResumingSince,
+        setActorIdentity,
       }),
     [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs, debounceUpMs, queryClient],
   );
@@ -212,8 +222,9 @@ export function HealthProvider({
       updateAvailable,
       connection,
       warehouseResumingSince,
+      actorIdentity,
     }),
-    [health, probeMs, fetchedAt, updateAvailable, connection, warehouseResumingSince],
+    [health, probeMs, fetchedAt, updateAvailable, connection, warehouseResumingSince, actorIdentity],
   );
 
   return <HealthContext.Provider value={value}>{children}</HealthContext.Provider>;
