@@ -290,7 +290,7 @@ test.describe('legible metadata and a ringed palette cursor (a11y-01)', () => {
       const input = palette.locator('.cmdk__input');
       const placeholder = await input.evaluate((el) => getComputedStyle(el, '::placeholder').color);
       expect(placeholder).toBe(text3);
-      const panel = await renderedColors(palette);
+      const panel = await renderedColors(palette.locator('.cmdk__panel'));
       const ratio = contrastRatio(parseRgb(placeholder), panel.bg);
       expect(ratio, `placeholder ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
     });
@@ -312,7 +312,7 @@ test.describe('legible metadata and a ringed palette cursor (a11y-01)', () => {
     expect(ring.style).toBe('solid');
     expect(ring.width).toBe(await tokenValue(row, '--focus-ring-width'));
     expect(ring.color).toBe(await asComputedRgb(page, ring.token));
-    const panel = await renderedColors(palette);
+    const panel = await renderedColors(palette.locator('.cmdk__panel'));
     expect(contrastRatio(parseRgb(ring.color), panel.bg)).toBeGreaterThanOrEqual(3);
   });
 });

@@ -9,12 +9,10 @@ import { Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
-import { api } from '../lib/api';
+import { homeQueries } from '../lib/homeQueries';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import { queryKeys } from '../lib/queryKeys';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { AsyncStatus } from '../components/ui/AsyncState';
 import { useApp } from '../components/AppContext';
-import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { signedPct } from '../lib/formatters';
 import { parseBackendTimestamp } from '../lib/time';
@@ -27,15 +25,17 @@ import './home.css';
 /** Home's one primary action: the ranked queue the answer band previews. */
 export const HOME_PRIMARY_CTA = { label: "Review today's top leads", href: '/lead-queue' } as const;
 
-export const HOME_PORTFOLIO_PREVIEW_CRITERIA = { marketing_eligibility: 'Any' } as const;
+// Home's hero reads have one definition, shared with the boot-time route
+// prefetch (lib/routeDataPrefetch.ts), so the two can never drift.
+export { HOME_PORTFOLIO_PREVIEW_CRITERIA } from '../lib/homeQueries';
 export { APPROVAL_QUEUE_STATE_LABEL } from './home.approval-banner';
 
 export function requestHomePortfolioPreview(signal?: AbortSignal) {
-  return api.portfolioPreview(HOME_PORTFOLIO_PREVIEW_CRITERIA, signal);
+  return homeQueries.homePreview.fetch(signal);
 }
 
 export function requestHomeSummary(signal?: AbortSignal) {
-  return api.homeSummary(signal);
+  return homeQueries.homeSummary.fetch(signal);
 }
 
 /** Format a signed percent-delta for the KPI delta slot. `null` → undefined
@@ -69,32 +69,11 @@ export default function Home() {
   // so normal loading is visually distinct from a genuinely unknown value.
   const { lender, canAccessAdmin } = useApp();
   const [mapSelection, setMapSelection] = useMapSelectionParams();
-  const healthCtx = useOptionalHealth();
-  // True when the shared health poll has confirmed warehouse / lakebase is
-  // down: a real outage (a routine serverless resume reports `resuming`, not
-  // `down`, and never reaches this). While that's the case we keep a calm
-  // callout instead of falling into a contradictory red error: the
-  // system-wide DegradedBanner already explains the situation, and an outage
-  // can outlast the per-tile retry budget (30 s). User feedback 2026-04-25:
-  // showing both a "reconnecting" banner AND a "couldn't load" red tile makes
-  // the app look broken.
-  const warehouseDown =
-    healthCtx?.health?.dependencies?.warehouse === 'down' ||
-    healthCtx?.health?.dependencies?.lakebase === 'down';
-  const {
-    data: preview,
-    warmingUp: previewWarming,
-    error: previewErrorObj,
-    manualRetry: retryPreview,
-  } = useWarmingUpRetry<PortfolioPreview>(
+  const previewQuery = useWarmingUpRetry<PortfolioPreview>(
     requestHomePortfolioPreview,
-    { queryKey: queryKeys.homePreview() },
+    { queryKey: homeQueries.homePreview.queryKey() },
   );
-  const previewError = previewErrorObj
-    ? previewErrorObj instanceof Error
-      ? previewErrorObj.message
-      : "Couldn't load portfolio KPIs."
-    : null;
+  const { data: preview, warmingUp: previewWarming, error: previewError } = previewQuery;
 
   // S4 "since your last login" summary: additive fetch — the KPI row above
   // owns the degraded-state story, so a warming/erroring summary simply
@@ -104,7 +83,7 @@ export default function Home() {
     warmingUp: summaryWarming,
     error: summaryError,
   } = useWarmingUpRetry<HomeSummary>(requestHomeSummary, {
-    queryKey: queryKeys.homeSummary(),
+    queryKey: homeQueries.homeSummary.queryKey(),
   });
   const summaryLoading = !summary && !summaryError && !summaryWarming;
 
@@ -159,50 +138,13 @@ export default function Home() {
       {/* One grid wraps the whole stack so every card sits --gap-grid from
           its neighbour (2026-09-21 audit visual-06; home.css). */}
       <div className="home-stack">
-        {previewWarming && (
-          <WarmingUpBlock
-            state={previewWarming}
-            title="Portfolio KPIs loading"
-            compact
-          />
-        )}
-        {/* When the health poll confirms the warehouse / lakebase is down,
-            we keep the warming-up copy visible instead of dropping into
-            the red error. The system-wide DegradedBanner already says
-            "reconnecting"; a contradictory red tile underneath made the
-            app look broken when it was correctly cold-starting. The
-            tile recovers on its own: on the down -> up edge HealthProvider
-            refetches every mounted query that failed because of the
-            recovered dependency (components/healthRecovery.ts), on every
-            route, so Home no longer carries a private recovery effect. */}
-        {previewError && !previewWarming && warehouseDown && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="status-callout"
-          >
-            {/* A true outage, so no duration is promised (delivery-01). */}
-            Portfolio KPIs are waiting on the analytics warehouse, which is
-            not answering right now. They load on their own as soon as it is
-            back.
-          </div>
-        )}
-        {previewError && !previewWarming && !warehouseDown && (
-          <div
-            role="alert"
-            className="status-callout status-callout--danger"
-          >
-            <span>Couldn&apos;t load portfolio KPIs: {previewError}</span>
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={retryPreview}
-              aria-label="Retry loading portfolio KPIs"
-            >
-              Retry
-            </button>
-          </div>
-        )}
+        {/* The shared surface (audit states-04 / states-03 a): the warming
+            block, then, under a DegradedBanner that already names this
+            outage, a calm "reloads when … reconnects" status (true by
+            construction: HealthProvider refetches exactly these failures on
+            recovery, healthRecovery.ts), and any other failure in red with
+            the buyer-safe copy. A true outage promises no duration. */}
+        <AsyncStatus query={previewQuery} subject="Portfolio KPIs" compact />
         {isDayZero && (
           <HomeDayZeroStatus canAccessAdmin={canAccessAdmin} />
         )}

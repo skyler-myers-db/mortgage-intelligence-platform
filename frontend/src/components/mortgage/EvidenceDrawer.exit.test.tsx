@@ -17,8 +17,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EvidenceDrawer } from './EvidenceDrawer';
+import { LazyEvidenceDrawerBody } from './evidenceDrawerBodyLoader';
 import type { DrawerSource } from '../AppContext';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -56,6 +57,14 @@ async function settle(): Promise<void> {
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   });
 }
+
+
+// The drawer's panels are a lazy chunk (audit bundle-04): load it once up
+// front, so every render below mounts the body synchronously, exactly as a
+// chip hover or the idle preload leaves it in the app.
+beforeAll(async () => {
+  await LazyEvidenceDrawerBody.preload();
+}, 60_000);
 
 describe('EvidenceDrawer exit', () => {
   let root: Root;

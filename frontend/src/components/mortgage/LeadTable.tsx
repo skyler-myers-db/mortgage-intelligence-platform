@@ -111,6 +111,7 @@ export function LeadTable({
   expandedId: controlledExpanded,
   onExpandedChange,
   restoreScroll = false,
+  headerStatus,
 }: LeadTableProps) {
   'use no memo';
 
@@ -397,7 +398,17 @@ export function LeadTable({
             <Icon name="user" size={14} />
           </div>
           <div>
-            <SurfaceTitle>Ranked borrowers</SurfaceTitle>
+            {/* The view's freshness sits beside the title, not in the action
+                row: there it squeezed the keyboard hint onto a second line
+                and pushed the 480px scroller past the fold at 1440x900. */}
+            {headerStatus ? (
+              <div className="inline-flex">
+                <SurfaceTitle>Ranked borrowers</SurfaceTitle>
+                {headerStatus}
+              </div>
+            ) : (
+              <SurfaceTitle>Ranked borrowers</SurfaceTitle>
+            )}
             <div className="muted fs-12">
               {/* Keycaps are `<kbd>` (prototype-parity P2); the header's
                   "Keyboard shortcuts" button and `?` list every key. */}

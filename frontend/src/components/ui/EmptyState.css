@@ -1,0 +1,49 @@
+/*
+ * EmptyState (audit 2026-09-21 states-v2). Declared prototype extension:
+ * design_files/index.html defines no empty-state pattern, so `.empty` follows
+ * the app's `.genie-empty` anatomy (06-genie-chat.css) in the prototype's
+ * token vocabulary. Colocated with the lazy component: never part of the
+ * initial stylesheet (design-system/components.css does not import it).
+ */
+.empty {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  margin-bottom: var(--gap-grid);
+  padding: var(--sp-4);
+  border: 1px dashed var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+.empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  flex: 0 0 auto;
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.empty__body {
+  min-width: 0;
+}
+.empty__title {
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+.empty__copy {
+  margin-top: var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
+.empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}

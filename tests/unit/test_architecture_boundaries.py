@@ -66,6 +66,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/genie/message/progress"): "tests/unit/test_genie_async_flow.py",
     ("POST", "/api/genie/message/complete"): "tests/unit/test_genie_async_flow.py",
     ("POST", "/api/genie/message/status"): "tests/unit/test_genie_completion_jobs.py",
+    ("POST", "/api/genie/message/cancel"): "tests/unit/test_genie_cancel.py",
     ("POST", "/api/genie/start"): "tests/unit/test_api_routes.py",
     ("GET", "/api/genie/sessions"): "tests/unit/test_genie_history_api.py",
     (
@@ -81,6 +82,8 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/growth-agent/monitors"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/agent/run"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/agent/compose"): "tests/unit/test_growth_agent_api.py",
+    ("POST", "/api/growth-agent/agent/plan/execute"): "tests/unit/test_growth_agent_plan_execute.py",
+    ("GET", "/api/growth-agent/runs"): "tests/unit/test_growth_agent_run_history.py",
     ("POST", "/api/growth-agent/custom/run"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/monitors/run-due"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/monitors/run-due-all"): "tests/unit/test_growth_agent_api.py",
@@ -127,6 +130,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("PUT", "/api/workspace/drafts/{borrower_id}"): "tests/unit/test_workspace_api.py",
     ("DELETE", "/api/workspace/leads/{borrower_id}"): "tests/unit/test_workspace_api.py",
     ("PUT", "/api/workspace/leads/{borrower_id}"): "tests/unit/test_workspace_api.py",
+    ("GET", "/api/workspace/queue-version"): "tests/unit/test_workspace_queue_version.py",
 }
 
 

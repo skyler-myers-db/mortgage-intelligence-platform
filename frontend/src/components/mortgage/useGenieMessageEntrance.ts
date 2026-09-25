@@ -42,7 +42,9 @@ export interface GenieMessageEntrance {
  *     open, or /ask-genie shows its Ask tab);
  *   - the pending question bubble of a NEW in-flight turn, keyed by its
  *     generation, never a resumed one;
- *   - a Stopped note (never an Interrupted one);
+ *   - a Stopped note (never an Interrupted one, and never the server's
+ *     confirmed copy that replaces a Stopped note already seen: same
+ *     `stopId`, audit `genie-03`);
  *   - a bubble the surface appends itself (`mark`: the panel's governed
  *     action result).
  * A History restore or a hydrated transcript fires none of these, so it
@@ -71,7 +73,11 @@ export function useGenieMessageEntrance({
   }
   if (notes !== seenNotes) {
     setSeenNotes(notes);
-    const stopped = notes.filter((note) => note.kind === 'stopped' && !seenNotes.includes(note));
+    const seenStops = new Set(seenNotes.map((note) => note.stopId));
+    const stopped = notes.filter(
+      (note) =>
+        note.kind === 'stopped' && !seenNotes.includes(note) && (note.stopId === undefined || !seenStops.has(note.stopId)),
+    );
     if (stopped.length > 0 && isVisible() && !prefersReducedMotion()) setEntering([...entering, ...stopped]);
   }
 

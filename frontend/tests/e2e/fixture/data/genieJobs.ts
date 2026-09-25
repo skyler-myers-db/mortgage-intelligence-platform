@@ -10,15 +10,21 @@
  * rail shows is the one the test put on the wire. The answer is the shared
  * synthetic `genieAnswerFixture` (read-only import): no borrower ids, names or
  * contact fields, and it never overlays a live turn in the running app.
+ *
+ * Audit genie-03 / genie-01: the script can also answer `/message/cancel`
+ * (an outcome, a delay and a status the test picks, recording every body
+ * the browser sent) and stamp `typical_seconds` on every running status.
  */
 import type { GenieAnswer } from '../../../../src/types';
 import type { GenieLiveProgress } from '../../../../src/lib/apiTypes';
 import type {
+  GenieCancelResult,
   GenieCompletionJobStatus,
   GenieJobStage,
   GenieSubmitResultWithJobs,
 } from '../../../../src/types/genieJobs';
-import type { FixtureRequest, MockApi } from '../mockApi';
+import type { ContractSample } from '../contractSamples';
+import type { FixtureReply, FixtureRequest, MockApi } from '../mockApi';
 import { GENIE_CONVERSATION_ID } from './genie';
 import { GENIE_MESSAGE_ID, GENIE_PROGRESS_TOKEN, genieAnswerFixture, genieProgressFixture } from './genieTurn';
 
@@ -39,6 +45,7 @@ export const GENIE_JOB_STAGE_LABELS: Record<GenieJobStage, string> = {
   done: 'Governed answer recorded',
   failed: 'Genie could not complete this question',
   expired: 'This Genie answer expired before it was collected',
+  cancelled: 'Stopped at your request before the answer was recorded',
 };
 
 /** The job status as it travels: the app's GenieCompletionJobStatus, with the
@@ -46,27 +53,43 @@ export const GENIE_JOB_STAGE_LABELS: Record<GenieJobStage, string> = {
 export type GenieJobStatusBody = Omit<GenieCompletionJobStatus, 'response'> & { response: GenieAnswer | null };
 
 export const GENIE_JOB_EXPIRED_HINT = 'This answer is no longer available here. Check History, or ask the question again.';
+export const GENIE_JOB_CANCELLED_HINT = 'You stopped this question before its answer was recorded. Ask it again to get an answer.';
 
 /** One step of a scripted job: a running stage (optionally with sweep
  *  parts), or a terminal outcome. */
 export type GenieJobStep =
   | { stage: GenieJobStage; parts?: readonly [done: number, planned: number] }
   | 'succeeded'
-  | 'expired';
+  | 'expired'
+  | 'cancelled';
 
-export function genieJobStatusFixture(step: GenieJobStep, answer: GenieAnswer = genieAnswerFixture()): GenieJobStatusBody {
+export function genieJobStatusFixture(
+  step: GenieJobStep,
+  answer: GenieAnswer = genieAnswerFixture(),
+  typicalSeconds?: number,
+): GenieJobStatusBody {
   if (step === 'succeeded') {
     return { ...base('succeeded', 'done'), terminal: true, response: answer };
   }
   if (step === 'expired') {
     return { ...base('expired', 'expired'), terminal: true, failed: true, error_hint: GENIE_JOB_EXPIRED_HINT };
   }
+  if (step === 'cancelled') {
+    return { ...base('cancelled', 'cancelled'), terminal: true, error_hint: GENIE_JOB_CANCELLED_HINT };
+  }
   const status = step.stage === 'queued' ? 'queued' : 'running';
   return {
     ...base(status, step.stage),
     parts_done: step.parts?.[0] ?? null,
     parts_planned: step.parts?.[1] ?? null,
+    ...(typicalSeconds === undefined ? {} : { typical_seconds: typicalSeconds }),
   };
+}
+
+/** The server's answer to a Stop (backend GenieCancelResponse). */
+export function genieCancelFixture(outcome: GenieCancelResult['outcome']): GenieCancelResult {
+  const status = outcome === 'cancelled' ? 'running' : outcome === 'recorded' ? 'succeeded' : 'failed';
+  return { kind: 'genie_completion_cancel', job_id: GENIE_JOB_ID, outcome, status };
 }
 
 function base(status: GenieCompletionJobStatus['status'], stage: GenieJobStage): GenieJobStatusBody {
@@ -105,6 +128,11 @@ export interface GenieJobScript {
   steps?: readonly GenieJobStep[];
   /** Hold every complete call until `releaseComplete()`. */
   holdComplete?: boolean;
+  /** Stamped on every running status (audit genie-01 duration hint). */
+  typicalSeconds?: number;
+  /** How `/message/cancel` answers (audit genie-03): its outcome, a real
+   *  delay before the reply, and the HTTP status (default 200). */
+  cancel?: { outcome: GenieCancelResult['outcome']; delayMs?: number; status?: number };
 }
 
 export interface GenieJobController {
@@ -112,9 +140,11 @@ export interface GenieJobController {
   readonly progressPolls: number;
   readonly completes: number;
   readonly statusPolls: number;
+  readonly cancels: number;
   /** Request bodies the browser really sent. */
   readonly completeBodies: readonly unknown[];
   readonly statusBodies: readonly unknown[];
+  readonly cancelBodies: readonly unknown[];
   /** The step the next status poll reports. */
   readonly step: GenieJobStep;
   /** Advance the job one scripted step (the last one repeats). */
@@ -146,10 +176,11 @@ export function registerGenieJob(mockApi: MockApi, script: GenieJobScript = {}):
   let index = 0;
   const completeGate = script.holdComplete ? gate() : null;
   let statusGate: Promise<void> = Promise.resolve();
-  const counts = { submits: 0, progressPolls: 0, completes: 0, statusPolls: 0 };
+  const counts = { submits: 0, progressPolls: 0, completes: 0, statusPolls: 0, cancels: 0 };
   const completeBodies: unknown[] = [];
   const statusBodies: unknown[] = [];
-  const current = () => genieJobStatusFixture(steps[index], answer);
+  const cancelBodies: unknown[] = [];
+  const current = () => genieJobStatusFixture(steps[index], answer, script.typicalSeconds);
 
   mockApi.register<GenieSubmitResultWithJobs>('POST', '/api/genie/message/submit', () => {
     counts.submits += 1;
@@ -171,6 +202,17 @@ export function registerGenieJob(mockApi: MockApi, script: GenieJobScript = {}):
     await statusGate;
     return { body: current() };
   });
+  mockApi.register<GenieCancelResult | { detail: string }>('POST', '/api/genie/message/cancel', async (request: FixtureRequest) => {
+    counts.cancels += 1;
+    cancelBodies.push(request.body);
+    const cancel = script.cancel ?? { outcome: 'cancelled' as const };
+    if (cancel.delayMs) await new Promise((resolve) => setTimeout(resolve, cancel.delayMs));
+    const reply: FixtureReply<GenieCancelResult | { detail: string }> =
+      (cancel.status ?? 200) === 200
+        ? { body: genieCancelFixture(cancel.outcome) }
+        : { status: cancel.status, body: { detail: 'lakebase is temporarily unavailable' } };
+    return reply;
+  });
 
   return {
     get submits() {
@@ -185,8 +227,12 @@ export function registerGenieJob(mockApi: MockApi, script: GenieJobScript = {}):
     get statusPolls() {
       return counts.statusPolls;
     },
+    get cancels() {
+      return counts.cancels;
+    },
     completeBodies,
     statusBodies,
+    cancelBodies,
     get step() {
       return steps[index];
     },
@@ -208,19 +254,9 @@ export function registerGenieJob(mockApi: MockApi, script: GenieJobScript = {}):
 }
 
 /** One exported sample per wire shape, for the fixture contract exporter
- *  (w3-api-contract): `[{source, method, pattern, path, query, status, body}]`. */
-export interface GenieJobContractSample {
-  source: string;
-  method: 'POST';
-  pattern: string;
-  path: string;
-  query: string;
-  status: number;
-  body: unknown;
-}
-
-export function contractSamples(): GenieJobContractSample[] {
-  const sample = (pattern: string, status: number, body: unknown): GenieJobContractSample => ({
+ *  (w3-api-contract). */
+export function contractSamples(): ContractSample[] {
+  const sample = (pattern: string, status: number, body: unknown): ContractSample => ({
     source: 'data/genieJobs.ts',
     method: 'POST',
     pattern,
@@ -245,5 +281,11 @@ export function contractSamples(): GenieJobContractSample[] {
     ...running.map((step) => sample('/api/genie/message/status', 200, genieJobStatusFixture(step))),
     sample('/api/genie/message/status', 200, genieJobStatusFixture('succeeded')),
     sample('/api/genie/message/status', 200, genieJobStatusFixture('expired')),
+    sample('/api/genie/message/status', 200, genieJobStatusFixture('cancelled')),
+    sample('/api/genie/message/status', 200, genieJobStatusFixture({ stage: 'researching', parts: [3, 7] }, undefined, 170)),
+    sample('/api/genie/message/complete', 202, genieJobStatusFixture({ stage: 'queued' }, undefined, 42)),
+    ...(['cancelled', 'recorded', 'ended'] as const).map((outcome) =>
+      sample('/api/genie/message/cancel', 200, genieCancelFixture(outcome)),
+    ),
   ];
 }

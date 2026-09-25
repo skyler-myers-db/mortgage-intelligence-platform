@@ -18,6 +18,7 @@ import {
   genieJobPartsLabel,
   genieProgressLabel,
   genieStatusLabel,
+  genieTypicalDurationHint,
 } from './GenieProgress';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -338,5 +339,36 @@ describe('GenieProgress: the completion job speaks with the server stage (genie-
 
     expect(container.querySelector('.genie-progress__label')!.textContent).toBe('Verifying the answer against its rows');
     expect(genieJobPartsLabel(verifying)).toBeNull();
+  });
+
+  it('appends the typical duration after the parts, inside the label span, and never to the announced label', () => {
+    const typical: GenieTurnProgress = { ...RESEARCHING, job: { ...RESEARCHING.job!, typical_seconds: 170 } };
+    act(() => root.render(<GenieProgress progress={typical} startedAt={Date.now()} />));
+
+    expect(container.querySelector('.genie-progress__label')!.textContent).toBe(
+      'Running governed sub-analyses · 3 of 7 sub-analyses finished · usually about 3 min',
+    );
+    expect(genieProgressLabel(typical)).toBe('Running governed sub-analyses');
+    expect(container.querySelectorAll('.genie-progress__label')).toHaveLength(1);
+  });
+
+  it.each([
+    [42, 'usually under a minute'],
+    [59, 'usually under a minute'],
+    [60, 'usually about 1 min'],
+    [89, 'usually about 1 min'],
+    [90, 'usually about 2 min'],
+    [170, 'usually about 3 min'],
+  ])('rounds %s s to "%s"', (seconds, hint) => {
+    expect(genieTypicalDurationHint({ ...RESEARCHING, job: { ...RESEARCHING.job!, typical_seconds: seconds } })).toBe(hint);
+  });
+
+  it('shows no hint when the field is absent or null', () => {
+    for (const job of [RESEARCHING.job!, { ...RESEARCHING.job!, typical_seconds: null }]) {
+      act(() => root.render(<GenieProgress progress={{ ...RESEARCHING, job }} />));
+      expect(container.querySelector('.genie-progress__label')!.textContent).not.toContain('usually');
+      expect(genieTypicalDurationHint({ ...RESEARCHING, job })).toBeNull();
+    }
+    expect(genieTypicalDurationHint(LIVE_TERMINAL)).toBeNull();
   });
 });

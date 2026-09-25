@@ -19,7 +19,8 @@ import { isWithheldGenieSource } from './genieRefusal';
 import { isTrustedGenieSource, usePinnedInsights } from '../../lib/pinnedInsights';
 import { buildFallbackFollowUps, buildPinFromAnswer } from '../../lib/genieAnswerText';
 import { humanizeKey, pickPlan } from './GenieAnswer.logic';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useModalDialog } from '../../hooks/useModalDialog';
+import { useExitRetained } from '../../hooks/useExitRetained';
 import { answerCohortFromActions } from '../../lib/genieCellLinks';
 import { GOVERNED_ACTION_SOURCE } from '../../lib/genieTurnOutcome';
 import type { GenieAnswerExportBase } from './GenieAnswer.exportTarget';
@@ -95,7 +96,7 @@ export function GenieAnswer({
   const workspaceHost = useWorkspaceHost();
   const { pins, pin, unpin } = usePinnedInsights();
   const [showProof, setShowProof] = useState(false);
-  const proofDrawerRef = useRef<HTMLElement | null>(null);
+  const proofDrawerRef = useRef<HTMLDialogElement | null>(null);
   const proofCloseRef = useRef<HTMLButtonElement | null>(null);
   const rows = Array.isArray(table_rows) ? table_rows : [];
   // The answer's own filters, so a row link opens the population the row
@@ -215,12 +216,23 @@ export function GenieAnswer({
     </div>
   ) : null;
 
-  useFocusTrap({
-    open: showProof,
-    containerRef: proofDrawerRef,
+  // The proof drawer is a native modal <dialog> (audit stack-05 / a11y-07):
+  // useModalDialog opens it with showModal(), so the answer and the page
+  // behind it are inert, and gives focus back to "Show proof" on close.
+  const proofOpen = showProof && Boolean(payload.proof);
+  useModalDialog({
+    open: proofOpen,
+    dialogRef: proofDrawerRef,
     initialFocusRef: proofCloseRef,
-    onClose: () => setShowProof(false),
+    onDismiss: () => setShowProof(false),
+    backdrop: 'outside',
   });
+  // The proof drawer plays the .drawer exit instead of unmounting mid-slide
+  // (audit 2026-09-21 motion-01 remainder): close() runs at exit start and
+  // the closed <dialog> stays rendered, inert, until its transition ends.
+  // Open, the focus trap and focus return still follow `showProof`; only the
+  // rendering is retained.
+  const proofMounted = useExitRetained(proofOpen ? true : null, proofDrawerRef) === true;
 
   const sourceDisclosure = isGovernedActionResult
     ? {
@@ -338,50 +350,45 @@ export function GenieAnswer({
       {isTrustedGenieSource(payload.source) && !isGovernedActionResult && (
         <GenieAnswerToolbar payload={payload} onStatus={onAnnounce} />
       )}
-      {payload.proof && showProof && typeof document !== 'undefined' && createPortal(
-        <>
-          <div
-            className="drawer-scrim is-open"
-            onClick={() => setShowProof(false)}
-            aria-hidden="true"
-          />
-          <aside
-            ref={proofDrawerRef}
-            className="drawer genie-proof-drawer is-open"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Genie answer proof"
-          >
-            <div className="drawer__hdr">
-              <div className="drawer__source-icon">
-                <Icon name="audit" size={16} />
-              </div>
-              <div>
-                <div className="drawer__title">Answer proof</div>
-                <div className="drawer__subtitle">{payload.question_hash ?? payload.message_id ?? 'Genie result'}</div>
-              </div>
-              <button
-                ref={proofCloseRef}
-                className="drawer__close"
-                onClick={() => setShowProof(false)}
-                aria-label="Close Genie proof"
-                type="button"
-              >
-                <Icon name="close" size={14} />
-              </button>
+      {payload.proof && proofMounted && typeof document !== 'undefined' && createPortal(
+        <dialog
+          ref={proofDrawerRef}
+          className={`drawer genie-proof-drawer${proofOpen ? ' is-open' : ''}`}
+          aria-label="Genie answer proof"
+          aria-hidden={!proofOpen || undefined}
+          // The closing drawer stays rendered while it slides out (motion-01);
+          // inert keeps that copy out of the tab order and the pointer path.
+          inert={!proofOpen}
+        >
+          <div className="drawer__hdr">
+            <div className="drawer__source-icon">
+              <Icon name="audit" size={16} />
             </div>
-            <div className="drawer__body">
-              <GenieProofPanel
-                payload={payload}
-                workspaceHost={workspaceHost}
-                onOpenSource={(source) => {
-                  setShowProof(false);
-                  setDrawer(source);
-                }}
-              />
+            <div>
+              <div className="drawer__title">Answer proof</div>
+              <div className="drawer__subtitle">{payload.question_hash ?? payload.message_id ?? 'Genie result'}</div>
             </div>
-          </aside>
-        </>,
+            <button
+              ref={proofCloseRef}
+              className="drawer__close"
+              onClick={() => setShowProof(false)}
+              aria-label="Close Genie proof"
+              type="button"
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+          <div className="drawer__body">
+            <GenieProofPanel
+              payload={payload}
+              workspaceHost={workspaceHost}
+              onOpenSource={(source) => {
+                setShowProof(false);
+                setDrawer(source);
+              }}
+            />
+          </div>
+        </dialog>,
         document.body,
       )}
       {onFollowUp && effectiveFollowUps.length > 0 && (

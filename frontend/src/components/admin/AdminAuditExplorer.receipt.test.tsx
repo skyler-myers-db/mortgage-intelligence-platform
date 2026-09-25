@@ -31,8 +31,12 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ canAccessAdmin: true, setDrawer: vi.fn(), showEvidence: true, showConfidence: true }),
 }));
 
-import { isDecisionReceiptEvent } from '../mortgage/DecisionReceipt.copy';
-import { AuditEventTableRow } from './AdminAuditExplorer.row';
+import {
+  DECISION_RECEIPT_ACTIONS,
+  DECISION_RECEIPT_EVENT_TYPES,
+  isDecisionReceiptEvent,
+} from '../mortgage/DecisionReceipt.copy';
+import { AuditEventTableRow, DECISION_RECEIPT_ACTION_NAMES, DECISION_RECEIPT_TYPES } from './AdminAuditExplorer.row';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
@@ -158,5 +162,12 @@ describe('explorer decision receipts', () => {
     expect(isDecisionReceiptEvent({ event_type: 'VIEW_LEADS', action: 'VIEW_LEADS' })).toBe(false);
     expect(isDecisionReceiptEvent({ event_type: 'APPROVE_OUTREACH', action: 'APPROVE_OUTREACH' })).toBe(false);
     expect(isDecisionReceiptEvent({})).toBe(false);
+  });
+
+  // The row's local mirror (so it can name a failed receipt load without
+  // importing the receipt module) stays equal to the receipt's own lists.
+  it('keeps the row\'s decision-type mirror equal to DecisionReceipt.copy', () => {
+    expect([...DECISION_RECEIPT_TYPES].sort()).toEqual([...DECISION_RECEIPT_EVENT_TYPES].sort());
+    expect([...DECISION_RECEIPT_ACTION_NAMES].sort()).toEqual([...DECISION_RECEIPT_ACTIONS].sort());
   });
 });

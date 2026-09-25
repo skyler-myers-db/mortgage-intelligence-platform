@@ -1,5 +1,5 @@
 import { Fragment, useId, useRef, useSyncExternalStore } from 'react';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import {
   KEYMAP_SCOPE_LABELS,
   chordKeycaps,
@@ -23,7 +23,10 @@ import './ShortcutOverlay.css';
  *
  * `.cmdk` BEM (the command palette's modal surface and rows) plus the global
  * `kbd` keycap; the static-row modifier and the keycap cluster live in the
- * colocated ShortcutOverlay.css (shipped with this lazy chunk).
+ * colocated ShortcutOverlay.css (shipped with this lazy chunk). Like the
+ * palette it is a native modal <dialog class="cmdk"> (useModalDialog): the
+ * full-viewport layer is its own backdrop, and the panel keeps the
+ * `shortcut-sheet` test id.
  */
 export interface ShortcutOverlayProps {
   onClose: () => void;
@@ -60,29 +63,23 @@ function sheetEntries(): Map<KeymapScope, SheetEntry[]> {
 export function ShortcutOverlay({ onClose }: ShortcutOverlayProps) {
   const titleId = useId();
   const noteId = useId();
-  const panelRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [singleKeysOn] = useSingleKeyShortcuts();
   // Re-render when a page registers or drops a binding while the sheet is open.
   useSyncExternalStore(subscribeKeyBindings, keyBindingsVersion, keyBindingsVersion);
-  useFocusTrap({ open: true, containerRef: panelRef, initialFocusRef: closeRef, onClose });
+  useModalDialog({ open: true, dialogRef, initialFocusRef: closeRef, onDismiss: onClose, backdrop: 'self' });
 
   const grouped = sheetEntries();
   return (
-    <div
+    <dialog
+      ref={dialogRef}
       className="cmdk"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
+      aria-labelledby={titleId}
+      aria-describedby={singleKeysOn ? undefined : noteId}
     >
       <div
-        ref={panelRef}
         className="cmdk__panel cmdk__panel--sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={singleKeysOn ? undefined : noteId}
         tabIndex={-1}
         data-testid="shortcut-sheet"
       >
@@ -146,6 +143,6 @@ export function ShortcutOverlay({ onClose }: ShortcutOverlayProps) {
           <span>Shortcuts act only where they are listed; typing in a field never triggers one.</span>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

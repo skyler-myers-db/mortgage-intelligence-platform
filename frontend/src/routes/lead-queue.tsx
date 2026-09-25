@@ -5,12 +5,14 @@ import { api } from '../lib/api';
 import { leadsQuery, type LeadsRequest } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
+import { isAbortError } from '../lib/apiTransport';
 import type { SalesTeamMember } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable, type LeadExportContext } from '../components/mortgage/LeadTable';
-import { PropertyLookupPanel } from '../components/mortgage/PropertyLookupPanel';
 import { Chip } from '../components/Primitives';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { AsyncState } from '../components/ui/AsyncState';
+import { DescribedErrorBody } from '../components/ui/DescribedError';
+import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { useApp } from '../components/AppContext';
@@ -19,12 +21,14 @@ import { queueFilterLabel, usePublishQueueContext } from '../lib/queueContextPub
 import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
+import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
 import { copyLink } from '../lib/copyLink';
 import {
   hasLeadQueueFilters,
   leadQueueActiveFilterChips,
+  leadQueueFilterParams,
   moreFiltersActiveCount,
   searchParamsCleared,
   searchParamsWithoutFilter,
@@ -47,7 +51,6 @@ import {
   SEGMENT_OPTION_TO_CODE,
   approvalFilterDisplayValue,
   buildLeadQueueExportFilters,
-  formatLeadQueueLoadError,
   isAssignedToMe,
   isNoOpPortfolioValue,
   leadQueueShareParams,
@@ -101,6 +104,8 @@ function selectCountyZips(payload: Awaited<ReturnType<typeof api.zipRollups>>): 
 }
 
 const RULES_VERSION_STALE_MS = 5 * 60_000;
+const EMPTY_STATE = lazyModule(() => import('../components/mortgage/LeadQueueEmptyState'));
+const PROPERTY_LOOKUP = lazyModule(() => import('../components/mortgage/PropertyLookupPanel'));
 const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters';
 
 export default function LeadQueue() {
@@ -198,7 +203,7 @@ export default function LeadQueue() {
   const actorIsListedLo = Boolean(actorEmail) && salesTeam.some(
     (member) => member.email.toLowerCase() === actorEmail?.toLowerCase(),
   );
-  const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
+  const salesTeamError = salesTeamQuery.error && !isAbortError(salesTeamQuery.error) ? salesTeamQuery.error : null;
   const segmentFilter = segmentFilterDisplayValue(segment, segmentCodes, segmentMode);
   const segmentFilterOptions = optionsWithCurrentValue(SEGMENT_FILTER_OPTIONS, segmentFilter);
   // S8: one removable chip per active segment. Removing a chip rewrites the
@@ -276,25 +281,34 @@ export default function LeadQueue() {
   };
   // The Growth Agent proof is the one input api.leadsPage reads from outside
   // the request (window.location), so its URL fingerprint rides in the key.
-  const leadsPageQuery = leadsQuery('lead-queue', leadsRequest, [growthAgentProofKey]);
+  // An unresolved "Assigned to me" sends no assignee, so without a sentinel
+  // it would share the UNFILTERED queue's key and paint its cached rows under
+  // the Me preset; the sentinel (only then, so every other key stays
+  // byte-identical), no placeholder carry-over and a payload-less queue
+  // close that (w3-queue-place review).
+  const leadsPageQuery = leadsQuery(
+    'lead-queue',
+    leadsRequest,
+    meUnresolved ? [growthAgentProofKey, 'assigned_to=me:unresolved'] : [growthAgentProofKey],
+  );
+  const leadsState = useWarmingUpRetry<LeadsPage>(
+    leadsPageQuery.fetcher,
+    { queryKey: leadsPageQuery.queryKey, keepPreviousData: !meUnresolved, enabled: !meUnresolved },
+  );
+  const leadsQueryState = meUnresolved ? { ...leadsState, data: null } : leadsState;
   const {
     data: leadsData,
     warmingUp,
     error,
-    manualRetry,
     isFetching: leadsFetching,
     isPlaceholderData: leadsPlaceholderData,
-  } = useWarmingUpRetry<LeadsPage>(
-    leadsPageQuery.fetcher,
-    { queryKey: leadsPageQuery.queryKey, keepPreviousData: true, enabled: !meUnresolved },
-  );
-  // Audit states-v1 (2026-09-21): the queue used to mount LeadTable with an
-  // empty array whenever `warmingUp` or `error` was set, so a cold start or a
-  // failed load read as "Showing 0 ranked borrowers" — a false zero in an
-  // evidence-first product. The table now mounts ONLY when a payload exists.
-  // TanStack keeps `failureReason` after the final retry, so `warmingUp`
-  // outlives the retry loop; `error` is set only once it has given up. From
-  // then on the honest surface is the error + Retry, not "retrying…".
+  } = leadsQueryState;
+  // Audit states-v1 / states-v2 (2026-09-21): LeadTable mounts ONLY for a
+  // payload with rows. Warming, a load error and a measured zero each have
+  // their own surface (AsyncState below), so no "Showing 0 ranked
+  // borrowers" chrome ever reads as data. TanStack keeps `failureReason`
+  // after the final retry, so `warmingUp` outlives the retry loop; `error` is
+  // set only once it has given up.
   const warming = error === null ? warmingUp : null;
   const hasQueue = leadsData !== null;
   const queueRefetchWarming = hasQueue && warming !== null;
@@ -302,7 +316,22 @@ export default function LeadQueue() {
   const queueStatusLabel = queueRefetchWarming
     ? `${warming.label} (${warming.attempt}/${warming.maxAttempts})`
     : 'updating';
-  const loadError = error ? formatLeadQueueLoadError(error) : null;
+  // The measured zero's EmptyState (and its Ask Genie template) loads only
+  // when a zero is on screen: none of it rides the natural load.
+  const measuredZero = hasQueue && !leadsPlaceholderData && error === null && warming === null
+    && leadsData.leads.length === 0;
+  const emptyModule = useLazyModule(EMPTY_STATE, measuredZero).module;
+  // The below-the-fold address lookup loads right after the queue, off its
+  // natural-load closure (the Console's copy is the primary entry).
+  const lookupModule = useLazyModule(PROPERTY_LOOKUP, true).module;
+  // "Fetched 3m ago · Refresh" / "Queue updated · Refresh" (audit states-09):
+  // an audit-free version poll; Refresh is the one explicit re-read.
+  const freshness = useLeadQueueFreshness({
+    enabled: hasQueue && !leadsPlaceholderData && !meUnresolved,
+    dataUpdatedAt: leadsQueryState.dataUpdatedAt,
+    isFetching: leadsFetching,
+    onRefresh: leadsState.manualRetry,
+  });
 
   // Resolve `?county=FFFFF` → set of ZIPs via /api/geo/zip-rollups for an
   // honest scope chip only. The actual county predicate is server-side in
@@ -665,37 +694,10 @@ export default function LeadQueue() {
           directly above the ranked-borrowers region. */}
       {salesTeamError && (
         <div role="alert" className="status-callout status-callout--warning mb-grid">
-          Sales team unavailable: {salesTeamError} — lead assignment to LOs is degraded until it reconnects.
-        </div>
-      )}
-      {warming && !hasQueue && (
-        <WarmingUpBlock state={warming} title="Ranked borrowers loading" compact />
-      )}
-      {loadError && !warming && (
-        <div
-          role="alert"
-          className="status-callout status-callout--danger"
-        >
-          <span>{loadError.message}</span>
-          {loadError.invalidFilters ? (
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={clearAllFilters}
-              aria-label="Clear invalid lead queue filters"
-            >
-              Clear filters
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={manualRetry}
-              aria-label="Retry loading leads"
-            >
-              Retry
-            </button>
-          )}
+          {/* The buyer-safe vocabulary, never the transport message (audit states-04). */}
+          Sales team unavailable:{' '}
+          <DescribedErrorBody error={salesTeamError} subject="the sales team" />{' '}
+          Lead assignment to LOs is degraded until it reconnects.
         </div>
       )}
       {meWithoutEmail && (
@@ -711,69 +713,86 @@ export default function LeadQueue() {
           </button>
         </div>
       )}
-      {/* The table slot while no payload exists: first load AND warm-up. The
-          DegradedBanner can suppress WarmingUpBlock, so the skeleton — never a
-          zero-count table — is what holds the slot. A load error shows only
-          the alert above. */}
-      {!hasQueue && !loadError && !meWithoutEmail && (
-        <LeadQueueTableSkeleton />
-      )}
-      {countyLoading && hasQueue && !loadError && !warming && (
-        <div className="muted body mb-grid">
-          Resolving county ZIPs…
-        </div>
-      )}
-      {hasQueue && !loadError && !warming && !countyLoading && visibleLeads.length === 0 && (
-        <div className="muted body mb-grid">
-          {countyFilter && countyZips && countyZips.size === 0
-            ? 'No ZIP-level rollup for this county in the current Cotality data coverage.'
-            : segmentChips.length > 1 && segmentMode === 'all'
-              ? '0 borrowers sit in every selected segment — a real intersection result from the live query, not an error. Remove a segment chip to widen the cohort.'
-              : 'No leads match this filter.'}
-        </div>
-      )}
-      {hasQueue && (
-        <div
-          className={`stable-refresh-region stable-refresh-region--table ${queueUpdating ? 'is-updating' : ''}`}
-          aria-busy={queueUpdating}
-          data-status={queueStatusLabel}
+      {/* One surface per state (audit states-04 / states-v2): the skeleton
+          holds the slot through a first load and a warm-up (the banner can
+          suppress the warming block), a failure says what happened in the
+          shared vocabulary, a measured zero says why, and LeadTable mounts
+          only for rows. */}
+      {!meWithoutEmail && (
+        <AsyncState
+          query={leadsQueryState}
+          subject="Ranked borrowers"
+          loading={<LeadQueueTableSkeleton />}
+          // A Growth Agent handoff is never "empty": its cohort proof and
+          // verification status render in LeadTable's status chips, and a
+          // verified cohort whose rows the filters hide must still show them.
+          isEmpty={(page) => page.leads.length === 0 && !page.growthAgentVerification}
+          empty={countyLoading ? (
+            <div className="muted body mb-grid">Resolving county ZIPs…</div>
+          ) : emptyModule && (
+            <emptyModule.LeadQueueEmptyState
+              filterParams={leadQueueFilterParams(searchParams)}
+              countyNoCoverage={Boolean(countyFilter && countyZips && countyZips.size === 0)}
+              intersection={segmentChips.length > 1 && segmentMode === 'all'}
+              onClearFilters={clearAllFilters}
+            />
+          )}
+          onClearFilters={clearAllFilters}
         >
-          <LeadTable
-            leads={visibleLeads}
-            totalMatching={leadsData?.totalMatching ?? null}
-            truncatedAt={leadsData?.truncatedAt ?? null}
-            growthAgentVerification={leadsPlaceholderData
-              ? null
-              : leadsData?.growthAgentVerification ?? null}
-            exportContext={exportContext}
-            salesTeam={salesTeam}
-            view={tableView}
-            onViewChange={(next) => setSearchParams(searchParamsWithLeadTableView(searchParams, next))}
-            fillHeight
-            restoreScroll
-            // A sort (and Reset to rank) is a new history entry; expand and
-            // collapse replace the current one, so Back leaves the queue.
-            sort={place.sort}
-            onSortChange={(next) => setSearchParams(
-              searchParamsWithLeadTablePlace(searchParams, { sort: next, row: expandedRow }),
-            )}
-            expandedId={expandedRow}
-            onExpandedChange={(borrowerId) => {
-              setRequestedRow({ row: borrowerId, against: searchParams });
-              setSearchParams(
-                searchParamsWithLeadTablePlace(searchParams, { row: borrowerId }),
-                { replace: true },
-              );
-            }}
-          />
-        </div>
+          {(page) => (
+            <>
+              {countyLoading && !warming && (
+                <div className="muted body mb-grid">
+                  Resolving county ZIPs…
+                </div>
+              )}
+              <div
+                className={`stable-refresh-region stable-refresh-region--table ${queueUpdating ? 'is-updating' : ''}`}
+                aria-busy={queueUpdating}
+                data-status={queueStatusLabel}
+              >
+                <LeadTable
+                  leads={visibleLeads}
+                  totalMatching={page.totalMatching ?? null}
+                  truncatedAt={page.truncatedAt ?? null}
+                  growthAgentVerification={leadsPlaceholderData
+                    ? null
+                    : page.growthAgentVerification ?? null}
+                  exportContext={exportContext}
+                  salesTeam={salesTeam}
+                  view={tableView}
+                  onViewChange={(next) => setSearchParams(searchParamsWithLeadTableView(searchParams, next))}
+                  fillHeight
+                  restoreScroll
+                  headerStatus={freshness}
+                  // A sort (and Reset to rank) is a new history entry; expand and
+                  // collapse replace the current one, so Back leaves the queue.
+                  sort={place.sort}
+                  onSortChange={(next) => setSearchParams(
+                    searchParamsWithLeadTablePlace(searchParams, { sort: next, row: expandedRow }),
+                  )}
+                  expandedId={expandedRow}
+                  onExpandedChange={(borrowerId) => {
+                    setRequestedRow({ row: borrowerId, against: searchParams });
+                    setSearchParams(
+                      searchParamsWithLeadTablePlace(searchParams, { row: borrowerId }),
+                      { replace: true },
+                    );
+                  }}
+                />
+              </div>
+            </>
+          )}
+        </AsyncState>
       )}
       {/* Address → borrower lookup: a secondary fast path, demoted from the
           hero slot so the operational queue leads. The Console right-rail
           quick action stays the primary lookup entry. */}
-      <div className="mb-grid">
-        <PropertyLookupPanel />
-      </div>
+      {lookupModule && (
+        <div className="mb-grid">
+          <lookupModule.PropertyLookupPanel />
+        </div>
+      )}
     </PageShell>
   );
 }

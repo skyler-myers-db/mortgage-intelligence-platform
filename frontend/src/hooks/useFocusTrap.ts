@@ -7,6 +7,8 @@ const FOCUSABLE_SELECTOR = [
   'input:not([disabled])',
   'textarea:not([disabled])',
   'select:not([disabled])',
+  'summary',
+  '[contenteditable]:not([contenteditable="false"])',
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ');
 
@@ -18,12 +20,32 @@ interface UseFocusTrapOptions<TContainer extends HTMLElement, TInitial extends H
   containerRef: RefObject<TContainer | null>;
   initialFocusRef?: RefObject<TInitial | null>;
   onClose: () => void;
+  /**
+   * Give focus back to the element that held it when the trap opened
+   * (default). `useModalDialog` passes false: it restores focus itself,
+   * after `dialog.close()`, because an opener behind an open modal is inert
+   * and refuses focus.
+   */
+  restoreFocus?: boolean;
 }
 
-function focusableElements(container: HTMLElement): HTMLElement[] {
-  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-    (element) => !element.hasAttribute('disabled') && element.getAttribute('aria-hidden') !== 'true',
-  );
+/**
+ * Tab stops the wrap-around cycles through (audit a11y-07). The selector
+ * alone also matched elements Tab skips: a control inside an `inert`
+ * subtree (the retained copy of a closing panel, a closing filter menu) or
+ * one that is not rendered (`display: none`, a closed `<details>` body).
+ * Wrapping onto one of those left focus where it was, so Tab looked dead.
+ * `checkVisibility` is missing in DOM test environments; there the check is
+ * skipped.
+ */
+function isTabStop(element: HTMLElement): boolean {
+  if (element.hasAttribute('disabled') || element.getAttribute('aria-hidden') === 'true') return false;
+  if (element.closest('[inert]') !== null) return false;
+  return typeof element.checkVisibility !== 'function' || element.checkVisibility();
+}
+
+export function focusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(isTabStop);
 }
 
 export function useFocusTrap<TContainer extends HTMLElement, TInitial extends HTMLElement = HTMLElement>({
@@ -31,6 +53,7 @@ export function useFocusTrap<TContainer extends HTMLElement, TInitial extends HT
   containerRef,
   initialFocusRef,
   onClose,
+  restoreFocus = true,
 }: UseFocusTrapOptions<TContainer, TInitial>) {
   // The latest onClose, read when Escape fires; not a dependency of the trap
   // (stack-04 tail), so a caller's inline handler never re-runs the trap and
@@ -110,9 +133,10 @@ export function useFocusTrap<TContainer extends HTMLElement, TInitial extends HT
       if (retryFrame) cancelAnimationFrame(retryFrame);
       popEscapeLayer();
       window.removeEventListener('keydown', onKeyDown);
+      if (!restoreFocus) return;
       if (lastFocused && typeof lastFocused.focus === 'function' && document.contains(lastFocused)) {
         lastFocused.focus();
       }
     };
-  }, [containerRef, initialFocusRef, open]);
+  }, [containerRef, initialFocusRef, open, restoreFocus]);
 }

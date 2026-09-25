@@ -93,6 +93,14 @@ export function genieJobPartsLabel(progress: GenieTurnProgress | null | undefine
   return `${done} of ${planned} sub-analyses finished`;
 }
 
+/** " · usually under a minute" / " · usually about 3 min" from the job's
+ *  recent typical duration (audit genie-01); card only, never announced. */
+export function genieTypicalDurationHint(progress: GenieTurnProgress | null | undefined): string | null {
+  const seconds = progress?.job?.typical_seconds;
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return null;
+  return seconds < 60 ? 'usually under a minute' : `usually about ${Math.round(seconds / 60)} min`;
+}
+
 function dedupeTrace(trace: Array<{ kind: string; content: string }>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -134,6 +142,7 @@ export function GenieProgress({
 }) {
   const label = genieProgressLabel(progress, status);
   const parts = genieJobPartsLabel(progress);
+  const typical = genieTypicalDurationHint(progress);
   const stages = stagesFor(Boolean(progress?.deep));
   // Monotonic rail: Genie legitimately revisits earlier statuses (e.g. a
   // text-only repair turn re-enters ASKING_AI after EXECUTING_QUERY), but a
@@ -175,6 +184,7 @@ export function GenieProgress({
         <span className="genie-progress__label">
           {label}
           {parts ? ` · ${parts}` : null}
+          {typical ? ` · ${typical}` : null}
         </span>
         {/* aria-hidden and OUTSIDE every live region (audit 2026-09-21 genie-v1 /
             a11y-06): a once-a-second text change inside role="status"

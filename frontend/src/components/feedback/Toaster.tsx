@@ -7,8 +7,10 @@ import {
   useSyncExternalStore,
   type FocusEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router';
 import { AUDIT_EVENT_ID_PARAM, AUDIT_EXPLORER_PATH, auditEventHref } from '../../lib/auditLinks';
+import { subscribeModalLayers, topModalLayer } from '../../lib/modalLayers';
 import { dismissToast, getToasts, subscribeToasts, type Toast } from '../../lib/toast';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
@@ -25,10 +27,27 @@ import './Toaster.css';
  * are plain `.btn` markup: the Button primitive's module (EvidenceChip, the
  * hover card) lives in a lazy chunk the shell must not pull in.
  *
- *   - The region is `popover="manual"`, shown once on mount, so toasts sit in
- *     the top layer above the Console, drawers and the Genie panel without a
+ *   - The region is `popover="manual"`, shown when it mounts, so toasts sit
+ *     in the top layer above the Console and the Genie panel without a
  *     z-index race. Where the Popover API is missing the same element is a
- *     fixed-position region on `--z-toast`.
+ *     fixed-position region on `--z-toast`. It renders through a portal into
+ *     one container element that lives at the end of <body>.
+ *   - Over a modal (audit 2026-09-21 a11y-07, correction 3): showModal()
+ *     makes everything outside the dialog inert and paints the dialog above
+ *     a popover shown earlier, so a shell region would sit unreachable,
+ *     unannounced and beneath it. The container therefore MOVES into the
+ *     topmost dialog of lib/modalLayers (and back to <body> once none is
+ *     open), synchronously, in the layers' own subscription: the SAME section
+ *     element, never a re-mount, so a control a dialog recorded as its
+ *     opener (a toast's audit link held by "Leave without saving?") is still
+ *     there when that dialog hands focus back, and nothing is re-created.
+ *     Inside the dialog it is not inert, and it is shown as a popover again
+ *     after the dialog (a moved popover closes), so it sits on top. A move
+ *     re-inserts the region: an inserted role=alert is announced, so a
+ *     failure already on screen is carried over without its role (the same
+ *     card element, still shown); the polite list's existing content is not
+ *     a change, and a toast raised after the move lands in that list, which
+ *     exists before it does, and is announced once.
  *   - Success toasts render inside one persistent `role="status"` polite
  *     live region (it exists before any toast is inserted, so additions are
  *     announced). A failure toast carries `role="alert"` itself: an inserted
@@ -45,7 +64,8 @@ import './Toaster.css';
  *     came from before it entered the region, else to the page heading.
  *     A keyboard dismissal may scroll that control back into view; a mouse
  *     dismissal never scrolls the page (the person is looking at the toast,
- *     not at the control, which may be far off-screen by now).
+ *     not at the control, which may be far off-screen by now). Inside a
+ *     modal the hand-off stays in that dialog: never onto the inert page.
  *   - Success toasts dismiss after `SUCCESS_TOAST_MS`; the timer pauses while
  *     the pointer is over the region or focus is inside it (WCAG 2.2.1).
  *     Failures stay until dismissed.
@@ -55,6 +75,19 @@ export const SUCCESS_TOAST_MS = 8000;
 
 function supportsPopover(element: HTMLElement): boolean {
   return typeof element.showPopover === 'function';
+}
+
+/**
+ * The first control of `host` (an open modal dialog) outside the toast
+ * region. A local query, not useFocusTrap's list: this lazy chunk importing
+ * that shell hook made the bundler split lib/escapeStack out of the entry
+ * chunk into an extra initial request. A candidate that cannot take focus
+ * falls through to the next one (see focusAwayFrom).
+ */
+function firstControlOutside(host: HTMLElement, region: HTMLElement): HTMLElement | undefined {
+  return [...host.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].find((element) => !region.contains(element) && element.closest('[inert]') === null);
 }
 
 /**
@@ -83,13 +116,19 @@ function focusAwayFrom(
   );
   const index = cards.indexOf(card);
   const neighbour = index === -1 ? undefined : cards[index + 1] ?? cards[index - 1];
+  const host = region.parentElement?.closest<HTMLElement>('dialog') ?? null;
+  const originOk = origin?.isConnected && !region.contains(origin) && (!host || host.contains(origin));
   const main = document.getElementById('main-content');
+  // In a modal, everything outside the dialog is inert: the last resorts
+  // are the dialog's own first tab stop, then the dialog itself.
+  const lastResorts: Array<HTMLElement | null | undefined> = host
+    ? [firstControlOutside(host, region), host]
+    : [main?.querySelector<HTMLElement>('h1[tabindex]'), main];
   const candidates: Array<[HTMLElement | null | undefined, boolean]> = [
     [neighbour?.querySelector<HTMLElement>('.toast__close'), pointer],
-    [origin?.isConnected && !region.contains(origin) ? origin : null, pointer],
-    // The heading and <main> are last resorts: take focus without scrolling the page.
-    [main?.querySelector<HTMLElement>('h1[tabindex]'), true],
-    [main, true],
+    [originOk ? origin : null, pointer],
+    // The last resorts take focus without scrolling the page.
+    ...lastResorts.map((element): [HTMLElement | null | undefined, boolean] => [element, true]),
   ];
   for (const [candidate, preventScroll] of candidates) {
     if (!candidate) continue;
@@ -122,17 +161,19 @@ interface ToastCardProps {
   toast: Toast;
   paused: boolean;
   canOpenAudit: boolean;
+  /** False for a failure already on screen before the region last moved (see Toaster). */
+  announce: boolean;
   /** `clickDetail` is the click's `detail`: 0 for Enter / Space, 1+ for a pointer. */
   onDismiss: (id: number, clickDetail: number) => void;
 }
 
-function ToastCard({ toast, paused, canOpenAudit, onDismiss }: ToastCardProps) {
+function ToastCard({ toast, paused, canOpenAudit, announce, onDismiss }: ToastCardProps) {
   useAutoDismiss(toast, paused);
   const failed = toast.tone === 'error';
   return (
     <div
       className={`toast toast--${toast.tone}`}
-      role={failed ? 'alert' : undefined}
+      role={failed && announce ? 'alert' : undefined}
       data-toast-id={toast.id}
     >
       <Icon name={failed ? 'cross' : 'check'} size={16} className="toast__ico" />
@@ -171,26 +212,65 @@ function ToastCard({ toast, paused, canOpenAudit, onDismiss }: ToastCardProps) {
   );
 }
 
+/** One announcement per toast and per coalesced repeat (a repeat is news again). */
+function toastKey(toast: Toast): string {
+  return `${toast.id}.${toast.revision}`;
+}
+
+const NOTHING_CARRIED: ReadonlySet<string> = new Set();
+
+function noModalLayer(): null {
+  return null;
+}
+
 export function Toaster() {
   const toasts = useSyncExternalStore(subscribeToasts, getToasts, getToasts);
   const { canAccessAdmin } = useApp();
+  // The topmost open modal dialog, or null for the shell (see the module note).
+  const layer = useSyncExternalStore(subscribeModalLayers, topModalLayer, noModalLayer);
+  // Toasts on screen when the host last changed: a render-time latch, so the
+  // new host's first render already knows them.
+  const [host, setHost] = useState<HTMLElement | null>(layer);
+  const [carried, setCarried] = useState<ReadonlySet<string>>(NOTHING_CARRIED);
+  if (host !== layer) {
+    setHost(layer);
+    setCarried(new Set(toasts.map(toastKey)));
+  }
   const regionRef = useRef<HTMLElement | null>(null);
+  // The portal container the region lives in; it is moved, React never is.
+  // `display: contents` keeps it out of the layout of whatever holds it
+  // (a flex or grid dialog).
+  const [portal] = useState(() => {
+    const element = document.createElement('div');
+    element.style.display = 'contents';
+    return element;
+  });
   /** Where focus was before it last entered the region (see focusAwayFrom). */
   const originRef = useRef<HTMLElement | null>(null);
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
   const { pathname, search } = useLocation();
 
-  // Promote the region to the top layer once; it stays open (and empty) for
-  // the life of the shell, so the polite live region is always present.
+  // Place the container in the topmost modal dialog, else at the end of
+  // <body>, and promote the region to the top layer; it stays open (and
+  // empty) for the life of the shell, so the polite live region is always
+  // present. This runs in the modal-layer subscription itself, before a
+  // closing dialog hands focus back, and shows the popover again after each
+  // move: inside a modal it is shown AFTER the dialog, which puts it on top.
   useLayoutEffect(() => {
-    const region = regionRef.current;
-    if (!region || !supportsPopover(region)) return undefined;
-    if (!region.matches(':popover-open')) region.showPopover();
-    return () => {
-      if (region.matches(':popover-open')) region.hidePopover();
+    const place = () => {
+      const host = topModalLayer() ?? document.body;
+      if (portal.parentNode !== host) host.appendChild(portal);
+      const region = regionRef.current;
+      if (region && supportsPopover(region) && !region.matches(':popover-open')) region.showPopover();
     };
-  }, []);
+    place();
+    const unsubscribe = subscribeModalLayers(place);
+    return () => {
+      unsubscribe();
+      portal.remove();
+    };
+  }, [portal]);
 
   const onFocus = (event: FocusEvent<HTMLElement>) => {
     setFocusWithin(true);
@@ -268,7 +348,17 @@ export function Toaster() {
   const paused = hovered || focusWithin;
   const failures = toasts.filter((toast) => toast.tone === 'error');
   const confirmations = toasts.filter((toast) => toast.tone !== 'error');
-  return (
+  const card = (toast: Toast) => (
+    <ToastCard
+      key={toast.id}
+      toast={toast}
+      paused={paused}
+      canOpenAudit={canAccessAdmin}
+      announce={!carried.has(toastKey(toast))}
+      onDismiss={dismiss}
+    />
+  );
+  const section = (
     <section
       ref={regionRef}
       className="toast-region"
@@ -280,14 +370,11 @@ export function Toaster() {
       onFocus={onFocus}
       onBlur={onBlur}
     >
-      {failures.map((toast) => (
-        <ToastCard key={toast.id} toast={toast} paused={paused} canOpenAudit={canAccessAdmin} onDismiss={dismiss} />
-      ))}
+      {failures.map(card)}
       <div className="toast-region__list" role="status" aria-live="polite" aria-atomic="false">
-        {confirmations.map((toast) => (
-          <ToastCard key={toast.id} toast={toast} paused={paused} canOpenAudit={canAccessAdmin} onDismiss={dismiss} />
-        ))}
+        {confirmations.map(card)}
       </div>
     </section>
   );
+  return createPortal(section, portal);
 }

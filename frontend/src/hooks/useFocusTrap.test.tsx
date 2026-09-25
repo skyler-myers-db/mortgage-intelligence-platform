@@ -7,12 +7,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRef } from 'react';
 import { escapeLayerCount } from '../lib/escapeStack';
-import { useFocusTrap } from './useFocusTrap';
+import { focusableElements, useFocusTrap } from './useFocusTrap';
 
-function TrapHarness({ open, onClose }: { open: boolean; onClose: () => void }) {
+function TrapHarness({ open, onClose, restoreFocus }: { open: boolean; onClose: () => void; restoreFocus?: boolean }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const initialRef = useRef<HTMLButtonElement | null>(null);
-  useFocusTrap({ open, containerRef: panelRef, initialFocusRef: initialRef, onClose });
+  useFocusTrap({ open, containerRef: panelRef, initialFocusRef: initialRef, onClose, restoreFocus });
 
   if (!open) return null;
   return (
@@ -130,5 +130,112 @@ describe('useFocusTrap', () => {
     } finally {
       document.removeEventListener('focusin', countInitialFocus);
     }
+  });
+
+  it('leaves focus where it is on close when restoreFocus is false (useModalDialog restores it)', async () => {
+    const launcher = document.getElementById('launcher') as HTMLButtonElement;
+    launcher.focus();
+    await act(async () => {
+      root.render(<TrapHarness open onClose={onClose} restoreFocus={false} />);
+    });
+    await settle();
+    const outside = document.getElementById('outside') as HTMLButtonElement;
+    outside.focus();
+    await act(async () => {
+      root.render(<TrapHarness open={false} onClose={onClose} restoreFocus={false} />);
+    });
+    await settle();
+    expect(document.activeElement).toBe(outside);
+  });
+});
+
+/**
+ * The Tab wrap cycles only through real tab stops (audit a11y-07). The
+ * selector used to match elements Tab skips (inside an `inert` subtree, not
+ * rendered) and to miss ones it visits (`summary`, `contenteditable`), so
+ * the wrap either never fired (the last listed element was one Tab skips,
+ * and focus walked out of the dialog) or skipped a real stop.
+ */
+describe('useFocusTrap tab stops', () => {
+  let root: Root;
+  const realCheckVisibility = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'checkVisibility');
+
+  function StopsHarness() {
+    const panelRef = useRef<HTMLDivElement | null>(null);
+    const firstRef = useRef<HTMLButtonElement | null>(null);
+    useFocusTrap({ open: true, containerRef: panelRef, initialFocusRef: firstRef, onClose: () => undefined });
+    return (
+      <div ref={panelRef} role="dialog" tabIndex={-1}>
+        <button type="button" data-hidden="" id="hidden-first">Hidden first</button>
+        <button ref={firstRef} type="button" id="first">First</button>
+        <details>
+          <summary id="summary">More detail</summary>
+        </details>
+        <div contentEditable suppressContentEditableWarning id="editable">Notes</div>
+        <div contentEditable="false" suppressContentEditableWarning id="not-editable">Read only</div>
+        <button type="button" id="last">Last</button>
+        <div inert>
+          <button type="button" id="inert-after">Inert</button>
+        </div>
+        <button type="button" data-hidden="" id="hidden-after">Hidden</button>
+      </div>
+    );
+  }
+
+  beforeEach(() => {
+    // happy-dom has no checkVisibility: model "not rendered" with a marker.
+    Object.defineProperty(HTMLElement.prototype, 'checkVisibility', {
+      configurable: true,
+      value(this: HTMLElement) {
+        return !this.hasAttribute('data-hidden');
+      },
+    });
+    document.body.innerHTML = '<div id="root"></div><button id="page-control">Page</button>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+    if (realCheckVisibility) Object.defineProperty(HTMLElement.prototype, 'checkVisibility', realCheckVisibility);
+    else delete (HTMLElement.prototype as { checkVisibility?: unknown }).checkVisibility;
+  });
+
+  function tab(shiftKey = false): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, cancelable: true });
+    window.dispatchEvent(event);
+    return event;
+  }
+
+  it('wraps from the last real stop, skipping inert and unrendered elements after it', async () => {
+    await act(async () => {
+      root.render(<StopsHarness />);
+    });
+    await settle();
+    const last = document.getElementById('last') as HTMLButtonElement;
+    last.focus();
+    const event = tab();
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement?.id).toBe('first');
+  });
+
+  it('wraps backwards from the first real stop, skipping an unrendered element before it', async () => {
+    await act(async () => {
+      root.render(<StopsHarness />);
+    });
+    await settle();
+    (document.getElementById('first') as HTMLButtonElement).focus();
+    const event = tab(true);
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement?.id).toBe('last');
+  });
+
+  it('counts summary and contenteditable as stops, never contenteditable="false"', async () => {
+    await act(async () => {
+      root.render(<StopsHarness />);
+    });
+    await settle();
+    const container = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(focusableElements(container).map((element) => element.id)).toEqual(['first', 'summary', 'editable', 'last']);
   });
 });

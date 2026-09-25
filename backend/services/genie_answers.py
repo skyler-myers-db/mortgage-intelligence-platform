@@ -286,6 +286,10 @@ class GenieCompletionJobStatus(BaseModel):
     governed sub-analyses while it runs. ``response`` is the finished
     governed answer, present only when ``status`` is ``succeeded``; its
     action confirmation tokens are signed afresh for the caller at delivery.
+    ``cancelled`` is terminal and not failed: the owner stopped the turn
+    before its governed record existed. ``typical_seconds`` (audit genie-01)
+    is the recent median completion time of this job's class (deep or
+    single), only while the job still runs and only with enough samples.
     """
 
     kind: Literal["genie_completion_job"] = "genie_completion_job"
@@ -299,6 +303,26 @@ class GenieCompletionJobStatus(BaseModel):
     failed: bool = False
     error_hint: str | None = None
     response: GenieMessageResponse | None = None
+    typical_seconds: int | None = None
+
+
+class GenieCancelResponse(BaseModel):
+    """``/message/cancel``: what the owner's Stop did (audit genie-03).
+
+    ``cancelled``: this app will not verify or record the answer; nothing is
+    recorded for the turn (no ``genie.run_query`` audit row, no action
+    tokens, no session row; the submit's ``genie.message_submitted`` row
+    stays). It never means that Genie's own message was cancelled: Genie may
+    keep the question as context. ``recorded``: the answer was already
+    verified and recorded before the Stop, so nothing changed. ``ended``: the
+    job had already failed or expired. ``status`` is the job's status after
+    the request.
+    """
+
+    kind: Literal["genie_completion_cancel"] = "genie_completion_cancel"
+    job_id: str
+    outcome: Literal["cancelled", "recorded", "ended"]
+    status: GenieJobStatus
 
 
 _SAMPLE_QUESTIONS_CACHE: tuple[list[str], ...] | None = None

@@ -5,40 +5,35 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PropertyLoanLookupResponse } from '../../types';
 
 const propertyLookup = vi.fn();
 
-vi.mock('../../lib/api', () => {
-  class MockApiError extends Error {
-    status: number | null;
-    dependency: string | null;
-    constructor(message: string, status: number | null, dependency: string | null = null) {
-      super(message);
-      this.name = 'ApiError';
-      this.status = status;
-      this.dependency = dependency;
-    }
-  }
-  return {
-    api: {
-      propertyLookup: (...args: unknown[]) => propertyLookup(...args),
-    },
-    ApiError: MockApiError,
-  };
-});
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  api: {
+    propertyLookup: (...args: unknown[]) => propertyLookup(...args),
+  },
+}));
 
-import { ApiError } from '../../lib/api';
+import { ApiError, type ApiValidationIssue } from '../../lib/api';
 import { PropertyLookupPanel } from './PropertyLookupPanel';
+import { preloadDescribedError } from '../ui/DescribedError';
 
-// The mocked ApiError constructor accepts (message, status, dependency).
-const makeApiError = (message: string, status: number, dependency?: string) =>
-  new (ApiError as unknown as new (m: string, s: number, d?: string) => Error)(
-    message,
-    status,
-    dependency,
-  );
+/** Server detail the panel must never print (audit states-04). */
+const SENTINEL = 'SENTINEL server detail 500 Internal Server Error';
+
+const makeApiError = (
+  status: number,
+  opts: { dependency?: string; validationIssues?: ApiValidationIssue[]; retryable?: boolean; reason?: string } = {},
+) =>
+  new ApiError(SENTINEL, { path: '/api/v1/lookup/property-loan', status, ...opts });
+
+// The error vocabulary is its own chunk (loaded with the first failure).
+beforeAll(async () => {
+  await preloadDescribedError();
+});
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -171,8 +166,10 @@ describe('PropertyLookupPanel', () => {
     );
   });
 
-  it('surfaces the sanitized 422 detail as a validation callout', async () => {
-    propertyLookup.mockRejectedValue(makeApiError('zip5 must be 5 digits', 422));
+  it('surfaces the 422 validation issue text as a validation callout, never the message', async () => {
+    propertyLookup.mockRejectedValue(makeApiError(422, {
+      validationIssues: [{ field: 'zip5', message: 'String should match pattern', location: ['body', 'zip5'] }],
+    }));
     render();
     fillValidForm();
     await submit();
@@ -180,11 +177,12 @@ describe('PropertyLookupPanel', () => {
     expect(resultEl()).toBeNull();
     const alert = container.querySelector('[role="alert"]');
     expect(alert).not.toBeNull();
-    expect(alert!.textContent).toContain('zip5 must be 5 digits');
+    expect(alert!.textContent).toBe('zip5: String should match pattern.');
+    expect(container.textContent).not.toContain('SENTINEL');
   });
 
-  it('shows a degraded, retryable state on a 503 dependency-down', async () => {
-    propertyLookup.mockRejectedValue(makeApiError('dependency unavailable', 503, 'lakebase'));
+  it('shows a degraded, retryable state on a 503 dependency-down, naming the dependency as the banner does', async () => {
+    propertyLookup.mockRejectedValue(makeApiError(503, { dependency: 'lakebase', retryable: true, reason: 'retries_exhausted' }));
     render();
     fillValidForm();
     await submit();
@@ -192,8 +190,58 @@ describe('PropertyLookupPanel', () => {
     expect(resultEl()).toBeNull();
     const alert = container.querySelector('[role="alert"]');
     expect(alert).not.toBeNull();
-    expect(alert!.textContent).toContain('lakebase');
-    expect(alert!.textContent).toContain('warming up or unavailable');
+    expect(alert!.textContent).toContain('The operational database is warming up or unavailable.');
+    expect(alert!.textContent).not.toContain('lakebase');
     expect(container.querySelector('button[aria-label="Retry property lookup"]')).not.toBeNull();
   });
+
+  it('says why any other failure happened, without the transport message', async () => {
+    propertyLookup.mockRejectedValue(makeApiError(500));
+    render();
+    fillValidForm();
+    await submit();
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert!.textContent).toContain("Couldn't complete the lookup: The server hit an unexpected error.");
+    expect(container.textContent).not.toContain('SENTINEL');
+    expect(container.textContent).not.toContain('Internal Server Error');
+    await flushLazy();
+    expect(container.querySelector('button[aria-label="Retry property lookup"]'), 'a 500 is worth retrying').not.toBeNull();
+  });
+
+  // PR #255: a missing grant answers 503 {retryable:false, reason:'permission_denied'}.
+  // It is not "warming up", and a Retry would be one more audited
+  // PROPERTY_LOOKUP that cannot succeed.
+  it('says a missing grant is not temporary and offers no Retry (503 permission_denied)', async () => {
+    propertyLookup.mockRejectedValue(makeApiError(503, { dependency: 'warehouse', retryable: false, reason: 'permission_denied' }));
+    render();
+    fillValidForm();
+    await submit();
+    await flushLazy();
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert!.textContent).toContain('refused the app access to a required object');
+    expect(alert!.textContent).toContain('retrying will not help');
+    expect(alert!.textContent).not.toContain('warming');
+    expect(container.querySelector('button[aria-label="Retry property lookup"]')).toBeNull();
+    expect(container.textContent).not.toContain('SENTINEL');
+  });
+
+  it('offers no Retry for a 403 (the role cannot run it)', async () => {
+    propertyLookup.mockRejectedValue(makeApiError(403));
+    render();
+    fillValidForm();
+    await submit();
+    await flushLazy();
+
+    expect(container.querySelector('[role="alert"]')!.textContent).toContain('Ask an administrator for access.');
+    expect(container.querySelector('button[aria-label="Retry property lookup"]')).toBeNull();
+  });
 });
+
+/** Let the lazy error vocabulary resolve (the failure chunk and its wrappers). */
+async function flushLazy() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}

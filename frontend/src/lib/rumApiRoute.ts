@@ -19,17 +19,22 @@ export const API_ROUTE_SEGMENTS = [
   'actions', 'activation', 'admin', 'agent', 'aging', 'analytics', 'approve',
   'assets', 'assign', 'assignment', 'assignment-overlay', 'assignments', 'audit',
   'borrowers', 'campaign-performance', 'campaign-recommendation', 'campaigns',
+  'cancel',
   'capabilities', 'complete', 'compose', 'config', 'conversion', 'county-rollups',
   'create', 'custom', 'data-estate', 'destinations', 'disposition', 'distribute',
   'draft', 'drafts', 'economics', 'event', 'events', 'evidence', 'executive',
+  'execute',
   'export-receipt', 'feedback', 'footprint', 'force-degraded', 'funnel', 'genie',
   'geo', 'geography', 'growth-agent', 'health', 'home', 'leads', 'lifecycle',
   'lineage', 'loan-officers', 'lookup', 'manifest', 'message', 'metadata',
   'monitors', 'my-events', 'notification-drafts', 'offers', 'operations', 'options',
   'outbox', 'outcome', 'outcomes', 'outreach', 'page', 'points', 'portfolio',
+  'plan',
   'preview', 'progress', 'proof', 'property-loan', 'rate-sensitivity', 'rate-window',
+  'queue-version',
   'receipt',
   'recommend', 'refusal-report', 'reject', 'rollups', 'rules', 'rum', 'run',
+  'runs',
   'run-due', 'run-due-all', 'sales', 'search', 'segments', 'session', 'sessions',
   'settings', 'signals', 'sources', 'stage', 'standup', 'start', 'state-rollups',
   'status', 'submit', 'summary', 'team', 'telemetry', 'workflows', 'workspace',
@@ -53,6 +58,9 @@ const EXCLUDED_TEMPLATES: ReadonlySet<string> = new Set([
   // The completion-job poll (audit 2026-09-21 genie-01): ~40/min per turn,
   // the same rationale as the progress poll. Its job id never reaches RUM.
   '/api/genie/message/status',
+  // The Lead Queue's change-signal poll (audit states-09): once a minute
+  // while the queue is open; a poll, not a read a person made.
+  '/api/workspace/queue-version',
 ]);
 const EXCLUDED_PREFIX = '/api/telemetry/';
 

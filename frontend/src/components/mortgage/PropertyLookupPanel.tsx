@@ -1,10 +1,12 @@
-import { useState, type FormEvent } from 'react';
+import { lazy, Suspense, useState, type ComponentType, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ApiError, api } from '../../lib/api';
 import type { PropertyLoanLookupResponse } from '../../types';
 import { segmentName } from '../../lib/segmentMetadata';
 import { Button, Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
+import { friendlyDependencyName } from '../healthRecovery';
+import { DescribedErrorBody } from '../ui/DescribedError';
 import { ScoreBadge } from './ScoreBadge';
 import { formatUsd, ratePct } from '../../lib/formatters';
 
@@ -34,7 +36,37 @@ type LookupState =
   | { status: 'done'; result: PropertyLoanLookupResponse }
   | { status: 'validation'; message: string }
   | { status: 'degraded'; dependency: string | null }
-  | { status: 'error'; message: string };
+  | { status: 'error'; error: unknown };
+
+/**
+ * A failed lookup in buyer-safe words (audit 2026-09-21 `states-04`): a 422
+ * shows its validation issue text, a RETRYABLE 503 names the dependency the
+ * way the banner does, anything else (a permission_denied 503 included)
+ * renders through describeApiError (never the transport message).
+ */
+function failedLookup(err: unknown): LookupState {
+  if (err instanceof ApiError && err.status === 422) {
+    const issues = err.validationIssues.map((issue) => `${issue.field}: ${issue.message}`).join('; ');
+    return { status: 'validation', message: issues ? `${issues}.` : 'Check the address and ZIP, then try again.' };
+  }
+  if (err instanceof ApiError && err.status === 503 && err.retryable) return { status: 'degraded', dependency: err.dependency };
+  return { status: 'error', error: err };
+}
+
+type FailureModule = typeof import('../ui/AsyncFailure');
+type RetryGateProps = { error: unknown; children: ReactNode };
+const NoRetry = () => null;
+
+/**
+ * Retry, only when describeApiError says retrying can help: never for a 403
+ * or a permission_denied 503, where each Retry would be one more audited
+ * PROPERTY_LOOKUP that cannot succeed. Until the vocabulary loads (or if it
+ * cannot) no Retry shows; the form's own Look up stays available.
+ */
+const RetryWhenUseful = lazy<ComponentType<RetryGateProps>>(() => (import('../ui/AsyncFailure') as Promise<FailureModule | undefined>).then(
+  (module) => ({ default: module?.RetryWhenUseful ?? NoRetry }),
+  () => ({ default: NoRetry }),
+));
 
 function isZip5(value: string): boolean {
   return /^[0-9]{5}$/.test(value.trim());
@@ -62,32 +94,20 @@ export function PropertyLookupPanel({ onNavigate, compact, headingLevel = 2 }: P
     lookup.status !== 'loading';
 
   async function runLookup() {
+    // Built before the try: a value block inside try/catch is a React
+    // Compiler 1.0 bailout (audit runtime-03).
+    const request = {
+      address_line: addressLine.trim(),
+      zip5: zip5.trim(),
+      city: city.trim() || null,
+      state: state.trim().toUpperCase() || null,
+    };
     setLookup({ status: 'loading' });
     try {
-      const result = await api.propertyLookup({
-        address_line: addressLine.trim(),
-        zip5: zip5.trim(),
-        city: city.trim() || null,
-        state: state.trim().toUpperCase() || null,
-      });
+      const result = await api.propertyLookup(request);
       setLookup({ status: 'done', result });
     } catch (err) {
-      if (err instanceof ApiError) {
-        if (err.status === 422) {
-          setLookup({ status: 'validation', message: err.message });
-          return;
-        }
-        if (err.status === 503) {
-          setLookup({ status: 'degraded', dependency: err.dependency });
-          return;
-        }
-        setLookup({ status: 'error', message: err.message });
-        return;
-      }
-      setLookup({
-        status: 'error',
-        message: err instanceof Error ? err.message : 'Lookup failed.',
-      });
+      setLookup(failedLookup(err));
     }
   }
 
@@ -192,8 +212,8 @@ export function PropertyLookupPanel({ onNavigate, compact, headingLevel = 2 }: P
         {lookup.status === 'degraded' && (
           <div className="status-callout status-callout--danger" role="alert">
             <span>
-              A data dependency
-              {lookup.dependency ? ` (${lookup.dependency})` : ''} is warming up or unavailable. The lookup was not run.
+              The {lookup.dependency ? friendlyDependencyName(lookup.dependency.toLowerCase()) : 'data service'} is warming
+              up or unavailable. The lookup was not run.
             </span>
             <button
               type="button"
@@ -208,15 +228,22 @@ export function PropertyLookupPanel({ onNavigate, compact, headingLevel = 2 }: P
 
         {lookup.status === 'error' && (
           <div className="status-callout status-callout--danger" role="alert">
-            <span>Couldn't complete the lookup: {lookup.message}</span>
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={() => void runLookup()}
-              aria-label="Retry property lookup"
-            >
-              Retry
-            </button>
+            <span>
+              Couldn&apos;t complete the lookup:{' '}
+              <DescribedErrorBody error={lookup.error} subject="the property lookup" />
+            </span>
+            <Suspense fallback={null}>
+              <RetryWhenUseful error={lookup.error}>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => void runLookup()}
+                  aria-label="Retry property lookup"
+                >
+                  Retry
+                </button>
+              </RetryWhenUseful>
+            </Suspense>
           </div>
         )}
 

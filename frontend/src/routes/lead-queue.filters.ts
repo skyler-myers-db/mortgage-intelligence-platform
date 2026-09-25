@@ -1,4 +1,4 @@
-import { ApiError, type LeadFunnelStage } from '../lib/api';
+import type { LeadFunnelStage } from '../lib/api';
 import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { SEGMENT_DEFINITIONS } from '../lib/segmentMetadata';
 import type { SegmentCode } from '../types';
@@ -563,31 +563,4 @@ export function searchParamsWithLeadTablePlace(
     else next.delete('row');
   }
   return next;
-}
-
-export interface LeadQueueLoadErrorState {
-  message: string;
-  invalidFilters: boolean;
-}
-
-export function formatLeadQueueLoadError(error: unknown): LeadQueueLoadErrorState {
-  if (error instanceof ApiError && error.status === 422) {
-    const issueText = error.validationIssues.length > 0
-      ? error.validationIssues.map((issue) => `${issue.field}: ${issue.message}`).join('; ')
-      : error.message;
-    return {
-      message: `Lead queue filters are invalid. ${issueText}. Clear filters or choose a supported filter value.`,
-      invalidFilters: true,
-    };
-  }
-  if (error instanceof Error) {
-    return {
-      message: `Couldn't load leads: ${error.message}`,
-      invalidFilters: false,
-    };
-  }
-  return {
-    message: "Couldn't load leads.",
-    invalidFilters: false,
-  };
 }

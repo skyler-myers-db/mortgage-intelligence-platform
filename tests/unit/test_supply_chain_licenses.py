@@ -54,6 +54,37 @@ def test_svg_maps_noncommercial_package_is_not_in_the_frontend_contract() -> Non
     assert all(retired_map_package not in package_path for package_path in lock["packages"])
 
 
+def test_the_oxlint_lock_entry_is_complete_for_every_platform() -> None:
+    """oxlint (the jsx-a11y ratchet, audit a11y-05) ships native binaries as
+    optional platform packages. npm has dropped other platforms' optional
+    entries when a lock is regenerated over an installed node_modules, which
+    would break `npm ci` on the CI runner or the VRT container while a macOS
+    install stays green. Every binding the pinned oxlint declares must be in
+    the lock, optional, at the pin; its optional peers are never installed.
+    """
+    package_json = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))
+    pin = package_json["devDependencies"]["oxlint"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pin), f"oxlint must be an exact pin, got {pin!r}"
+    assert "oxlint" not in package_json.get("dependencies", {})
+    packages = _package_lock()["packages"]
+    oxlint = packages["node_modules/oxlint"]
+
+    assert oxlint["version"] == pin
+    assert oxlint["license"] == "MIT"
+    assert oxlint.get("dev") is True
+    # The binding names come from the pinned manifest (what `npm view
+    # oxlint@<pin> optionalDependencies` lists), never from a name prefix.
+    bindings = oxlint.get("optionalDependencies", {})
+    assert {"@oxlint/binding-linux-x64-gnu", "@oxlint/binding-darwin-arm64"} <= set(bindings)
+    for name, version in bindings.items():
+        entry = packages.get(f"node_modules/{name}")
+        assert entry is not None, f"{name} is missing from the lock (regenerated over node_modules?)"
+        assert entry["version"] == version == pin
+        assert entry.get("optional") is True and entry.get("dev") is True, f"{name} must stay a dev-only optional"
+    for peer in ("oxlint-tsgolint", "vite-plus"):
+        assert f"node_modules/{peer}" not in packages, f"the optional peer {peer} must not be installed"
+
+
 def test_third_party_license_notice_covers_weak_copyleft_and_map_data() -> None:
     notice = (ROOT / "docs" / "THIRD_PARTY_LICENSES.md").read_text(encoding="utf-8")
 

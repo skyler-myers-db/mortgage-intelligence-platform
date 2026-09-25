@@ -33,6 +33,7 @@ from backend.services.genie_actions import (
 from backend.services.genie_answers import (
     GenieActionRequest,
     GenieActionResponse,
+    GenieCancelResponse,
     GenieCompletionJobStatus,
     GenieMessageResponse,
     GenieProgressResponse,
@@ -48,8 +49,15 @@ from backend.services.genie_client import (
     ResilientGenieClient,
     get_genie_client,
 )
+from backend.services.genie_completion_cancel import (
+    GenieCancelRequest,
+    request_cancel,
+    require_completion_jobs,
+)
 from backend.services.genie_completion_delivery import job_status
+from backend.services.genie_completion_durations import typical_seconds_for
 from backend.services.genie_completion_jobs import (
+    adoptable,
     completion_jobs_available,
     create_or_join,
     job_turn_ids_eligible,
@@ -625,9 +633,15 @@ def genie_message_complete(
         message_id=payload.message_id,
         question_hash=str(claims.get("question_hash") or ""),
         expires_at_epoch=int(claims.get("exp") or 0),
+        deep=genie_turn_is_deep(payload.question),
     )
+    # Risk 4 (genie-01): a queued job this process created but never ran (its
+    # creating request failed before enqueueing it) is run by the retry.
+    run_here = enrollment.created or adoptable(enrollment.job)
+    if run_here and not enrollment.created:
+        emit(log, "genie_job_enqueued", dependency="lakebase", outcome="adopted", job_id=enrollment.job.job_id)
     if payload.respond_async:
-        if enrollment.created:
+        if run_here:
             run_completion_job(
                 turn,
                 enrollment.job,
@@ -639,9 +653,10 @@ def genie_message_complete(
             question=payload.question,
             actor=actor,
             live_campaign_run_marker=live_campaign_run_marker,
+            typical_seconds=typical_seconds_for(lakebase, enrollment.job),
         )
         return JSONResponse(status_code=202, content=status.model_dump(mode="json"))
-    if enrollment.created:
+    if run_here:
         return run_inline_job(turn, enrollment.job)
     return await_joined_job(turn, enrollment.job)
 
@@ -681,7 +696,38 @@ def genie_message_status(
         question=payload.question,
         actor=actor,
         live_campaign_run_marker=live_campaign_run_marker,
+        typical_seconds=typical_seconds_for(lakebase, job),
     )
+
+
+@router.post("/message/cancel", response_model=GenieCancelResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
+def genie_message_cancel(
+    payload: GenieCancelRequest,
+    request: Request,
+    lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> GenieCancelResponse:
+    """The owner's Stop on a job-backed turn (audit genie-03).
+
+    Token-authorized like the other job calls, with the submit's 16-hex
+    question label instead of the question. An accepted cancel is audited as
+    GENIE_TURN_CANCELLED in the same transaction as its flag
+    (``request_cancel``); a repeat, a recorded answer or an ended job is a
+    no-op with no audit row. ``cancelled`` means this app will not record
+    the answer, never that Genie's own message was cancelled.
+    """
+    actor = resolve_actor(request)
+    claims = verify_genie_progress_token(
+        payload.progress_token,
+        actor=actor,
+        conversation_id=payload.conversation_id,
+        message_id=payload.message_id,
+    )
+    binding_hash = str(claims.get("question_hash") or "")
+    if binding_hash[:16] != payload.question_hash:
+        raise HTTPException(status_code=400, detail="question does not match the submitted Genie turn")
+    require_completion_jobs(lakebase)  # 404 without the job table, 503 when Lakebase is down
+    return request_cancel(lakebase, actor=actor, payload=payload, binding_hash=binding_hash)
 
 
 @router.post("/actions", response_model=GenieActionResponse, responses=JSON_CONTENT_TYPE_RESPONSE)

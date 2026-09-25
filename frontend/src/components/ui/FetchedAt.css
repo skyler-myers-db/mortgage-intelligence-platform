@@ -1,0 +1,21 @@
+/*
+ * FetchedAt (audit 2026-09-21 states-09): the view's age and its Refresh,
+ * beside a table header's title. Declared extension (design_files has no
+ * freshness control); colocated, never in the initial stylesheet.
+ */
+.fetched-at {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-inline-start: var(--sp-3);
+  white-space: nowrap;
+}
+.fetched-at__label {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.fetched-at__changed {
+  color: var(--accent-ink);
+  font-size: var(--fs-11);
+  font-weight: 600;
+}

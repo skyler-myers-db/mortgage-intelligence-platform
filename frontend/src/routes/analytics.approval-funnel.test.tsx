@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrawerSource } from '../components/AppContext';
 import type { ApprovalFunnelResponse, LoanOfficerFunnelDetailResponse } from '../types';
 
@@ -160,6 +160,13 @@ vi.mock('../lib/api', () => ({
 
 import { APPROVAL_FUNNEL_NESTED_IN, ApprovalFunnelSection } from './analytics.approval-funnel';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
+import { ApiError } from '../lib/apiTransport';
+import { preloadDescribedError } from '../components/ui/DescribedError';
+
+// The error vocabulary is its own chunk (loaded with the first failure).
+beforeAll(async () => {
+  await preloadDescribedError();
+});
 
 async function settle(): Promise<void> {
   await act(async () => {
@@ -335,5 +342,22 @@ describe('ApprovalFunnelSection', () => {
     await act(async () => secondDrill.click());
     await settle();
     expect(document.body.textContent).toContain('No active assignments for Summit LO 02');
+  });
+
+  // Audit states-04: the drill's failure reads in the shared vocabulary,
+  // never the transport message.
+  it('says why an officer drill-down failed without the transport message', async () => {
+    funnelData = LIVE_FUNNEL;
+    apiMocks.approvalFunnelLoanOfficer.mockRejectedValue(
+      new ApiError('SENTINEL 500 Internal Server Error', { path: '/api/v1/analytics/funnel/loan-officers/x', status: 500 }),
+    );
+    await act(async () => renderSection());
+    await settle();
+    await act(async () => drillButtons()[0].click());
+    await settle();
+
+    const alert = document.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe('Officer drill-down unavailable: The server hit an unexpected error.');
+    expect(document.body.textContent).not.toContain('SENTINEL');
   });
 });

@@ -8,7 +8,7 @@
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { consumeGeniePrefill, subscribeGenieOpenRequests } from '../../lib/genieOpen';
 
 const navigate = vi.fn();
@@ -31,9 +31,17 @@ vi.mock('../../lib/api', () => ({
   api: { borrowerSearch: (...a: unknown[]) => borrowerSearch(...a) },
 }));
 
-import { CommandPalette } from './CommandPalette';
+import { CommandPalette, loadCommandPaletteDialog } from './CommandPalette';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+
+// The palette dialog is a lazy chunk behind the shell host (audit bundle-04):
+// load it once up front, as the idle preload leaves it in the app, so the
+// host mounts it at once and ⌘K opens it synchronously.
+beforeAll(async () => {
+  await loadCommandPaletteDialog();
+}, 60_000);
 
 describe('CommandPalette Ask Genie row', () => {
   let container: HTMLDivElement;
@@ -110,7 +118,7 @@ describe('CommandPalette Ask Genie row', () => {
     act(() => row!.click());
     expect(openRequests).toEqual([1]);
     expect(consumeGeniePrefill()).toBe('refi candidates in Texas');
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
     expect(navigate).not.toHaveBeenCalled();
     expect(borrowerSearch.mock.calls.length, 'the borrower search is the only network call').toBeLessThanOrEqual(1);
   });

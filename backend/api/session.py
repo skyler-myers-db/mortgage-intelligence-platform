@@ -62,6 +62,23 @@ class SessionResponse(BaseModel):
             "contract."
         ),
     )
+    lender_name: str | None = Field(
+        default=None,
+        description=(
+            "The configured lender's display name (settings.mip_lender_name), "
+            "the same value /api/config/options returns. Served here too so "
+            "the shell's tenant label rides this zero-dependency call instead "
+            "of the warehouse-backed options call (audit delivery-07)."
+        ),
+    )
+    rum_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the browser may install the opt-in RUM beacon "
+            "(settings.mip_rum_enabled), the same value /api/config/options "
+            "returns (audit delivery-07)."
+        ),
+    )
 
 
 def _forwarded_actor(request: Request) -> str | None:
@@ -126,4 +143,6 @@ async def get_session(request: Request) -> SessionResponse:
         actor_email=identity,
         actor_display_name=display_name_for(identity),
         role_labels=role_labels_for(identity=identity, admin=admin, approver=approver),
+        lender_name=settings.mip_lender_name,
+        rum_enabled=settings.mip_rum_enabled,
     )

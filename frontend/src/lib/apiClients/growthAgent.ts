@@ -21,6 +21,7 @@ import type {
   GrowthAgentRunResponse,
   GrowthAgentWorkflowId,
 } from '../../types';
+import type { ExecutePlanRequest } from '../../types/growthAgent';
 import { _newRequestId, getJson, postJson } from '../apiTransport';
 
 export const growthAgentApi = {
@@ -138,6 +139,22 @@ export const growthAgentApi = {
     };
     return postJson<ComposePlanResponse, ComposePlanRequest>(
       '/api/growth-agent/agent/compose',
+      body,
+      signal,
+    );
+  },
+
+  /** Run the reviewed plan exactly as displayed (audit 2026-09-21 `critic-01`). */
+  executeComposedGrowthAgentPlan: (
+    payload: ExecutePlanRequest,
+    signal?: AbortSignal,
+  ) => {
+    const body: ExecutePlanRequest = {
+      ...payload,
+      request_id: payload.request_id ?? _newRequestId(),
+    };
+    return postJson<ComposePlanResponse, ExecutePlanRequest>(
+      '/api/growth-agent/agent/plan/execute',
       body,
       signal,
     );

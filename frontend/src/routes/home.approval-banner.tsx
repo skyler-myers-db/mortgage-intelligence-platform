@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
-import { api } from '../lib/api';
-import { queryKeys } from '../lib/queryKeys';
+import { homeQueries } from '../lib/homeQueries';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview } from '../types';
 import { formatCount } from '../lib/formatters';
@@ -55,10 +54,10 @@ export const APPROVAL_QUEUE_STATE_LABEL = 'current lifecycle state';
 export const HOME_REVIEW_QUEUE_TITLE = 'Refinance review queue';
 export const APPROVAL_QUEUE_HREF = '/lead-queue?segment=itm';
 /** The Lead Queue's default contactability, which the banner's link inherits. */
-export const HOME_CONTACTABLE_PREVIEW_CRITERIA = { marketing_eligibility: 'Eligible only' } as const;
+export { HOME_CONTACTABLE_PREVIEW_CRITERIA } from '../lib/homeQueries';
 
 export function requestHomeContactablePreview(signal?: AbortSignal) {
-  return api.portfolioPreview(HOME_CONTACTABLE_PREVIEW_CRITERIA, signal);
+  return homeQueries.homeContactablePreview.fetch(signal);
 }
 
 interface ApprovalQueueBannerProps {
@@ -74,7 +73,7 @@ export function ApprovalQueueBanner({ screenCount, approvedCount, inOutreachCoun
   // second callout — the banner just says what it still knows to be true.
   const { data: contactablePreview } = useWarmingUpRetry<PortfolioPreview>(
     requestHomeContactablePreview,
-    { queryKey: queryKeys.portfolioPreview(['home', 'contactable']) },
+    { queryKey: homeQueries.homeContactablePreview.queryKey() },
   );
   const reported = contactablePreview?.high_intent_leads;
   // Two requests can straddle a gold refresh; clamp so the sentence can never

@@ -79,6 +79,29 @@ describe('BorrowerOfferPreviewMock', () => {
     expect(mock.textContent).toContain('no information was submitted and no offer was made');
   });
 
+  it('is a native modal dialog that Escape and a press on its ::backdrop close', () => {
+    const onClose = vi.fn();
+    act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} onClose={onClose} />));
+    const mock = document.body.querySelector<HTMLDialogElement>('dialog.offer-mock[data-testid="borrower-offer-mock"]')!;
+    expect(mock.open).toBe(true);
+    expect(mock.hasAttribute('role')).toBe(false);
+    expect(mock.getAttribute('aria-label')).toBe('Borrower offer experience — prototype');
+    expect(document.body.querySelector('.offer-mock-scrim')).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // A press outside the card lands on the dialog itself (the ::backdrop).
+    mock.getBoundingClientRect = () => DOMRect.fromRect({ x: 450, y: 200, width: 544, height: 420 });
+    act(() => {
+      mock.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 8, clientY: 8 }));
+      mock.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 8, clientY: 8 }));
+    });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
   it('calls onClose from the close control', () => {
     const onClose = vi.fn();
     act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} onClose={onClose} />));

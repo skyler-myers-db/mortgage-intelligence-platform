@@ -205,6 +205,17 @@ def test_the_genie_export_receipt_is_a_lakebase_mutation(path: str) -> None:
     assert budget.requests_per_minute == settings.mip_rate_limit_mutation_per_minute
 
 
+@pytest.mark.parametrize("path", ["/api/genie/message/cancel", "/api/v1/genie/message/cancel"])
+def test_the_genie_cancel_is_a_lakebase_mutation_outside_the_genie_budget(path: str) -> None:
+    # Audit genie-03: a Stop is one Lakebase transaction, never a Genie call,
+    # and must land even when the Genie budget is spent.
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("mutation", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_mutation_per_minute
+
+
 @pytest.mark.parametrize(
     "path",
     ["/api/v1/genie/message/complete", "/api/v1/genie/message/submit", "/api/v1/genie/actions"],

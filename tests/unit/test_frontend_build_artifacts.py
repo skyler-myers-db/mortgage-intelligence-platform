@@ -140,6 +140,120 @@ def test_chunk_modules_key_node_modules_ids_by_package_path() -> None:
     assert sorted(module for module in ids if module.startswith(("../", "/"))) == []
 
 
+_MODULE_SCRIPT = re.compile(r'<script type="module" crossorigin src="/(assets/[^"]+\.js)"></script>')
+
+
+def _module_scripts(html: str) -> list[str]:
+    return _MODULE_SCRIPT.findall(html)
+
+
+def _built_manifest() -> dict[str, dict[str, object]]:
+    manifest_file = FRONTEND / "build-meta" / "build-manifest.json"
+    if not manifest_file.is_file():
+        _skip_unless_required("frontend/build-meta is not built in this checkout")
+    return json.loads(manifest_file.read_text(encoding="utf-8"))
+
+
+def test_built_html_loads_the_boot_module_just_before_the_entry() -> None:
+    """Audit ``bundle-02``: the boot module starts the four non-audited boot
+    reads while the entry downloads. No inline script, no fetch preload."""
+    _built_entry_chunk()
+    manifest = _built_manifest()
+    boot = manifest["src/boot/primeBoot.ts"]["file"]
+    entry = manifest["index.html"]["file"]
+    html = (DIST / "index.html").read_text(encoding="utf-8")
+
+    assert _module_scripts(html) == [boot, entry]
+    assert html.index(f'src="/{boot}"') < html.index(f'src="/{entry}"')
+    assert re.search(r"<script(?![^>]*\bsrc=)[^>]*>", html) is None, "no inline script (CSP script-src 'self')"
+    assert 'as="fetch"' not in html
+
+
+def test_built_html_paints_the_text_free_shell_skeleton() -> None:
+    """Audit ``bundle-10``: #root carries the aria-hidden shell skeleton, with
+    no text and no inline style, in both shells."""
+    _built_entry_chunk()
+    for shell in ("index.html", "index.home.html"):
+        html = (DIST / shell).read_text(encoding="utf-8")
+        match = re.search(r'<div id="root">(<div class="app-shell" aria-hidden="true">.*?)</div>\s*</body>', html, re.S)
+        assert match, f"{shell}: #root holds the shell skeleton"
+        skeleton = match.group(1)
+        assert re.sub(r"<[^>]+>", "", skeleton) == "", "no text nodes"
+        assert "style=" not in skeleton and " id=" not in skeleton and "role=" not in skeleton
+        for name in ("rail", "topbar", "main", "route-nav", "proto-hero", "skeleton skeleton--title"):
+            assert f'class="{name}"' in skeleton
+
+
+_MODULEPRELOAD = re.compile(r'<link rel="modulepreload" crossorigin href="/(assets/[^"]+\.js)">')
+
+
+def _static_closure(manifest: dict[str, dict[str, object]], start: str) -> set[str]:
+    seen: set[str] = set()
+    queue = [start]
+    while queue:
+        key = queue.pop()
+        if key in seen:
+            continue
+        seen.add(key)
+        queue.extend(str(imported) for imported in manifest[key].get("imports", []))  # type: ignore[union-attr]
+    return seen
+
+
+def _home_closure_files(manifest: dict[str, dict[str, object]]) -> set[str]:
+    """Home's JS beyond the initial closure, from the manifest (not the plugin's own maths)."""
+    keys = _static_closure(manifest, "src/routes/home.tsx") - _static_closure(manifest, "index.html")
+    return {str(manifest[key]["file"]) for key in keys if str(manifest[key]["file"]).endswith(".js")}
+
+
+def test_root_serves_the_home_variant_and_deep_links_the_plain_shell() -> None:
+    """Audit ``bundle-02``: exactly ``/`` preloads Home's closure beside the
+    entry; a deep link never pays for Home's chunks. Both shells carry the
+    boot module just before the entry and are never cached."""
+    _built_entry_chunk()
+    manifest = _built_manifest()
+    boot = manifest["src/boot/primeBoot.ts"]["file"]
+    entry = manifest["index.html"]["file"]
+    home_files = _home_closure_files(manifest)
+    assert home_files, "the Home route has chunks beyond the initial closure"
+    assert (DIST / "index.home.html").is_file()
+    from backend.main import app
+
+    client = TestClient(app)
+    root = client.get("/")
+    root_with_query = client.get("/?view=map")
+    deep = client.get("/lead-queue")
+    by_name = client.get("/index.home.html")
+    plain = (DIST / "index.html").read_text(encoding="utf-8")
+
+    for response in (root, root_with_query, deep, by_name):
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache, no-store, must-revalidate"
+        assert _module_scripts(response.text) == [boot, entry]
+    assert root.text == root_with_query.text
+    assert set(_MODULEPRELOAD.findall(root.text)) - set(_MODULEPRELOAD.findall(plain)) == home_files
+    assert deep.text == plain
+    assert by_name.text == plain, "a shell requested by name is served as the plain shell"
+    assert not home_files & set(_MODULEPRELOAD.findall(deep.text))
+    assert not re.search(r'href="/assets/home-[^"]+\.js"', deep.text)
+    assert 'rel="preload" as="style"' not in root.text
+
+
+def test_the_genie_answer_chunk_is_named_for_its_family() -> None:
+    """w3 review #88: the shared chunk holding GenieAnswer.tsx is
+    ``genie-answer-*.js`` (a naming-only chunkFileNames rule), not the name of
+    an arbitrary member such as ``useGenieTurnCollapse``."""
+    _built_entry_chunk()
+    modules_file = FRONTEND / "build-meta" / "build-modules.json"
+    if not modules_file.is_file():
+        _skip_unless_required("frontend/build-meta is not built in this checkout")
+    chunks: dict[str, list[str]] = json.loads(modules_file.read_text(encoding="utf-8"))["chunks"]
+
+    holders = [name for name, modules in chunks.items() if "src/components/mortgage/GenieAnswer.tsx" in modules]
+    assert len(holders) == 1
+    assert re.fullmatch(r"assets/genie-answer-[\w-]+\.js", holders[0]), holders[0]
+    assert not [name for name in chunks if name.startswith("assets/useGenieTurnCollapse-")]
+
+
 def _missing_build_outcome() -> str:
     """How a missing build ends a test: 'skip' or 'fail' (never both)."""
     try:

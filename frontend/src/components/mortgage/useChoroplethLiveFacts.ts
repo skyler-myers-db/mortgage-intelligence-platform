@@ -30,7 +30,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../../lib/api';
 import type { GeoAssignmentOverlayResponse, GeoOverlayLevel } from '../../lib/api';
-import { queryKeys } from '../../lib/queryKeys';
+import {
+  geoQueryKeys,
+  requestStateRollupsByCode,
+  rollupCohort,
+  type GeoCriteria,
+} from '../../lib/geoQueryKeys';
 import {
   useWarmingUpRetry,
   type UseWarmingUpRetryResult,
@@ -42,17 +47,11 @@ import { rateScenarioApi } from '../../lib/apiClients/rateScenario';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { loadUsaStateMap } from './USStateMapData';
 
-type Criteria = Record<string, string | number | null | undefined>;
+type Criteria = GeoCriteria;
 
-/** Geography rollup keys under the app's `mip` root (never collide with other reads). */
-export const geoQueryKeys = {
-  stateRollups: (cohort: readonly unknown[]) => [...queryKeys.all, 'geo', 'state-rollups', ...cohort] as const,
-  zipRollups: (state: string, cohort: readonly unknown[]) =>
-    [...queryKeys.all, 'geo', 'zip-rollups', state, ...cohort] as const,
-  assignmentOverlay: (level: GeoOverlayLevel, state: string | null) =>
-    [...queryKeys.all, 'geo', 'assignment-overlay', level, state ?? ''] as const,
-  rateSensitivity: () => [...queryKeys.all, 'geo', 'rate-sensitivity'] as const,
-};
+// The keys, the cohort and the state-rollups read live in lib/geoQueryKeys so
+// the route-data prefetch can use them without importing this lazy module.
+export { geoQueryKeys };
 
 /** Where the drilled state sits in a `zipRollups` key. */
 const ZIP_KEY_STATE_AT = geoQueryKeys.zipRollups('', []).length - 1;
@@ -126,27 +125,19 @@ export function useChoroplethLiveFacts({
     };
   }, []);
 
-  // The cohort half of every rollup key, built from the values the fetchers
-  // read. Without a segment filter the API ignores segment_mode, so it is
-  // normalised to `any` and Home's national read shares one entry.
+  // The cohort half of every rollup key (lib/geoQueryKeys rollupCohort).
   const segments = useMemo(
     () => (segmentFilter && segmentFilter.length > 0 ? segmentFilter : null),
     [segmentFilter],
   );
   const mode = segments ? segmentFilterMode : 'any';
   const cohort = useMemo(
-    () => [segments?.join(',') ?? '', mode, JSON.stringify(portfolioCriteria ?? {})] as const,
+    () => rollupCohort(segments, mode, portfolioCriteria),
     [segments, mode, portfolioCriteria],
   );
 
   const stateResult = useWarmingUpRetry<Record<string, StateRollup>>(
-    (signal) =>
-      api.stateRollups(segments, signal, mode, portfolioCriteria).then((payload) => {
-        // Keyed by lowercase USPS code to match the map's location ids.
-        const byCode: Record<string, StateRollup> = {};
-        for (const rollup of payload.rollups) byCode[rollup.state.toLowerCase()] = rollup;
-        return byCode;
-      }),
+    (signal) => requestStateRollupsByCode(segments, mode, portfolioCriteria, signal),
     { queryKey: geoQueryKeys.stateRollups(cohort), keepPreviousData: true },
   );
 

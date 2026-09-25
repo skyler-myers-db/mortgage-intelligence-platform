@@ -1,6 +1,6 @@
 import { useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import { formatTimestamp } from '../../lib/time';
 import { formatFixed } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
@@ -64,17 +64,22 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose, focusComponent 
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const focusCardRef = useRef<HTMLDivElement | null>(null);
-  const panelRef = useRef<HTMLElement | null>(null);
+  const panelRef = useRef<HTMLDialogElement | null>(null);
   // The one proof query (critic fix 16): opening the drawer is the explicit
   // act that may read; a re-open over a cached proof is a pure cache read,
   // even after an approve invalidated ['mip', 'borrower', ...].
   const proofQuery = useBorrowerProof(borrowerId, open);
 
-  useFocusTrap<HTMLElement, HTMLElement>({
+  // A native modal <dialog> (audit stack-05 / a11y-07), always mounted: it
+  // plays the .drawer exit on close (close() at exit start, the closed
+  // dialog inert and aria-hidden while it slides out) and gives focus back
+  // to "Show math" or the Score anatomy segment that opened it.
+  useModalDialog<HTMLElement>({
     open,
-    containerRef: panelRef,
+    dialogRef: panelRef,
     initialFocusRef: focusComponent ? focusCardRef : closeBtnRef,
-    onClose,
+    onDismiss: onClose,
+    backdrop: 'outside',
   });
 
   const proof = proofQuery.data;
@@ -89,20 +94,13 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose, focusComponent 
   };
 
   const drawer = (
-    <>
-      <div
-        className={`drawer-scrim ${open ? 'is-open' : ''}`}
-        onClick={onClose}
-        aria-hidden={!open}
-      />
-      <aside
-        ref={panelRef}
-        className={`drawer proof-drawer ${open ? 'is-open' : ''}`}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Proof for borrower ${borrowerId}`}
-        aria-hidden={!open}
-      >
+    <dialog
+      ref={panelRef}
+      className={`drawer proof-drawer ${open ? 'is-open' : ''}`}
+      aria-label={`Proof for borrower ${borrowerId}`}
+      aria-hidden={!open || undefined}
+      inert={!open}
+    >
         <div className="drawer__hdr">
           <div className="drawer__source-icon">
             <Icon name="shield" size={16} />
@@ -351,8 +349,7 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose, focusComponent 
             </>
           )}
         </div>
-      </aside>
-    </>
+    </dialog>
   );
 
   return createPortal(drawer, document.body);

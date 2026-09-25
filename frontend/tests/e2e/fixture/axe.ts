@@ -65,11 +65,8 @@ export const KNOWN_VIOLATIONS: KnownViolations = {
   // Surfaced by the first accent sweep (wave 2); the token fix is not in any
   // wave-2 lane, so it waits for the a11y-01 remainder.
   'home|default|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
-  'home|evidence-drawer|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
   'lead-queue|default|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
-  'lead-queue|evidence-drawer|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
   'borrower-360-detail|default|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
-  'borrower-360-detail|evidence-drawer|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
   // New slug (no register id fits; wave 3/4): Portfolio Builder's message
   // hypotheses wrap each <dt>/<dd> pair in `<div role="group" aria-label>`
   // (portfolio-builder.campaign-setup.tsx). A role on the wrapper takes the

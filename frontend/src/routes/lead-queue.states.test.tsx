@@ -18,7 +18,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -59,6 +59,13 @@ vi.mock('../lib/configOptionsQuery', () => {
   return { useConfigOptionsQuery: () => STABLE };
 });
 
+// The audit-free queue-version poll (states-09) is lead-queue.freshness.test's;
+// here it answers nothing, so no request leaves the test.
+vi.mock('../lib/queueVersion', async (importOriginal) => {
+  const STABLE = { data: undefined, dataUpdatedAt: 0, refetch: () => Promise.resolve() };
+  return { ...(await importOriginal<typeof import('../lib/queueVersion')>()), useQueueVersion: () => STABLE };
+});
+
 vi.mock('../components/FootprintProvider', () => {
   const STABLE = { ready: true, usingFallback: false, states: [] };
   return { useFootprint: () => STABLE };
@@ -87,6 +94,12 @@ vi.mock('../lib/api', () => {
 });
 
 import LeadQueue from './lead-queue';
+import { preloadAsyncFailure } from '../components/ui/AsyncState';
+
+// The red callout is its own chunk (loaded on the first failure).
+beforeAll(async () => {
+  await preloadAsyncFailure();
+});
 
 function warmingError() {
   return Object.assign(new Error('warehouse warming'), {
@@ -104,6 +117,32 @@ const EMPTY_PAGE = {
   returnedRows: 0,
   truncatedAt: null,
   growthAgentVerification: null,
+};
+
+const ONE_ROW_PAGE = {
+  ...EMPTY_PAGE,
+  leads: [{
+    borrower_id: 'B-0000000000001',
+    display_name: 'Borrower 1',
+    city: 'Chicago',
+    state: 'IL',
+    zip: '60601',
+    clip: '',
+    segment_codes: ['itm'],
+    equity_estimate: 250000,
+    rate_spread_bps: 80,
+    opportunity_score: 86,
+    confidence: 88,
+    recommended_offer_code: 'refi',
+    recommended_offer: 'Rate refinance',
+    why_now: 'Rate spread and equity support review.',
+    evidence_ids: ['ev-1'],
+    approval_status: 'pending',
+    outreach_status: 'none',
+  }],
+  totalMatching: 1,
+  rankedMatching: 1,
+  returnedRows: 1,
 };
 
 describe('LeadQueue never shows a zero count it did not measure', () => {
@@ -147,6 +186,12 @@ describe('LeadQueue never shows a zero count it did not measure', () => {
       if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1);
       else await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
+    // A measured zero loads its EmptyState chunk.
+    if (!vi.isFakeTimers()) {
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+    }
   }
 
   const text = () => document.body.textContent ?? '';
@@ -160,16 +205,29 @@ describe('LeadQueue never shows a zero count it did not measure', () => {
     expect(text()).not.toContain('Showing 0');
     expect(text()).not.toContain('ranked borrowers of');
     expect(text()).not.toContain('No leads match this filter.');
+    expect(document.querySelector('.empty')).toBeNull();
     expect(document.querySelector('[data-testid="lead-export"]')).toBeNull();
   }
 
-  it('renders the honest zero when the live query really returned none (control)', async () => {
+  const retryButton = () => document.querySelector('button[aria-label="Retry loading ranked borrowers"]');
+
+  /**
+   * Audit states-v2: a MEASURED zero is an EmptyState with its cause, and
+   * LeadTable never mounts for it (no "Showing 0" header, footer or Export).
+   */
+  it('renders the measured zero as an EmptyState, with no table chrome', async () => {
     apiMocks.leadsPage.mockResolvedValue(EMPTY_PAGE);
     await mount();
 
-    expect(table()).not.toBeNull();
-    expect(text()).toContain('Showing 0 ranked borrowers of 0 total matching filters');
-    expect(text()).toContain('No leads match this filter.');
+    const empty = document.querySelector('.empty');
+    expect(empty?.getAttribute('role')).toBe('status');
+    expect(empty?.textContent).toContain('No leads match this filter.');
+    // Unfiltered: says what the default view lists, and offers no Clear.
+    expect(empty?.textContent).toContain('The default view lists marketing-eligible borrowers only.');
+    expect(document.querySelector('button[aria-label="Clear lead queue filters"]')).toBeNull();
+    expect(table()).toBeNull();
+    expect(text()).not.toContain('Showing 0');
+    expect(document.querySelector('[data-testid="lead-export"]')).toBeNull();
     expect(skeleton()).toBeNull();
   });
 
@@ -201,13 +259,14 @@ describe('LeadQueue never shows a zero count it did not measure', () => {
     expectNoFalseZero();
   });
 
-  it('shows the error surface with Retry, and no table, after a load error', async () => {
+  it('shows the error surface with Retry, and no table, after a load error, never the raw message', async () => {
     apiMocks.leadsPage.mockRejectedValue(new Error('warehouse query failed'));
     await mount();
 
     const alert = document.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("Couldn't load leads: warehouse query failed");
-    expect(document.querySelector('button[aria-label="Retry loading leads"]')).not.toBeNull();
+    expect(alert?.textContent).toContain("Couldn't load ranked borrowers.");
+    expect(alert?.textContent).not.toContain('warehouse query failed');
+    expect(retryButton()).not.toBeNull();
     expect(skeleton()).toBeNull();
     expectNoFalseZero();
   });
@@ -227,8 +286,8 @@ describe('LeadQueue never shows a zero count it did not measure', () => {
 
     expect(apiMocks.leadsPage).toHaveBeenCalledTimes(6);
     expect(warmingBlock()).toBeNull();
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Couldn't load leads");
-    expect(document.querySelector('button[aria-label="Retry loading leads"]')).not.toBeNull();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Couldn't load ranked borrowers");
+    expect(retryButton()).not.toBeNull();
     expectNoFalseZero();
   });
 
@@ -236,7 +295,7 @@ describe('LeadQueue never shows a zero count it did not measure', () => {
     vi.useFakeTimers();
     apiMocks.leadsPage
       .mockRejectedValueOnce(warmingError())
-      .mockResolvedValue(EMPTY_PAGE);
+      .mockResolvedValue(ONE_ROW_PAGE);
     await mount();
     expectNoFalseZero();
 

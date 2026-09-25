@@ -40,7 +40,28 @@ jobs:
   backend-tests:
     name: backend (ruff + pytest)
     runs-on: ubuntu-latest
+    # 15 still holds with the Postgres service: the base job took 7m36s (run
+    # 36123325650) and the serial contract step ~31 s locally (19 tests).
     timeout-minutes: 15
+    services:
+      # Disposable PostgreSQL for the DSN-gated real-SQL contracts (audit
+      # genie-01 item 4); only the serial step below is given its DSN.
+      # PostgreSQL 16 is assumed to be the Lakebase default major
+      # (databricks.yml sets no pg_version). Pinned by tag AND index digest,
+      # verified in the registry on 2026-09-25. Trust auth on a throwaway
+      # service: there is no password literal (nothing secret, nothing for
+      # gitleaks).
+      postgres:
+        image: postgres:16.15-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -79,6 +100,72 @@ jobs:
             --cov-report=xml:coverage.xml \
             --cov-report=html:coverage/html \
             --cov-fail-under=83
+      - name: pytest (real PostgreSQL contracts, serial)
+        # The suites that read MIP_TEST_POSTGRES_DSN run the real SQL and DDL
+        # against the service above; the parallel step never sees the DSN,
+        # so they skip there. `-n 0` is required: every one of them
+        # DROPs/CREATEs mip_app in the same database. Before pytest, the
+        # database takes the dedicated Lakebase database's posture: the
+        # migration closes the default PUBLIC USAGE on schema public (see
+        # jobs/lakebase_migration_acl.py), a step the suites skip with
+        # allow_absent_provider_schema on vanilla PostgreSQL. KNOWN_UNRUN is
+        # shrink-only and pinned by tests/unit/test_ci_postgres_contracts.py:
+        # one `<node id>|<text its failure prints>` per line; each node is
+        # deselected here, re-run last, and must still fail WITH that text (a
+        # pass is a stale entry, another failure is a new defect; both fail
+        # this step). The junit check makes "ran, not skipped" a gate.
+        env:
+          MIP_TEST_POSTGRES_DSN: 'host=127.0.0.1 port=5432 dbname=postgres user=postgres'
+          KNOWN_UNRUN: ''
+        run: |
+          python - <<'PY'
+          import os
+
+          import psycopg
+
+          dsn = os.environ.get("MIP_TEST_POSTGRES_DSN")
+          if dsn:  # without a DSN every suite skips and the junit check fails the step
+              with psycopg.connect(dsn, autocommit=True) as conn:
+                  conn.execute("REVOKE ALL ON SCHEMA public FROM PUBLIC")
+          PY
+          deselect=()
+          while IFS='|' read -r node _; do
+            if [ -n "$node" ]; then deselect+=(--deselect "$node"); fi
+          done <<< "$KNOWN_UNRUN"
+          pytest -q -n 0 -rs --junitxml=postgres-contracts.xml "${deselect[@]}" \
+            tests/integration/test_*_postgres.py tests/integration/test_lakebase_schema_upgrade.py
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("postgres-contracts.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          tests = sum(int(suite.get("tests", 0)) for suite in suites)
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          print(f"real PostgreSQL contracts: {tests} tests, {skipped} skipped")
+          if tests == 0 or skipped > 0:
+              print("::error::the real-PostgreSQL contracts must run, not skip (is the DSN wired?)")
+              sys.exit(1)
+          PY
+          while IFS='|' read -r node expected; do
+            if [ -z "$node" ]; then continue; fi
+            set +e
+            output=$(pytest -q -n 0 -p no:cacheprovider "$node" < /dev/null 2>&1)
+            status=$?
+            set -e
+            printf '%s\n' "$output"
+            if [ "$status" -eq 0 ]; then
+              echo "::error::$node now passes: remove its KNOWN_UNRUN entry here and in tests/unit/test_ci_postgres_contracts.py"
+              exit 1
+            elif [ "$status" -ne 1 ]; then
+              echo "::error::the KNOWN_UNRUN re-run of $node could not execute (pytest exit $status)"
+              exit 1
+            elif ! grep -qF -- "$expected" <<< "$output"; then
+              echo "::error::$node failed without its known failure text ($expected): a new defect, triage it"
+              exit 1
+            fi
+            echo "::warning::known real-PostgreSQL failure, owner lane to fix: $node"
+          done <<< "$KNOWN_UNRUN"
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v7
@@ -117,6 +204,15 @@ jobs:
         # above its entry, and on a stale entry (lower it with --ratchet).
         # About 10 s; runs the same compiler options as the production build.
         run: node tools/react_compiler_coverage.mjs --check tools/react_compiler_allowlist.json
+      - name: oxlint jsx-a11y ratchet (audit a11y-05)
+        # Every jsx-a11y rule of the pinned oxlint, named explicitly in
+        # frontend/.oxlintrc.json, over frontend/src, compared with
+        # frontend/oxlint-baseline.json by file + rule + count (never line).
+        # Fails on a new or grown hit, a stale entry (lower it with
+        # --ratchet), a baseline from another oxlint, and any suppression
+        # directive. Its own step so the log names this gate; `npm run lint`
+        # runs it again (under 1 s).
+        run: npm --prefix frontend run lint:a11y
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run test
       - run: npm --prefix frontend run build
@@ -378,14 +474,19 @@ jobs:
         env:
           E2E_FIXTURE_WORKERS: '4'
         run: npm --prefix frontend run e2e:fixture:ci
-      - name: Run the perf budget (single worker)
-        # perf-budget.fixture.spec.ts measures timing, so it runs alone on one
-        # worker and only here (MIP_PERF=1; playwright.config.ts ignores it in
-        # every other run). Its artifacts go to test-results/perf and
+      - name: Run the perf and interaction budgets (single worker)
+        # The specs playwright.config.ts's PERF_SPEC collects measure timing,
+        # so they run alone on one worker and only here (MIP_PERF=1; every
+        # other run ignores them): perf-budget.fixture.spec.ts (calibrated on
+        # this runner, gating) and interaction-budget.fixture.spec.ts (audit
+        # runtime-09, W4b lead-queue; report-only until 3 runner medians
+        # calibrate it). The file filters are required: MIP_PERF=1 alone
+        # also collects every normal fixture spec. A filter that matches no
+        # file yet adds nothing. Artifacts go to test-results/perf and
         # playwright-report/perf, which the upload below already covers.
         env:
           MIP_PERF: '1'
-        run: npm --prefix frontend run e2e:fixture:ci -- perf-budget --workers=1
+        run: npm --prefix frontend run e2e:fixture:ci -- perf-budget interaction-budget --workers=1
       - name: Upload Playwright report
         # Safe to publish: every borrower, id and draft in this suite is
         # synthetic fixture data. (The live suite in nightly.yml does NOT
@@ -415,11 +516,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: mcr.microsoft.com/playwright:v1.59.1-noble
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
       options: --ipc=host
     env:
       MIP_VRT: '1'
-      MIP_VRT_IMAGE: mcr.microsoft.com/playwright:v1.59.1-noble
+      MIP_VRT_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

@@ -15,6 +15,7 @@ import {
   pollGenieJob,
   pollGenieTurn,
   requestGenieCompletion,
+  settledGenieJob,
   submitGenieTurn,
 } from './genieAsk';
 
@@ -209,6 +210,7 @@ describe('submitGenieTurn / pollGenieTurn (runtime-01 split)', () => {
       progressToken: 'tok',
       deep: true,
       completionJobs: false,
+      questionHash: null,
     });
     submit.mockResolvedValueOnce({
       completed: true,
@@ -219,6 +221,25 @@ describe('submitGenieTurn / pollGenieTurn (runtime-01 split)', () => {
       response: { answer: 'inline' },
     });
     expect(submit).toHaveBeenCalledTimes(2);
+  });
+
+  it('carries the submit question label only when it is the 16-hex shape (genie-03)', async () => {
+    const live = (question_hash: string | null | undefined) => ({
+      completed: false as const,
+      conversation_id: 'conv-1',
+      message_id: 'msg-1',
+      progress_token: 'tok',
+      question_hash,
+    });
+    const submit = vi.spyOn(api, 'genieSubmit');
+    const labels: Array<string | null> = [];
+    for (const label of ['0123456789abcdef', 'hash-1', '0123456789ABCDEF', 'a'.repeat(64), '', null, undefined]) {
+      submit.mockResolvedValueOnce(live(label));
+      const outcome = await submitGenieTurn('question?', null);
+      labels.push(outcome.kind === 'live' ? outcome.questionHash : 'inline');
+    }
+
+    expect(labels).toEqual(['0123456789abcdef', null, null, null, null, null, null]);
   });
 
   it('submit never re-POSTs on a failure: the error goes to the caller', async () => {
@@ -393,6 +414,20 @@ describe('pollGenieJob (genie-01)', () => {
     await expect(
       pollGenieJob(IDS, 'question?', 'job-1', { deadline: Date.now() + JOB_RESUME_WINDOW_MS, sleep: noSleep }),
     ).rejects.toMatchObject({ name: 'GenieLiveError', hint: 'Ask it again.' });
+  });
+
+  it('settles a cancelled job (terminal, not failed) with its hint at once, never polling to the deadline (genie-03)', async () => {
+    const hint = 'You stopped this question before its answer was recorded. Ask it again to get an answer.';
+    const cancelled = jobOf({ status: 'cancelled', stage: 'cancelled', terminal: true, failed: false, error_hint: hint });
+    const status = vi.spyOn(genieJobsApi, 'genieJobStatus').mockResolvedValue(cancelled);
+
+    expect(() => settledGenieJob(cancelled)).toThrowError(hint);
+    await expect(
+      pollGenieJob(IDS, 'question?', 'job-1', { deadline: Date.now() + JOB_RESUME_WINDOW_MS, sleep: noSleep }),
+    ).rejects.toMatchObject({ name: 'GenieLiveError', hint });
+    expect(status).toHaveBeenCalledTimes(1);
+    expect(settledGenieJob(jobOf({ status: 'running' }))).toBeNull();
+    expect(settledGenieJob(jobOf({ status: 'queued', stage: 'queued' }))).toBeNull();
   });
 
   it.each([400, 403, 404])('fails at once on a %i', async (code) => {

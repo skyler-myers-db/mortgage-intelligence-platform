@@ -79,6 +79,12 @@ from backend.services.observability import (
 )
 from backend.services.security_headers import SecurityHeadersMiddleware
 from backend.services.server_timing import ServerTimingMiddleware
+from backend.services.spa_shell import (
+    INDEX_SHELL,
+    SHELL_CACHE_CONTROL,
+    is_shell_file,
+    spa_shell_path,
+)
 from backend.services.static_assets import select_asset_variant
 from backend.services.thread_limits import configure_default_thread_limiter
 from backend.services.visit_tracking import VisitTrackingMiddleware
@@ -846,10 +852,10 @@ if _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file():
                 level=logging.WARNING,
                 path=attempted,
             )
-            candidate = _FRONTEND_DIST / "index.html"
-        if candidate.is_file() and candidate.name != "index.html":
+            candidate = _FRONTEND_DIST / INDEX_SHELL
+        if candidate.is_file() and not is_shell_file(candidate):
             return FileResponse(candidate)
         return FileResponse(
-            _FRONTEND_DIST / "index.html",
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            spa_shell_path(_FRONTEND_DIST, full_path),
+            headers={"Cache-Control": SHELL_CACHE_CONTROL},
         )

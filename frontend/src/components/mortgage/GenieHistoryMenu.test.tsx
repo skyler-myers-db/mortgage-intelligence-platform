@@ -98,7 +98,10 @@ describe('GenieHistoryMenu', () => {
     }
   }
 
-  async function waitUntil(condition: () => boolean, timeoutMs = 5_000) {
+  // Below vitest's own 5 s testTimeout, so a condition that never holds fails
+  // here, with this message, instead of as an anonymous test timeout
+  // (wave-3 api-contract review).
+  async function waitUntil(condition: () => boolean, timeoutMs = 2_000) {
     const startedAt = Date.now();
     while (!condition()) {
       if (Date.now() - startedAt > timeoutMs) throw new Error('waitUntil timeout');

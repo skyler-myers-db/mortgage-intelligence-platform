@@ -1,0 +1,38 @@
+{
+  "oxlintVersion": "1.85.0",
+  "config": "frontend/.oxlintrc.json",
+  "scope": "frontend/src",
+  "policy": {
+    "gate": "node tools/oxlint_ratchet.mjs --check frontend/oxlint-baseline.json (npm --prefix frontend run lint:a11y)",
+    "key": "file + rule + count, never line",
+    "moves": [],
+    "newHit": "fix it in code; a new file+rule key or a higher count is never added here",
+    "ratchet": "--ratchet only lowers counts, drops fixed or deleted files and accepts a new oxlintVersion; --moved-from/--moved-to transfers what a pure move carried into a new file",
+    "suppressions": "banned under frontend/src: any oxlint-disable directive, and an eslint-disable directive that is bare or names a jsx-a11y rule"
+  },
+  "files": {
+    "frontend/src/components/feedback/Toaster.tsx": {"jsx-a11y/no-noninteractive-element-interactions":1},
+    "frontend/src/components/layout/AppShell.tsx": {"jsx-a11y/no-redundant-roles":2},
+    "frontend/src/components/layout/Console.tsx": {"jsx-a11y/label-has-associated-control":11,"jsx-a11y/no-redundant-roles":1},
+    "frontend/src/components/layout/IdentityMenuPanel.tsx": {"jsx-a11y/control-has-associated-label":1,"jsx-a11y/interactive-supports-focus":1},
+    "frontend/src/components/layout/Rail.tsx": {"jsx-a11y/role-supports-aria-props":1},
+    "frontend/src/components/layout/ShellPanelBoundaries.tsx": {"jsx-a11y/no-redundant-roles":1},
+    "frontend/src/components/layout/Topbar.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/interactive-supports-focus":2},
+    "frontend/src/components/mortgage/AssignmentLifecycleAdvance.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-static-element-interactions":1},
+    "frontend/src/components/mortgage/GenieAnswer.markdown.tsx": {"jsx-a11y/no-noninteractive-tabindex":1},
+    "frontend/src/components/mortgage/GenieAnswer.sections.tsx": {"jsx-a11y/no-noninteractive-tabindex":1},
+    "frontend/src/components/mortgage/GenieAnswerAllRows.tsx": {"jsx-a11y/control-has-associated-label":2,"jsx-a11y/no-noninteractive-tabindex":1},
+    "frontend/src/components/mortgage/LeadTable.tsx": {"jsx-a11y/control-has-associated-label":2,"jsx-a11y/no-noninteractive-tabindex":1},
+    "frontend/src/components/mortgage/LeadTableRow.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-static-element-interactions":1},
+    "frontend/src/components/mortgage/LeadTableStatusSortMenu.tsx": {"jsx-a11y/interactive-supports-focus":1},
+    "frontend/src/components/mortgage/ScoreSpine.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-static-element-interactions":1},
+    "frontend/src/components/mortgage/USChoroplethMap.tsx": {"jsx-a11y/no-autofocus":3,"jsx-a11y/no-static-element-interactions":1},
+    "frontend/src/components/mortgage/USChoroplethMapStates.tsx": {"jsx-a11y/no-noninteractive-element-interactions":1},
+    "frontend/src/components/mortgage/USChoroplethMapTable.tsx": {"jsx-a11y/control-has-associated-label":2},
+    "frontend/src/components/mortgage/USChoroplethMapZipLevel.tsx": {"jsx-a11y/no-noninteractive-element-interactions":1,"jsx-a11y/no-redundant-roles":1},
+    "frontend/src/components/ui/FilterSelect.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-noninteractive-element-to-interactive-role":2},
+    "frontend/src/components/ui/MultiFilterSelect.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-noninteractive-element-to-interactive-role":2},
+    "frontend/src/routes/analytics.equity-scatter.tsx": {"jsx-a11y/no-static-element-interactions":3},
+    "frontend/src/routes/portfolio-builder.tsx": {"jsx-a11y/no-autofocus":1}
+  }
+}

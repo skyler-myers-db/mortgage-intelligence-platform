@@ -80,7 +80,7 @@ function cursorRow(page: Page): Locator {
 }
 
 function focusInOpenDrawer(page: Page): Promise<boolean> {
-  return page.evaluate(() => document.querySelector('aside.drawer.is-open')?.contains(document.activeElement) ?? false);
+  return page.evaluate(() => document.querySelector('dialog.drawer[open]')?.contains(document.activeElement) ?? false);
 }
 
 /** Let `count` animation frames commit (focus handoffs run on frames). */
@@ -261,7 +261,7 @@ test.describe('approve review', () => {
     // query, not a role query: inert content leaves the accessibility tree),
     // so the next Escape still belongs to the review.
     await page.keyboard.press('Control+k');
-    await expect(page.locator('[role="dialog"][aria-label="Command palette"]')).toHaveCount(0);
+    await expect(page.locator('dialog.cmdk[open]')).toHaveCount(0);
     await expect(dialog.getByTestId('lead-approve-review-confirm')).toBeFocused();
 
     await page.keyboard.press('Escape');

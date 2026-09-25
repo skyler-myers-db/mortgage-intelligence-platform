@@ -240,7 +240,10 @@
    fixed FAB at ALL widths (display: grid, no hiding media query). We hide
    it at desktop because a fixed bottom-right FAB collides with the lead
    table and choropleth at 1440, and the topbar Genie icon is the desktop
-   entry; the max-width:720px block below restores the FAB on mobile.
+   entry; the max-width:1023px band below restores the FAB wherever the
+   desktop layout has given way (2026-09-21 audit responsive-06: it used to
+   return only at 720px, leaving 721-1023px with no floating entry), and the
+   720px band lifts it clear of the bottom sheet.
    Pinned by components.test.ts as a documented deviation-by-choice. */
 .genie__fab {
   position: fixed; bottom: var(--sp-4); right: var(--sp-4);
@@ -256,9 +259,11 @@
 .genie__fab:hover { transform: translateY(-2px); }
 .genie__fab:active { scale: var(--pressed-scale); }
 .genie__fab.is-hidden { transform: translateY(20px) scale(0.6); opacity: 0; pointer-events: none; }
+@media (max-width: 1023px) {
+  .genie__fab { display: grid; }
+}
 @media (max-width: 720px) {
   .genie__fab {
-    display: grid;
     bottom: calc(var(--sp-4) + 56px);
   }
 }

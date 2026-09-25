@@ -138,6 +138,12 @@ async function installMockApi(
       await fulfillJson(route, { can_access_admin: false });
       return;
     }
+    // Wave 4a (error-surfaces): the Lead Queue polls an audit-free version of
+    // its decision ledgers; a stable version means "no change".
+    if (path === '/api/workspace/queue-version') {
+      await fulfillJson(route, { version: '0'.repeat(32) });
+      return;
+    }
     if (path === '/api/workspace') {
       await fulfillJson(route, { saved_leads: [], saved_drafts: [] });
       return;

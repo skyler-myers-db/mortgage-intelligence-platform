@@ -27,12 +27,27 @@ vi.mock('./app', () => ({
   },
 }));
 
+/** The three shell reads main.tsx seeds before render (lib/bootPrime). */
+const SEEDED_BOOT_READS = ['/api/v1/config/footprint', '/api/v1/config/options', '/api/v1/session'];
+/** The landing route's hero reads main.tsx prefetches for `/` (lib/routeDataPrefetch). */
+const HOME_PREFETCH_READS = [
+  '/api/v1/geo/state-rollups',
+  '/api/v1/home/summary',
+  '/api/v1/portfolio/preview',
+  '/api/v1/portfolio/preview',
+];
+const BOOT_AND_HOME_READS = [...SEEDED_BOOT_READS, ...HOME_PREFETCH_READS].sort();
+
+const notFound = () => new Response('{"detail":"not found"}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+
 describe('main.tsx boot', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('renders a page-level recovery surface instead of an empty #root when the shell throws', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => notFound()));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const addEventListener = vi.spyOn(window, 'addEventListener');
     document.body.innerHTML = '<div id="root"></div>';
@@ -79,7 +94,7 @@ describe('main.tsx boot', () => {
   it('installs the error listeners and the router source; a borrower-bearing ErrorEvent leaves one message-free report and no request', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const addEventListener = vi.spyOn(window, 'addEventListener');
-    const fetchSpy = vi.fn();
+    const fetchSpy = vi.fn(async () => notFound());
     const beacon = vi.fn(() => true);
     vi.stubGlobal('fetch', fetchSpy);
     Object.defineProperty(navigator, 'sendBeacon', { configurable: true, value: beacon });
@@ -111,8 +126,28 @@ describe('main.tsx boot', () => {
       { source: 'window', kind: 'render', errorName: 'Error', boundary: null, route: '/' },
     ]);
     expect(JSON.stringify(sent)).not.toContain('B-0TESTBORROWER');
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // The only requests are the seeded boot reads and the landing route's
+    // prefetch; the error report sent nothing (no telemetry fetch, no beacon).
+    expect(fetchSpy.mock.calls.map((call) => String((call as unknown[])[0]).split('?')[0]).sort()).toEqual(BOOT_AND_HOME_READS);
     expect(beacon).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
+  }, 60_000);
+
+  it("starts the session, options and footprint reads and the landing route's hero reads before the shell renders, once each", async () => {
+    const fetchSpy = vi.fn(async () => notFound());
+    vi.stubGlobal('fetch', fetchSpy);
+    let pathsAtFirstRender: string[] | null = null;
+    shell.render = () => {
+      pathsAtFirstRender ??= fetchSpy.mock.calls.map((call) => String((call as unknown[])[0]).split('?')[0]).sort();
+      return <div data-testid="shell-ok">workspace</div>;
+    };
+    document.body.innerHTML = '<div id="root"></div>';
+
+    vi.resetModules();
+    await act(async () => {
+      await import('./main');
+    });
+
+    expect(pathsAtFirstRender, 'seeded and prefetched before render').toEqual(BOOT_AND_HOME_READS);
+    expect(fetchSpy.mock.calls.map((call) => String((call as unknown[])[0]).split('?')[0]).sort()).toEqual(BOOT_AND_HOME_READS);
   }, 60_000);
 });

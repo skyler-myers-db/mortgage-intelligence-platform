@@ -67,6 +67,7 @@ interface GrowthAgentRunSlotProps {
  */
 export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRunSlotProps) {
   const here = agent.runOrigin === origin;
+  const composePlan = agent.composePlan;
   return (
     <>
       {agent.activeRun?.origin === origin && <GrowthAgentRunPending label={agent.activeRun.label} />}
@@ -82,11 +83,18 @@ export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRu
           renderSourceAssetChip={renderSourceAssetChip}
         />
       )}
-      {origin === 'workflows' && agent.composePlan && (
+      {origin === 'workflows' && composePlan && (
         <ComposePlanCard
-          response={agent.composePlan}
+          response={composePlan}
           onOpenRoute={onOpenRoute}
           renderSourceAssetChip={renderSourceAssetChip}
+          run={{
+            pending: agent.planExecution.pending,
+            conflict: agent.planExecution.conflict !== null,
+            errorMessage: agent.planExecution.errorMessage,
+            onRun: () => agent.executeComposedPlan(composePlan),
+            onComposeAgain: () => void agent.composeGrowthAgentPlan(),
+          }}
         />
       )}
       {origin === 'monitors' && <GrowthAgentDraftPanel drafts={agent.latestGrowthDrafts} />}

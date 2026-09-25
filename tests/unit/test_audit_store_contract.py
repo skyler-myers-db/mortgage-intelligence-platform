@@ -193,6 +193,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # runner's audit write + finalize are pinned in test_genie_completion_runner.
     "genie_message_complete": ("create_or_join", "complete_governed_turn("),
     "genie_message_status": ("AUDIT EXEMPT: read-only poll of the caller's own completion job",),
+    "genie_message_cancel": ("request_cancel(",),
     "genie_action": ("handle_genie_action(",),
     "genie_feedback": ("record_genie_feedback(",),
     "genie_refusal_report": ("record_genie_refusal_report(",),
@@ -200,6 +201,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "run_custom_growth_agent_workflow": ("_run_workflow(",),
     "run_mortgage_growth_agent": ("plan_growth_agent_prompt(", "_run_workflow("),
     "compose_mortgage_growth_agent_plan": ("compose_growth_agent_plan(", "execute_plan("),
+    "execute_reviewed_growth_agent_plan": ("execute_reviewed_plan(",),
     "rerun_growth_agent_monitor": ("_run_monitor_row(",),
     "run_due_growth_agent_monitors": ("_run_due_monitor_rows(",),
     "run_due_growth_agent_monitors_all_actors": ("_run_due_monitor_rows(",),

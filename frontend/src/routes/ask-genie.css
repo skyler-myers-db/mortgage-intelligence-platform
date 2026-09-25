@@ -94,11 +94,11 @@
 .surface__body > .surface--inset + .genie-composer__samples {
   margin-top: var(--sp-4);
 }
-/* Below 720px the Genie launcher (`.genie__fab`, 06-genie-chat.css) is shown,
-   fixed 52px wide at the inline end (right: var(--sp-4)). The composer keeps
-   its controls clear of it with an inline-end inset and puts Ask on its own
-   row. */
-@media (max-width: 720px) {
+/* Below 1024px the Genie launcher (`.genie__fab`, 06-genie-chat.css) is
+   shown, fixed 52px wide at the inline end (right: var(--sp-4)). The composer
+   keeps its controls clear of it with an inline-end inset and puts Ask on its
+   own row. */
+@media (max-width: 1023px) {
   .genie-composer {
     flex-wrap: wrap;
     justify-content: flex-end;

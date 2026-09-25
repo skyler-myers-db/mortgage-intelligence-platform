@@ -8,6 +8,7 @@ import { Link } from 'react-router';
 import { api } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
 import { Chip, SurfaceTitle } from '../components/Primitives';
+import { DescribedErrorBody as ErrorBody } from '../components/ui/DescribedError';
 import type {
   SalesAgingLead,
   SalesConversionResponse,
@@ -78,7 +79,8 @@ export function SalesOpsSection() {
     standup: SalesStandupResponse;
     conversion: SalesConversionResponse;
     outcomes: SalesOutcomeSummaryResponse | null;
-    outcomesError: string | null;
+    /** The outcome read's own failure, kept apart: it degrades one card only. */
+    outcomesError: unknown;
   }>({
     queryKey: queryKeys.salesOps(),
     queryFn: async ({ signal }) => {
@@ -88,11 +90,8 @@ export function SalesOpsSection() {
         api.salesConversion(weekStart, today, 'lo', signal),
       ]);
       const outcomeResult = await api.salesOutcomeSummary(weekStart, today, signal)
-        .then((data) => ({ data, error: null as string | null }))
-        .catch((error: unknown) => ({
-          data: null,
-          error: error instanceof Error ? error.message : 'Outcome summary unavailable',
-        }));
+        .then((data) => ({ data, error: null as unknown }))
+        .catch((error: unknown) => ({ data: null, error }));
       return {
         staleLeads: agingRows,
         standup: standupRows,
@@ -121,8 +120,10 @@ export function SalesOpsSection() {
     0,
   );
   const hasDryRunOutcomeRows = dryRunOutcomeCount > 0;
-  const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
-  const salesOpsError = salesOpsQuery.error instanceof Error ? salesOpsQuery.error.message : null;
+  // Failures render in the shared, buyer-safe vocabulary (audit states-04),
+  // never the transport message.
+  const salesTeamError = salesTeamQuery.error;
+  const salesOpsError = salesOpsQuery.error;
   // Every card on this page reads one combined query. Until it resolves the
   // `?? []` / `?? 0` fallbacks are indistinguishable from real counts, and a
   // manager who reads "STALE APPROVED 0" while 100+ approvals are aging has
@@ -172,12 +173,12 @@ export function SalesOpsSection() {
       <div className="surface__body">
         {salesTeamError && (
           <div role="alert" className="status-callout status-callout--warning mb-3">
-            Sales team unavailable: {salesTeamError}
+            Sales team unavailable: <ErrorBody error={salesTeamError} subject="the sales team" />
           </div>
         )}
         {salesOpsError && (
           <div role="alert" className="status-callout status-callout--warning mb-3">
-            Sales operations metrics unavailable: {salesOpsError}
+            Sales operations metrics unavailable: <ErrorBody error={salesOpsError} subject="sales operations metrics" />
           </div>
         )}
         <div className="sales-ops-grid">
@@ -263,7 +264,7 @@ export function SalesOpsSection() {
             </div>
             {outcomesError ? (
               <div className="muted fs-12 mt-2">
-                Outcome summary unavailable: {outcomesError}
+                Outcome summary unavailable: <ErrorBody error={outcomesError} subject="the outcome summary" />
               </div>
             ) : null}
             {/* The per-type distribution moved into the caption above (funded

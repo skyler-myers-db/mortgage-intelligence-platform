@@ -52,32 +52,13 @@ export function planForReason(
       stop: true,
     };
   }
-  if (reason === 'rate_limited') {
-    // Backpressure 429s carry an exact Retry-After header that api.ts honors
-    // before an ApiError is thrown. If a caller still reaches this planner
-    // (for example through a future 503-compatible body), pace retries at the
-    // expensive-read bucket horizon instead of falling back to warming cadence.
-    return {
-      reason,
-      label: `${depName} request budget cooling`,
-      intervalMs: 30_000,
-      maxAttempts: 2,
-      stop: false,
-    };
-  }
-  if (reason === 'dependency_saturated') {
-    // Concurrency saturation is usually shorter-lived than a token-bucket
-    // rate limit, but should still use a distinct label/cadence so UI copy
-    // doesn't describe it as warehouse auto-suspend warming.
-    return {
-      reason,
-      label: `${depName} concurrency saturated`,
-      intervalMs: Math.max(2_000, Math.min(defaults.intervalMs, 5_000)),
-      maxAttempts: Math.min(defaults.maxAttempts, 3),
-      stop: false,
-    };
-  }
   // "warming_up", null, or any unknown reason -> default cadence.
+  //
+  // `rate_limited` and `dependency_saturated` are not planned here: only the
+  // backpressure middleware emits them, always as a 429, and the planner runs
+  // only for isWarmingUpError (a 503). A 429 surfaces with `retryAfterMs`
+  // and the screen counts that wait down (audit states-08); the branches
+  // that used to sit here were unreachable.
   return {
     reason,
     label: `${depName} warming up`,

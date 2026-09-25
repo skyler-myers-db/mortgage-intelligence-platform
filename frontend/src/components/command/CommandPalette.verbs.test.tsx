@@ -11,7 +11,7 @@
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { commandVerbActions } from './commandActions';
@@ -33,7 +33,7 @@ vi.mock('../../lib/api', () => ({
   api: { borrowerSearch: () => Promise.resolve([]), approve: (...args: unknown[]) => approve(...args) },
 }));
 
-import { CommandPalette } from './CommandPalette';
+import { CommandPalette, loadCommandPaletteDialog } from './CommandPalette';
 
 function selection(overrides: Partial<CommandSelectionContext> = {}): CommandSelectionContext {
   return {
@@ -45,6 +45,14 @@ function selection(overrides: Partial<CommandSelectionContext> = {}): CommandSel
     ...overrides,
   };
 }
+
+
+// The palette dialog is a lazy chunk behind the shell host (audit bundle-04):
+// load it once up front, as the idle preload leaves it in the app, so the
+// host mounts it at once and ⌘K opens it synchronously.
+beforeAll(async () => {
+  await loadCommandPaletteDialog();
+}, 60_000);
 
 describe('commandVerbActions', () => {
   it('offers nothing without a selection', () => {
@@ -108,7 +116,7 @@ describe('CommandPalette selection verbs', () => {
 
     expect(context.run).toHaveBeenCalledWith('approve-selected');
     expect(approve).not.toHaveBeenCalled();
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
   });
 
   it('shows no approve verb for a selection the actor cannot approve', () => {
@@ -133,7 +141,8 @@ describe('CommandPalette selection verbs', () => {
   });
 
   it('Cmd-K never mounts the palette under a native modal dialog (the approve review)', () => {
-    const palette = () => container.querySelector('[role="dialog"][aria-label="Command palette"]');
+    // The palette dialog stays mounted once rendered: an open one has `open`.
+    const palette = () => container.querySelector('dialog.cmdk[open][aria-label="Command palette"]');
     const dialog = document.createElement('dialog');
     document.body.appendChild(dialog);
     act(() => {
@@ -153,6 +162,6 @@ describe('CommandPalette selection verbs', () => {
   it('Cmd-K is a modifier chord: it opens with single-key shortcuts switched off', () => {
     setSingleKeyShortcutsEnabled(false);
     openPalette();
-    expect(container.querySelector('[role="dialog"][aria-label="Command palette"]')).not.toBeNull();
+    expect(container.querySelector('dialog.cmdk[open][aria-label="Command palette"]')).not.toBeNull();
   });
 });

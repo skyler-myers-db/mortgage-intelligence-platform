@@ -267,13 +267,13 @@ test.describe('(d) the audited-read guard', () => {
 
 test.describe('(e) the VRT host guard', () => {
   test('only the pinned amd64 Linux container may capture or compare baselines', () => {
-    const image = pinnedVrtImage('1.59.1');
-    expect(image).toBe('mcr.microsoft.com/playwright:v1.59.1-noble');
-    expect(vrtHostProblems({ image, platform: 'linux', arch: 'x64', playwrightVersion: '1.59.1' })).toEqual([]);
-    expect(vrtHostProblems({ image, platform: 'darwin', arch: 'arm64', playwrightVersion: '1.59.1' })).toHaveLength(2);
-    expect(vrtHostProblems({ image, platform: 'linux', arch: 'arm64', playwrightVersion: '1.59.1' })).toEqual(['arch is arm64, expected x64 (amd64)']);
-    expect(vrtHostProblems({ image: 'mcr.microsoft.com/playwright:v1.58.0-noble', platform: 'linux', arch: 'x64', playwrightVersion: '1.59.1' }))
+    const image = pinnedVrtImage('1.63.0');
+    expect(image).toBe('mcr.microsoft.com/playwright:v1.63.0-noble');
+    expect(vrtHostProblems({ image, platform: 'linux', arch: 'x64', playwrightVersion: '1.63.0' })).toEqual([]);
+    expect(vrtHostProblems({ image, platform: 'darwin', arch: 'arm64', playwrightVersion: '1.63.0' })).toHaveLength(2);
+    expect(vrtHostProblems({ image, platform: 'linux', arch: 'arm64', playwrightVersion: '1.63.0' })).toEqual(['arch is arm64, expected x64 (amd64)']);
+    expect(vrtHostProblems({ image: 'mcr.microsoft.com/playwright:v1.58.0-noble', platform: 'linux', arch: 'x64', playwrightVersion: '1.63.0' }))
       .toHaveLength(1);
-    expect(vrtHostProblems({ image: undefined, platform: 'linux', arch: 'x64', playwrightVersion: '1.59.1' })[0]).toContain('unset');
+    expect(vrtHostProblems({ image: undefined, platform: 'linux', arch: 'x64', playwrightVersion: '1.63.0' })[0]).toContain('unset');
   });
 });

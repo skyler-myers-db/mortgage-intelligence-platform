@@ -68,8 +68,14 @@ describe('ShortcutOverlay', () => {
     act(() => openShortcutOverlay());
     const panel = await waitForSheet();
 
-    expect(panel.getAttribute('role')).toBe('dialog');
-    expect(panel.getAttribute('aria-modal')).toBe('true');
+    // A native modal <dialog class="cmdk"> named by its heading (stack-05);
+    // the panel keeps the test id and carries no dialog role of its own.
+    const dialog = panel.closest('dialog');
+    expect(dialog?.classList.contains('cmdk')).toBe(true);
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.hasAttribute('role')).toBe(false);
+    expect(document.getElementById(dialog?.getAttribute('aria-labelledby') ?? '')?.textContent).toBe('Keyboard shortcuts');
+    expect(panel.hasAttribute('role')).toBe(false);
     const groups = [...panel.querySelectorAll('.cmdk__group-label')].map((label) => label.textContent);
     expect(groups).toEqual(['Ranked borrowers table', 'Everywhere']);
     const next = [...panel.querySelectorAll('.cmdk__row')].find((row) => row.textContent?.includes('Next borrower'));

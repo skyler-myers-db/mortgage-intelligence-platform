@@ -10,7 +10,7 @@
  * explorer expands and scrolls into view on arrival; and the current page
  * downloads as CSV.
  */
-import { useRef, useState } from 'react';
+import { lazy, Suspense, useRef, useState, type ComponentType } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
@@ -32,6 +32,34 @@ import {
 } from './AdminAuditExplorer.params';
 import { AUDIT_TABLE_CONTEXT, AuditEventTableRow, formatAuditTimestamp } from './AdminAuditExplorer.row';
 import { formatCount } from '../../lib/formatters';
+
+interface ErrorBodyProps {
+  error: unknown;
+  subject: string;
+}
+
+const ERROR_BODY_FALLBACK = 'It could not load.';
+const ErrorBodyFallback = () => ERROR_BODY_FALLBACK;
+type FailureModule = typeof import('../ui/AsyncFailure');
+
+/**
+ * The explorer's failure lines in the shared vocabulary (audit states-04):
+ * DescribedErrorBody's lazy wrapper (components/ui/DescribedError.tsx),
+ * inlined so the admin-config closure does not carry that shared chunk (0.54
+ * KiB br against a route gate with none to spare); same chunk, same fallback.
+ */
+const ErrorBodyLine = lazy<ComponentType<ErrorBodyProps>>(() => (import('../ui/AsyncFailure') as Promise<FailureModule | undefined>).then(
+  (module) => ({ default: module?.FailureBody ?? ErrorBodyFallback }),
+  () => ({ default: ErrorBodyFallback }),
+));
+
+function ErrorBody(props: ErrorBodyProps) {
+  return (
+    <Suspense fallback={ERROR_BODY_FALLBACK}>
+      <ErrorBodyLine {...props} />
+    </Suspense>
+  );
+}
 
 interface AuditRollupRow {
   bucket_start: string;
@@ -106,11 +134,9 @@ export function AdminAuditExplorer() {
       ? `${warmingUp.label} (${warmingUp.attempt}/${warmingUp.maxAttempts})`
       : 'Updating audit rows'
     : '';
-  const error = errorObj
-    ? errorObj instanceof Error
-      ? errorObj.message
-      : 'unreachable'
-    : null;
+  // Failures read in the shared vocabulary, never the transport message
+  // (audit states-04).
+  const error = errorObj;
 
   const {
     data: rollups,
@@ -120,11 +146,7 @@ export function AdminAuditExplorer() {
     (signal) => api.auditRollups('week', signal),
     { queryKey: queryKeys.auditRollups('week') },
   );
-  const rollupsError = rollupsErrorObj
-    ? rollupsErrorObj instanceof Error
-      ? rollupsErrorObj.message
-      : 'unreachable'
-    : null;
+  const rollupsError = rollupsErrorObj;
 
   const goToPage = (cursors: Array<string | null>) => {
     setExpandedState({ key: appliedKey, id: null });
@@ -219,7 +241,7 @@ export function AdminAuditExplorer() {
         )}
         {error && !warmingUp && (
           <div className="muted body fs-12 mt-3">
-            Audit explorer unavailable: {error}
+            Audit explorer unavailable: <ErrorBody error={error} subject="the audit explorer" />
           </div>
         )}
         <div className="admin-rollups mt-3">
@@ -228,7 +250,9 @@ export function AdminAuditExplorer() {
             <WarmingUpBlock state={rollupsWarming} title="Audit rollups loading" compact />
           )}
           {rollupsError && !rollupsWarming && (
-            <div className="muted fs-12">Audit rollups unavailable: {rollupsError}</div>
+            <div className="muted fs-12">
+              Audit rollups unavailable: <ErrorBody error={rollupsError} subject="the audit rollups" />
+            </div>
           )}
           {!rollupsWarming && !rollupsError && (
             <div className="admin-rollups__grid">
@@ -258,7 +282,7 @@ export function AdminAuditExplorer() {
             data-status={statusLabel}
           >
             {events.length > 0 && (
-              <table className="tbl" aria-label="Audit events">
+              <table className="tbl tbl--static" aria-label="Audit events">
                 <thead>
                   <tr>
                     <th scope="col" aria-label="Event details" />

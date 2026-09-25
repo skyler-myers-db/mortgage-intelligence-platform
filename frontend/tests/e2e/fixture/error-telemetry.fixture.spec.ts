@@ -97,7 +97,7 @@ test.describe('A. evidence drawer render throw', () => {
       const surface = drawer.locator('[data-error-boundary="drawer"][data-error-kind="render"]');
       await expect(surface).toBeVisible();
       await expect(drawer).toHaveClass(/is-open/);
-      await expect(drawer).toHaveAttribute('aria-modal', 'true');
+      expect(await drawer.evaluate((el) => el.matches(':modal')), 'the frame is a native modal dialog').toBe(true);
       await expect(surface.getByRole('button')).toHaveText(['Try again', 'Reload']);
       await expect(surface.getByRole('heading', { level: 2 })).toHaveText('The evidence drawer hit an unexpected error');
       await expect(page.locator('body')).not.toContainText('Cannot read');
