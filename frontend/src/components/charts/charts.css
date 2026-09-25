@@ -1,0 +1,45 @@
+/* Chart kit (components/charts; 2026-09-21 audit dataviz-07 step 2,
+   dataviz-10). App-extension BEM: the prototype draws no charts beyond its
+   KPI sparklines, so the frame is new; its axes, grid and tooltip reuse the
+   `.analytics-chart__*` chrome of 10-native-analytics.css. Tokens only.
+   Lazy: ChartFrame.tsx is the one importer. */
+.chart-frame {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-2) var(--sp-3);
+  margin: 0;
+}
+.chart-frame__summary {
+  grid-column: 1;
+  max-inline-size: 72ch;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
+.chart-frame__toolbar {
+  grid-column: 2;
+}
+.chart-frame__plot,
+.chart-frame__table,
+.chart-frame__notice {
+  grid-column: 1 / -1;
+  min-inline-size: 0;
+}
+.chart-frame__plot {
+  border-radius: var(--r-md);
+}
+.chart-frame__notice {
+  margin: 0;
+}
+
+/* Edge-anchored x ticks (stack-06): the first label starts at the plot's
+   left edge and the last ends at its right edge instead of centring on the
+   edge, where the last evidence date spilled past its surface. Doubled with
+   the --x modifier so the lazy sheet never depends on load order. */
+.analytics-chart__tick--x.analytics-chart__tick--edge-start {
+  transform: none;
+}
+.analytics-chart__tick--x.analytics-chart__tick--edge-end {
+  transform: translateX(-100%);
+}

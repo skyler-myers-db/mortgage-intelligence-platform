@@ -1,0 +1,57 @@
+/**
+ * The kit's one tooltip (2026-09-21 audit dataviz-07 step 2): a crosshair,
+ * a dot and a tip in the plot's percent space, on the existing
+ * `.analytics-chart__crosshair / __hover-dot / __tip(--flip) / __tip-x /
+ * __tip-y` chrome. It shows the cursor's point whether a pointer or the
+ * keyboard set it. The whole layer is aria-hidden: the plot's description,
+ * the table view and the frame's live region carry the same values to
+ * assistive technology.
+ */
+import type { CSSProperties, ReactNode, RefObject } from 'react';
+import type { ChartCursorSurfaceProps } from './useChartCursor';
+
+export interface ChartTooltipPoint {
+  /** Percent of the plot width. */
+  x: number;
+  /** Percent of the plot height, top-down. */
+  y: number;
+  label: ReactNode;
+  value: ReactNode;
+}
+
+/** Past ~60% of the plot width the tip would overflow the surface, so it flips left. */
+const FLIP_AT_PCT = 60;
+
+export function ChartTooltip({
+  point,
+  surfaceRef,
+  surfaceProps,
+  crosshair = true,
+}: {
+  point: ChartTooltipPoint | null;
+  /** The pointer surface: omitted where the marks take the pointer themselves (the scatter). */
+  surfaceRef?: RefObject<HTMLDivElement | null>;
+  surfaceProps?: ChartCursorSurfaceProps;
+  crosshair?: boolean;
+}) {
+  const at = point ? ({ '--hover-x': `${point.x}%`, '--hover-y': `${point.y}%` } as CSSProperties) : undefined;
+  return (
+    <div
+      ref={surfaceRef}
+      className={`analytics-chart__hover${surfaceProps ? '' : ' analytics-chart__hover--passive'}`}
+      aria-hidden="true"
+      {...surfaceProps}
+    >
+      {point && (
+        <>
+          {crosshair && <span className="analytics-chart__crosshair" style={at} />}
+          <span className="analytics-chart__hover-dot" style={at} />
+          <span className={`analytics-chart__tip${point.x > FLIP_AT_PCT ? ' analytics-chart__tip--flip' : ''}`} style={at}>
+            <span className="analytics-chart__tip-x">{point.label}</span>
+            <span className="analytics-chart__tip-y">{point.value}</span>
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
