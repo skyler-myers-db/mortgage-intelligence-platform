@@ -8,8 +8,9 @@
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
+import RateScenarioControl from './RateScenarioControl';
 import { buildChoroplethScale } from './USChoroplethMap.scale';
 import { USChoroplethMapLegend, type LegendRate } from './USChoroplethMapLegend';
 import { indexRateScenario, scenarioView } from './rateScenario.logic';
@@ -87,11 +88,6 @@ const GRID: RateSensitivityResponse = {
 describe('USChoroplethMapLegend in rate mode', () => {
   let root: Root;
 
-  // Warm the lazy control module so React.lazy resolves within the test.
-  beforeAll(async () => {
-    await import('./RateScenarioControl');
-  }, 30_000);
-
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
@@ -121,12 +117,6 @@ describe('USChoroplethMapLegend in rate mode', () => {
         />,
       );
     });
-    // Let the lazy control chunk resolve.
-    for (let i = 0; i < 200 && !document.querySelector('.map-legend__lever-slot > *'); i += 1) {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      });
-    }
     return {
       label: [...document.querySelectorAll('.map-legend__lever-note .chip')].map((chip) => chip.textContent),
       total: document.querySelector('.map-legend__value')?.textContent,
@@ -137,7 +127,16 @@ describe('USChoroplethMapLegend in rate mode', () => {
   }
 
   const index = indexRateScenario(GRID);
-  const base = { index: null, view: null, step: 0, onStepChange: () => undefined, scope: null };
+  // The map hands the legend the control once its lazy chunk has loaded.
+  const base = {
+    index: null,
+    view: null,
+    step: 0,
+    onStepChange: () => undefined,
+    scope: null,
+    control: RateScenarioControl,
+    controlFailed: false,
+  };
 
   it('shows the scenario label and no number while the read is loading', async () => {
     const out = await renderRate({ ...base, read: read({ loading: true }) });
@@ -162,6 +161,17 @@ describe('USChoroplethMapLegend in rate mode', () => {
       expect(out.slider).toBeNull();
       expect(out.lever.replace(/attempt \d of \d/, '')).not.toMatch(/\d/);
     }
+  });
+
+  it('says a control chunk that failed to load could not load, with Reload, and draws no number', async () => {
+    const out = await renderRate({ ...base, read: read({ data: GRID }), control: null, controlFailed: true });
+    expect(out.label).toEqual(['Scenario, not a forecast']);
+    expect(out.lever).toContain('Rate scenarios could not load. Showing borrower counts.');
+    expect(out.total).toBe('—');
+    expect(out.slider).toBeNull();
+    const reload = [...document.querySelectorAll('.map-legend__lever button')].map((button) => button.textContent);
+    expect(reload).toEqual(['Reload']);
+    expect(out.lever).not.toMatch(/\d/);
   });
 
   it('recounts the book at the shown step once the grid is up, with the label', async () => {

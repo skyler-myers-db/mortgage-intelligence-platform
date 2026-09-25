@@ -9,7 +9,8 @@
  * "Rate scenario" (audit wow-stage-1) covers the whole book, so under a
  * segment or portfolio filter it is aria-disabled with its reason (it stays
  * focusable and a click does nothing). Pointing at it or focusing it warms
- * the lazy control chunk; no API call is made until it is picked.
+ * the lazy control chunk (best effort: a failed warm is swallowed); no API
+ * call is made until it is picked.
  */
 import { useEffect, useId, useRef } from 'react';
 import { Icon } from '../Icon';
@@ -18,7 +19,8 @@ import { genieStatePrompt } from '../../lib/genieContext';
 import { GenieAskAbout } from './GenieAskAbout';
 import { claimDrillFocus, drillExitOriginatedInMap } from './USChoroplethMap.a11y';
 import { formatCount } from '../../lib/formatters';
-import { loadRateScenarioControl } from './rateScenario.lazy';
+import { preloadBestEffort } from '../../lib/lazyPreload';
+import { RATE_SCENARIO_CONTROL } from './rateScenario.lazy';
 
 export type MapView = 'map' | 'table';
 /** What the fill encodes: borrowers, the S9 unattended overlay, or the Rate Lever scenario. */
@@ -80,8 +82,10 @@ export function USChoroplethMapHeader({
   // Focus the user still holds elsewhere is never taken (claimDrillFocus).
   const usCrumbRef = useRef<HTMLButtonElement | null>(null);
   const rateReasonId = useId();
+  // A speculative warm: a failed fetch is swallowed here (the pick itself
+  // shows the lever's "could not load" line), never an unhandled rejection.
   const warmRateControl = () => {
-    if (rateAvailable) void loadRateScenarioControl();
+    if (rateAvailable) preloadBestEffort(RATE_SCENARIO_CONTROL.load);
   };
   const lastFocused = useRef<Element | null>(null);
   useEffect(() => {

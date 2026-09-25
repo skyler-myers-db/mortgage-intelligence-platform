@@ -13,6 +13,9 @@
  *    number and keep the borrower fill; the label is up while the read is
  *    delayed; ZIP tiles keep borrower colouring and the legend recounts the
  *    drilled state; the evidence chip names the gold table.
+ *  - Resilience: a control chunk a redeploy retired degrades the lever
+ *    alone (the "could not load" line, Reload, the borrower fill); the route,
+ *    the map and the KPIs stay up, and Reload brings the lever back.
  *  - Runtime-06: a changed cohort keeps the previous fill, labelled
  *    "Updating…", and one state's ZIP tiles never paint under another.
  */
@@ -33,6 +36,10 @@ import { expect, test } from './test';
 import { expectNoAuditedReadSince, expectNoSurfaceOverflow } from './visual';
 
 const RATE_PATH = '/api/geo/rate-sensitivity';
+/** The route / root / panel boundary's recovery surface (components/ErrorBoundaryFallback). */
+const BOUNDARY_SURFACE = '[data-testid="error-surface"]';
+/** The control's hashed chunk files (script and stylesheet), as a retired build answers them. */
+const CONTROL_CHUNK = /\/assets\/RateScenarioControl-[^/]+\.(js|css)$/;
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
 const COUNT = new Intl.NumberFormat('en-US');
 
@@ -318,6 +325,55 @@ test.describe('Rate Lever on the geography hero', () => {
     await expect(slider(page)).toHaveValue('0');
     await expect(page.getByRole('dialog')).toHaveCount(0);
     expect(page.url()).toBe(url);
+  });
+
+  test('(q) a control chunk a redeploy retired degrades the lever alone; the route stays up and Reload recovers', async ({ app, hygiene, page }) => {
+    // The retired chunk logs the browser's own 404 line and the app's
+    // message-free preload report; both are the behaviour under test. A
+    // speculative warm that rejected unhandled would fail the pageerror check.
+    hygiene.allow('console.error', /Failed to load resource/);
+    hygiene.allow('console.error', /\[mip\] client error/);
+    await page.route(CONTROL_CHUNK, (route) =>
+      route.fulfill({ status: 404, contentType: 'text/plain', body: 'retired chunk (fixture)' }),
+    );
+    await app.gotoRoute('/');
+    const regions = page.locator('path.map-region[data-map-unit]');
+    const classes = () => regions.evaluateAll((els) => els.map((el) => el.getAttribute('data-map-class')));
+    const borrowerClasses = await classes();
+    const borrowerClass = await designated(page).getAttribute('data-map-class');
+
+    await colouring(page, 'Rate scenario').click();
+    const lever = page.locator('.map-legend__lever');
+    await expect(lever).toContainText('Rate scenarios could not load. Showing borrower counts.');
+    await expect(lever.getByRole('button', { name: 'Reload' })).toBeVisible();
+    await expect(scenarioLabel(page)).toBeVisible();
+    await expect(slider(page)).toHaveCount(0);
+    await expect(legendTotal(page)).toHaveText('—');
+    await expect(designated(page)).toHaveAttribute('data-map-class', borrowerClass ?? '');
+    expect(await classes()).toEqual(borrowerClasses);
+    // The route, the hero map and the KPIs are still there.
+    await expect(page.locator(BOUNDARY_SURFACE)).toHaveCount(0);
+    await expect(page.locator('.map-wrap')).toBeVisible();
+    await expect(page.locator('.kpi').first()).toBeVisible();
+    // The legend keeps its own layout (it does not wait on the failed
+    // chunk's stylesheet): under the stage, inside the map.
+    const wrap = await page.locator('.map-wrap').boundingBox();
+    const stage = await page.locator('.map-levels').boundingBox();
+    const legend = await page.locator('.map-legend').boundingBox();
+    if (!wrap || !stage || !legend) throw new Error('map, stage or legend has no box');
+    expect(legend.y).toBeGreaterThanOrEqual(stage.y + stage.height - 0.5);
+    expect(legend.y + legend.height).toBeLessThanOrEqual(wrap.y + wrap.height + 0.5);
+
+    // Reload asks the new document for the current build's chunk.
+    await page.unroute(CONTROL_CHUNK);
+    const reloaded = page.waitForEvent('load');
+    await lever.getByRole('button', { name: 'Reload' }).click();
+    await reloaded;
+    await colouring(page, 'Rate scenario').click();
+    await expect(slider(page)).toBeVisible();
+    await expect(legendTotal(page)).toHaveText(COUNT.format(TOTALS.inTheMoney));
+    // Non-vacuity: the scenario the failure withheld does repaint the map.
+    await expect.poll(classes).not.toEqual(borrowerClasses);
   });
 });
 

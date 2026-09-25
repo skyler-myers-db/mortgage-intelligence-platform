@@ -1,7 +1,8 @@
 /**
  * RateScenarioControl — the Rate Lever's scrubber (audit wow-stage-1), loaded
- * with React.lazy from the map legend the first time the user picks "Rate
- * scenario". Its sentences and styles ship in the same lazy chunk.
+ * on demand (rateScenario.lazy, useLazyModule) the first time the user picks
+ * "Rate scenario", and rendered in the map legend. Its sentences and styles
+ * ship in the same lazy chunk.
  *
  * DECLARED EXTENSION beyond design_files: the prototype has no slider
  * (Module 0 Prototype.html's map legend, ~L1860-1871, is a static class bar).
@@ -22,7 +23,7 @@
  * built. The map keeps the borrower fill meanwhile.
  */
 import { useId } from 'react';
-import type { LegendRate } from './USChoroplethMapLegend';
+import type { RateLeverInputs } from './USChoroplethMapLegend';
 import { useWarmingBlockDefers } from './USChoroplethMap.warming';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { bpsLabel, formatCount, ratePct } from '../../lib/formatters';
@@ -33,7 +34,7 @@ import { nearestStep, recountAt } from './rateScenario.recount';
 import { scenarioHeadline, scenarioValueText } from './rateScenario.copy';
 import './RateScenarioControl.css';
 
-export default function RateScenarioControl({ rate }: { rate: LegendRate }) {
+export default function RateScenarioControl({ rate }: { rate: RateLeverInputs }) {
   const { read, index } = rate;
   const warming = read.warmingUp;
   const defers = useWarmingBlockDefers(warming);

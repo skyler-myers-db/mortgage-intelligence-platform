@@ -18,23 +18,25 @@
  * today's par, and hosts the lazy RateScenarioControl in a fixed-height slot.
  * The control's chunk also carries the warming / failed / not-built lines,
  * so their copy stays out of the map chunk both hero routes load (route
- * budget). `.map-legend__lever*` are declared app extensions of the
- * prototype legend (USChoroplethMap.css).
+ * budget). The one line that cannot live there is the chunk's own failure
+ * (a chunk a redeploy retired, a network blip): the legend says it, over
+ * the borrower fill the map keeps, with Reload (the next document asks for
+ * the current build's chunk). `.map-legend__lever*` are declared app
+ * extensions of the prototype legend (USChoroplethMap.css).
  */
 
-import { Suspense } from 'react';
+import type { ComponentType } from 'react';
 import type { GeoAssignmentOverlayResponse } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import { Chip, EvidenceChip } from '../Primitives';
 import type { MapScenarioView, RateScenarioIndex } from './rateScenario.logic';
-import { RateScenarioControlLazy } from './rateScenario.lazy';
 import { classRanges, formatBreak, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { GeoRead } from './useChoroplethLiveFacts';
 import { formatCount } from '../../lib/formatters';
 
-/** The Rate Lever's legend inputs; present only while the rate colouring is on. */
-export interface LegendRate {
+/** What the lazy RateScenarioControl reads. */
+export interface RateLeverInputs {
   read: GeoRead<RateSensitivityResponse>;
   /** The indexed grid; null while warming, failed or not built. */
   index: RateScenarioIndex | null;
@@ -45,6 +47,14 @@ export interface LegendRate {
   onStepChange: (step: number) => void;
   /** The drilled state (ZIP level, where tiles keep borrower colouring), or null for the whole book. */
   scope: { id: string; name: string } | null;
+}
+
+/** The Rate Lever's legend inputs; present only while the rate colouring is on. */
+export interface LegendRate extends RateLeverInputs {
+  /** The control once its lazy chunk loaded; null while it loads or after it failed. */
+  control: ComponentType<{ rate: RateLeverInputs }> | null;
+  /** The control's chunk failed to load: the map keeps the borrower fill. */
+  controlFailed: boolean;
 }
 
 interface USChoroplethMapLegendProps {
@@ -90,6 +100,7 @@ export function USChoroplethMapLegend({
       : 'borrowers in the money at the scenario par rate';
   // The recount: the drilled state, or the whole book.
   const rateTotal = rate?.scope ? rate.view?.inTheMoneyById[rate.scope.id] : rate?.view?.total;
+  const Control = rate?.control ?? null;
   const ranges = scale ? classRanges(scale) : [];
   const barLabel = scale
     ? `Fill classes: no borrowers or no data; ${ranges
@@ -190,9 +201,16 @@ export function USChoroplethMapLegend({
           {/* The slot reserves the control's height, so neither the chunk
               load nor a status line moves the stage. */}
           <div className="map-legend__lever-slot">
-            <Suspense fallback={null}>
-              <RateScenarioControlLazy rate={rate} />
-            </Suspense>
+            {rate.controlFailed ? (
+              <div className="map-legend__caption map-legend__caption--degraded" role="status">
+                Rate scenarios could not load. Showing borrower counts.{' '}
+                <button type="button" className="btn btn--ghost btn--sm" onClick={() => window.location.reload()}>
+                  Reload
+                </button>
+              </div>
+            ) : (
+              Control && <Control rate={rate} />
+            )}
           </div>
         </div>
       )}

@@ -9,7 +9,9 @@
  *    on ONE scale over the whole grid (so a state keeps its class unless its
  *    count crosses a break), and the table's scenario column totals the
  *    legend;
- *  - under a segment filter the button is aria-disabled and nothing is read.
+ *  - under a segment filter the button is aria-disabled and nothing is read;
+ *  - a control chunk that fails to load (retired by a redeploy) keeps the
+ *    borrower fill and says so in the legend: no scenario number, no throw.
  * (The cohort placeholder lives in USChoroplethMap.cohort.test.tsx.)
  */
 import { act, type ReactNode } from 'react';
@@ -36,6 +38,18 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   api: { stateRollups: mocks.stateRollups, zipRollups: mocks.zipRollups, assignmentOverlay: mocks.assignmentOverlay },
 }));
 vi.mock('../../lib/apiClients/rateScenario', () => ({ rateScenarioApi: { rateSensitivity: mocks.rateSensitivity } }));
+// The real control chunk, or (chunk.retired) an import that rejects the way
+// a chunk retired by a redeploy does.
+const chunk = vi.hoisted(() => ({ retired: false }));
+vi.mock('./rateScenario.lazy', async (importOriginal) => {
+  const real = (await importOriginal<typeof import('./rateScenario.lazy')>()).RATE_SCENARIO_CONTROL;
+  return {
+    RATE_SCENARIO_CONTROL: {
+      load: () => (chunk.retired ? Promise.reject(new Error('retired chunk (test)')) : real.load()),
+      current: () => (chunk.retired ? null : real.current()),
+    },
+  };
+});
 vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer: () => undefined, showEvidence: true, showConfidence: true }),
 }));
@@ -117,6 +131,7 @@ describe('USChoroplethMap rate scenario', () => {
     act(() => root.unmount());
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    chunk.retired = false;
   });
 
   it('reads the grid only when picked and fills on one scale over the whole grid', async () => {
@@ -141,6 +156,25 @@ describe('USChoroplethMap rate scenario', () => {
     await until(() => document.querySelector('[data-testid="map-table-extra-total"]') !== null);
     expect([...document.querySelectorAll('th')].some((th) => th.textContent === 'In the money at 6.30%')).toBe(true);
     expect(document.querySelector('[data-testid="map-table-extra-total"]')?.textContent).toBe('1,000');
+  });
+
+  it('a control chunk that fails to load keeps the borrower fill and says so, with no number', async () => {
+    chunk.retired = true;
+    await act(async () => root.render(<Providers><USChoroplethMap /></Providers>));
+    await until(() => cls('il') === '4');
+    const borrowerClasses = [cls('il'), cls('tx')];
+
+    await act(async () => button('Rate scenario')?.click());
+    const lever = () => document.querySelector('.map-legend__lever')?.textContent ?? '';
+    await until(() => lever().includes('Rate scenarios could not load. Showing borrower counts.'));
+    // The grid would paint IL 3 / TX 2 and total 1,000: none of it shows.
+    await settle();
+    expect([cls('il'), cls('tx')]).toEqual(borrowerClasses);
+    expect(document.querySelector('.map-legend__value')?.textContent).toBe('—');
+    expect(document.querySelector('input[type="range"]')).toBeNull();
+    expect([...document.querySelectorAll('.map-legend__lever button')].map((b) => b.textContent)).toEqual(['Reload']);
+    expect(document.querySelector('.map-legend__caption')?.textContent).toContain('marketable population');
+    expect(button('Rate scenario')?.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('under a segment filter the rate button is aria-disabled and reads nothing', async () => {

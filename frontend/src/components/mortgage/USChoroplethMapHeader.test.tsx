@@ -13,10 +13,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMapHeader, type MapColorMode } from './USChoroplethMapHeader';
 
 const lazyMocks = vi.hoisted(() => ({ load: vi.fn(() => Promise.resolve({})) }));
-vi.mock('./rateScenario.lazy', () => ({ loadRateScenarioControl: lazyMocks.load }));
+vi.mock('./rateScenario.lazy', () => ({ RATE_SCENARIO_CONTROL: { load: lazyMocks.load, current: () => null } }));
 vi.mock('./GenieAskAbout', () => ({ GenieAskAbout: () => null }));
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// The frontend tsconfig carries no Node typings; the test runner's process
+// reaches the rejection hook structurally (as in routePreloaders.home.test).
+interface RejectionEmitter {
+  on(event: 'unhandledRejection', listener: (reason: unknown) => void): unknown;
+  off(event: 'unhandledRejection', listener: (reason: unknown) => void): unknown;
+}
+const nodeProcess = (globalThis as unknown as { process: RejectionEmitter }).process;
 
 const REASON = 'Rate scenarios cover the whole book; clear segment and portfolio filters to use them.';
 
@@ -79,6 +87,24 @@ describe('USChoroplethMapHeader colouring toggle', () => {
     expect(lazyMocks.load).toHaveBeenCalled();
     act(() => rate?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(setMode).toHaveBeenCalledWith('rate');
+  });
+
+  it('swallows a failed warm: a retired or unreachable chunk is no unhandled rejection', async () => {
+    const unhandled = vi.fn();
+    nodeProcess.on('unhandledRejection', unhandled);
+    try {
+      lazyMocks.load.mockImplementation(() => Promise.reject(new Error('retired chunk (test)')));
+      const { rate } = renderHeader('borrowers', true);
+      act(() => rate?.dispatchEvent(new PointerEvent('pointerover', { bubbles: true })));
+      act(() => rate?.focus());
+      expect(lazyMocks.load).toHaveBeenCalledTimes(2);
+      // Node reports an unhandled rejection after the microtask queue drains.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      nodeProcess.off('unhandledRejection', unhandled);
+      lazyMocks.load.mockImplementation(() => Promise.resolve({}));
+    }
   });
 
   it('is aria-disabled with its reason under a cohort filter, and a click does nothing', () => {

@@ -28,6 +28,8 @@ import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { USChoroplethMapZipLevel } from './USChoroplethMapZipLevel';
 import { useChoroplethLiveFacts, type GeoRead } from './useChoroplethLiveFacts';
 import { indexRateScenario, scenarioView } from './rateScenario.logic';
+import { RATE_SCENARIO_CONTROL } from './rateScenario.lazy';
+import { useLazyModule } from './useLazyModule';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import { ratePct } from '../../lib/formatters';
 import './USChoroplethMap.css';
@@ -150,6 +152,11 @@ export function USChoroplethMap({
   const effectiveMode: MapColorMode = mode === 'rate' && !rateAvailable ? 'borrowers' : mode;
   const overlayOn = effectiveMode === 'unattended';
   const rateOn = effectiveMode === 'rate';
+  // The control's lazy chunk. A failed load (a chunk a redeploy retired, a
+  // network blip) turns the scenario off here, over the borrower fill, with
+  // the legend saying so; it never throws into the route error boundary.
+  const lever = useLazyModule(RATE_SCENARIO_CONTROL, rateOn);
+  const scenarioOn = rateOn && !lever.failed;
   const [rateStep, setRateStep] = useState(0);
   const shownStep = useDeferredValue(rateStep);
   const [view, setView] = useState<MapView>('map');
@@ -189,7 +196,7 @@ export function USChoroplethMap({
     segmentFilterMode,
     portfolioCriteria,
     overlayOn,
-    rateOn,
+    rateOn: scenarioOn,
   });
   const stateFacts = states.data;
   const zipFacts = zips.data;
@@ -200,7 +207,7 @@ export function USChoroplethMap({
   // Rate Lever: the grid drives the state fill once it is indexed; while it
   // is warming, failed or not built the fill stays on borrowers.
   // (The React Compiler memoizes both on their inputs.)
-  const rateIndex = rateOn ? indexRateScenario(rate.data) : null;
+  const rateIndex = scenarioOn ? indexRateScenario(rate.data) : null;
   const scenarioAtShown = rateIndex ? scenarioView(rateIndex, shownStep) : null;
   // ZIP tiles keep borrower colouring: there is no sub-state scenario.
   const shownScenario = level === 'state' ? scenarioAtShown : null;
@@ -537,6 +544,8 @@ export function USChoroplethMap({
           step: rateStep,
           onStepChange: setRateStep,
           scope: drillStateId ? { id: drillStateId, name: drillStateName } : null,
+          control: lever.module?.default ?? null,
+          controlFailed: lever.failed,
         } : null}
       />
 
