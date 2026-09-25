@@ -302,7 +302,8 @@ describe('layout containment contracts', () => {
     const css = designCss();
 
     expect(css).toMatch(/\.genie__fab\s*\{[^}]*display:\s*none;/s);
-    expect(css).toMatch(/@media \(max-width:\s*720px\)\s*\{[\s\S]*?\.genie__fab\s*\{[\s\S]*?display:\s*grid;/s);
+    // responsive-06: the FAB returns wherever the topbar layout has given way.
+    expect(css).toMatch(/@media \(max-width:\s*1023px\)\s*\{\s*\.genie__fab\s*\{\s*display:\s*grid;/s);
   });
 
   it('keeps theme switches visually coherent across shell surfaces', () => {

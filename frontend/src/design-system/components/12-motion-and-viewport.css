@@ -104,15 +104,30 @@
   .app-shell {
     grid-template-columns: 56px 1fr;
   }
+  /* Search and the actions share one row (2026-09-21 audit responsive-06):
+     hiding `.topbar__actions` here took the theme, Genie and Console
+     toggles and the account menu away between 721px and 1023px (a 1440
+     laptop at 150% zoom, iPad portrait), and the Genie FAB only appeared at
+     720px. The icon buttons stay; the tenant pill goes and the status pill
+     keeps its dot, its label visually hidden (still its accessible name). */
   .topbar {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
     padding-inline: var(--sp-3);
   }
   .topbar__crumbs,
-  .topbar__actions {
+  .topbar__pill:has(> .topbar__pill-tenant) {
     display: none;
   }
+  .topbar__pill-label {
+    position: absolute;
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+    width: 1px;
+    height: 1px;
+  }
   .topbar__search {
+    grid-column: 1;
     min-width: 0;
     width: 100%;
   }
