@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.services import genie_completion_jobs as jobs
 from backend.services import genie_completion_runner as runner
+from backend.services import observability
 from backend.services.audit_metadata_policy import AuditMetadataValueViolation
 from backend.services.audit_store import build_safe_audit_metadata
 from backend.services.genie_progress import genie_question_binding_hash, genie_question_hash
@@ -317,6 +318,9 @@ def test_a_queued_job_is_cancelled_at_once_and_its_later_claim_fails_and_release
     slot = _Slot()
     runner._run_job(turn, row["job_id"], slot, "corr-cancel-queued")  # type: ignore[arg-type]
 
+    # The job's correlation id never outlives the job on the calling thread
+    # (a pooled worker keeps its context between jobs).
+    assert observability.correlation_id_var.get() is None
     assert slot.released == 1
     assert repo.calls == []
     assert audit.writes == []

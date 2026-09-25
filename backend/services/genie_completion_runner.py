@@ -91,7 +91,7 @@ from backend.services.genie_message_policy import (
 from backend.services.genie_session_guard import GENIE_MESSAGE_OWNERSHIP_SQL
 from backend.services.genie_turn_record import _finalize_genie_response
 from backend.services.lakebase import LakebaseClient, LakebaseError
-from backend.services.observability import emit, set_correlation_id
+from backend.services.observability import emit, reset_correlation_id, set_correlation_id
 from backend.services.repositories.protocols import GenieAnswerRepository
 from backend.services.resilience import DependencyDownError
 
@@ -357,7 +357,9 @@ def _store_success(turn: GovernedTurn, job_id: str, response: GenieMessageRespon
 
 def _run_job(turn: GovernedTurn, job_id: str, slot: DependencySlot | None, correlation_id: str) -> None:
     started = time.monotonic()
-    set_correlation_id(correlation_id)
+    # Reset in the finally below: a pooled worker thread keeps its context
+    # between jobs, so an unreset id would tag the thread's next work.
+    correlation_token = set_correlation_id(correlation_id)
     claimed = False
     try:
         if not jobs.claim(turn.lakebase, job_id):
@@ -385,6 +387,7 @@ def _run_job(turn: GovernedTurn, job_id: str, slot: DependencySlot | None, corre
             jobs.CANCELS.discard(job_id)
         if slot is not None:
             slot.release()
+        reset_correlation_id(correlation_token)
 
 
 def run_completion_job(
