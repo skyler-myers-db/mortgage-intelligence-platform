@@ -12,6 +12,8 @@
  *  - A duplicate is skipped, not failed.
  *  - The ETA is the budget floor until a chunk has settled, then the slower
  *    of the floor and the observed pace.
+ *  - The polite announcement says the start, each quarter once (the highest
+ *    one a batch crossed) and the result.
  */
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -172,6 +174,38 @@ describe('useLeadBulkRun', () => {
       { borrowerId: IDS[2], outcome: 'network', message: 'Failed to fetch' },
     ]);
     expect(result?.ok).toBe(6);
+  });
+
+  it('announces the start, each quarter once, and the result last', async () => {
+    const twelve = Array.from({ length: 12 }, (_, index) => `B-QUARTER${String(index + 1).padStart(6, '0')}`);
+    let done: Promise<BulkRunResult | null> = Promise.resolve(null);
+    act(() => {
+      done = run!.start({ kind: 'approve', rows: twelve.map((borrowerId) => ({ borrowerId, posts: 2 })), decide });
+    });
+    expect(run!.announcement).toBe('Approving 12 borrowers.');
+
+    await settleWire();
+    expect(run!.announcement).toBe('25% done: 3 of 12.');
+    await settleWire();
+    expect(run!.announcement).toBe('50% done: 6 of 12.');
+    await settleWire();
+    expect(run!.announcement).toBe('75% done: 9 of 12.');
+    await settleWire();
+    await done;
+    // 100% is the result itself, not a fourth quarter.
+    expect(run!.announcement).toBe('12 of 12 approved.');
+
+    // A batch that crosses two quarters at once says only the higher one
+    // (3 of 5 is past 25% and 50%).
+    const five = twelve.slice(0, 5);
+    act(() => {
+      done = run!.start({ kind: 'approve', rows: five.map((borrowerId) => ({ borrowerId, posts: 2 })), decide });
+    });
+    await settleWire();
+    expect(run!.announcement).toBe('50% done: 3 of 5.');
+    await settleWire();
+    await done;
+    expect(run!.announcement).toBe('5 of 5 approved.');
   });
 
   it('holds the synchronous latch: a second start while one runs sends nothing', async () => {
