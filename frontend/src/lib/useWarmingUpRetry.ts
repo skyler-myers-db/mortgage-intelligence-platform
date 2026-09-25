@@ -185,9 +185,15 @@ export function useWarmingUpRetry<T>(
     };
   }, [failureReason, intervalMs, maxAttempts, query.data, query.failureCount, query.isPlaceholderData]);
 
+  // `refetch` is the observer's bound method, stable for the hook's life;
+  // the result object around it is not (react-query returns a fresh tracked
+  // result each render). Keying on it keeps `manualRetry`, and so the whole
+  // returned object, stable across renders the query did not cause: a map
+  // hover no longer re-renders every consumer of the reads (runtime-07).
+  const { refetch } = query;
   const manualRetry = useCallback(() => {
-    void query.refetch();
-  }, [query]);
+    void refetch();
+  }, [refetch]);
 
   return {
     data: query.data ?? null,
