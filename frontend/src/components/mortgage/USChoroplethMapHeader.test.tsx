@@ -12,8 +12,19 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMapHeader, type MapColorMode } from './USChoroplethMapHeader';
 
-const lazyMocks = vi.hoisted(() => ({ load: vi.fn(() => Promise.resolve({})) }));
-vi.mock('./rateScenario.lazy', () => ({ RATE_SCENARIO_CONTROL: { load: lazyMocks.load, current: () => null } }));
+const lazyMocks = vi.hoisted(() => ({ load: vi.fn(), fail: false }));
+vi.mock('./rateScenario.lazy', () => ({
+  RATE_SCENARIO_CONTROL: {
+    // Counted through the spy but answered by a plain promise: vitest attaches
+    // handlers to a vi.fn's returned promise (settledResults), so a rejection
+    // it returned could never surface as unhandled.
+    load: () => {
+      lazyMocks.load();
+      return lazyMocks.fail ? Promise.reject(new Error('retired chunk (test)')) : Promise.resolve({});
+    },
+    current: () => null,
+  },
+}));
 vi.mock('./GenieAskAbout', () => ({ GenieAskAbout: () => null }));
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -93,7 +104,7 @@ describe('USChoroplethMapHeader colouring toggle', () => {
     const unhandled = vi.fn();
     nodeProcess.on('unhandledRejection', unhandled);
     try {
-      lazyMocks.load.mockImplementation(() => Promise.reject(new Error('retired chunk (test)')));
+      lazyMocks.fail = true;
       const { rate } = renderHeader('borrowers', true);
       act(() => rate?.dispatchEvent(new PointerEvent('pointerover', { bubbles: true })));
       act(() => rate?.focus());
@@ -103,7 +114,7 @@ describe('USChoroplethMapHeader colouring toggle', () => {
       expect(unhandled).not.toHaveBeenCalled();
     } finally {
       nodeProcess.off('unhandledRejection', unhandled);
-      lazyMocks.load.mockImplementation(() => Promise.resolve({}));
+      lazyMocks.fail = false;
     }
   });
 
