@@ -330,8 +330,10 @@ def run_completion_job(
 ) -> None:
     """Enqueue ``job``: its lease is renewed from now until it finishes."""
 
-    jobs.HEARTBEAT.track(job.job_id, turn.lakebase)
     try:
+        # Inside the try: the request's slot is already adopted, so a failure
+        # to start the heartbeat must release it too.
+        jobs.HEARTBEAT.track(job.job_id, turn.lakebase)
         # A fresh, EMPTY context per job: nothing leaks between jobs sharing a
         # pool thread, and the request's Server-Timing collector is absent.
         _executor().submit(contextvars.Context().run, _run_job, turn, job.job_id, slot, correlation_id)

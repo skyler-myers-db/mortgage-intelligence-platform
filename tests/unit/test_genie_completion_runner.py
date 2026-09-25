@@ -123,6 +123,24 @@ def test_the_job_releases_its_slot_when_it_fails(monkeypatch: Any, slots: int, f
     _await_slots(slots)
 
 
+def test_a_heartbeat_that_cannot_start_releases_the_adopted_slot(monkeypatch: Any, slots: int) -> None:
+    repo, audit, lakebase = FakeRepo(), FakeAudit(), FakeJobLakebase()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+
+    def track_explodes(*_: Any, **__: Any) -> None:
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(jobs.HEARTBEAT, "track", track_explodes)
+
+    res = post_complete(TestClient(app, raise_server_exceptions=False), headers=_bp_headers())
+
+    assert res.status_code == 500
+    assert repo.calls == []
+    # The request adopted its Genie slot before the heartbeat failed to start;
+    # the runner, not the middleware, owes the release.
+    _await_slots(slots)
+
+
 def test_a_joined_complete_adopts_nothing_and_the_runner_still_releases_once(monkeypatch: Any, slots: int) -> None:
     gate = threading.Event()
     repo, audit, lakebase = FakeRepo(gate=gate), FakeAudit(), FakeJobLakebase()
