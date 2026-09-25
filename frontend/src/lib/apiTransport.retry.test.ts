@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from './api';
-import { postJson } from './apiTransport';
+import { IDEMPOTENT_UNKEYED_POSTS, INNER_RETRY_AFTER_CAP_MS, getJson, postJson } from './apiTransport';
 import { requestGenieCompletion } from './genieAsk';
 
 /**
@@ -116,5 +116,133 @@ describe('the async Genie complete (default policy)', () => {
     expect((error as ApiError).status).toBe(503);
     expect((error as ApiError).retryable).toBe(false);
     expect(paths).toEqual([COMPLETE]);
+  });
+});
+
+/**
+ * Audit delivery-v2: the inner re-send is reason-aware and key-aware. Only a
+ * short `warming_up` (or unclassified) 503 is ridden out here; every other
+ * transient reason is the outer plan's (lib/retryPlan.ts). An unkeyed write
+ * defaults to 'rejected-only'; a keyed one re-sends its very same request_id.
+ */
+describe('the reason-aware inner re-send (GET, default policy)', () => {
+  const LEADS = '/api/v1/leads';
+
+  it('re-sends a warming_up 503 once the blip passes', async () => {
+    const paths = stubFetch([reply(503, { ...WARMING_503, dependency: 'warehouse' }), reply(200, [])]);
+    await expect(getJson('/api/leads')).resolves.toEqual([]);
+    expect(paths).toEqual([LEADS, LEADS]);
+  });
+
+  it.each([
+    ['breaker_open', { detail: 'x', retryable: true, dependency: 'warehouse', reason: 'breaker_open' }],
+    ['retries_exhausted', { detail: 'x', retryable: true, dependency: 'warehouse', reason: 'retries_exhausted' }],
+    ['dependency_saturated', { detail: 'x', retryable: true, dependency: 'warehouse', reason: 'dependency_saturated' }],
+    ['an unknown reason', { detail: 'x', retryable: true, dependency: 'warehouse', reason: 'something_new' }],
+    ['permission_denied (retryable: false)', { detail: 'x', retryable: false, dependency: 'warehouse', reason: 'permission_denied' }],
+  ])('sends a 503 %s exactly once and surfaces it', async (_label, body) => {
+    const paths = stubFetch([reply(503, body), reply(200, [])]);
+    const error = await getJson('/api/leads').catch((err: unknown) => err);
+    expect((error as ApiError).status).toBe(503);
+    expect(paths).toEqual([LEADS]);
+  });
+
+  it('surfaces a 429 whose Retry-After exceeds the cap at once, carrying the wait', async () => {
+    const paths = stubFetch([reply(429, RATE_429, { 'Retry-After': '12' }), reply(200, [])]);
+    const error = await getJson('/api/leads').catch((err: unknown) => err);
+    expect((error as ApiError).status).toBe(429);
+    expect((error as ApiError).retryAfterMs).toBe(12_000);
+    expect(paths).toEqual([LEADS]);
+  });
+
+  it('sleeps through a 429 whose Retry-After is within the cap (1.5 s), then re-sends', async () => {
+    vi.useFakeTimers();
+    try {
+      const paths = stubFetch([reply(429, RATE_429, { 'Retry-After': '1.5' }), reply(200, [])]);
+      const pending = getJson('/api/leads');
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(paths).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toEqual([]);
+      expect(paths).toEqual([LEADS, LEADS]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('caps the inner wait at 2 s', () => {
+    expect(INNER_RETRY_AFTER_CAP_MS).toBe(2_000);
+  });
+});
+
+describe('the method policy (unkeyed writes are rejected-only)', () => {
+  it('sends an unkeyed POST /offers/recommend once after a warming 503', async () => {
+    const paths = stubFetch([reply(503, WARMING_503), reply(200, {})]);
+    const error = await api.recommendOffer('B-0123456789ABC').catch((err: unknown) => err);
+    expect((error as ApiError).status).toBe(503);
+    expect(paths).toEqual(['/api/v1/offers/recommend']);
+  });
+
+  it('sends a workspace PUT once after a warming 503', async () => {
+    const paths = stubFetch([reply(503, WARMING_503), reply(200, {})]);
+    const lead = { borrower_id: 'B-0123456789ABC' } as Parameters<typeof api.saveWorkspaceLead>[0];
+    const error = await api.saveWorkspaceLead(lead).catch((err: unknown) => err);
+    expect((error as ApiError).status).toBe(503);
+    expect(paths).toEqual(['/api/v1/workspace/leads/B-0123456789ABC']);
+  });
+
+  it('sends a workspace DELETE once after a warming 503', async () => {
+    const paths = stubFetch([reply(503, WARMING_503), reply(200, {})]);
+    const error = await api.deleteWorkspaceLead('B-0123456789ABC').catch((err: unknown) => err);
+    expect((error as ApiError).status).toBe(503);
+    expect(paths).toEqual(['/api/v1/workspace/leads/B-0123456789ABC']);
+  });
+
+  it('still re-sends an unkeyed write after a pre-handler 429', async () => {
+    const paths = stubFetch([reply(429, RATE_429), reply(200, {})]);
+    await api.recommendOffer('B-0123456789ABC');
+    expect(paths).toHaveLength(2);
+  });
+
+  it('re-sends a keyed approve after a warming 503 with the identical request_id', async () => {
+    const bodies: string[] = [];
+    const responses = [reply(503, WARMING_503), reply(200, { audit_event_id: 'a-1' })];
+    vi.stubGlobal('fetch', async (_path: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      return responses.shift() as Response;
+    });
+    await api.approve('B-0123456789ABC', { request_id: 'req-approve-1' });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(JSON.parse(bodies[0]).request_id).toBe('req-approve-1');
+  });
+
+  it('re-sends a POST carrying an Idempotency-Key after a warming 503', async () => {
+    const paths = stubFetch([reply(503, WARMING_503), reply(200, { ok: true })]);
+    await postJson('/api/genie/actions', {}, undefined, { 'Idempotency-Key': 'key-1' });
+    expect(paths).toHaveLength(2);
+  });
+
+  it('re-sends an unkeyed POST whose caller asks for the default policy', async () => {
+    const paths = stubFetch([reply(503, WARMING_503), reply(200, { ok: true })]);
+    await postJson('/api/genie/message/cancel', {}, undefined, undefined, { retry: 'default' });
+    expect(paths).toHaveLength(2);
+  });
+
+  it('re-sends POST /api/portfolio/preview (an audit-free read) after a warming 503', async () => {
+    const paths = stubFetch([reply(503, { ...WARMING_503, dependency: 'warehouse' }), reply(200, { ok: true })]);
+    await postJson('/api/portfolio/preview', { criteria: {} });
+    expect(paths).toEqual(['/api/v1/portfolio/preview', '/api/v1/portfolio/preview']);
+  });
+
+  it('keeps exactly the reviewed idempotent unkeyed POSTs on the default policy', () => {
+    expect([...IDEMPOTENT_UNKEYED_POSTS].sort()).toEqual([
+      '/api/genie/message/complete',
+      '/api/genie/message/progress',
+      '/api/genie/message/status',
+      '/api/genie/start',
+      '/api/portfolio/campaign-recommendation',
+      '/api/portfolio/preview',
+    ]);
   });
 });

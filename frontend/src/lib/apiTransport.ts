@@ -532,15 +532,30 @@ async function _fetchOnce(
 }
 
 /**
- * Which transient failures a request may be re-sent after.
+ * Which transient failures a request may be re-sent after, inside this
+ * transport (a few hundred ms apart; TanStack's reason-aware plan in
+ * lib/retryPlan.ts owns every longer wait).
  *
- *   - 'default'       every retryable 503 / 429 (idempotent calls).
+ *   - 'default'       idempotent calls. A retryable 503 only while the
+ *                     dependency is `warming_up` (or unclassified): a short
+ *                     blip. Never `breaker_open`, `retries_exhausted`,
+ *                     `dependency_saturated` or an unknown reason, which the
+ *                     outer plan paces (audit delivery-v2: three sub-second
+ *                     re-sends into an open breaker). A retryable 429 only
+ *                     when its Retry-After is absent or within
+ *                     INNER_RETRY_AFTER_CAP_MS; a longer wait surfaces at once
+ *                     as an ApiError carrying `retryAfterMs`, so the screen
+ *                     counts it down instead of freezing (states-08).
  *   - 'rejected-only' only a 429 the backpressure middleware returned BEFORE
  *                     the handler ran (reason rate_limited or
- *                     dependency_saturated). Never a 503: a 503 can come from
- *                     a handler that already acted, and a request without an
- *                     Idempotency-Key (the Genie submit, which creates a
- *                     Genie message) must not act twice.
+ *                     dependency_saturated), honouring its Retry-After. Never
+ *                     a 503: a 503 can come from a handler that already acted,
+ *                     and a request without an idempotency key must not act
+ *                     twice.
+ *
+ * `retryable: false` (e.g. a 503 `permission_denied`) is never re-sent.
+ * Callers rarely pass a policy: `_policyFor` derives it from the method and
+ * the request's idempotency key.
  */
 export type RetryPolicy = 'default' | 'rejected-only';
 
@@ -550,10 +565,71 @@ export interface RequestOptions {
 
 const REJECTED_BEFORE_HANDLER: ReadonlySet<string> = new Set(['rate_limited', 'dependency_saturated']);
 
+/** The longest Retry-After the transport sleeps through by itself. */
+export const INNER_RETRY_AFTER_CAP_MS = 2_000;
+
 function _mayResend(res: Response, parsed: Retryable503Parsed, retry: RetryPolicy): boolean {
   if (!parsed.retryable) return false;
-  if (retry === 'default') return true;
-  return res.status === 429 && typeof parsed.reason === 'string' && REJECTED_BEFORE_HANDLER.has(parsed.reason);
+  if (retry === 'rejected-only') {
+    return res.status === 429 && typeof parsed.reason === 'string' && REJECTED_BEFORE_HANDLER.has(parsed.reason);
+  }
+  if (res.status === 429) return parsed.retryAfterMs === null || parsed.retryAfterMs <= INNER_RETRY_AFTER_CAP_MS;
+  return parsed.reason === null || parsed.reason === 'warming_up';
+}
+
+/**
+ * Unkeyed POSTs that are nonetheless safe to re-send: audit-free reads and
+ * the Genie job endpoints the server makes idempotent (apiClients/genieJobs.ts;
+ * progress and status are token-authorized peeks). Pinned both ways:
+ * apiTransport.retry.test.ts (membership) and
+ * tests/unit/test_transport_idempotent_posts.py (each is a backpressure
+ * read-only POST or an audit-exempt / join handler).
+ */
+export const IDEMPOTENT_UNKEYED_POSTS: ReadonlySet<string> = new Set([
+  '/api/genie/message/complete',
+  '/api/genie/message/progress',
+  '/api/genie/message/status',
+  '/api/genie/start',
+  '/api/portfolio/campaign-recommendation',
+  '/api/portfolio/preview',
+]);
+
+/** `/api/v1/x?y` and `/api/x` name the same route. */
+function _routePath(path: string): string {
+  const pathOnly = path.split(/[?#]/, 1)[0] ?? '';
+  return pathOnly.startsWith('/api/v1/') ? `/api/${pathOnly.slice('/api/v1/'.length)}` : pathOnly;
+}
+
+function _carriesRequestId(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) return false;
+  const requestId = (body as { request_id?: unknown }).request_id;
+  return typeof requestId === 'string' && requestId.trim().length > 0;
+}
+
+function _carriesIdempotencyKey(headers: Record<string, string> | undefined): boolean {
+  return Object.entries(headers ?? {}).some(
+    ([name, value]) => name.toLowerCase() === 'idempotency-key' && value.trim().length > 0,
+  );
+}
+
+/**
+ * The effective retry policy (audit delivery-v2): the caller's, when it names
+ * one; otherwise 'default' for a GET, a body carrying a `request_id`, an
+ * Idempotency-Key header or an IDEMPOTENT_UNKEYED_POSTS route, and
+ * 'rejected-only' for every other POST, PUT, PATCH and DELETE.
+ */
+function _policyFor(
+  method: string,
+  path: string,
+  body: unknown,
+  headers: Record<string, string> | undefined,
+  explicit: RetryPolicy | undefined,
+): RetryPolicy {
+  if (explicit) return explicit;
+  if (method === 'GET') return 'default';
+  if (_carriesRequestId(body) || _carriesIdempotencyKey(headers)) return 'default';
+  if (method === 'POST' && IDEMPOTENT_UNKEYED_POSTS.has(_routePath(path))) return 'default';
+  return 'rejected-only';
 }
 
 async function _fetchWithRetry(
@@ -705,6 +781,23 @@ export async function getJsonWithHeaders<T>(path: string, signal?: AbortSignal):
   return _requestJson<T>(path, undefined, signal);
 }
 
+/**
+ * One write. The body is stringified once, so a re-send carries the very same
+ * `request_id` (approve, reject, assign, activation, growth-agent runs).
+ */
+async function _writeJson<T>(
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  path: string,
+  body: unknown,
+  signal: AbortSignal | undefined,
+  extraHeaders: Record<string, string> | undefined,
+  options: RequestOptions | undefined,
+): Promise<T> {
+  const init = method === 'DELETE' && body === undefined ? { method } : _jsonBody(method, body, extraHeaders);
+  const policy = _policyFor(method, path, body, extraHeaders, options?.retry);
+  return (await _requestJson<T>(path, init, signal, policy)).data;
+}
+
 export async function postJson<T, B>(
   path: string,
   body: B,
@@ -712,17 +805,17 @@ export async function postJson<T, B>(
   extraHeaders?: Record<string, string>,
   options?: RequestOptions,
 ): Promise<T> {
-  return (await _requestJson<T>(path, _jsonBody('POST', body, extraHeaders), signal, options?.retry)).data;
+  return _writeJson<T>('POST', path, body, signal, extraHeaders, options);
 }
 
-export async function putJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
-  return (await _requestJson<T>(path, _jsonBody('PUT', body), signal)).data;
+export async function putJson<T, B>(path: string, body: B, signal?: AbortSignal, options?: RequestOptions): Promise<T> {
+  return _writeJson<T>('PUT', path, body, signal, undefined, options);
 }
 
-export async function patchJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
-  return (await _requestJson<T>(path, _jsonBody('PATCH', body), signal)).data;
+export async function patchJson<T, B>(path: string, body: B, signal?: AbortSignal, options?: RequestOptions): Promise<T> {
+  return _writeJson<T>('PATCH', path, body, signal, undefined, options);
 }
 
-export async function deleteJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  return (await _requestJson<T>(path, { method: 'DELETE' }, signal)).data;
+export async function deleteJson<T>(path: string, signal?: AbortSignal, options?: RequestOptions): Promise<T> {
+  return _writeJson<T>('DELETE', path, undefined, signal, undefined, options);
 }
