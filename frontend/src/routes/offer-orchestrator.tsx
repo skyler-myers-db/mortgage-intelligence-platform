@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Navigate, useParams } from 'react-router';
+import { Navigate, useLocation, useParams } from 'react-router';
 import type { ApproveResult, RejectResult } from '../lib/apiTypes';
 import {
   offerMutationKeys,
@@ -12,8 +12,12 @@ import {
 } from '../lib/mutations/offer';
 import { isDecisionPending } from '../lib/mutations/outreach';
 import { intentFingerprint, useIntentRequestIds } from '../lib/mutations/requestIds';
+import { queueHref, useQueueContext } from '../lib/queueContext';
+import { queuePosition } from '../lib/queuePosition';
+import { offerPath } from '../lib/routeMeta';
 import { PageShell } from '../components/layout/PageShell';
 import { BorrowerOfferPreviewMock } from '../components/mortgage/BorrowerOfferPreviewMock';
+import { QueuePager } from '../components/mortgage/QueuePager';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
@@ -53,6 +57,10 @@ function draftSaveErrorCopy(err: unknown): string {
 
 export default function OfferOrchestrator() {
   const { id } = useParams();
+  const location = useLocation();
+  // The ranked Lead Queue this offer was opened from (masked ids only), for
+  // the pager, the Next-in-queue step and the queue-aware back links.
+  const queue = useQueueContext(location.state, id ?? null);
   const { campaignBinding, campaignBindingError } = useOfferCampaignBinding();
   const queryClient = useQueryClient();
   const [approveError, setApproveError] = useState<string | null>(null);
@@ -157,8 +165,21 @@ export default function OfferOrchestrator() {
   }
 
   if (!id) {
-    return <OfferOrchestratorEmptyRoute />;
+    return <OfferOrchestratorEmptyRoute backTo={queueHref(queue)} />;
   }
+
+  // shell-04 / flow-09: step offer to offer through the queue. The keys are
+  // off while the reject rationale is open (the only typed work here) and,
+  // with the buttons, while a decision is on the wire.
+  const pager = (
+    <QueuePager
+      borrowerId={id}
+      queue={queue}
+      pathFor={offerPath}
+      hotkeys={!rejectReviewOpen && !approving}
+      disabled={approving}
+    />
+  );
 
   const productLabel = offerDisplayLabel(
     rec?.offer_code ?? b?.recommended_offer_code,
@@ -330,7 +351,7 @@ export default function OfferOrchestrator() {
   };
 
   if (snapshot.warmingUp) {
-    return <OfferWarmingRoute borrowerId={id} warmingUp={snapshot.warmingUp} />;
+    return <OfferWarmingRoute borrowerId={id} warmingUp={snapshot.warmingUp} pager={pager} />;
   }
 
   if (snapshot.loadError) {
@@ -339,6 +360,8 @@ export default function OfferOrchestrator() {
         borrowerId={id}
         loadError={snapshot.loadError}
         notFound={snapshot.notFound}
+        backTo={queueHref(queue)}
+        pager={pager}
         onRetry={() => {
           setLoadGeneration((n) => n + 1);
           rereadSnapshotAndDraft();
@@ -380,6 +403,7 @@ export default function OfferOrchestrator() {
         )
       }
     >
+      {pager}
       {snapshotReconciling && (
         <OfferSnapshotReconciliation borrowerId={id} inline />
       )}
@@ -465,6 +489,8 @@ export default function OfferOrchestrator() {
         approveError={decisionPending ? null : approveError}
         score={b ? { opportunityScore: b.opportunity_score, confidence: b.confidence } : null}
         routing={approvalRouting?.id === id ? approvalRouting : null}
+        queue={queue}
+        nextId={queue ? queuePosition(queue, id)?.next ?? null : null}
       />
       {decisionPending && (
         <OfferActionBar

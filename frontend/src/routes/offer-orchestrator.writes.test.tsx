@@ -16,6 +16,7 @@ import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Borrower360, BorrowerLifecycle, OfferRecommendation, SalesTeamMember } from '../types';
 import type { OutreachDraftResult } from '../lib/apiTypes';
+import { clearQueueContext, storeQueueContext } from '../lib/queueContext';
 
 const apiMocks = vi.hoisted(() => ({
   borrower: vi.fn(),
@@ -262,6 +263,8 @@ describe('Offer Orchestrator writes', () => {
     queryClient.clear();
     container.remove();
     navigate = null;
+    clearQueueContext();
+    window.sessionStorage.clear();
   });
 
   function mount(entry = `/offer-orchestrator/${ID}`) {
@@ -270,10 +273,12 @@ describe('Offer Orchestrator writes', () => {
         <QueryClientProvider client={queryClient}>
           <MemoryRouter initialEntries={[entry]}>
             <NavigateProbe />
-            <Routes>
-              <Route path="/offer-orchestrator/:id" element={<OfferOrchestrator />} />
-              <Route path="/lead-queue" element={<div data-testid="elsewhere" />} />
-            </Routes>
+            <main>
+              <Routes>
+                <Route path="/offer-orchestrator/:id" element={<OfferOrchestrator />} />
+                <Route path="/lead-queue" element={<div data-testid="elsewhere" />} />
+              </Routes>
+            </main>
           </MemoryRouter>
         </QueryClientProvider>,
       );
@@ -483,5 +488,78 @@ describe('Offer Orchestrator writes', () => {
     await act(async () => release(BORROWER));
     await waitUntil(() => findButton('Approve outreach')?.disabled === false);
     expect(button('Confirm reject').disabled).toBe(false);
+  });
+
+  describe('queue context (shell-04 / flow-09)', () => {
+    const NEXT = 'B-0000000000002';
+    const queue = { epoch: 'e-writes', search: '?state=IL', label: 'IL', ids: ['B-0000000000000', ID, NEXT] };
+    const pager = () => container.querySelector('nav[aria-label="Lead queue position"]');
+    const nextStep = () => container.querySelector('[data-testid="offer-next-in-queue"]');
+    const pressJ = () => {
+      const target = container.querySelector<HTMLElement>('h1') ?? container.querySelector<HTMLElement>('main')!;
+      target.tabIndex = -1;
+      act(() => target.focus());
+      act(() => {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true, cancelable: true }));
+      });
+    };
+
+    beforeEach(() => {
+      storeQueueContext(queue);
+    });
+
+    it('shows the pager, and Next in queue only after the approve returned true', async () => {
+      let release: (value: unknown) => void = () => undefined;
+      apiMocks.approve.mockReturnValue(new Promise((resolve) => {
+        release = resolve;
+      }));
+      mount();
+      await waitUntil(() => loaded());
+      expect(pager()?.textContent).toContain('2 of 3 ranked in IL');
+      await act(async () => {
+        button('Approve outreach').click();
+      });
+      await waitUntil(() => apiMocks.approve.mock.calls.length === 1);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      // In flight: no Next, and the pager cannot step away from the write.
+      expect(nextStep()).toBeNull();
+      expect(button('Next').disabled).toBe(true);
+      expect(button('Previous').disabled).toBe(true);
+      await act(async () => {
+        release({ approved: true, audit_event_id: 'audit-1', approval_id: 'approval-1' });
+      });
+      await waitUntil(() => nextStep() !== null);
+      const link = nextStep()!.querySelector('a')!;
+      expect(link.textContent).toBe(`Next in queue: ${NEXT}`);
+      expect(link.getAttribute('href')).toBe(`/offer-orchestrator/${NEXT}`);
+      // Never auto-navigates.
+      expect(container.querySelector('[data-testid="elsewhere"]')).toBeNull();
+      expect(apiMocks.borrower.mock.calls.every((call) => call[0] === ID)).toBe(true);
+    });
+
+    it('no Next in queue after a failed write', async () => {
+      apiMocks.approve.mockResolvedValue({ approved: false });
+      mount();
+      await waitUntil(() => loaded());
+      await act(async () => {
+        button('Approve outreach').click();
+      });
+      await waitUntil(() => container.textContent?.includes('Approval endpoint returned approved=false.') === true);
+      expect(nextStep()).toBeNull();
+    });
+
+    it('J pages to the next offer, but not while the reject rationale is open', async () => {
+      mount();
+      await waitUntil(() => loaded());
+      await openRejectReview();
+      pressJ();
+      expect(apiMocks.borrower.mock.calls.some((call) => call[0] === NEXT)).toBe(false);
+      act(() => button('Cancel').click());
+      await waitUntil(() => findButton('Confirm reject') === undefined);
+      pressJ();
+      await waitUntil(() => apiMocks.borrower.mock.calls.some((call) => call[0] === NEXT));
+    });
   });
 });

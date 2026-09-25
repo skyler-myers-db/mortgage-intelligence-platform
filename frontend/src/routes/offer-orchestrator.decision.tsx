@@ -16,10 +16,13 @@
  * the durable lifecycle row), so a read-back this viewer may not make (403:
  * another approver's row) or that fails still says Approved / Rejected.
  */
+import { Link } from 'react-router';
 import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import type { DecisionRouting } from '../components/mortgage/DecisionReceipt.copy';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { Chip } from '../components/Primitives';
+import { queueHref, type QueueContext } from '../lib/queueContext';
+import { offerPath } from '../lib/routeMeta';
 import type { OutreachChannel } from './offer-orchestrator.constants';
 
 // The receipt renders only once a decision exists, so it loads then (its
@@ -50,6 +53,34 @@ export interface OfferDecisionOutcomeProps {
    * (carryover #12): a persistent line on the receipt, beside the toast.
    */
   routing?: DecisionRouting | null;
+  /** The Lead Queue this offer was opened from, or null (shell-04 / flow-09). */
+  queue?: QueueContext | null;
+  /** The next ranked borrower in that queue; null at its end. */
+  nextId?: string | null;
+}
+
+/**
+ * The step after a decision made HERE (audit shell-04 / flow-09): the next
+ * ranked borrower's offer, or the filtered queue at its end. Rendered only
+ * once the write returned true in this view (justDecided), never for a
+ * durable decision, never on its own: no auto-navigation and no focus move
+ * (the receipt keeps focus). A plain Link: no prefetch and no hover read of
+ * the neighbour, whose open writes audit rows only when the reviewer goes.
+ */
+function NextInQueue({ queue, nextId }: { queue: QueueContext; nextId: string | null }) {
+  return (
+    <div className="section-actions" data-testid="offer-next-in-queue">
+      {nextId ? (
+        <Link className="btn btn--sm" to={offerPath(nextId)} state={{ queue }}>
+          Next in queue: <span className="mono">{nextId}</span>
+        </Link>
+      ) : (
+        <Link className="btn btn--sm" to={queueHref(queue)}>
+          Back to lead queue
+        </Link>
+      )}
+    </div>
+  );
 }
 
 export function OfferDecisionOutcome({
@@ -63,6 +94,8 @@ export function OfferDecisionOutcome({
   approveError,
   score,
   routing = null,
+  queue = null,
+  nextId = null,
 }: OfferDecisionOutcomeProps) {
   const scoreAtDecision = justDecided ? score : null;
   const decided = effectiveApproval === 'approved' || effectiveApproval === 'rejected';
@@ -71,37 +104,29 @@ export function OfferDecisionOutcome({
   const receiptChunk = useLazyModule(RECEIPT_CHUNK, decided && hasAuditId);
   const DecisionReceipt = receiptChunk.module?.DecisionReceipt;
   const receiptSlot = hasAuditId && !receiptChunk.failed;
+  const nextStep = justDecided && queue ? <NextInQueue queue={queue} nextId={nextId} /> : null;
   return (
     <>
       {effectiveApproval === 'approved' && (
-        <>
-          {receiptSlot ? (DecisionReceipt && auditId && (
-            <DecisionReceipt
-              auditEventId={auditId}
-              decision="approved"
-              decidedHere={justDecided}
-              reveal={justDecided}
-              score={scoreAtDecision}
-              focusHeading={justDecided}
-              routing={routing}
-              className="mt-grid"
-            />
-          )) : (
-            <div className="surface mt-grid">
-              <div className="surface__body surface__body--inline">
-                <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
-                {approvalId && <span className="mono muted fs-11">approval: {approvalId}</span>}
-              </div>
-            </div>
-          )}
-          <ActivationLoopPanel
-            borrowerId={borrowerId}
-            offerCode={offerCode}
-            channel={channel}
-            approvalId={approvalId}
-            approved
+        receiptSlot ? (DecisionReceipt && auditId && (
+          <DecisionReceipt
+            auditEventId={auditId}
+            decision="approved"
+            decidedHere={justDecided}
+            reveal={justDecided}
+            score={scoreAtDecision}
+            focusHeading={justDecided}
+            routing={routing}
+            className="mt-grid"
           />
-        </>
+        )) : (
+          <div className="surface mt-grid">
+            <div className="surface__body surface__body--inline">
+              <Chip variant="success" icon="check">Approved · governed internal queue</Chip>
+              {approvalId && <span className="mono muted fs-11">approval: {approvalId}</span>}
+            </div>
+          </div>
+        )
       )}
       {effectiveApproval === 'rejected' && (
         receiptSlot ? (DecisionReceipt && auditId && (
@@ -121,6 +146,16 @@ export function OfferDecisionOutcome({
             </div>
           </div>
         )
+      )}
+      {nextStep}
+      {effectiveApproval === 'approved' && (
+        <ActivationLoopPanel
+          borrowerId={borrowerId}
+          offerCode={offerCode}
+          channel={channel}
+          approvalId={approvalId}
+          approved
+        />
       )}
       {approveError && (
         <div
