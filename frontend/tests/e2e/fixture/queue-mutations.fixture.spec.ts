@@ -31,7 +31,6 @@
  * Every write is registered per test so the test owns its timing.
  */
 import { readFile } from 'node:fs/promises';
-import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from '../../../src/lib/apiClients/leadExport';
 import type { ApproveResult, DecisionReceipt } from '../../../src/lib/apiTypes';
@@ -43,10 +42,11 @@ import { leadFixtures } from './data/leads';
 import { SALES_TEAM } from './data/portfolio';
 import { registerDraftEcho, registerHeldDecision, reviewSubject } from './data/queueKeyboard';
 import { json, type FixtureReply, type FixtureRequest, type MockApi } from './mockApi';
+import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
+import type { FixtureTheme } from './app';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 const ID = PRIMARY_BORROWER.borrower_id;
 const REFRESHED_AT = '2026-07-14T06:15:00Z';
 const LOAN_OFFICERS = SALES_TEAM.filter((member) => member.role === 'loan_officer');
@@ -96,9 +96,9 @@ function registerReceiptRead(mockApi: MockApi): void {
   );
 }
 
-async function axeViolations(page: Page, selector: string) {
-  const results = await new AxeBuilder({ page }).include(selector).withTags(WCAG_TAGS).analyze();
-  return results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(', ')}`);
+/** The shared axe gate (axe.ts: WCAG tags, impact policy, ratchet) over one region. */
+async function expectRegionAxeClean(page: Page, theme: FixtureTheme, state: string, include: string): Promise<void> {
+  await expectAxeClean(page, { key: { route: 'lead-queue', state }, theme, known: KNOWN_VIOLATIONS, include });
 }
 
 test.describe('(a) a governed approve stays pessimistic and refetches nothing', () => {
@@ -126,7 +126,7 @@ test.describe('(a) a governed approve stays pessimistic and refetches nothing', 
       await expect(cell.getByRole('button', { name: `Reject ${ID}` })).toBeDisabled();
       await expect(cell.locator('.chip--success')).toHaveCount(0);
       expect(bodies, 'one approve POST while held').toHaveLength(1);
-      expect(await axeViolations(page, '.tbl-wrap'), `${theme} pending row`).toEqual([]);
+      await expectRegionAxeClean(page, theme, 'approve-pending-row', '.tbl-wrap');
 
       const settledCalls = mockApi.calls.length;
       gate.release();
@@ -224,7 +224,7 @@ test.describe('(c) assignment strategies are honest and land in the shell toast 
       const toast = toastFor('audit-distribute-1');
       await expect(toast).toBeVisible();
       await expect(toast.locator('.toast__title')).toHaveText('2 leads assigned');
-      expect(await axeViolations(page, '.toast'), `${theme} toast`).toEqual([]);
+      await expectRegionAxeClean(page, theme, 'assignment-toast', '.toast');
 
       await boxes.nth(0).check();
       await boxes.nth(1).check();

@@ -28,9 +28,9 @@
  * Holds are RequestGates, never wall-clock waits, so the in-flight
  * assertions hold under any machine load.
  */
-import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import type { FixtureTheme } from './app';
+import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { LEADS } from './data/borrowers';
 import {
   REVIEW_AUDIT_ID,
@@ -43,8 +43,6 @@ import {
 } from './data/queueKeyboard';
 import type { MockApi } from './mockApi';
 import { expect, test } from './test';
-
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 function draftRequests(mockApi: MockApi): number {
   return mockApi.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/outreach/draft')).length;
@@ -366,16 +364,24 @@ test.describe('approve review', () => {
       await page.keyboard.press('j');
       await page.keyboard.press('a');
       await expect(page.locator('dialog.lead-approve-dialog').getByTestId('lead-approve-review-confirm')).toBeFocused();
-      const reviewScan = await new AxeBuilder({ page }).include('dialog.lead-approve-dialog').withTags(WCAG_TAGS).analyze();
-      expect(reviewScan.violations.map((violation) => violation.id)).toEqual([]);
+      await expectAxeClean(page, {
+        key: { route: 'lead-queue', state: 'approve-review-dialog' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: 'dialog.lead-approve-dialog',
+      });
       await page.keyboard.press('Escape');
 
       await scrollRegion(page).focus();
       await page.keyboard.press('?');
       const sheet = page.getByTestId('shortcut-sheet');
       await expect(sheet).toBeVisible();
-      const sheetScan = await new AxeBuilder({ page }).include('[data-testid="shortcut-sheet"]').withTags(WCAG_TAGS).analyze();
-      expect(sheetScan.violations.map((violation) => violation.id)).toEqual([]);
+      await expectAxeClean(page, {
+        key: { route: 'lead-queue', state: 'shortcut-sheet' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: '[data-testid="shortcut-sheet"]',
+      });
     });
   }
 });
