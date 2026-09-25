@@ -43,6 +43,8 @@ import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
 import { useLeadBulkRun, type BulkRowReport, type BulkRunResult } from './useLeadBulkRun';
 import { pruneTo, rangeIds } from './LeadTable.selection';
 
+const BULK_TOAST_DISMISS_MS = 4000;
+
 /** Verification state of a `?campaign_id=&variant_name=` URL binding. */
 export type CampaignBindingState = 'absent' | 'invalid' | 'verified' | 'validating';
 
@@ -573,6 +575,16 @@ export function useLeadApprovalActions({
   useEffect(() => {
     clearCancelledBulk();
   }, []);
+
+  // A flashed run with nothing aborted (the unmount landed after its last
+  // POST returned) clears itself after 4 s, as before the run moved to
+  // useLeadBulkRun; an audit-ambiguous one (aborted > 0) stays until the
+  // operator opens Recent activity.
+  useEffect(() => {
+    if (!bulkToast || bulkToast.aborted > 0) return undefined;
+    const timer = window.setTimeout(() => setBulkToast(null), BULK_TOAST_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [bulkToast]);
 
   /**
    * A row that must not be approved from an open review, read synchronously:

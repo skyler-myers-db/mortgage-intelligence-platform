@@ -363,6 +363,25 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled')).toBeNull();
   });
 
+  it('clears a flashed run with nothing aborted after 4 s, and keeps an aborted one until it is resolved', () => {
+    vi.useFakeTimers();
+    try {
+      window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 3, aborted: 0, ts: Date.now() }));
+      mount();
+      expect(actions!.bulkToast).toEqual({ ok: 3, fail: 0, network: 0, aborted: 0 });
+      act(() => vi.advanceTimersByTime(4000));
+      expect(actions!.bulkToast, 'nothing is ambiguous: no dismiss control needed').toBeNull();
+
+      // Aborted rows may have committed: that flash waits for Recent activity.
+      window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 1, aborted: 2, ts: Date.now() }));
+      remount();
+      act(() => vi.advanceTimersByTime(60_000));
+      expect(actions!.bulkToast).toEqual({ ok: 1, fail: 0, network: 0, aborted: 2 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('sends one reject POST for a double submit and replays its request_id after a failure', async () => {
     let releaseReject: (value: unknown) => void = () => undefined;
     apiMocks.reject
