@@ -256,7 +256,9 @@ def _served(mode: str, scenario: str, monkeypatch: Any) -> tuple[dict[str, Any],
         wait_for_job(lakebase)
         body = post_status(client, job_id).json()["response"]
     else:
-        res = post_complete(client, respond_async=mode == "inline_no_table")
+        # Without the table only an older tab's complete runs inline (an
+        # async one is refused): the pre-job path is the legacy body.
+        res = post_complete(client, respond_async=False)
         assert res.status_code == 200
         body = res.json()
     return body, _audit_kwargs(audit)

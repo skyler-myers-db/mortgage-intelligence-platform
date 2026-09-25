@@ -5,7 +5,8 @@ job table (tests/fixtures/genie_job_lakebase.py): one job per (actor,
 conversation, message) so a reloaded or retried complete never runs the
 governed tail twice, the opt-in 202 versus the legacy 200, the status poll's
 authorization, lease-based expiry on read and in the sweep every new job
-runs, the table-absent inline path, canned failure hints only, and a stored
+runs, a job-less async complete refused (a legacy one inline), canned
+failure hints only, and a stored
 result that holds neither the question nor any live authorization.
 """
 
@@ -31,6 +32,7 @@ from backend.services.genie_completion_stages import (
 )
 from backend.services.genie_deterministic import _policy_blocked_genie_output_response
 from backend.services.genie_message_policy import GenieMessageRequest
+from backend.services.lakebase import LakebaseError
 from backend.services.resilience import DependencyDownError
 from tests.fixtures.genie_job_lakebase import FakeJobLakebase
 from tests.fixtures.genie_job_turns import (
@@ -356,16 +358,90 @@ def test_the_sweep_is_bounded(monkeypatch: Any) -> None:
 # -------------------------------------------------- table not provisioned
 
 
-def test_without_the_job_table_async_complete_runs_the_inline_governed_path(monkeypatch: Any) -> None:
-    repo, audit, lakebase = FakeRepo(), FakeAudit(), FakeJobLakebase(jobs_table=False)
+class _ProbeBlipLakebase(FakeJobLakebase):
+    """The job table exists, but the capability probe's query fails once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.probe_failures = 1
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        if sql is jobs._PROBE_SQL and self.probe_failures:
+            self.probe_failures -= 1
+            raise LakebaseError("connection reset (fake)")
+        return super().fetchone(sql, params)
+
+
+_INELIGIBLE_CONV = "conv.job.1"
+
+
+def _unjobbed_complete(client: TestClient, case: str, *, respond_async: bool) -> Any:
+    """A complete that cannot get a job: no table, or ids outside the job grammar."""
+
+    if case == "no_table":
+        return post_complete(client, respond_async=respond_async)
+    body: dict[str, Any] = {
+        "conversation_id": _INELIGIBLE_CONV,
+        "message_id": MSG,
+        "progress_token": token(conversation_id=_INELIGIBLE_CONV),
+        "question": QUESTION,
+    }
+    if respond_async:
+        body["respond_async"] = True
+    return client.post("/api/genie/message/complete", json=body, headers=HEADERS)
+
+
+@pytest.mark.parametrize("case", ["no_table", "ineligible_ids"])
+def test_an_async_complete_that_cannot_get_a_job_is_refused_before_any_genie_work(monkeypatch: Any, case: str) -> None:
+    # The browser re-sends an async complete (a timeout, a reload); a job-less
+    # inline run could not be joined, so the re-send would run the governed
+    # tail and write RUN_GENIE a second time. Refused, and never re-sent.
+    repo, audit, lakebase = FakeRepo(), FakeAudit(), FakeJobLakebase(jobs_table=case != "no_table")
     install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
 
-    res = post_complete(TestClient(app))
+    res = _unjobbed_complete(TestClient(app), case, respond_async=True)
+
+    assert res.status_code == 503
+    assert res.json()["detail"] == "lakebase is temporarily unavailable"
+    assert res.json().get("retryable") is not True, "the transport must not re-send it"
+    assert repo.calls == []
+    assert audit.writes == []
+    assert lakebase.rows == {}
+    assert lakebase.executed == []
+
+
+@pytest.mark.parametrize("case", ["no_table", "ineligible_ids"])
+def test_a_legacy_complete_that_cannot_get_a_job_runs_the_inline_governed_path(monkeypatch: Any, case: str) -> None:
+    repo, audit, lakebase = FakeRepo(), FakeAudit(), FakeJobLakebase(jobs_table=case != "no_table")
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+
+    res = _unjobbed_complete(TestClient(app), case, respond_async=False)
 
     assert res.status_code == 200
     assert res.json()["answer"].startswith("There are 124,946")
     assert lakebase.rows == {}
     assert lakebase.job_statements == []
+    assert len(repo.calls) == 1
+    assert len(audit.run_query_rows()) == 1
+
+
+def test_a_probe_blip_refuses_the_async_complete_and_its_resend_runs_the_turn_once(monkeypatch: Any) -> None:
+    repo, audit, lakebase = FakeRepo(), FakeAudit(), _ProbeBlipLakebase()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+    client = TestClient(app)
+
+    refused = post_complete(client)
+
+    assert refused.status_code == 503
+    assert repo.calls == []
+    assert audit.writes == []
+
+    accepted = post_complete(client)
+    job = wait_for_job(lakebase)
+
+    assert accepted.status_code == 202
+    assert job["status"] == "succeeded"
+    assert len(repo.calls) == 1
     assert len(audit.run_query_rows()) == 1
 
 

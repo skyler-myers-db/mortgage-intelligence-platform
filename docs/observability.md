@@ -524,7 +524,8 @@ answer, SQL, or exception text; ids are the job UUID only:
 | `genie_job_expired` | INFO | `reason` stale_lease / past_expiry, `via` read / sweep, `job_id` | A job was expired: its runner stopped renewing the lease (the process died or restarted), or a served answer passed `expires_at` and its stored result was NULLed. |
 | `genie_job_finished` (logger `mip-genie`) | INFO | `status` succeeded / failed / expired, `duration_ms`, `failure_kind`, `job_id` | The runner finished. `failure_kind` is dependency_down, upstream_error or internal; the browser gets the canned hint for it. `expired` here means the runner lost its lease before it could store the answer. |
 | `genie_job_internal_error` (logger `mip-genie`) | ERROR | `error_type`, `job_id` | An unexpected exception inside a job, logged with the enqueuing request's correlation id. |
-| `genie_jobs_table_absent` | WARNING, once per absence | — | The App runs ahead of the Lakebase migration: completion stays inline (no job) until `mip_lakebase_migrate` has run; the probe re-checks every 60 s. |
+| `genie_jobs_table_absent` | WARNING, once per absence | — | The App runs ahead of the Lakebase migration: submit advertises no jobs and an older tab's completion stays inline (no job) until `mip_lakebase_migrate` has run; the probe re-checks every 60 s. |
+| `genie_complete_async_refused` (logger `mip-genie`) | WARNING | `outcome` refused | An async complete arrived while the turn could not get a job (the probe failed or found no table). It got a non-retryable 503 before any Genie work or audit row: the browser re-sends an async complete, and a job-less run could not be joined, so the re-send would complete the turn twice. |
 
 Leases and expiry. Postgres `now()` is the only clock. A job is leased to its
 process for 45 s; one daemon thread per process renews its own queued and

@@ -100,7 +100,7 @@ from backend.services.genie_turn_record import (  # noqa: F401 - compatibility r
 )
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
-from backend.services.observability import get_correlation_id
+from backend.services.observability import emit, get_correlation_id
 from backend.services.rbac import resolve_workflow_actor
 from backend.services.repositories import BorrowerRepository, GenieAnswerRepository
 from backend.services.repositories.factory import (
@@ -581,7 +581,9 @@ def genie_message_complete(
     recording single-shot: a reloaded or retried complete joins the job.
     ``respond_async`` answers 202 with the job's status (the browser polls
     ``/message/status``); older tabs get today's 200 answer. Without the job
-    table (App ahead of its migration) the tail runs inline with no job. No
+    table (App ahead of its migration) an older tab's tail runs inline with no
+    job; an async request is refused with a non-retryable 503, because the
+    browser re-sends it and a job-less run could not be joined. No
     conversation-ownership lookup here: for a fresh conversation the Lakebase
     row intentionally does not exist until this very call finalizes — the
     token is the authorization.
@@ -601,6 +603,20 @@ def genie_message_complete(
         job_turn_ids_eligible(payload.conversation_id, payload.message_id)
         and completion_jobs_available(lakebase)
     ):
+        if payload.respond_async:
+            # The browser sends respond_async only after submit advertised
+            # jobs, and it re-sends it (timeout, reload). A job-less inline
+            # run could not be joined, so that re-send would run the governed
+            # tail and write RUN_GENIE a second time. Refuse before any Genie
+            # work; no retryable flag, so the transport does not re-send.
+            emit(
+                log,
+                "genie_complete_async_refused",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="refused",
+            )
+            raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase"))
         return complete_governed_turn(turn)
     enrollment = create_or_join(
         lakebase,

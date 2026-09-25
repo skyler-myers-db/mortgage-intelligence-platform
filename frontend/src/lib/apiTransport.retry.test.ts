@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from './api';
 import { postJson } from './apiTransport';
+import { requestGenieCompletion } from './genieAsk';
 
 /**
  * The transport's transient retry never re-sends a non-idempotent POST that
@@ -93,5 +94,27 @@ describe('every other POST (default policy, unchanged)', () => {
     await postJson<{ ok: boolean }, Record<string, never>>('/api/genie/message/progress', {});
 
     expect(paths).toHaveLength(2);
+  });
+});
+
+describe('the async Genie complete (default policy)', () => {
+  const COMPLETE = '/api/v1/genie/message/complete';
+  const TURN = { conversationId: 'conv-1', messageId: 'msg-1', progressToken: 'tok-1' };
+  // What the server answers when it cannot give the turn a job: a plain 503
+  // with no retryable flag. A job-less run could not be joined, so a re-send
+  // would run the governed tail, and its audit row, twice.
+  const REFUSED_503 = { detail: 'lakebase is temporarily unavailable' };
+
+  it('is sent exactly once when the server refuses it for want of a job', async () => {
+    const paths = stubFetch([reply(503, REFUSED_503), reply(202, { kind: 'genie_completion_job' })]);
+
+    const error = await requestGenieCompletion(TURN, 'Which states lead?', { asyncComplete: true }).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(503);
+    expect((error as ApiError).retryable).toBe(false);
+    expect(paths).toEqual([COMPLETE]);
   });
 });

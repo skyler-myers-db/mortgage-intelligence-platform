@@ -13,7 +13,10 @@ second time. The tail now lives in :func:`complete_governed_turn` and runs:
   thread holding its own slot, and records the outcome on the job, so a
   retried legacy complete JOINS it and waits instead of running it again;
 * WITHOUT A JOB when the table is not provisioned yet (the App promoted
-  ahead of its migration): exactly today's inline path.
+  ahead of its migration): exactly today's inline path, for older tabs only.
+  An async request that cannot get a job is refused with a non-retryable
+  503 instead, because the browser re-sends it and nothing could join a
+  job-less run.
 
 Single-shot audit and token issuance: one (actor, conversation, message) has
 exactly one job row (the table's UNIQUE key) and exactly one claimant (the

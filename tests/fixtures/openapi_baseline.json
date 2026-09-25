@@ -17778,7 +17778,7 @@
     "/api/genie/message/complete": {
       "post": {
         "deprecated": true,
-        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nOne job per (actor, conversation, message) makes the output-policy\ncheck, the RUN_GENIE audit write, action-token issuance and session\nrecording single-shot: a reloaded or retried complete joins the job.\n``respond_async`` answers 202 with the job's status (the browser polls\n``/message/status``); older tabs get today's 200 answer. Without the job\ntable (App ahead of its migration) the tail runs inline with no job. No\nconversation-ownership lookup here: for a fresh conversation the Lakebase\nrow intentionally does not exist until this very call finalizes \u2014 the\ntoken is the authorization.",
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nOne job per (actor, conversation, message) makes the output-policy\ncheck, the RUN_GENIE audit write, action-token issuance and session\nrecording single-shot: a reloaded or retried complete joins the job.\n``respond_async`` answers 202 with the job's status (the browser polls\n``/message/status``); older tabs get today's 200 answer. Without the job\ntable (App ahead of its migration) an older tab's tail runs inline with no\njob; an async request is refused with a non-retryable 503, because the\nbrowser re-sends it and a job-less run could not be joined. No\nconversation-ownership lookup here: for a fresh conversation the Lakebase\nrow intentionally does not exist until this very call finalizes \u2014 the\ntoken is the authorization.",
         "operationId": "post_api_genie_message_complete_genie_message_complete",
         "requestBody": {
           "content": {
@@ -25507,7 +25507,7 @@
     },
     "/api/v1/genie/message/complete": {
       "post": {
-        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nOne job per (actor, conversation, message) makes the output-policy\ncheck, the RUN_GENIE audit write, action-token issuance and session\nrecording single-shot: a reloaded or retried complete joins the job.\n``respond_async`` answers 202 with the job's status (the browser polls\n``/message/status``); older tabs get today's 200 answer. Without the job\ntable (App ahead of its migration) the tail runs inline with no job. No\nconversation-ownership lookup here: for a fresh conversation the Lakebase\nrow intentionally does not exist until this very call finalizes \u2014 the\ntoken is the authorization.",
+        "description": "Async lifecycle step 3: governed completion of the submitted turn.\n\nOne job per (actor, conversation, message) makes the output-policy\ncheck, the RUN_GENIE audit write, action-token issuance and session\nrecording single-shot: a reloaded or retried complete joins the job.\n``respond_async`` answers 202 with the job's status (the browser polls\n``/message/status``); older tabs get today's 200 answer. Without the job\ntable (App ahead of its migration) an older tab's tail runs inline with no\njob; an async request is refused with a non-retryable 503, because the\nbrowser re-sends it and a job-less run could not be joined. No\nconversation-ownership lookup here: for a fresh conversation the Lakebase\nrow intentionally does not exist until this very call finalizes \u2014 the\ntoken is the authorization.",
         "operationId": "post_api_v1_genie_message_complete_genie_message_complete",
         "requestBody": {
           "content": {
