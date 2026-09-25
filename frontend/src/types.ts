@@ -784,6 +784,7 @@ export interface EconomicsAnalyticsResponse {
   rate_spread_histogram: RateSpreadBucket[];
   equity_spread: import('./types/economicsScatter').EquitySpreadOverview;
   top_borrowers: TopBorrowerAnalyticsRow[];
+  thresholds: import('./types/economicsScatter').AnalyticsThresholds;
 }
 
 export interface SegmentOverviewRow {
