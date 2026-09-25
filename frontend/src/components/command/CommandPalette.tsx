@@ -13,7 +13,7 @@ import { api } from '../../lib/api';
 import { openGenie } from '../../lib/genieOpen';
 import { hasOpenModal, registerKeyBinding } from '../../lib/keymap';
 import type { LeadSummary } from '../../types';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import {
   commandActionsForAccess,
   commandVerbActions,
@@ -29,8 +29,14 @@ import { ShortcutOverlayHost } from './ShortcutOverlayHost';
  * keyboard-first "fly through the app" moment. Deterministic: actions are
  * local; only the borrower/geography rows hit the network (debounced,
  * abortable). Fully accessible — combobox + listbox with
- * aria-activedescendant, focus trap, Esc to close, restore focus on close —
- * and reduced-motion aware (CSS).
+ * aria-activedescendant, a native modal <dialog> (useModalDialog: the page
+ * is inert behind it), Esc to close, restore focus on close — and
+ * reduced-motion aware (CSS).
+ *
+ * The dialog stays mounted once rendered (audit motion-01): closing plays
+ * the exit over the LAST results, which reset on the next open (the rising
+ * edge of `open`), and the closing copy is inert, aria-hidden and has no
+ * active descendant.
  *
  * Open with ⌘K (mac) / Ctrl+K. The existing "/" topbar-search shortcut is
  * untouched; this is the heavier cross-surface launcher.
@@ -89,27 +95,30 @@ function CommandPaletteSurface() {
   // same index would then point at a borrower; the selection follows the row.
   const onGenieRowRef = useRef(false);
 
-  const containerRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const resetTransient = useCallback(() => {
-    setQuery('');
-    setBorrowers([]);
-    setSearchStatus('idle');
-    setActiveIndex(0);
-    onGenieRowRef.current = false;
-  }, []);
+  // Transient state resets on the RISING edge of `open` (a render-time
+  // latch, never an effect), so a ⌘K open never flashes the previous
+  // query/results while the exit still shows them.
+  const [openLatch, setOpenLatch] = useState(open);
+  if (openLatch !== open) {
+    setOpenLatch(open);
+    if (open) {
+      setQuery('');
+      setBorrowers([]);
+      setSearchStatus('idle');
+      setActiveIndex(0);
+    }
+  }
   const close = useCallback(() => {
     setOpen(false);
-    resetTransient();
-  }, [resetTransient]);
+  }, []);
   const openPalette = useCallback(() => {
-    // Reset on OPEN too, so a ⌘K toggle-open never flashes the previous
-    // query/results (frontend signoff: the old toggle bypassed teardown).
-    resetTransient();
+    onGenieRowRef.current = false;
     setOpen(true);
-  }, [resetTransient]);
+  }, []);
 
   // The global listener is bound once, so it can't read `open` from a stale
   // closure — track the latest value in a ref (updated in an effect, never
@@ -141,7 +150,9 @@ function CommandPaletteSurface() {
     },
   }), [close, openPalette]);
 
-  useFocusTrap({ open, containerRef, initialFocusRef: inputRef, onClose: close });
+  // The full-viewport layer IS the backdrop ('self'): a press on it outside
+  // the panel closes; a press inside the panel never does.
+  useModalDialog({ open, dialogRef, initialFocusRef: inputRef, onDismiss: close, backdrop: 'self' });
 
   // Debounced borrower/geography search (mirrors the topbar). Actions are
   // always available locally; the network only augments with borrower rows.
@@ -279,8 +290,6 @@ function CommandPaletteSurface() {
     el?.scrollIntoView({ block: 'nearest' });
   }, [activeIndex, open]);
 
-  if (!open) return null;
-
   const optionId = (i: number) => `cmdk-option-${i}`;
   let runningIndex = -1;
   const allActionItems = items.filter((it) => it.kind === 'action') as Extract<FlatItem, { kind: 'action' }>[];
@@ -290,21 +299,14 @@ function CommandPaletteSurface() {
   const borrowerItems = items.filter((it) => it.kind === 'borrower') as Extract<FlatItem, { kind: 'borrower' }>[];
 
   return (
-    <div
+    <dialog
+      ref={dialogRef}
       className="cmdk"
-      role="presentation"
-      onMouseDown={(e) => {
-        // Backdrop click closes; clicks inside the panel don't.
-        if (e.target === e.currentTarget) close();
-      }}
+      aria-label="Command palette"
+      aria-hidden={!open || undefined}
+      inert={!open}
     >
-      <div
-        className="cmdk__panel"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Command palette"
-        ref={containerRef}
-      >
+      <div className="cmdk__panel">
         <div className="cmdk__search">
           <Icon name="search" size={14} />
           <input
@@ -314,7 +316,7 @@ function CommandPaletteSurface() {
             role="combobox"
             aria-expanded="true"
             aria-controls="cmdk-listbox"
-            aria-activedescendant={items.length > 0 ? optionId(activeIndex) : undefined}
+            aria-activedescendant={open && items.length > 0 ? optionId(activeIndex) : undefined}
             aria-label="Search borrowers, ZIPs, pages, and actions"
             placeholder="Search borrowers, ZIPs, pages, actions…"
             value={query}
@@ -446,7 +448,7 @@ function CommandPaletteSurface() {
           <span><kbd>esc</kbd> close</span>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }
 

@@ -110,7 +110,7 @@ describe('CommandPalette Ask Genie row', () => {
     act(() => row!.click());
     expect(openRequests).toEqual([1]);
     expect(consumeGeniePrefill()).toBe('refi candidates in Texas');
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
     expect(navigate).not.toHaveBeenCalled();
     expect(borrowerSearch.mock.calls.length, 'the borrower search is the only network call').toBeLessThanOrEqual(1);
   });

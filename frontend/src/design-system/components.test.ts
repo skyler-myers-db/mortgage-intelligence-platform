@@ -149,9 +149,10 @@ describe('layout containment contracts', () => {
 
   it('layers the ⌘K command palette above the Genie FAB and dims with a scrim (re-audit #4 #1)', () => {
     const css = designCss();
-    // The palette sits at the top of the overlay scale (--z-palette, 1000),
-    // above the Genie FAB (--z-genie-fab, 29) and the map tip (--z-map-tip, 900).
-    expect(css).toMatch(/\.cmdk\s*\{[^}]*z-index:\s*var\(--z-palette\);/s);
+    // The palette is a native modal <dialog> (stack-05): the top layer puts it
+    // above the Genie FAB, the drawer and the map tip, so it needs no z-index.
+    expect(css).toMatch(/\.cmdk\s*\{[^}]*position:\s*fixed;/s);
+    expect(css).not.toMatch(/\.cmdk\s*\{[^}]*z-index/s);
     expect(css).toMatch(/\.cmdk\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
     expect(css).toContain('.cmdk__row.is-active');
     // Entrance animation is disabled under reduced motion.

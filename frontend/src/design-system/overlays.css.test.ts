@@ -76,3 +76,25 @@ describe('the evidence and proof drawers are native modal dialogs', () => {
     );
   });
 });
+
+describe('the command palette and the shortcut sheet are one full-viewport modal dialog', () => {
+  it('keeps the scrim and blur on the layer itself, with a transparent ::backdrop', () => {
+    const layer = block('.cmdk');
+    expect(layer).toMatch(/inset:\s*0;/);
+    expect(layer).toMatch(/background:\s*var\(--surface-scrim\);/);
+    expect(layer).toMatch(/backdrop-filter:\s*blur\(3px\);/);
+    for (const reset of [/width:\s*auto;/, /height:\s*auto;/, /max-inline-size:\s*none;/, /max-block-size:\s*none;/, /margin:\s*0;/, /border:\s*0;/, /padding-block-end:\s*0;/, /color:\s*var\(--text-1\);/, /overflow:\s*hidden;/]) {
+      expect(layer).toMatch(reset);
+    }
+    expect(layer).not.toMatch(/z-index/);
+    expect(block('.cmdk::backdrop')).toMatch(/background:\s*transparent;/);
+  });
+
+  it('fades the closed layer and slides its panel on the exit pair, instantly under reduced motion', () => {
+    expect(block('.cmdk')).toMatch(/opacity var\(--dur-exit\) var\(--ease-exit\),\s*display var\(--dur-exit\) allow-discrete,\s*overlay var\(--dur-exit\) allow-discrete;/);
+    expect(block('.cmdk:not([open])')).toMatch(/display:\s*none;\s*opacity:\s*0;/);
+    expect(block('.cmdk__panel')).toMatch(/transition:\s*translate var\(--dur-exit\) var\(--ease-exit\);/);
+    expect(block('.cmdk:not([open]) .cmdk__panel')).toMatch(/translate:\s*0 calc\(-1 \* var\(--sp-2\)\);/);
+    expect(css()).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.cmdk,\s*\.cmdk__panel\s*\{\s*animation:\s*none;\s*transition:\s*none;/);
+  });
+});

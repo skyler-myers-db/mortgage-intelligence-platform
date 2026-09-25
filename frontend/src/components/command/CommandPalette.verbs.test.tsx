@@ -108,7 +108,7 @@ describe('CommandPalette selection verbs', () => {
 
     expect(context.run).toHaveBeenCalledWith('approve-selected');
     expect(approve).not.toHaveBeenCalled();
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
   });
 
   it('shows no approve verb for a selection the actor cannot approve', () => {
@@ -133,7 +133,8 @@ describe('CommandPalette selection verbs', () => {
   });
 
   it('Cmd-K never mounts the palette under a native modal dialog (the approve review)', () => {
-    const palette = () => container.querySelector('[role="dialog"][aria-label="Command palette"]');
+    // The palette dialog stays mounted once rendered: an open one has `open`.
+    const palette = () => container.querySelector('dialog.cmdk[open][aria-label="Command palette"]');
     const dialog = document.createElement('dialog');
     document.body.appendChild(dialog);
     act(() => {
@@ -153,6 +154,6 @@ describe('CommandPalette selection verbs', () => {
   it('Cmd-K is a modifier chord: it opens with single-key shortcuts switched off', () => {
     setSingleKeyShortcutsEnabled(false);
     openPalette();
-    expect(container.querySelector('[role="dialog"][aria-label="Command palette"]')).not.toBeNull();
+    expect(container.querySelector('dialog.cmdk[open][aria-label="Command palette"]')).not.toBeNull();
   });
 });

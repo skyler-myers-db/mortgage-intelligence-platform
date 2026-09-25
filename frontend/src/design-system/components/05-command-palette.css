@@ -1,22 +1,45 @@
 /* ============================================================
    ⌘K COMMAND PALETTE (re-audit #4 Buyer-Wow #1)
-   Top of the overlay scale: above every surface, the rail, the drawer
-   (--z-drawer), the Genie panel and FAB (--z-genie / --z-genie-fab) and
-   the map tooltip (--z-map-tip); see tokens.css "Layering".
+   A native modal <dialog class="cmdk"> (the palette and the ? shortcut
+   sheet), opened with showModal() through hooks/useModalDialog (2026-09-21
+   audit stack-05 / a11y-07 / css-03): the top layer puts it above every
+   surface, the drawer, the Genie panel and the map tooltip, so it no longer
+   consumes --z-palette. The dialog IS the full-viewport scrim layer, so
+   `.cmdk` keeps its --surface-scrim background and blur and `::backdrop`
+   is transparent. The resets undo every user-agent dialog property the
+   layer does not set.
    ============================================================ */
 .cmdk {
   position: fixed;
   inset: 0;
-  z-index: var(--z-palette);
+  width: auto;
+  height: auto;
+  max-inline-size: none;
+  max-block-size: none;
+  margin: 0;
+  border: 0;
+  color: var(--text-1);
+  overflow: hidden;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-block-start: 14vh;
+  padding-block-end: 0;
   padding-inline: var(--sp-4);
   background: var(--surface-scrim);
   backdrop-filter: blur(3px);
   animation: cmdk-scrim-in var(--dur-fast) var(--ease);
+  /* The exit (motion-01): close() runs at exit start and the closed layer
+     fades while `display` and `overlay` hold it rendered and in the top
+     layer (allow-discrete). The entry stays the keyframes below. Where
+     `overlay` is unsupported the fade may be cut (documented fallback). */
+  transition:
+    opacity var(--dur-exit) var(--ease-exit),
+    display var(--dur-exit) allow-discrete,
+    overlay var(--dur-exit) allow-discrete;
 }
+.cmdk:not([open]) { display: none; opacity: 0; }
+.cmdk::backdrop { background: transparent; }
 .cmdk__panel {
   inline-size: min(40rem, 100%);
   max-block-size: 70vh;
@@ -28,7 +51,9 @@
   box-shadow: var(--shadow-lg), var(--kpi-glow);
   overflow: hidden;
   animation: cmdk-panel-in var(--dur-base) var(--ease);
+  transition: translate var(--dur-exit) var(--ease-exit);
 }
+.cmdk:not([open]) .cmdk__panel { translate: 0 calc(-1 * var(--sp-2)); }
 .cmdk__search {
   display: flex;
   align-items: center;
@@ -138,7 +163,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .cmdk,
-  .cmdk__panel { animation: none; }
+  .cmdk__panel { animation: none; transition: none; }
 }
 .drawer__hdr {
   padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line-1);

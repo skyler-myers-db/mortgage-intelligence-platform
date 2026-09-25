@@ -59,7 +59,9 @@ describe('CommandPalette', () => {
       );
     });
   }
-  const dialog = () => container.querySelector('[role="dialog"]');
+  // The palette is a native <dialog class="cmdk"> that stays mounted once
+  // rendered (stack-05 / motion-01): "open" is its `open` attribute.
+  const dialog = () => container.querySelector<HTMLDialogElement>('dialog.cmdk[open]');
   const input = () => container.querySelector<HTMLInputElement>('input[role="combobox"]')!;
   function keyOnInput(key: string) {
     act(() => {
@@ -78,7 +80,11 @@ describe('CommandPalette', () => {
     expect(dialog()).toBeNull();
     pressMetaK();
     expect(dialog()).not.toBeNull();
-    expect(dialog()!.getAttribute('aria-modal')).toBe('true');
+    // Named by the dialog itself; role and modality are implicit.
+    expect(dialog()!.getAttribute('aria-label')).toBe('Command palette');
+    expect(dialog()!.hasAttribute('role')).toBe(false);
+    expect(dialog()!.hasAttribute('aria-modal')).toBe(false);
+    expect(container.querySelector('.cmdk__panel')!.hasAttribute('role')).toBe(false);
     const combo = input();
     expect(combo.getAttribute('aria-controls')).toBe('cmdk-listbox');
     expect(container.querySelector('#cmdk-listbox')!.getAttribute('role')).toBe('listbox');
@@ -193,16 +199,33 @@ describe('CommandPalette', () => {
     expect(dialog()).toBeNull();
   });
 
-  it('closes on a backdrop mousedown but not on a click inside the panel', () => {
+  it('closes on a press on the backdrop layer but not on a press inside the panel', () => {
     pressMetaK();
-    const panel = dialog()!;
-    // Click inside the panel: stays open.
-    act(() => panel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })));
+    const press = (target: Element) => act(() => {
+      target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    // A press inside the panel: stays open.
+    press(container.querySelector('.cmdk__panel')!);
     expect(dialog()).not.toBeNull();
-    // Mousedown on the backdrop (the .cmdk presentation root): closes.
-    const backdrop = container.querySelector('.cmdk')!;
-    act(() => backdrop.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })));
+    // A press on the full-viewport .cmdk layer itself (its own backdrop): closes.
+    press(dialog()!);
     expect(dialog()).toBeNull();
+  });
+
+  it('keeps the last results through its exit: closed, inert, hidden, no active descendant', () => {
+    pressMetaK();
+    setQuery('analytics');
+    expect(input().getAttribute('aria-activedescendant')).toBe('cmdk-option-0');
+    pressMetaK(); // toggle closed
+    const closing = container.querySelector<HTMLDialogElement>('dialog.cmdk')!;
+    expect(closing.open).toBe(false);
+    expect(closing.hasAttribute('inert')).toBe(true);
+    expect(closing.getAttribute('aria-hidden')).toBe('true');
+    expect(input().hasAttribute('aria-activedescendant')).toBe(false);
+    // The exit shows what was on screen, not an emptied palette.
+    expect(input().value).toBe('analytics');
+    expect(closing.querySelector('[role="option"]')?.textContent).toContain('Analytics');
   });
 
   it('shows an empty state when nothing matches, with the Ask Genie handoff as the only row', () => {
@@ -247,7 +270,7 @@ describe('CommandPalette borrower search (networked path)', () => {
   });
 
   const input = () => container.querySelector<HTMLInputElement>('input[role="combobox"]')!;
-  const dialog = () => container.querySelector('[role="dialog"]');
+  const dialog = () => container.querySelector<HTMLDialogElement>('dialog.cmdk[open]');
   function pressMetaK() {
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
