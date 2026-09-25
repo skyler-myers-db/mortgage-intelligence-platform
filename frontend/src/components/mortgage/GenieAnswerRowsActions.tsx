@@ -1,6 +1,12 @@
-import { useId, useRef, useState, type ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { formatCount } from '../../lib/formatters';
 import { postGenieExportReceipt } from '../../lib/apiClients/genieExport';
+import {
+  beginGenieExport,
+  genieExportLatchKey,
+  settleGenieExport,
+  useGenieExportLatch,
+} from '../../lib/genieAnswerMemory';
 import { Icon } from '../Icon';
 import {
   GENIE_EXPORT_MAX_ROWS,
@@ -107,8 +113,11 @@ export function GenieAnswerRowsActions({
 /**
  * "Download CSV" for one rows block. Offered only on a trusted answer with a
  * live conversation and message id (the caller decides and passes `target`).
- * One click is one ledger attempt: a ref latch and the disabled "Recording
- * export…" state hold a second POST. The file downloads only after the
+ * One click is one ledger attempt: the latch in lib/genieAnswerMemory and
+ * the disabled "Recording export…" state hold a second POST, and because
+ * the latch outlives this component, a remount mid-export (a collapsed turn
+ * expanded again, a return to the page) still shows it recording, then the
+ * outcome (audit genie-08 item 3). The file downloads only after the
  * receipt answers; the outcome is shown here and spoken through the
  * surface's one announcer. Never prefetched, never fired on hover.
  */
@@ -125,21 +134,17 @@ export function GenieRowsCsvDownload({
   reportedRowCount: number | null;
   onAnnounce?: (text: string) => void;
 }) {
-  const latchRef = useRef(false);
-  const [recording, setRecording] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  const latchKey = genieExportLatchKey(target);
+  const { recording, status } = useGenieExportLatch(latchKey);
   const reasonId = useId();
   const tooMany = rows.length > GENIE_EXPORT_MAX_ROWS;
   const download = () => {
-    if (latchRef.current || tooMany) return;
-    latchRef.current = true;
-    setRecording(true);
-    setStatus(null);
+    if (tooMany) return;
+    const started = beginGenieExport(latchKey);
+    if (started === null) return;
     void runGenieExport({ rows, columns, target, reportedRowCount }).then((outcome) => {
-      latchRef.current = false;
-      setRecording(false);
-      setStatus(outcome.message);
-      onAnnounce?.(outcome.message);
+      // Nothing to say after an actor change cleared the latch mid-export.
+      if (settleGenieExport(latchKey, started, outcome.message)) onAnnounce?.(outcome.message);
     });
   };
   return (

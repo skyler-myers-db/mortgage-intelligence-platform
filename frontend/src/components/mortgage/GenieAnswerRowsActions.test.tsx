@@ -50,6 +50,7 @@ vi.mock('../../lib/apiClients/leadExport', async () => {
 });
 
 import { ApiError } from '../../lib/apiTransport';
+import { clearGenieAnswerMemory } from '../../lib/genieAnswerMemory';
 import { GenieAnswer } from './GenieAnswer';
 import {
   GENIE_EXPORT_DOWNLOADED,
@@ -119,6 +120,8 @@ describe('Genie answer CSV download (genie-06 slice 2)', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     onAnnounce.mockReset();
+    // The export latch is module state that outlives a component (genie-08).
+    clearGenieAnswerMemory();
     mocks.genieFeedback.mockResolvedValue({ accepted: true });
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -204,6 +207,34 @@ describe('Genie answer CSV download (genie-06 slice 2)', () => {
     expect(mocks.postGenieExportReceipt).toHaveBeenCalledTimes(1);
     expect(mocks.downloadCsvText).not.toHaveBeenCalled();
     expect(downloadButton()!.disabled).toBe(false);
+  });
+
+  it('an export in flight across a remount still shows "Recording export…", then its outcome, with one receipt POST (genie-08)', async () => {
+    let resolveReceipt: (receipt: GenieAnswerExportReceipt) => void = () => undefined;
+    mocks.postGenieExportReceipt.mockReturnValue(
+      new Promise<GenieAnswerExportReceipt>((resolve) => {
+        resolveReceipt = resolve;
+      }),
+    );
+    render(payload());
+    await act(async () => downloadButton()!.click());
+    await eventually(() => expect(mocks.postGenieExportReceipt).toHaveBeenCalledTimes(1));
+
+    // A collapsed turn expanded again, or a return to the page: a new mount.
+    act(() => root.unmount());
+    root = createRoot(container);
+    render(payload());
+    expect(downloadButton()!.disabled).toBe(true);
+    expect(downloadButton()!.textContent).toBe('Recording export…');
+    await act(async () => downloadButton()!.click());
+
+    await act(async () => resolveReceipt(RECEIPT));
+    await eventually(() =>
+      expect(container.querySelector('[data-export-status]')?.textContent).toBe(GENIE_EXPORT_DOWNLOADED),
+    );
+    expect(downloadButton()!.disabled).toBe(false);
+    expect(mocks.postGenieExportReceipt).toHaveBeenCalledTimes(1);
+    expect(mocks.downloadCsvText).toHaveBeenCalledTimes(1);
   });
 
   it('a throw while the file is built releases the latch: refused, no POST, the button re-enabled', async () => {
