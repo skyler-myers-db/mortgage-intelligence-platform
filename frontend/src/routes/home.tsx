@@ -9,9 +9,8 @@ import { Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
 import { Reveal } from '../components/fx/Reveal';
-import { api } from '../lib/api';
+import { homeQueries } from '../lib/homeQueries';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import { queryKeys } from '../lib/queryKeys';
 import { AsyncStatus } from '../components/ui/AsyncState';
 import { useApp } from '../components/AppContext';
 import { EntradaWordmark } from '../components/brand/Entrada';
@@ -26,15 +25,17 @@ import './home.css';
 /** Home's one primary action: the ranked queue the answer band previews. */
 export const HOME_PRIMARY_CTA = { label: "Review today's top leads", href: '/lead-queue' } as const;
 
-export const HOME_PORTFOLIO_PREVIEW_CRITERIA = { marketing_eligibility: 'Any' } as const;
+// Home's hero reads have one definition, shared with the boot-time route
+// prefetch (lib/routeDataPrefetch.ts), so the two can never drift.
+export { HOME_PORTFOLIO_PREVIEW_CRITERIA } from '../lib/homeQueries';
 export { APPROVAL_QUEUE_STATE_LABEL } from './home.approval-banner';
 
 export function requestHomePortfolioPreview(signal?: AbortSignal) {
-  return api.portfolioPreview(HOME_PORTFOLIO_PREVIEW_CRITERIA, signal);
+  return homeQueries.homePreview.fetch(signal);
 }
 
 export function requestHomeSummary(signal?: AbortSignal) {
-  return api.homeSummary(signal);
+  return homeQueries.homeSummary.fetch(signal);
 }
 
 /** Format a signed percent-delta for the KPI delta slot. `null` → undefined
@@ -70,7 +71,7 @@ export default function Home() {
   const [mapSelection, setMapSelection] = useMapSelectionParams();
   const previewQuery = useWarmingUpRetry<PortfolioPreview>(
     requestHomePortfolioPreview,
-    { queryKey: queryKeys.homePreview() },
+    { queryKey: homeQueries.homePreview.queryKey() },
   );
   const { data: preview, warmingUp: previewWarming, error: previewError } = previewQuery;
 
@@ -82,7 +83,7 @@ export default function Home() {
     warmingUp: summaryWarming,
     error: summaryError,
   } = useWarmingUpRetry<HomeSummary>(requestHomeSummary, {
-    queryKey: queryKeys.homeSummary(),
+    queryKey: homeQueries.homeSummary.queryKey(),
   });
   const summaryLoading = !summary && !summaryError && !summaryWarming;
 
