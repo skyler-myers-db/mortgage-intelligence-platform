@@ -77,11 +77,13 @@ def job_status(
     question: str,
     actor: str,
     live_campaign_run_marker: str | None,
+    typical_seconds: int | None = None,
 ) -> GenieCompletionJobStatus:
     """The wire status of ``job``; the answer only once it succeeded.
 
     A cancelled job is terminal and NOT failed (a cancel is not a failure):
-    its hint says the answer was not recorded.
+    its hint says the answer was not recorded. ``typical_seconds`` is the
+    duration hint, served only while the job still runs.
     """
 
     status = job.status
@@ -122,6 +124,7 @@ def job_status(
         failed=status in _FAILED,
         error_hint=error_hint,
         response=response,
+        typical_seconds=None if terminal else typical_seconds,
     )
 
 

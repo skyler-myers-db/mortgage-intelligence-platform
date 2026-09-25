@@ -557,7 +557,7 @@ def test_the_commit_point_refuses_a_cancel_this_process_never_saw(monkeypatch: A
     job = wait_for_job(lakebase, statuses=_ENDED)
 
     assert job["status"] == "cancelled"
-    statements = [name for name in lakebase.job_statements if name != "stage"]
+    statements = [name for name in lakebase.job_statements if name not in {"stage", "durations"}]
     assert statements[-3:] == ["commit", "cancel_state", "end_cancelled"]
     assert audit.writes == []
     assert lakebase.executed == []

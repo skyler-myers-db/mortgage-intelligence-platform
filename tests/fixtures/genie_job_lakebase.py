@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import copy
 import json
+import statistics
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -31,6 +32,7 @@ from typing import Any
 from uuid import uuid4
 
 from backend.services import genie_completion_cancel as cancel
+from backend.services import genie_completion_durations as durations
 from backend.services import genie_completion_jobs as jobs
 from backend.services import genie_completion_record as record
 from backend.services.lakebase import LakebaseError
@@ -159,6 +161,10 @@ class FakeJobLakebase:
         with self._lock:
             if sql is jobs._PROBE_SQL:
                 return {"present": self.jobs_table and self.cancel_columns}
+            if sql is durations._DURATIONS_SQL:
+                self._require_table()
+                self.job_statements.append("durations")
+                return self._durations(bool(params["deep"]))
             if sql in _JOB_SQL:
                 self._require_table()
                 self.job_statements.append(_JOB_SQL[sql])
@@ -262,6 +268,21 @@ class FakeJobLakebase:
             self.audit_rows.append(audit_row)
             return audit_row
         raise AssertionError(f"unexpected transaction SQL: {sql[:80]}")
+
+    def _durations(self, deep: bool) -> dict[str, Any]:
+        recent = sorted(
+            (
+                row
+                for row in self.rows.values()
+                if row["recorded_at"] is not None
+                and row["deep"] is deep
+                and row["created_at"] > self.now - timedelta(days=14)
+            ),
+            key=lambda row: row["created_at"],
+            reverse=True,
+        )[: durations.MAX_SAMPLES]
+        seconds = [(row["recorded_at"] - row["created_at"]).total_seconds() for row in recent]
+        return {"samples": len(seconds), "median_s": statistics.median(seconds) if seconds else None}
 
     def _require_table(self) -> None:
         if not self.jobs_table:

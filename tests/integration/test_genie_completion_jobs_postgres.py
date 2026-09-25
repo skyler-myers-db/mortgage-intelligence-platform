@@ -11,7 +11,8 @@ suite's convention); the whole migration's apply is covered there.
 
 Audit genie-03: the fixture also applies the 2026_09_25 cancel block and the
 ``action_audit`` DDL, so the commit point, the cancelled end, the heartbeat's
-RETURNING and the cancel route's one transaction run their real SQL, and the cancel-versus-commit race is played in both orders
+RETURNING, the cancel route's one transaction and the durations query run
+their real SQL, and the cancel-versus-commit race is played in both orders
 on real row locks. The migration's own two-apply re-run contract lives in
 ``test_genie_job_cancel_migration_postgres.py``.
 """
@@ -33,6 +34,7 @@ import pytest
 from fastapi import HTTPException
 from psycopg.rows import dict_row
 
+from backend.services import genie_completion_durations as durations
 from backend.services import genie_completion_jobs as jobs
 from backend.services import genie_completion_record as record
 from backend.services.genie_completion_cancel import _ACCEPT_SQL, GenieCancelRequest, request_cancel
@@ -433,3 +435,21 @@ def test_the_cancel_and_commit_race_has_exactly_one_winner(pg: _PgLakebase, firs
 
     assert (first_matched, second_matched) == (True, False)
 
+
+def test_the_durations_query_is_the_recent_class_median(pg: _PgLakebase) -> None:
+    durations._reset_for_tests()
+    for index in range(durations.MIN_SAMPLES):
+        job_id = _enroll(pg, message_id=f"d-{index}").job.job_id
+        pg.sql(
+            "UPDATE mip_app.genie_completion_jobs SET status = 'succeeded', stage = 'done', deep = true, "
+            "recorded_at = created_at + make_interval(secs => %s) WHERE job_id = %s::uuid",
+            (100 + index * 2, job_id),
+        )
+    try:
+        deep = durations.typical_completion_seconds(pg, deep=True)  # type: ignore[arg-type]
+        single = durations.typical_completion_seconds(pg, deep=False)  # type: ignore[arg-type]
+    finally:
+        durations._reset_for_tests()
+
+    assert deep == 119  # median of 100, 102, ..., 138
+    assert single is None

@@ -51,6 +51,7 @@ from backend.services.genie_client import (
 )
 from backend.services.genie_completion_cancel import GenieCancelRequest, request_cancel
 from backend.services.genie_completion_delivery import job_status
+from backend.services.genie_completion_durations import typical_seconds_for
 from backend.services.genie_completion_jobs import (
     adoptable,
     completion_jobs_available,
@@ -648,6 +649,7 @@ def genie_message_complete(
             question=payload.question,
             actor=actor,
             live_campaign_run_marker=live_campaign_run_marker,
+            typical_seconds=typical_seconds_for(lakebase, enrollment.job),
         )
         return JSONResponse(status_code=202, content=status.model_dump(mode="json"))
     if run_here:
@@ -690,6 +692,7 @@ def genie_message_status(
         question=payload.question,
         actor=actor,
         live_campaign_run_marker=live_campaign_run_marker,
+        typical_seconds=typical_seconds_for(lakebase, job),
     )
 
 

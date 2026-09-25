@@ -287,7 +287,9 @@ class GenieCompletionJobStatus(BaseModel):
     governed answer, present only when ``status`` is ``succeeded``; its
     action confirmation tokens are signed afresh for the caller at delivery.
     ``cancelled`` is terminal and not failed: the owner stopped the turn
-    before its governed record existed.
+    before its governed record existed. ``typical_seconds`` (audit genie-01)
+    is the recent median completion time of this job's class (deep or
+    single), only while the job still runs and only with enough samples.
     """
 
     kind: Literal["genie_completion_job"] = "genie_completion_job"
@@ -301,6 +303,7 @@ class GenieCompletionJobStatus(BaseModel):
     failed: bool = False
     error_hint: str | None = None
     response: GenieMessageResponse | None = None
+    typical_seconds: int | None = None
 
 
 class GenieCancelResponse(BaseModel):
