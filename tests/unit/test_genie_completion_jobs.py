@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from typing import Any
 
 import pytest
@@ -658,14 +657,28 @@ def test_two_adopters_of_one_job_give_one_claim_and_keep_its_lease_until_both_en
         lakebase=lakebase,  # type: ignore[arg-type]
     )
 
+    # Observe the claim loser's untrack: the lease assertion below must run
+    # AFTER it, or it passes before the refcount is ever exercised.
+    real_untrack = jobs.HEARTBEAT.untrack
+    untracked: list[str] = []
+    loser_untracked = threading.Event()
+
+    def observed_untrack(job_id: str) -> None:
+        real_untrack(job_id)
+        untracked.append(job_id)
+        loser_untracked.set()
+
+    monkeypatch.setattr(jobs.HEARTBEAT, "untrack", observed_untrack)
+
     assert jobs.adoptable(job)
     runner.run_completion_job(turn, job, slot=None, correlation_id="adopt-1")
     runner.run_completion_job(turn, job, slot=None, correlation_id="adopt-2")
     assert repo.started.wait(10)
-    # The claim loser has ended; the claimant still holds the lease.
-    deadline = time.monotonic() + 10
-    while lakebase.job_statements.count("claim") < 2 and time.monotonic() < deadline:
-        time.sleep(0.01)
+    # The claim loser has ended (its untrack ran); the claimant, parked on
+    # the gate, has not untracked and still holds the lease.
+    assert loser_untracked.wait(10)
+    assert untracked == [row["job_id"]]
+    assert lakebase.job_statements.count("claim") == 2
     assert row["job_id"] in jobs.HEARTBEAT.tracked()
     assert not jobs.adoptable(job)
     gate.set()
