@@ -67,7 +67,8 @@ PROBE_TTL_S = 60.0
 _STAGE_WARNING_INTERVAL_S = 60.0
 
 #: The same opaque-id grammar as the table CHECKs. Ids outside it cannot get
-#: a job; the caller runs the governed completion inline instead.
+#: a job: submit then advertises none, an older tab's completion runs inline
+#: and an async complete is refused.
 JOB_TURN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 JOB_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _BINDING_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -246,9 +247,11 @@ _PROBE_LOCK = threading.Lock()
 def completion_jobs_available(lakebase: LakebaseClient) -> bool:
     """Whether the job table exists (cached 60 s per client).
 
-    False when the App was promoted ahead of the Lakebase migration: the
-    caller then runs today's inline completion, the real governed path, and
-    submit tells the browser not to ask for a job. One WARNING per absence.
+    False when the App was promoted ahead of the Lakebase migration (or the
+    probe itself failed; that is not cached): submit tells the browser not to
+    ask for a job, an older tab's complete runs today's inline completion, the
+    real governed path, and an async complete is refused with a non-retryable
+    503. One WARNING per absence.
     """
 
     now = time.monotonic()
@@ -257,7 +260,7 @@ def completion_jobs_available(lakebase: LakebaseClient) -> bool:
         return cached[1]
     try:
         row = lakebase.fetchone(_PROBE_SQL)
-    except Exception as exc:  # noqa: BLE001 - no job, today's inline completion
+    except Exception as exc:  # noqa: BLE001 - no job for this request
         emit(
             log,
             "genie_jobs_probe_failed",
