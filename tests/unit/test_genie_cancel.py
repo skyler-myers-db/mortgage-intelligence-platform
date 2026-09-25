@@ -13,6 +13,8 @@ metadata policy.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -193,8 +195,11 @@ def test_a_lakebase_outage_at_the_table_probe_is_a_503_not_a_404(monkeypatch: An
 def test_an_accepted_cancel_writes_one_audit_row_in_its_transaction_and_marks_the_runner(monkeypatch: Any) -> None:
     client, audit, lakebase = _setup(monkeypatch)
     row = _seed(lakebase)
-
-    res = _cancel(client, row["job_id"])
+    jobs.HEARTBEAT.track(row["job_id"], lakebase)  # type: ignore[arg-type]  # its runner runs here
+    try:
+        res = _cancel(client, row["job_id"])
+    finally:
+        jobs.HEARTBEAT.untrack(row["job_id"])
 
     assert res.status_code == 200
     assert res.json() == {
@@ -247,6 +252,35 @@ def test_another_process_running_job_is_accepted_but_not_marked_here(monkeypatch
     assert not jobs.CANCELS.is_marked(row["job_id"])
 
 
+class _RunnerEndsBeforeTheMark(FakeJobLakebase):
+    """The runner's commit UPDATE waited on the cancel's row lock, saw the
+    cancel, and ended (untrack, then discard its mark) right after the
+    cancel's transaction committed, before the route's post-commit mark."""
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        with super().transaction() as conn:
+            yield conn
+        for job_id in list(self.rows):
+            jobs.HEARTBEAT.untrack(job_id)
+            jobs.CANCELS.discard(job_id)
+
+
+def test_a_mark_after_the_runner_ended_is_never_left_behind(monkeypatch: Any) -> None:
+    audit, lakebase = FakeAudit(), _RunnerEndsBeforeTheMark()
+    install(monkeypatch, repo=FakeRepo(), audit=audit, lakebase=lakebase)
+    row = _seed(lakebase)
+    jobs.HEARTBEAT.track(row["job_id"], lakebase)  # type: ignore[arg-type]
+
+    res = _cancel(TestClient(app), row["job_id"])
+
+    assert res.json()["outcome"] == "cancelled"
+    assert len(_cancelled_rows(lakebase)) == 1
+    assert row["job_id"] not in jobs.HEARTBEAT.tracked()
+    # Nobody would ever discard it: the process set would keep it forever.
+    assert not jobs.CANCELS.is_marked(row["job_id"])
+
+
 class _Slot:
     def __init__(self) -> None:
         self.released = 0
@@ -258,6 +292,7 @@ class _Slot:
 def test_a_queued_job_is_cancelled_at_once_and_its_later_claim_fails_and_releases_the_slot(monkeypatch: Any) -> None:
     client, audit, lakebase = _setup(monkeypatch)
     row = _seed(lakebase, status="queued", stage="queued")
+    jobs.HEARTBEAT.track(row["job_id"], lakebase)  # type: ignore[arg-type]  # enqueued, waiting for a worker
 
     res = _cancel(client, row["job_id"])
 
@@ -280,7 +315,6 @@ def test_a_queued_job_is_cancelled_at_once_and_its_later_claim_fails_and_release
         lakebase=lakebase,  # type: ignore[arg-type]
     )
     slot = _Slot()
-    jobs.HEARTBEAT.track(row["job_id"], lakebase)  # type: ignore[arg-type]
     runner._run_job(turn, row["job_id"], slot, "corr-cancel-queued")  # type: ignore[arg-type]
 
     assert slot.released == 1
@@ -307,8 +341,11 @@ def test_a_recorded_answer_is_not_cancelled_and_nothing_is_audited(monkeypatch: 
     if overrides.get("recorded_at") == "set":
         overrides["recorded_at"] = lakebase.now
     row = _seed(lakebase, **overrides)
-
-    res = _cancel(client, row["job_id"])
+    jobs.HEARTBEAT.track(row["job_id"], lakebase)  # type: ignore[arg-type]  # its runner may still run
+    try:
+        res = _cancel(client, row["job_id"])
+    finally:
+        jobs.HEARTBEAT.untrack(row["job_id"])
 
     assert res.status_code == 200
     assert res.json()["outcome"] == "recorded"
@@ -337,14 +374,18 @@ def test_an_audit_insert_failure_rolls_the_flag_back_and_a_retry_audits_once(mon
     client, _audit, lakebase = _setup(monkeypatch)
     row = _seed(lakebase)
     lakebase.fail_audit_inserts = 1
-
-    refused = _cancel(client, row["job_id"])
+    jobs.HEARTBEAT.track(row["job_id"], lakebase)  # type: ignore[arg-type]  # its runner runs here
+    try:
+        refused = _cancel(client, row["job_id"])
+        marked_after_refusal = jobs.CANCELS.is_marked(row["job_id"])
+    finally:
+        jobs.HEARTBEAT.untrack(row["job_id"])
 
     assert refused.status_code == 503
     assert refused.json()["detail"] == "lakebase is temporarily unavailable"
     assert lakebase.rows[row["job_id"]]["cancel_requested_at"] is None, "the flag rolled back with the audit row"
     assert lakebase.audit_rows == []
-    assert not jobs.CANCELS.is_marked(row["job_id"])
+    assert not marked_after_refusal
 
     retried = _cancel(client, row["job_id"])
 

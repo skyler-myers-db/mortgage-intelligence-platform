@@ -203,9 +203,11 @@ def request_cancel(
         )
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     if outcome == "accepted" and prior is GenieJobStatus.RUNNING and lease_owner == jobs.PROCESS_ID:
-        # The runner here reads only this mark at its cancel points. A queued
-        # job is already terminal: its claim fails, so it needs no mark.
-        jobs.CANCELS.mark(payload.job_id)
+        # The runner here reads only this mark at its cancel points, so it is
+        # set only while that runner still tracks the job (it may have seen
+        # the cancel at its commit point and ended already). A queued job is
+        # already terminal: its claim fails, so it needs no mark.
+        jobs.HEARTBEAT.mark_cancelled(payload.job_id)
     emit(
         log,
         "genie_job_cancel_requested",

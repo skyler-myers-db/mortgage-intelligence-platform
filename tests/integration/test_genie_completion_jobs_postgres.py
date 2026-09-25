@@ -363,17 +363,21 @@ def test_the_probe_requires_the_cancel_columns(pg: _PgLakebase) -> None:
 
 def test_request_cancel_real_sql_accepts_once_and_audits_in_the_same_transaction(pg: _PgLakebase) -> None:
     job_id = _running_job(pg)
-
-    first = request_cancel(pg, actor="lo@example.com", payload=_cancel_payload(job_id), binding_hash=_HASH)  # type: ignore[arg-type]
-    second = request_cancel(pg, actor="lo@example.com", payload=_cancel_payload(job_id), binding_hash=_HASH)  # type: ignore[arg-type]
+    jobs.HEARTBEAT.track(job_id, pg)  # type: ignore[arg-type]  # its runner runs here
+    try:
+        first = request_cancel(pg, actor="lo@example.com", payload=_cancel_payload(job_id), binding_hash=_HASH)  # type: ignore[arg-type]
+        second = request_cancel(pg, actor="lo@example.com", payload=_cancel_payload(job_id), binding_hash=_HASH)  # type: ignore[arg-type]
+        marked = jobs.CANCELS.is_marked(job_id)
+    finally:
+        jobs.HEARTBEAT.untrack(job_id)
+        jobs.CANCELS.discard(job_id)
 
     assert (first.outcome, first.status.value, second.outcome) == ("cancelled", "running", "cancelled")
     rows = _audit_rows(pg)
     assert [row["event_type"] for row in rows] == ["GENIE_TURN_CANCELLED"]
     assert rows[0]["metadata"]["genie_job_id"] == job_id
     assert pg.row(job_id)["cancel_requested_at"] is not None
-    assert jobs.CANCELS.is_marked(job_id)
-    jobs.CANCELS.discard(job_id)
+    assert marked
 
     queued = _enroll(pg, message_id="msg-2").job.job_id
     payload = _cancel_payload(queued).model_copy(update={"message_id": "msg-2"})

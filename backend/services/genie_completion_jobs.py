@@ -416,12 +416,9 @@ def claim(lakebase: LakebaseClient, job_id: str) -> bool:
 
 
 def adoptable(job: GenieCompletionJob) -> bool:
-    """A joined job nobody runs: queued, leased to THIS process, untracked.
-
-    Its creating request inserted the row and then failed before enqueueing
-    it (genie-01 risk 4); the retry runs it. A double enqueue is harmless:
-    ``claim`` is a compare-and-set, so exactly one runner claims it.
-    """
+    """A joined job nobody runs: queued, leased to THIS process, untracked; its
+    creating request failed before enqueueing it (genie-01 risk 4). A double
+    enqueue is harmless: ``claim`` is a compare-and-set, so one runner claims."""
 
     return (
         job.status is GenieJobStatus.QUEUED
@@ -496,6 +493,11 @@ class _Heartbeat:
         with self._lock:
             return set(self._jobs)
 
+    def mark_cancelled(self, *job_ids: str) -> None:
+        """Mark CANCELS only for jobs a runner here still tracks: once it ended, nobody discards a mark."""
+        with self._lock:
+            CANCELS.mark(*(set(job_ids) & self._jobs.keys()))
+
     def beat(self) -> None:
         """One renewal pass: one UPDATE per client for all its tracked jobs;
         its RETURNING marks CANCELS for a cancel another process accepted."""
@@ -514,9 +516,7 @@ class _Heartbeat:
             except Exception as exc:  # noqa: BLE001 - the next beat retries
                 _warn_throttled("genie_job_heartbeat_failed", error_type=type(exc).__name__)
                 continue
-            with self._lock:  # never mark a job whose runner untracked it since the snapshot
-                cancelled = {str(row["job_id"]) for row in rows if row.get("cancel_requested") is True}
-                CANCELS.mark(*(cancelled & self._jobs.keys()))
+            self.mark_cancelled(*(str(row["job_id"]) for row in rows if row.get("cancel_requested") is True))
 
     def _loop(self) -> None:
         while True:
