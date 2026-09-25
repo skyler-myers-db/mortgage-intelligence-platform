@@ -220,9 +220,9 @@ export class AppDriver {
     return this.page.locator('.genie[role="dialog"]');
   }
 
-  /** The evidence drawer (`aside.drawer`), whether or not it is open. Borrower 360 mounts a second `.drawer.proof-drawer`. */
+  /** The evidence drawer (a native `dialog.drawer`), whether or not it is open. Borrower 360 mounts a second `.drawer.proof-drawer`. */
   evidenceDrawer(): Locator {
-    return this.page.locator('aside.drawer[role="dialog"]:not(.proof-drawer)');
+    return this.page.locator('dialog.drawer:not(.proof-drawer)');
   }
 
   /**

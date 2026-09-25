@@ -244,7 +244,14 @@ export function hasOpenModalDialog(doc: Document = document): boolean {
   return false;
 }
 
-/** A modal layer is open (drawer, palette, shortcut sheet, a native modal dialog). */
+/**
+ * A modal layer is open. Every modal surface is a native `<dialog>` opened
+ * with showModal() (audit stack-05: the drawers, the palette, the shortcut
+ * sheet, the offer mock, the approve review, the session dialog), so an open
+ * one is `dialog[open]`; a closed one kept mounted for its exit has no
+ * `open` and is aria-hidden. `[aria-modal="true"]` still counts any other
+ * modal layer.
+ */
 export function hasOpenModal(doc: Document = document): boolean {
   for (const el of doc.querySelectorAll('[aria-modal="true"], dialog[open]')) {
     if (el.closest('[aria-hidden="true"]') === null) return true;

@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, type RefObject } from 'react';
 import type { DrawerSource } from '../AppContext';
 import { descriptorFor } from '../../lib/drawerSources';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import { pushEscapeLayer } from '../../lib/escapeStack';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
@@ -242,36 +242,32 @@ export function LeadApproveReviewInline(props: LeadApproveReviewProps) {
 
 /**
  * The review as a native modal `<dialog>` when the row is collapsed (or
- * scrolled out of the virtualized window): `showModal()` puts it in the top
- * layer with the page inert behind it, and `useFocusTrap` owns Tab and puts
- * Escape on the shared layer stack (so Escape cancels the review alone).
+ * scrolled out of the virtualized window), through `useModalDialog`:
+ * `showModal()` puts it in the top layer with the page inert behind it, the
+ * opener (the table) is recorded before showModal moves focus and gets it
+ * back on close, and the shared layer stack owns Escape (so Escape cancels
+ * the review alone; the native `cancel` never closes it behind React's
+ * back). No backdrop press cancels it: the review is a decision surface.
  */
 export function LeadApproveReviewDialog(props: LeadApproveReviewProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const { onCancel } = props;
-  // Declared BEFORE showModal's effect: the trap records the element to give
-  // focus back to on close (the table), and showModal would already have
-  // moved focus into the dialog. Initial focus on Confirm (aria-disabled,
-  // still focusable, until the draft lands), so the trap never pulls focus
-  // back off it once the draft is ready.
-  useFocusTrap({ open: true, containerRef: dialogRef, initialFocusRef: props.confirmRef, onClose: () => { onCancel(); } });
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog || dialog.open) return;
-    if (typeof dialog.showModal === 'function') dialog.showModal();
-    else dialog.setAttribute('open', '');
-  }, []);
+  // Initial focus on Confirm (aria-disabled, still focusable, until the
+  // draft lands), so the trap never pulls focus back off it once the draft
+  // is ready.
+  useModalDialog({
+    open: true,
+    dialogRef,
+    initialFocusRef: props.confirmRef,
+    onDismiss: () => { onCancel(); },
+    backdrop: false,
+  });
   return (
     <dialog
       ref={dialogRef}
       className="lead-approve-dialog"
       aria-label={`Review the outreach for ${props.review.borrowerId}`}
       tabIndex={-1}
-      onCancel={(event) => {
-        // Native Escape: the layer stack already handled it; never let the
-        // browser close the dialog behind React's back.
-        event.preventDefault();
-      }}
     >
       <LeadApproveReview {...props} />
     </dialog>

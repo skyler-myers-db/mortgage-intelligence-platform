@@ -2,9 +2,9 @@
 // would only add initial-chunk bytes (see DegradedBanner.tsx).
 'use no memo';
 
-import { useCallback, useId, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import { useId, useRef, useSyncExternalStore } from 'react';
 import { Icon } from '../Icon';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import {
   getSessionStatus,
   subscribeSessionStatus,
@@ -26,9 +26,10 @@ import {
  * page. When a write failed on expiry, the dialog says it was NOT recorded:
  * an approval must never look like it went through.
  *
- * It cannot be dismissed: Escape is consumed by the shared Escape stack
- * (useFocusTrap) and the native `cancel`, and if the browser force-closes the
- * dialog anyway it re-opens, because nothing behind it can work until reload.
+ * It cannot be dismissed: Escape is consumed by the shared Escape stack and
+ * the native `cancel` is prevented (useModalDialog), and if the browser
+ * force-closes the dialog anyway it re-opens (`dismissible: false`), because
+ * nothing behind it can work until reload.
  *
  * Styles: `.session-dialog` in design-system/components/31-session-recovery.css.
  * It ships in the initial stylesheet on purpose: once the session ends the
@@ -73,18 +74,14 @@ function OpenSessionExpiredDialog({
   const titleId = useId();
   const bodyId = useId();
 
-  const show = useCallback(() => {
-    const dialog = dialogRef.current;
-    if (!dialog || dialog.open) return;
-    if (typeof dialog.showModal === 'function') dialog.showModal();
-    else dialog.setAttribute('open', '');
-  }, []);
-
-  useLayoutEffect(() => {
-    show();
-  }, [show]);
-
-  useFocusTrap({ open: true, containerRef: dialogRef, initialFocusRef: reloadRef, onClose: noop });
+  useModalDialog({
+    open: true,
+    dialogRef,
+    initialFocusRef: reloadRef,
+    onDismiss: noop,
+    dismissible: false,
+    backdrop: false,
+  });
 
   return (
     <dialog
@@ -95,8 +92,6 @@ function OpenSessionExpiredDialog({
       aria-labelledby={titleId}
       aria-describedby={bodyId}
       data-session-dialog=""
-      onCancel={(event) => event.preventDefault()}
-      onClose={show}
     >
       <div className="session-dialog__ico" aria-hidden="true">
         <Icon name="shield" size={16} />

@@ -286,25 +286,38 @@
   outline-offset: var(--focus-ring-offset);
 }
 /* Borrower offer experience PROTOTYPE (auto-offer Module 1 mock). Unmistakably
-   a mock: watermark + warning banner + legal disclaimer. */
-.offer-mock-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-  display: grid;
-  place-items: center;
-  padding: var(--sp-4);
-  background: var(--surface-scrim);
-  backdrop-filter: blur(2px);
-}
+   a mock: watermark + warning banner + legal disclaimer.
+   A native modal <dialog class="offer-mock"> (useModalDialog; 2026-09-21
+   audit stack-05 / a11y-07): the top layer replaces the --z-modal tier, the
+   user-agent `margin: auto` centres it, and `::backdrop` replaces the
+   `.offer-mock-scrim` div with the same --surface-scrim and blur(2px). A
+   modal dialog is already a containing block for the absolute watermark and
+   close button, so `position: relative` is gone. The resets undo the
+   remaining user-agent dialog properties. */
 .offer-mock {
-  position: relative;
-  inline-size: min(34rem, 100%);
+  inline-size: min(34rem, calc(100vw - 2 * var(--sp-4)));
+  max-inline-size: calc(100vw - 2 * var(--sp-4));
+  max-block-size: calc(100dvh - 2 * var(--sp-4));
+  margin: auto;
+  padding: 0;
+  color: var(--text-1);
   border-radius: var(--r-lg);
   border: 1px solid var(--line-1);
   background: var(--bg-1);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
+}
+.offer-mock::backdrop {
+  background: var(--surface-scrim);
+  backdrop-filter: blur(2px);
+  transition: opacity var(--dur-base) var(--ease);
+}
+@starting-style {
+  .offer-mock[open]::backdrop { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The global reduced-motion reset matches `*`, never `::backdrop`. */
+  .offer-mock::backdrop { transition: none; }
 }
 .offer-mock__watermark {
   position: absolute;
@@ -472,22 +485,36 @@
 
 /* ============================================================
    DATA SOURCE DRAWER
-   ============================================================ */
-.drawer-scrim {
-  position: fixed; inset: 0;
-  background: var(--surface-scrim);
-  backdrop-filter: blur(2px);
-  opacity: 0; pointer-events: none;
-  transition: opacity var(--dur-base) var(--ease);
-  z-index: var(--z-drawer-scrim);
-}
-.drawer-scrim.is-open { opacity: 1; pointer-events: auto; }
+   ============================================================
+   Every `.drawer` (the evidence drawer, its error frame, the borrower proof
+   drawer, the Genie answer proof) is a native modal <dialog> opened with
+   showModal() through hooks/useModalDialog (2026-09-21 audit stack-05 /
+   a11y-07 / css-03). The top layer replaces the --z-drawer-scrim / --z-drawer
+   tiers, and `::backdrop` replaces the prototype's `.drawer-scrim` div
+   (design_files/index.html:656-664; Module 0 Prototype.html:1256): the same
+   --surface-scrim and blur(2px). Declared departure: aside + scrim div ->
+   <dialog> + ::backdrop.
+
+   The dialog resets below undo every user-agent dialog property the
+   prototype drawer does not set (margin, padding, border, max sizes, inset,
+   height, colour, background, overflow), so `.drawer__body` stays the one
+   scroller. `width` is never set in a rule more specific than `.drawer`, so
+   `.proof-drawer` (05) and `.genie-proof-drawer` (14) still win. */
 .drawer {
-  position: fixed; top: 0; right: 0; bottom: 0;
-  width: 460px; max-width: 100vw;
-  background: var(--bg-1);
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: 460px;
+  height: 100dvh;
+  max-inline-size: 100vw;
+  max-block-size: 100dvh;
+  margin: 0;
+  padding: 0;
+  border: 0;
   border-left: 1px solid var(--line-2);
+  color: var(--text-1);
+  background: var(--bg-1);
   box-shadow: var(--shadow-lg);
+  overflow: hidden;
   transform: translateX(100%);
   visibility: hidden;
   /* The closed rule IS the exit: the slide-out runs on the exit pair and
@@ -495,14 +522,20 @@
      (2026-09-21 audit motion-01 / css-03). The prototype drawer
      (design_files/index.html:665-676) has no visibility rule at all; the
      app's instant `visibility: hidden` had been cutting its own slide-out.
-     EvidenceDrawer.tsx keeps the closing source rendered until
-     `transitionend` (useExitRetained). */
+     close() runs at exit start, so `display` and `overlay` hold the closed
+     dialog rendered and in the top layer for the same --dur-exit
+     (allow-discrete). Where `overlay` is unsupported the closed dialog
+     leaves the top layer at once and the slide-out may be cut; that is the
+     documented fallback. EvidenceDrawer.tsx keeps the closing source
+     rendered until `transitionend` (useExitRetained). */
   transition:
     transform var(--dur-exit) var(--ease-exit),
-    visibility 0s linear var(--dur-exit);
-  z-index: var(--z-drawer);
+    visibility 0s linear var(--dur-exit),
+    display var(--dur-exit) allow-discrete,
+    overlay var(--dur-exit) allow-discrete;
   display: flex; flex-direction: column;
 }
+.drawer:not([open]) { display: none; }
 .drawer.is-open {
   transform: translateX(0);
   visibility: visible;
@@ -510,11 +543,33 @@
     transform var(--dur-slow) var(--ease),
     visibility 0s linear 0s;
 }
+.drawer::backdrop {
+  background: var(--surface-scrim);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  transition:
+    opacity var(--dur-exit) var(--ease-exit),
+    display var(--dur-exit) allow-discrete,
+    overlay var(--dur-exit) allow-discrete;
+}
+.drawer[open]::backdrop {
+  opacity: 1;
+  transition: opacity var(--dur-base) var(--ease);
+}
+/* A dialog enters from `display: none`, which has no before-change style:
+   the slide-in and the scrim fade start from here. */
+@starting-style {
+  .drawer.is-open { transform: translateX(100%); }
+  .drawer[open]::backdrop { opacity: 0; }
+}
 @media (prefers-reduced-motion: reduce) {
   /* No visibility hold at all: the panel hides the moment it closes rather
      than on the next frame (a pending 0.01ms transition still holds the
      "visible" side until a frame commits). */
   .drawer,
   .drawer.is-open { transition-property: transform; }
+  /* The global reduced-motion reset matches `*`, never `::backdrop`. */
+  .drawer::backdrop,
+  .drawer[open]::backdrop { transition: none; }
 }
 

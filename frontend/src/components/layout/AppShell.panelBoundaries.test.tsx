@@ -23,6 +23,9 @@ import { AppShell } from './AppShell';
  * a malformed payload read through a `staleTime: Infinity` query (the real
  * drawer's lineage manifest read), which stays cached after the crash. The
  * first read answers `{families: null}`, every later read a valid payload.
+ * The probes read under the real panels' query keys, because the panel
+ * boundaries' Try again and Close drop only those (DRAWER_RESET_SCOPES,
+ * CONSOLE_RESET_SCOPES).
  */
 
 /** The probes' payload: `families` is a required array, so `null` is a payload the contract cannot produce. */
@@ -53,7 +56,7 @@ vi.mock('./Console', async () => {
     Console: function ConsoleProbe(): ReactNode {
       const { consoleOpen } = useAppContext();
       const payload = useQuery({
-        queryKey: ['panel-probe', 'console'],
+        queryKey: ['audit', 'my-events', 'panel-probe'],
         queryFn: async () => {
           probes.consoleFetches += 1;
           return probes.payload(probes.consoleFetches) as ProbePayload;
@@ -81,7 +84,7 @@ vi.mock('../mortgage/EvidenceDrawer', async () => {
       // Like the real drawer's lineage manifest read: always mounted,
       // enabled only while open, never stale.
       const payload = useQuery({
-        queryKey: ['panel-probe', 'drawer'],
+        queryKey: ['mip', 'lineage', 'manifest'],
         queryFn: async () => {
           probes.drawerFetches += 1;
           return probes.payload(probes.drawerFetches) as ProbePayload;
@@ -237,9 +240,11 @@ describe('AppShell panel boundaries', () => {
     await update(() => app.setDrawer({ title: 'Lineage manifest', lineageFamily: 'lead_scoring' }));
 
     await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
-    const frame = container.querySelector('aside.drawer.is-open[role="dialog"][aria-modal="true"]');
+    // The frame is the same native modal <dialog> as the drawer (stack-05).
+    const frame = container.querySelector<HTMLDialogElement>('dialog.drawer.is-open');
+    expect(frame?.open).toBe(true);
+    expect(frame?.hasAttribute('role')).toBe(false);
     expect(frame?.querySelector('.drawer__body')?.contains(surfaces()[0])).toBe(true);
-    expect(container.querySelector('.drawer-scrim.is-open')).not.toBeNull();
     expect(container.querySelector('[data-testid="drawer-probe"]')).toBeNull();
 
     // Modal like the drawer it stands in for: focus starts on Close and Escape closes.
@@ -292,7 +297,7 @@ describe('AppShell panel boundaries', () => {
     it("closing the crashed drawer's frame lets the next open re-read the payload", async () => {
       await crashTheDrawerOnItsPayload();
 
-      const frame = container.querySelector('aside.drawer.is-open[role="dialog"]');
+      const frame = container.querySelector('dialog.drawer.is-open');
       await update(() => frame?.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')?.click());
       expect(app.drawer).toBeNull();
       expect(surfaces()).toHaveLength(0);
@@ -304,6 +309,45 @@ describe('AppShell panel boundaries', () => {
       expect(surfaces()).toHaveLength(0);
       expect(drawerProbe()?.classList.contains('is-open')).toBe(true);
       expect(probes.drawerFetches).toBe(2);
+    });
+
+    /**
+     * Wave-3 error-telemetry review: the panel Try again and the drawer
+     * frame's Close used the route boundary's app-wide reset, which dropped
+     * every unobserved cached query in the app (other routes' warm caches).
+     * Now each panel drops only its own key prefixes.
+     */
+    it("drops only the panel's own queries: a bystander unobserved ['mip','leads'] cache survives", async () => {
+      const bystander = ['mip', 'leads', 'bystander'];
+      const assetKey = ['mip', 'asset', 'lead_population'];
+      queryClient.setQueryData(bystander, { rows: 1 });
+      queryClient.setQueryData(assetKey, { freshness: 'fresh' });
+      await crashTheDrawerOnItsPayload();
+
+      await clickTryAgain();
+      await vi.waitFor(() => expect(drawerProbe()?.dataset.families).toBe('1'));
+      expect(queryClient.getQueryData(bystander), 'drawer Try again keeps the bystander').toEqual({ rows: 1 });
+      expect(queryClient.getQueryData(assetKey), "drawer Try again drops the drawer's asset metadata").toBeUndefined();
+
+      // Crash again on a fresh payload read, then Close the frame.
+      queryClient.setQueryData(assetKey, { freshness: 'fresh' });
+      probes.drawerFetches = 0;
+      queryClient.removeQueries({ queryKey: ['mip', 'lineage', 'manifest'] });
+      await update(() => app.setDrawer(null));
+      await update(() => app.setDrawer(LINEAGE_SOURCE));
+      await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
+      const frame = container.querySelector('dialog.drawer.is-open');
+      await update(() => frame?.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')?.click());
+      expect(queryClient.getQueryData(bystander), 'drawer Close keeps the bystander').toEqual({ rows: 1 });
+      expect(queryClient.getQueryData(assetKey)).toBeUndefined();
+
+      // The Console: its Try again drops its recent activity, nothing else.
+      probes.consoleReadsPayload = true;
+      await update(() => app.setConsoleOpen(true));
+      await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
+      await clickTryAgain();
+      await vi.waitFor(() => expect(consoleProbe()?.dataset.families).toBe('1'));
+      expect(queryClient.getQueryData(bystander), 'Console Try again keeps the bystander').toEqual({ rows: 1 });
     });
 
     it("the Console's Try again re-reads the payload and renders the healthy Console", async () => {

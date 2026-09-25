@@ -149,9 +149,10 @@ describe('layout containment contracts', () => {
 
   it('layers the ⌘K command palette above the Genie FAB and dims with a scrim (re-audit #4 #1)', () => {
     const css = designCss();
-    // The palette sits at the top of the overlay scale (--z-palette, 1000),
-    // above the Genie FAB (--z-genie-fab, 29) and the map tip (--z-map-tip, 900).
-    expect(css).toMatch(/\.cmdk\s*\{[^}]*z-index:\s*var\(--z-palette\);/s);
+    // The palette is a native modal <dialog> (stack-05): the top layer puts it
+    // above the Genie FAB, the drawer and the map tip, so it needs no z-index.
+    expect(css).toMatch(/\.cmdk\s*\{[^}]*position:\s*fixed;/s);
+    expect(css).not.toMatch(/\.cmdk\s*\{[^}]*z-index/s);
     expect(css).toMatch(/\.cmdk\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
     expect(css).toContain('.cmdk__row.is-active');
     // Entrance animation is disabled under reduced motion.
@@ -248,7 +249,7 @@ describe('layout containment contracts', () => {
     const css = designCss();
     expect(css).toContain('.offer-mock__watermark');
     expect(css).toMatch(/\.offer-mock__banner\s*\{[^}]*color:\s*var\(--status-warning-ink\);/s);
-    expect(css).toMatch(/\.offer-mock-scrim\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
+    expect(css).toMatch(/\.offer-mock::backdrop\s*\{[^}]*background:\s*var\(--surface-scrim\);/s);
   });
 
   it('styles the portfolio summary card claim chips + verdict ("Your book today")', () => {
@@ -301,7 +302,8 @@ describe('layout containment contracts', () => {
     const css = designCss();
 
     expect(css).toMatch(/\.genie__fab\s*\{[^}]*display:\s*none;/s);
-    expect(css).toMatch(/@media \(max-width:\s*720px\)\s*\{[\s\S]*?\.genie__fab\s*\{[\s\S]*?display:\s*grid;/s);
+    // responsive-06: the FAB returns wherever the topbar layout has given way.
+    expect(css).toMatch(/@media \(max-width:\s*1023px\)\s*\{\s*\.genie__fab\s*\{\s*display:\s*grid;/s);
   });
 
   it('keeps theme switches visually coherent across shell surfaces', () => {
@@ -439,7 +441,9 @@ describe('layout containment contracts', () => {
     expect(tokens).toMatch(/--dur-exit:\s*216ms;/);
     expect(tokens).toMatch(/--ease-exit:\s*cubic-bezier\(/);
 
-    expect(css).toMatch(/\.drawer\s*\{[^}]*visibility:\s*hidden;[^}]*transition:\s*transform var\(--dur-exit\) var\(--ease-exit\),\s*visibility 0s linear var\(--dur-exit\);/s);
+    // The drawer is a native <dialog> (stack-05): its exit also holds
+    // `display` and `overlay` so the closed dialog stays in the top layer.
+    expect(css).toMatch(/\.drawer\s*\{[^}]*visibility:\s*hidden;[^}]*transition:\s*transform var\(--dur-exit\) var\(--ease-exit\),\s*visibility 0s linear var\(--dur-exit\),\s*display var\(--dur-exit\) allow-discrete,\s*overlay var\(--dur-exit\) allow-discrete;/s);
     expect(css).toMatch(/\.drawer\.is-open\s*\{[^}]*visibility:\s*visible;[^}]*transition:\s*transform var\(--dur-slow\) var\(--ease\),\s*visibility 0s linear 0s;/s);
     expect(css).not.toMatch(/\.drawer:not\(\.is-open\)/);
 

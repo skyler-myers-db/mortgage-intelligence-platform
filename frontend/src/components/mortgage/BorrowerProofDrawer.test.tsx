@@ -370,6 +370,30 @@ describe('BorrowerProofDrawer', () => {
     expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(1);
   });
 
+  it('is a native modal dialog, closed, inert and hidden while it stays mounted for its exit', async () => {
+    await render(false);
+    const dialog = document.querySelector<HTMLDialogElement>('dialog.drawer.proof-drawer');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.open).toBe(false);
+    expect(dialog!.hasAttribute('inert')).toBe(true);
+    expect(dialog!.getAttribute('aria-hidden')).toBe('true');
+
+    await render(true);
+    expect(dialog!.open).toBe(true);
+    expect(dialog!.classList.contains('is-open')).toBe(true);
+    expect(dialog!.hasAttribute('inert')).toBe(false);
+    expect(dialog!.hasAttribute('aria-hidden')).toBe(false);
+    // Role and modality are implicit on a modal <dialog>.
+    expect(dialog!.hasAttribute('role')).toBe(false);
+    expect(dialog!.hasAttribute('aria-modal')).toBe(false);
+
+    await render(false);
+    // close() at exit start; the same element stays for the slide-out.
+    expect(document.querySelector('dialog.proof-drawer')).toBe(dialog);
+    expect(dialog!.open).toBe(false);
+    expect(dialog!.hasAttribute('inert')).toBe(true);
+  });
+
   it('"Show math" (no component) keeps focusing the close button with no focused card', async () => {
     await render(true);
     await settle();

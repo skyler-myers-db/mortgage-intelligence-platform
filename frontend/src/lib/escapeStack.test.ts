@@ -3,7 +3,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { escapeLayerCount, pushEscapeLayer } from './escapeStack';
+import { dismissTopLayer, escapeLayerCount, pushEscapeLayer } from './escapeStack';
 
 function pressEscape(target: EventTarget = window): KeyboardEvent {
   const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
@@ -89,6 +89,45 @@ describe('escapeStack', () => {
     expect(escapeLayerCount()).toBe(0);
     pressEscape();
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  // The echo guard lasts until the end of the task that consumed an Escape;
+  // earlier cases pressed Escape in this same task.
+  const nextTask = () => new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  it('dismissTopLayer runs the topmost accepting layer once, as a keypress would', async () => {
+    await nextTask();
+    const lower = vi.fn();
+    const declining = vi.fn(() => false as const);
+    push(lower);
+    push(declining);
+
+    expect(dismissTopLayer()).toBe(true);
+    expect(declining).toHaveBeenCalledOnce();
+    expect(lower).toHaveBeenCalledOnce();
+    expect((lower.mock.calls[0] as unknown[])[0]).toMatchObject({ key: 'Escape' });
+  });
+
+  it('dismissTopLayer is a no-op for the echo of an Escape the stack consumed in the same task', async () => {
+    await nextTask();
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn();
+      push(handler);
+      pressEscape();
+      expect(handler).toHaveBeenCalledOnce();
+      // A browser that still fires the dialog's `cancel` for that keypress.
+      expect(dismissTopLayer()).toBe(false);
+      expect(handler).toHaveBeenCalledOnce();
+
+      vi.runOnlyPendingTimers();
+      expect(dismissTopLayer()).toBe(true);
+      expect(handler).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('survives a handler that pops itself while the stack is being walked', () => {

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import type { Borrower360 } from '../../types';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useModalDialog } from '../../hooks/useModalDialog';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 
 /**
@@ -53,23 +53,23 @@ export function BorrowerOfferPreviewMock({
   const product = offerDisplayLabel(borrower.recommended_offer_code, borrower.recommended_offer || 'a mortgage option');
   const lenderName = (lender || 'Your lender').trim();
   const reason = borrowerReason(borrower);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  // Modal focus trap + Escape-to-close + focus restoration (mirrors the
-  // command palette / drawer pattern).
-  useFocusTrap({ open: true, containerRef: panelRef, initialFocusRef: closeRef, onClose });
+  // A native modal <dialog> like the drawers and the palette (audit
+  // stack-05 / a11y-07): showModal() makes the page inert, Escape and a
+  // press on the ::backdrop close it, focus goes back to "Preview borrower
+  // experience".
+  useModalDialog({ open: true, dialogRef, initialFocusRef: closeRef, onDismiss: onClose, backdrop: 'outside' });
 
   if (typeof document === 'undefined') return null;
 
   return createPortal(
-    <div
-      className="offer-mock-scrim"
-      role="dialog"
-      aria-modal="true"
+    <dialog
+      ref={dialogRef}
+      className="offer-mock"
       aria-label="Borrower offer experience — prototype"
       data-testid="borrower-offer-mock"
     >
-      <div className="offer-mock" ref={panelRef}>
         <span className="offer-mock__watermark" aria-hidden="true">PROTOTYPE</span>
         <div className="offer-mock__banner" role="note">
           <Icon name="info" size={12} />
@@ -118,8 +118,7 @@ export function BorrowerOfferPreviewMock({
             <button className="btn btn--primary" type="button" onClick={onClose}>Close prototype</button>
           </div>
         )}
-      </div>
-    </div>,
+    </dialog>,
     document.body,
   );
 }
