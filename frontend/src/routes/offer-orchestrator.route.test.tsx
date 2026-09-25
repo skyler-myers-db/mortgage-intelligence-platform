@@ -770,13 +770,14 @@ describe('OfferOrchestrator route behavior', () => {
     await act(async () => {
       for (let index = 0; index < 10; index += 1) await Promise.resolve();
     });
+    // TanStack delivers observer updates on a 0 ms timer (the reads are on
+    // the query layer since wave 4b), so let that fake timer run too.
+    await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(container.textContent).toContain('Warehouse warming up');
     expect(container.textContent).toContain('attempt 2 of 6');
 
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
     expect(apiMocks.borrower).toHaveBeenCalledTimes(2);
-    // TanStack delivers observer updates on a 0 ms timer (the reads are on
-    // the query layer since wave 4b), so let that fake timer run too.
     await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(container.textContent).toContain('Review and approve outreach');
   });

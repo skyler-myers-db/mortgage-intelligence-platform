@@ -17,7 +17,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Borrower360, BorrowerLifecycle, OfferRecommendation, SavedDraft } from '../types';
+import type { Borrower360, BorrowerLifecycle, OfferRecommendation, SalesTeamMember, SavedDraft } from '../types';
 import type { OutreachDraftResult } from '../lib/apiTypes';
 import { ApiError } from '../lib/apiTransport';
 import { queryKeys } from '../lib/queryKeys';
@@ -505,6 +505,39 @@ describe('Offer Orchestrator read-count table (audit parity with the effect it r
     await waitUntil(() => loaded());
     await settle(50);
     expect(delta(before, counts())).toEqual({ B: 1, R: 1, L: 1, D: 0 });
+  });
+
+  it('the assignment roster: its own key, active loan officers and sales managers, one read per minute', async () => {
+    const roster: SalesTeamMember[] = [
+      { email: 'lo.a@summit-mortgage.example', display_label: 'Loan Officer A', role: 'loan_officer', capacity_per_day: 20, active: true },
+      { email: 'sm.b@summit-mortgage.example', display_label: 'Sales Manager B', role: 'sales_manager', capacity_per_day: 5, active: true },
+      { email: 'lo.c@summit-mortgage.example', display_label: 'Loan Officer C', role: 'loan_officer', capacity_per_day: 20, active: false },
+      { email: 'admin.d@summit-mortgage.example', display_label: 'Admin D', role: 'admin', capacity_per_day: 0, active: true },
+    ];
+    apiMocks.salesTeam.mockResolvedValue(roster);
+    // Lead Queue / Sales ops cache a loan-officer-only list under salesTeam():
+    // Offer must not read (or overwrite) it.
+    const loOnly = roster.filter((member) => member.role === 'loan_officer');
+    queryClient.setQueryData(queryKeys.salesTeam(), loOnly);
+    mount();
+    await waitUntil(() => loaded() && container.querySelectorAll('#lo-assign option').length > 1);
+    const options = () => [...container.querySelectorAll<HTMLOptionElement>('#lo-assign option')].map((option) => option.value);
+    expect(options()).toEqual(['', 'lo.a@summit-mortgage.example', 'sm.b@summit-mortgage.example']);
+    expect(apiMocks.salesTeam).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData(queryKeys.salesTeam())).toBe(loOnly);
+    // A re-open within the minute reuses the roster (no audit row either way).
+    await reopen();
+    await waitUntil(() => loaded() && counts().D === 2);
+    expect(apiMocks.salesTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it('a roster failure leaves assignment empty and approval available', async () => {
+    apiMocks.salesTeam.mockRejectedValue(new Error('sales team unavailable'));
+    mount();
+    await waitUntil(() => loaded());
+    await settle(50);
+    expect([...container.querySelectorAll<HTMLOptionElement>('#lo-assign option')].map((option) => option.value)).toEqual(['']);
+    expect(button('Approve outreach').disabled).toBe(false);
   });
 
   it('a draft that also holds a retryable 503 re-POSTs once on the same recovery edge', async () => {
