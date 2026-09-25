@@ -1,5 +1,19 @@
 type Cancel = () => void;
 
+/**
+ * True when the browser asks pages to save data (`Save-Data`, the Network
+ * Information API's `navigator.connection.saveData`; audit bundle-09). A
+ * browser without the API, or a navigator that throws, reads as false.
+ */
+export function saveDataRequested(): boolean {
+  try {
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+    return connection?.saveData === true;
+  } catch {
+    return false;
+  }
+}
+
 export function createIdlePreloader(loader: () => Promise<unknown>, timeout = 3000): () => Cancel {
   let completedOrRunning = false;
   let cancelScheduled: Cancel | null = null;

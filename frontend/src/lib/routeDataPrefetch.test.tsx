@@ -56,6 +56,7 @@ import { prefetchRouteData } from './routeDataPrefetch';
 import { useWarmingUpRetry } from './useWarmingUpRetry';
 import { AppProvider } from '../components/AppContext';
 import { FootprintProvider } from '../components/FootprintProvider';
+import { RouteNav } from '../components/layout/RouteNav';
 import Home, { HOME_PORTFOLIO_PREVIEW_CRITERIA as HOME_ROUTE_CRITERIA, requestHomePortfolioPreview } from '../routes/home';
 import { HOME_CONTACTABLE_PREVIEW_CRITERIA as HOME_BANNER_CRITERIA } from '../routes/home.approval-banner';
 import AnalyticsRoute from '../routes/analytics';
@@ -260,6 +261,47 @@ describe('route data prefetch', () => {
         expect(methods.filter((method) => !ALLOWED_READS.includes(method))).toEqual([]);
       },
     );
+
+    /** Hover then focus each RouteNav link; returns the api methods each intent read. */
+    async function navIntents(): Promise<Record<string, string[]>> {
+      const queryClient = client();
+      await mount(queryClient, '/glossary', <RouteNav />);
+      const links = [...container.querySelectorAll<HTMLAnchorElement>('a.route-nav__link')];
+      expect(links.length).toBeGreaterThan(5);
+      const reads: Record<string, string[]> = {};
+      for (const link of links) {
+        recorder.calls = [];
+        await act(async () => {
+          link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
+          link.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+        });
+        reads[link.getAttribute('href') ?? ''] = [...new Set(recorder.calls.map((call) => call.method))].sort();
+      }
+      return reads;
+    }
+
+    it('RouteNav hover and focus read only the Analytics aggregates, and nothing for Home, the queue or a dossier', async () => {
+      const reads = await navIntents();
+
+      expect(Object.values(reads).flat().filter((method) => !ALLOWED_READS.includes(method))).toEqual([]);
+      expect(reads['/analytics']).toEqual(['analyticsExecutive', 'analyticsRateWindow']);
+      for (const [href, methods] of Object.entries(reads)) {
+        if (href !== '/analytics') expect(methods, `${href} hover reads nothing`).toEqual([]);
+      }
+      expect(preloadRouteForPath).toHaveBeenCalledWith('/lead-queue');
+      expect(preloadRouteForPath).toHaveBeenCalledWith('/analytics');
+    });
+
+    it('RouteNav skips the Analytics data prefetch under saveData, but still preloads the chunk', async () => {
+      Object.defineProperty(navigator, 'connection', { configurable: true, value: { saveData: true } });
+      try {
+        const reads = await navIntents();
+        expect(reads['/analytics']).toEqual([]);
+        expect(preloadRouteForPath).toHaveBeenCalledWith('/analytics');
+      } finally {
+        Reflect.deleteProperty(navigator, 'connection');
+      }
+    });
 
     it('prefetches data only for / and an unfiltered /analytics', () => {
       for (const path of concretePaths) {

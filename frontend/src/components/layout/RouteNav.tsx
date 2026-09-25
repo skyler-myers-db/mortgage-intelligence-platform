@@ -1,7 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { NavLink } from 'react-router';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
+import { saveDataRequested } from '../../lib/prefetch';
+import { prefetchRouteData } from '../../lib/routeDataPrefetch';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import {
   NAVIGATION_ROUTE_IDS,
@@ -52,6 +54,17 @@ export function useAdminNavigationAccess(): boolean {
 export function RouteNav() {
   const { lastBorrowerId } = useApp();
   const canAccessAdmin = useAdminNavigationAccess();
+  const queryClient = useQueryClient();
+  // Intent (hover / focus) preloads the route chunk. Analytics alone also
+  // prefetches its unfiltered hero reads (non-audited aggregates, audit
+  // delivery-03), unless the browser asks to save data. Home prefetches no
+  // data on hover (its summary read starts Genie phrasing; perf-motion pins
+  // that a hover asks the API for nothing), and the queue, borrower and offer
+  // paths never do: their reads write VIEW_* audit rows.
+  const onIntent = (to: AppPath) => {
+    if (to === ROUTES.analytics.pattern && !saveDataRequested()) prefetchRouteData(queryClient, to, '');
+    else preloadRouteForPath(to);
+  };
   const items = NAVIGATION_ROUTE_IDS
     .filter((id) => canAccessAdmin || id !== 'admin')
     .map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] }));
@@ -64,8 +77,8 @@ export function RouteNav() {
             key={i.id}
             to={i.to}
             end={end}
-            onMouseEnter={() => preloadRouteForPath(i.to)}
-            onFocus={() => preloadRouteForPath(i.to)}
+            onMouseEnter={() => onIntent(i.to)}
+            onFocus={() => onIntent(i.to)}
             className="route-nav__link"
           >
             <Icon name={i.route.icon} size={12} />
