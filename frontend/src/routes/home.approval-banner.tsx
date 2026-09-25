@@ -8,7 +8,13 @@ import type { PortfolioPreview } from '../types';
 import { formatCount } from '../lib/formatters';
 
 /**
- * Home's "Approval queue" banner — prototype `.approval` BEM, unchanged.
+ * Home's "Refinance review queue" banner — prototype `.approval` BEM, unchanged.
+ *
+ * Title (audit flow-v1, wave 3): it was "Approval queue", but it counts the
+ * contactable refinance-economics screen, not genuinely pending approvals
+ * (that needs an audit-free pending count, wave 4; Home must never call
+ * GET /api/leads). The title now names what it counts and what the button
+ * opens. Offer Orchestrator's ApprovalBanner keeps "Approval queue".
  *
  * Addressable-vs-contactable reconciliation (2026-09-21 audit, flow-v1). The
  * banner quoted the whole-book refinance-economics screen
@@ -45,6 +51,8 @@ import { formatCount } from '../lib/formatters';
  */
 
 export const APPROVAL_QUEUE_STATE_LABEL = 'current lifecycle state';
+/** The banner's title and region name (flow-v1). */
+export const HOME_REVIEW_QUEUE_TITLE = 'Refinance review queue';
 export const APPROVAL_QUEUE_HREF = '/lead-queue?segment=itm';
 /** The Lead Queue's default contactability, which the banner's link inherits. */
 export const HOME_CONTACTABLE_PREVIEW_CRITERIA = { marketing_eligibility: 'Eligible only' } as const;
@@ -114,10 +122,10 @@ export function ApprovalQueueBanner({ screenCount, approvedCount, inOutreachCoun
   }
 
   return (
-    <div role="region" aria-label="Approval queue" className="approval">
+    <div role="region" aria-label={HOME_REVIEW_QUEUE_TITLE} className="approval">
       <div className="approval__ico"><Icon name="shield" size={16} /></div>
       <div className="approval__body">
-        <div className="approval__title">Approval queue</div>
+        <div className="approval__title">{HOME_REVIEW_QUEUE_TITLE}</div>
         <div className="approval__sub">{body}</div>
       </div>
       {/* Secondary: Home carries exactly one primary action, "Review today's

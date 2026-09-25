@@ -17,7 +17,7 @@ const fmt = (value: number) => value.toLocaleString('en-US');
 test.describe('Home approval-queue banner', () => {
   test('states N contactable of M, and N is the queue total its link opens', async ({ app, page }) => {
     await app.gotoRoute('/');
-    const banner = page.getByRole('region', { name: 'Approval queue' });
+    const banner = page.getByRole('region', { name: 'Refinance review queue' });
     await expect(banner.getByTestId('approval-queue-contactable')).toHaveText(fmt(TOTALS.contactableInTheMoney));
     await expect(banner.getByTestId('approval-queue-screen')).toHaveText(fmt(TOTALS.inTheMoney));
     await expect(banner).toContainText(

@@ -67,7 +67,7 @@ describe('Home data estate relocation', () => {
     expect(document.querySelector('.data-estate')).toBeNull();
     expect(document.body.textContent).not.toContain('Data estate under the hood');
     // Sanity: Home still renders its own operator content.
-    expect(document.body.textContent).toContain('Approval queue');
+    expect(document.body.textContent).toContain('Refinance review queue');
   });
 
   it('pairs geography with the approval-queue side panel and removes the admin-only activity log', () => {
@@ -86,7 +86,7 @@ describe('Home data estate relocation', () => {
     // the approval queue.
     const pairing = map?.closest('.layoutA-grid');
     expect(pairing).toBeTruthy();
-    expect(pairing?.querySelector('[role="region"][aria-label="Approval queue"]')).toBeTruthy();
+    expect(pairing?.querySelector('[role="region"][aria-label="Refinance review queue"]')).toBeTruthy();
     expect(document.querySelector('[data-testid="agent-activity-log"]')).toBeNull();
     expect(document.body.textContent).not.toContain('Agent action audit log');
     expect(document.body.textContent).not.toContain('Roadmap');

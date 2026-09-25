@@ -130,7 +130,7 @@ test('light: amber icon glyphs clear 3:1 on their tinted tiles', async ({ app, m
   await app.setTheme('light');
   await app.gotoRoute('/');
 
-  const approvalIcon = page.getByRole('region', { name: 'Approval queue' }).locator('.approval__ico');
+  const approvalIcon = page.getByRole('region', { name: 'Refinance review queue' }).locator('.approval__ico');
   await expect(approvalIcon).toBeVisible();
   await expectWarningInk(page, approvalIcon, AA_UI);
 

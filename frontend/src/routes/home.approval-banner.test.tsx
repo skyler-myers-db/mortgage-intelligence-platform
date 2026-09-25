@@ -121,8 +121,17 @@ describe('Home approval-queue banner reconciles with the queue it opens', () => 
     });
   }
 
-  const banner = () => container.querySelector('[role="region"][aria-label="Approval queue"]') as HTMLElement;
+  const banner = () => container.querySelector('[role="region"][aria-label="Refinance review queue"]') as HTMLElement;
   const bannerText = () => banner().querySelector('.approval__sub')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+
+  // flow-v1 (wave 3): the banner counts the contactable refinance screen,
+  // not pending approvals, so it is titled for what it counts and opens.
+  it('is titled the refinance review queue, as a region of the same name', async () => {
+    await mountHome();
+    expect(banner().querySelector('.approval__title')?.textContent).toBe('Refinance review queue');
+    expect(banner().querySelector('a')?.getAttribute('href')).toBe('/lead-queue?segment=itm');
+    expect(container.textContent).not.toContain('Approval queue');
+  });
 
   it('states the contactable count beside the whole-book screen, SegmentCard style', async () => {
     await mountHome();
