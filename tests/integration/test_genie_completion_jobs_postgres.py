@@ -386,6 +386,24 @@ def test_an_audit_failure_rolls_the_cancel_flag_back(pg: _PgLakebase) -> None:
     assert _audit_rows(pg) == []
 
 
+def test_the_accept_update_sets_the_flag_once_and_never_on_a_recorded_job(pg: _PgLakebase) -> None:
+    job_id = _running_job(pg)
+    accept = {"job_id": job_id}
+
+    first = pg.fetchone(_ACCEPT_SQL, accept)
+    stamped = pg.row(job_id)["cancel_requested_at"]
+    second = pg.fetchone(_ACCEPT_SQL, accept)
+
+    assert first == {"status": "running", "lease_owner": jobs.PROCESS_ID}
+    assert second is None, "a repeat matches no row: the flag (and its audit row) is set once"
+    assert pg.row(job_id)["cancel_requested_at"] == stamped
+
+    recorded = _running_job(pg, message_id="msg-2")
+    assert record.commit_governed_record(pg, recorded) == "committed"  # type: ignore[arg-type]
+    assert pg.fetchone(_ACCEPT_SQL, {"job_id": recorded}) is None
+    assert pg.row(recorded)["cancel_requested_at"] is None
+
+
 def _blocked_backends(dsn: str) -> int:
     with psycopg.connect(dsn) as conn:
         row = conn.execute(
