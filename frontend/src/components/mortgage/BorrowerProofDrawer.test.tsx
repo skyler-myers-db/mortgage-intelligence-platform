@@ -9,6 +9,8 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BorrowerProofDrawer } from './BorrowerProofDrawer';
 import { invalidateOperationalQueries } from '../../lib/queryKeys';
+import { ApiError } from '../../lib/apiTransport';
+import { refetchRecoveredQueries } from '../healthRecovery';
 import type { BorrowerProof, ProofScoreComponentKey } from '../../types';
 
 const apiMocks = vi.hoisted(() => ({
@@ -314,6 +316,39 @@ describe('BorrowerProofDrawer', () => {
     await settle();
     expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).toContain('Governed proof ready');
+  });
+
+  // Review follow-up: the static proof query is skipped by refetchQueries, so
+  // a warehouse recovery no longer re-reads an open drawer whose read failed.
+  // That is deliberate (every read writes VIEW_BORROWER_PROOF), so the
+  // drawer offers the explicit re-read instead of leaving close-and-reopen.
+  it('a failed read survives a warehouse recovery untouched and re-reads only from Try again', async () => {
+    apiMocks.borrowerProof.mockRejectedValueOnce(
+      new ApiError('Warehouse is warming up', {
+        path: '/api/borrowers/B-TEST/proof',
+        status: 503,
+        retryable: true,
+        dependency: 'warehouse',
+      }),
+    );
+    await render(true);
+    await settle();
+    expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain('Proof unavailable');
+
+    await act(async () => {
+      refetchRecoveredQueries(queryClient, ['warehouse']);
+    });
+    await settle();
+    expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      buttonByText('Try again').click();
+    });
+    await settle();
+    expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).toContain('Governed proof ready');
+    expect(document.body.textContent).not.toContain('Proof unavailable');
   });
 
   it('a segment-opened drawer selects the Math tab and focuses that component card', async () => {

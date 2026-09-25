@@ -11,6 +11,8 @@ import { Skeleton } from '../ui/Skeleton';
 import { GlossaryTerm } from '../GlossaryTerm';
 import { useTabs } from '../ui/useTabs';
 import { useBorrowerProof } from './useBorrowerProof';
+// Same lazy chunk: ScoreAnatomy is the drawer's only importer.
+import { SCORE_SPINE_COPY } from './scoreSpine.copy';
 
 type ProofTab = 'math' | 'evidence' | 'lineage' | 'reproduce';
 
@@ -139,13 +141,21 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose, focusComponent 
             </div>
           )}
 
+          {/* The proof query is static (useBorrowerProof), so a health
+              recovery never re-reads it: every read writes a
+              VIEW_BORROWER_PROOF row, and only an explicit act may. "Try
+              again" is that act, disabled while a read is in flight so a
+              second click cannot cancel it and send another. */}
           {proofQuery.isError && (
             <div className="proof-callout proof-callout--warning">
               <div className="h-4">Proof unavailable</div>
               <p className="body flush">
-                The borrower dossier loaded, but the governed proof endpoint did not return. Retry after
-                the warehouse is healthy.
+                The borrower dossier loaded, but the governed proof endpoint did not return. Try again
+                once the warehouse is healthy.
               </p>
+              <Button size="sm" className="mt-2" disabled={proofQuery.isFetching} onClick={() => void proofQuery.refetch()}>
+                {SCORE_SPINE_COPY.retry}
+              </Button>
             </div>
           )}
 
