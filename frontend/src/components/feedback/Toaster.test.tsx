@@ -11,6 +11,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { pushModalLayer } from '../../lib/modalLayers';
 import { clearToasts, getToasts, toast } from '../../lib/toast';
 import { SUCCESS_TOAST_MS, Toaster } from './Toaster';
 
@@ -344,5 +345,126 @@ describe('Toaster', () => {
       vi.advanceTimersByTime(100);
     });
     expect(cards()).toHaveLength(0);
+  });
+});
+
+/**
+ * Toasts over a modal (audit a11y-07, correction 3): showModal() makes the
+ * shell inert and paints the dialog above a popover shown earlier, so the
+ * region re-hosts inside the topmost modal layer (lib/modalLayers) and back.
+ * A toast already on screen is carried over without a second announcement;
+ * one raised inside the modal lands in the live list and is announced once.
+ */
+describe('Toaster over a modal dialog', () => {
+  let root: Root;
+  let container: HTMLElement;
+  let modal: HTMLDialogElement;
+  let popModal: (() => void) | null = null;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    session.canAccessAdmin = true;
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    modal = document.createElement('dialog');
+    modal.setAttribute('open', '');
+    modal.innerHTML = '<button type="button" id="modal-close">Close drawer</button>';
+    document.body.appendChild(modal);
+    root = createRoot(container);
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <Toaster />
+        </MemoryRouter>,
+      );
+    });
+  });
+
+  afterEach(() => {
+    act(() => popModal?.());
+    popModal = null;
+    act(() => root.unmount());
+    container.remove();
+    modal.remove();
+    act(() => clearToasts());
+    vi.useRealTimers();
+  });
+
+  const region = () => document.querySelector<HTMLElement>('section.toast-region');
+  const liveList = () => region()?.querySelector<HTMLElement>('[role="status"][aria-live="polite"]') ?? null;
+  const openModal = () => act(() => {
+    popModal = pushModalLayer(modal);
+  });
+  const closeModal = () => act(() => {
+    popModal?.();
+    popModal = null;
+  });
+
+  it('renders the same region inside the topmost modal layer, and back in the shell once it closes', () => {
+    expect(container.contains(region())).toBe(true);
+    openModal();
+    expect(modal.contains(region())).toBe(true);
+    expect(document.querySelectorAll('section.toast-region')).toHaveLength(1);
+    expect(region()?.getAttribute('aria-label')).toBe('Notifications');
+    expect(liveList()).not.toBeNull();
+    closeModal();
+    expect(container.contains(region())).toBe(true);
+    expect(modal.querySelector('section.toast-region')).toBeNull();
+  });
+
+  it('keeps a toast already on screen visible when a modal opens, without announcing it again', () => {
+    act(() => {
+      toast.success('Build saved');
+      toast.error('Copy failed');
+    });
+    expect(liveList()?.textContent).toContain('Build saved');
+    expect(document.querySelector('.toast--error')?.getAttribute('role')).toBe('alert');
+
+    openModal();
+    const carried = [...modal.querySelectorAll<HTMLElement>('.toast')];
+    expect(carried.map((card) => card.textContent)).toEqual([
+      expect.stringContaining('Copy failed'),
+      expect.stringContaining('Build saved'),
+    ]);
+    // Not re-announced: the success is outside the (new) live list, and the
+    // failure is no longer an inserted alert.
+    expect(liveList()?.childElementCount).toBe(0);
+    expect(modal.querySelector('.toast--error')?.hasAttribute('role')).toBe(false);
+    expect(carried.every((card) => card.closest('[aria-live], [role="alert"], [role="status"]') === null)).toBe(true);
+  });
+
+  it('announces a toast raised while the modal is open once, in the live list that existed before it', () => {
+    openModal();
+    const list = liveList();
+    expect(list?.childElementCount).toBe(0);
+    act(() => {
+      toast.success('Assigned 12 borrowers');
+    });
+    expect(liveList()).toBe(list);
+    expect(list?.querySelectorAll('.toast')).toHaveLength(1);
+    expect(list?.textContent).toContain('Assigned 12 borrowers');
+    expect(document.querySelectorAll('.toast')).toHaveLength(1);
+  });
+
+  it('keeps the focus hand-off inside the dialog after a dismiss, never on the inert page', () => {
+    const main = document.createElement('main');
+    main.id = 'main-content';
+    main.tabIndex = -1;
+    main.innerHTML = '<h1 tabindex="-1">Lead Queue</h1><button type="button" id="page-origin">Assign</button>';
+    document.body.appendChild(main);
+    try {
+      openModal();
+      act(() => {
+        toast.error('Assignment failed');
+      });
+      // Focus reached the toast from the page (inert behind a real modal).
+      act(() => document.getElementById('page-origin')?.focus());
+      const close = modal.querySelector<HTMLButtonElement>('button[aria-label="Dismiss notification"]')!;
+      act(() => close.focus());
+      act(() => close.click());
+      expect(document.activeElement?.id).toBe('modal-close');
+    } finally {
+      main.remove();
+    }
   });
 });
