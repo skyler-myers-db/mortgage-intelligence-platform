@@ -7,7 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/apiTransport';
 import type { HealthPayload } from '../lib/apiTypes';
 import { HealthProvider } from './HealthProvider';
-import { isRecoverableQueryError, recoveredDependencies } from './healthRecovery';
+import {
+  blockDefersToBanner,
+  degradedDependency,
+  friendlyDependencyName,
+  isBanneredOutage,
+  isRecoverableQueryError,
+  recoveredDependencies,
+  type DependencyHealth,
+} from './healthRecovery';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -67,6 +75,68 @@ describe('isRecoverableQueryError', () => {
     expect(isRecoverableQueryError(anonymous, warehouse)).toBe(false);
     expect(isRecoverableQueryError(new Error('boom'), warehouse)).toBe(false);
     expect(isRecoverableQueryError(null, warehouse)).toBe(false);
+  });
+});
+
+/**
+ * The bannered-outage rule (audit states-03 part a): a panel shows the calm
+ * "reloads when … reconnects" status instead of a red alert exactly when its
+ * error is the outage the DegradedBanner already names, which is exactly the
+ * set refetchRecoveredQueries re-fetches when it ends.
+ */
+describe('isBanneredOutage and blockDefersToBanner', () => {
+  const UP = { warehouse: 'up', lakebase: 'up', genie: 'up' };
+  const WAREHOUSE_DOWN: DependencyHealth = { dependencies: { ...UP, warehouse: 'down' } };
+  const BREAKER_OPEN: DependencyHealth = { dependencies: UP, circuit_breakers: { warehouse: 'closed', lakebase: 'open' } };
+  const HEALTHY: DependencyHealth = { dependencies: UP, circuit_breakers: {} };
+
+  it('names the bannered dependency the way the banner does', () => {
+    expect(degradedDependency(WAREHOUSE_DOWN)).toBe('warehouse');
+    expect(degradedDependency(BREAKER_OPEN)).toBe('lakebase');
+    expect(degradedDependency(HEALTHY)).toBeNull();
+    expect(degradedDependency(null)).toBeNull();
+    expect(friendlyDependencyName('warehouse')).toBe('analytics warehouse');
+    expect(friendlyDependencyName('lakebase')).toBe('operational database');
+    expect(friendlyDependencyName('genie')).toBe('AI assistant');
+  });
+
+  it('is true for the matching retryable 503 while online (retries_exhausted included)', () => {
+    expect(isBanneredOutage(dependencyDown('warehouse', 'retries_exhausted'), WAREHOUSE_DOWN, 'online')).toBe(true);
+    expect(isBanneredOutage(dependencyDown('warehouse'), WAREHOUSE_DOWN, 'online')).toBe(true);
+    // An open breaker is bannered by its name.
+    expect(isBanneredOutage(dependencyDown('lakebase', 'breaker_open'), BREAKER_OPEN, 'online')).toBe(true);
+  });
+
+  it.each(['offline', 'unreachable', 'session_expired'] as const)('is false while the connection is %s', (connection) => {
+    expect(isBanneredOutage(dependencyDown('warehouse'), WAREHOUSE_DOWN, connection)).toBe(false);
+    expect(blockDefersToBanner('warehouse', WAREHOUSE_DOWN, connection)).toBe(false);
+  });
+
+  it('is false for a non-matching dependency and with no banner', () => {
+    expect(isBanneredOutage(dependencyDown('genie'), WAREHOUSE_DOWN, 'online')).toBe(false);
+    expect(isBanneredOutage(dependencyDown('warehouse'), HEALTHY, 'online')).toBe(false);
+    expect(isBanneredOutage(dependencyDown('warehouse'), null, 'online')).toBe(false);
+  });
+
+  it.each([
+    ['a 403', new ApiError('x', { path: '/x', status: 403, dependency: 'warehouse' })],
+    ['a 422', new ApiError('x', { path: '/x', status: 422, dependency: 'warehouse' })],
+    ['a 429', new ApiError('x', { path: '/x', status: 429, retryable: true, dependency: 'warehouse', reason: 'rate_limited' })],
+    ['a 500', new ApiError('x', { path: '/x', status: 500, dependency: 'warehouse' })],
+    ['a permission_denied 503', new ApiError('x', { path: '/x', status: 503, retryable: false, dependency: 'warehouse', reason: 'permission_denied' })],
+    ['an aborted request', new ApiError('x', { path: '/x', status: 503, retryable: true, dependency: 'warehouse', aborted: true })],
+    ['a plain Error', new Error('warehouse down')],
+  ])('keeps %s red under the matching banner', (_label, error) => {
+    expect(isBanneredOutage(error, WAREHOUSE_DOWN, 'online')).toBe(false);
+  });
+
+  it('defers a block for the bannered dependency, or one that names none', () => {
+    expect(blockDefersToBanner('warehouse', WAREHOUSE_DOWN, 'online')).toBe(true);
+    expect(blockDefersToBanner('Warehouse', WAREHOUSE_DOWN, 'online')).toBe(true);
+    expect(blockDefersToBanner(null, WAREHOUSE_DOWN, 'online')).toBe(true);
+    expect(blockDefersToBanner('lakebase', WAREHOUSE_DOWN, 'online')).toBe(false);
+    expect(blockDefersToBanner('lakebase', BREAKER_OPEN, 'online')).toBe(true);
+    expect(blockDefersToBanner(null, HEALTHY, 'online')).toBe(false);
   });
 });
 

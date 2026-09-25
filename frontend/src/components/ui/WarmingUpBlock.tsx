@@ -1,7 +1,8 @@
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
-import { computeDegraded, useOptionalHealth } from '../HealthProvider';
+import { useOptionalHealth } from '../HealthProvider';
+import { blockDefersToBanner } from '../healthRecovery';
 
 /**
  * WarmingUpBlock — shared presentational component for the cold-start
@@ -63,27 +64,15 @@ export function WarmingUpBlock({
 }: WarmingUpBlockProps) {
   // R6-11 (2026-04-23): on a deep-link cold-start the DegradedBanner,
   // footprint-fallback chip, and this per-route block all fire at once.
-  // If health is already reporting the dependency as down, the banner
-  // is already telling the story — suppress the route-level duplicate
-  // so the page doesn't stack three cold-start affordances. We only
-  // suppress when the block's dependency matches the degraded one
-  // (warehouse/lakebase mapping) so a genuine per-route warm-up still
-  // shows while an unrelated dep is down.
+  // If the banner is already telling this dependency's story, suppress the
+  // route-level duplicate so the page doesn't stack three cold-start
+  // affordances. One shared rule decides (healthRecovery.blockDefersToBanner,
+  // audit states-03 a): the block steps aside exactly when the banner shows
+  // for its dependency (or it named none), so a genuine per-route warm-up
+  // still shows while an unrelated dependency is down.
   const healthCtx = useOptionalHealth();
-  if (healthCtx && computeDegraded(healthCtx.health)) {
-    const deps = healthCtx.health?.dependencies ?? {};
-    const blockDep = (state.dependency ?? '').toLowerCase();
-    const banneredDep =
-      deps.warehouse === 'down'
-        ? 'warehouse'
-        : deps.lakebase === 'down'
-          ? 'lakebase'
-          : null;
-    // If the banner covers the same dep (or the block didn't name one),
-    // the banner's copy is the single source of truth — drop the block.
-    if (!blockDep || blockDep === banneredDep) {
-      return null;
-    }
+  if (healthCtx && blockDefersToBanner(state.dependency, healthCtx.health, healthCtx.connection ?? 'online')) {
+    return null;
   }
   return (
     <div

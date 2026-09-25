@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { ApiError } from '../lib/apiTransport';
 import type { HealthPayload } from '../lib/apiTypes';
+import type { ConnectionStatus } from './connectionState';
 
 /**
  * Health recovery — what the shared health poll does on the
@@ -60,6 +61,77 @@ export function isRecoverableQueryError(error: unknown, recovered: ReadonlySet<s
   if (!(error instanceof ApiError)) return false;
   if (error.aborted || !error.retryable || error.status !== 503) return false;
   return error.dependency !== null && recovered.has(error.dependency.toLowerCase());
+}
+
+/** The health fields the dependency banner reads (any health payload shape). */
+export type DependencyHealth = Pick<Partial<HealthPayload>, 'status' | 'dependencies' | 'circuit_breakers'>;
+
+/**
+ * Map internal Databricks product names → buyer-friendly dependency names.
+ * The degraded banner is surfaced to the business buyer (Head of Growth,
+ * VP Lending), who doesn't know what "lakebase" or "genie" are. Keep the
+ * internal name in `data-degraded-dependency` for ops telemetry; show
+ * the friendly name in the visible title.
+ */
+const FRIENDLY_DEP_NAMES: Record<string, string> = {
+  warehouse: 'analytics warehouse',
+  lakebase: 'operational database',
+  genie: 'AI assistant',
+};
+
+export function friendlyDependencyName(dep: string): string {
+  return FRIENDLY_DEP_NAMES[dep] ?? dep;
+}
+
+export function degradedDependency(health: DependencyHealth | null): string | null {
+  if (!health) return null;
+  const deps = health.dependencies ?? {};
+  if (deps.warehouse === 'down') return 'warehouse';
+  if (deps.lakebase === 'down') return 'lakebase';
+  if (deps.genie === 'down') return 'genie';
+  // Open breaker without a concrete dep ping-down still counts.
+  const breakers = health.circuit_breakers ?? {};
+  for (const [name, state] of Object.entries(breakers)) {
+    if (state === 'open') return name;
+  }
+  return null;
+}
+
+/**
+ * The bannered-outage rule (audit states-03 part a): ONE answer, shared by
+ * every surface, to "is the DegradedBanner already telling this story?".
+ * The banner shows exactly when the connection is online and
+ * `degradedDependency` names a dependency, so a surface defers to it only
+ * then. A `status: 'degraded'` payload with every dependency up and no open
+ * breaker shows no banner, and so hides nothing.
+ */
+
+/** True when a WarmingUpBlock for `dependency` should step aside for the banner. */
+export function blockDefersToBanner(
+  dependency: string | null | undefined,
+  health: DependencyHealth | null,
+  connection: ConnectionStatus,
+): boolean {
+  if (connection !== 'online') return false;
+  const bannered = degradedDependency(health);
+  return bannered !== null && (!dependency || dependency.toLowerCase() === bannered);
+}
+
+/**
+ * True when `error` is the bannered outage itself: exactly the errors
+ * `refetchRecoveredQueries` re-fetches when that dependency comes back, so a
+ * panel that says "reloads when … reconnects" is true by construction. A
+ * permission_denied 503, a 403/404/409/422/429/500, an abort or another
+ * dependency's failure is not, and keeps its own (red) error.
+ */
+export function isBanneredOutage(
+  error: unknown,
+  health: DependencyHealth | null,
+  connection: ConnectionStatus,
+): boolean {
+  if (connection !== 'online') return false;
+  const bannered = degradedDependency(health);
+  return bannered !== null && isRecoverableQueryError(error, new Set([bannered]));
 }
 
 /** Refetch the mounted queries that failed because of a now-recovered dependency. */

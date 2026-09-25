@@ -7,8 +7,13 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from '../Icon';
 import { useOptionalHealth } from '../HealthProvider';
 import type { ConnectionStatus } from '../connectionState';
+import { degradedDependency, friendlyDependencyName } from '../healthRecovery';
 import { SessionExpiredDialog } from '../layout/SessionExpiredDialog';
 import { apiPath } from '../../lib/apiPaths';
+
+// Moved to healthRecovery.ts (audit states-03 part a): the banner and every
+// surface that defers to it read one rule.
+export { degradedDependency };
 
 /**
  * DegradedBanner — Slice-6 resilience surface.
@@ -81,37 +86,6 @@ async function defaultFetchHealth(): Promise<HealthPayload> {
     };
   }
   return (await res.json()) as HealthPayload;
-}
-
-/**
- * Map internal Databricks product names → buyer-friendly dependency names.
- * The degraded banner is surfaced to the business buyer (Head of Growth,
- * VP Lending), who doesn't know what "lakebase" or "genie" are. Keep the
- * internal name in `data-degraded-dependency` for ops telemetry; show
- * the friendly name in the visible title.
- */
-const FRIENDLY_DEP_NAMES: Record<string, string> = {
-  warehouse: 'analytics warehouse',
-  lakebase: 'operational database',
-  genie: 'AI assistant',
-};
-
-function friendlyDependencyName(dep: string): string {
-  return FRIENDLY_DEP_NAMES[dep] ?? dep;
-}
-
-export function degradedDependency(health: HealthPayload | null): string | null {
-  if (!health) return null;
-  const deps = health.dependencies ?? {};
-  if (deps.warehouse === 'down') return 'warehouse';
-  if (deps.lakebase === 'down') return 'lakebase';
-  if (deps.genie === 'down') return 'genie';
-  // Open breaker without a concrete dep ping-down still counts.
-  const breakers = health.circuit_breakers ?? {};
-  for (const [name, state] of Object.entries(breakers)) {
-    if (state === 'open') return name;
-  }
-  return null;
 }
 
 /**
