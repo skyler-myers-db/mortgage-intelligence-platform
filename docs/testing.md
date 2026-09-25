@@ -17,6 +17,22 @@
 - Approval writes audit.
 - Genie fallback.
 
+### Real-PostgreSQL contracts
+
+Two suites run the ACTUAL SQL and DDL against a disposable PostgreSQL when `MIP_TEST_POSTGRES_DSN` names one, and skip otherwise: `tests/integration/test_genie_completion_jobs_postgres.py` (the Genie completion-job store, 8 tests) and `tests/integration/test_lakebase_schema_upgrade.py` (the Lakebase migration, 11 tests). In CI the `backend-tests` job runs a pinned `postgres:16.15-bookworm` service (by digest; 16 is assumed to be the Lakebase default major) with trust auth, and only the step "pytest (real PostgreSQL contracts, serial)" gets the DSN; the parallel step never does, so the suites skip there. That step revokes PostgreSQL's default PUBLIC privileges on schema `public` first (the dedicated Lakebase database's posture, which the migration closes itself where the provider schema exists), runs every DSN suite with `-n 0`, and fails when the junit report shows zero tests or any skip. A new DSN suite named `tests/integration/test_*_postgres.py` is picked up automatically; `tests/unit/test_ci_postgres_contracts.py` fails if any file under `tests/` reads the DSN but falls outside the step. Its shrink-only `KNOWN_UNRUN_DSN_SUITES` lists what the step does not gate on (each node id is deselected and re-run last, and a pass fails the step as a stale entry); never add to it to go green.
+
+Run them locally on a unique port, never 5432 on a shared machine:
+
+```bash
+docker run --rm -d --name mip-pg-$USER -e POSTGRES_HOST_AUTH_METHOD=trust -p 5439:5432 postgres:16.15-bookworm
+psql 'host=127.0.0.1 port=5439 dbname=postgres user=postgres' -c 'REVOKE ALL ON SCHEMA public FROM PUBLIC'
+MIP_TEST_POSTGRES_DSN='host=127.0.0.1 port=5439 dbname=postgres user=postgres' \
+  pytest -n 0 -rs tests/integration/test_*_postgres.py tests/integration/test_lakebase_schema_upgrade.py
+docker rm -f mip-pg-$USER
+```
+
+`-n 0` is required, and the two suites must never run concurrently: both `DROP SCHEMA mip_app CASCADE` and recreate it in the same database. Point the DSN only at a throwaway database.
+
 ## E2E tests
 
 Playwright path:

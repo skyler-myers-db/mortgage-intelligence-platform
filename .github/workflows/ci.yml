@@ -40,7 +40,28 @@ jobs:
   backend-tests:
     name: backend (ruff + pytest)
     runs-on: ubuntu-latest
+    # 15 still holds with the Postgres service: the base job took 7m36s (run
+    # 36123325650) and the serial contract step ~31 s locally (19 tests).
     timeout-minutes: 15
+    services:
+      # Disposable PostgreSQL for the DSN-gated real-SQL contracts (audit
+      # genie-01 item 4); only the serial step below is given its DSN.
+      # PostgreSQL 16 is assumed to be the Lakebase default major
+      # (databricks.yml sets no pg_version). Pinned by tag AND index digest,
+      # verified in the registry on 2026-09-25. Trust auth on a throwaway
+      # service: there is no password literal (nothing secret, nothing for
+      # gitleaks).
+      postgres:
+        image: postgres:16.15-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -79,6 +100,64 @@ jobs:
             --cov-report=xml:coverage.xml \
             --cov-report=html:coverage/html \
             --cov-fail-under=83
+      - name: pytest (real PostgreSQL contracts, serial)
+        # The suites that read MIP_TEST_POSTGRES_DSN run the real SQL and DDL
+        # against the service above; the parallel step never sees the DSN,
+        # so they skip there. `-n 0` is required: every one of them
+        # DROPs/CREATEs mip_app in the same database. Before pytest, the
+        # database takes the dedicated Lakebase database's posture: the
+        # migration closes the default PUBLIC USAGE on schema public (see
+        # jobs/lakebase_migration_acl.py), a step the suites skip with
+        # allow_absent_provider_schema on vanilla PostgreSQL. KNOWN_UNRUN is
+        # shrink-only and pinned by tests/unit/test_ci_postgres_contracts.py:
+        # each entry is deselected here, re-run last, and must still fail
+        # (a pass is a stale entry and fails this step). The junit check
+        # makes "ran, not skipped" a gate.
+        env:
+          MIP_TEST_POSTGRES_DSN: 'host=127.0.0.1 port=5432 dbname=postgres user=postgres'
+          KNOWN_UNRUN: tests/integration/test_lakebase_schema_upgrade.py::test_campaign_treatment_state_machine_freezes_ready_proof
+        run: |
+          python - <<'PY'
+          import os
+
+          import psycopg
+
+          dsn = os.environ.get("MIP_TEST_POSTGRES_DSN")
+          if dsn:  # without a DSN every suite skips and the junit check fails the step
+              with psycopg.connect(dsn, autocommit=True) as conn:
+                  conn.execute("REVOKE ALL ON SCHEMA public FROM PUBLIC")
+          PY
+          deselect=()
+          for node in $KNOWN_UNRUN; do deselect+=(--deselect "$node"); done
+          pytest -q -n 0 -rs --junitxml=postgres-contracts.xml "${deselect[@]}" \
+            tests/integration/test_*_postgres.py tests/integration/test_lakebase_schema_upgrade.py
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("postgres-contracts.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          tests = sum(int(suite.get("tests", 0)) for suite in suites)
+          skipped = sum(int(suite.get("skipped", 0)) for suite in suites)
+          print(f"real PostgreSQL contracts: {tests} tests, {skipped} skipped")
+          if tests == 0 or skipped > 0:
+              print("::error::the real-PostgreSQL contracts must run, not skip (is the DSN wired?)")
+              sys.exit(1)
+          PY
+          for node in $KNOWN_UNRUN; do
+            set +e
+            pytest -q -n 0 -p no:cacheprovider "$node"
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "::error::$node now passes: remove its KNOWN_UNRUN entry here and in tests/unit/test_ci_postgres_contracts.py"
+              exit 1
+            elif [ "$status" -ne 1 ]; then
+              echo "::error::the KNOWN_UNRUN re-run of $node could not execute (pytest exit $status)"
+              exit 1
+            fi
+            echo "::warning::known real-PostgreSQL failure, owner lane to fix: $node"
+          done
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v7
