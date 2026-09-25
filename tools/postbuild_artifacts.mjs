@@ -28,10 +28,10 @@
 // Wired into `npm --prefix frontend run build` between `vite build` and
 // tools/precompress_assets.mjs. Node built-ins only.
 // ---------------------------------------------------------------------------
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export { initialClosure } from './build_manifest.mjs';
 
@@ -131,6 +131,9 @@ function main() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.join(repoRoot, 'tools', 'postbuild_artifacts.mjs')) {
+// Main-module guard, realpath-safe (audit bundle-08 item 2): Node runs a
+// symlinked script under its real path, so comparing path.resolve(argv[1])
+// silently skipped the gate (exit 0) when invoked through a symlink.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main();
 }
