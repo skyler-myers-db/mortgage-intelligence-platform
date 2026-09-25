@@ -19,9 +19,14 @@ import './AsyncState.css';
  *     chip. A 429's Retry is aria-disabled (never native disabled) while it
  *     counts the server's wait down, and live at zero.
  *
- * DescribedError reads `describeApiError` from this same chunk.
+ * DescribedErrorBody (DescribedError.tsx) renders `FailureBody` from this
+ * same chunk.
  */
-export { describeApiError };
+
+/** A failure's describeApiError body sentence, for DescribedErrorBody. */
+export function FailureBody({ error, subject }: { error: unknown; subject: string }) {
+  return describeApiError(error, { subject }).body;
+}
 
 export interface AsyncFailureProps {
   error: Error;

@@ -104,7 +104,8 @@ describe('WarmingUpBlock', () => {
   it('puts the correlation id behind a Details disclosure with a Copy button, not in the footer', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-    act(() => root.render(<WarmingUpBlock state={warming({ correlationId: 'corr-warm-7' })} />));
+    // The disclosure is a lazy part of the block: let it resolve.
+    await act(async () => root.render(<WarmingUpBlock state={warming({ correlationId: 'corr-warm-7' })} />));
     const details = block()?.querySelector('details');
     expect(details?.querySelector('summary')?.textContent).toBe('Details');
     expect(details?.querySelector('[data-testid="warming-up-reference"]')?.textContent).toBe('corr-warm-7');

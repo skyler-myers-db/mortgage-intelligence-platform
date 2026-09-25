@@ -10,12 +10,11 @@
  * explorer expands and scrolls into view on arrival; and the current page
  * downloads as CSV.
  */
-import { useRef, useState } from 'react';
+import { lazy, Suspense, useRef, useState, type ComponentType } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
-import { DescribedErrorBody as ErrorBody } from '../ui/DescribedError';
 import { api, type AuditEventPage } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
@@ -33,6 +32,34 @@ import {
 } from './AdminAuditExplorer.params';
 import { AUDIT_TABLE_CONTEXT, AuditEventTableRow, formatAuditTimestamp } from './AdminAuditExplorer.row';
 import { formatCount } from '../../lib/formatters';
+
+interface ErrorBodyProps {
+  error: unknown;
+  subject: string;
+}
+
+const ERROR_BODY_FALLBACK = 'It could not load.';
+const ErrorBodyFallback = () => ERROR_BODY_FALLBACK;
+type FailureModule = typeof import('../ui/AsyncFailure');
+
+/**
+ * The explorer's failure lines in the shared vocabulary (audit states-04):
+ * DescribedErrorBody's lazy wrapper (components/ui/DescribedError.tsx),
+ * inlined so the admin-config closure does not carry that shared chunk (0.54
+ * KiB br against a route gate with none to spare); same chunk, same fallback.
+ */
+const ErrorBodyLine = lazy<ComponentType<ErrorBodyProps>>(() => (import('../ui/AsyncFailure') as Promise<FailureModule | undefined>).then(
+  (module) => ({ default: module?.FailureBody ?? ErrorBodyFallback }),
+  () => ({ default: ErrorBodyFallback }),
+));
+
+function ErrorBody(props: ErrorBodyProps) {
+  return (
+    <Suspense fallback={ERROR_BODY_FALLBACK}>
+      <ErrorBodyLine {...props} />
+    </Suspense>
+  );
+}
 
 interface AuditRollupRow {
   bucket_start: string;

@@ -1,15 +1,34 @@
+import { lazy, Suspense, type ComponentType } from 'react';
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { useOptionalHealth } from '../HealthProvider';
 import { blockDefersToBanner } from '../healthRecovery';
-import { lazyModule, useLazyModule } from '../mortgage/useLazyModule';
 
-/** The wait clocks and the reference disclosure, loaded with the first warm-up. */
-const WAIT_EXTRAS = lazyModule(() => import('./WarmingUpBlock.wait'));
+type WaitModule = typeof import('./WarmingUpBlock.wait');
 
-/** Load the clocks ahead of need (a server render, a test); later mounts render them at once. */
-export const preloadWarmingExtras = (): Promise<unknown> => WAIT_EXTRAS.load();
+const loadWaitExtras = () => import('./WarmingUpBlock.wait') as Promise<WaitModule | undefined>;
+
+/** Load the clocks ahead of need (a test); the first render still resolves the lazy wrappers. */
+export const preloadWarmingExtras = (): Promise<unknown> => loadWaitExtras();
+
+const NOTHING = () => null;
+
+/**
+ * The wait clocks and the reference disclosure, loaded with the first block
+ * that shows: React.lazy (lazy and Suspense ship with React) keeps them and
+ * any loader helper out of every route's natural-load closure. A chunk that
+ * cannot load shows neither; the cadence line stays.
+ */
+function lazyWaitPart<P extends object>(pick: (module: WaitModule) => ComponentType<P>) {
+  return lazy<ComponentType<P>>(() => loadWaitExtras().then(
+    (module) => ({ default: module ? pick(module) : NOTHING }),
+    () => ({ default: NOTHING }),
+  ));
+}
+
+const WaitLine = lazyWaitPart((module) => module.WaitLine);
+const ReferenceDetails = lazyWaitPart((module) => module.ReferenceDetails);
 
 /**
  * WarmingUpBlock — shared presentational component for the cold-start
@@ -84,8 +103,6 @@ export function WarmingUpBlock({
   const defers = healthCtx
     ? blockDefersToBanner(state.dependency, healthCtx.health, healthCtx.connection ?? 'online')
     : false;
-  // The clocks load only for a block that shows.
-  const extras = useLazyModule(WAIT_EXTRAS, !defers).module;
   if (defers) return null;
   return (
     <div
@@ -122,9 +139,15 @@ export function WarmingUpBlock({
         <div className="warming-block__footer">
           <Icon name="db" size={11} />
           <span className="muted warming-block__meta">{cadenceFor(state.label)}</span>
-          {extras && <extras.WaitLine attempt={state.attempt} intervalMs={state.intervalMs} />}
+          <Suspense fallback={null}>
+            <WaitLine attempt={state.attempt} intervalMs={state.intervalMs} />
+          </Suspense>
         </div>
-        {extras && state.correlationId && <extras.ReferenceDetails reference={state.correlationId} />}
+        {state.correlationId && (
+          <Suspense fallback={null}>
+            <ReferenceDetails reference={state.correlationId} />
+          </Suspense>
+        )}
       </div>
     </div>
   );
