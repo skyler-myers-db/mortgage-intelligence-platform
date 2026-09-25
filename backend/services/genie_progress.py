@@ -45,6 +45,11 @@ from backend.services.repositories.databricks_genie_trust import (
 #: Fifteen minutes covers the longest observed Genie turn (warehouse cold
 #: start included) with margin, while keeping a leaked token short-lived.
 _PROGRESS_TOKEN_TTL_S = 15 * 60
+#: Public name (audit 2026-09-21 genie-01): a completion job's ``expires_at``
+#: is the token's ``exp``, so its answer is served for at most this long, and
+#: the browser's job resume window (genieAsk.ts JOB_RESUME_WINDOW_MS) must
+#: stay inside it.
+GENIE_PROGRESS_TOKEN_TTL_S = _PROGRESS_TOKEN_TTL_S
 
 _PROGRESS_TOKEN_KIND = "genie_progress"
 

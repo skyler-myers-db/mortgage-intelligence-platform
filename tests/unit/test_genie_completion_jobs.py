@@ -442,3 +442,20 @@ def test_each_poll_re_signs_the_same_actions_for_the_polling_actor(monkeypatch: 
     assert first["request_id"] == second["request_id"]
     assert first["confirmation_token"] and second["confirmation_token"]
     assert first["confirmation_token"] != second["confirmation_token"]
+
+
+# ------------------------------------------------ the served-answer window
+
+
+def test_the_browser_resume_window_stays_inside_the_token_that_authorizes_it() -> None:
+    import re
+    from pathlib import Path
+
+    from backend.services.genie_progress import GENIE_PROGRESS_TOKEN_TTL_S
+
+    source = (Path(__file__).resolve().parents[2] / "frontend/src/lib/genieAsk.ts").read_text(encoding="utf-8")
+    match = re.search(r"export const JOB_RESUME_WINDOW_MS = (\d+) \* 60_000;", source)
+    assert match is not None
+    resume_window_s = int(match.group(1)) * 60
+    assert GENIE_PROGRESS_TOKEN_TTL_S == 15 * 60
+    assert 0 < resume_window_s < GENIE_PROGRESS_TOKEN_TTL_S
