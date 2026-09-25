@@ -225,6 +225,9 @@
   color: var(--text-2);
   cursor: pointer;
   border-radius: var(--r-sm);
+  /* Selecting a tab eases its fill and ink instead of snapping (2026-09-21
+     audit motion-08, tab slice; additive to the prototype's .layout-tabs). */
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .drawer__tab:hover { color: var(--text-1); }
 .drawer__tab:active { translate: 0 var(--pressed-shift); }
@@ -393,7 +396,7 @@
 .proof-drawer__body,.proof-components,.proof-branches{display:flex;flex-direction:column;gap:var(--sp-3)}
 .proof-tabs,.proof-status-row,.proof-component__meta,.proof-evidence-row__meta,.proof-component__fields{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
 .proof-tabs{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--line-1);overflow-x:auto}
-.proof-tab{display:inline-flex;align-items:center;gap:var(--sp-2);min-block-size:var(--sp-8);padding:0 var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-12);cursor:pointer}
+.proof-tab{display:inline-flex;align-items:center;gap:var(--sp-2);min-block-size:var(--sp-8);padding:0 var(--sp-3);border:1px solid var(--line-1);border-radius:var(--r-md);background:var(--bg-2);color:var(--text-2);font-family:var(--font-mono);font-size:var(--fs-12);cursor:pointer;transition:background-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
 /* Hover and focus take a lighter step than the selected tab, so neither can be mistaken for it (audit motion-09); the selected rule comes after at equal specificity, so hovering the selected tab keeps it selected. Focus also keeps the global ring. */
 .proof-tab:hover,.proof-tab:focus-visible{border-color:var(--line-3);color:var(--text-1);background:var(--bg-3)}
 .proof-tab.is-active{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}

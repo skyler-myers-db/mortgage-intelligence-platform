@@ -117,6 +117,16 @@ describe('the borrower offer mock is a modal dialog with the prototype scrim as 
   });
 });
 
+describe('drawer and proof tabs ease their selection (motion-08, tab slice)', () => {
+  it('transitions the tab fill and ink on --dur-fast / --ease', () => {
+    for (const selector of ['.drawer__tab', '.proof-tab']) {
+      expect(block(selector), selector).toMatch(
+        /transition:\s*background-color var\(--dur-fast\) var\(--ease\),\s*color var\(--dur-fast\) var\(--ease\)/,
+      );
+    }
+  });
+});
+
 describe('the z-index tiers the top layer replaced', () => {
   const RETIRED = ['--z-drawer-scrim', '--z-drawer', '--z-palette', '--z-modal'];
 
