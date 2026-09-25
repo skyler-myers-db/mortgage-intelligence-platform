@@ -2,7 +2,9 @@
 
 The status poll carries ``typical_seconds``: the median time from job
 creation to the governed record (``recorded_at``) over the last 14 days'
-recorded jobs of the same class, deep sweep or single turn, newest 200. It
+recorded jobs of the same class, deep sweep or single turn, newest 200. Only
+a job that delivered its answer (``succeeded``) is a sample: one that failed
+or expired after its commit point never reached the user. It
 is a hint, not a promise, so it is published only with at least
 ``MIN_SAMPLES`` samples, clamped to 1..3600 s, and cached per client and
 class. The aggregate spans all actors and returns one number: no identity
@@ -39,6 +41,7 @@ SELECT count(*) AS samples,
         SELECT EXTRACT(EPOCH FROM recorded_at - created_at) AS seconds
           FROM mip_app.genie_completion_jobs
          WHERE recorded_at IS NOT NULL
+           AND status = 'succeeded'
            AND deep = %(deep)s
            AND created_at > now() - interval '14 days'
          ORDER BY created_at DESC

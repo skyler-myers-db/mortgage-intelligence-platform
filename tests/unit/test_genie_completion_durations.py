@@ -81,6 +81,22 @@ def test_the_classes_are_separate_and_older_rows_do_not_count() -> None:
     assert durations.typical_completion_seconds(lakebase, deep=True) == 170
 
 
+def test_only_delivered_answers_are_samples() -> None:
+    # A job that failed or expired AFTER its commit point has recorded_at
+    # set but never reached the user: it is not a sample.
+    lakebase = FakeJobLakebase()
+    _recorded(lakebase, 40, count=19)
+    created = lakebase.now - timedelta(minutes=5)
+    for status in ("failed", "expired") * 15:
+        lakebase.insert_row(status=status, stage=status, deep=False, created_at=created, recorded_at=created + timedelta(seconds=900))
+
+    assert durations.typical_completion_seconds(lakebase, deep=False) is None
+
+    durations._reset_for_tests()
+    _recorded(lakebase, 40)
+    assert durations.typical_completion_seconds(lakebase, deep=False) == 40
+
+
 @pytest.mark.parametrize(("seconds", "expected"), [(12.4, 12), (12.6, 13), (0.2, 1), (5000.0, 3600)])
 def test_the_median_is_rounded_and_clamped(seconds: float, expected: int) -> None:
     lakebase = FakeJobLakebase()

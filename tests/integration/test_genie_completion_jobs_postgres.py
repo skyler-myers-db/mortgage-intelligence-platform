@@ -479,3 +479,28 @@ def test_the_durations_query_is_the_recent_class_median(pg: _PgLakebase) -> None
 
     assert deep == 119  # median of 100, 102, ..., 138
     assert single is None
+
+
+def test_the_durations_query_samples_only_delivered_answers(pg: _PgLakebase) -> None:
+    durations._reset_for_tests()
+    for index in range(durations.MIN_SAMPLES):
+        job_id = _enroll(pg, message_id=f"ok-{index}").job.job_id
+        pg.sql(
+            "UPDATE mip_app.genie_completion_jobs SET status = 'succeeded', stage = 'done', deep = true, "
+            "recorded_at = created_at + interval '60 seconds' WHERE job_id = %s::uuid",
+            (job_id,),
+        )
+    # Recorded, then failed or expired after the commit point: never delivered.
+    for index, status in enumerate(("failed", "expired") * 15):
+        job_id = _enroll(pg, message_id=f"lost-{index}").job.job_id
+        pg.sql(
+            "UPDATE mip_app.genie_completion_jobs SET status = %s, stage = %s, deep = true, "
+            "recorded_at = created_at + interval '900 seconds' WHERE job_id = %s::uuid",
+            (status, status, job_id),
+        )
+    try:
+        typical = durations.typical_completion_seconds(pg, deep=True)  # type: ignore[arg-type]
+    finally:
+        durations._reset_for_tests()
+
+    assert typical == 60
