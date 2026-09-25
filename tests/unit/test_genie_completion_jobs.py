@@ -9,16 +9,18 @@ runs, a job-less async complete refused (a legacy one inline), canned
 failure hints only, and a stored
 result that holds neither the question nor any live authorization.
 
-Audit genie-03: the heartbeat marks a cancel another
+Audit genie-03 / genie-01 risk 4: the heartbeat marks a cancel another
 process accepted, a cancel-requested job is never claimed, a table without
-the 2026_09_25 columns completes inline, and the submit-time deep flag is
-stored.
+the 2026_09_25 columns completes inline, the submit-time deep flag is
+stored, and a retry adopts (once) a queued job this process created but
+never ran.
 """
 
 from __future__ import annotations
 
 import json
 import threading
+import time
 from typing import Any
 
 import pytest
@@ -599,3 +601,79 @@ def test_the_submit_time_deep_flag_is_stored_on_the_job(monkeypatch: Any, questi
 
     assert lakebase.only_job()["deep"] is deep
 
+
+# --------------------------------------------------- risk 4 (genie-01)
+
+
+def test_a_retry_adopts_this_process_untracked_queued_job_and_runs_it_once(monkeypatch: Any) -> None:
+    # The creating request inserted the row and failed before enqueueing it.
+    client, repo, audit, lakebase = _setup(monkeypatch)
+    row = _seed_own_job(lakebase, lease_owner=jobs.PROCESS_ID)
+
+    res = post_complete(client)
+    job = wait_for_job(lakebase)
+
+    assert res.status_code == 202
+    assert res.json()["job_id"] == row["job_id"]
+    assert job["status"] == "succeeded"
+    assert "insert" in lakebase.job_statements and "select_turn" in lakebase.job_statements
+    assert lakebase.job_statements.count("claim") == 1
+    assert len(repo.calls) == 1
+    assert len(audit.run_query_rows()) == 1
+
+
+@pytest.mark.parametrize("case", ["tracked", "other_process", "cancel_requested"])
+def test_a_job_that_is_running_elsewhere_or_stopped_is_never_adopted(monkeypatch: Any, case: str) -> None:
+    client, repo, _audit, lakebase = _setup(monkeypatch)
+    owner = "other-process" if case == "other_process" else jobs.PROCESS_ID
+    row = _seed_own_job(lakebase, lease_owner=owner)
+    if case == "cancel_requested":
+        lakebase.rows[row["job_id"]].update(cancel_requested_at=lakebase.now, status="cancelled", stage="cancelled")
+    if case == "tracked":
+        jobs.HEARTBEAT.track(row["job_id"], lakebase)
+    try:
+        res = post_complete(client)
+    finally:
+        if case == "tracked":
+            jobs.HEARTBEAT.untrack(row["job_id"])
+
+    assert res.status_code == 202
+    assert "claim" not in lakebase.job_statements
+    assert repo.calls == []
+
+
+def test_two_adopters_of_one_job_give_one_claim_and_keep_its_lease_until_both_end(monkeypatch: Any) -> None:
+    gate = threading.Event()
+    _client, repo, audit, lakebase = _setup(monkeypatch, gate=gate)
+    row = _seed_own_job(lakebase, lease_owner=jobs.PROCESS_ID)
+    job = jobs._job_from_row(lakebase._view(lakebase.rows[row["job_id"]]))
+    turn = runner.GovernedTurn(
+        actor=ACTOR,
+        question=QUESTION,
+        conversation_id=CONV,
+        message_id=MSG,
+        live_campaign_run_marker=None,
+        repo=repo,  # type: ignore[arg-type]
+        audit=audit,  # type: ignore[arg-type]
+        lakebase=lakebase,  # type: ignore[arg-type]
+    )
+
+    assert jobs.adoptable(job)
+    runner.run_completion_job(turn, job, slot=None, correlation_id="adopt-1")
+    runner.run_completion_job(turn, job, slot=None, correlation_id="adopt-2")
+    assert repo.started.wait(10)
+    # The claim loser has ended; the claimant still holds the lease.
+    deadline = time.monotonic() + 10
+    while lakebase.job_statements.count("claim") < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert row["job_id"] in jobs.HEARTBEAT.tracked()
+    assert not jobs.adoptable(job)
+    gate.set()
+    done = wait_for_job(lakebase)
+
+    assert done["status"] == "succeeded"
+    assert lakebase.job_statements.count("claim") == 2
+    assert len(repo.calls) == 1
+    assert len(audit.run_query_rows()) == 1
+    runner._reset_executor_for_tests()
+    assert row["job_id"] not in jobs.HEARTBEAT.tracked()

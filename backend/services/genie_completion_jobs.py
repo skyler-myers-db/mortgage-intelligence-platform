@@ -415,6 +415,22 @@ def claim(lakebase: LakebaseClient, job_id: str) -> bool:
     return row is not None
 
 
+def adoptable(job: GenieCompletionJob) -> bool:
+    """A joined job nobody runs: queued, leased to THIS process, untracked.
+
+    Its creating request inserted the row and then failed before enqueueing
+    it (genie-01 risk 4); the retry runs it. A double enqueue is harmless:
+    ``claim`` is a compare-and-set, so exactly one runner claims it.
+    """
+
+    return (
+        job.status is GenieJobStatus.QUEUED
+        and job.lease_owner == PROCESS_ID
+        and not job.cancel_requested
+        and job.job_id not in HEARTBEAT.tracked()
+    )
+
+
 # ----------------------------------------------------------------- cancels
 
 
@@ -447,17 +463,21 @@ CANCELS = _CancelMarks()
 
 
 class _Heartbeat:
-    """Renews this process's leases; one daemon thread, started on demand."""
+    """Renews this process's leases; one daemon thread, started on demand.
+    Tracking is counted: a job adopted twice keeps its lease until both
+    runners (the claimant and the claim loser) untracked it."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._jobs: dict[str, LakebaseClient] = {}
+        self._refs: dict[str, int] = {}
         self._thread: threading.Thread | None = None
         self._wake = threading.Event()
 
     def track(self, job_id: str, lakebase: LakebaseClient) -> None:
         with self._lock:
             self._jobs[job_id] = lakebase
+            self._refs[job_id] = self._refs.get(job_id, 0) + 1
             if self._thread is None or not self._thread.is_alive():
                 self._thread = threading.Thread(
                     target=self._loop, name="genie-job-heartbeat", daemon=True
@@ -466,7 +486,11 @@ class _Heartbeat:
 
     def untrack(self, job_id: str) -> None:
         with self._lock:
-            self._jobs.pop(job_id, None)
+            refs = self._refs.pop(job_id, 1) - 1
+            if refs > 0:
+                self._refs[job_id] = refs
+            else:
+                self._jobs.pop(job_id, None)
 
     def tracked(self) -> set[str]:
         with self._lock:
@@ -703,6 +727,7 @@ __all__ = [
     "STAGE_WRITER",
     "GenieCompletionJob",
     "JobEnrollment",
+    "adoptable",
     "claim",
     "completion_jobs_available",
     "create_or_join",

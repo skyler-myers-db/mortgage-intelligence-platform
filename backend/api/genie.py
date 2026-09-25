@@ -52,6 +52,7 @@ from backend.services.genie_client import (
 from backend.services.genie_completion_cancel import GenieCancelRequest, request_cancel
 from backend.services.genie_completion_delivery import job_status
 from backend.services.genie_completion_jobs import (
+    adoptable,
     completion_jobs_available,
     create_or_join,
     job_turn_ids_eligible,
@@ -629,8 +630,13 @@ def genie_message_complete(
         expires_at_epoch=int(claims.get("exp") or 0),
         deep=genie_turn_is_deep(payload.question),
     )
+    # Risk 4 (genie-01): a queued job this process created but never ran (its
+    # creating request failed before enqueueing it) is run by the retry.
+    run_here = enrollment.created or adoptable(enrollment.job)
+    if run_here and not enrollment.created:
+        emit(log, "genie_job_enqueued", dependency="lakebase", outcome="adopted", job_id=enrollment.job.job_id)
     if payload.respond_async:
-        if enrollment.created:
+        if run_here:
             run_completion_job(
                 turn,
                 enrollment.job,
@@ -644,7 +650,7 @@ def genie_message_complete(
             live_campaign_run_marker=live_campaign_run_marker,
         )
         return JSONResponse(status_code=202, content=status.model_dump(mode="json"))
-    if enrollment.created:
+    if run_here:
         return run_inline_job(turn, enrollment.job)
     return await_joined_job(turn, enrollment.job)
 
