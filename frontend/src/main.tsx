@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router/dom";
 import { createAppRouter } from "./appRouter";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { seedBootQueries } from "./lib/bootPrime";
 import { installClientErrorListeners, rootErrorOptions } from "./lib/clientErrorLog";
 import { hasRenderBlockedChunkLoad } from "./lib/lazyPreload";
 import { createMipQueryClient } from "./lib/queryClient";
@@ -19,6 +20,11 @@ import "./design-system/print.css";
 installClientErrorListeners();
 
 const queryClient = createMipQueryClient();
+
+// The shell's session, config-options and footprint queries start now,
+// before render, consuming the reads the boot module (src/boot/primeBoot)
+// already started beside this chunk; every provider joins them (lib/bootPrime).
+seedBootQueries(queryClient);
 
 // A data router with one catch-all route around the unchanged <Routes> tree
 // in app.tsx, so the unsaved-changes guard can use useBlocker (audit

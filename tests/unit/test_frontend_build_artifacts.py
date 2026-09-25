@@ -140,6 +140,35 @@ def test_chunk_modules_key_node_modules_ids_by_package_path() -> None:
     assert sorted(module for module in ids if module.startswith(("../", "/"))) == []
 
 
+_MODULE_SCRIPT = re.compile(r'<script type="module" crossorigin src="/(assets/[^"]+\.js)"></script>')
+
+
+def _module_scripts(html: str) -> list[str]:
+    return _MODULE_SCRIPT.findall(html)
+
+
+def _built_manifest() -> dict[str, dict[str, object]]:
+    manifest_file = FRONTEND / "build-meta" / "build-manifest.json"
+    if not manifest_file.is_file():
+        _skip_unless_required("frontend/build-meta is not built in this checkout")
+    return json.loads(manifest_file.read_text(encoding="utf-8"))
+
+
+def test_built_html_loads_the_boot_module_just_before_the_entry() -> None:
+    """Audit ``bundle-02``: the boot module starts the four non-audited boot
+    reads while the entry downloads. No inline script, no fetch preload."""
+    _built_entry_chunk()
+    manifest = _built_manifest()
+    boot = manifest["src/boot/primeBoot.ts"]["file"]
+    entry = manifest["index.html"]["file"]
+    html = (DIST / "index.html").read_text(encoding="utf-8")
+
+    assert _module_scripts(html) == [boot, entry]
+    assert html.index(f'src="/{boot}"') < html.index(f'src="/{entry}"')
+    assert re.search(r"<script(?![^>]*\bsrc=)[^>]*>", html) is None, "no inline script (CSP script-src 'self')"
+    assert 'as="fetch"' not in html
+
+
 def _missing_build_outcome() -> str:
     """How a missing build ends a test: 'skip' or 'fail' (never both)."""
     try:

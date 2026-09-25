@@ -54,6 +54,10 @@ const tools = {
   postbuildInitialClosure: postbuildTool.initialClosure as (manifest: Manifest) => Closure,
 };
 
+/** The boot module's manifest entry as the real build writes it (audit bundle-02): a leaf. */
+const BOOT_KEY = 'src/boot/primeBoot.ts';
+const BOOT_ENTRY: ManifestChunk = { file: 'assets/boot-P.js', name: 'boot', src: BOOT_KEY, isEntry: true };
+
 /**
  * index.html statically imports a shared vendor-ish chunk (which has its own
  * CSS) and lazily imports two routes. `lead` statically imports a table
@@ -85,20 +89,21 @@ function syntheticManifest(): Manifest {
       imports: ['index.html', '_shared-B.js'],
     },
     'src/lib/rum.ts': { file: 'assets/rum-F.js', src: 'src/lib/rum.ts', isDynamicEntry: true, imports: ['index.html'] },
+    [BOOT_KEY]: { ...BOOT_ENTRY },
   };
 }
 
 const DIST_FILES = [
   'assets/index-A.js', 'assets/index-A.css', 'assets/shared-B.js', 'assets/shared-B.css',
   'assets/lead-C.js', 'assets/lead-C.css', 'assets/table-D.js', 'assets/table-D.css',
-  'assets/home-E.js', 'assets/rum-F.js',
+  'assets/home-E.js', 'assets/rum-F.js', 'assets/boot-P.js',
 ];
 
 describe('initial closure (manifest maths)', () => {
   it('is the entry plus its static imports and never follows dynamicImports', () => {
     const closure = tools.initialClosure(syntheticManifest());
     expect(closure.entry).toBe('index.html');
-    expect(closure.js.sort()).toEqual(['assets/index-A.js', 'assets/shared-B.js']);
+    expect(closure.js.sort()).toEqual(['assets/boot-P.js', 'assets/index-A.js', 'assets/shared-B.js']);
     expect(closure.js).not.toContain('assets/lead-C.js');
     expect(closure.js).not.toContain('assets/rum-F.js');
   });
@@ -111,10 +116,40 @@ describe('initial closure (manifest maths)', () => {
     expect(tools.postbuildInitialClosure(syntheticManifest())).toEqual(tools.initialClosure(syntheticManifest()));
   });
 
-  it('refuses a manifest without exactly one entry', () => {
+  it('refuses a manifest without exactly the two entries, index.html and the boot module', () => {
+    const third = syntheticManifest();
+    third['src/routes/home.tsx'].isEntry = true;
+    expect(() => tools.initialClosure(third)).toThrow(/exactly two entries/);
+    const noBoot = syntheticManifest();
+    delete noBoot[BOOT_KEY];
+    expect(() => tools.initialClosure(noBoot)).toThrow(/exactly two entries/);
+    const renamed = syntheticManifest();
+    renamed['src/boot/other.ts'] = { ...BOOT_ENTRY, src: 'src/boot/other.ts' };
+    delete renamed[BOOT_KEY];
+    expect(() => tools.initialClosure(renamed)).toThrow(/exactly two entries/);
+  });
+
+  it('counts the boot module in the initial closure (the budget measures it) and in no route closure', () => {
+    const closure = tools.initialClosure(syntheticManifest());
+    expect(closure.js).toContain('assets/boot-P.js');
+    expect(closure.keys).toContain(BOOT_KEY);
+    const routeFiles = Object.values(tools.routeClosures(syntheticManifest())).flatMap((route) => route.js);
+    expect(routeFiles).not.toContain('assets/boot-P.js');
+  });
+
+  it.each(['imports', 'dynamicImports', 'css'] as const)('fails when the boot module has %s', (field) => {
     const manifest = syntheticManifest();
-    manifest['src/routes/home.tsx'].isEntry = true;
-    expect(() => tools.initialClosure(manifest)).toThrow(/exactly one entry/);
+    manifest[BOOT_KEY] = { ...BOOT_ENTRY, [field]: field === 'css' ? ['assets/boot-P.css'] : ['_shared-B.js'] };
+    expect(() => tools.initialClosure(manifest)).toThrow(new RegExp(`boot module .* must have no ${field}`));
+  });
+
+  it('fails when any chunk imports the boot module', () => {
+    const manifest = syntheticManifest();
+    manifest['_shared-B.js'].imports = [BOOT_KEY];
+    expect(() => tools.initialClosure(manifest)).toThrow(/no chunk may import the boot module/);
+    const lazy = syntheticManifest();
+    lazy['src/routes/home.tsx'].dynamicImports = [BOOT_KEY];
+    expect(() => tools.initialClosure(lazy)).toThrow(/imported by: src\/routes\/home.tsx/);
   });
 });
 
@@ -175,6 +210,7 @@ function vendorManifest(): Manifest {
     },
     '_table-D.js': { file: 'assets/table-D.js', name: 'table' },
     '_map-M.js': { file: 'assets/map-M.js', name: 'map' },
+    [BOOT_KEY]: { ...BOOT_ENTRY },
   };
 }
 

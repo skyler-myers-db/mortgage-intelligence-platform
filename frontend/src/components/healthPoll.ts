@@ -3,6 +3,7 @@ import { onlineManager, type QueryClient } from '@tanstack/react-query';
 import { isAbortError, type HealthPayload } from '../lib/api';
 import type { HealthHint } from '../lib/apiTypes';
 import { subscribeNetworkFailures } from '../lib/apiFailure';
+import { readHealthPrime, takeHealthPrime } from '../lib/bootPrime';
 import { healthActorObservation, type ActorIdentity } from '../lib/healthTrust';
 import { isSessionExpired, subscribeSessionStatus } from '../lib/sessionStatus';
 import { recoveredDependencies, refetchRecoveredQueries } from './healthRecovery';
@@ -183,6 +184,7 @@ export function startHealthPoll({
   let cancelled = false;
   let inFlight = false;
   let lastProbeEndedAt = Number.NEGATIVE_INFINITY;
+  let bootPrimeChecked = false;
 
   const isHidden = () =>
     typeof document !== 'undefined' && document.visibilityState === 'hidden';
@@ -247,7 +249,13 @@ export function startHealthPoll({
     inFlight = true;
     const t0 = performance.now();
     try {
-      const rawPayload = await fetchHealth(ctrl.signal, idleHint());
+      // The page's first probe takes the boot module's health prime
+      // (lib/bootPrime) instead of a second request; an unusable or stale
+      // prime falls back to fetchHealth, so the probe still happens once.
+      const prime = bootPrimeChecked ? null : takeHealthPrime();
+      bootPrimeChecked = true;
+      const primed = prime ? await readHealthPrime(prime, () => fetchHealth(ctrl.signal, idleHint())) : null;
+      const rawPayload = primed ? primed.payload : await fetchHealth(ctrl.signal, idleHint());
       if (cancelled) return;
       observeConnection(rawPayload.status !== 'unreachable');
       // Only a trusted observation may say who the actor is (lib/healthTrust):
@@ -255,7 +263,7 @@ export function startHealthPoll({
       // only when the key changes, so the shell's actor effect runs once per change.
       const actor = healthActorObservation(rawPayload);
       if (actor.trusted) setActorIdentity((prior) => (prior !== null && prior.key === actor.key ? prior : { key: actor.key }));
-      const elapsed = Math.round(performance.now() - t0);
+      const elapsed = primed?.probeMs ?? Math.round(performance.now() - t0);
       const { payload, next } = applyDownUpDebounce(
         rawPayload,
         debounceRef.current,
