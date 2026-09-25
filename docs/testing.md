@@ -189,6 +189,26 @@ node tools/react_compiler_coverage.mjs --check tools/react_compiler_allowlist.js
 
 It scans every `.tsx` and `.ts` file under `frontend/src` with the build's compiler options and fails on a bailout in a file the allowlist does not list, on a count above its entry, or on a stale entry (the file is gone, or it improved). Each entry records the counts, the owning finding, an owner and a date. When you fix a bailout, lower its entry in the same change with `--ratchet`, which only ever lowers counts and refuses while anything is unlisted or grown. **Never loosen the allowlist to go green**: fix a new bailout in code (hoist the value block, move the try/finally into a helper). A manual addition needs a finding id and a reviewer sign-off in the commit body. `--write-allowlist <path>` exists only to bootstrap a new list and refuses to overwrite one.
 
+### a11y lint ratchet (oxlint jsx-a11y)
+
+Audit a11y-05 item 2. The pinned `oxlint` (an exact devDependency) runs its built-in jsx-a11y plugin over `frontend/src` with `frontend/.oxlintrc.json`: the plugin list is exactly `["jsx-a11y"]`, every category is `off`, and every jsx-a11y rule the pinned version lists (`oxlint --rules --format json`) is named explicitly, so an oxlint bump cannot widen the gate silently (the tool fails while the installed oxlint lists a rule the config does not name). Test files, `src/test/**` and `src/mocks/**` are ignored. The `frontend-tests` CI job runs it as its own step, and `npm --prefix frontend run lint` runs it last:
+
+```bash
+npm --prefix frontend run lint:a11y     # = node ../tools/oxlint_ratchet.mjs --check oxlint-baseline.json
+```
+
+`frontend/oxlint-baseline.json` records the hits per **file + rule + count**, never by line, so moving code inside a file changes nothing. `--check` fails on an UNLISTED file+rule key, a GROWN count, a STALE entry (a lower count, or no hit left in the file), a baseline recorded with another oxlint version, and any suppression directive. It also fails closed on unparseable output or a config error, on any diagnostic that is not jsx-a11y (config drift), and on a vacuous run (no file linted, or a rule count other than the config enables). It prints the per-rule totals on every run.
+
+- **Fix a new hit in code; never add it.** A new file+rule key or a higher count is fixed in the component, not recorded.
+- **`--ratchet` only lowers.** `node tools/oxlint_ratchet.mjs --ratchet frontend/oxlint-baseline.json` lowers counts, drops files with no hit left and accepts a new `oxlintVersion`; it refuses while anything is unlisted, grown or suppressed. A fix lowers its entry in the same change.
+- **A pure move is governed.** When code moves to a NEW file, `--ratchet ... --moved-from <old> --moved-to <new>` (repeatable) transfers exactly the (rule, count) pairs that went stale in `<old>` to the new file's keys, refuses a move into a file the baseline already lists or a move that carries a new hit, never lets a per-rule total grow, and records the move in the baseline's `policy.moves`.
+- **No suppressions.** Any `oxlint-disable` directive under `frontend/src`, and an `eslint-disable` directive that is bare or names a `jsx-a11y/` rule (oxlint honours ESLint's disable comments too), fails the gate. Suppressions are banned, not ratcheted.
+- **The baseline is a generated artifact.** Never hand-edit or hand-merge it. The integrator re-runs `--ratchet` after each merge; a lane commits only `--ratchet` output, in a separate final commit. `--write-baseline <new path>` exists only to bootstrap and refuses to overwrite.
+
+Rules set to `off`, each with its reason:
+
+- `jsx-a11y/prefer-tag-over-role`: its only remedy swaps a `div role="status|group|dialog|region|img|button"` for a native tag, which contradicts the prototype markup contract (`design_files/Module 0 Prototype.html` renders `div.genie role="dialog"`, `aside.tweaks role="dialog"` and `div.approval role="region"`; `design_files/Design System.html` renders `div.theme-toggle role="group"` and `role="button"` segment cards) and moves BEM selectors and VRT pixels. On 2026-09-25 it reported 159 hits in 81 files (80 of them `role="status"`).
+
 ### Fixture contract (every body against the backend's response model)
 
 `tsc` checks a fixture payload only against the frontend's hand-written types, which can drift from the backend. `tests/unit/test_e2e_fixture_contract.py` closes that gap: every body the harness can serve is validated against the real FastAPI response model of the route the app would call, so a fixture UI cannot pass while the wire contract has moved.

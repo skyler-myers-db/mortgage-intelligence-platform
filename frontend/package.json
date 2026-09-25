@@ -14,7 +14,8 @@
     "budget": "node ../tools/check_frontend_budgets.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
-    "lint": "eslint . --max-warnings 0 && node ../tools/lint_css_literals.mjs && npm run typecheck:e2e-fixture",
+    "lint": "eslint . --max-warnings 0 && node ../tools/lint_css_literals.mjs && npm run typecheck:e2e-fixture && npm run lint:a11y",
+    "lint:a11y": "node ../tools/oxlint_ratchet.mjs --check oxlint-baseline.json",
     "typecheck:e2e-fixture": "tsc -p tests/e2e/fixture/tsconfig.json",
     "e2e": "playwright test",
     "e2e:ci": "playwright test --reporter=list --workers=1",
@@ -47,6 +48,7 @@
     "eslint": "10.2.1",
     "eslint-plugin-react-hooks": "7.1.1",
     "happy-dom": "20.10.3",
+    "oxlint": "1.85.0",
     "typescript": "6.0.3",
     "vite": "8.3.0",
     "vitest": "4.1.11"

@@ -11,6 +11,12 @@ this remediation pass.
 
 - Browser-shipped production dependencies have no known commercial-use license
   blockers.
+- Frontend `npm audit`, 2026-09-25, after the wave-4 test-infra batch
+  (Playwright 1.63.0 and oxlint 1.85.0; no other package moved): 0
+  advisories at any level (0 low, 0 moderate, 0 high, 0 critical) across 251
+  packages, read at both the `--audit-level=high` gate and the advisory
+  `--audit-level=moderate` level. The batch adds oxlint and its 19 optional
+  platform bindings and drops Playwright's nested fsevents (232 -> 251).
 - Frontend `npm audit`, 2026-09-24, after the wave-2 minor dependency batch
   (vitest 4.1.11, React 19.3.0, React Router 8.4.0, Vite 8.3.0,
   @vitejs/plugin-react 6.1.1, @axe-core/playwright 4.13.0,
@@ -93,6 +99,20 @@ a batch lands, check each of these:
   `tests/unit/test_ci_frontend_gates.py`). A Playwright bump moves the image
   in the same change, and the baselines are regenerated once, from that
   bump PR's pinned-image CI renders (never on a developer host).
+- **oxlint is an exact dev pin with platform bindings.** `oxlint` 1.85.0
+  (MIT) runs the jsx-a11y ratchet (`tools/oxlint_ratchet.mjs`, see
+  docs/testing.md). Its native binaries are the `@oxlint/binding-*`
+  packages, declared as optional dependencies (npm installs only the host's
+  one); its optional peers `vite-plus` and `oxlint-tsgolint` are never
+  installed. Refresh the lock with `--package-lock-only` over no
+  `node_modules`: regenerating it over an installed tree can drop the other
+  platforms' optional entries, which
+  `tests/unit/test_supply_chain_licenses.py` catches (the linux-x64-gnu
+  binding CI and the VRT container use, the darwin-arm64 one for local
+  work). An oxlint bump names any new jsx-a11y rule in
+  `frontend/.oxlintrc.json` explicitly and re-runs `node
+  tools/oxlint_ratchet.mjs --ratchet frontend/oxlint-baseline.json`, which
+  records the new version.
 - **typescript-eslint gates TypeScript 7.** typescript-eslint 8.70.1 peers
   `typescript >=4.8.4 <6.1.0`. TypeScript 7 waits until a typescript-eslint
   release admits it; check the peer range with `npm view

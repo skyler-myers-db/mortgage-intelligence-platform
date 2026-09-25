@@ -117,6 +117,15 @@ jobs:
         # above its entry, and on a stale entry (lower it with --ratchet).
         # About 10 s; runs the same compiler options as the production build.
         run: node tools/react_compiler_coverage.mjs --check tools/react_compiler_allowlist.json
+      - name: oxlint jsx-a11y ratchet (audit a11y-05)
+        # Every jsx-a11y rule of the pinned oxlint, named explicitly in
+        # frontend/.oxlintrc.json, over frontend/src, compared with
+        # frontend/oxlint-baseline.json by file + rule + count (never line).
+        # Fails on a new or grown hit, a stale entry (lower it with
+        # --ratchet), a baseline from another oxlint, and any suppression
+        # directive. Its own step so the log names this gate; `npm run lint`
+        # runs it again (under 1 s).
+        run: npm --prefix frontend run lint:a11y
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run test
       - run: npm --prefix frontend run build

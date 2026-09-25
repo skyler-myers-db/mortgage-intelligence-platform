@@ -14,7 +14,9 @@ pinned fail-closed:
 
 Wave 4 (test-infra PR-1) adds: the e2e-visual container and ``MIP_VRT_IMAGE``
 name the image of the exact ``@playwright/test`` pin, and the lock resolves
-the Playwright trio to it.
+the Playwright trio to it; the oxlint jsx-a11y ratchet is its own
+frontend-tests step before ``lint`` and the tail of the ``lint`` chain, with
+an exact pin and a jsx-a11y-only config.
 
 The backend job's Node + ``MIP_REQUIRE_FIXTURE_CONTRACT`` wiring is pinned by
 tests/unit/test_e2e_fixture_contract.py beside the test it serves.
@@ -83,6 +85,43 @@ def test_the_vrt_container_is_the_image_of_the_playwright_pin() -> None:
     lock = json.loads((FRONTEND / "package-lock.json").read_text(encoding="utf-8"))["packages"]
     for name in ("@playwright/test", "playwright", "playwright-core"):
         assert lock[f"node_modules/{name}"]["version"] == pin, f"{name} in the lock is not the {pin} pin"
+
+
+def test_the_oxlint_ratchet_runs_as_its_own_step_before_lint_and_inside_it() -> None:
+    """Audit a11y-05 item 2: the jsx-a11y ratchet is a named CI step and part of `npm run lint`."""
+    steps = _jobs()["frontend-tests"]["steps"]
+    ratchet = _step_index(steps, "npm --prefix frontend run lint:a11y")
+    lint = next(i for i, step in enumerate(steps) if step.get("run") == "npm --prefix frontend run lint")
+
+    assert steps[ratchet]["name"] == "oxlint jsx-a11y ratchet (audit a11y-05)"
+    assert "if" not in steps[ratchet] and "continue-on-error" not in steps[ratchet]
+    assert ratchet < lint
+
+    scripts = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))["scripts"]
+    assert scripts["lint:a11y"] == "node ../tools/oxlint_ratchet.mjs --check oxlint-baseline.json"
+    assert scripts["lint"].endswith(" && npm run lint:a11y")
+    assert (FRONTEND / "oxlint-baseline.json").is_file(), "the ratchet's baseline is committed"
+
+
+def test_oxlint_is_an_exact_pin_and_its_config_names_only_jsx_a11y_rules() -> None:
+    package = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))
+    assert re.fullmatch(r"\d+\.\d+\.\d+", package["devDependencies"]["oxlint"]), "oxlint must be pinned exactly (no ^ or ~)"
+
+    config = json.loads((FRONTEND / ".oxlintrc.json").read_text(encoding="utf-8"))
+    assert config["plugins"] == ["jsx-a11y"]
+    assert set(config["categories"]) == {
+        "correctness", "suspicious", "pedantic", "perf", "style", "restriction", "nursery",
+    }
+    assert set(config["categories"].values()) == {"off"}, "no category may enable a non-jsx-a11y rule"
+    assert config["rules"], "every rule is named explicitly"
+    assert all(rule.startswith("jsx-a11y/") for rule in config["rules"])
+    assert set(config["rules"].values()) <= {"error", "off"}
+
+    # A rule turned off carries its one-line reason in docs/testing.md.
+    testing_doc = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
+    for rule, level in config["rules"].items():
+        if level == "off":
+            assert f"`{rule}`" in testing_doc, f"{rule} is off without a reason in docs/testing.md"
 
 
 def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:
