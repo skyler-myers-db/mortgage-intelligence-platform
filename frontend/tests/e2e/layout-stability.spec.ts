@@ -20,7 +20,11 @@ test.skip(
   !LIVE && !MOCK,
   'Set E2E_LIVE=1 for deployed real-data coverage or E2E_LAYOUT_MOCK=1 for deterministic local coverage.',
 );
-test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
+test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS, contextOptions: { reducedMotion: 'reduce' } });
+// Reduced motion (2026-09-21 audit stack-04 / runtime-10): route and theme
+// changes now run View Transitions where motion is allowed; this spec
+// measures layout, not a transition, so it opts out the way the fixture
+// harness does.
 
 type Box = {
   x: number;

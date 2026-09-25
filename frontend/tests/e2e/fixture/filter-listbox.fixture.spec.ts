@@ -13,7 +13,7 @@
  *    keyboard alone.
  */
 import type { Locator, Page } from '@playwright/test';
-import { asComputedRgb, tokenValue } from './renderedColor';
+import { asComputedRgb, settleTransitions, tokenValue } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
@@ -147,6 +147,10 @@ for (const theme of FIXTURE_THEMES) {
       await expect(second).toHaveAttribute('aria-selected', 'true');
       await expect(search).toHaveAttribute('aria-activedescendant', (await second.getAttribute('id')) ?? 'missing');
       await expect(search, 'focus stays in the input').toBeFocused();
+      // The ring arrives as a (reduced-motion 0.01ms) outline transition from
+      // the UA's 3px medium width; wait it out before reading the width
+      // (css-hygiene review flake).
+      await settleTransitions(second);
       await expectFocusRing(page, second);
       const borrowerId = (await second.locator('.mono').textContent())?.trim() ?? '';
       expect(borrowerId).toMatch(/^B-[0-9A-Z]{13}$/);
@@ -241,3 +245,4 @@ test('Analytics view tabs switch with the arrow keys', async ({ app, page }) => 
   await expect(page).not.toHaveURL(/view=/);
   await app.settle();
 });
+
