@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useEffect, ViewTransition, type ReactElement } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useState, ViewTransition, type ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { RouteErrorBoundary } from './components/ErrorBoundaryRoute';
@@ -23,7 +23,6 @@ import {
 } from './lib/routePreloaders';
 import { api } from './lib/api';
 import { ROUTE_IDS, ROUTES, type RouteId } from './lib/routeMeta';
-import { usePrefersReducedMotion } from './lib/usePrefersReducedMotion';
 import type { SessionResponse } from './types';
 import './app.transitions.css';
 // The evidence hover card's sheet ships with the initial CSS (it was in
@@ -90,6 +89,10 @@ const ROUTE_ELEMENTS = {
 const ROUTE_EXIT_CLASS = 'mip-route-exit';
 const ROUTE_ENTER_CLASS = 'mip-route-enter';
 
+function prefersReducedMotionAtMount(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 /**
  * RouteTransition — the painted route inside a `<ViewTransition>` keyed by
  * `pathname` (2026-09-21 audit stack-04 / motion-03 / runtime-10 / css-10 /
@@ -128,8 +131,11 @@ const ROUTE_ENTER_CLASS = 'mip-route-enter';
  *     enter / exit "none" is not enough: React 19.3 starts a transition for
  *     ANY ViewTransition placement in a transition or retry commit
  *     (react-dom trackEnterViewTransitions), whatever its class, which
- *     measured one call per navigation and one on a cold load. Flipping the
- *     OS setting mid-session therefore remounts the painted route once.
+ *     measured one call per navigation and one on a cold load. The
+ *     preference is read ONCE, at mount: switching the element type later
+ *     would remount the painted route and drop its state (a decision receipt
+ *     vanished when the OS setting flipped). A mid-session switch to reduce
+ *     is honoured by app.transitions.css's reduced-motion belt instead.
  *   - No `viewTransition` option on a Link or navigate(): React Router would
  *     call startViewTransition itself and double the transition.
  *   - Back / Forward swap at once: React renders a transition started inside
@@ -163,7 +169,7 @@ const ROUTE_ENTER_CLASS = 'mip-route-enter';
  */
 function RouteTransition() {
   const { pathname } = useLocation();
-  const reducedMotion = usePrefersReducedMotion();
+  const [reducedMotion] = useState(prefersReducedMotionAtMount);
   const pending = useRoutePending();
   const painted = (
     <div className="route-transition" data-route-path={pathname} aria-busy={pending ? 'true' : undefined}>

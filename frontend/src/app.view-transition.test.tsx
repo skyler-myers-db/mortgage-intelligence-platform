@@ -80,19 +80,32 @@ vi.mock('./lib/routePreloaders', async () => {
   };
 });
 
-function stubReducedMotion(reduce: boolean): void {
+type MediaListener = (event: { matches: boolean }) => void;
+
+/** A matchMedia whose reduced-motion answer can flip later, notifying its listeners. */
+function stubReducedMotion(reduce: boolean): { flip: (next: boolean) => void } {
+  let current = reduce;
+  const listeners = new Set<MediaListener>();
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     writable: true,
     value: (query: string) => ({
       media: query,
-      matches: reduce && query.includes('prefers-reduced-motion: reduce'),
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      addListener: () => undefined,
-      removeListener: () => undefined,
+      get matches() {
+        return current && query.includes('prefers-reduced-motion: reduce');
+      },
+      addEventListener: (_type: string, listener: MediaListener) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: MediaListener) => listeners.delete(listener),
+      addListener: (listener: MediaListener) => listeners.add(listener),
+      removeListener: (listener: MediaListener) => listeners.delete(listener),
     }),
   });
+  return {
+    flip: (next) => {
+      current = next;
+      for (const listener of [...listeners]) listener({ matches: next });
+    },
+  };
 }
 
 describe('App route View Transition boundary', () => {
@@ -173,6 +186,22 @@ describe('App route View Transition boundary', () => {
     await go('/glossary');
     expect(recorder.renders).toEqual([]);
     expect(container.querySelector('[data-testid="route-ok"]')?.textContent).toBe('glossary');
+  });
+
+  it('keeps the painted route mounted when the OS reduced-motion setting flips mid-session', async () => {
+    const media = stubReducedMotion(false);
+    await renderAt('/');
+    const painted = container.querySelector('[data-testid="route-ok"]');
+    expect(painted?.textContent).toBe('home');
+    const instancesBefore = instances().size;
+
+    // The OS switches to reduce (a change event, as a browser sends): the
+    // element type around the route must not change, or the route remounts
+    // and loses its state (a decision receipt vanished this way).
+    await act(async () => media.flip(true));
+    await flush();
+    expect(container.querySelector('[data-testid="route-ok"]'), 'the same route node, not a remount').toBe(painted);
+    expect(instances().size).toBe(instancesBefore);
   });
 
   it('re-keys the boundary on a pathname change but not on a search change', async () => {
