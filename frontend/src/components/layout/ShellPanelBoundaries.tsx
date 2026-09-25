@@ -11,6 +11,7 @@ import { queryKeys } from '../../lib/queryKeys';
 import { useApp } from '../AppContext';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { Icon } from '../Icon';
+import { preloadEvidenceDrawerBody } from '../mortgage/evidenceDrawerBodyLoader';
 import { useGeniePanelDismissal } from '../mortgage/useGeniePanelDismissal';
 
 /**
@@ -118,17 +119,24 @@ function ConsoleFrame({ children }: BoundaryProps) {
  * The evidence drawer. Closing it resets the boundary (resetKey) after the
  * frame's Close has dropped the drawer's unobserved cached queries, so the
  * next open renders the drawer afresh and re-reads its payload instead of
- * re-throwing.
+ * re-throwing. Its lazy body chunk failing to load lands here too (a chunk
+ * error: the surface offers Reload only). Try again first re-runs the body
+ * preload; a chunk that is still missing shows this frame again (the dead
+ * import is cached, so it never loops).
  */
 export function DrawerBoundary({ children }: BoundaryProps) {
   const { drawer } = useApp();
   const resetDrawerQueries = useScopedQueryReset(DRAWER_RESET_SCOPES);
+  const retry = useCallback(() => {
+    preloadEvidenceDrawerBody();
+    resetDrawerQueries();
+  }, [resetDrawerQueries]);
   return (
     <ErrorBoundary
       boundary="drawer"
       variant="panel"
       routeLabel="The evidence drawer"
-      onRetry={resetDrawerQueries}
+      onRetry={retry}
       resetKey={drawer ? 'open' : 'closed'}
       frame={(surface) => <DrawerFrame>{surface}</DrawerFrame>}
     >

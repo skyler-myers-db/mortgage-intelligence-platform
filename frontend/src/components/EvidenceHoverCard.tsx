@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useExitRetained } from '../hooks/useExitRetained';
 import type { DrawerSource } from './AppContext';
 import { freshnessBucket, FRESHNESS_LABEL } from './freshness';
+import { preloadEvidenceDrawerBody } from './mortgage/evidenceDrawerBodyLoader';
 import './EvidenceHoverCard.css';
 
 /**
@@ -35,6 +36,10 @@ import './EvidenceHoverCard.css';
  * focus shows immediately. Closing fades out over --dur-instant through
  * hooks/useExitRetained (instant under reduced motion and where no
  * transition runs, such as the test DOM).
+ *
+ * Intent: hovering or focusing a chip preloads the evidence drawer's lazy
+ * body chunk (audit bundle-04), so a click opens it without a loading state.
+ * The chunk only, never data: the drawer's reads start once it is open.
  */
 
 const SHOW_DELAY_MS = 350;
@@ -122,6 +127,7 @@ export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHov
 
   const onMouseEnter = useCallback(() => {
     if (!source) return;
+    preloadEvidenceDrawerBody();
     clearTimer();
     if (Date.now() - lastClosedAt < REOPEN_GRACE_MS) {
       show();
@@ -132,6 +138,7 @@ export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHov
 
   const onFocus = useCallback(() => {
     if (!source) return;
+    preloadEvidenceDrawerBody();
     // Keyboard focus shows immediately (no hover-intent delay needed).
     clearTimer();
     show();
