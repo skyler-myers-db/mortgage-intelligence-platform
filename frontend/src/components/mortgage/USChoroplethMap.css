@@ -62,6 +62,14 @@
 .map-legend__break--3 { grid-column: 5; }
 .map-legend__scale { color: var(--text-3); }
 
+/* Runtime-06: the stage and the legend are stable-refresh regions, so a
+   placeholder cohort desaturates under an "Updating..." pill instead of
+   blanking. The shared region rule sets position: relative, which must not
+   pull the overlay legend out of its absolute corner (the container-query
+   and ZIP / table rules that make it static are more specific and still
+   win). */
+.map-legend.stable-refresh-region { position: absolute; }
+
 /* The keyboard hint (revealed by .map-wrap:focus-within in 08-map.css) wraps
    at the legend's own width instead of stretching the legend across the map:
    one line of hint widened it to ~530px at 1440x900 and covered half of

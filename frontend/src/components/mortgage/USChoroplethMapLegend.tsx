@@ -33,6 +33,8 @@ interface USChoroplethMapLegendProps {
   segmentCaption: string;
   /** Active segment filter — drives the overlay's scope-mismatch note. */
   segmentFilter?: string[];
+  /** A placeholder cohort is on screen (runtime-06): the legend desaturates with the fill. */
+  updating?: boolean;
 }
 
 export function USChoroplethMapLegend({
@@ -45,6 +47,7 @@ export function USChoroplethMapLegend({
   scaleScope = null,
   segmentCaption,
   segmentFilter,
+  updating = false,
 }: USChoroplethMapLegendProps) {
   const ranges = scale ? classRanges(scale) : [];
   const barLabel = scale
@@ -55,7 +58,7 @@ export function USChoroplethMapLegend({
         .join('; ')}`
     : 'Fill classes: lower to higher';
   return (
-    <div className="map-legend">
+    <div className={`map-legend stable-refresh-region ${updating ? 'is-updating' : ''}`}>
       <div className="map-legend__header">
         <span>
           {overlayOn ? 'Unattended leads in selection' : 'Borrowers in selection'}{' '}

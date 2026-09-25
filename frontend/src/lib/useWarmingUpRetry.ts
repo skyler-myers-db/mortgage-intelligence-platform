@@ -105,6 +105,14 @@ export interface UseWarmingUpRetryOpts {
   refetchOnWindowFocus?: boolean;
   /** Preserve the previous payload while a changed query key refetches. */
   keepPreviousData?: boolean;
+  /**
+   * Key-aware form of `keepPreviousData` (audit runtime-06): keep the previous
+   * payload only when this predicate accepts the key it was fetched under.
+   * The geography map keeps a drilled state's ZIP tiles while its cohort
+   * re-reads, but never paints one state's tiles under another state. Takes
+   * precedence over the boolean form.
+   */
+  keepPreviousWhen?: (previousKey: QueryKey) => boolean;
 }
 
 /**
@@ -127,6 +135,7 @@ export function useWarmingUpRetry<T>(
   const enabled = opts.enabled ?? true;
 
   const queryKey: QueryKey = opts.queryKey ?? ['warming-up-retry', ...deps];
+  const keepPreviousWhen = opts.keepPreviousWhen;
 
   const query = useQuery<T, ApiError | Error>({
     queryKey,
@@ -134,7 +143,12 @@ export function useWarmingUpRetry<T>(
     queryFn: ({ signal }) => fetcher(signal),
     staleTime: opts.staleTime ?? DEFAULT_QUERY_STALE_MS,
     refetchOnWindowFocus: opts.refetchOnWindowFocus,
-    placeholderData: opts.keepPreviousData ? keepPreviousData : undefined,
+    placeholderData: keepPreviousWhen
+      ? (previous, previousQuery) =>
+          previousQuery && keepPreviousWhen(previousQuery.queryKey) ? previous : undefined
+      : opts.keepPreviousData
+        ? keepPreviousData
+        : undefined,
     retry: (failureCount, err) => {
       if (!isWarmingUpError(err)) return false;
       const plan = planForReason(err.reason, err.dependency, {

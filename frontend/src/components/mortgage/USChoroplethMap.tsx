@@ -80,6 +80,10 @@ export type { MapSelection } from './USChoroplethMap.selection';
  * at 1.6:1, so the fill could not be read. The map, the ZIP tiles and the
  * legend now share one token ramp (`--map-ramp-0..4`, tokens.css) with
  * equal OKLab steps in both themes, and the legend prints real breaks.
+ *
+ * Runtime-06 (map slice): a changed cohort keeps the previous fill up,
+ * labelled "Updating…" (`.stable-refresh-region.is-updating` on the stage and
+ * the legend, one announcement in `.map-status`), instead of blanking.
  */
 
 interface USChoroplethMapProps {
@@ -229,9 +233,14 @@ export function USChoroplethMap({
     return usaMap?.locations.find((l) => l.id === drillStateId)?.name ?? drillStateUC;
   }, [drillStateId, drillStateUC, usaMap]);
   const levelWhat = level === 'zip' ? `ZIP rollups for ${drillStateName || 'state'}` : 'State borrower rollups';
+  // runtime-06: the previous cohort stays painted while the new one reads,
+  // labelled; a warming loop over it keeps the fill and says so in the pill.
+  const updating = primary.updating;
   const mapStatus = !usaMap
     ? 'Loading geography.'
-    : primary.warmingUp
+    : updating
+      ? `Updating ${level === 'zip' ? levelWhat : 'state borrower rollups'}.`
+      : primary.warmingUp
       ? `${levelWhat}: ${primary.warmingUp.label}, retrying.`
       : primary.error
         ? `${levelWhat} could not load.`
@@ -347,7 +356,7 @@ export function USChoroplethMap({
     if (!usaMap) {
       return <div className="map-stage map-stage--empty">Loading geography…</div>;
     }
-    if (primary.warmingUp || primary.error) {
+    if ((primary.warmingUp && !updating) || primary.error) {
       return (
         <MapUnavailable
           read={primary}
@@ -442,7 +451,7 @@ export function USChoroplethMap({
           child stage fills it. Not busy while a rollup is warming up or
           failed: aria-busy would silence the WarmingUpBlock's live region. */}
       <div
-        className="map-levels"
+        className={`map-levels stable-refresh-region ${updating ? 'is-updating' : ''}`}
         key={level}
         aria-busy={mapBusy}
         // Escape hides an open card and stops there, so the same keypress
@@ -457,6 +466,11 @@ export function USChoroplethMap({
         <div className="map-status" role="status" aria-live="polite">
           {mapStatus}
         </div>
+        {updating && (
+          <span className="stable-refresh-status" aria-hidden="true">
+            Updating…{primary.warmingUp ? ` ${primary.warmingUp.label}` : ''}
+          </span>
+        )}
         {renderStage()}
       </div>
 
@@ -473,6 +487,7 @@ export function USChoroplethMap({
         scaleScope={scaleScope}
         segmentCaption={segmentCaption}
         segmentFilter={segmentFilter}
+        updating={updating}
       />
 
       {/* Hover / focus card, portaled to document.body so `.map-wrap

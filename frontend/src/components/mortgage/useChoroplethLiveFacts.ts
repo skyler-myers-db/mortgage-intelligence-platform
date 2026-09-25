@@ -14,6 +14,14 @@
  * Every read here is an aggregate over gold tables or Lakebase assignment
  * counts (`backend/api/geo.py`); none writes an audit row, so the default
  * refetch behaviour cannot inflate governance evidence.
+ *
+ * Audit runtime-06 (map slice): a changed cohort keeps the previous fill up
+ * as a placeholder instead of blanking the hero to is-loading. The state
+ * rollups keep the previous payload; a drilled state's ZIP rollups keep it
+ * only when it was read for the SAME state, so one state's tiles never paint
+ * under another. `updating` says a placeholder is on screen (the map labels
+ * it), and a final error ends the placeholder: the previous cohort is never
+ * presented as current after a failure.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -40,6 +48,9 @@ export const geoQueryKeys = {
     [...queryKeys.all, 'geo', 'assignment-overlay', level, state ?? ''] as const,
 };
 
+/** Where the drilled state sits in a `zipRollups` key. */
+const ZIP_KEY_STATE_AT = geoQueryKeys.zipRollups('', []).length - 1;
+
 /** One rollup read as the map renders it. `data === null` means unknown. */
 export interface GeoRead<T> {
   data: T | null;
@@ -49,6 +60,8 @@ export interface GeoRead<T> {
   error: Error | null;
   /** True for the first load of this key (no data, no warming, no error yet). */
   loading: boolean;
+  /** True while `data` is the previous key's payload shown as a placeholder (runtime-06). */
+  updating: boolean;
   retry: () => void;
 }
 
@@ -76,6 +89,9 @@ function geoRead<T>(result: UseWarmingUpRetryResult<T>, enabled: boolean): GeoRe
     warmingUp,
     error,
     loading: enabled && data === null && warmingUp === null && error === null,
+    // react-query shows a placeholder only while the new key is pending: a
+    // final error drops it (data null above), so the error is what renders.
+    updating: data !== null && result.isPlaceholderData,
     retry: result.manualRetry,
   };
 }
@@ -123,7 +139,7 @@ export function useChoroplethLiveFacts({
         return byCode;
       }),
     [], // ignored: the key below carries every input the fetcher reads
-    { queryKey: geoQueryKeys.stateRollups(cohort) },
+    { queryKey: geoQueryKeys.stateRollups(cohort), keepPreviousData: true },
   );
 
   const zipEnabled = drillState !== null;
@@ -135,7 +151,11 @@ export function useChoroplethLiveFacts({
         return byZip;
       }),
     [],
-    { queryKey: geoQueryKeys.zipRollups(drillState ?? '', cohort), enabled: zipEnabled },
+    {
+      queryKey: geoQueryKeys.zipRollups(drillState ?? '', cohort),
+      enabled: zipEnabled,
+      keepPreviousWhen: (previousKey) => previousKey[ZIP_KEY_STATE_AT] === drillState,
+    },
   );
 
   // The overlay keys on the same unit as the fill it recolours: states at the
