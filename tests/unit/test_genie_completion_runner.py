@@ -9,8 +9,9 @@
   signed tokens' nonce/exp and minted request ids) and write the same audit
   rows, across six repository outcomes.
 * The runner's audit rows carry the enqueuing request's correlation id; the
-  stage sink writes the real repository's stages from the runner thread
-  only; a failing stage write never fails the answer.
+  stage sink reports the real repository's stages from the runner thread
+  only and the stage writer puts them on the job row off that thread, so a
+  hung or failing stage write never holds or fails the answer.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from tests.fixtures.genie_job_turns import (
     post_complete,
     post_status,
     wait_for_job,
+    wait_for_stage_writer,
 )
 
 
@@ -49,6 +51,7 @@ from tests.fixtures.genie_job_turns import (
 def _drain_runner() -> Any:
     yield
     runner._reset_executor_for_tests()
+    wait_for_stage_writer()
 
 
 def test_the_runner_owns_the_audit_write_and_the_governed_finalize() -> None:
@@ -316,10 +319,17 @@ def test_runner_audit_rows_carry_the_enqueuing_request_correlation_id(monkeypatc
 
 
 class _StubGenie:
-    def __init__(self) -> None:
+    """Genie's side of a single live turn; ``gate`` holds ``resume_message``."""
+
+    def __init__(self, gate: threading.Event | None = None) -> None:
         self.resilient = SimpleNamespace(breaker=CircuitBreaker("genie", failure_threshold=1, cooldown_s=60.0))
+        self.gate = gate
+        self.started = threading.Event()
 
     def resume_message(self, conversation_id: str, message_id: str) -> GenieResponse:
+        self.started.set()
+        if self.gate is not None:
+            assert self.gate.wait(10), "the test never released Genie"
         return GenieResponse(
             answer_text="Illinois leads with 48,396 in-the-money borrowers, ahead of Texas at 10,914.",
             sql_query=(
@@ -336,26 +346,113 @@ class _StubGenie:
         )
 
 
-def _real_repo_job(monkeypatch: Any, lakebase: FakeJobLakebase, *, respond_async: bool = True) -> Any:
-    repo = DatabricksGenieRepository(_StubGenie())  # type: ignore[arg-type]
+def _real_repo_job(
+    monkeypatch: Any,
+    lakebase: FakeJobLakebase,
+    *,
+    respond_async: bool = True,
+    genie: _StubGenie | None = None,
+) -> Any:
+    repo = DatabricksGenieRepository(genie or _StubGenie())  # type: ignore[arg-type]
     install(monkeypatch, repo=repo, audit=FakeAudit(), lakebase=lakebase)
     return post_complete(TestClient(app), respond_async=respond_async)
 
 
-def test_the_job_publishes_the_real_pipeline_stages_then_finalizing(monkeypatch: Any) -> None:
+_PIPELINE = ["collecting", "verifying", "cross_checking", "finalizing"]
+
+
+def _record_reported_stages(monkeypatch: Any) -> list[str]:
+    """What the runner hands the stage writer, in report order."""
+
+    reported: list[str] = []
+    submit = jobs.STAGE_WRITER.submit
+
+    def recording(
+        lakebase: Any,
+        job_id: str,
+        stage: jobs.GenieJobStage,
+        parts_done: int | None = None,
+        parts_planned: int | None = None,
+    ) -> None:
+        reported.append(str(stage))
+        submit(lakebase, job_id, stage, parts_done, parts_planned)
+
+    monkeypatch.setattr(jobs.STAGE_WRITER, "submit", recording)
+    return reported
+
+
+def _in_report_order(written: list[str], reported: list[str]) -> bool:
+    remaining = iter(reported)
+    return all(stage in remaining for stage in written)
+
+
+def test_the_job_reports_the_real_pipeline_stages_then_finalizing(monkeypatch: Any) -> None:
     lakebase = FakeJobLakebase()
+    reported = _record_reported_stages(monkeypatch)
 
     res = _real_repo_job(monkeypatch, lakebase)
     job = wait_for_job(lakebase)
+    wait_for_stage_writer()
 
     assert res.status_code == 202
     assert job["status"] == "succeeded"
-    assert [stage for stage, _, _ in lakebase.stage_writes] == [
-        "collecting",
-        "verifying",
-        "cross_checking",
-        "finalizing",
-    ]
+    assert reported == _PIPELINE
+    # Latest wins: a stage superseded before its write is skipped, and what
+    # is written keeps the report order.
+    assert _in_report_order([stage for stage, _, _ in lakebase.stage_writes], reported)
+
+
+def test_the_stage_writer_puts_the_current_stage_on_the_running_job(monkeypatch: Any) -> None:
+    lakebase, genie = FakeJobLakebase(), _StubGenie(gate=threading.Event())
+    assert genie.gate is not None
+
+    try:
+        _real_repo_job(monkeypatch, lakebase, genie=genie)
+        assert genie.started.wait(10)
+        deadline = time.monotonic() + 10
+        while lakebase.only_job()["stage"] != "collecting" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        row = lakebase.only_job()
+        assert (row["status"], row["stage"]) == ("running", "collecting")
+    finally:
+        genie.gate.set()
+    assert wait_for_job(lakebase)["status"] == "succeeded"
+
+
+class _HungStageLakebase(FakeJobLakebase):
+    """Every stage write hangs until ``release``; nothing else does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stage_write_entered = threading.Event()
+        self.release = threading.Event()
+
+    def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
+        if sql is jobs._STAGE_SQL:
+            self.stage_write_entered.set()
+            self.release.wait(10)
+        super().execute(sql, params)
+
+
+def test_a_hung_stage_write_never_holds_the_governed_answer(monkeypatch: Any) -> None:
+    # A slow Lakebase must not slow the governed thread: in the deep sweep's
+    # wait loop that delay would leave finished sub-analyses uncollected. Genie
+    # answers only once the first stage write is hung, so the rest of the turn
+    # runs while it is.
+    lakebase = _HungStageLakebase()
+    genie = _StubGenie(gate=lakebase.stage_write_entered)
+
+    try:
+        res = _real_repo_job(monkeypatch, lakebase, genie=genie)
+        job = wait_for_job(lakebase, timeout=5.0)
+
+        assert res.status_code == 202
+        assert job["status"] == "succeeded"
+        assert job["result_json"] is not None
+        assert not lakebase.release.is_set(), "the stage write was still hung when the answer was stored"
+    finally:
+        lakebase.release.set()
+    wait_for_stage_writer()
 
 
 def test_the_legacy_inline_path_publishes_no_stages(monkeypatch: Any) -> None:
@@ -376,8 +473,9 @@ def test_failing_stage_writes_never_fail_the_answer_and_warn_once(monkeypatch: A
     with caplog.at_level(logging.WARNING, logger="mip-genie-jobs"):
         _real_repo_job(monkeypatch, lakebase)
         job = wait_for_job(lakebase)
+        wait_for_stage_writer()
 
     assert job["status"] == "succeeded"
-    assert lakebase.job_statements.count("stage") == 4
+    assert 1 <= lakebase.job_statements.count("stage") <= len(_PIPELINE)
     warnings = [record for record in caplog.records if record.getMessage() == "genie_job_stage_write_failed"]
     assert len(warnings) == 1

@@ -12,7 +12,9 @@ Lifecycle::
     heartbeat       one daemon thread per process renews lease_until for the
                     process's own queued/running jobs every 10 s.
     write_stage     best effort; a failure is a throttled WARNING, never an
-                    answer failure.
+                    answer failure. The runner's stages go through
+                    STAGE_WRITER: one daemon thread per process, latest stage
+                    wins per job, never on the governed thread.
     succeed / fail  terminal, only by the lease owner of a running job.
     read_for_actor  the status poll: expires a job whose lease went stale (its
                     process died) or whose served answer is past expires_at,
@@ -478,6 +480,74 @@ def write_stage(
         _warn_throttled("genie_job_stage_write_failed", stage=str(stage), error_type=type(exc).__name__)
 
 
+_PendingStage = tuple[LakebaseClient, GenieJobStage, int | None, int | None]
+
+
+class _StageWriter:
+    """Writes each running job's LATEST stage off the governed thread.
+
+    ``submit`` (the runner's stage sink) only records the stage and wakes one
+    daemon thread per process, so a slow Lakebase (the resilient client
+    retries three times with backoff) never delays the governed completion:
+    the deep sweep reports from inside its wait loop, and a stage write that
+    outlasted its budget there would leave finished sub-analyses uncollected.
+    A stage superseded before it was written is skipped (latest wins), and one
+    job's writes stay in report order. A write that lands after the job ended
+    matches no row (``status = 'running'``).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: dict[str, _PendingStage] = {}
+        self._writing = 0
+        self._thread: threading.Thread | None = None
+        self._wake = threading.Event()
+
+    def submit(
+        self,
+        lakebase: LakebaseClient,
+        job_id: str,
+        stage: GenieJobStage,
+        parts_done: int | None = None,
+        parts_planned: int | None = None,
+    ) -> None:
+        with self._lock:
+            self._pending[job_id] = (lakebase, stage, parts_done, parts_planned)
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._loop, name="genie-job-stages", daemon=True)
+                self._thread.start()
+        self._wake.set()
+
+    def idle(self) -> bool:
+        """Nothing pending and nothing being written."""
+
+        with self._lock:
+            return not self._pending and not self._writing
+
+    def _drain(self) -> None:
+        while True:
+            with self._lock:
+                if not self._pending:
+                    return
+                job_id = next(iter(self._pending))
+                lakebase, stage, parts_done, parts_planned = self._pending.pop(job_id)
+                self._writing += 1
+            try:
+                write_stage(lakebase, job_id, stage, parts_done, parts_planned)
+            finally:
+                with self._lock:
+                    self._writing -= 1
+
+    def _loop(self) -> None:
+        while True:
+            self._wake.wait()
+            self._wake.clear()
+            self._drain()
+
+
+STAGE_WRITER = _StageWriter()
+
+
 def succeed(lakebase: LakebaseClient, job_id: str, result: dict[str, Any]) -> bool:
     """Store the de-authorized answer. False when this process lost the job."""
 
@@ -565,6 +635,7 @@ __all__ = [
     "HEARTBEAT",
     "JOB_ID_RE",
     "PROCESS_ID",
+    "STAGE_WRITER",
     "GenieCompletionJob",
     "JobEnrollment",
     "claim",

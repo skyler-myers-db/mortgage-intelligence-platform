@@ -520,7 +520,7 @@ answer, SQL, or exception text; ids are the job UUID only:
 | Event | Level | Fields | Meaning |
 | --- | --- | --- | --- |
 | `genie_job_enqueued` | INFO | `outcome` created / joined, `joined`, `status`, `job_id` | A complete created the turn's job or joined the existing one. A `joined` burst for one job is a reload or a retry, not extra Genie work. |
-| `genie_job_stage_write_failed` | WARNING, at most once a minute per process | `stage`, `error_type` | A progress-stage write failed. Best effort: the answer is unaffected; the rail just shows an older stage. |
+| `genie_job_stage_write_failed` | WARNING, at most once a minute per process | `stage`, `error_type` | A progress-stage write failed. Best effort: the answer is unaffected; the rail just shows an older stage. Stage writes run on one background thread per process (the latest stage wins per job), so a slow Lakebase never delays the governed completion. |
 | `genie_job_expired` | INFO | `reason` stale_lease / past_expiry, `via` read / sweep, `job_id` | A job was expired: its runner stopped renewing the lease (the process died or restarted), or a served answer passed `expires_at` and its stored result was NULLed. |
 | `genie_job_finished` (logger `mip-genie`) | INFO | `status` succeeded / failed / expired, `duration_ms`, `failure_kind`, `job_id` | The runner finished. `failure_kind` is dependency_down, upstream_error or internal; the browser gets the canned hint for it. `expired` here means the runner lost its lease before it could store the answer. |
 | `genie_job_internal_error` (logger `mip-genie`) | ERROR | `error_type`, `job_id` | An unexpected exception inside a job, logged with the enqueuing request's correlation id. |

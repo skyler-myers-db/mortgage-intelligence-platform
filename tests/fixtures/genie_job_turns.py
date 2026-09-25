@@ -16,6 +16,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.services import genie_completion_jobs as jobs
 from backend.services.audit_store import get_audit_store
 from backend.services.genie_answers import (
     GenieActionSuggestion,
@@ -181,6 +182,16 @@ def post_status(
         **overrides,
     }
     return client.post("/api/genie/message/status", json=body, headers=headers or HEADERS)
+
+
+def wait_for_stage_writer(timeout: float = 10.0) -> None:
+    """Until the process's stage writer has written (or skipped) every stage."""
+
+    deadline = time.monotonic() + timeout
+    while not jobs.STAGE_WRITER.idle():
+        if time.monotonic() >= deadline:
+            raise AssertionError("the stage writer never went idle")
+        time.sleep(0.01)
 
 
 def wait_for_job(lakebase: FakeJobLakebase, *, statuses: tuple[str, ...] = ("succeeded", "failed", "expired"), timeout: float = 10.0) -> dict[str, Any]:

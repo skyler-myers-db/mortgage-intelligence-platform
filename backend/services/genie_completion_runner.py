@@ -308,7 +308,9 @@ def _run_job(turn: GovernedTurn, job_id: str, slot: DependencySlot | None, corre
             return
 
         def write(stage: GenieJobStage, done: int | None, planned: int | None) -> None:
-            jobs.write_stage(turn.lakebase, job_id, stage, done, planned)
+            # Recorded for the stage writer's thread: the governed thread
+            # never waits on Lakebase for progress.
+            jobs.STAGE_WRITER.submit(turn.lakebase, job_id, stage, done, planned)
 
         with stage_sink(write):
             response = complete_governed_turn(turn)
