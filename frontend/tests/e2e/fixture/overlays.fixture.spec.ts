@@ -236,7 +236,20 @@ async function closeFromInside(page: Page, dialog: Locator, closeLabel: string |
  * target is the dialog element itself (its padding or border), else its
  * title; for the full-viewport palette layer, its panel's footer.
  */
+/**
+ * Let the dialog finish any entry motion before a point is measured: a drawer
+ * still sliding in moves its box between the measurement and the click, so a
+ * point measured "outside" can land inside its settled box (1 in ~80 under
+ * load: CI run 36185829440 and a local 20x stress).
+ */
+async function settled(dialog: Locator): Promise<void> {
+  await dialog.evaluate((el) =>
+    Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => undefined))),
+  );
+}
+
 async function ownPoint(dialog: Locator, mode: 'outside' | 'self'): Promise<{ x: number; y: number }> {
+  await settled(dialog);
   return dialog.evaluate((el, which) => {
     // The footer, not the panel's centre: that is a command row, which runs.
     const panel = which === 'self' ? el.querySelector('.cmdk__footer') ?? el.querySelector('.cmdk__panel') : null;
@@ -260,6 +273,7 @@ async function ownPoint(dialog: Locator, mode: 'outside' | 'self'): Promise<{ x:
 
 /** A point on the backdrop: outside a panel dialog's box, or on the full-viewport layer beside its panel. */
 async function backdropPoint(dialog: Locator, mode: 'outside' | 'self'): Promise<{ x: number; y: number }> {
+  await settled(dialog);
   return dialog.evaluate((el, which) => {
     if (which === 'self') return { x: 24, y: 24 };
     const box = el.getBoundingClientRect();
