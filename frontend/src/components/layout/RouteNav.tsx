@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query';
 import { NavLink } from 'react-router';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
-import { api } from '../../lib/api';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import {
   NAVIGATION_ROUTE_IDS,
@@ -12,7 +11,7 @@ import {
   type AppPath,
   type NavigationRouteId,
 } from '../../lib/routeMeta';
-import type { SessionResponse } from '../../types';
+import { sessionQueryOptions } from '../../lib/sessionQuery';
 
 /**
  * Secondary route nav. APP-ADDED ELEMENT: the prototype is a single screen
@@ -46,11 +45,7 @@ function navTargetFor(id: NavigationRouteId, lastBorrowerId: string | null): App
  * successful authorization response.
  */
 export function useAdminNavigationAccess(): boolean {
-  const session = useQuery<SessionResponse>({
-    queryKey: ['session', 'access'],
-    queryFn: ({ signal }) => api.session(signal),
-    retry: false,
-  });
+  const session = useQuery(sessionQueryOptions());
   return session.data?.can_access_admin === true;
 }
 

@@ -69,6 +69,9 @@ export const shellFixtures: FixtureEntry[] = [
       can_access_admin: true,
       can_approve: true,
       actor_email: 'approver@summit-mortgage.example',
+      // delivery-07: the tenant label and RUM gate ride the session call.
+      lender_name: LENDER_NAME,
+      rum_enabled: false,
     }),
   ),
   fixture('GET', '/api/workspace', () => json<WorkspaceState>({ saved_leads: [], saved_drafts: [] })),
