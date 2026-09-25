@@ -16,6 +16,7 @@ import type {
   GrowthAgentMonitor,
   GrowthAgentWorkflow,
 } from '../../../../src/types';
+import type { ContractSample } from '../contractSamples';
 import { fixture, json, type FixtureEntry } from '../mockApi';
 
 export const GENIE_CONVERSATION_ID = 'fixture-conversation-0001';
@@ -87,3 +88,13 @@ export const genieFixtures: FixtureEntry[] = [
   fixture('GET', '/api/growth-agent', () => json<GrowthAgentHomeResponse>(GROWTH_AGENT_HOME)),
   fixture('GET', '/api/growth-agent/monitors', () => json<GrowthAgentMonitor[]>([])),
 ];
+
+/**
+ * Bodies specs register per test, for the fixture contract
+ * (tools/export_e2e_fixtures.mjs; docs/testing.md, "Fixture contract").
+ */
+export function contractSamples(): ContractSample[] {
+  return [
+    { source: 'GENIE_HISTORY_SESSIONS', method: 'GET', pattern: '/api/genie/sessions', body: { sessions: GENIE_HISTORY_SESSIONS } },
+  ];
+}

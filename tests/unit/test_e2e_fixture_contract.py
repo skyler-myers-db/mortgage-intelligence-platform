@@ -428,6 +428,12 @@ def test_the_exporter_runs_on_the_fixture_modules_alone(
     assert json.loads(out.read_text(encoding="utf-8")) == samples
 
 
+def test_the_exporter_collects_data_module_contract_samples(samples: list[dict[str, Any]]) -> None:
+    """Step 3 of the exporter (a data/*.ts module's own contractSamples()) is exercised by real data."""
+    sources = {sample["source"] for sample in samples}
+    assert "data/genie.ts:GENIE_HISTORY_SESSIONS" in sources
+
+
 # --- CI pin -------------------------------------------------------------------
 
 
