@@ -457,4 +457,25 @@ describe('LeadTable approve review guards', () => {
       expect(approve).not.toHaveBeenCalled();
     });
   });
+  // W2 queue residual: R on a row whose decision is on the wire says why
+  // instead of opening a reject panel whose Submit could do nothing.
+  it('R on a row whose approve is on the wire says a decision is already being recorded', async () => {
+    const held = holdApprovals();
+    mount();
+    await openInlineReviewOnFirstRow();
+    act(() => confirmButton()!.click());
+    await flush();
+    expect(approve).toHaveBeenCalledTimes(1);
+
+    region().focus();
+    press('r');
+
+    expect(container.querySelector('.decision-panel')).toBeNull();
+    expect(tableAlert()).toBe(`A decision for ${IDS[0]} is already being recorded.`);
+    expect(reject).not.toHaveBeenCalled();
+    await act(async () => {
+      held.releaseAll();
+    });
+    await flush();
+  });
 });

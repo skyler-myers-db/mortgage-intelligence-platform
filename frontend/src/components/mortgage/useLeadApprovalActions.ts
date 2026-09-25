@@ -211,6 +211,11 @@ export function useLeadApprovalActions({
     return rowInFlightRef.current[borrowerId] === true || isDecisionPending(queryClient, borrowerId);
   }
 
+  /** R, Reject or a reject panel's Submit on a row whose decision is on the wire. */
+  function reportDecisionInFlight(borrowerId: string): void {
+    setApprovalError(`A decision for ${borrowerId} is already being recorded.`);
+  }
+
   /**
    * Approve from the queue without leaving the page. Uses the same
    * `/api/outreach/approve` endpoint Offer Orchestrator calls. The row is
@@ -333,7 +338,10 @@ export function useLeadApprovalActions({
     reasonCode: RejectReasonCode,
     rationale: string | null = null,
   ): Promise<boolean> {
-    if (decisionInFlight(borrowerId)) return Promise.resolve(false);
+    if (decisionInFlight(borrowerId)) {
+      reportDecisionInFlight(borrowerId);
+      return Promise.resolve(false);
+    }
     if (!passesDecisionGate('rejection')) return Promise.resolve(false);
     rowInFlightRef.current[borrowerId] = true;
     setApprovalError(null);
@@ -612,6 +620,7 @@ export function useLeadApprovalActions({
     bulkRun,
     isDecisionLocked,
     isDecisionInFlight: decisionInFlight,
+    reportDecisionInFlight,
     isBulkRunInFlight,
     bulkApproveBtnRef,
     bulkRationaleRef,

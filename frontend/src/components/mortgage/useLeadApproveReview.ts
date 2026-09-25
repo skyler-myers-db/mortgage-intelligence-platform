@@ -54,6 +54,12 @@ export interface UseLeadApproveReviewInput {
    * Confirm time, so it must reflect the latest decisions synchronously.
    */
   isEligible: (borrowerId: string) => boolean;
+  /**
+   * An approve or reject for this row is on the wire (this mount or one that
+   * remounted): "Generate draft again" must not write a DRAFT_OUTREACH row
+   * for it until that decision settles.
+   */
+  isDecisionInFlight: (borrowerId: string) => boolean;
   /** The approve write returned ok for this borrower. */
   onApproved: (borrowerId: string) => void;
 }
@@ -65,6 +71,7 @@ export function useLeadApproveReview({
   draftForApproval,
   approveLead,
   isEligible,
+  isDecisionInFlight,
   onApproved,
 }: UseLeadApproveReviewInput) {
   'use no memo';
@@ -131,6 +138,14 @@ export function useLeadApproveReview({
   function retryDraft() {
     const current = reviewRef.current;
     if (!current || current.phase !== 'error') return;
+    // A decision for this row is still being recorded: no new draft yet.
+    if (isDecisionInFlight(current.borrowerId)) {
+      setReview({
+        ...current,
+        error: 'Not drafted: another decision for this borrower is still being recorded. Wait for it to finish, then check the row.',
+      });
+      return;
+    }
     // Decided while the review was open: a new draft would write a
     // DRAFT_OUTREACH row for a borrower nobody can approve any more.
     if (!isEligible(current.borrowerId)) {
