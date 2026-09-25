@@ -77,10 +77,14 @@ export function analyticsPath(
  *   - "rate_limited"      — request budget exhausted; Retry-After is the
  *                           source of truth when present.
  *   - "dependency_saturated" — concurrency guard is full for a dependency.
+ *   - "permission_denied" — a 503 with `retryable: false`: the dependency
+ *                           refused the app a required object (a missing
+ *                           grant). Never retried; an administrator fixes it.
  *
  * The client adds its own reasons (`ClientFailureReason`, see apiFailure.ts):
- * "session_expired", "offline", "unreachable" and "unreadable_response".
- * None of them is ever retried.
+ * "session_expired", "offline", "unreachable" and "unreadable_response", plus
+ * "cohort_proof" for a Growth Agent handoff whose cohort proof failed to
+ * verify (a client-side 409). None of them is ever retried.
  */
 export type ApiErrorReason =
   | 'warming_up'
@@ -88,6 +92,8 @@ export type ApiErrorReason =
   | 'retries_exhausted'
   | 'rate_limited'
   | 'dependency_saturated'
+  | 'permission_denied'
+  | 'cohort_proof'
   | ClientFailureReason;
 
 export interface ApiValidationIssue {
@@ -110,6 +116,13 @@ export class ApiError extends Error {
    * or `null` when the body did not include one. See `ApiErrorReason`.
    */
   readonly reason: ApiErrorReason | string | null;
+  /**
+   * How long the server asked the client to wait before another attempt
+   * (Retry-After, or the backpressure body's `retry_after_seconds`), in ms;
+   * null when it named no wait. A 429 surfaces with it so the screen counts
+   * the wait down instead of sleeping through it (audit states-08).
+   */
+  readonly retryAfterMs: number | null;
 
   constructor(
     message: string,
@@ -122,6 +135,7 @@ export class ApiError extends Error {
       aborted?: boolean;
       reason?: ApiErrorReason | string | null;
       validationIssues?: ApiValidationIssue[];
+      retryAfterMs?: number | null;
     } = { path: '' },
   ) {
     super(message);
@@ -134,6 +148,7 @@ export class ApiError extends Error {
     this.aborted = Boolean(opts.aborted);
     this.reason = opts.reason ?? null;
     this.validationIssues = opts.validationIssues ?? [];
+    this.retryAfterMs = opts.retryAfterMs ?? null;
   }
 }
 
@@ -250,11 +265,25 @@ export function _newRequestId(): string {
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const GROWTH_AGENT_RUN_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
+
+/**
+ * Every sentence a failed Growth Agent cohort proof can carry. A screen may
+ * show `error.message` for a `cohort_proof` error ONLY when it is one of
+ * these (lib/describeApiError.ts), so no other text can ride that path.
+ */
+export const COHORT_PROOF_MESSAGES = {
+  incomplete: 'Growth Agent cohort proof is incomplete.',
+  incompleteRerun: 'Growth Agent cohort proof is incomplete. Run the workflow again before reviewing leads.',
+  unverifiable: 'Growth Agent cohort proof cannot be verified in this browser.',
+  stale: 'Growth Agent cohort is stale. Run the workflow again before reviewing or approving leads.',
+} as const;
+
 function _growthAgentProofError(message: string): ApiError {
   return new ApiError(message, {
     path: apiPath('/api/leads'),
     status: 409,
     retryable: false,
+    reason: 'cohort_proof',
   });
 }
 
@@ -283,7 +312,7 @@ export function _growthAgentProofFromLocation(): GrowthAgentCohortProof | null {
     || !growthHandoff
     || growthHandoff[4096]
   ) {
-    throw _growthAgentProofError('Growth Agent cohort proof is incomplete.');
+    throw _growthAgentProofError(COHORT_PROOF_MESSAGES.incomplete);
   }
   return { runId, actionableTotal, cohortFingerprint, snapshotId, toolResultHash, growthHandoff };
 }
@@ -295,15 +324,11 @@ export async function growthAgentCohortFingerprint(
   const normalizedDigest = cohortDigest.trim().toLowerCase();
   const normalizedToolHash = toolResultHash.trim().toLowerCase();
   if (!SHA256_HEX_RE.test(normalizedDigest) || !SHA256_HEX_RE.test(normalizedToolHash)) {
-    throw _growthAgentProofError(
-      'Growth Agent cohort proof is incomplete. Run the workflow again before reviewing leads.',
-    );
+    throw _growthAgentProofError(COHORT_PROOF_MESSAGES.incompleteRerun);
   }
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) {
-    throw _growthAgentProofError(
-      'Growth Agent cohort proof cannot be verified in this browser.',
-    );
+    throw _growthAgentProofError(COHORT_PROOF_MESSAGES.unverifiable);
   }
   const canonical = JSON.stringify({
     cohort_digest: normalizedDigest,
@@ -333,9 +358,7 @@ export async function _verifyGrowthAgentCohort(
     || !snapshotId
     || !GROWTH_AGENT_RUN_ID_RE.test(runId)
   ) {
-    throw _growthAgentProofError(
-      'Growth Agent cohort is stale. Run the workflow again before reviewing or approving leads.',
-    );
+    throw _growthAgentProofError(COHORT_PROOF_MESSAGES.stale);
   }
   const destinationFingerprint = await growthAgentCohortFingerprint(
     cohortDigest,
@@ -348,9 +371,7 @@ export async function _verifyGrowthAgentCohort(
     || snapshotId !== proof.snapshotId
     || runId !== proof.runId
   ) {
-    throw _growthAgentProofError(
-      'Growth Agent cohort is stale. Run the workflow again before reviewing or approving leads.',
-    );
+    throw _growthAgentProofError(COHORT_PROOF_MESSAGES.stale);
   }
   return {
     status: 'verified',
@@ -398,18 +419,32 @@ export async function _parseRetryableBody(res: Response): Promise<Retryable503Pa
       detail?: string;
       correlation_id?: string;
       reason?: string;
+      retry_after_seconds?: unknown;
     };
     return {
       retryable: body?.retryable === true,
       dependency: body?.dependency ?? null,
       detail: body?.detail ?? null,
       correlationId: body?.correlation_id ?? null,
-      retryAfterMs: _parseRetryAfterMs(res.headers.get('Retry-After')),
+      // The header is the source of truth; backpressure.py also puts the
+      // wait in the body, which is all that survives a header-stripping proxy.
+      retryAfterMs: _parseRetryAfterMs(res.headers.get('Retry-After')) ?? _bodyRetryAfterMs(body?.retry_after_seconds),
       reason: body?.reason ?? null,
     };
   } catch {
     return empty;
   }
+}
+
+function _bodyRetryAfterMs(seconds: unknown): number | null {
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : null;
+}
+
+/** A correlation id a screen may show: the backend's sanitized shape only. */
+const CORRELATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+function _correlationId(...candidates: Array<string | null | undefined>): string | null {
+  return candidates.find((value): value is string => typeof value === 'string' && CORRELATION_ID_RE.test(value)) ?? null;
 }
 
 function _parseRetryAfterMs(headerValue: string | null): number | null {
@@ -469,7 +504,7 @@ export async function _parseHttpErrorBody(res: Response): Promise<{
       return { message: body.error, validationIssues: [] };
     }
   } catch {
-    // Non-JSON error bodies fall through to the HTTP status text below.
+    // Non-JSON error bodies fall through to SERVER_FAILURE_MESSAGE.
   }
   return { message: null, validationIssues: [] };
 }
@@ -547,6 +582,10 @@ async function _fetchWithRetry(
   return lastRes as Response;
 }
 
+/** Last-resort messages: neither ever carries a status line or a browser string. */
+export const SERVER_FAILURE_MESSAGE = 'The server could not complete this request.';
+export const REQUEST_FAILURE_MESSAGE = 'The request failed before the server answered.';
+
 function _clientFailure(path: string, reason: ClientFailureReason, status: number | null = null): ApiError {
   return new ApiError(CLIENT_FAILURE_MESSAGES[reason], { path, status, retryable: false, reason });
 }
@@ -563,15 +602,21 @@ async function _throwFromResponse(res: Response, path: string, method: string): 
   if (res.status === 401) throw _sessionExpiredError(path, method, 401);
   const parsed = await _parseRetryableBody(res);
   const parsedBody = await _parseHttpErrorBody(res);
-  const msg = parsed.detail ?? parsedBody.message ?? `${res.status} ${res.statusText}`;
+  // Never the status line: "500 Internal Server Error" is not copy for a
+  // buyer (audit states-04). Screens map status and reason to their own words
+  // (lib/describeApiError.ts); this constant is only the last resort.
+  const msg = parsed.detail ?? parsedBody.message ?? SERVER_FAILURE_MESSAGE;
   throw new ApiError(msg, {
     path,
     status: res.status,
     retryable: parsed.retryable,
     dependency: parsed.dependency,
-    correlationId: parsed.correlationId,
+    // The correlation middleware (main.py) sets the header on every
+    // response; the 503/429 bodies repeat it.
+    correlationId: _correlationId(parsed.correlationId, res.headers.get('X-Correlation-ID')),
     reason: parsed.reason,
     validationIssues: parsedBody.validationIssues,
+    retryAfterMs: parsed.retryAfterMs,
   });
 }
 
@@ -595,8 +640,7 @@ function _wrapFetchError(err: unknown, path: string): ApiError {
     if (reason === 'unreachable') reportNetworkFailure();
     return _clientFailure(path, reason);
   }
-  const message = err instanceof Error ? err.message : 'network error';
-  return new ApiError(message, { path, status: null, retryable: false });
+  return new ApiError(REQUEST_FAILURE_MESSAGE, { path, status: null, retryable: false });
 }
 
 /**
