@@ -118,9 +118,59 @@ function pressIsOnBackdrop(dialog: HTMLDialogElement, event: MouseEvent, backdro
   return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
 }
 
-/** One open period of the dialog: what its close must undo. */
-interface ModalSession {
-  end: () => void;
+/** The props a session reads when a native event fires: always the latest. */
+interface ModalHandlers {
+  dismiss: () => void;
+  dismissible: boolean;
+  backdrop: ModalBackdrop;
+}
+
+/**
+ * One open period of the dialog: record the opener, showModal(), push the
+ * layer and listen for the native events. Returns the close, which undoes
+ * all of it in order (listeners off, close(), pop, then focus).
+ */
+function startModalSession(dialog: HTMLDialogElement, handlers: () => ModalHandlers): () => void {
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const region = opener?.closest<HTMLElement>(OPENER_REGION_SELECTOR) ?? null;
+  showAsModal(dialog);
+  const popLayer = pushModalLayer(dialog);
+
+  let pressStartedOnBackdrop = false;
+  const onBackdrop = (event: MouseEvent) => {
+    const { dismissible, backdrop } = handlers();
+    return dismissible && pressIsOnBackdrop(dialog, event, backdrop);
+  };
+  const listeners: Array<[string, (event: Event) => void]> = [
+    ['cancel', (event) => {
+      event.preventDefault();
+      dismissTopLayer();
+    }],
+    // Only a close this session did not make reaches here: the listeners come
+    // off before its own close(), whether `close` fires in the same task (DOM
+    // test environments) or later (browsers).
+    ['close', () => {
+      if (dialog.open) return;
+      const { dismissible, dismiss } = handlers();
+      if (dismissible) dismiss();
+      else showAsModal(dialog);
+    }],
+    ['pointerdown', (event) => {
+      pressStartedOnBackdrop = onBackdrop(event as MouseEvent);
+    }],
+    ['click', (event) => {
+      const started = pressStartedOnBackdrop;
+      pressStartedOnBackdrop = false;
+      if (started && onBackdrop(event as MouseEvent)) handlers().dismiss();
+    }],
+  ];
+  for (const [type, listener] of listeners) dialog.addEventListener(type, listener);
+  return () => {
+    for (const [type, listener] of listeners) dialog.removeEventListener(type, listener);
+    closeDialog(dialog);
+    popLayer();
+    restoreModalFocus(opener, region);
+  };
 }
 
 export function useModalDialog<TInitial extends HTMLElement = HTMLElement>({
@@ -131,76 +181,27 @@ export function useModalDialog<TInitial extends HTMLElement = HTMLElement>({
   dismissible = true,
   backdrop,
 }: UseModalDialogOptions<TInitial>): void {
-  const sessionRef = useRef<ModalSession | null>(null);
-
+  const endSessionRef = useRef<(() => void) | null>(null);
   // The latest props, read when a native event fires (never a dependency,
   // so a caller's new inline onDismiss never closes and re-opens the dialog).
-  const onCancel = useEffectEvent((event: Event) => {
-    event.preventDefault();
-    dismissTopLayer();
-  });
-  const onForcedClose = useEffectEvent((dialog: HTMLDialogElement) => {
-    if (dismissible) onDismiss();
-    else showAsModal(dialog);
-  });
-  const isBackdropPress = useEffectEvent((dialog: HTMLDialogElement, event: MouseEvent) =>
-    dismissible && pressIsOnBackdrop(dialog, event, backdrop));
-  const onBackdropPress = useEffectEvent(() => {
-    onDismiss();
-  });
-
-  const startSession = useEffectEvent((dialog: HTMLDialogElement): ModalSession => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const region = opener?.closest<HTMLElement>(OPENER_REGION_SELECTOR) ?? null;
-    showAsModal(dialog);
-    const popLayer = pushModalLayer(dialog);
-
-    let pressStartedOnBackdrop = false;
-    const onPointerDown = (event: PointerEvent) => {
-      pressStartedOnBackdrop = isBackdropPress(dialog, event);
-    };
-    const onClick = (event: MouseEvent) => {
-      const started = pressStartedOnBackdrop;
-      pressStartedOnBackdrop = false;
-      if (started && isBackdropPress(dialog, event)) onBackdropPress();
-    };
-    const cancel = (event: Event) => onCancel(event);
-    const close = () => {
-      if (!dialog.open) onForcedClose(dialog);
-    };
-    dialog.addEventListener('cancel', cancel);
-    dialog.addEventListener('close', close);
-    dialog.addEventListener('pointerdown', onPointerDown);
-    dialog.addEventListener('click', onClick);
-    return {
-      end: () => {
-        dialog.removeEventListener('cancel', cancel);
-        dialog.removeEventListener('close', close);
-        dialog.removeEventListener('pointerdown', onPointerDown);
-        dialog.removeEventListener('click', onClick);
-        closeDialog(dialog);
-        popLayer();
-        restoreModalFocus(opener, region);
-      },
-    };
-  });
+  const handlers = useEffectEvent((): ModalHandlers => ({ dismiss: onDismiss, dismissible, backdrop }));
 
   // Open and close in the layout phase (see the module note on focus).
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
-    if (open && dialog && !sessionRef.current) {
-      sessionRef.current = startSession(dialog);
-    } else if (!open && sessionRef.current) {
-      sessionRef.current.end();
-      sessionRef.current = null;
+    if (open && dialog && !endSessionRef.current) {
+      endSessionRef.current = startModalSession(dialog, () => handlers());
+    } else if (!open && endSessionRef.current) {
+      endSessionRef.current();
+      endSessionRef.current = null;
     }
   }, [dialogRef, open]);
 
   // Unmounted while open: the cleanup runs while the dialog is still in the
   // document, so close() and the layer pop still apply.
   useLayoutEffect(() => () => {
-    sessionRef.current?.end();
-    sessionRef.current = null;
+    endSessionRef.current?.();
+    endSessionRef.current = null;
   }, []);
 
   useFocusTrap({ open, containerRef: dialogRef, initialFocusRef, onClose: onDismiss, restoreFocus: false });
