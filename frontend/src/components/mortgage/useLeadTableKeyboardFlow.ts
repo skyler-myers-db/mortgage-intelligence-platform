@@ -232,7 +232,10 @@ export function useLeadTableKeyboardFlow({
   // a change it did not make is told apart: Back / Forward moving `?row=`
   // (audit shell-03). A history move away from the row of an open INLINE
   // review abandons that review exactly as collapsing the row does; never
-  // while its approval is on the wire (`cancel` refuses then).
+  // while its approval is on the wire (`cancel` refuses then; it settles by
+  // itself). Either way the review rendered only inside that row, so it
+  // left the DOM in this very commit: a focus it held (Confirm) has already
+  // dropped to <body>, and the keyboard goes back to the table.
   const navigationType = useNavigationType();
   const requestedExpandedRef = useRef(expanded);
   const seenExpandedRef = useRef(expanded);
@@ -248,8 +251,9 @@ export function useLeadTableKeyboardFlow({
     requestedExpandedRef.current = expanded;
     if (ours || navigationType !== 'POP') return;
     if (!current || current.mode !== 'inline' || current.borrowerId !== previous) return;
-    const hadFocus = isInsideLeadApproveReview(document.activeElement, current.borrowerId);
-    if (review.cancel() && hadFocus) tableWrapRef.current?.focus({ preventScroll: true });
+    review.cancel();
+    const active = document.activeElement;
+    if (active === null || active === document.body) tableWrapRef.current?.focus({ preventScroll: true });
   });
 
   function eligibleSelectedIds(): string[] {
