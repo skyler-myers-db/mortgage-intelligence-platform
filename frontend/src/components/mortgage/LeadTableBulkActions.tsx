@@ -11,6 +11,7 @@ import type { ReactNode, RefObject } from 'react';
 import type { SalesTeamMember } from '../../types';
 import { Button } from '../Primitives';
 import type { BulkToast } from './useLeadApprovalActions';
+import type { BulkRunKind } from './useLeadBulkRun';
 import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 
 interface LeadTableBulkActionsProps {
@@ -41,6 +42,10 @@ interface LeadTableBulkActionsProps {
   assigneeRef?: RefObject<HTMLSelectElement | null>;
   /** Single-key shortcuts are on: advertise Shift+A. */
   shortcutsLive?: boolean;
+  /** The bulk run on the wire, if any (audit tables-07). */
+  runKind?: BulkRunKind | null;
+  /** The run's progress line (LeadBulkRunProgress, lazy), shown full width while it runs. */
+  runStatus?: ReactNode;
 }
 
 export function LeadTableBulkActions({
@@ -65,8 +70,11 @@ export function LeadTableBulkActions({
   samplesShown = false,
   assigneeRef,
   shortcutsLive = true,
+  runKind = null,
+  runStatus = null,
 }: LeadTableBulkActionsProps) {
   const gateOpen = selectionCount > 1 && bulkRationaleOpen;
+  const running = runKind !== null;
   return (
     <div
       role="toolbar"
@@ -76,6 +84,7 @@ export function LeadTableBulkActions({
         'bulk-actions',
         gateOpen ? 'bulk-actions--gate' : '',
         gateOpen && samplesShown ? 'bulk-actions--samples' : '',
+        running ? 'bulk-actions--running' : '',
       ].filter(Boolean).join(' ')}
     >
       <div className="bulk-actions__label">
@@ -166,6 +175,7 @@ export function LeadTableBulkActions({
         </Button>
       </div>
       {gateOpen && gateReview}
+      {running && runStatus}
     </div>
   );
 }

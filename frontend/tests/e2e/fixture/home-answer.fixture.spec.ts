@@ -230,7 +230,7 @@ for (const theme of FIXTURE_THEMES) {
       const sideBox = await side.boundingBox();
       expect(sideBox!.x).toBeGreaterThan(mapBox!.x + mapBox!.width);
       expect(Math.abs(sideBox!.y - mapBox!.y)).toBeLessThanOrEqual(1);
-      await expect(side.getByRole('region', { name: 'Approval queue' })).toBeVisible();
+      await expect(side.getByRole('region', { name: 'Refinance review queue' })).toBeVisible();
     });
 
     test('a narrow WHO column keeps every id and city whole: a 1366 laptop, the Console open', async ({ app, page }) => {

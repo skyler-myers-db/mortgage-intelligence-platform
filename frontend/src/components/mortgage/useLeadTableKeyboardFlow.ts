@@ -13,9 +13,11 @@
  * handlers; this hook only decides WHICH row and WHEN.
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useNavigationType } from 'react-router';
 import type { LeadSummary } from '../../types';
 import type { DrawerSource } from '../AppContext';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
+import { pushEscapeLayer } from '../../lib/escapeStack';
 import { publishCommandSelection, type CommandVerb } from '../command/commandSelection';
 import { isLeadApprovalEligible, isLeadSelectableForSalesOps, isTerminalApproval } from './LeadTable.logic';
 import { isInsideLeadApproveReview, leadApproveReviewId } from './LeadApproveReview.ids';
@@ -34,6 +36,8 @@ export interface UseLeadTableKeyboardFlowInput {
   approvals: Record<string, 'approved' | 'rejected'>;
   expanded: string | null;
   setExpanded: (borrowerId: string | null) => void;
+  /** The cursor row at mount (a row restored from the URL); read once. */
+  initialCursorId?: string | null;
   approval: ApprovalActions;
   approverGate: string | null;
   campaignBindingBlocked: boolean;
@@ -106,6 +110,7 @@ export function useLeadTableKeyboardFlow({
   approvals,
   expanded,
   setExpanded,
+  initialCursorId = null,
   approval,
   approverGate,
   campaignBindingBlocked,
@@ -142,6 +147,7 @@ export function useLeadTableKeyboardFlow({
     scrollToIndex,
     statusOf: (lead) => effectiveStatus(lead) ?? 'pending',
     isPending,
+    initialCursorId,
   });
   const [toast, setToast] = useState<LeadDecisionToastState | null>(null);
   const [refocusTable, setRefocusTable] = useState(false);
@@ -149,12 +155,18 @@ export function useLeadTableKeyboardFlow({
   // and whether that fetch failed.
   const [reviewLoading, setReviewLoading] = useState<string | null>(null);
   const [reviewLoadFailed, setReviewLoadFailed] = useState(false);
-  const reviewLoadingRef = useRef<string | null>(null);
+  // The review chunk load on the wire, and the Approve waiting for it (null
+  // once dropped: the cursor left that row or Escape was pressed first).
+  const reviewLoadInFlightRef = useRef(false);
+  const pendingApproveRef = useRef<string | null>(null);
+  const popPendingEscapeRef = useRef<(() => void) | null>(null);
   const liveRef = useRef(true);
   useEffect(() => {
     liveRef.current = true;
     return () => {
       liveRef.current = false;
+      popPendingEscapeRef.current?.();
+      popPendingEscapeRef.current = null;
     };
   }, []);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
@@ -164,6 +176,7 @@ export function useLeadTableKeyboardFlow({
     draftForApproval: approval.draftForApproval,
     approveLead: approval.approveLead,
     isEligible: canStillApprove,
+    isDecisionInFlight: approval.isDecisionInFlight,
     onApproved: (borrowerId) => {
       setToast({ borrowerId });
       cursor.advanceAfter(borrowerId);
@@ -215,6 +228,34 @@ export function useLeadTableKeyboardFlow({
     onCampaignBindingChange();
   });
 
+  // Every expand and collapse this flow makes goes through setExpandedRow, so
+  // a change it did not make is told apart: Back / Forward moving `?row=`
+  // (audit shell-03). A history move away from the row of an open INLINE
+  // review abandons that review exactly as collapsing the row does; never
+  // while its approval is on the wire (`cancel` refuses then; it settles by
+  // itself). Either way the review rendered only inside that row, so it
+  // left the DOM in this very commit: a focus it held (Confirm) has already
+  // dropped to <body>, and the keyboard goes back to the table.
+  const navigationType = useNavigationType();
+  const requestedExpandedRef = useRef(expanded);
+  const seenExpandedRef = useRef(expanded);
+  function setExpandedRow(borrowerId: string | null) {
+    requestedExpandedRef.current = borrowerId;
+    setExpanded(borrowerId);
+  }
+  useEffect(() => {
+    const previous = seenExpandedRef.current;
+    if (previous === expanded) return;
+    seenExpandedRef.current = expanded;
+    const ours = requestedExpandedRef.current === expanded;
+    requestedExpandedRef.current = expanded;
+    if (ours || navigationType !== 'POP') return;
+    if (!current || current.mode !== 'inline' || current.borrowerId !== previous) return;
+    review.cancel();
+    const active = document.activeElement;
+    if (active === null || active === document.body) tableWrapRef.current?.focus({ preventScroll: true });
+  });
+
   function eligibleSelectedIds(): string[] {
     return approval.approvalEligibleIds.filter((id) => approval.selectedIds.has(id));
   }
@@ -236,9 +277,30 @@ export function useLeadTableKeyboardFlow({
     // review.open runs the approver / campaign-binding gate before it drafts.
     const result = review.open(borrowerId, expanded === borrowerId ? 'inline' : 'dialog');
     if (result === 'already-open') {
-      document.getElementById(leadApproveReviewId(borrowerId))?.scrollIntoView?.({ block: 'nearest' });
-      confirmRef.current?.focus();
+      // An inline review whose row the virtualizer took out of the DOM is
+      // brought back first (#9), then Confirm takes focus once rendered.
+      cursor.revealRow(borrowerId);
+      focusConfirmWhenRendered();
     }
+  }
+
+  /** Focus the open review's Confirm once it is rendered (a revealed row may need a frame or two). */
+  function focusConfirmWhenRendered(attempts = 12) {
+    const confirm = confirmRef.current;
+    if (confirm) {
+      confirm.focus();
+      return;
+    }
+    if (attempts > 0) requestAnimationFrame(() => focusConfirmWhenRendered(attempts - 1));
+  }
+
+  /** Abandon the Approve waiting on the review chunk (it has drafted nothing). */
+  function dropPendingApprove() {
+    if (pendingApproveRef.current === null) return;
+    pendingApproveRef.current = null;
+    popPendingEscapeRef.current?.();
+    popPendingEscapeRef.current = null;
+    setReviewLoading(null);
   }
 
   /**
@@ -249,21 +311,41 @@ export function useLeadTableKeyboardFlow({
    * again with the latest state (every gate re-checked).
    */
   function loadReviewThenOpen(borrowerId: string) {
-    if (reviewLoadingRef.current !== null) return;
-    reviewLoadingRef.current = borrowerId;
+    pendingApproveRef.current = borrowerId;
     setReviewLoading(borrowerId);
     setReviewLoadFailed(false);
+    // Escape before the chunk lands abandons the Approve (#9): nothing drafts.
+    if (popPendingEscapeRef.current === null) {
+      popPendingEscapeRef.current = pushEscapeLayer(() => {
+        dropPendingApprove();
+      });
+    }
+    if (reviewLoadInFlightRef.current) return;
+    reviewLoadInFlightRef.current = true;
     void reviewChunk.load().then((loaded) => {
-      reviewLoadingRef.current = null;
+      reviewLoadInFlightRef.current = false;
+      const wanted = pendingApproveRef.current;
+      pendingApproveRef.current = null;
+      popPendingEscapeRef.current?.();
+      popPendingEscapeRef.current = null;
       if (!liveRef.current) return;
       setReviewLoading(null);
+      // Dropped while the chunk loaded: no review, no draft, no failure line.
+      if (wanted === null) return;
       if (!loaded) {
         setReviewLoadFailed(true);
         return;
       }
-      openReviewRef.current(borrowerId);
+      openReviewRef.current(wanted);
     });
   }
+
+  // The cursor left the row whose Approve is waiting on the review chunk
+  // (J / K, a click on another row): that Approve is dropped (#9).
+  useEffect(() => {
+    const pending = pendingApproveRef.current;
+    if (pending !== null && cursor.cursorId !== pending) dropPendingApprove();
+  });
   const openReviewRef = useRef<(borrowerId: string) => void>(() => undefined);
   useEffect(() => {
     openReviewRef.current = openReview;
@@ -283,11 +365,11 @@ export function useLeadTableKeyboardFlow({
       if (!review.cancel()) return;
     }
     cursor.setCursorId(lead.borrower_id);
-    setExpanded(isOpen ? null : lead.borrower_id);
+    setExpandedRow(isOpen ? null : lead.borrower_id);
   }
 
   function viewReceipt(borrowerId: string) {
-    setExpanded(borrowerId);
+    setExpandedRow(borrowerId);
     cursor.moveTo(borrowerId);
     focusWhenRendered(leadReceiptAnchorId(borrowerId));
   }
@@ -323,6 +405,12 @@ export function useLeadTableKeyboardFlow({
    * keyboard user is left in the table, a Shift+Tab walk away from it.
    */
   function openReject(borrowerId: string) {
+    // A decision for this row is on the wire: say so instead of opening a
+    // panel whose Submit could do nothing (W2 queue residual).
+    if (approval.isDecisionInFlight(borrowerId)) {
+      approval.reportDecisionInFlight(borrowerId);
+      return;
+    }
     approval.setPendingReject(borrowerId);
     requestAnimationFrame(() => rejectReasonRef.current?.focus());
   }
@@ -360,7 +448,7 @@ export function useLeadTableKeyboardFlow({
     if (!current || current.mode !== 'dialog') return;
     const borrowerId = current.borrowerId;
     review.moveInline();
-    setExpanded(borrowerId);
+    setExpandedRow(borrowerId);
     cursor.setCursorId(borrowerId);
     cursor.revealRow(borrowerId);
     whenInlineReviewChip(borrowerId, chipIndex, (chip) => {
@@ -384,6 +472,11 @@ export function useLeadTableKeyboardFlow({
       if (!lead || approval.bulkApproving) return;
       if (!isLeadSelectableForSalesOps(lead.approval_status, approvals[lead.borrower_id], lead)) return;
       approval.toggleSelect(lead.borrower_id);
+    },
+    extendSelectionToCursor: () => {
+      const lead = targetId ? leadsById.get(targetId) : undefined;
+      if (!lead || approval.bulkApproving) return;
+      approval.selectRange(lead.borrower_id, sortedLeads.map((row) => row.borrower_id));
     },
     reviewCursorRow: () => {
       if (targetId) openReview(targetId);

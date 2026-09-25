@@ -54,3 +54,42 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* ============================================================
+   BULK RUN PROGRESS + REPORT (audit tables-07, states-08 bulk half).
+   BEM extension of the `.bulk-actions` toolbar (no prototype
+   counterpart): `.bulk-actions__run` is a full-width line in the
+   toolbar while a run is on the wire (the native <progress>, "k of N",
+   the ETA and "Stop after this batch"); `.bulk-actions__result` is the
+   report under the table once it settles, with the failed / skipped /
+   not-started rows behind a native <details>.
+   ============================================================ */
+.bulk-actions--running { flex-wrap: wrap; }
+.bulk-actions__run {
+  flex: 1 0 100%;
+  order: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.bulk-actions__progress {
+  inline-size: calc(var(--sp-16) * 3);
+  max-inline-size: 100%;
+  block-size: var(--sp-2);
+  accent-color: var(--accent);
+}
+.bulk-actions__result { flex-wrap: wrap; }
+.bulk-actions__issues {
+  flex: 1 0 100%;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.bulk-actions__issues summary { cursor: pointer; color: var(--text-1); }
+.bulk-actions__issues ul {
+  margin: var(--sp-2) 0 0;
+  padding-inline-start: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}

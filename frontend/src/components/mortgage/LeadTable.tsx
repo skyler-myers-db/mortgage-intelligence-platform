@@ -39,12 +39,13 @@ import { useLeadApprovalActions, type CampaignBindingState } from './useLeadAppr
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
+import { useLeadTableInitialOffset, useLeadTableScroll } from './useLeadTableScroll';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
 import { ariaKeyShortcuts } from '../../lib/keymap';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
-import type { LeadTableProps, SortDir, SortKey } from './LeadTable.types';
+import type { LeadTableProps, LeadTableSort, SortDir, SortKey } from './LeadTable.types';
 import './LeadTable.css';
 
 export { buildLeadCsv } from './LeadTable.csv';
@@ -105,6 +106,11 @@ export function LeadTable({
   view = 'default',
   onViewChange,
   fillHeight = false,
+  sort: controlledSort,
+  onSortChange,
+  expandedId: controlledExpanded,
+  onExpandedChange,
+  restoreScroll = false,
 }: LeadTableProps) {
   'use no memo';
 
@@ -142,9 +148,16 @@ export function LeadTable({
   useLeadTableFillHeight(tableWrapRef, fillHeight);
   const columns = leadTableColumns(view);
   const columnCount = leadTableColumnCount(view);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>('rank');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  // Sort and expanded row: owned by the parent when it passes the change
+  // handler (the Lead Queue keeps both in the URL, audit shell-03), else here.
+  const [ownExpanded, setOwnExpanded] = useState<string | null>(null);
+  const [ownSort, setOwnSort] = useState<LeadTableSort | null>(null);
+  const expanded = onExpandedChange ? controlledExpanded ?? null : ownExpanded;
+  const setExpanded = onExpandedChange ?? setOwnExpanded;
+  const activeSort = onSortChange ? controlledSort ?? null : ownSort;
+  const setSort = onSortChange ?? setOwnSort;
+  const sortKey: SortKey = activeSort?.key ?? 'rank';
+  const sortDir: SortDir = activeSort?.dir ?? 'desc';
   // Shared error surface: both the approval path and the sales-ops path
   // report into the single `.table-error` alert this shell renders.
   const [approvalError, setApprovalError] = useState<string | null>(null);
@@ -185,6 +198,8 @@ export function LeadTable({
     : -1;
   const hasExpandedRow = expandedRowIndex >= 0;
   const shouldVirtualize = sortedLeads.length > LEAD_VIRTUALIZATION_THRESHOLD;
+  // Back to this entry: the virtualizer starts at the saved offset (runtime-08).
+  const initialTableOffset = useLeadTableInitialOffset(restoreScroll);
   // TanStack Virtual returns imperative instance methods tied to the scroll
   // element. The hook stays local to this table and its methods are not passed
   // into memoized children, so React Compiler's library advisory is expected.
@@ -198,6 +213,12 @@ export function LeadTable({
     getItemKey: (index) => sortedLeads[index]?.borrower_id ?? index,
     getScrollElement: () => tableWrapRef.current,
     overscan: LEAD_ROW_OVERSCAN,
+    initialOffset: initialTableOffset,
+  });
+  useLeadTableScroll({
+    enabled: restoreScroll,
+    tableWrapRef,
+    virtualizer: shouldVirtualize ? rowVirtualizer : null,
   });
   const virtualItems = shouldVirtualize ? rowVirtualizer.getVirtualItems() : [];
   const visibleRows = shouldVirtualize
@@ -243,6 +264,8 @@ export function LeadTable({
     approvals,
     expanded,
     setExpanded,
+    // A restored row (the Lead Queue's `?row=`) starts as the cursor row.
+    initialCursorId: expanded,
     approval,
     approverGate,
     campaignBindingBlocked,
@@ -267,7 +290,12 @@ export function LeadTable({
   // Load the review chunk once the reader engages with rows (the draft is
   // requested only on Approve); the bulk review chunk once rows are selected.
   const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null);
-  const bulkChunk = useLazyModule(BULK_REVIEW_CHUNK, approval.selectionCount > 1);
+  const bulkRun = approval.bulkRun;
+  // The bulk chunk also carries a run's progress and report (tables-07).
+  const bulkChunk = useLazyModule(
+    BULK_REVIEW_CHUNK,
+    approval.selectionCount > 1 || approval.bulkApproving || bulkRun.result !== null,
+  );
   // The module cache is the truth: after one failed chunk load this hook's
   // state stays failed, yet the next Approve re-imports the chunk and drafts
   // (an audited DRAFT_OUTREACH write), so the review must render from the
@@ -282,7 +310,10 @@ export function LeadTable({
   // The result line follows an approve made through the review, so it ships
   // in the review's chunk (loaded by then), not in the table's.
   const DecisionToast = reviewModule?.LeadTableDecisionToast;
-  const BulkReview = bulkChunk.module?.LeadBulkApproveReview;
+  const bulkModule = bulkChunk.module ?? BULK_REVIEW_CHUNK.current();
+  const BulkReview = bulkModule?.LeadBulkApproveReview;
+  const BulkRunProgress = bulkModule?.LeadBulkRunProgress;
+  const BulkRunResult = bulkModule?.LeadBulkRunResult;
   const reviewProps = openReview && {
     review: openReview,
     actorEmail,
@@ -343,18 +374,10 @@ export function LeadTable({
 
   function toggleSort(key: SortKey) {
     if (key === 'rank') {
-      setSortKey('rank');
-      setSortDir('desc');
+      setSort(null);
       return;
     }
-    setSortKey((current) => {
-      if (current === key) {
-        setSortDir((dir) => (dir === 'desc' ? 'asc' : 'desc'));
-        return current;
-      }
-      setSortDir('desc');
-      return key;
-    });
+    setSort({ key, dir: activeSort?.key === key && sortDir === 'desc' ? 'asc' : 'desc' });
   }
 
   return (
@@ -510,6 +533,10 @@ export function LeadTable({
       <span className="sr-only" role="status" aria-live="polite" data-testid="lead-decision-status">
         {flow.toast ? `Approved ${flow.toast.borrowerId}.` : ''}
       </span>
+      {/* A bulk run's start, each quarter, a Stop and the result (tables-07). */}
+      <span className="sr-only" role="status" aria-live="polite" data-testid="lead-bulk-run-status">
+        {bulkRun.announcement}
+      </span>
       <div
         ref={tableWrapRef}
         className={fillHeight ? 'tbl-wrap tbl-wrap--fill' : 'tbl-wrap'}
@@ -589,7 +616,9 @@ export function LeadTable({
                       setLastBorrowerId(row.borrower_id);
                       flow.toggleRow(row, open);
                     }}
-                    onToggleSelect={approval.toggleSelect}
+                    onToggleSelect={(borrowerId, range) => (range
+                      ? approval.selectRange(borrowerId, sortedLeads.map((row) => row.borrower_id))
+                      : approval.toggleSelect(borrowerId))}
                     onApprove={flow.openReview}
                     onReject={flow.openReject}
                     onOpenDisposition={sales.openDisposition}
@@ -620,7 +649,9 @@ export function LeadTable({
           Opening the review for {reviewOpeningFor}…
         </div>
       )}
-      {approval.selectionCount > 0 && (
+      {/* The toolbar stays while a run is on the wire, even when a filter
+          change took every selected row off screen. */}
+      {(approval.selectionCount > 0 || approval.bulkApproving) && (
         <LeadTableBulkActions
           selectionCount={approval.selectionCount}
           selectedApprovalEligibleCount={approval.selectedApprovalEligibleCount}
@@ -642,6 +673,10 @@ export function LeadTable({
           assigneeRef={assigneeRef}
           shortcutsLive={singleKeysOn}
           samplesShown={samplesShown}
+          runKind={bulkRun.progress?.kind ?? null}
+          runStatus={bulkRun.progress && BulkRunProgress
+            ? <BulkRunProgress progress={bulkRun.progress} onStop={bulkRun.requestStop} />
+            : null}
           gateReview={BulkReview ? (
             <BulkReview
               // Samples drafted under one campaign binding go with it.
@@ -656,6 +691,9 @@ export function LeadTable({
             />
           ) : null}
         />
+      )}
+      {bulkRun.result && BulkRunResult && (
+        <BulkRunResult result={bulkRun.result} onDismiss={bulkRun.dismissResult} />
       )}
       {approval.bulkToast && (
         <LeadTableBulkToast

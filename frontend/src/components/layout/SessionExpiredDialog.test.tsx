@@ -104,6 +104,22 @@ describe('SessionExpiredDialog', () => {
     );
   });
 
+  it('says a bulk approval stopped part-way: approved rows stay, the rest were not recorded', async () => {
+    await render();
+    await act(async () => {
+      // The run's own approve POST met the 401 first ('approval'), then the
+      // bulk loop stopped and said more.
+      markSessionExpired({ method: 'POST', path: '/api/v1/outreach/approve' });
+      markUnrecordedWrite('bulk_approval');
+    });
+    const warn = dialog()?.querySelector('[data-session-unrecorded]');
+    expect(warn?.getAttribute('data-session-unrecorded')).toBe('bulk_approval');
+    expect(warn?.textContent).toBe(
+      'Your bulk approval stopped part-way. Rows already approved stay approved; the rest were not recorded. '
+      + 'After you sign in, check Recent activity before approving them again.',
+    );
+  });
+
   it('cannot be dismissed: Escape is cancelled and a forced close re-opens it', async () => {
     await render();
     await act(async () => {

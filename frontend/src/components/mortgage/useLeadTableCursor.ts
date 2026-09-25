@@ -33,6 +33,11 @@ interface UseLeadTableCursorInput {
   statusOf: (lead: LeadSummary) => string;
   /** A row the cursor may advance to after a decision. */
   isPending: (lead: LeadSummary) => boolean;
+  /**
+   * The cursor row at mount: a row restored from the URL (audit shell-03).
+   * Read once; it moves nothing and fetches nothing.
+   */
+  initialCursorId?: string | null;
 }
 
 function findRow(scope: HTMLElement | null, borrowerId: string): HTMLElement | null {
@@ -46,10 +51,11 @@ export function useLeadTableCursor({
   scrollToIndex,
   statusOf,
   isPending,
+  initialCursorId = null,
 }: UseLeadTableCursorInput) {
   'use no memo';
 
-  const [cursorId, setCursorId] = useState<string | null>(null);
+  const [cursorId, setCursorId] = useState<string | null>(initialCursorId);
   const [announcement, setAnnouncement] = useState('');
   // A decision to advance from, resolved after the render that carries the
   // decided row's new state (so "next pending" reads fresh approvals).

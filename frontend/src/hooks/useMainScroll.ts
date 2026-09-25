@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
-import { useLocation, useNavigationType, type Location } from 'react-router';
+import { useLocation, useNavigationType } from 'react-router';
 import { retryUntil } from './retryUntil';
+import { readOffsets, rememberOffsetCapped, scrollStorageKey, writeOffsets } from './scrollOffsetStore';
+
+export { scrollStorageKey };
 
 /**
  * useMainScroll — scroll continuity for the persistent `.main` scroller.
@@ -10,8 +13,10 @@ import { retryUntil } from './retryUntil';
  * remounts, so its offset leaked across routes. Reproduced in a browser: Home
  * scrolled to 689 then Analytics opened at 570; Back to the Lead Queue returned
  * 0 instead of 770; `/glossary#clip` never scrolled on client navigation.
- * `<ScrollRestoration>` is Data-router only and the app is deliberately
- * Declarative, so this hook does the same job for one element.
+ * The app is a RouterProvider data router now, but `<ScrollRestoration>`
+ * restores only the WINDOW's scroll, and the window never scrolls here: `.main`
+ * does. So this hook does that job for the one element (and the Lead Queue's
+ * table scroller has its own, useLeadTableScroll).
  *
  * Rules, keyed on the history entry (`location.key`):
  *   - POP (Back / Forward / reload) restores the offset saved for that entry,
@@ -27,7 +32,8 @@ import { retryUntil } from './retryUntil';
  * Offsets live in a Map mirrored to sessionStorage (so a reload restores too),
  * capped at `MAX_ENTRIES`. Values are plain numbers keyed by the router's
  * random entry key; the first-load entry (key "default") is keyed by a
- * non-reversible fingerprint of its URL so no borrower id is written to storage.
+ * non-reversible fingerprint of its URL so no borrower id is written to storage
+ * (hooks/scrollOffsetStore.ts, shared with the table scroller).
  */
 
 export const MAIN_SCROLL_STORAGE_KEY = 'mip.mainScroll.v1';
@@ -37,66 +43,18 @@ export const MAIN_SCROLL_DEADLINE_MS = 3000;
 const STICKY_NAV_SELECTOR = '.route-nav';
 const USER_SCROLL_INTENT_EVENTS = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
 
-type ScrollLocation = Pick<Location, 'key' | 'pathname' | 'search' | 'hash'>;
-
-/** FNV-1a, base36. Only used to avoid writing a URL into sessionStorage. */
-function fingerprint(text: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i += 1) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(36);
-}
-
-/**
- * Storage key for a history entry. The router gives every pushed entry a
- * random key; entries it did not create (the first load, a native `#fragment`
- * jump such as the skip link) all report "default", so those are told apart by
- * their URL.
- */
-export function scrollStorageKey(location: ScrollLocation): string {
-  if (location.key !== 'default') return location.key;
-  return `default:${fingerprint(`${location.pathname}${location.search}${location.hash}`)}`;
-}
-
+/** The `.main` offsets, under this hook's own storage key and cap. */
 export function readStoredOffsets(): Map<string, number> {
-  const offsets = new Map<string, number>();
-  try {
-    const raw = window.sessionStorage.getItem(MAIN_SCROLL_STORAGE_KEY);
-    if (!raw) return offsets;
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return offsets;
-    for (const entry of parsed.slice(-MAX_ENTRIES)) {
-      if (!Array.isArray(entry)) continue;
-      const [key, value] = entry as unknown[];
-      if (typeof key === 'string' && typeof value === 'number' && Number.isFinite(value)) {
-        offsets.set(key, value);
-      }
-    }
-  } catch {
-    // Storage can be unavailable or hold a corrupt value; start empty.
-  }
-  return offsets;
+  return readOffsets(MAIN_SCROLL_STORAGE_KEY, MAX_ENTRIES);
 }
 
 function writeStoredOffsets(offsets: ReadonlyMap<string, number>): void {
-  try {
-    window.sessionStorage.setItem(MAIN_SCROLL_STORAGE_KEY, JSON.stringify([...offsets]));
-  } catch {
-    // Storage can be unavailable in privacy-restricted contexts.
-  }
+  writeOffsets(MAIN_SCROLL_STORAGE_KEY, offsets);
 }
 
-/** Most-recently-used insert with a hard size cap. */
+/** Most-recently-used insert with the `.main` size cap. */
 export function rememberOffset(offsets: Map<string, number>, key: string, value: number): void {
-  offsets.delete(key);
-  offsets.set(key, value);
-  while (offsets.size > MAX_ENTRIES) {
-    const oldest = offsets.keys().next();
-    if (oldest.done) break;
-    offsets.delete(oldest.value);
-  }
+  rememberOffsetCapped(offsets, key, value, MAX_ENTRIES);
 }
 
 function hashTargetId(hash: string): string {

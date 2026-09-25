@@ -20,6 +20,8 @@ import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
+import { LeadQueueViews } from './lead-queue.views';
+import { copyLink } from '../lib/copyLink';
 import {
   hasLeadQueueFilters,
   leadQueueActiveFilterChips,
@@ -32,6 +34,7 @@ import {
   APPROVAL_FILTER_OPTIONS,
   CONTACTABILITY_FILTER_OPTIONS,
   CONSENT_FILTER_OPTIONS,
+  GROWTH_AGENT_PROOF_PARAMS,
   LEAD_TABLE_VIEW_PARAM,
   LOAN_PRODUCT_FILTER_OPTIONS,
   ORIGINATION_CHANNEL_FILTER_OPTIONS,
@@ -45,18 +48,23 @@ import {
   approvalFilterDisplayValue,
   buildLeadQueueExportFilters,
   formatLeadQueueLoadError,
+  isAssignedToMe,
   isNoOpPortfolioValue,
+  leadQueueShareParams,
   outreachFilterDisplayValue,
   parseBorrowerIds,
   parseCsvParam,
   parseFunnelStage,
   parsePortfolioCriteria,
   parseSegmentCodes,
+  parseLeadTablePlace,
   parseLeadTableView,
   parseTargetLenderRef,
   searchParamsAfterSegmentRemoval,
+  searchParamsWithLeadTablePlace,
   searchParamsWithLeadTableView,
   segmentFilterChips,
+  type LeadQueueExportFiltersInput,
   segmentFilterDisplayValue,
 } from './lead-queue.filters';
 
@@ -97,11 +105,12 @@ const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters'
 
 export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { search: queueSearch } = useLocation();
-  // `?view=` is a column preset, not a filter: it never enables Clear all.
+  const { search: queueSearch, pathname } = useLocation();
+  // `?view=` (column preset) and the table place (`?sort=`, `?dir=`, `?row=`)
+  // are display state, not filters: they never enable Clear all.
   const filtersActive = hasLeadQueueFilters(searchParams);
   const footprint = useFootprint();
-  const { canAccessAdmin } = useApp();
+  const { canAccessAdmin, actorEmail, sessionStatus } = useApp();
   const queryClient = useQueryClient();
   const moreFiltersToggleRef = useRef<HTMLButtonElement | null>(null);
   const segment = parseSegmentCodes(searchParams.get('segment'))[0];
@@ -165,16 +174,18 @@ export default function LeadQueue() {
   const recencyFilter = portfolioCriteria?.recency ?? 'Any';
   const approvalStatus = (searchParams.get('approval_status') ?? 'any').toLowerCase();
   const outreachStatus = (searchParams.get('outreach_status') ?? 'any').toLowerCase();
-  const assignedTo = (searchParams.get('assigned_to') ?? '').trim() || undefined;
+  // `?assigned_to=me` (the "Assigned to me" preset) is resolved to the
+  // signed-in actor's email here, at request time: the request and the export
+  // get the email, the URL never holds one a preset wrote. While the session
+  // is loading the leads query waits; a session with no email reads nothing
+  // and says so.
+  const assignedParam = (searchParams.get('assigned_to') ?? '').trim() || undefined;
+  const assignedToMe = isAssignedToMe(assignedParam);
+  const assignedTo = assignedToMe ? actorEmail ?? undefined : assignedParam;
+  const meUnresolved = assignedToMe && !actorEmail;
+  const meWithoutEmail = meUnresolved && sessionStatus !== 'loading';
   const agedDays = Number(searchParams.get('aged_days') ?? '') || null;
-  const growthAgentProofKey = [
-    'growth_agent_run_id',
-    'actionable_total',
-    'actionable_cohort_fingerprint',
-    'actionable_snapshot_id',
-    'tool_result_hash',
-    'growth_handoff',
-  ].map((key) => searchParams.get(key) ?? '').join('|');
+  const growthAgentProofKey = GROWTH_AGENT_PROOF_PARAMS.map((key) => searchParams.get(key) ?? '').join('|');
   // Sales team feeds the ASSIGNED filter and LeadTable's assign actions. The
   // Sales ops snapshot that also used it moved to the Analytics "Sales ops" tab.
   const salesTeamQuery = useQuery<SalesTeamMember[]>({
@@ -183,6 +194,10 @@ export default function LeadQueue() {
     staleTime: 60_000,
   });
   const salesTeam = salesTeamQuery.data ?? [];
+  // require_visible_assignee answers 422 for anyone but a listed loan officer.
+  const actorIsListedLo = Boolean(actorEmail) && salesTeam.some(
+    (member) => member.email.toLowerCase() === actorEmail?.toLowerCase(),
+  );
   const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
   const segmentFilter = segmentFilterDisplayValue(segment, segmentCodes, segmentMode);
   const segmentFilterOptions = optionsWithCurrentValue(SEGMENT_FILTER_OPTIONS, segmentFilter);
@@ -274,7 +289,7 @@ export default function LeadQueue() {
     // Ignored while `queryKey` is passed (see useWarmingUpRetry); kept equal
     // to the key's inputs so the fallback key stays correct if that changes.
     [leadsRequest, growthAgentProofKey],
-    { queryKey: leadsPageQuery.queryKey, keepPreviousData: true },
+    { queryKey: leadsPageQuery.queryKey, keepPreviousData: true, enabled: !meUnresolved },
   );
   // Audit states-v1 (2026-09-21): the queue used to mount LeadTable with an
   // empty array whenever `warmingUp` or `error` was set, so a cold start or a
@@ -317,34 +332,47 @@ export default function LeadQueue() {
     return leadsData?.leads ?? [];
   }, [leadsData]);
 
+  // The reader's place (audit shell-03 / runtime-08): sort and expanded row
+  // live in the URL, never in the leads request. `?row=` counts only when it
+  // names a row of the SETTLED list (placeholder rows belong to the previous
+  // filters); otherwise it is ignored here and the next place write drops it.
+  // Restoring it re-opens the in-memory preview only: no borrower, proof or
+  // draft request.
+  const place = parseLeadTablePlace(searchParams);
+  const settledRowIds = leadsData && !leadsPlaceholderData
+    ? new Set(visibleLeads.map((lead) => lead.borrower_id))
+    : null;
+  const expandedRow = place.row !== null && settledRowIds?.has(place.row) ? place.row : null;
+
   const countyLoading = Boolean(countyFilter) && countyZipsQuery.isPending;
   // Export provenance (audit delivery-08): the rows' own refresh time from
   // X-Data-Refreshed-At, and the rules version read on the Export click only,
   // for an actor who may read admin rules (GET /api/admin/rules writes no
   // audit row). Nothing export-only is fetched on mount.
+  const filterInput: LeadQueueExportFiltersInput = {
+    segment,
+    segmentCodes,
+    segmentMode,
+    stateFilter,
+    zipFilter,
+    stateFilters,
+    zipFilters,
+    cityFilters,
+    borrowerIdFilters,
+    countyFilter,
+    countyFilters,
+    targetLenderRef,
+    targetLenderRefs: targetLenderOptions,
+    portfolioCriteria,
+    approvalStatus: approvalStatus === 'any' ? undefined : approvalStatus,
+    outreachStatus: outreachStatus === 'any' ? undefined : outreachStatus,
+    assignedTo,
+    agedDays,
+    cohortId,
+    funnelStage,
+  };
   const exportContext: LeadExportContext = {
-    filters: buildLeadQueueExportFilters({
-      segment,
-      segmentCodes,
-      segmentMode,
-      stateFilter,
-      zipFilter,
-      stateFilters,
-      zipFilters,
-      cityFilters,
-      borrowerIdFilters,
-      countyFilter,
-      countyFilters,
-      targetLenderRef,
-      targetLenderRefs: targetLenderOptions,
-      portfolioCriteria,
-      approvalStatus: approvalStatus === 'any' ? undefined : approvalStatus,
-      outreachStatus: outreachStatus === 'any' ? undefined : outreachStatus,
-      assignedTo,
-      agedDays,
-      cohortId,
-      funnelStage,
-    }),
+    filters: buildLeadQueueExportFilters(filterInput),
     refreshedAt: leadsData?.dataRefreshedAt ?? null,
     // The export's 4 s bound signal is deliberately not threaded into this
     // read: GET /api/admin/rules writes no audit row, and a read that
@@ -368,7 +396,8 @@ export default function LeadQueue() {
     targetLenderRef,
     portfolioCriteria,
     outreachStatus,
-    assignedTo,
+    // The URL value: `me` reads "Me", never the resolved email.
+    assignedTo: assignedParam,
     agedDays,
     zipFilter,
     zipFilters,
@@ -393,6 +422,22 @@ export default function LeadQueue() {
     ids: visibleLeads.map((lead) => lead.borrower_id),
   } : null);
   const clearAllFilters = () => setSearchParams(searchParamsCleared(searchParams));
+  // Copy link (audit tables-09): this origin and path plus the shareable
+  // params only. Never the address bar: that holds the open row, maybe an
+  // assignee email and a Growth Agent proof bound to this session.
+  const copyQueueLink = () => {
+    const share = leadQueueShareParams(searchParams, { ...filterInput, assignedTo: assignedParam });
+    void copyLink(`${window.location.origin}${pathname}${share.search}`, {
+      success: 'Queue link copied',
+      successDetail: share.omitted.length > 0
+        ? `Left out: ${share.omitted.join(', ')}.`
+        : 'Anyone with access opens this queue view.',
+      failure: 'Copy failed',
+      // Never "copy the address bar": it holds exactly what this link leaves out.
+      failureDetail: 'The browser blocked clipboard access. Try again rather than sharing the address bar: '
+        + 'it can hold the open row and private filters.',
+    });
+  };
   const scopeFiltersActive = Boolean(
     funnelStage
       || zipFilter
@@ -411,11 +456,21 @@ export default function LeadQueue() {
       title="Ranked borrowers"
       lede="Expand a row, then approve or reject. Decisions are audited; nothing is sent automatically."
       heroRight={
-        <LeadQueueHeroFilterChips
-          chips={activeFilterChips}
-          onRemove={(chip) => setSearchParams(searchParamsWithoutFilter(searchParams, chip.params))}
-          focusFallbackRef={moreFiltersToggleRef}
-        />
+        // The presets and Copy link sit in the hero's action slot, stacked
+        // over the active-filter chips: a row of their own above the filter
+        // bar pushed the 480px table scroller below the fold at 1440x900.
+        <div className="lead-queue-hero">
+          <LeadQueueViews
+            searchParams={searchParams}
+            showAssignedToMe={actorIsListedLo}
+            onCopyLink={copyQueueLink}
+          />
+          <LeadQueueHeroFilterChips
+            chips={activeFilterChips}
+            onRemove={(chip) => setSearchParams(searchParamsWithoutFilter(searchParams, chip.params))}
+            focusFallbackRef={moreFiltersToggleRef}
+          />
+        </div>
       }
     >
       <div className="surface mb-grid">
@@ -579,9 +634,9 @@ export default function LeadQueue() {
                 />
                 <FilterSelect
                   label="ASSIGNED"
-                  value={assignedTo ?? 'All LOs'}
-                  options={['All LOs', ...salesTeam.map((member) => member.email)]}
-                  onChange={(v) => updateParam('assigned_to', v === 'All LOs' ? null : v)}
+                  value={assignedToMe ? 'Me' : assignedParam ?? 'All LOs'}
+                  options={['All LOs', ...(assignedToMe ? ['Me'] : []), ...salesTeam.map((member) => member.email)]}
+                  onChange={(v) => updateParam('assigned_to', v === 'All LOs' ? null : v === 'Me' ? 'me' : v)}
                 />
                 <FilterSelect
                   label="AGING"
@@ -636,11 +691,24 @@ export default function LeadQueue() {
           )}
         </div>
       )}
+      {meWithoutEmail && (
+        <div role="alert" className="status-callout status-callout--warning" data-testid="lead-queue-me-unresolved">
+          <span>The Assigned to me view needs your signed-in email, and this session has none, so no leads were read.</span>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={clearAllFilters}
+            aria-label="Clear the Assigned to me filter"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
       {/* The table slot while no payload exists: first load AND warm-up. The
           DegradedBanner can suppress WarmingUpBlock, so the skeleton — never a
           zero-count table — is what holds the slot. A load error shows only
           the alert above. */}
-      {!hasQueue && !loadError && (
+      {!hasQueue && !loadError && !meWithoutEmail && (
         <LeadQueueTableSkeleton />
       )}
       {countyLoading && hasQueue && !loadError && !warming && (
@@ -675,6 +743,18 @@ export default function LeadQueue() {
             view={tableView}
             onViewChange={(next) => setSearchParams(searchParamsWithLeadTableView(searchParams, next))}
             fillHeight
+            restoreScroll
+            // A sort (and Reset to rank) is a new history entry; expand and
+            // collapse replace the current one, so Back leaves the queue.
+            sort={place.sort}
+            onSortChange={(next) => setSearchParams(
+              searchParamsWithLeadTablePlace(searchParams, { sort: next, row: expandedRow }),
+            )}
+            expandedId={expandedRow}
+            onExpandedChange={(borrowerId) => setSearchParams(
+              searchParamsWithLeadTablePlace(searchParams, { row: borrowerId }),
+              { replace: true },
+            )}
           />
         </div>
       )}
