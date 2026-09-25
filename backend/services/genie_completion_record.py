@@ -1,8 +1,10 @@
 """The governed record's one commit point, and the cancelled end of a job.
 
 Audit 2026-09-21 ``genie-03``. A job-backed Genie turn the owner stops
-before its governed record exists must record nothing: no RUN_GENIE row, no
-action tokens, no session row. ``mip_app.genie_completion_jobs.recorded_at``
+before its governed record exists must record nothing: no ``genie.run_query``
+RUN_GENIE row, no action tokens, no session row (the submit's own
+``genie.message_submitted`` RUN_GENIE row was written before the job
+existed). ``mip_app.genie_completion_jobs.recorded_at``
 is that record's ONE commit point. The runner sets it with a conditional
 UPDATE that requires ``cancel_requested_at IS NULL``, immediately before the
 audit write, token issuance and session recording; the cancel route sets

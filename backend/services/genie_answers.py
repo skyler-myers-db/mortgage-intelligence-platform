@@ -310,8 +310,9 @@ class GenieCancelResponse(BaseModel):
     """``/message/cancel``: what the owner's Stop did (audit genie-03).
 
     ``cancelled``: this app will not verify or record the answer; nothing is
-    recorded for the turn (no RUN_GENIE row, no action tokens, no session
-    row). It never means that Genie's own message was cancelled: Genie may
+    recorded for the turn (no ``genie.run_query`` audit row, no action
+    tokens, no session row; the submit's ``genie.message_submitted`` row
+    stays). It never means that Genie's own message was cancelled: Genie may
     keep the question as context. ``recorded``: the answer was already
     verified and recorded before the Stop, so nothing changed. ``ended``: the
     job had already failed or expired. ``status`` is the job's status after
