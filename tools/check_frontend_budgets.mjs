@@ -277,8 +277,16 @@ const budgets = {
   // +1.19 (View Transitions, anchored hover card, nav). 437.77 -> 463.92 br,
   // 1526.70 -> 1603.11 raw, 507.53 -> 537.66 gzip, 67 -> 77 chunks; every new
   // surface is a lazy chunk (initial JS moved +0.76 br). ~5% headroom.
-  totalJsBytes: 1684 * KiB, // actual 1603.11 (77 chunks, wave-3 integration)
-  totalJsGzipBytes: 565 * KiB, // actual 537.66 (wave-3 integration)
+  // Re-baselined 2026-09-25 at the wave-4a integration, attributed by
+  // building every first-parent merge step of ux/wave-4a (br KiB, total JS
+  // 463.80 -> 484.23): test-infra-pr1 +0.14, delivery-boot +1.42 (boot
+  // module, shell skeleton), overlays +4.50 (lazy palette + drawer body
+  // chunks; initial JS -4.60), error-surfaces +12.50 (AsyncState, EmptyState,
+  // FetchedAt, RetryClock and the error vocabulary shipped per route chunk),
+  // growth-agent-trust +1.33, genie-server +0.63, the Home re-point -0.09.
+  // Initial JS 146.80 -> 144.09 br. ~5% headroom restored for wave 4b.
+  totalJsBytes: 1733 * KiB, // actual 1650.24 (91 chunks, wave-4a integration)
+  totalJsGzipBytes: 589 * KiB, // actual 560.08 (wave-4a integration)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -327,7 +335,7 @@ const budgets = {
   // left it 4.3%. Measured: 22.96 br; +~5% rounded up to a whole KiB.
   initialJsBrBytes: 152 * KiB, // actual 143.92 (5 chunks; 142.81 before the vendor split)
   initialCssBrBytes: 25 * KiB, // actual 22.96 (22.89 before the bold fallback faces; 22.82 with the static @fontsource CSS)
-  totalJsBrBytes: 488 * KiB, // actual 463.92 (77 chunks, wave-3 integration; see totalJsBytes)
+  totalJsBrBytes: 509 * KiB, // actual 484.23 (91 chunks, wave-4a integration; see totalJsBytes)
   maxLazyJsBrBytes: 38 * KiB, // actual 35.32 (LeadTable, wave-3 integration)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
@@ -340,16 +348,21 @@ const budgets = {
     // wave-3 integration: 4.52 -> 5.01, w3-motion-nav's icon stroke floor
     // and audit glyph in the shared Icon module. ~5% headroom.
     'src/routes/admin-config.access-denied.tsx': 6 * KiB, // actual 5.01
-    'src/routes/admin-config.tsx': 35 * KiB, // actual 32.79
-    'src/routes/analytics.tsx': 44 * KiB, // actual 41.60
+    // wave-4a: 33.75 -> 34.63 (error-surfaces +0.84: AsyncState/describeApiError).
+    'src/routes/admin-config.tsx': 37 * KiB, // actual 34.63
+    // wave-4a: 42.32 -> 43.24 (error-surfaces +0.95).
+    'src/routes/analytics.tsx': 46 * KiB, // actual 43.24
     // wave-2 integration: 50.03 -> 53.12, the w2-genie-turn lane's in-flight
     // turn store, route Stop and single announcer. ~5% headroom.
     // wave-3 integration: 53.01 -> 59.82, w3-genie-reading +5.13 (markdown
     // grammar, collapse, audited CSV), w3-genie-jobs +0.94 (job polling),
     // w3-motion-nav +0.53. ~5% headroom.
-    'src/routes/ask-genie.tsx': 63 * KiB, // actual 59.82
+    // wave-4a: 60.02 -> 61.87 (growth-agent-trust +1.33 plan execute,
+    // genie-server +0.57 cancel).
+    'src/routes/ask-genie.tsx': 65 * KiB, // actual 61.87
     'src/routes/asset.tsx': 8 * KiB, // actual 7.08
-    'src/routes/borrower-360.tsx': 38 * KiB, // actual 35.62
+    // wave-4a: 36.x -> 37.44 (delivery-boot +0.4, error-surfaces +0.37).
+    'src/routes/borrower-360.tsx': 40 * KiB, // actual 37.44
     // w4 pre-cut: 8.42 -> 8.99 on the CI (Linux) build, which measures ~0.1
     // KiB br more per route than the macOS builds these gates were set on;
     // SurfaceTitle folded into the shared Primitives chunk adds ~0.1 (a
@@ -357,20 +370,26 @@ const budgets = {
     'src/routes/glossary.tsx': 10 * KiB, // actual 8.99 (CI build)
     // wave-3 integration: 40.40 -> 43.24, w3-rate-lever +2.37 (the Rate
     // Lever on the geography hero), w3-motion-nav +0.49. ~5% headroom.
-    'src/routes/home.tsx': 46 * KiB, // actual 43.24
+    // wave-4a: 43.14 -> 44.17 (error-surfaces +1.16 AsyncState on Home).
+    'src/routes/home.tsx': 47 * KiB, // actual 44.17
     // wave-3 integration: 66.10 -> 67.13 net: w3-score-anatomy moved the
     // proof out (-4.23), w3-queue-place added place + bulk progress (+4.22).
-    'src/routes/lead-queue.tsx': 71 * KiB, // actual 67.13
+    // wave-4a: 67.13 -> 69.44 (error-surfaces +1.90 FetchedAt, EmptyState,
+    // queue version; overlays +0.22).
+    'src/routes/lead-queue.tsx': 73 * KiB, // actual 69.44
     // w4 pre-cut: 3.93 (wave 3) -> 4.00 on the CI build (see glossary above).
     'src/routes/not-found.tsx': 5 * KiB, // actual 4.00 (CI build)
     // wave-3 integration: ratcheted DOWN, 34.29 -> 31.29 (w3-score-anatomy
     // moved the proof surfaces into lazy chunks). ~5% headroom.
-    'src/routes/offer-orchestrator.tsx': 33 * KiB, // actual 31.29
+    // wave-4a: 31.40 -> 31.77 (error-surfaces +0.37).
+    'src/routes/offer-orchestrator.tsx': 34 * KiB, // actual 31.77
     'src/routes/portfolio-builder.tsx': 34 * KiB, // actual 31.76
     // wave-3 integration: 82.46 -> 83.57 (w3-rate-lever map facts +1.95,
     // w3-queue-place +2.39, w3-score-anatomy -4.24), 0.5% left: restored
     // to ~5% headroom.
-    'src/routes/segment-intelligence.tsx': 88 * KiB, // actual 83.57
+    // wave-4a: 83.43 -> 86.37 (error-surfaces +2.59 FetchedAt/EmptyState on
+    // Segments, overlays +0.29).
+    'src/routes/segment-intelligence.tsx': 91 * KiB, // actual 86.37
   },
 };
 
