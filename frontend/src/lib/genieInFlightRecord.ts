@@ -11,8 +11,12 @@
  * the job, before its first status poll). A v:1 record, written by the code
  * before jobs existed, is never resumed: `readRecord` reports it as
  * LEGACY_RECORD and the store removes it with a generic note.
+ *
+ * `questionHash` (audit 2026-09-21 `genie-03`, optional in v:2) is the
+ * submit's 16-hex question label, validated on read, so a reload-resumed job
+ * turn can still send its server cancel. Never the question itself.
  */
-import type { GenieTurnIds } from './genieAsk';
+import { GENIE_QUESTION_LABEL_RE, type GenieTurnIds } from './genieAsk';
 import { GENIE_IN_FLIGHT_TURN_KEY } from './genieConversation';
 import type { GenieTurnPhase, GenieTurnSurface } from './genieInFlightTurn';
 
@@ -29,6 +33,8 @@ export interface PersistedTurnRecord {
   asyncComplete: boolean;
   /** The job the 202 named (UUID-checked on read). */
   jobId?: string;
+  /** The submit's 16-hex question label (checked on read). */
+  questionHash?: string;
 }
 
 /** A record from before completion jobs (v:1): removed, never resumed. */
@@ -73,6 +79,10 @@ function parseRecord(raw: string): PersistedTurnRecord | typeof LEGACY_RECORD | 
     ids: parseIds(record.ids),
     asyncComplete: record.asyncComplete === true,
     jobId: typeof record.jobId === 'string' && JOB_ID_RE.test(record.jobId) ? record.jobId : undefined,
+    questionHash:
+      typeof record.questionHash === 'string' && GENIE_QUESTION_LABEL_RE.test(record.questionHash)
+        ? record.questionHash
+        : undefined,
   };
 }
 

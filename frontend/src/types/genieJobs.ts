@@ -23,9 +23,12 @@ export type GenieJobStage =
   | 'finalizing'
   | 'done'
   | 'failed'
-  | 'expired';
+  | 'expired'
+  | 'cancelled';
 
-export type GenieJobStatusValue = 'queued' | 'running' | 'succeeded' | 'failed' | 'expired';
+/** `cancelled` (audit genie-03): the owner stopped the turn before its answer
+ *  was recorded. Terminal, and not `failed`. */
+export type GenieJobStatusValue = 'queued' | 'running' | 'succeeded' | 'failed' | 'expired' | 'cancelled';
 
 export interface GenieCompletionJobStatus {
   kind: 'genie_completion_job';
@@ -50,6 +53,17 @@ export interface GenieJobProgress {
   stage_label: string;
   parts_done: number | null;
   parts_planned: number | null;
+}
+
+/** `POST /api/genie/message/cancel` (audit genie-03). `cancelled`: this app
+ *  will not verify or record the answer (never that Genie's own message was
+ *  cancelled). `recorded`: the answer was already recorded. `ended`: the job
+ *  had already failed or expired. */
+export interface GenieCancelResult {
+  kind: 'genie_completion_cancel';
+  job_id: string;
+  outcome: 'cancelled' | 'recorded' | 'ended';
+  status: GenieJobStatusValue;
 }
 
 /** Genie's own (last) progress, plus the completion job once there is one. */

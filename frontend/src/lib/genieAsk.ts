@@ -33,8 +33,9 @@
  * recovers by asking again. A terminal FAILED/CANCELLED/EXPIRED turn throws
  * `GenieLiveError` with the server's canned hint so callers render an honest
  * failure bubble without a wasted complete round-trip. Job polling adds 404
- * (not this actor's job) to the fatal set and ends on a failed or expired job
- * with the server's canned hint.
+ * (not this actor's job) to the fatal set and ends on ANY terminal job other
+ * than a succeeded one (failed, expired, or cancelled by the owner's Stop,
+ * audit `genie-03`) with the server's canned hint.
  */
 
 import type { GenieCompletionJobStatus, GenieSubmitResultWithJobs } from '../types/genieJobs';
@@ -88,10 +89,15 @@ export interface GenieTurnIds {
 }
 
 /** What the one submit POST returned: an inline answer, or a live turn to poll.
- *  `completionJobs`: the server will run the completion as a job. */
+ *  `completionJobs`: the server will run the completion as a job.
+ *  `questionHash`: the submit's 16-hex question label (what a cancel sends
+ *  instead of the question), or null when the server sent none. */
 export type GenieSubmitOutcome =
   | { kind: 'completed'; response: GenieResult }
-  | ({ kind: 'live'; deep: boolean; completionJobs: boolean } & GenieTurnIds);
+  | ({ kind: 'live'; deep: boolean; completionJobs: boolean; questionHash: string | null } & GenieTurnIds);
+
+/** The server's 16-hex question label (the audit ledger's `question_hash`). */
+export const GENIE_QUESTION_LABEL_RE = /^[0-9a-f]{16}$/;
 
 /** What the complete call returned: a job to poll, or (legacy / an older
  *  server) the governed answer itself. */
@@ -188,6 +194,10 @@ export async function submitGenieTurn(
     progressToken: token,
     deep: submitted.deep === true,
     completionJobs,
+    questionHash:
+      typeof submitted.question_hash === 'string' && GENIE_QUESTION_LABEL_RE.test(submitted.question_hash)
+        ? submitted.question_hash
+        : null,
   };
 }
 
@@ -304,13 +314,14 @@ export interface PollGenieJobOptions {
   sleep?: Sleep;
 }
 
-/** A terminal job's answer, a failure, or null while it still runs. */
+/** A terminal job's answer, a failure, or null while it still runs. Any
+ *  terminal status but `succeeded` (failed, expired, cancelled) throws. */
 export function settledGenieJob(job: GenieCompletionJobStatus): GenieResult | null {
   if (job.status === 'succeeded') {
     if (!job.response) throw new GenieLiveError('Genie returned an empty answer.');
     return job.response;
   }
-  if (job.status === 'failed' || job.status === 'expired') {
+  if (job.status !== 'queued' && job.status !== 'running') {
     throw new GenieLiveError(job.error_hint ?? 'Genie could not complete this question.', job.error_hint);
   }
   return null;
