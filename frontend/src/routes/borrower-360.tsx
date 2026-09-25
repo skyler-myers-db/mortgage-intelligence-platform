@@ -106,7 +106,7 @@ export default function Borrower360() {
     (signal) => api.borrower(id!, signal),
     { enabled: Boolean(id), queryKey: queryKeys.borrower(id) },
   );
-  const failurePage = useLazyModule(FAILURE_PAGE, error !== null).module;
+  const { module: failurePage, failed: failurePageFailed } = useLazyModule(FAILURE_PAGE, error !== null);
   // wow-stage-3: the lifecycle row carries the audit id of the latest
   // decision; when it does, the hero offers the Decision receipt read back
   // from that row. A 403 (actor outside the sales team) simply hides it.
@@ -186,11 +186,26 @@ export default function Borrower360() {
   if (error) {
     // A 404 keeps its copy; a bannered outage waits calmly; anything else in
     // the shared vocabulary, never the transport message (DossierFailure).
+    // Until that page's chunk loads (or if it cannot) a neutral line holds
+    // the page: the read did fail, so never a "Loading…" claim; once the
+    // chunk has failed, Retry (an explicit re-read) is the way forward.
     return failurePage ? (
       <failurePage.DossierFailure id={id} error={error} pager={pager} onRetry={manualRetry} />
     ) : (
-      <PageShell eyebrow="Borrower 360" title={`Borrower ${id}`} lede={`Loading borrower ${id}…`}>
+      <PageShell eyebrow="Borrower 360" title={`Borrower ${id}`} lede={`Borrower ${id} could not load.`}>
         {pager}
+        {failurePageFailed && (
+          <div className="surface">
+            <div className="surface__body surface__body--inline">
+              <Button onClick={manualRetry} aria-label={`Retry loading borrower ${id}`}>
+                Retry
+              </Button>
+              <Link className="btn" to="/lead-queue">
+                Back to lead queue
+              </Link>
+            </div>
+          </div>
+        )}
       </PageShell>
     );
   }
