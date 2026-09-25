@@ -10,6 +10,10 @@ only when the test says so.
 * the segment source-readiness gates: the list's soft TTL, stale-if-error,
   and a cold failure gates nothing and is NOT cached (the build used to
   swallow it, so a failure was stored as ``{}``);
+* the state footprint the Genie guards and schema validators read: stale
+  after 240 s, recomputed inline at 300 s (never older than the old hard
+  TTL), no stale-if-error: a degraded load REPLACES live coverage and a
+  failed refresh drops it; rows and flag come from one snapshot.
 """
 
 from __future__ import annotations
@@ -28,6 +32,13 @@ from backend.services.repositories.databricks_geo import DatabricksSegmentReposi
 from backend.services.repositories.databricks_rate_window import DatabricksRateWindowRepository
 from backend.services.repositories.databricks_segment_gates import apply_source_gates
 from backend.services.resilience import TTLCache
+from backend.services.state_footprint import (
+    FootprintState,
+    StateFootprintResolver,
+    _FootprintSnapshot,
+    _reset_state_footprint_resolver_for_tests,
+    _schema_state_footprint_provider,
+)
 
 
 class _DeferredExecutor(Executor):
@@ -292,3 +303,125 @@ def test_the_segment_repository_gates_through_its_own_gold_cache() -> None:
     assert repo.list(None)[0].source_status == "connected"
 
     assert isinstance(DatabricksSegmentRepository(warehouse)._gate_cache, GoldAggregateCache)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# The state footprint (guard-adjacent: the maximum age a reader sees is 300 s,
+# exactly the old hard TTL).
+# ---------------------------------------------------------------------------
+
+_NY = [FootprintState("NY", "New York", 1, True)]
+_NY_NJ = [FootprintState("NY", "New York", 1, True), FootprintState("NJ", "New Jersey", 2, False)]
+
+
+class _Coverage:
+    """Stands in for ``_load_from_uc``: the rows to answer, or None for an outage."""
+
+    def __init__(self, rows: list[FootprintState] | None) -> None:
+        self.rows = rows
+        self.error: BaseException | None = None
+        self.loads = 0
+
+    def __call__(self) -> list[FootprintState] | None:
+        self.loads += 1
+        if self.error is not None:
+            raise self.error
+        return self.rows
+
+
+@pytest.fixture
+def footprint() -> tuple[StateFootprintResolver, _Coverage, _Clock, _DeferredExecutor]:
+    clock, deferred = _Clock(), _DeferredExecutor()
+    resolver = StateFootprintResolver(cache=_swr(clock, deferred))
+    coverage = _Coverage(_NY)
+    resolver._load_from_uc = coverage  # type: ignore[method-assign]
+    return resolver, coverage, clock, deferred
+
+
+def test_footprint_hits_before_its_soft_ttl(footprint: Any) -> None:
+    resolver, coverage, clock, deferred = footprint
+    assert resolver.state_codes() == ["NY"]
+    clock.now += 239.0
+    assert resolver.state_codes() == ["NY"]
+    assert coverage.loads == 1 and deferred.jobs == []
+
+
+def test_footprint_serves_stale_with_exactly_one_refresh(footprint: Any) -> None:
+    resolver, coverage, clock, deferred = footprint
+    resolver.state_codes()
+    coverage.rows = _NY_NJ
+    clock.now += 241.0
+
+    assert resolver.state_codes() == ["NY"]
+    assert resolver.using_fallback() is False
+    assert len(deferred.jobs) == 1
+
+    deferred.run_all()
+    assert resolver.state_codes() == ["NY", "NJ"]
+    assert coverage.loads == 2
+
+
+def test_footprint_recomputes_inline_at_the_old_hard_ttl(footprint: Any) -> None:
+    resolver, coverage, clock, deferred = footprint
+    resolver.state_codes()
+    coverage.rows = _NY_NJ
+    clock.now += 300.0
+
+    assert resolver.state_codes() == ["NY", "NJ"], "never older than the 300 s the guards saw before"
+    assert deferred.jobs == []
+
+
+def test_a_degraded_refresh_replaces_live_coverage_and_flips_the_flag(footprint: Any) -> None:
+    resolver, coverage, clock, deferred = footprint
+    assert resolver.using_fallback() is False
+    clock.now += 241.0
+    assert resolver.using_fallback() is False  # stale serve; refresh scheduled
+    coverage.rows = None  # UC unreachable: the generic fallback
+    deferred.run_all()
+
+    assert resolver.using_fallback() is True
+    assert len(resolver.state_codes()) == 50
+    assert resolver.default_state_code() is None
+
+
+def test_a_failed_refresh_drops_the_snapshot_instead_of_serving_it(footprint: Any) -> None:
+    resolver, coverage, clock, deferred = footprint
+    resolver.state_codes()
+    clock.now += 241.0
+    resolver.state_codes()
+    coverage.error = RuntimeError("malformed coverage row")
+    deferred.run_all()
+    coverage.error = None
+    coverage.rows = _NY_NJ
+
+    assert resolver.state_codes() == ["NY", "NJ"], "the next read reloads inline"
+    assert coverage.loads == 3
+    assert deferred.jobs == []
+
+
+def test_invalidate_drops_the_snapshot(footprint: Any) -> None:
+    resolver, coverage, _clock, _deferred = footprint
+    resolver.state_codes()
+    coverage.rows = _NY_NJ
+    resolver.invalidate()
+    assert resolver.state_codes() == ["NY", "NJ"]
+    assert coverage.loads == 2
+
+
+def test_the_schema_provider_reads_rows_and_flag_from_one_snapshot() -> None:
+    live = _FootprintSnapshot(rows=tuple(_NY), status="live_coverage")
+    degraded = _FootprintSnapshot(rows=tuple(_NY_NJ), status="fallback")
+    answers = iter([live, degraded])
+    resolver = StateFootprintResolver()
+    resolver.snapshot = lambda: next(answers)  # type: ignore[method-assign]
+    _reset_state_footprint_resolver_for_tests(resolver)
+    try:
+        states, using_fallback = _schema_state_footprint_provider()
+    finally:
+        _reset_state_footprint_resolver_for_tests(None)
+
+    assert (states, using_fallback) == ((("NY", "New York"),), False)
+
+
+def test_the_footprint_defaults_to_the_gold_cache() -> None:
+    assert isinstance(StateFootprintResolver()._cache, GoldAggregateCache)
