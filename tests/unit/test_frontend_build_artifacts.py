@@ -169,6 +169,21 @@ def test_built_html_loads_the_boot_module_just_before_the_entry() -> None:
     assert 'as="fetch"' not in html
 
 
+def test_built_html_paints_the_text_free_shell_skeleton() -> None:
+    """Audit ``bundle-10``: #root carries the aria-hidden shell skeleton, with
+    no text and no inline style, in both shells."""
+    _built_entry_chunk()
+    for shell in ("index.html", "index.home.html"):
+        html = (DIST / shell).read_text(encoding="utf-8")
+        match = re.search(r'<div id="root">(<div class="app-shell" aria-hidden="true">.*?)</div>\s*</body>', html, re.S)
+        assert match, f"{shell}: #root holds the shell skeleton"
+        skeleton = match.group(1)
+        assert re.sub(r"<[^>]+>", "", skeleton) == "", "no text nodes"
+        assert "style=" not in skeleton and " id=" not in skeleton and "role=" not in skeleton
+        for name in ("rail", "topbar", "main", "route-nav", "proto-hero", "skeleton skeleton--title"):
+            assert f'class="{name}"' in skeleton
+
+
 _MODULEPRELOAD = re.compile(r'<link rel="modulepreload" crossorigin href="/(assets/[^"]+\.js)">')
 
 

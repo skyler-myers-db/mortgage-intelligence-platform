@@ -4,6 +4,7 @@ import { defineConfig, type Plugin } from "vite";
 import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { bootModulePlugin } from "./src/lib/bootModulePlugin.ts";
+import { shellSkeleton } from "./src/lib/shellSkeleton.ts";
 
 /** Written beside the build manifest; postbuild moves both to build-meta/. */
 const CHUNK_MODULES_FILE = "build-modules.json";
@@ -116,6 +117,7 @@ export default defineConfig({
     chunkModulesManifest(),
     preloadWebfonts(),
     bootModulePlugin(),
+    shellSkeleton(),
   ],
   build: {
     // The chunk graph tools/check_frontend_budgets.mjs measures (initial and
