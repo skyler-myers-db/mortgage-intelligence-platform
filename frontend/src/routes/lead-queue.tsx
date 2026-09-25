@@ -433,7 +433,9 @@ export default function LeadQueue() {
         ? `Left out: ${share.omitted.join(', ')}.`
         : 'Anyone with access opens this queue view.',
       failure: 'Copy failed',
-      failureDetail: 'The browser blocked clipboard access. Copy the address bar instead.',
+      // Never "copy the address bar": it holds exactly what this link leaves out.
+      failureDetail: 'The browser blocked clipboard access. Try again rather than sharing the address bar: '
+        + 'it can hold the open row and private filters.',
     });
   };
   const scopeFiltersActive = Boolean(

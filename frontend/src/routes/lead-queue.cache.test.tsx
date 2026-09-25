@@ -83,6 +83,7 @@ vi.mock('../lib/api', () => ({
 }));
 
 import LeadQueue from './lead-queue';
+import { clearToasts, getToasts } from '../lib/toast';
 
 let navigateTo: (url: string) => void = () => {};
 let currentSearch = '';
@@ -341,6 +342,33 @@ describe('LeadQueue cache identity', () => {
       expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/lead-queue?state=IL&sort=equity&dir=desc`);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it('a blocked clipboard never tells the reader to share the address bar instead', async () => {
+    clearToasts();
+    const writeText = vi.fn<(text: string) => Promise<void>>()
+      .mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
+    vi.stubGlobal('navigator', { ...window.navigator, clipboard: { writeText } });
+    try {
+      await mountAt('/lead-queue?state=IL&row=B-P5YP9ESW32R7Z');
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-testid="lead-queue-copy-link"]')?.click();
+      });
+      await settle();
+
+      // The address bar holds exactly what Copy link leaves out (the open
+      // row, an assignee email, a Growth Agent proof).
+      const [failure] = getToasts();
+      expect(failure).toMatchObject({ tone: 'error', title: 'Copy failed' });
+      expect(failure.detail).toBe(
+        'The browser blocked clipboard access. Try again rather than sharing the address bar: '
+        + 'it can hold the open row and private filters.',
+      );
+      expect(failure.detail).not.toMatch(/copy the address bar/i);
+    } finally {
+      vi.unstubAllGlobals();
+      clearToasts();
     }
   });
 });
