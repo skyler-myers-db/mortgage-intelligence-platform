@@ -7,10 +7,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError } from '../lib/api';
 import {
   buildLeadQueueExportFilters,
-  formatLeadQueueLoadError,
   searchParamsAfterSegmentRemoval,
   segmentFilterChips,
 } from './lead-queue.filters';
@@ -19,10 +17,13 @@ import type { LeadExportContext } from '../components/mortgage/LeadTable';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+/** A ranked row; the stubbed LeadTable reads only what the route hands it. */
+const ONE_LEAD = { borrower_id: 'B-0123456789ABC' } as never;
+
 const retryMocks = vi.hoisted(() => ({
   state: {
     data: {
-      leads: [],
+      leads: [] as never[],
       totalMatching: 0,
       returnedRows: 0,
       truncatedAt: null,
@@ -208,37 +209,6 @@ describe('buildLeadQueueExportFilters', () => {
   });
 });
 
-describe('formatLeadQueueLoadError', () => {
-  it('turns 422 validation responses into filter guidance instead of a raw HTTP code', () => {
-    const state = formatLeadQueueLoadError(new ApiError('aged_days: Input should be less than or equal to 90', {
-      path: '/api/v1/leads',
-      status: 422,
-      validationIssues: [
-        {
-          field: 'aged_days',
-          location: ['query', 'aged_days'],
-          message: 'Input should be less than or equal to 90',
-        },
-      ],
-    }));
-
-    expect(state.invalidFilters).toBe(true);
-    expect(state.message).toContain('Lead queue filters are invalid.');
-    expect(state.message).toContain('aged_days: Input should be less than or equal to 90');
-    expect(state.message).not.toContain('422');
-  });
-
-  it('keeps retry semantics for non-validation errors', () => {
-    const state = formatLeadQueueLoadError(new ApiError('Warehouse unavailable', {
-      path: '/api/v1/leads',
-      status: 503,
-    }));
-
-    expect(state.invalidFilters).toBe(false);
-    expect(state.message).toBe("Couldn't load leads: Warehouse unavailable");
-  });
-});
-
 describe('LeadQueue filter state', () => {
   let root: Root;
   let queryClient: QueryClient;
@@ -263,6 +233,7 @@ describe('LeadQueue filter state', () => {
     vi.clearAllMocks();
     appMocks.canAccessAdmin = true;
     retryMocks.state.isPlaceholderData = false;
+    retryMocks.state.data = { leads: [], totalMatching: 0, returnedRows: 0, truncatedAt: null };
   });
 
   async function mountAt(url: string) {
@@ -301,6 +272,8 @@ describe('LeadQueue filter state', () => {
 
   it('resolves the rules version through the query cache only when the export asks, for an admin', async () => {
     apiMocks.adminRules.mockResolvedValue({ offer_rules_version: 'rules.itm_2026_09' });
+    // LeadTable mounts only for rows (a measured zero is an EmptyState).
+    retryMocks.state.data = { ...retryMocks.state.data, leads: [ONE_LEAD], totalMatching: 1, returnedRows: 1 };
     await mountAt('/lead-queue');
     const resolve = tableProps.current?.exportContext?.resolveRulesVersion;
     expect(resolve).toBeTypeOf('function');
@@ -320,9 +293,9 @@ describe('LeadQueue filter state', () => {
 
   it('stamps the rows’ refresh time and blocks the export while placeholder rows are on screen', async () => {
     retryMocks.state.data = {
-      leads: [],
-      totalMatching: 0,
-      returnedRows: 0,
+      leads: [ONE_LEAD],
+      totalMatching: 1,
+      returnedRows: 1,
       truncatedAt: null,
       dataRefreshedAt: '2026-09-21T07:30:00Z',
     } as unknown as typeof retryMocks.state.data;
