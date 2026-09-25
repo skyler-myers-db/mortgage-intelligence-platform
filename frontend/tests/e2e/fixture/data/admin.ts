@@ -94,9 +94,25 @@ const AUDIT_EVENTS: AuditEventRow[] = LEADS.slice(0, 12).map((lead, index) => {
   };
 });
 
+/** One `GET /api/audit/rollups` row (backend AuditRollupResponse). */
+interface AuditRollupFixtureRow {
+  bucket_start: string;
+  event_type: string;
+  group_by: 'event_type';
+  group_key: string;
+  event_count: number;
+}
+
+function rollup(date: string, eventType: string, eventCount: number): AuditRollupFixtureRow {
+  return { bucket_start: `${date}T00:00:00Z`, event_type: eventType, group_by: 'event_type', group_key: eventType, event_count: eventCount };
+}
+
 const DESTINATIONS: ActivationDestination[] = [
-  { destination_key: 'salesforce_default', destination_type: 'salesforce', display_name: 'Salesforce (dry run)', status: 'dry_run', allowed_actions: ['stage'], updated_at: SNAPSHOT_AT },
-  { destination_key: 'los_pos_default', destination_type: 'los_pos', display_name: 'LOS / POS', status: 'not_configured', allowed_actions: [], updated_at: null },
+  // allowed_actions uses the governed activation vocabulary and is never
+  // empty (backend/schemas/activation.py); the values mirror the
+  // lakebase/schema.sql destination seed for each destination type.
+  { destination_key: 'salesforce_default', destination_type: 'salesforce', display_name: 'Salesforce (dry run)', status: 'dry_run', allowed_actions: ['stage_lead', 'stage_campaign'], updated_at: SNAPSHOT_AT },
+  { destination_key: 'los_pos_default', destination_type: 'los_pos', display_name: 'LOS / POS', status: 'not_configured', allowed_actions: ['stage_lead'], updated_at: null },
 ];
 
 const CAPABILITIES: GrowthAgentCapabilityRow[] = [
@@ -164,12 +180,14 @@ export const adminFixtures: FixtureEntry[] = [
     return json<AuditEventRow[]>(AUDIT_EVENTS.slice(0, limit > 0 ? limit : AUDIT_EVENTS.length));
   }),
   fixture('GET', '/api/audit/events/page', () => json<AuditEventPage>({ items: AUDIT_EVENTS, next_cursor: null })),
+  // The default `group_by=event_type` rollup: the backend echoes the group in
+  // group_by / group_key and fills event_type from it (backend/api/audit.py).
   fixture('GET', '/api/audit/rollups', () =>
-    json<Array<{ bucket_start: string; event_type: string; event_count: number }>>(
+    json<AuditRollupFixtureRow[]>(
       ['2026-07-08', '2026-07-09', '2026-07-10', '2026-07-11', '2026-07-12', '2026-07-13', '2026-07-14'].flatMap((date, index) => [
-        { bucket_start: `${date}T00:00:00Z`, event_type: 'VIEW_LEADS', event_count: 40 + index * 6 },
-        { bucket_start: `${date}T00:00:00Z`, event_type: 'APPROVE_OUTREACH', event_count: 8 + (index % 3) * 4 },
-        { bucket_start: `${date}T00:00:00Z`, event_type: 'RUN_GENIE', event_count: 12 + (index % 4) * 5 },
+        rollup(date, 'VIEW_LEADS', 40 + index * 6),
+        rollup(date, 'APPROVE_OUTREACH', 8 + (index % 3) * 4),
+        rollup(date, 'RUN_GENIE', 12 + (index % 4) * 5),
       ]),
     ),
   ),

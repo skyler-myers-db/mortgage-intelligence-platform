@@ -60,9 +60,17 @@ export const SET_STATE_IN_EFFECT_SCOPE = [
   "src/components/mortgage/useLeadApprovalActions.ts",
   "src/components/mortgage/useLeadSalesActions.ts",
   "src/components/mortgage/ApprovalBanner.tsx",
+  "src/components/mortgage/GenieHistoryMenu.tsx",
   "src/routes/lead-queue.tsx",
   "src/lib/mutations/*.ts",
 ];
+
+/** Fixture harness files may import TYPES from frontend/src, never runtime code. */
+const FIXTURE_SRC_TYPE_ONLY = {
+  group: ["**/src/**"],
+  allowTypeImports: true,
+  message: "Fixture harness files may only `import type` from frontend/src.",
+};
 
 export default [
   {
@@ -154,11 +162,56 @@ export default [
       "@typescript-eslint/no-restricted-imports": [
         "error",
         {
+          patterns: [FIXTURE_SRC_TYPE_ONLY],
+        },
+      ],
+    },
+  },
+  // The fixture data the contract exporter loads on bare Node (audit
+  // quality-09 step 3, tools/export_e2e_fixtures.mjs): Node strips types but
+  // resolves every surviving import, so a type imported as a value would load
+  // frontend/src at runtime, and a bare package would need node_modules.
+  // node: builtins are fine. This block restates the src rule because a
+  // later block's options replace an earlier block's for the same rule.
+  // Type stripping erases only a whole `import type` / `export type`: an
+  // all-inline `import { type A } from "x"` becomes `import {} from "x"`, and
+  // `export { type A } from "x"` becomes `export {} from "x"`, which still
+  // load "x". no-restricted-imports' allowTypeImports accepts both spellings,
+  // so they are banned here outright (no-import-type-side-effects also fixes
+  // the inline form consistent-type-imports' inline fix would produce).
+  {
+    files: [
+      "tests/e2e/fixture/data/**/*.ts",
+      "tests/e2e/fixture/registry.ts",
+      "tests/e2e/fixture/mockApi.ts",
+      "tests/e2e/fixture/contractSamples.ts",
+    ],
+    rules: {
+      "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports", fixStyle: "inline-type-imports" }],
+      "@typescript-eslint/no-import-type-side-effects": "error",
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "ExportNamedDeclaration[source][exportKind='value']:not(:has(ExportSpecifier[exportKind='value']))",
+          message:
+            "Write `export type { … } from …`: Node's type stripping keeps `export { type A } from …` as a runtime load of that module, which the contract exporter runs on bare Node.",
+        },
+        {
+          selector: "ImportExpression",
+          message:
+            "Fixture data is loaded by the contract exporter on bare Node: use a static relative import, or `import type`, never import().",
+        },
+      ],
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
           patterns: [
+            FIXTURE_SRC_TYPE_ONLY,
             {
-              group: ["**/src/**"],
+              regex: "^(?![./]|node:)",
               allowTypeImports: true,
-              message: "Fixture harness files may only `import type` from frontend/src.",
+              message:
+                "Fixture data is loaded by the contract exporter on bare Node: import a package with `import type` only (node: builtins are fine).",
             },
           ],
         },

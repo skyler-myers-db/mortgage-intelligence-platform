@@ -14,12 +14,16 @@ The static checks pin that wiring. The served-layer checks go through the
 real ``backend.main.app`` and skip when ``frontend/dist`` is not built, which
 is the case in the backend CI job (it runs before any frontend build); there
 the postbuild step's own dist scan, which runs inside every
-``npm run build``, is the fail-closed guard.
+``npm run build``, is the fail-closed guard. CI's e2e-fixture job runs this
+file again right after its build with ``MIP_REQUIRE_FRONTEND_DIST=1``, where a
+missing dist or build-meta FAILS instead of skipping, so the served-layer
+checks can never go silently vacuous.
 """
 from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
 from pathlib import Path
 
@@ -31,6 +35,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 DIST = FRONTEND / "dist"
 RELOCATED_DIRS = ("frontend/build-meta/", "frontend/sourcemaps/")
+REQUIRE_DIST_FLAG = "MIP_REQUIRE_FRONTEND_DIST"
 RELOCATED_SAMPLES = (
     "frontend/build-meta/build-manifest.json",
     "frontend/sourcemaps/assets/index-AbC123.js.map",
@@ -77,10 +82,17 @@ def test_vite_emits_hidden_source_maps_and_the_named_manifest() -> None:
     assert re.search(r"""^\s*manifest:\s*(["'])build-manifest\.json\1,""", config, re.MULTILINE)
 
 
+def _skip_unless_required(reason: str) -> None:
+    """Skip where no build ran; FAIL where the caller promised one."""
+    if os.environ.get(REQUIRE_DIST_FLAG) == "1":
+        pytest.fail(f"{reason}, but {REQUIRE_DIST_FLAG}=1 requires the built frontend")
+    pytest.skip(reason)
+
+
 def _built_entry_chunk() -> Path:
     entries = sorted((DIST / "assets").glob("index-*.js")) if (DIST / "assets").is_dir() else []
     if not (DIST / "index.html").is_file() or not entries:
-        pytest.skip("frontend/dist is not built in this checkout")
+        _skip_unless_required("frontend/dist is not built in this checkout")
     return entries[0]
 
 
@@ -117,7 +129,7 @@ def test_chunk_modules_key_node_modules_ids_by_package_path() -> None:
     _built_entry_chunk()
     modules_file = FRONTEND / "build-meta" / "build-modules.json"
     if not modules_file.is_file():
-        pytest.skip("frontend/build-meta is not built in this checkout")
+        _skip_unless_required("frontend/build-meta is not built in this checkout")
     modules = json.loads(modules_file.read_text(encoding="utf-8"))
     ids = {module for chunk in modules["chunks"].values() for module in chunk}
     ids.update(modules["entryStaticModules"])
@@ -126,3 +138,24 @@ def test_chunk_modules_key_node_modules_ids_by_package_path() -> None:
     assert vendored, "the build renders node_modules modules"
     assert [module for module in vendored if not module.startswith("node_modules/")] == []
     assert sorted(module for module in ids if module.startswith(("../", "/"))) == []
+
+
+def _missing_build_outcome() -> str:
+    """How a missing build ends a test: 'skip' or 'fail' (never both)."""
+    try:
+        _skip_unless_required("frontend/dist is not built in this checkout")
+    except pytest.fail.Exception:
+        return "fail"
+    except pytest.skip.Exception:
+        return "skip"
+    return "none"
+
+
+def test_the_require_flag_turns_a_missing_build_into_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(REQUIRE_DIST_FLAG, raising=False)
+    assert _missing_build_outcome() == "skip"
+
+    monkeypatch.setenv(REQUIRE_DIST_FLAG, "1")
+    assert _missing_build_outcome() == "fail"

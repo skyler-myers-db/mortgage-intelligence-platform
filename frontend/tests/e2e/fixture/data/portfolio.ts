@@ -107,9 +107,33 @@ export const HOME_SUMMARY: HomeSummary = {
     { measure: 'refi_economics_screen', label: 'refi candidates', display: '+2,250', value_token: '+2,250', current: TOTALS.inTheMoney, baseline: 10590, delta: 2250, delta_pct: 21.2 },
     { measure: 'offers_available', label: 'offers available', display: '+190', value_token: '+190', current: TOTALS.offersRecommended, baseline: 6060, delta: 190, delta_pct: 3.1 },
   ],
-  current: {},
-  baseline: {},
-  deltas: {},
+  // The HeadlineKpis readings the highlights above are cut from (backend
+  // HeadlineKpis / KpiDeltas: every count is required, deltas = current -
+  // baseline). Home renders the highlights, not these objects.
+  current: {
+    marketable_population: TOTALS.addressable,
+    refi_economics_screen: TOTALS.inTheMoney,
+    high_opportunity: TOTALS.highOpportunity,
+    offers_available: TOTALS.offersRecommended,
+    offers_recommended: TOTALS.offersRecommended,
+    avg_opportunity_score: 81,
+  },
+  baseline: {
+    marketable_population: 88491,
+    refi_economics_screen: 10590,
+    high_opportunity: 4059,
+    offers_available: 6060,
+    offers_recommended: 6060,
+    avg_opportunity_score: 80.6,
+  },
+  deltas: {
+    marketable_population: TOTALS.addressable - 88491,
+    refi_economics_screen: 2250,
+    high_opportunity: 61,
+    offers_available: 190,
+    offers_recommended: 190,
+    avg_opportunity_score: 0.4,
+  },
   current_source: 'mip.semantics.portfolio_headline_metric_view',
   baseline_source: 'mip_app.kpi_snapshots',
 };
@@ -123,20 +147,39 @@ export const SALES_TEAM: SalesTeamMember[] = [
 export const portfolioFixtures: FixtureEntry[] = [
   fixture('POST', '/api/portfolio/preview', (request) => json<PortfolioPreview>(previewFor(request))),
   fixture('POST', '/api/portfolio/campaign-recommendation', () =>
+    // The backend's reviewed fallback (services/campaign_intelligence.py
+    // `_fallback` / `_evidence`), so every CampaignRecommendationResponse
+    // validator holds: the audience summary and strategy carry no numbers
+    // (numeric facts live in `evidence`), each body ends on a review
+    // invitation, and no evidence label is name-shaped.
     json<CampaignRecommendationResponse>({
       generation_mode: 'reviewed_fallback',
-      generator_label: 'Reviewed campaign template',
+      generator_label: 'Reviewed campaign framework',
       performance_status: 'insufficient_sample',
-      audience_summary: `${TOTALS.contactable.toLocaleString('en-US')} contact-eligible borrowers across the current footprint`,
-      strategy: 'Review two governed variants before approval; a human approves every send.',
+      audience_summary:
+        'The selected audience is led by borrowers with refinance economics and usable home equity and is ready for a controlled message test.',
+      strategy:
+        'Compare the reviewed benefit and guidance frames with one clear review invitation and a randomized holdout.',
       variants: [
-        { variant_name: 'Benefit-led', subject: 'Review your mortgage options', body: 'A draft for human review. No message is sent without approval.', hypothesis: 'Benefit framing lifts response for in-the-money borrowers.', provenance_token: null },
-        { variant_name: 'Guidance-led', subject: 'A mortgage review may help', body: 'A second draft for human review. No message is sent without approval.', hypothesis: 'Guidance framing suits lower-intent borrowers.', provenance_token: null },
+        {
+          variant_name: 'Benefit-led',
+          subject: 'See whether your mortgage options have improved',
+          body: 'A refinance and home-equity review can help you compare your current mortgage with other available options. A loan officer can explain the tradeoffs in plain language. Would you like to schedule a review?',
+          hypothesis: 'A specific potential benefit and a low-friction review invitation will earn more qualified responses than a generic rate message.',
+          provenance_token: null,
+        },
+        {
+          variant_name: 'Guidance-led',
+          subject: 'A clearer way to review your current mortgage',
+          body: 'Mortgage choices can change as your balance, equity, and goals change. A loan officer can walk through whether a refinance fits your situation, with no assumption that changing your loan is the right answer. Would a review be useful?',
+          hypothesis: 'Plain-language guidance and an explicit no-pressure frame will improve trust and response quality for borrowers who are not ready for a product-led message.',
+          provenance_token: null,
+        },
       ],
       holdout_pct: 10,
       evidence: [
-        { label: 'Contact-eligible borrowers', value: TOTALS.contactable.toLocaleString('en-US'), source_asset: 'mip.gold.borrower_360' },
-        { label: 'Average rate spread', value: '112 bps', source_asset: 'mip.semantics.portfolio_headline_metric_view' },
+        { label: 'Eligible cohort', value: `${TOTALS.contactable.toLocaleString('en-US')} borrowers`, source_asset: 'mip.semantics.portfolio_headline_metric_view' },
+        { label: 'Average rate spread', value: '112 bps', source_asset: 'mip.gold.borrower_360' },
       ],
       warnings: [],
     }),

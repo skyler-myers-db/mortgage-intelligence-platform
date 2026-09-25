@@ -19,6 +19,7 @@
  * starters curated for the current route.
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -158,6 +159,9 @@ describe('floating Genie conversational controls', () => {
   let container: HTMLDivElement;
   let root: Root;
   let route = '/';
+  // The History menu reads its rows through useQuery (audit runtime-06), so
+  // the case that opens it needs a client: one per test, never retrying.
+  let queryClient: QueryClient;
 
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
@@ -185,10 +189,12 @@ describe('floating Genie conversational controls', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   });
 
   afterEach(() => {
     act(() => root.unmount());
+    queryClient.clear();
     container.remove();
     // The turn lives in a module-level store that outlives the panel.
     __resetGenieTurnStoreForTests();
@@ -200,12 +206,14 @@ describe('floating Genie conversational controls', () => {
   function render() {
     act(() => {
       root.render(
-        <MemoryRouter initialEntries={[route]}>
-          <button type="button" aria-label="Toggle Genie chat" aria-pressed={appState.genieOpen}>
-            Genie
-          </button>
-          <GenieChat />
-        </MemoryRouter>,
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={[route]}>
+            <button type="button" aria-label="Toggle Genie chat" aria-pressed={appState.genieOpen}>
+              Genie
+            </button>
+            <GenieChat />
+          </MemoryRouter>
+        </QueryClientProvider>,
       );
     });
   }
