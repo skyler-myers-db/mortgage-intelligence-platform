@@ -75,7 +75,7 @@
   width: var(--bar-pct, 0%);
   min-width: var(--sp-1);
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--seg-itm), var(--accent));
+  background: linear-gradient(90deg, var(--seg-itm), var(--accent-data));
 }
 .analytics-bars__value {
   justify-self: end;
@@ -111,7 +111,7 @@
   transition: opacity var(--dur-base) var(--ease);
 }
 .funnel-sankey__bar {
-  fill: var(--accent);
+  fill: var(--accent-data);
   transition: fill var(--dur-fast) var(--ease);
 }
 .funnel-sankey__count {
@@ -135,9 +135,11 @@
   cursor: pointer;
   outline: none;
 }
+/* Hover leans the data ink toward --text-1, which only raises its contrast
+   on either theme; the focus ring below still marks focus. */
 .funnel-sankey__node:hover .funnel-sankey__bar,
 .funnel-sankey__node:focus-visible .funnel-sankey__bar {
-  fill: var(--accent-hover);
+  fill: color-mix(in oklab, var(--accent-data) 80%, var(--text-1));
 }
 .funnel-sankey__node:hover .funnel-sankey__label,
 .funnel-sankey__node:focus-visible .funnel-sankey__label {
@@ -275,7 +277,7 @@
   inline-size: var(--sp-2);
   block-size: var(--sp-2);
   border-radius: var(--r-pill);
-  background: var(--accent);
+  background: var(--accent-data);
   border: 1px solid var(--bg-1);
   transform: translate(-50%, -50%);
 }
@@ -306,7 +308,7 @@
 .analytics-chart__tip-y { color: var(--text-2); font-size: var(--fs-11); }
 .analytics-line-chart polyline {
   fill: none;
-  stroke: var(--accent);
+  stroke: var(--accent-data);
   stroke-width: 2.4;
 }
 .analytics-chart__axis {

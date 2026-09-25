@@ -140,7 +140,7 @@ export function GenieBarChart({
                 y={y + 4}
                 width={Math.max(2, w)}
                 height={rowH - 8}
-                fill="var(--accent)"
+                fill="var(--accent-data)"
                 rx={3}
               />
               <text

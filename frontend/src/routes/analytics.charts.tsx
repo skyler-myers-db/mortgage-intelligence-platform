@@ -231,7 +231,7 @@ export function FunnelSankey({
     >
       <defs>
         <linearGradient id={`fs-${gradientId}`} x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.5" />
+          <stop offset="0%" stopColor="var(--accent-data)" stopOpacity="0.5" />
           <stop offset="100%" stopColor="var(--seg-itm)" stopOpacity="0.28" />
         </linearGradient>
       </defs>
