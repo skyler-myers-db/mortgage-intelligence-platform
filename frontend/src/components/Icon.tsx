@@ -1,10 +1,20 @@
 import type { CSSProperties, ReactElement, SVGProps } from 'react';
 
 /**
- * Minimal inline SVG icon set ported verbatim from the Module 0 prototype.
- * Stroke-based, Geist-like. One component, one name prop. Keep the prototype
- * naming (sparkle, bolt, db, flow, target, permit, tag, investor, equity,
- * money, audit, tweak, etc.) — pages, rail, and topbar all rely on it.
+ * Minimal inline SVG icon set ported from the Module 0 prototype
+ * (design_files/Module 0 Prototype.html:986-1031). Stroke-based, Geist-like.
+ * One component, one name prop. Keep the prototype naming (sparkle, bolt,
+ * db, flow, target, permit, tag, investor, equity, money, audit, tweak,
+ * etc.) — pages, rail, and topbar all rely on it.
+ *
+ * Two declared departures (2026-09-21 audit critic-12):
+ *  - a stroke floor at small sizes: the prototype's fixed 1.6 on a 24 unit
+ *    viewBox renders 0.6-0.8 CSS px at the 9-12 px sizes most call sites
+ *    use, so at 12 px and below the stroke is scaled to at least 1 CSS px
+ *    (`iconStrokeWidth`); 14 px and up keep 1.6. A caller's explicit
+ *    strokeWidth still wins.
+ *  - `audit` is its own glyph (a clipboard list), no longer the filter's
+ *    three bars.
  */
 export type IconName =
   | 'search' | 'filter' | 'map' | 'layers' | 'bolt' | 'home' | 'user' | 'pin'
@@ -47,7 +57,10 @@ const paths: Paths = {
   tag:        <><path d="M20 12 12 20 3 11V3h8z"/><circle cx="8" cy="8" r="1.5"/></>,
   building:   <><path d="M4 21V5l8-3 8 3v16"/><path d="M9 9h.01M15 9h.01M9 13h.01M15 13h.01M9 17h.01M15 17h.01"/></>,
   doc:        <><path d="M7 3h8l4 4v14H7z"/><path d="M15 3v5h4M10 12h6M10 16h4"/></>,
-  audit:      <><path d="M3 6h18M6 12h12M9 18h6"/></>,
+  // clipboard-list from Lucide (ISC License, (c) Lucide Contributors;
+  // https://lucide.dev/license), copied as path data, no dependency. The
+  // prototype's audit glyph was the filter's three bars (audit critic-12).
+  audit:      <><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></>,
   link:       <><path d="M9 15c2 2 5 2 7 0l3-3c2-2 2-5 0-7s-5-2-7 0l-1 1"/><path d="M15 9c-2-2-5-2-7 0l-3 3c-2 2-2 5 0 7s5 2 7 0l1-1"/></>,
   play:       <path d="M7 4v16l14-8z"/>,
   send:       <path d="M4 12 20 4l-4 16-4-7z"/>,
@@ -67,6 +80,20 @@ interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   style?: CSSProperties;
 }
 
+/** The prototype's stroke on a 24 unit viewBox. */
+const BASE_STROKE = 1.6;
+/** Largest size that gets the floor; 12 px x 2 units = 1 CSS px. */
+const STROKE_FLOOR_MAX_SIZE = 12;
+
+/**
+ * Stroke width in viewBox units so the rendered stroke is at least 1 CSS px
+ * at 12 px and below (24 / size units is exactly 1 px), rounded to 3 places.
+ */
+export function iconStrokeWidth(size: number): number {
+  if (size > STROKE_FLOOR_MAX_SIZE || size <= 0) return BASE_STROKE;
+  return Math.round(Math.max(BASE_STROKE, 24 / size) * 1000) / 1000;
+}
+
 export function Icon({ name, size = 16, className, style, ...rest }: IconProps) {
   return (
     <svg
@@ -75,7 +102,7 @@ export function Icon({ name, size = 16, className, style, ...rest }: IconProps) 
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth={iconStrokeWidth(size)}
       strokeLinecap="round"
       strokeLinejoin="round"
       className={className}
