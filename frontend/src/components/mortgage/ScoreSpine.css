@@ -1,0 +1,185 @@
+/* ============================================================
+   Score anatomy (wave 3: wow-stage-2 spine, wow-ai-1 margins)
+   ------------------------------------------------------------
+   Imported by ScoreSpine.tsx / ProofMargins.tsx, so it ships in the lazy
+   Score anatomy chunk and costs the initial CSS nothing.
+
+   .score-spine is a DOCUMENTED BEM EXTENSION of the prototype's segmented
+   confidence bars .conf__bars / .conf__bar (design_files/index.html:556-565):
+   the same one-bar-of-discrete-parts reading, stacked by weighted points out
+   of 100 instead of counted bars. Hues come from the --score-part-* tokens
+   (tokens.css), never --seg-* (segments) or --signal-* (state). Tokens only:
+   no colour literal and no [data-theme] rule; the light theme is carried by
+   the tokens.
+   .score-margins is a new block for the deterministic margins list.
+   ============================================================ */
+
+.score-spine__slice--economic,
+.score-spine__seg--economic { --score-spine-hue: var(--score-part-economic); }
+.score-spine__slice--intent,
+.score-spine__seg--intent { --score-spine-hue: var(--score-part-intent); }
+.score-spine__slice--fit,
+.score-spine__seg--fit { --score-spine-hue: var(--score-part-fit); }
+.score-spine__slice--relationship,
+.score-spine__seg--relationship { --score-spine-hue: var(--score-part-relationship); }
+.score-spine__slice--evidence,
+.score-spine__seg--evidence { --score-spine-hue: var(--score-part-evidence); }
+
+.score-spine {
+  display: grid;
+  gap: var(--sp-2);
+  min-inline-size: 0;
+}
+
+/* The decorative bar: a 2px surface gap separates adjacent fills, and the
+ * unfilled remainder is the track. */
+.score-spine__bar {
+  display: flex;
+  gap: calc(var(--sp-1) / 2);
+  block-size: var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--line-1);
+  overflow: hidden;
+}
+
+.score-spine__slice {
+  flex: none;
+  background: var(--score-spine-hue);
+  cursor: pointer;
+}
+
+/* The legend is the control: five real buttons that wrap inside any card
+ * (the narrow Lead Queue preview included), each at least 24 x 24. */
+.score-spine__segs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  min-inline-size: 0;
+}
+
+.score-spine__seg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-block-size: var(--sp-6);
+  min-inline-size: var(--sp-6);
+  max-inline-size: 100%;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.score-spine__seg::before {
+  content: '';
+  flex: none;
+  inline-size: var(--sp-2);
+  block-size: var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--score-spine-hue);
+}
+
+.score-spine__seg:hover {
+  border-color: var(--line-2);
+  color: var(--text-1);
+}
+
+.score-spine__points {
+  font-family: var(--font-mono);
+  color: var(--text-1);
+}
+
+.score-spine__seal {
+  justify-self: start;
+  margin: 0;
+}
+
+.score-spine__gaps {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--status-warning-line);
+  border-radius: var(--r-md);
+  background: var(--status-warning-soft-muted);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+
+.score-spine__gaps ul {
+  margin: var(--sp-1) 0 0;
+  padding-inline-start: var(--sp-4);
+}
+
+/* A drawer opened from a segment focuses that component's card. The only
+ * path that sets this class loads this sheet. */
+.proof-component--focused {
+  border-color: var(--accent-ink);
+  box-shadow: inset 0 0 0 1px var(--accent-ink);
+}
+
+.score-margins {
+  display: grid;
+  gap: var(--sp-2);
+  margin-block-start: var(--sp-3);
+}
+
+.score-margins__list {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+}
+
+.score-margins__row {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.score-margins__label {
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.score-margins__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  margin: 0;
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  line-height: var(--lh-snug);
+}
+
+.score-margins__threshold {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+
+.score-margins__note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+}
+
+/* Forced colours: the hues are gone, so every slice and swatch keeps a
+ * CanvasText border on a Canvas fill and the visible labels carry the
+ * meaning (not the weak 1px-hollow encoding css-hygiene flagged on
+ * .conf__bar). */
+@media (forced-colors: active) {
+  .score-spine__bar {
+    background-color: Canvas;
+    border: 1px solid CanvasText;
+  }
+  .score-spine__slice,
+  .score-spine__seg::before {
+    background-color: Canvas;
+    border: 1px solid CanvasText;
+  }
+}

@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
+import { ScoreAnatomyGate } from '../components/mortgage/ScoreAnatomyGate';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
@@ -333,6 +334,9 @@ function PrimaryOfferPanel({
                 <Skeleton key={i} width={96} height={18} rounded="sm" />
               ))}
         </div>
+        {/* wow-ai-1: the deterministic margins, read only on this click (the
+            page's natural load stays recommend + draft, never /proof). */}
+        {borrower && <ScoreAnatomyGate borrowerId={borrower.borrower_id} variant="margins" />}
         {borrower && (
           <div className="mt-3">
             <div className="eyebrow mb-2">Borrower flags</div>
