@@ -14,6 +14,17 @@
  * Every read here is an aggregate over gold tables or Lakebase assignment
  * counts (`backend/api/geo.py`); none writes an audit row, so the default
  * refetch behaviour cannot inflate governance evidence.
+ *
+ * Audit runtime-06 (map slice): a changed cohort keeps the previous fill up
+ * as a placeholder instead of blanking the hero to is-loading. The state
+ * rollups keep the previous payload; a drilled state's ZIP rollups keep it
+ * only when it was read for the SAME state, so one state's tiles never paint
+ * under another. `updating` says a placeholder is on screen (the map labels
+ * it), and a final error ends the placeholder: the previous cohort is never
+ * presented as current after a failure.
+ *
+ * The Rate Lever read (audit wow-stage-1) is enabled only while the rate
+ * colouring is the effective mode: never on load, never prefetched.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -26,6 +37,8 @@ import {
   type WarmingUpState,
 } from '../../lib/useWarmingUpRetry';
 import type { StateRollup, ZipRollup } from '../../types';
+import type { RateSensitivityResponse } from '../../types/rateScenario';
+import { rateScenarioApi } from '../../lib/apiClients/rateScenario';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { loadUsaStateMap } from './USStateMapData';
 
@@ -38,7 +51,11 @@ export const geoQueryKeys = {
     [...queryKeys.all, 'geo', 'zip-rollups', state, ...cohort] as const,
   assignmentOverlay: (level: GeoOverlayLevel, state: string | null) =>
     [...queryKeys.all, 'geo', 'assignment-overlay', level, state ?? ''] as const,
+  rateSensitivity: () => [...queryKeys.all, 'geo', 'rate-sensitivity'] as const,
 };
+
+/** Where the drilled state sits in a `zipRollups` key. */
+const ZIP_KEY_STATE_AT = geoQueryKeys.zipRollups('', []).length - 1;
 
 /** One rollup read as the map renders it. `data === null` means unknown. */
 export interface GeoRead<T> {
@@ -49,6 +66,8 @@ export interface GeoRead<T> {
   error: Error | null;
   /** True for the first load of this key (no data, no warming, no error yet). */
   loading: boolean;
+  /** True while `data` is the previous key's payload shown as a placeholder (runtime-06). */
+  updating: boolean;
   retry: () => void;
 }
 
@@ -60,6 +79,8 @@ export interface UseChoroplethLiveFactsInput {
   portfolioCriteria?: Criteria;
   /** Whether the "Unattended leads" overlay is on (the overlay is only read then). */
   overlayOn: boolean;
+  /** Whether the rate colouring is the effective mode (the rate grid is only read then). */
+  rateOn: boolean;
 }
 
 function geoRead<T>(result: UseWarmingUpRetryResult<T>, enabled: boolean): GeoRead<T> {
@@ -76,6 +97,9 @@ function geoRead<T>(result: UseWarmingUpRetryResult<T>, enabled: boolean): GeoRe
     warmingUp,
     error,
     loading: enabled && data === null && warmingUp === null && error === null,
+    // react-query shows a placeholder only while the new key is pending: a
+    // final error drops it (data null above), so the error is what renders.
+    updating: data !== null && result.isPlaceholderData,
     retry: result.manualRetry,
   };
 }
@@ -86,6 +110,7 @@ export function useChoroplethLiveFacts({
   segmentFilterMode,
   portfolioCriteria,
   overlayOn,
+  rateOn,
 }: UseChoroplethLiveFactsInput) {
   const [usaMap, setUsaMap] = useState<UsaSvgMap | null>(null);
 
@@ -123,7 +148,7 @@ export function useChoroplethLiveFacts({
         return byCode;
       }),
     [], // ignored: the key below carries every input the fetcher reads
-    { queryKey: geoQueryKeys.stateRollups(cohort) },
+    { queryKey: geoQueryKeys.stateRollups(cohort), keepPreviousData: true },
   );
 
   const zipEnabled = drillState !== null;
@@ -135,7 +160,11 @@ export function useChoroplethLiveFacts({
         return byZip;
       }),
     [],
-    { queryKey: geoQueryKeys.zipRollups(drillState ?? '', cohort), enabled: zipEnabled },
+    {
+      queryKey: geoQueryKeys.zipRollups(drillState ?? '', cohort),
+      enabled: zipEnabled,
+      keepPreviousWhen: (previousKey) => previousKey[ZIP_KEY_STATE_AT] === drillState,
+    },
   );
 
   // The overlay keys on the same unit as the fill it recolours: states at the
@@ -151,6 +180,13 @@ export function useChoroplethLiveFacts({
     { queryKey: geoQueryKeys.assignmentOverlay(overlayLevel, drillState), enabled: overlayOn, staleTime: 0 },
   );
   const overlay = geoRead(overlayResult, overlayOn);
+  // The whole book, keyed once: an aggregate over gold plus a live
+  // contactable count, never an audit row, and only in rate mode.
+  const rateResult = useWarmingUpRetry<RateSensitivityResponse>(
+    (signal) => rateScenarioApi.rateSensitivity(signal),
+    [],
+    { queryKey: geoQueryKeys.rateSensitivity(), enabled: rateOn },
+  );
   const overlayDependency = overlay.error instanceof ApiError && overlay.error.dependency
     ? ` (${overlay.error.dependency})`
     : '';
@@ -164,5 +200,6 @@ export function useChoroplethLiveFacts({
     // borrower view stays up — never a silent fallback.
     overlayError: overlay.error ? `Coverage overlay unavailable${overlayDependency}. Showing borrower counts.` : null,
     overlayLoading: overlay.loading || overlay.warmingUp !== null,
+    rate: geoRead(rateResult, rateOn),
   };
 }

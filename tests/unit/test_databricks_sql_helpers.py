@@ -53,6 +53,7 @@ def test_qualify_accepts_explicit_catalog() -> None:
         ("gold", "fn_segment_counts", "mip.gold.fn_segment_counts"),
         ("gold", "fn_lead_queue_url", "mip.gold.fn_lead_queue_url"),
         ("gold", "rate_window_weekly", "mip.gold.rate_window_weekly"),
+        ("gold", "rate_sensitivity_rollup", "mip.gold.rate_sensitivity_rollup"),
     ],
 )
 def test_qualify_allows_known_public_relations(

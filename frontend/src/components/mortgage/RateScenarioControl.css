@@ -1,0 +1,62 @@
+/* ============================================================
+   Rate Lever scrubber (audit wow-stage-1). Imported by
+   RateScenarioControl.tsx, so it ships in the control's lazy chunk,
+   never in the initial stylesheet or the map chunk.
+
+   DECLARED APP EXTENSION: block .rate-lever does not exist in the
+   prototype, which has no slider (design_files/Module 0 Prototype.html,
+   map legend ~L1860-1871). Built from the prototype's tokens only: the
+   legend's type sizes, the accent as the native range's accent-color,
+   the shared focus ring. The legend's lever host elements
+   (.map-legend__lever / __lever-note) are laid out by the map's own
+   stylesheet (USChoroplethMap.css): the legend draws them before this
+   chunk arrives, and after it failed to load.
+   ============================================================ */
+.rate-lever {
+  display: grid;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+.rate-lever__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-inline-size: 0;
+}
+.rate-lever__label {
+  flex: none;
+  color: var(--text-2);
+  font-weight: 500;
+}
+.rate-lever__range {
+  flex: 1 1 auto;
+  min-inline-size: calc(var(--sp-16) * 2);
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.rate-lever__range:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.rate-lever__output {
+  flex: none;
+  min-inline-size: var(--sp-12);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+.rate-lever__reset { flex: none; }
+.rate-lever__headline {
+  margin: 0;
+  color: var(--text-1);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
+.rate-lever__meta {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}

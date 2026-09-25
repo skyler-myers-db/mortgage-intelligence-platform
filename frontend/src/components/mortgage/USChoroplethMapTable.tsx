@@ -26,8 +26,11 @@ export interface MapTableRow {
   topSegment?: string;
   /** Contact-eligible subset (state rows); undefined when not reported. */
   contactable?: number | null;
-  /** Unattended leads, when the overlay colours the map. */
-  unattended?: number | null;
+  /**
+   * The value the fill encodes when it is not borrowers: unattended leads
+   * under the S9 overlay, or in the money at the Rate Lever's shown step.
+   */
+  extra?: number | null;
   cls: MapClass | null;
   /** Drill into this unit (states only). */
   onOpen?: () => void;
@@ -37,7 +40,12 @@ interface USChoroplethMapTableProps {
   unitLabel: 'State' | 'ZIP';
   caption: string;
   rows: MapTableRow[];
-  overlayActive: boolean;
+  /**
+   * Header of the `extra` column ("Unattended leads", "In the money at
+   * 5.80%"), or null when the fill encodes borrowers. Its total equals the
+   * legend's figure.
+   */
+  extraColumn: string | null;
   /** Take focus once rendered: a drill from a row of the previous table removed the focused button. */
   autoFocus?: boolean;
   /** Called once focus has moved, so a later Back navigation does not steal it. */
@@ -51,7 +59,7 @@ export function USChoroplethMapTable({
   unitLabel,
   caption,
   rows,
-  overlayActive,
+  extraColumn,
   autoFocus = false,
   onAutoFocused,
 }: USChoroplethMapTableProps) {
@@ -86,7 +94,7 @@ export function USChoroplethMapTable({
               </button>
             </th>
             {showContactable && <th scope="col" className="tbl-cell--right">Contactable</th>}
-            {overlayActive && <th scope="col" className="tbl-cell--right">Unattended leads</th>}
+            {extraColumn && <th scope="col" className="tbl-cell--right">{extraColumn}</th>}
             <th scope="col" className="tbl-cell--right">Avg. score</th>
             <th scope="col">Top segment</th>
           </tr>
@@ -106,7 +114,7 @@ export function USChoroplethMapTable({
               </th>
               <td className="num tbl-cell--right">{fmt(row.count)}</td>
               {showContactable && <td className="num tbl-cell--right">{fmt(row.contactable)}</td>}
-              {overlayActive && <td className="num tbl-cell--right">{fmt(row.unattended)}</td>}
+              {extraColumn && <td className="num tbl-cell--right">{fmt(row.extra)}</td>}
               <td className="num tbl-cell--right">{fmt(row.avgScore)}</td>
               <td>{row.topSegment ?? '—'}</td>
             </tr>
@@ -121,9 +129,9 @@ export function USChoroplethMapTable({
                 {fmt(rows.reduce((sum, row) => sum + (row.contactable ?? 0), 0))}
               </td>
             )}
-            {overlayActive && (
-              <td className="num tbl-cell--right">
-                {fmt(rows.reduce((sum, row) => sum + (row.unattended ?? 0), 0))}
+            {extraColumn && (
+              <td className="num tbl-cell--right" data-testid="map-table-extra-total">
+                {fmt(rows.reduce((sum, row) => sum + (row.extra ?? 0), 0))}
               </td>
             )}
             <td />

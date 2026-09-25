@@ -914,3 +914,36 @@ TBLPROPERTIES (
   'delta.autoOptimize.optimizeWrite' = 'true',
   'delta.autoOptimize.autoCompact'   = 'true'
 );
+
+-- -----------------------------------------------------------------------------
+-- 18. mip.gold.rate_sensitivity_rollup
+--     Rate Lever scenario grid (2026-09-21 UI/UX audit, wow-stage-1): one row
+--     per (state, step_bps) with the addressable borrowers that would clear
+--     this refresh's refi screen if the 30-year par rate moved by step_bps,
+--     under the canonical fn_rate_spread / fn_in_the_money rule re-run at
+--     par + step. A scenario, not a forecast; contactable counts are joined
+--     live by the endpoint, never stored.
+--     See sql/ddl/gold_rate_sensitivity_rollup.sql for column comments.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.rate_sensitivity_rollup (
+  state                          STRING    NOT NULL COMMENT '2-char USPS state code (uppercase), carried from gold.borrower_360.state. PK part.',
+  step_bps                       INT       NOT NULL COMMENT 'Par-rate move in basis points (-100 .. +100, 25 bps steps); positive = par rises. PK part.',
+  base_market_rate_fraction      DOUBLE             COMMENT 'The par rate this refresh scored with (gold.borrower_360.market_rate_fraction), as a fraction. NULL only when the refresh had no market print.',
+  scenario_market_rate_fraction  DOUBLE             COMMENT 'base_market_rate_fraction + step_bps / 10000 (DOUBLE arithmetic): the par rate this step describes, as a fraction.',
+  scenario_market_rate_pct       DOUBLE             COMMENT 'scenario_market_rate_fraction in percent (6.30 == 6.30%), rounded to 6 places for display.',
+  addressable_borrowers          BIGINT    NOT NULL COMMENT 'gold.borrower_360 rows in the state: the map addressable count. The same on every step.',
+  rate_movable_borrowers         BIGINT    NOT NULL COMMENT 'Addressable borrowers with a gated note rate (active lien, bounded rate strictly inside 1%..15%): the only ones a scenario can move.',
+  in_the_money_borrowers         BIGINT    NOT NULL COMMENT 'Borrowers that clear the refi screen at this step: fn_in_the_money(fn_rate_spread(note, par + step / 10000), equity_pct, thresholds). Step 0 equals SUM(borrower_360.in_the_money).',
+  min_spread_bps_applied         INT                COMMENT 'Rate-spread threshold (bps) of this refresh, carried from gold.borrower_360.min_spread_bps_applied.',
+  min_equity_pct_applied         INT                COMMENT 'Equity threshold (pct) of this refresh, carried from gold.borrower_360.min_equity_pct_applied.',
+  book_as_of                     TIMESTAMP NOT NULL COMMENT 'Refresh anchor of the book the grid was measured over (mip.ref.refresh_run_state).',
+  refreshed_at                   TIMESTAMP NOT NULL COMMENT 'Deterministic refresh anchor from mip.ref.refresh_run_state.'
+)
+USING DELTA
+CLUSTER BY (state)
+COMMENT 'Rate Lever scenario grid: per state and par-rate step (-100 .. +100 bps), the addressable borrowers that would clear this refresh refi screen under the canonical fn_rate_spread / fn_in_the_money rule re-run at par + step. A scenario, not a forecast. Built by mip_refresh_scores via gold_rate_sensitivity_rollup.sql; read by /api/v1/geo/rate-sensitivity.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);

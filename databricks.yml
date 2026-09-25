@@ -490,6 +490,7 @@ resources:
     #  12. source_readiness              (needs refreshed gold outputs + upstream probes; app-readable admin summary)
     #  13. refresh_semantics_views       (needs lead_population + segment_population + borrower_dossier)
     #  14. rate_window_weekly            (needs borrower_360 + silver.lien_current + silver.market_rates_weekly -- why-now rate window)
+    #  15. rate_sensitivity_rollup       (needs borrower_360 + silver.lien_current -- Rate Lever scenario grid)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
@@ -775,6 +776,20 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_state_top_segment.sql
+        # Rate Lever scenario grid (2026-09-21 UI/UX audit, wow-stage-1):
+        # per state and par-rate step (-100 .. +100 bps), the addressable
+        # borrowers that clear the refi screen with fn_rate_spread /
+        # fn_in_the_money re-run at par + step. Reads gold.borrower_360
+        # (behind the freshness sentinel) and silver.lien_current; writes its
+        # own sibling table, so it parallelizes with the rollups.
+        - task_key: ctas_rate_sensitivity_rollup
+          description: "Rebuild mip.gold.rate_sensitivity_rollup via CTAS (Rate Lever: in-the-money borrowers per state per par-rate step)."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_rate_sensitivity_rollup.sql
         # Governed property loan lookup spine (address -> CLIP -> loan). Reads
         # the SAME raw share sources silver_property_master + silver_lien_current
         # read (ETL identity), plus mip.ref.refresh_run_state for the anchor, so

@@ -348,6 +348,26 @@ export const DRAWER_SOURCES = defineDrawerSources({
     ],
   },
 
+  // Rate Lever (audit wow-stage-1): the map's rate-scenario colouring. The
+  // grid is precomputed per refresh; only the contactable subset is live.
+  rateSensitivity: {
+    title: 'Rate scenario: in the money if par moved',
+    lineageFamily: 'rate_spread',
+    short: 'Rate scenario grid, per state',
+    assetKey: 'rate_sensitivity_rollup',
+    assetPath: 'mip.gold.rate_sensitivity_rollup',
+    description:
+      "Per state and par-rate step, the borrowers that clear this refresh's refi screen with fn_rate_spread and fn_in_the_money re-run at par plus the step. A scenario, not a forecast; rebuilt by the gold refresh, not on a schedule.",
+    signals: [
+      { label: 'Scenario grid', source: 'mip.gold.rate_sensitivity_rollup', value: 'state x step, per refresh' },
+      { label: 'Book', source: 'mip.gold.borrower_360', value: 'state, equity, thresholds, base par' },
+      { label: 'Note rate', source: 'mip.silver.lien_current', value: 'bounded, active liens only' },
+      { label: 'Rule', source: 'mip.gold.fn_rate_spread + mip.gold.fn_in_the_money', value: 'at par + step' },
+      { label: 'Contactable', source: 'eligibility predicate', value: 'live, per request' },
+      { label: 'Book as of', source: 'mip.ref.refresh_run_state', value: 'current refresh' },
+    ],
+  },
+
   portfolioHeadlineView: {
     title: 'Portfolio headline metric view',
     lineageFamily: 'marketable_population',

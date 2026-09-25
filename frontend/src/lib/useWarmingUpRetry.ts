@@ -105,6 +105,14 @@ export interface UseWarmingUpRetryOpts {
   refetchOnWindowFocus?: boolean;
   /** Preserve the previous payload while a changed query key refetches. */
   keepPreviousData?: boolean;
+  /**
+   * Key-aware form of `keepPreviousData` (audit runtime-06): keep the previous
+   * payload only when this predicate accepts the key it was fetched under.
+   * The geography map keeps a drilled state's ZIP tiles while its cohort
+   * re-reads, but never paints one state's tiles under another state. Takes
+   * precedence over the boolean form.
+   */
+  keepPreviousWhen?: (previousKey: QueryKey) => boolean;
 }
 
 /**
@@ -127,6 +135,7 @@ export function useWarmingUpRetry<T>(
   const enabled = opts.enabled ?? true;
 
   const queryKey: QueryKey = opts.queryKey ?? ['warming-up-retry', ...deps];
+  const keepPreviousWhen = opts.keepPreviousWhen;
 
   const query = useQuery<T, ApiError | Error>({
     queryKey,
@@ -134,7 +143,12 @@ export function useWarmingUpRetry<T>(
     queryFn: ({ signal }) => fetcher(signal),
     staleTime: opts.staleTime ?? DEFAULT_QUERY_STALE_MS,
     refetchOnWindowFocus: opts.refetchOnWindowFocus,
-    placeholderData: opts.keepPreviousData ? keepPreviousData : undefined,
+    placeholderData: keepPreviousWhen
+      ? (previous, previousQuery) =>
+          previousQuery && keepPreviousWhen(previousQuery.queryKey) ? previous : undefined
+      : opts.keepPreviousData
+        ? keepPreviousData
+        : undefined,
     retry: (failureCount, err) => {
       if (!isWarmingUpError(err)) return false;
       const plan = planForReason(err.reason, err.dependency, {
@@ -171,9 +185,15 @@ export function useWarmingUpRetry<T>(
     };
   }, [failureReason, intervalMs, maxAttempts, query.data, query.failureCount, query.isPlaceholderData]);
 
+  // `refetch` is the observer's bound method, stable for the hook's life;
+  // the result object around it is not (react-query returns a fresh tracked
+  // result each render). Keying on it keeps `manualRetry`, and so the whole
+  // returned object, stable across renders the query did not cause: a map
+  // hover no longer re-renders every consumer of the reads (runtime-07).
+  const { refetch } = query;
   const manualRetry = useCallback(() => {
-    void query.refetch();
-  }, [query]);
+    void refetch();
+  }, [refetch]);
 
   return {
     data: query.data ?? null,

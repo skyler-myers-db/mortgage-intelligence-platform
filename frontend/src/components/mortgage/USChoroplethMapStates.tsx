@@ -23,6 +23,7 @@ import { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup } from '../../types';
+import type { MapScenarioView } from './rateScenario.logic';
 import { moveRovingFocus, showCardOnFocus, stateAriaLabel } from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale, type MapClass } from './USChoroplethMap.scale';
 import type { HoverState, UsaSvgMap, UsaSvgMapLocation } from './USChoroplethMap.utils';
@@ -35,6 +36,8 @@ interface USChoroplethMapStatesProps {
   scale: ChoroplethScale | null;
   /** Overlay units keyed by lowercase USPS code when the overlay colours the map; else null. */
   overlayByUnit: Record<string, GeoAssignmentOverlayUnit> | null;
+  /** The Rate Lever view at the shown step, when the rate colouring fills the map; else null. */
+  scenario?: MapScenarioView | null;
   footprintStates: Record<string, string>;
   /** Lowercase id of the selected state, if any. */
   selectedId: string | null;
@@ -60,6 +63,7 @@ export function USChoroplethMapStates({
   stateFacts,
   scale,
   overlayByUnit,
+  scenario = null,
   footprintStates,
   selectedId,
   setHover,
@@ -73,7 +77,9 @@ export function USChoroplethMapStates({
       .map((location) => {
         const rollup = stateFacts?.[location.id];
         const overlayUnit = overlayByUnit?.[location.id];
-        const value = overlayByUnit ? overlayUnit?.unattended_count : rollup?.addressable;
+        const value = scenario
+          ? scenario.inTheMoneyById[location.id]
+          : overlayByUnit ? overlayUnit?.unattended_count : rollup?.addressable;
         return {
           location,
           rollup,
@@ -83,7 +89,7 @@ export function USChoroplethMapStates({
           inFootprint: Boolean(footprintStates[location.id]),
         };
       });
-  }, [footprintStates, overlayByUnit, scale, stateFacts, usaMap.locations]);
+  }, [footprintStates, overlayByUnit, scale, scenario, stateFacts, usaMap.locations]);
 
   const [activeId, setActiveId] = useState<string | null>(null);
   // The single tab stop: the last focused state, else the selected one, else

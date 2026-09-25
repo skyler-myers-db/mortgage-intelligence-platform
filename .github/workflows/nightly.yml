@@ -407,6 +407,15 @@ jobs:
         run: pytest tests/integration/test_source_readiness_live.py -q --tb=short
       - name: Borrower dossier parity
         run: pytest tests/integration/test_borrower_dossier_parity.py -q --tb=short
+      - name: Rate lever and rate window parity
+        # The two gold tables that re-run fn_rate_spread / fn_in_the_money
+        # off the scoring path: the Rate Lever grid (step 0 == scored
+        # in_the_money, golden cases through the UC functions, live
+        # contactable) and the why-now rate window. Neither ran before.
+        run: |
+          pytest -q --tb=short \
+            tests/integration/test_rate_sensitivity_parity.py \
+            tests/integration/test_rate_window_weekly_live.py
       - name: Borrower identity and silver normalization invariants
         run: |
           pytest -q --tb=short \
