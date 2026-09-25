@@ -11,10 +11,10 @@
    values between the prototype's Lower / Higher words), .map-table (the
    "View as table" view), .zip-tiles__item (list items around the ZIP
    buttons), .map-stage--status (warming-up / unavailable stage),
-   .map-legend__lever-slot (the Rate Lever's host in the legend, audit
-   wow-stage-1; .map-legend__lever / __lever-note and the control's block
-   .rate-lever ship in its lazy chunk). The prototype legend (Module 0
-   Prototype.html ~L1860-1871) has no scenario control.
+   .map-legend__lever / __lever-note / __lever-slot (the Rate Lever's host
+   in the legend, audit wow-stage-1; the control's block .rate-lever ships
+   in its lazy chunk). The prototype legend (Module 0 Prototype.html
+   ~L1860-1871) has no scenario control.
    ============================================================ */
 
 /* USPS labels on populated states. Sized in SVG user units (the Albers
@@ -75,11 +75,37 @@
 .map-legend.stable-refresh-region { position: absolute; }
 
 /* Rate Lever host (audit wow-stage-1): the slot reserves the control's
-   height so loading its chunk does not move the stage. The lever's own
-   layout ships with that chunk (RateScenarioControl.css). In rate mode the
-   map's height is a floor, not a size (USChoroplethMap.tsx): the legend
-   strip under a narrow map grows by the lever, and the stage keeps a
+   height so loading its chunk does not move the stage. The host is laid out
+   here, not in the control's chunk: the legend draws it (the scenario chip,
+   and the "could not load" line) before that chunk arrives and after it
+   failed, so neither the first pick nor a failure moves the legend. In rate
+   mode the map's height is a floor, not a size (USChoroplethMap.tsx): the
+   legend strip under a narrow map grows by the lever, and the stage keeps a
    readable floor instead of being squeezed under it. */
+.map-legend__lever {
+  display: grid;
+  gap: var(--sp-1);
+  inline-size: calc(var(--sp-16) * 6);
+  max-inline-size: 100%;
+  margin-block-start: var(--sp-1);
+}
+.map-legend__lever-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-3);
+}
+/* A wide map's overlay legend would park the lever over the map itself: in
+   rate mode it joins the flow under the stage, as it does for the ZIP grid. */
+.map-wrap:has(.map-legend__lever) .map-legend {
+  position: static;
+  margin: 0 var(--sp-3) var(--sp-3);
+}
+/* Under the stage (a narrow map), the lever takes the strip's full width. */
+@container map-wrap (max-width: 1100px) {
+  .map-legend > .map-legend__lever { inline-size: auto; }
+}
 .map-legend__lever-slot { min-block-size: calc(var(--sp-16) + var(--sp-6)); }
 .map-wrap:has(.map-legend__lever) .map-levels {
   flex: 1 0 auto;

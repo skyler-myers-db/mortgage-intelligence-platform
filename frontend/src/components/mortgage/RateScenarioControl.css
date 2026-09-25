@@ -7,34 +7,11 @@
    prototype, which has no slider (design_files/Module 0 Prototype.html,
    map legend ~L1860-1871). Built from the prototype's tokens only: the
    legend's type sizes, the accent as the native range's accent-color,
-   the shared focus ring. Also the legend's lever host elements
-   (.map-legend__lever / __lever-note), which only rate mode draws:
-   until this chunk arrives the chip row simply flows inline.
+   the shared focus ring. The legend's lever host elements
+   (.map-legend__lever / __lever-note) are laid out by the map's own
+   stylesheet (USChoroplethMap.css): the legend draws them before this
+   chunk arrives, and after it failed to load.
    ============================================================ */
-.map-legend__lever {
-  display: grid;
-  gap: var(--sp-1);
-  inline-size: calc(var(--sp-16) * 6);
-  max-inline-size: 100%;
-  margin-block-start: var(--sp-1);
-}
-.map-legend__lever-note {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  color: var(--text-3);
-}
-/* A wide map's overlay legend would park the lever over the map itself: in
-   rate mode it joins the flow under the stage, as it does for the ZIP grid. */
-.map-wrap:has(.map-legend__lever) .map-legend {
-  position: static;
-  margin: 0 var(--sp-3) var(--sp-3);
-}
-/* Under the stage (a narrow map), the lever takes the strip's full width. */
-@container map-wrap (max-width: 1100px) {
-  .map-legend > .map-legend__lever { inline-size: auto; }
-}
 .rate-lever {
   display: grid;
   gap: var(--sp-1);

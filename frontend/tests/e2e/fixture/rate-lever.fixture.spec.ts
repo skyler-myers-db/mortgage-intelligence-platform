@@ -15,7 +15,8 @@
  *    drilled state; the evidence chip names the gold table.
  *  - Resilience: a control chunk a redeploy retired degrades the lever
  *    alone (the "could not load" line, Reload, the borrower fill); the route,
- *    the map and the KPIs stay up, and Reload brings the lever back.
+ *    the map and the KPIs stay up, and Reload brings the lever back. The
+ *    legend's rate layout never waits on that chunk.
  *  - Runtime-06: a changed cohort keeps the previous fill, labelled
  *    "Updating…", and one state's ZIP tiles never paint under another.
  */
@@ -374,6 +375,38 @@ test.describe('Rate Lever on the geography hero', () => {
     await expect(legendTotal(page)).toHaveText(COUNT.format(TOTALS.inTheMoney));
     // Non-vacuity: the scenario the failure withheld does repaint the map.
     await expect.poll(classes).not.toEqual(borrowerClasses);
+  });
+
+  test('(r) on a wide map the legend moves under the stage at once, and stays there when the chunk fails', async ({ app, hygiene, page }) => {
+    hygiene.allow('console.error', /Failed to load resource/);
+    hygiene.allow('console.error', /\[mip\] client error/);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(CONTROL_CHUNK, async (route) => {
+      await held;
+      await route.fulfill({ status: 404, contentType: 'text/plain', body: 'retired chunk (fixture)' });
+    });
+    // No cohort filter (contactability Any): the lever is available on
+    // Segment Intelligence's full-width map, whose legend is an overlay.
+    await app.gotoRoute('/segment-intelligence?marketing_eligibility=Any');
+    const underStage = async (): Promise<boolean> => {
+      const stage = await page.locator('.map-levels').boundingBox();
+      const legend = await page.locator('.map-legend').boundingBox();
+      if (!stage || !legend) throw new Error('stage or legend has no box');
+      return legend.y >= stage.y + stage.height - 0.5;
+    };
+    expect(await underStage(), 'non-vacuity: the borrower legend overlays the wide stage').toBe(false);
+    await colouring(page, 'Rate scenario').click();
+    await expect(scenarioLabel(page)).toBeVisible();
+    // The host layout is the map's own: no jump when the chunk arrives...
+    expect(await underStage(), 'while the control chunk is in flight').toBe(true);
+    release();
+    // ...and none when it never does.
+    await expect(page.locator('.map-legend__lever')).toContainText('Rate scenarios could not load. Showing borrower counts.');
+    expect(await underStage(), 'after the control chunk failed').toBe(true);
+    await expect(page.locator(BOUNDARY_SURFACE)).toHaveCount(0);
   });
 });
 
