@@ -165,3 +165,128 @@ describe('AppProvider theme preference', () => {
     document.documentElement.style.removeProperty('--bg-0');
   });
 });
+
+/**
+ * The theme cross-fade (2026-09-21 audit motion-03 setTheme; stack-04): a
+ * change of the PAINTED theme runs inside document.startViewTransition with a
+ * flushSync'd update, so <html data-theme> already names the new theme when
+ * the callback returns (the browser snapshots right after it). A choice that
+ * leaves the painted theme alone starts nothing.
+ */
+describe('AppProvider theme cross-fade', () => {
+  let root: Root;
+  let queryClient: QueryClient;
+  const originalMatchMedia = window.matchMedia;
+  let themeInsideCallback: Array<string | null> = [];
+
+  function installSchemeOnly(systemDark: boolean): void {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        media: query,
+        // Motion is allowed; only the colour scheme query reports the OS.
+        matches: query.includes('prefers-color-scheme: dark') ? systemDark : false,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }),
+    });
+  }
+
+  beforeEach(() => {
+    installLocalStorage();
+    themeInsideCallback = [];
+    document.body.innerHTML = '<div id="root"></div>';
+    document.documentElement.removeAttribute('data-theme');
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    apiMocks.workspace.mockResolvedValue({ saved_leads: [], saved_drafts: [] });
+    apiMocks.session.mockReturnValue(new Promise(() => {}));
+    // The browser calls back on a later task, after the old snapshot.
+    Object.defineProperty(document, 'startViewTransition', {
+      configurable: true,
+      writable: true,
+      value: vi.fn((callback: () => void) => {
+        const done = new Promise<void>((resolve) => {
+          window.setTimeout(() => {
+            callback();
+            themeInsideCallback.push(document.documentElement.getAttribute('data-theme'));
+            resolve();
+          }, 0);
+        });
+        return { ready: done, updateCallbackDone: done, finished: done, skipTransition: () => undefined };
+      }),
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    queryClient.clear();
+    document.body.innerHTML = '';
+    Reflect.deleteProperty(document, 'startViewTransition');
+    Object.defineProperty(window, 'matchMedia', { value: originalMatchMedia, configurable: true, writable: true });
+    vi.clearAllMocks();
+  });
+
+  async function mount() {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <AppProvider><Probe /></AppProvider>
+        </QueryClientProvider>,
+      );
+    });
+  }
+
+  async function pressAndSettle(testId: string) {
+    await act(async () => {
+      press(testId);
+      await new Promise((resolve) => window.setTimeout(resolve, 10));
+    });
+  }
+
+  const startViewTransition = () =>
+    (document as Document & { startViewTransition: ReturnType<typeof vi.fn> }).startViewTransition;
+  const probe = () => document.querySelector('[data-testid="probe"]')?.textContent;
+
+  it('a dark to light toggle has written data-theme="light" by the time the transition callback returns', async () => {
+    window.localStorage.setItem('mip.theme', 'dark');
+    installSchemeOnly(true);
+    await mount();
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+
+    await pressAndSettle('pin-light');
+    expect(startViewTransition()).toHaveBeenCalledTimes(1);
+    expect(themeInsideCallback).toEqual(['light']);
+    expect(probe()).toBe('light/light');
+    expect(document.documentElement.hasAttribute('data-theme-switching')).toBe(false);
+
+    await pressAndSettle('pin-dark');
+    expect(startViewTransition()).toHaveBeenCalledTimes(2);
+    expect(themeInsideCallback).toEqual(['light', 'dark']);
+  });
+
+  it('a System pick that matches the painted theme starts no transition', async () => {
+    window.localStorage.setItem('mip.theme', 'dark');
+    installSchemeOnly(true);
+    await mount();
+    await pressAndSettle('follow-system');
+    expect(probe()).toBe('system/dark');
+    expect(startViewTransition()).not.toHaveBeenCalled();
+
+    // Pinning the theme that is already painted starts none either.
+    await pressAndSettle('pin-dark');
+    expect(probe()).toBe('dark/dark');
+    expect(startViewTransition()).not.toHaveBeenCalled();
+  });
+
+  it('a System pick that changes the painted theme cross-fades', async () => {
+    window.localStorage.setItem('mip.theme', 'dark');
+    installSchemeOnly(false);
+    await mount();
+    await pressAndSettle('follow-system');
+    expect(probe()).toBe('system/light');
+    expect(startViewTransition()).toHaveBeenCalledTimes(1);
+    expect(themeInsideCallback).toEqual(['light']);
+  });
+});

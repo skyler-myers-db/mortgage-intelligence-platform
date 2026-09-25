@@ -1,0 +1,102 @@
+/* ============================================================
+   ROUTE + THEME VIEW TRANSITIONS (2026-09-21 audit stack-04, motion-03,
+   runtime-10, css-10, shell-10: phase 1)
+   ============================================================
+   DECLARED EXTENSION. The prototype (design_files/Module 0 Prototype.html)
+   has no route or theme motion; this is additive, timed on the motion tokens
+   and at or under 250 ms everywhere.
+
+   app.tsx wraps the painted route in a keyed <ViewTransition> whose enter /
+   exit classes are `mip-route-enter` / `mip-route-exit` (update and default
+   are "none", so a ?query navigation never animates). The nav's
+   aria-current, the crumbs and the title change outside that boundary, so
+   the root is captured too; on a route change it switches at once (below),
+   and only a theme switch cross-fades it (lib/themeTransition).
+
+   CASCADE: main.tsx imports ./appRouter (and so app.tsx and this sheet)
+   BEFORE tokens.css and components.css, so this sheet sits EARLIER in the
+   bundled cascade than the partials. Every override here wins on
+   specificity, never on source order. */
+
+/* The route's own snapshot: the old page fades out on the exit curve, the
+   new one fades in with route-in's small rise. Both images are unpaired
+   (the boundary is keyed per pathname), so no group ever slides between a
+   scrolled and a reset offset. */
+::view-transition-old(.mip-route-exit) {
+  animation: mip-route-exit var(--dur-fast) var(--ease-exit) both;
+}
+::view-transition-new(.mip-route-enter) {
+  animation: mip-route-enter var(--dur-base) var(--ease) both;
+}
+@keyframes mip-route-exit {
+  to { opacity: 0; }
+}
+@keyframes mip-route-enter {
+  from { opacity: 0; translate: 0 var(--sp-1); }
+}
+
+/* The theme cross-fade and every group run on the base duration. */
+::view-transition-group(*) {
+  animation-duration: var(--dur-base);
+  animation-timing-function: var(--ease);
+}
+
+/* A click during a transition reaches the live page, not the overlay. */
+::view-transition {
+  pointer-events: none;
+}
+
+/* A route transition animates the route content only. Everything outside
+   the boundary (rail, topbar, nav, crumbs, Console and the always-mounted,
+   non-modal Genie panel) is the root snapshot, and on a route change the
+   root switches at once: its old image is dropped and its new image (a live
+   view) does not fade, so a streaming Genie answer never ghosts and the
+   panel stays hit-testable mid-transition. The panel deliberately has NO
+   view-transition-name of its own: Chromium does not hit-test a named
+   element while its transition runs, so a click on the composer fell
+   through to `.main` underneath (measured with elementFromPoint). A theme
+   switch keeps the root cross-fade, which is its whole effect. */
+:root:not([data-theme-switching])::view-transition-old(root) {
+  display: none;
+}
+:root:not([data-theme-switching])::view-transition-new(root) {
+  animation: none;
+}
+
+/* route-in (components/11-skeleton-menu-and-genie-answer.css) is the
+   painted route's entrance for browsers WITHOUT View Transitions only.
+   (0,3,0) outranks its (0,1,0) `.route-transition` rule from later in the
+   cascade. An `:active-view-transition` gate would replay route-in once the
+   transition ends, so the gate is feature support, not transition state. */
+@supports (view-transition-name: none) {
+  :root .route-transition:not(.route-transition--fallback) {
+    animation: none;
+  }
+}
+/* The Suspense fallback wrapper never animates, in any browser: on a cold
+   load the content that replaces it makes the one entrance
+   (w2-error-telemetry review). Its own rule, outside the gate above, so the
+   two jobs stay separate. */
+.route-transition.route-transition--fallback {
+  animation: none;
+}
+
+/* Theme cross-fade (lib/themeTransition): while <html data-theme-switching>
+   is set, the per-selector colour transitions (01-app-shell.css) must not
+   tween inside the new snapshot while the root cross-fades. `transition:
+   none` rather than a `0s` duration: the motion-literal gate
+   (tokenUsage.test.ts) admits a time literal only in the global
+   reduced-motion reset. */
+:root[data-theme-switching] :is(*, *::before, *::after) {
+  transition: none !important;
+}
+
+/* Reduced-motion belt: app.tsx and lib/themeTransition start no transition
+   under reduced motion; if one runs anyway, nothing in it moves. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

@@ -61,6 +61,11 @@
     background: Canvas;
   }
 
+  /* Paper never replays the route entrance (route-in starts at opacity 0). */
+  .route-transition {
+    animation: none;
+  }
+
   .rail,
   .topbar,
   .route-nav,
