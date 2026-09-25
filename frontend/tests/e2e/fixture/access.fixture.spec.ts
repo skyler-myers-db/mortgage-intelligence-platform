@@ -79,7 +79,9 @@ test.describe('asset detail denied by the server', () => {
     await expect(back).toHaveClass(/btn--primary/);
     await expect(denied.getByRole('link', { name: 'Go to Home' })).toHaveClass(/btn--ghost/);
     await back.click();
-    await expect(page).toHaveURL(/\/lead-queue$/);
+    // Back lands on the Lead Queue with its place kept: since wave 3
+    // (w3-queue-place) the focused row rides in the URL.
+    await expect(page).toHaveURL(/\/lead-queue(\?row=B-[0-9A-Z]{13})?$/);
     await expect(page.locator('#main-content h1')).toBeVisible();
   });
 
