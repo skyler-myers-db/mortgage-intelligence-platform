@@ -14,44 +14,24 @@
    from .genie-md-p / .genie-md-p--heading (14-genie-markdown-and-proof.css). */
 :is(h3, h4).genie-md-p { font-weight: inherit; }
 
-/* Deep-research navigation (genie-08), for a sweep of four or more sections:
-   an outline of the section titles and an accordion toggle inside each h3.
-   `.genie-answer__outline`, `__outline-link`, `__section-toggle` and
+/* Deep-research sections (genie-08), for a sweep of four or more: an
+   accordion toggle inside each h3. `.genie-answer__section-toggle` and
    `__section-body` are documented BEM extensions of `.genie-answer`; the
    prototype's Genie bubble (design_files/index.html:741-760) has no
    multi-section answer. */
-.genie-answer__outline {
-  margin-top: var(--sp-3);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--bg-1);
-  border: 1px solid var(--line-1);
-  border-radius: var(--r-md);
-}
-.genie-answer__outline ol {
-  margin: 0;
-  padding-left: var(--sp-5);
-  color: var(--text-3);
-  font-size: var(--fs-12);
-  line-height: var(--lh-body);
-}
-.genie-answer__outline-link,
-.genie-answer__section-toggle {
-  padding: 0;
-  background: none;
-  border: 0;
-  font: inherit;
-  text-align: start;
-  cursor: pointer;
-}
-.genie-answer__outline-link { color: var(--text-2); }
-.genie-answer__outline-link:hover { color: var(--text-1); text-decoration: underline; }
 .genie-answer__section-toggle {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
   inline-size: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
   color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
 }
 .genie-answer__section-toggle svg {
   flex: none;
@@ -59,8 +39,6 @@
   transition: transform var(--dur-fast) var(--ease);
 }
 .genie-answer__section-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
-/* An outline jump lands the heading clear of the scroller's edge. */
-.genie-answer__section > h3 { scroll-margin-block-start: var(--sp-3); }
 
 /* Verbatim narrative text (stack-02 / genie-07): a prose pipe table or a
    fenced block, shown as written and scrolled sideways inside itself. A

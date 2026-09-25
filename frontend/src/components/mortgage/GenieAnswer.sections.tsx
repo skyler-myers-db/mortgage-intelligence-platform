@@ -1,7 +1,6 @@
-import { lazy, Suspense, useId, useRef, useState } from 'react';
+import { lazy, Suspense, useId, useState } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
-import { prefersReducedMotion } from './genieMotion';
 import type {
   GenieAnswer as GenieAnswerShape,
   GenieAnswerSection,
@@ -281,19 +280,20 @@ export function GenieSectionVisual({
   );
 }
 
-/** Sections from which a long sweep gets an outline and collapsible bodies. */
-export const GENIE_OUTLINE_MIN_SECTIONS = 4;
+/** Sections from which a long sweep gets collapsible bodies. */
+export const GENIE_ACCORDION_MIN_SECTIONS = 4;
 
 /**
  * Deep-research body (audit 2026-09-21 `genie-08`). The Summary and every
  * section title are REAL h3 headings (the same classes the old <p> carried,
  * so the pixels match), and the prose inside a section heads at h4.
  *
- * A sweep of four or more sections also gets an outline and collapsible
- * bodies. The APG accordion pattern is used rather than <details>: a heading
- * inside <summary> loses its heading semantics in Firefox (its children are
+ * A sweep of four or more sections also gets collapsible bodies. The APG
+ * accordion pattern is used rather than <details>: a heading inside
+ * <summary> loses its heading semantics in Firefox (its children are
  * presentational). Every section starts open; the open/closed state is
- * presentation only and is never written to any store.
+ * presentation only and is never written to any store. (The outline above
+ * the sections is held for wave 4 by the lane's JS budget cut line.)
  */
 export function GenieAnswerSections({
   summary,
@@ -315,10 +315,9 @@ export function GenieAnswerSections({
   onAnnounce?: (text: string) => void;
 }) {
   const summaryText = (summary ?? '').trim();
-  const collapsible = sections.length >= GENIE_OUTLINE_MIN_SECTIONS;
+  const collapsible = sections.length >= GENIE_ACCORDION_MIN_SECTIONS;
   const idBase = useId();
   const [closed, setClosed] = useState<ReadonlySet<number>>(() => new Set());
-  const toggleRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const titleOf = (section: GenieAnswerSection) => section.title || section.question;
   const setOpen = (index: number, open: boolean) =>
     setClosed((current) => {
@@ -327,18 +326,6 @@ export function GenieAnswerSections({
       else next.add(index);
       return next;
     });
-  // An outline entry opens its section, brings its heading to the top of the
-  // scroller and puts focus on its toggle.
-  const jumpTo = (index: number) => {
-    setOpen(index, true);
-    const toggle = toggleRefs.current[index];
-    if (!toggle) return;
-    toggle.parentElement?.scrollIntoView({
-      block: 'start',
-      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-    });
-    toggle.focus({ preventScroll: true });
-  };
   return (
     <div className="genie-answer__sections">
       {summaryText && (
@@ -346,19 +333,6 @@ export function GenieAnswerSections({
           <h3 className="genie-md-p genie-md-p--heading genie-md-p--first">Summary</h3>
           <MarkdownAnswer text={summaryText} workspaceHost={workspaceHost} headingLevel={4} />
         </>
-      )}
-      {collapsible && (
-        <nav className="genie-answer__outline" aria-label="Sections in this answer">
-          <ol>
-            {sections.map((section, i) => (
-              <li key={`${section.title || 'section'}-${i}`}>
-                <button type="button" className="genie-answer__outline-link" onClick={() => jumpTo(i)}>
-                  {titleOf(section)}
-                </button>
-              </li>
-            ))}
-          </ol>
-        </nav>
       )}
       {sections.map((section, i) => {
         const headingClass = `genie-md-p genie-md-p--heading${!summaryText && i === 0 ? ' genie-md-p--first' : ''}`;
@@ -387,9 +361,6 @@ export function GenieAnswerSections({
               <>
                 <h3 className={headingClass}>
                   <button
-                    ref={(element) => {
-                      toggleRefs.current[i] = element;
-                    }}
                     type="button"
                     className="genie-answer__section-toggle"
                     aria-expanded={open}

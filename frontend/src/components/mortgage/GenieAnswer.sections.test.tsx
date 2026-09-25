@@ -169,17 +169,13 @@ describe('GenieAnswer deep-research sections', () => {
       ['H3', 'Second'],
     ]);
     expect(container.querySelectorAll('p.genie-md-p--heading')).toHaveLength(0);
-    // Three or fewer sections: plain headings, no outline and no toggles.
-    expect(container.querySelector('.genie-answer__outline')).toBeNull();
+    // Three or fewer sections: plain headings, no toggles.
     expect(container.querySelector('.genie-answer__section-toggle')).toBeNull();
   });
 
-  it('gives a 4-section sweep an outline and accordion headings, every section open', () => {
+  it('gives a 4-section sweep accordion headings, every section open', () => {
     const titles = ['Market size', 'Rate spread', 'Equity', 'What this adds up to'];
     render(payload({ summary: 'Summary text.', sections: titles.map((title) => section({ title })) }));
-    const outline = container.querySelector('nav.genie-answer__outline');
-    expect(outline?.getAttribute('aria-label')).toBe('Sections in this answer');
-    expect(Array.from(outline!.querySelectorAll('ol > li > button')).map((b) => b.textContent)).toEqual(titles);
     const toggles = Array.from(container.querySelectorAll<HTMLButtonElement>('h3 > button.genie-answer__section-toggle'));
     expect(toggles.map((t) => t.textContent)).toEqual(titles);
     for (const toggle of toggles) {
@@ -200,30 +196,6 @@ describe('GenieAnswer deep-research sections', () => {
     act(() => toggle.click());
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(body()?.hidden).toBe(false);
-  });
-
-  it('an outline entry opens its section, scrolls its heading to the top and focuses its toggle', () => {
-    const scrolled: Array<[Element, ScrollIntoViewOptions | boolean | undefined]> = [];
-    const original = HTMLElement.prototype.scrollIntoView;
-    HTMLElement.prototype.scrollIntoView = function scrollIntoView(this: HTMLElement, arg?: ScrollIntoViewOptions | boolean) {
-      scrolled.push([this, arg]);
-    };
-    try {
-      render(payload({ sections: ['A', 'B', 'C', 'D'].map((title) => section({ title })) }));
-      const toggle = container.querySelectorAll<HTMLButtonElement>('.genie-answer__section-toggle')[2];
-      act(() => toggle.click());
-      expect(toggle.getAttribute('aria-expanded')).toBe('false');
-      const entry = container.querySelectorAll<HTMLButtonElement>('.genie-answer__outline-link')[2];
-      act(() => entry.click());
-      expect(toggle.getAttribute('aria-expanded')).toBe('true');
-      expect(document.activeElement).toBe(toggle);
-      expect(scrolled).toHaveLength(1);
-      expect(scrolled[0][0]).toBe(toggle.parentElement);
-      expect(scrolled[0][0].tagName).toBe('H3');
-      expect(scrolled[0][1]).toEqual({ block: 'start', behavior: 'smooth' });
-    } finally {
-      HTMLElement.prototype.scrollIntoView = original;
-    }
   });
 
   it('leaves a single-turn answer exactly as it was', () => {
