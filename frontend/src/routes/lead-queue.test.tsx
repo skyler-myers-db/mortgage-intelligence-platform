@@ -117,10 +117,14 @@ vi.mock('../lib/api', () => ({
 
 import LeadQueue from './lead-queue';
 
-// The measured zero's EmptyState chunk, transformed once up front so a loaded
-// machine cannot push the first zero-row mount past the per-test timeout.
+// The route's lazy chunks (the measured zero's EmptyState, the address
+// lookup), transformed once up front so a loaded machine cannot push the
+// first mount past the per-test timeout.
 beforeAll(async () => {
-  await import('../components/mortgage/LeadQueueEmptyState');
+  await Promise.all([
+    import('../components/mortgage/LeadQueueEmptyState'),
+    import('../components/mortgage/PropertyLookupPanel'),
+  ]);
 }, 60_000);
 
 async function settle(): Promise<void> {
@@ -128,7 +132,8 @@ async function settle(): Promise<void> {
     await Promise.resolve();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   });
-  // The measured zero's EmptyState is its own chunk, loaded when a zero shows.
+  // The route's lazy chunks (the measured zero's EmptyState, the address
+  // lookup) load after mount.
   await act(async () => {
     await vi.dynamicImportSettled();
   });

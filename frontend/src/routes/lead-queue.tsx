@@ -9,7 +9,6 @@ import { isAbortError } from '../lib/apiTransport';
 import type { SalesTeamMember } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable, type LeadExportContext } from '../components/mortgage/LeadTable';
-import { PropertyLookupPanel } from '../components/mortgage/PropertyLookupPanel';
 import { Chip } from '../components/Primitives';
 import { AsyncState } from '../components/ui/AsyncState';
 import { DescribedErrorBody } from '../components/ui/DescribedError';
@@ -106,6 +105,7 @@ function selectCountyZips(payload: Awaited<ReturnType<typeof api.zipRollups>>): 
 
 const RULES_VERSION_STALE_MS = 5 * 60_000;
 const EMPTY_STATE = lazyModule(() => import('../components/mortgage/LeadQueueEmptyState'));
+const PROPERTY_LOOKUP = lazyModule(() => import('../components/mortgage/PropertyLookupPanel'));
 const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters';
 
 export default function LeadQueue() {
@@ -321,6 +321,9 @@ export default function LeadQueue() {
   const measuredZero = hasQueue && !leadsPlaceholderData && error === null && warming === null
     && leadsData.leads.length === 0;
   const emptyModule = useLazyModule(EMPTY_STATE, measuredZero).module;
+  // The below-the-fold address lookup loads right after the queue, off its
+  // natural-load closure (the Console's copy is the primary entry).
+  const lookupModule = useLazyModule(PROPERTY_LOOKUP, true).module;
   // "Fetched 3m ago · Refresh" / "Queue updated · Refresh" (audit states-09):
   // an audit-free version poll; Refresh is the one explicit re-read.
   const freshness = useLeadQueueFreshness({
@@ -782,9 +785,11 @@ export default function LeadQueue() {
       {/* Address → borrower lookup: a secondary fast path, demoted from the
           hero slot so the operational queue leads. The Console right-rail
           quick action stays the primary lookup entry. */}
-      <div className="mb-grid">
-        <PropertyLookupPanel />
-      </div>
+      {lookupModule && (
+        <div className="mb-grid">
+          <lookupModule.PropertyLookupPanel />
+        </div>
+      )}
     </PageShell>
   );
 }
