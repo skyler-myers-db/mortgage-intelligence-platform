@@ -22,6 +22,10 @@ export function createIdlePreloader(loader: () => Promise<unknown>, timeout = 30
     if (completedOrRunning) return () => undefined;
     if (cancelScheduled) return cancelScheduled;
     if (typeof window === 'undefined') return () => undefined;
+    // Idle preloads are speculative downloads: none while the browser asks to
+    // save data (audit bundle-09). Explicit preloads (hover, a lazy render)
+    // do not come through here and are unaffected.
+    if (saveDataRequested()) return () => undefined;
 
     const run = () => {
       cancelScheduled = null;
