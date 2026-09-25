@@ -251,6 +251,59 @@ test.describe('Console and Genie share the right edge without colliding', () => 
   });
 });
 
+/**
+ * responsive-v1 item 1 with the evidence drawer (audit 2026-09-21, stack-05):
+ * the drawer used to sit at z 41 under the Console (z 50), so with both open
+ * the Console covered part of it and its controls stayed reachable behind the
+ * aria-modal drawer. The drawer is now a showModal() dialog: the top layer
+ * puts all of it above the Console and the docked Genie panel, and both are
+ * inert behind it.
+ */
+test.describe('the evidence drawer over the Console and the docked Genie panel', () => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 1080 }]) {
+    test(`${viewport.width}x${viewport.height}: the drawer is topmost over its whole box and keeps focus`, async ({ app, page }) => {
+      await page.setViewportSize(viewport);
+      await app.gotoRoute('/');
+      const consolePanel = await app.openConsole();
+      const genie = await app.openGenie();
+      // The Console x docked-Genie non-intersection still holds.
+      expect(overlaps(await boxOf(consolePanel), await boxOf(genie)), 'the Genie panel clears the Console').toBe(false);
+
+      const drawer = await app.openEvidenceDrawer();
+      expect(await drawer.evaluate((el) => el.matches(':modal')), 'the drawer is a modal dialog').toBe(true);
+      // Measure the settled drawer, not its slide-in.
+      await drawer.evaluate((el) => Promise.all(el.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+
+      const misses = await drawer.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const out: string[] = [];
+        for (let fx = 0.05; fx < 1; fx += 0.1) {
+          for (let fy = 0.05; fy < 1; fy += 0.1) {
+            const x = box.left + box.width * fx;
+            const y = box.top + box.height * fy;
+            const hit = document.elementFromPoint(x, y);
+            if (!hit || !el.contains(hit)) out.push(`(${Math.round(x)}, ${Math.round(y)}) hit ${hit?.tagName ?? 'nothing'}.${hit?.className ?? ''}`);
+          }
+        }
+        return out;
+      });
+      expect(misses, 'every point of the drawer box belongs to the drawer').toEqual([]);
+
+      // A focus attempt on a Console control and on a docked-Genie control
+      // leaves focus in the drawer: both panels are inert behind the modal
+      // (DOM locators: inert content has left the accessibility tree).
+      for (const [name, control] of [
+        ['Console "Light"', page.locator('#workspace-console button', { hasText: 'Light' }).first()],
+        ['Genie composer', app.geniePanel().locator('[aria-label="Ask Genie"]').first()],
+      ] as const) {
+        await expect(control).toBeAttached();
+        await control.evaluate((el) => (el as HTMLElement).focus());
+        expect(await drawer.evaluate((el) => el.contains(document.activeElement)), `${name} cannot take focus`).toBe(true);
+      }
+    });
+  }
+});
+
 async function kpiRowTops(page: Page): Promise<number[]> {
   const cards = page.locator('.kpi-row > .kpi');
   await expect(cards).toHaveCount(4);
