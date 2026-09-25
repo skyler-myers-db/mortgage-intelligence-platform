@@ -8,7 +8,8 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ lastBorrowerId: null }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: { session: vi.fn() },
 }));
 

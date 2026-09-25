@@ -21,7 +21,10 @@ import type { LeadSummary } from '../../types';
 
 const apiMocks = vi.hoisted(() => ({ borrowerSearch: vi.fn() }));
 
-vi.mock('../../lib/api', () => ({ api: { borrowerSearch: apiMocks.borrowerSearch } }));
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  api: { borrowerSearch: apiMocks.borrowerSearch },
+}));
 vi.mock('../AppContext', () => ({
   useApp: () => ({
     lender: 'Summit Mortgage',

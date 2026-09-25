@@ -63,7 +63,8 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({
   ActivationOperationsPanel: () => <div data-testid="activation-panel" />,
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: apiMocks,
 }));
 

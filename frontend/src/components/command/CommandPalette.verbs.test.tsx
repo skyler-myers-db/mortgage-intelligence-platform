@@ -29,7 +29,8 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 const approve = vi.fn();
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: { borrowerSearch: () => Promise.resolve([]), approve: (...args: unknown[]) => approve(...args) },
 }));
 

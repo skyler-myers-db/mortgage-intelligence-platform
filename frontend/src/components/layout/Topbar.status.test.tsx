@@ -22,7 +22,10 @@ const shell: { health: HealthPayload | null; connection: ConnectionStatus; wareh
   warehouseResumingSince: null,
 };
 
-vi.mock('../../lib/api', () => ({ api: { borrowerSearch: vi.fn().mockResolvedValue([]) } }));
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  api: { borrowerSearch: vi.fn().mockResolvedValue([]) },
+}));
 vi.mock('../AppContext', () => ({
   useApp: () => ({
     lender: 'Summit Mortgage',

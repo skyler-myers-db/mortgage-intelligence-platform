@@ -13,7 +13,8 @@ const reads = vi.hoisted(() => ({
   warehouse: 'up' as string,
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: {
     portfolioPreview: apiMocks.portfolioPreview,
   },

@@ -15,7 +15,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const leadsPage = vi.hoisted(() => vi.fn());
 
-vi.mock('./api', () => ({
+vi.mock('./api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./api')>()),
   api: { leadsPage: (...args: unknown[]) => leadsPage(...args) },
 }));
 

@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const growthAgentCapabilities = vi.fn();
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     growthAgentCapabilities: (...args: unknown[]) => growthAgentCapabilities(...args),
   },

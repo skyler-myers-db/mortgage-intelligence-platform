@@ -17,7 +17,8 @@ import { BorrowerProofDrawer } from './BorrowerProofDrawer';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // The tabs render before the proof read resolves; keep it pending.
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: { borrowerProof: () => new Promise(() => undefined) },
 }));
 
