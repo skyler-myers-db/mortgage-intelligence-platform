@@ -54,6 +54,8 @@ export default function OfferOrchestrator() {
   // on load and a reload of the same borrower does not replay it (audit
   // motion-06; the receipt replaced the .burst chip in wave 1).
   const [justDecided, setJustDecided] = useState<{ id: string; reloadToken: number } | null>(null);
+  // Carryover #12: where the approval made here was routed, from its response.
+  const [approvalRouting, setApprovalRouting] = useState<{ id: string; assignedTo: string | null; followUpAt: string | null } | null>(null);
   const [lifecycle, setLifecycle] = useState<BorrowerLifecycle | null>(null);
   const [approving, setApproving] = useState<boolean>(false);
   const [reloadToken, setReloadToken] = useState<number>(0);
@@ -525,11 +527,9 @@ export default function OfferOrchestrator() {
         setAuditId(res.audit_event_id ?? null);
         setApprovalId(res.approval_id ?? null);
         setJustDecided({ id, reloadToken });
-        announceApprovalRouting(
-          res.assigned_to_email ?? (assignedTo || null),
-          res.follow_up_at ?? null,
-          res.audit_event_id ?? null,
-        );
+        const routedTo = res.assigned_to_email ?? (assignedTo || null);
+        setApprovalRouting({ id, assignedTo: routedTo, followUpAt: res.follow_up_at ?? null });
+        announceApprovalRouting(routedTo, res.follow_up_at ?? null, res.audit_event_id ?? null);
         clearBorrowerCache(id);
         void invalidateOperationalQueries(queryClient);
       } else {
@@ -741,6 +741,7 @@ export default function OfferOrchestrator() {
         approvalId={approvalId}
         approveError={decisionPending ? null : approveError}
         score={b ? { opportunityScore: b.opportunity_score, confidence: b.confidence } : null}
+        routing={approvalRouting?.id === id ? approvalRouting : null}
       />
       {decisionPending && (
         <OfferActionBar

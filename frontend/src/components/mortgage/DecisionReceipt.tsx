@@ -34,8 +34,21 @@ import { Button, Chip, EvidenceChip } from '../Primitives';
 import { Skeleton } from '../ui/Skeleton';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { ScoreBadge } from './ScoreBadge';
-import { DECISION_RECEIPT_COPY, decisionChip, humanizeReasonCode, receiptChannelLabel } from './DecisionReceipt.copy';
+import {
+  DECISION_RECEIPT_COPY,
+  decisionChip,
+  decisionRoutingLine,
+  humanizeReasonCode,
+  receiptChannelLabel,
+  type DecisionRouting,
+} from './DecisionReceipt.copy';
 import { copyAuditId, printReceipt } from './DecisionReceipt.actions';
+
+// The explorer loads this module on an expanded row and asks it whether the
+// row is a decision (AdminAuditExplorer.row.tsx).
+export { isDecisionReceiptEvent } from './DecisionReceipt.copy';
+import { SCORE_ANATOMY_COPY } from './scoreAnatomy.copy';
+import { proofSealHolds, useBorrowerProof } from './useBorrowerProof';
 import './DecisionReceipt.css';
 
 /** What a queue row remembers about the decision it just made. */
@@ -73,6 +86,22 @@ export interface DecisionReceiptProps {
   compact?: boolean;
   /** The lead payload's score line, when the caller has it. */
   score?: { opportunityScore: number; confidence: number } | null;
+  /**
+   * Move focus to the receipt's heading on mount and on each pending ->
+   * read-back / unavailable swap (carryover #11), so a decision made in this
+   * view does not strand focus on <body> when its gate unmounts. Only from
+   * <body> / nothing, or from inside the receipt: never away from a control
+   * the reviewer moved to (a toast).
+   */
+  focusHeading?: boolean;
+  /**
+   * Where an approval was routed, from the approve response (carryover #12).
+   * Shown on the read-back and unavailable cards of an approval, captioned as
+   * the response's: the ledger read-back carries no assignee.
+   */
+  routing?: DecisionRouting | null;
+  /** "Open in audit explorer" (default on); the explorer's own receipt turns it off. */
+  explorerLink?: boolean;
   className?: string;
 }
 
@@ -176,11 +205,15 @@ export function DecisionReceipt({
   onRevealed,
   compact = false,
   score = null,
+  focusHeading = false,
+  routing = null,
+  explorerLink = true,
   className = '',
 }: DecisionReceiptProps) {
   const { canAccessAdmin } = useApp();
   const titleId = useId();
   const cardRef = useRef<HTMLElement | null>(null);
+  const headingRef = useRef<HTMLDivElement | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   // The copy result is announced through the receipt's one live region.
   // It is tied to the audit id and the card state it was made in, so a
@@ -193,6 +226,9 @@ export function DecisionReceipt({
     staleTime: Infinity,
     retry: false,
   });
+  // The recompute seal is a cache read only (critic fix 16): a proof another
+  // surface already read may seal the score; this never reads /proof itself.
+  const cachedProof = useBorrowerProof(query.data?.borrower_id ?? '', false).data;
 
   // motion-06: the reveal is one-shot. It is latched per audit id at first
   // render, so a parent that records "revealed" (onRevealed) while the
@@ -218,6 +254,16 @@ export function DecisionReceipt({
   }, [copyState]);
 
   const phase: ReceiptPhase = query.isPending ? 'pending' : query.data ? 'read-back' : 'unavailable';
+  useEffect(() => {
+    const heading = headingRef.current;
+    if (!focusHeading || !heading) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body || heading.closest('section')?.contains(active)) {
+      heading.focus();
+    }
+  }, [focusHeading, phase]);
+  const headingFocus = focusHeading ? -1 : undefined;
+  const routingLine = decisionRoutingLine(routing);
   const onCopy = async () => {
     const copied = await copyAuditId(auditEventId);
     setCopyState(copied ? 'copied' : 'failed');
@@ -254,7 +300,7 @@ export function DecisionReceipt({
         >
           <div className="surface__hdr">
             <Icon name="audit" size={14} className="icon-accent" />
-            <div className="h-4">{pendingTitle}</div>
+            <div className="h-4" ref={headingRef} tabIndex={headingFocus}>{pendingTitle}</div>
             <span className="decision-receipt__hdr-note">{pendingNote}</span>
           </div>
           <div className="surface__body decision-receipt__skeleton">
@@ -306,10 +352,13 @@ export function DecisionReceipt({
             ) : (
               <Chip variant="neutral" icon="shield">{DECISION_RECEIPT_COPY.recorded}</Chip>
             )}
-            <div className="h-4" id={titleId}>{title}</div>
+            <div className="h-4" id={titleId} ref={headingRef} tabIndex={headingFocus}>{title}</div>
           </div>
           <div className="surface__body">
             <p className="muted fs-12 flush">{explanation}</p>
+            {decision === 'approved' && routingLine && (
+              <p className="decision-receipt__routing" data-testid="decision-receipt-routing">{routingLine}</p>
+            )}
             <div className="decision-receipt__ids" data-testid="decision-receipt-audit-id">
               audit event {auditEventId}
             </div>
@@ -328,6 +377,10 @@ export function DecisionReceipt({
   }
 
   const receipt = query.data;
+  // The seal needs a trusted, gap-free proof whose score is the one shown.
+  const sealed = Boolean(
+    score && cachedProof && proofSealHolds(cachedProof) && cachedProof.opportunity_score === score.opportunityScore,
+  );
   const chip = decisionChip(receipt.decision as DecisionOutcome);
   const rows = receiptRows(receipt);
   const evidenceIndex = rows.length;
@@ -348,11 +401,14 @@ export function DecisionReceipt({
       >
         <div className="surface__hdr">
           <Icon name="audit" size={14} className="icon-accent" />
-          <div className="h-4" id={titleId}>{DECISION_RECEIPT_COPY.title}</div>
+          <div className="h-4" id={titleId} ref={headingRef} tabIndex={headingFocus}>{DECISION_RECEIPT_COPY.title}</div>
           <Chip variant={chip.variant} icon={chip.icon}>{chip.label}</Chip>
           <span className="decision-receipt__hdr-note">{DECISION_RECEIPT_COPY.readBackNote}</span>
         </div>
         <div className="surface__body">
+          {receipt.decision === 'approved' && routingLine && (
+            <p className="decision-receipt__routing" data-testid="decision-receipt-routing">{routingLine}</p>
+          )}
           <dl className="decision-receipt__grid">
             {rows.map((row, index) => (
               <div key={row.key} className="decision-receipt__row" style={staggerIndex(index)}>
@@ -395,7 +451,11 @@ export function DecisionReceipt({
               <div className="decision-receipt__score" data-testid="decision-receipt-score">
                 <ScoreBadge value={score.opportunityScore} />
                 <ConfidenceMeter value={score.confidence} compact />
-                <span className="muted fs-11">{DECISION_RECEIPT_COPY.scoreNote}</span>
+                {sealed ? (
+                  <span className="decision-receipt__seal" data-testid="decision-receipt-seal">{SCORE_ANATOMY_COPY.seal}</span>
+                ) : (
+                  <span className="muted fs-11" data-testid="decision-receipt-score-note">{DECISION_RECEIPT_COPY.scoreNote}</span>
+                )}
               </div>
             </div>
           )}
@@ -409,7 +469,7 @@ export function DecisionReceipt({
             <Button size="sm" icon="export" onClick={() => printReceipt(cardRef.current)}>
               {DECISION_RECEIPT_COPY.print}
             </Button>
-            {canAccessAdmin && (
+            {canAccessAdmin && explorerLink && (
               <Link
                 className="btn btn--sm decision-receipt__explorer"
                 to={auditExplorerHref(receipt.audit_event_id)}
