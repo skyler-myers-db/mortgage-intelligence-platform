@@ -25,11 +25,17 @@ export const runCustomGrowthAgentWorkflow = vi.fn();
 export const runMortgageGrowthAgent = vi.fn();
 export const rerunGrowthAgentMonitor = vi.fn();
 export const createGrowthAgentMonitorNotificationDrafts = vi.fn();
+export const composeMortgageGrowthAgentPlan = vi.fn();
+export const executeComposedGrowthAgentPlan = vi.fn();
 export const navigate = vi.fn();
 export const setDrawer = vi.fn();
 export const refreshWorkspace = vi.fn();
 
-vi.mock('../lib/api', () => ({
+// Spreads the real module (ApiError, isAbortError, ...) and replaces only
+// `api`: a bare factory flakes when a preloaded route imports ApiError, and a
+// 409 from the plan execute path must be a real ApiError.
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: {
     growthAgent: (...args: unknown[]) => growthAgent(...args),
     growthAgentCapabilities: (...args: unknown[]) => growthAgentCapabilities(...args),
@@ -43,12 +49,9 @@ vi.mock('../lib/api', () => ({
     createGrowthAgentMonitorNotificationDrafts: (...args: unknown[]) => (
       createGrowthAgentMonitorNotificationDrafts(...args)
     ),
+    composeMortgageGrowthAgentPlan: (...args: unknown[]) => composeMortgageGrowthAgentPlan(...args),
+    executeComposedGrowthAgentPlan: (...args: unknown[]) => executeComposedGrowthAgentPlan(...args),
   },
-  ApiError: class ApiError extends Error {
-    status = 500;
-  },
-  isAbortError: () => false,
-  isWarmingUpError: () => false,
 }));
 
 vi.mock('../components/AppContext', () => ({

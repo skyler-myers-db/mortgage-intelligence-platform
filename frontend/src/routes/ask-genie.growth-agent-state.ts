@@ -13,6 +13,7 @@ import type {
   GrowthAgentWorkflow,
   GrowthAgentWorkflowId,
 } from '../types';
+import { mergeExecutedPlan, useComposedPlanExecution } from './ask-genie.compose-plan-execute';
 import { parseGrowthAgentStateInput } from './ask-genie.growth-agent.helpers';
 
 /** The `/ask-genie` tab an action was started from; its feedback renders there. */
@@ -22,6 +23,12 @@ export type GrowthAgentRunOrigin = 'workflows' | 'monitors';
 export interface GrowthAgentActiveRun {
   origin: GrowthAgentRunOrigin;
   label: string;
+}
+
+/** The objective and state scope a plan was composed for. */
+export interface GrowthAgentComposeSnapshot {
+  objective: string;
+  states: string[];
 }
 
 /**
@@ -37,6 +44,11 @@ export interface GrowthAgentActiveRun {
  * tab rather than in a tab the user cannot see. `activeRun` is an honest
  * indeterminate state: each run is one blocking request with no server step
  * events, so the UI names the action and nothing more.
+ *
+ * Audit 2026-09-21 `critic-01`: compose only drafts a plan for review;
+ * `executeComposedPlan` runs THAT plan, posting the displayed plan with the
+ * server's digest and the objective and scope it was composed for
+ * (`composeSnapshot`).
  */
 export function useGrowthAgentWorkspace() {
   const [agentStateText, setAgentStateText] = useState('');
@@ -57,9 +69,13 @@ export function useGrowthAgentWorkspace() {
   const [customSegments, setCustomSegments] = useState<GrowthAgentSegmentCode[]>(['itm', 'listed']);
   const [customMode, setCustomMode] = useState<GrowthAgentSegmentMode>('any');
   const [composePlan, setComposePlan] = useState<ComposePlanResponse | null>(null);
-  const [composePending, setComposePending] = useState<'compose' | 'execute' | null>(null);
+  const [composePending, setComposePending] = useState<'compose' | null>(null);
+  const [composeSnapshot, setComposeSnapshot] = useState<GrowthAgentComposeSnapshot | null>(null);
   const [runOrigin, setRunOrigin] = useState<GrowthAgentRunOrigin>('workflows');
   const [activeRun, setActiveRun] = useState<GrowthAgentActiveRun | null>(null);
+  const planExecution = useComposedPlanExecution({
+    onExecuted: (result, request) => setComposePlan((current) => mergeExecutedPlan(current, result, request)),
+  });
 
   function beginRun(origin: GrowthAgentRunOrigin, label: string) {
     setRunOrigin(origin);
@@ -70,6 +86,7 @@ export function useGrowthAgentWorkspace() {
     setLatestGrowthRun(null);
     setLatestGrowthDrafts([]);
     setComposePlan(null);
+    planExecution.reset();
     setGrowthAgentError(null);
   }
 
@@ -162,7 +179,7 @@ export function useGrowthAgentWorkspace() {
     }
   }
 
-  async function composeGrowthAgentPlan(execute: boolean) {
+  async function composeGrowthAgentPlan() {
     setRunOrigin('workflows');
     const parsed = parseGrowthAgentStateInput(agentStateText);
     const objective = agentPrompt.trim();
@@ -176,23 +193,49 @@ export function useGrowthAgentWorkspace() {
       setGrowthAgentError('Enter a borrower-growth objective for the agent.');
       return;
     }
-    setComposePending(execute ? 'execute' : 'compose');
-    beginRun('workflows', execute ? 'Composing and running a plan for your objective' : 'Composing a plan for your objective');
+    const snapshot: GrowthAgentComposeSnapshot = { objective, states: parsed.states };
+    setComposePending('compose');
+    beginRun('workflows', 'Composing a plan for your objective');
     setComposePlan(null);
+    planExecution.reset();
     setGrowthAgentError(null);
     try {
       const result = await api.composeMortgageGrowthAgentPlan({
         objective,
-        execute,
         states: parsed.states,
       });
       setComposePlan(result);
+      setComposeSnapshot(snapshot);
     } catch (err) {
       setGrowthAgentError(err instanceof Error ? err.message : 'Compose plan failed.');
     } finally {
       setComposePending(null);
       setActiveRun(null);
     }
+  }
+
+  /**
+   * Run the plan the card shows, exactly: its plan and digest with the
+   * objective and scope it was composed for. Pessimistic: the card changes
+   * only when the server answers (see `mergeExecutedPlan`).
+   */
+  function executeComposedPlan(response: ComposePlanResponse) {
+    if (
+      response.status !== 'composed'
+      || !response.plan
+      || !response.plan_digest
+      || response.executed
+      || !composeSnapshot
+      || planExecution.pending
+    ) {
+      return;
+    }
+    planExecution.run({
+      objective: composeSnapshot.objective,
+      states: composeSnapshot.states,
+      plan: response.plan,
+      plan_digest: response.plan_digest,
+    });
   }
 
   async function runCustomGrowthAgentWorkflow(saveMonitor: boolean) {
@@ -287,7 +330,7 @@ export function useGrowthAgentWorkspace() {
   const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
   const workflows = growthAgentQuery.data?.workflows ?? growthAgentCapabilitiesQuery.data?.workflows ?? [];
   const monitors = growthAgentQuery.data?.monitors ?? growthAgentCapabilitiesQuery.data?.monitors ?? [];
-  const agentBusy = growthAgentPending !== null || promptAgentPending || composePending !== null || monitorPending !== null || monitorDraftPending !== null;
+  const agentBusy = growthAgentPending !== null || promptAgentPending || composePending !== null || planExecution.pending || monitorPending !== null || monitorDraftPending !== null;
 
   return {
     agentStateText,
@@ -311,6 +354,8 @@ export function useGrowthAgentWorkspace() {
     setCustomMode,
     composePlan,
     composePending,
+    composeSnapshot,
+    planExecution,
     runOrigin,
     activeRun,
     workflowsLoading: growthAgentQuery.isPending,
@@ -323,6 +368,7 @@ export function useGrowthAgentWorkspace() {
     runGrowthAgentWorkflow,
     runMortgageGrowthAgentPrompt,
     composeGrowthAgentPlan,
+    executeComposedPlan,
     runCustomGrowthAgentWorkflow,
     rerunGrowthAgentMonitor,
     draftGrowthAgentMonitorNotifications,

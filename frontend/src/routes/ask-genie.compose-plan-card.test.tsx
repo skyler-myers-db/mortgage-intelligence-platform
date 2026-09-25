@@ -4,9 +4,9 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ComposePlanResponse, GrowthAgentWorkflow } from '../types';
-import { ComposePlanCard } from './ask-genie.compose-plan-card';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ComposedPlan, ComposePlanResponse, GrowthAgentWorkflow } from '../types';
+import { ComposePlanCard, type ComposePlanRunControls } from './ask-genie.compose-plan-card';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -26,6 +26,7 @@ const COMPOSED_EXECUTED: ComposePlanResponse = {
   status: 'composed',
   planner: 'supervisor_composed',
   model_endpoint: 'databricks-meta-llama',
+  plan_digest: `v1.v1.1790000000.${'A'.repeat(43)}`,
   plan: {
     objective_summary: 'Surface high-equity HELOC candidates in IL for review.',
     steps: [
@@ -91,6 +92,7 @@ const DEGRADED: ComposePlanResponse = {
   planner: 'supervisor_composed',
   model_endpoint: null,
   plan: null,
+  plan_digest: null,
   trace: [],
   approval_required: false,
   approval_gate_step_id: null,
@@ -109,6 +111,7 @@ const INVALID: ComposePlanResponse = {
   planner: 'supervisor_composed',
   model_endpoint: 'databricks-meta-llama',
   plan: null,
+  plan_digest: null,
   trace: [],
   approval_required: false,
   approval_gate_step_id: null,
@@ -121,6 +124,50 @@ const INVALID: ComposePlanResponse = {
   fallback_workflows: [],
   audit_event_ids: [],
 };
+
+/** A signed plan built from planner-exposed tools. */
+const SIGNED_PLAN: ComposedPlan = {
+    objective_summary: 'Screen refi economics, then gate to eligible leads.',
+    steps: [
+      { step_id: 'step-1', tool: 'fn_build_cohort', params: { states: [] }, rationale: 'Broad screen.' },
+      {
+        step_id: 'step-2',
+        tool: 'fn_segment_counts',
+        params: { segment_codes: ['itm', 'listed'], segment_mode: 'all', states: ['IL', 'TX'] },
+        rationale: 'Gate to eligible, opted-in leads.',
+      },
+      { step_id: 'step-3', tool: 'fn_borrower_dossier_evidence', params: { min_opportunity_score: 80 }, rationale: 'Evidence.' },
+    ],
+    expected_outcome: 'An eligible subset.',
+    risk_notes: 'Read-only counts.',
+    requires_approval: false,
+};
+
+/** A signed, composed, not yet executed plan. */
+const COMPOSED_SIGNED: ComposePlanResponse = {
+  ...INVALID,
+  status: 'composed',
+  message: null,
+  plan_digest: `v1.v1.1790000000.${'B'.repeat(43)}`,
+  plan: SIGNED_PLAN,
+};
+
+function runControls(overrides: Partial<ComposePlanRunControls> = {}): ComposePlanRunControls {
+  return {
+    pending: false,
+    conflict: false,
+    errorMessage: null,
+    onRun: vi.fn(),
+    onComposeAgain: vi.fn(),
+    ...overrides,
+  };
+}
+
+function runButton(container: HTMLElement): HTMLButtonElement | undefined {
+  return Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
+    /Run this plan|Running…/.test(button.textContent ?? ''),
+  );
+}
 
 describe('ComposePlanCard', () => {
   let container: HTMLDivElement;
@@ -137,9 +184,9 @@ describe('ComposePlanCard', () => {
     container.remove();
   });
 
-  function renderResponse(response: ComposePlanResponse) {
+  function renderResponse(response: ComposePlanResponse, run?: ComposePlanRunControls) {
     act(() => {
-      root.render(<ComposePlanCard response={response} />);
+      root.render(<ComposePlanCard response={response} run={run} />);
     });
   }
 
@@ -198,5 +245,73 @@ describe('ComposePlanCard', () => {
     expect(container.textContent).not.toContain('Plan steps');
     expect(container.textContent).not.toContain('Reviewed fallback workflows');
     expect(container.querySelector('.growth-agent-timeline')).toBeNull();
+  });
+
+  it('shows each step its inputs from the closed vocabulary', () => {
+    renderResponse(COMPOSED_SIGNED, runControls());
+    const metas = Array.from(container.querySelectorAll('.growth-agent-step__meta')).map((node) => node.textContent);
+    expect(metas).toContain('States: current coverage');
+    expect(metas).toContain('States: IL, TX · Segments: Prime Refi Candidates, Listed for Sale · Match: all segments');
+    expect(metas).toContain('Min score: 80');
+  });
+
+  it('offers Run only on a composed, signed, unexecuted plan, described by what it does', () => {
+    const run = runControls();
+    renderResponse(COMPOSED_SIGNED, run);
+    const button = runButton(container);
+    expect(button?.textContent).toBe('Run this plan');
+    expect(button?.disabled).toBe(false);
+    expect(button?.classList.contains('btn--primary')).toBe(true);
+    const hint = document.getElementById(button?.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toBe(
+      'Runs exactly the 3 steps above with the inputs shown. Read-only: it counts and checks, stops at the first approval gate and sends nothing.',
+    );
+    act(() => button?.click());
+    expect(run.onRun).toHaveBeenCalledTimes(1);
+
+    for (const other of [COMPOSED_EXECUTED, DEGRADED, INVALID]) {
+      renderResponse(other, runControls());
+      expect(runButton(container), other.status).toBeUndefined();
+    }
+  });
+
+  it('disables Run with the reason when the deployment cannot sign the plan', () => {
+    renderResponse({ ...COMPOSED_SIGNED, plan_digest: null }, runControls());
+    const button = runButton(container);
+    expect(button?.disabled).toBe(true);
+    expect(document.getElementById(button?.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+      'This plan can be reviewed here but not run: this deployment is missing a required security setting. Ask an administrator.',
+    );
+  });
+
+  it('holds the result until the server answers: pending is Running…, disabled and announced', () => {
+    renderResponse(COMPOSED_SIGNED, runControls({ pending: true }));
+    const button = runButton(container);
+    expect(button?.textContent).toBe('Running…');
+    expect(button?.disabled).toBe(true);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Running the plan you reviewed.');
+    expect(container.textContent).not.toContain('Execution trace');
+  });
+
+  it('says a 409 ran nothing and offers Compose again', () => {
+    const run = runControls({ conflict: true });
+    renderResponse(COMPOSED_SIGNED, run);
+    const alert = container.querySelector('.status-callout--danger[role="alert"]');
+    expect(alert?.textContent).toBe(
+      'This plan was not run. It changed, expired or no longer passes review since it was composed. Compose it again to review the current plan.',
+    );
+    expect(runButton(container)?.disabled).toBe(true);
+    const again = Array.from(container.querySelectorAll('button')).find((node) => node.textContent === 'Compose again');
+    expect(again?.classList.contains('btn--ghost')).toBe(true);
+    act(() => again?.click());
+    expect(run.onComposeAgain).toHaveBeenCalledTimes(1);
+    expect(run.onRun).not.toHaveBeenCalled();
+  });
+
+  it('shows any other failure in an alert and keeps Run available', () => {
+    renderResponse(COMPOSED_SIGNED, runControls({ errorMessage: 'lakebase is temporarily unavailable' }));
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('lakebase is temporarily unavailable');
+    expect(runButton(container)?.disabled).toBe(false);
+    expect(container.textContent).not.toContain('Compose again');
   });
 });

@@ -26,6 +26,10 @@ interface GrowthAgentPanelProps {
  * reports where it runs instead of below the custom builder. Saved
  * watchlists and their drafts moved to the Saved monitors tab.
  *
+ * Audit 2026-09-21 `critic-01` / `genie-09` part 1: the command bar has one
+ * primary action and no one-shot 'Execute plan'. Compose only drafts a plan;
+ * the composed plan card holds 'Run this plan', which runs that exact plan.
+ *
  * `aria-busy` marks only the workflow cards, never the whole surface: a busy
  * subtree holds its live-region announcements until it settles, and the run
  * slot's in-progress `role="status"` card is gone by then.
@@ -98,21 +102,16 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
               variant="ghost"
               size="sm"
               icon="sparkle"
-              onClick={() => agent.composeGrowthAgentPlan(false)}
+              onClick={() => agent.composeGrowthAgentPlan()}
               disabled={agentBusy || stateParsePreview.invalid.length > 0}
             >
               {composePending === 'compose' ? 'Composing…' : 'Compose plan'}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="bolt"
-              onClick={() => agent.composeGrowthAgentPlan(true)}
-              disabled={agentBusy || stateParsePreview.invalid.length > 0}
-            >
-              {composePending === 'execute' ? 'Executing…' : 'Execute plan'}
-            </Button>
           </div>
+          <p className="growth-agent__hint">
+            Plan reviewed workflow picks one reviewed workflow and counts eligible borrowers. Compose plan drafts a
+            multi-step plan from reviewed tools; you review each step before anything runs.
+          </p>
         </section>
 
         <div className="growth-agent__controls">
