@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.lead import LeadSummary
+from backend.schemas.queue_version import QueueVersionResponse
 from backend.schemas.workspace import (
     SavedDraft,
     SavedDraftInput,
@@ -31,13 +32,14 @@ from backend.services.outreach_draft_proof import (
     GeneratedOutreachDraftProofError,
     load_verified_generated_outreach_draft,
 )
-from backend.services.rbac import resolve_workflow_actor
+from backend.services.rbac import AuthenticatedActorDep, resolve_workflow_actor
 from backend.services.repositories import (
     LeadRepository,
     OutreachRepository,
     get_lead_repository,
     get_outreach_repository,
 )
+from backend.services.workspace_queue_version import QueueVersionService, get_queue_version_service
 from backend.services.workspace_store import WorkspaceStore, get_workspace_store
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -46,6 +48,7 @@ WorkspaceDep = Annotated[WorkspaceStore, Depends(get_workspace_store)]
 LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 OutreachRepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
+QueueVersionDep = Annotated[QueueVersionService, Depends(get_queue_version_service)]
 
 
 def _as_lakebase_503() -> HTTPException:
@@ -173,6 +176,22 @@ def read_workspace(
     try:
         state = store.list(actor=resolve_workflow_actor(request))
         return _hydrate_saved_leads(state, repo)
+    except LakebaseError as exc:
+        raise _as_lakebase_503() from exc
+
+
+@router.get("/queue-version", response_model=QueueVersionResponse)
+def read_queue_version(
+    _actor: AuthenticatedActorDep,
+    service: QueueVersionDep,
+) -> QueueVersionResponse:
+    """Audit-free Lead Queue change signal (audit states-09).
+
+    Fail-closed behind an authenticated identity; reads only the Lakebase
+    decision ledgers through a 30 s cache and writes no audit row.
+    """
+    try:
+        return QueueVersionResponse(version=service.current())
     except LakebaseError as exc:
         raise _as_lakebase_503() from exc
 
