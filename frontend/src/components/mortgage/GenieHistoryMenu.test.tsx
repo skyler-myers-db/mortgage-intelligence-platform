@@ -6,10 +6,11 @@
  * menu is open (never on mount, never prefetched), once per open, a reopen
  * shows the cached rows while its read runs, closing aborts the read, and an
  * error shows "History unavailable" after exactly ONE request even when the
- * client's default would retry.
+ * client's default would retry. Offline is a network failure like any other
+ * (not a paused "Loading history…"), and only an explicit reopen re-reads.
  */
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -78,6 +79,7 @@ describe('GenieHistoryMenu', () => {
     act(() => root.unmount());
     client.clear();
     container.remove();
+    onlineManager.setOnline(true);
   });
 
   function render(open: boolean) {
@@ -152,6 +154,32 @@ describe('GenieHistoryMenu', () => {
     expect(mocks.genieSessions).toHaveBeenCalledTimes(1);
     expect(container.querySelector('.genie-history__state--error')?.textContent).toBe('History unavailable');
     expect(container.querySelectorAll('.genie-history__item')).toHaveLength(0);
+  });
+
+  it('offline, fails into "History unavailable" after one attempt; only a reopen reads again', async () => {
+    act(() => onlineManager.setOnline(false));
+    mocks.genieSessions.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(true);
+    await waitUntil(() => container.textContent?.includes('History unavailable') ?? false);
+    await settle(10);
+
+    // The client's default networkMode ('online') would pause here on
+    // "Loading history…" with no request at all.
+    expect(mocks.genieSessions).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain('Loading history');
+
+    // Reconnecting is not an open: no background read while the menu is open.
+    mocks.genieSessions.mockResolvedValue([PAST]);
+    act(() => onlineManager.setOnline(true));
+    await settle(10);
+    expect(mocks.genieSessions).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('History unavailable');
+
+    render(false);
+    render(true);
+    await waitUntil(() => rowTitles().length === 1);
+    expect(rowTitles()).toEqual(['Equity sweep']);
+    expect(mocks.genieSessions).toHaveBeenCalledTimes(2);
   });
 
   it('hides rows cached by an earlier open once the reread fails', async () => {

@@ -11,7 +11,7 @@ import { Icon } from '../Icon';
  * precedent) under the shared `mip` root, so AppShell's queryClient.clear()
  * on an actor switch drops the previous actor's rows with everything else.
  */
-export const genieSessionsQueryKey = () => [...queryKeys.all, 'genie', 'sessions'] as const;
+const genieSessionsQueryKey = () => [...queryKeys.all, 'genie', 'sessions'] as const;
 
 /**
  * One past session as turns, or null when it could not be read. Never
@@ -108,6 +108,11 @@ export function GenieHistoryMenu({
  * that read runs, and unmounting (close) aborts it because the query function
  * consumes the signal. `retry: false`: an error shows "History unavailable"
  * after exactly one request, never a retry storm against a 5xx.
+ * `networkMode: 'always'`: offline, the read is attempted and fails into
+ * "History unavailable" like any network failure, instead of pausing on
+ * "Loading history…" under the client's default 'online' mode.
+ * `refetchOnReconnect: false` (also TanStack's default under 'always'): a
+ * reconnect is not an open, so only a reopen reads again.
  */
 function GenieHistoryRows({
   loadingId,
@@ -127,6 +132,8 @@ function GenieHistoryRows({
     staleTime: 0,
     refetchOnMount: 'always',
     retry: false,
+    networkMode: 'always',
+    refetchOnReconnect: false,
   });
   // A settled error only: while a reopen's read runs, the rows cached from an
   // earlier open stay on screen instead of the previous open's error.
