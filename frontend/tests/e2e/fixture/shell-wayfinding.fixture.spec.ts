@@ -321,8 +321,26 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
 
     await app.gotoRoute('/data-estate/assets/borrower_360');
     const assetCrumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
-    await expect(assetCrumbs.getByRole('link', { name: 'Data estate' })).toHaveAttribute('href', '/admin-config');
+    await expect(assetCrumbs.getByRole('link', { name: 'Data estate' })).toHaveAttribute('href', '/admin-config#data-estate');
     await expect(assetCrumbs.locator('[aria-current="page"]')).toHaveText('Governed asset');
+  });
+
+  // Wave-1c follow-up #15: the crumb used to land on the top of Admin, far
+  // above the governed-asset index it names.
+  test('the asset crumb "Data estate" lands on the Data estate panel, just under the sticky nav (admin session)', async ({ app, page }) => {
+    await app.gotoRoute('/data-estate/assets/borrower_360');
+    await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'Data estate' }).click();
+    await expect(page).toHaveURL(/\/admin-config#data-estate$/);
+    await app.settle();
+    const panel = page.locator('#data-estate');
+    await expect(panel).toHaveClass(/\bdata-estate\b/);
+    await expect.poll(async () => {
+      const [panelTop, navBottom] = await Promise.all([
+        panel.evaluate((el) => el.getBoundingClientRect().top),
+        page.locator('.route-nav').evaluate((el) => el.getBoundingClientRect().bottom),
+      ]);
+      return Math.abs(panelTop - navBottom);
+    }, { message: "#data-estate's top sits within 8 px of the nav's bottom edge" }).toBeLessThanOrEqual(8);
   });
 });
 
