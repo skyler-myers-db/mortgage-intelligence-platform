@@ -65,7 +65,8 @@ export const RATE_LEVER_NOT_BUILT: RateSensitivityResponse = {
   steps_bps: [],
   scenario_market_rate_pct: [],
   base_market_rate_pct: null,
-  thresholds: {},
+  // The server's RateSensitivityThresholds() serializes both keys as null.
+  thresholds: { min_spread_bps: null, min_equity_pct: null },
   states: [],
   provenance: { ...RATE_LEVER.provenance, book_as_of: null, refreshed_at: null },
 };
