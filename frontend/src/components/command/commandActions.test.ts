@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   COMMAND_ACTIONS,
   commandActionsForAccess,
+  commandVerbActions,
   filterCommandActions,
   scoreAction,
   type CommandAction,
 } from './commandActions';
+import type { CommandSelectionContext } from './commandSelection';
 
 describe('command palette action registry', () => {
   it('exposes every product-flow route as a navigable action', () => {
@@ -74,5 +76,26 @@ describe('command palette action registry', () => {
       .filter((action) => action.id === 'nav-genie' || action.id === 'cmd-genie')
       .map((action) => action.label);
     expect(genieLabels).toEqual(['Ask Genie', 'Open Genie panel']);
+  });
+});
+
+describe('selection verbs (responsive-04: one number format)', () => {
+  const selection = (overrides: Partial<CommandSelectionContext>): CommandSelectionContext => ({
+    selectedCount: 1,
+    approveCount: 1,
+    canApprove: true,
+    canAssign: true,
+    run: () => undefined,
+    ...overrides,
+  });
+
+  it('groups the counts with en-US separators whatever the browser locale', () => {
+    const labels = commandVerbActions(selection({ approveCount: 1234, selectedCount: 2500 })).map((action) => action.label);
+    expect(labels).toEqual(['Approve 1,234 selected…', 'Assign 2,500 selected…']);
+  });
+
+  it('offers no verb without a selection', () => {
+    expect(commandVerbActions(null)).toEqual([]);
+    expect(commandVerbActions(selection({ selectedCount: 0 }))).toEqual([]);
   });
 });

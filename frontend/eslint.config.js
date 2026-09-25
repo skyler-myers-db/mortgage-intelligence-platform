@@ -47,12 +47,10 @@ export const FORMATTING_BAN = [
 // SHRINK-ONLY: src/lib/formattingBan.test.ts fails when an entry no longer
 // reproduces a violation, so a file that is migrated leaves this list in the
 // same change. Never add an entry: migrate the call site. (The wave-1c
-// lane-owned exemption block was retired in wave 2: every file it covered
-// was migrated except the one below, which violated on the wave-1c merge.)
-export const FORMATTING_ALLOWLIST = {
-  "src/components/command/commandActions.ts":
-    "Cmd-K selection verb labels (approveCount / selectedCount); violated on the wave-1c merge and belongs to the wave-4 palette lane",
-};
+// lane-owned exemption block was retired in wave 2; the last entry,
+// commandActions.ts's selection verb labels, was migrated in wave 4.) Empty
+// now; the export stays because formattingBan.test.ts reads it.
+export const FORMATTING_ALLOWLIST = {};
 
 // Files where react-hooks/set-state-in-effect is already an error (see the
 // block after the main config). Grow it as files leave effect-driven state.
@@ -287,10 +285,10 @@ export default [
       "no-restricted-syntax": ["error", ...FORMATTING_BAN],
     },
   },
-  {
-    files: Object.keys(FORMATTING_ALLOWLIST),
-    rules: {
-      "no-restricted-syntax": "off",
-    },
-  },
+  // An empty `files` array throws in @eslint/config-array ("Expected value
+  // to be a non-empty array") and would break ALL lint, so the override
+  // exists only while the allowlist has an entry.
+  ...(Object.keys(FORMATTING_ALLOWLIST).length
+    ? [{ files: Object.keys(FORMATTING_ALLOWLIST), rules: { "no-restricted-syntax": "off" } }]
+    : []),
 ];
