@@ -57,8 +57,10 @@ def _recorded(lakebase: FakeJobLakebase, seconds: float, *, deep: bool = False, 
 
 
 def test_no_hint_below_the_sample_floor() -> None:
+    # Literal counts: the floor is 20 samples (a count derived from the
+    # constant would follow a lowered floor down).
     lakebase = FakeJobLakebase()
-    _recorded(lakebase, 40, count=durations.MIN_SAMPLES - 1)
+    _recorded(lakebase, 40, count=19)
 
     assert durations.typical_completion_seconds(lakebase, deep=False) is None
 

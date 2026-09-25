@@ -347,6 +347,14 @@ def test_the_heartbeat_returning_reports_a_requested_cancel(pg: _PgLakebase) -> 
     assert jobs.claim(pg, str(_enroll(pg, message_id="msg-3").job.job_id)) is True  # type: ignore[arg-type]
 
 
+def test_claim_never_takes_a_queued_job_whose_cancel_was_requested(pg: _PgLakebase) -> None:
+    job_id = _enroll(pg).job.job_id
+    pg.sql("UPDATE mip_app.genie_completion_jobs SET cancel_requested_at = now() WHERE job_id = %s::uuid", (job_id,))
+
+    assert jobs.claim(pg, job_id) is False  # type: ignore[arg-type]
+    assert pg.row(job_id)["status"] == "queued"
+
+
 def test_the_probe_requires_the_cancel_columns(pg: _PgLakebase) -> None:
     assert pg.fetchone(jobs._PROBE_SQL) == {"present": True}
     pg.sql("ALTER TABLE mip_app.genie_completion_jobs DROP COLUMN deep")
