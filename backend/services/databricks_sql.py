@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -67,6 +68,36 @@ class DatabricksSqlError(RuntimeError):
         super().__init__(message)
         self.statement_id = statement_id
         self.state = state
+
+
+class DatabricksSqlPermissionError(DatabricksSqlError):
+    """The warehouse refused the statement on authorization (SQLSTATE 42501).
+
+    A definitive answer from a reachable warehouse, not an outage: no retry
+    can grant a privilege. A subclass, so every ``except DatabricksSqlError``
+    still catches it; the resilient client fails fast on it (see
+    ``Resilient``'s ``permission_denied_on``).
+    """
+
+
+# Unity Catalog's authorization refusal: its error class or its SQLSTATE.
+_UC_PERMISSION_DENIED_RE = re.compile(r"\bINSUFFICIENT_PERMISSIONS\b|\bSQLSTATE:?\s*42501\b")
+
+
+def _sql_error_class(message: object, error_code: object = None) -> type[DatabricksSqlError]:
+    """``DatabricksSqlPermissionError`` for an authorization refusal, else the base.
+
+    A refusal is the UC error class / SQLSTATE in the message, or a FAILED
+    statement's own ``PERMISSION_DENIED`` error code. The HTTP-level path
+    passes only the response body, so a 403 without those markers (an
+    expired or invalid token, which a re-minted token can fix) stays a
+    plain, retryable ``DatabricksSqlError``.
+    """
+    if _UC_PERMISSION_DENIED_RE.search(str(message or "")):
+        return DatabricksSqlPermissionError
+    if str(error_code or "").strip().upper() == "PERMISSION_DENIED":
+        return DatabricksSqlPermissionError
+    return DatabricksSqlError
 
 
 class DatabricksSqlClient:
@@ -160,7 +191,8 @@ class DatabricksSqlClient:
         state = status.get("state")
         statement_id = resp.get("statement_id")
         if state != "SUCCEEDED":
-            err_msg = (status.get("error") or {}).get("message", "no error message returned")
+            error = status.get("error") or {}
+            err_msg = error.get("message", "no error message returned")
             duration_ms = round((time.monotonic() - start) * 1000.0, 2)
             record_dependency("warehouse", duration_ms)
             emit(
@@ -174,7 +206,7 @@ class DatabricksSqlClient:
                 state=state,
                 statement_id=statement_id,
             )
-            raise DatabricksSqlError(
+            raise _sql_error_class(err_msg, error.get("error_code"))(
                 f"Databricks SQL statement did not succeed "
                 f"(state={state!r} statement_id={statement_id!r}): {err_msg}",
                 statement_id=statement_id,
@@ -275,7 +307,7 @@ class DatabricksSqlClient:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:  # pragma: no cover -- server error
             detail = exc.read().decode("utf-8", errors="replace")
-            raise DatabricksSqlError(
+            raise _sql_error_class(detail)(
                 f"HTTP {exc.code} from Databricks SQL API: {detail[:500]}"
             ) from exc
         except urllib.error.URLError as exc:  # pragma: no cover -- network error
@@ -404,8 +436,10 @@ def get_sql_client() -> DatabricksSqlClient:
             backoff_max=2.0,
             # Retry any Databricks-side failure including URLError;
             # ``DependencyDownError`` is never wrapped (breaker-open
-            # already short-circuits).
+            # already short-circuits). A permission refusal is the one
+            # definitive answer: fail fast, never retried, not "warming".
             retry_on=(DatabricksSqlError, OSError),
+            permission_denied_on=(DatabricksSqlPermissionError,),
         )
         _CLIENT = ResilientSqlClient(bare, resilient)
         return _CLIENT

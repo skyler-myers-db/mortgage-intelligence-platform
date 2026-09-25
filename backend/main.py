@@ -598,14 +598,17 @@ async def _dependency_down_handler(_request: Request, exc: DependencyDownError) 
     return JSONResponse(
         status_code=503,
         content={
-            "detail": safe_dependency_detail(exc.dependency),
-            "retryable": True,
+            "detail": safe_dependency_detail(exc.dependency, permission_denied=not exc.retryable),
+            # False only for ``permission_denied``: a missing grant is not
+            # transient, so the UI must not run a warming/retry loop on it.
+            "retryable": exc.retryable,
             "dependency": exc.dependency,
             # R6-05: additive machine-readable classification. Values are
             # ``"warming_up"`` (cold-start, fast retry OK), ``"breaker_open"``
             # (breaker already tripped -- back off to cooldown window before
             # retrying), ``"retries_exhausted"`` (retry budget blown, harder
-            # failure). The legacy ``retryable: true`` stays for
+            # failure), ``"permission_denied"`` (a missing grant: fail, never
+            # retry). The ``retryable`` flag stays for
             # backward compatibility; the frontend (parallel cycle) can key
             # off ``reason`` for a smarter backoff curve.
             "reason": exc.kind,

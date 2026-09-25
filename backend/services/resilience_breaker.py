@@ -7,7 +7,7 @@ probe observe one coherent state.
 
 ``DependencyDownError`` lives here because it is the breaker's own
 refusal signal -- the typed exception routers catch and translate to
-HTTP 503 with ``retryable: true``.
+HTTP 503 with ``retryable: true`` (``false`` only for a permission refusal).
 
 ``backend.services.resilience`` re-exports everything in this module, so
 existing import sites keep working unchanged.
@@ -47,12 +47,20 @@ class DependencyDownError(RuntimeError):
     harder outage). The legacy ``retryable: true`` field stays on the
     wire so existing UI code keeps working; the additive ``kind`` lets
     the frontend (in a parallel cycle) pick a smarter backoff.
+
+    ``permission_denied`` is the one kind that is NOT retryable: the
+    dependency answered and refused the caller's authorization (a missing
+    grant). No retry or cooldown can fix that, so the 503 body says
+    ``retryable: false`` and the UI shows a failure instead of a warming loop.
     """
 
     KIND_WARMING_UP = "warming_up"
     KIND_BREAKER_OPEN = "breaker_open"
     KIND_RETRIES_EXHAUSTED = "retries_exhausted"
-    _ALLOWED_KINDS = frozenset({KIND_WARMING_UP, KIND_BREAKER_OPEN, KIND_RETRIES_EXHAUSTED})
+    KIND_PERMISSION_DENIED = "permission_denied"
+    _ALLOWED_KINDS = frozenset(
+        {KIND_WARMING_UP, KIND_BREAKER_OPEN, KIND_RETRIES_EXHAUSTED, KIND_PERMISSION_DENIED}
+    )
 
     def __init__(
         self,
@@ -69,6 +77,11 @@ class DependencyDownError(RuntimeError):
         # Defensively clamp to the allowed set so a typo in a future
         # call site can't ship a freeform string to the frontend.
         self.kind = kind if kind in self._ALLOWED_KINDS else self.KIND_WARMING_UP
+
+    @property
+    def retryable(self) -> bool:
+        """False only for a refusal no retry can fix (``permission_denied``)."""
+        return self.kind != self.KIND_PERMISSION_DENIED
 
 
 # ---------------------------------------------------------------------------
