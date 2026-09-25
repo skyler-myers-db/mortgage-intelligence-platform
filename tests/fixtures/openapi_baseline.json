@@ -6091,6 +6091,83 @@
         "title": "GenieAnswerSection",
         "type": "object"
       },
+      "GenieCancelRequest": {
+        "additionalProperties": false,
+        "description": "``/message/cancel`` body. There is no ``question`` field: a body that\ncarries one is refused (422), so the prompt never travels on a Stop.",
+        "properties": {
+          "conversation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "job_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "message_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
+          "progress_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Progress Token",
+            "type": "string"
+          },
+          "question_hash": {
+            "pattern": "^[0-9a-f]{16}$",
+            "title": "Question Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "progress_token",
+          "job_id",
+          "question_hash"
+        ],
+        "title": "GenieCancelRequest",
+        "type": "object"
+      },
+      "GenieCancelResponse": {
+        "description": "``/message/cancel``: what the owner's Stop did (audit genie-03).\n\n``cancelled``: this app will not verify or record the answer; nothing is\nrecorded for the turn (no RUN_GENIE row, no action tokens, no session\nrow). It never means that Genie's own message was cancelled: Genie may\nkeep the question as context. ``recorded``: the answer was already\nverified and recorded before the Stop, so nothing changed. ``ended``: the\njob had already failed or expired. ``status`` is the job's status after\nthe request.",
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "genie_completion_cancel",
+            "default": "genie_completion_cancel",
+            "title": "Kind",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "cancelled",
+              "recorded",
+              "ended"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GenieJobStatus"
+          }
+        },
+        "required": [
+          "job_id",
+          "outcome",
+          "status"
+        ],
+        "title": "GenieCancelResponse",
+        "type": "object"
+      },
       "GenieCompleteAsyncRequest": {
         "description": "``/message/complete`` body. ``respond_async`` opts in to the 202 job.\n\nOlder servers ignore the extra field and answer 200, which the browser\nrecognises (deploy-skew safety in both directions).",
         "properties": {
@@ -6134,7 +6211,7 @@
         "type": "object"
       },
       "GenieCompletionJobStatus": {
-        "description": "Where the governed completion of one live Genie turn is (audit genie-01).\n\nReturned with 202 by ``/message/complete`` when the browser asked for a\njob, and by every ``/message/status`` poll. Server-owned vocabulary only:\n``status`` and ``stage`` are closed enums, ``stage_label`` and\n``error_hint`` are fixed server copy (never exception or model text).\n``parts_done`` / ``parts_planned`` count the deep-research sweep's\ngoverned sub-analyses while it runs. ``response`` is the finished\ngoverned answer, present only when ``status`` is ``succeeded``; its\naction confirmation tokens are signed afresh for the caller at delivery.",
+        "description": "Where the governed completion of one live Genie turn is (audit genie-01).\n\nReturned with 202 by ``/message/complete`` when the browser asked for a\njob, and by every ``/message/status`` poll. Server-owned vocabulary only:\n``status`` and ``stage`` are closed enums, ``stage_label`` and\n``error_hint`` are fixed server copy (never exception or model text).\n``parts_done`` / ``parts_planned`` count the deep-research sweep's\ngoverned sub-analyses while it runs. ``response`` is the finished\ngoverned answer, present only when ``status`` is ``succeeded``; its\naction confirmation tokens are signed afresh for the caller at delivery.\n``cancelled`` is terminal and not failed: the owner stopped the turn\nbefore its governed record existed. ``typical_seconds`` (audit genie-01)\nis the recent median completion time of this job's class (deep or\nsingle), only while the job still runs and only with enough samples.",
         "properties": {
           "error_hint": {
             "anyOf": [
@@ -6208,6 +6285,17 @@
             "default": false,
             "title": "Terminal",
             "type": "boolean"
+          },
+          "typical_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Typical Seconds"
           }
         },
         "required": [
@@ -6373,7 +6461,8 @@
           "finalizing",
           "done",
           "failed",
-          "expired"
+          "expired",
+          "cancelled"
         ],
         "title": "GenieJobStage",
         "type": "string"
@@ -6385,7 +6474,8 @@
           "running",
           "succeeded",
           "failed",
-          "expired"
+          "expired",
+          "cancelled"
         ],
         "title": "GenieJobStatus",
         "type": "string"
@@ -18216,6 +18306,59 @@
         ]
       }
     },
+    "/api/genie/message/cancel": {
+      "post": {
+        "deprecated": true,
+        "description": "The owner's Stop on a job-backed turn (audit genie-03).\n\nToken-authorized like the other job calls, with the submit's 16-hex\nquestion label instead of the question. An accepted cancel is audited as\nGENIE_TURN_CANCELLED in the same transaction as its flag\n(``request_cancel``); a repeat, a recorded answer or an ended job is a\nno-op with no audit row. ``cancelled`` means this app will not record\nthe answer, never that Genie's own message was cancelled.",
+        "operationId": "post_api_genie_message_cancel_genie_message_cancel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Cancel",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
     "/api/genie/message/complete": {
       "post": {
         "deprecated": true,
@@ -26016,6 +26159,58 @@
           }
         },
         "summary": "Genie Message",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/message/cancel": {
+      "post": {
+        "description": "The owner's Stop on a job-backed turn (audit genie-03).\n\nToken-authorized like the other job calls, with the submit's 16-hex\nquestion label instead of the question. An accepted cancel is audited as\nGENIE_TURN_CANCELLED in the same transaction as its flag\n(``request_cancel``); a repeat, a recorded answer or an ended job is a\nno-op with no audit row. ``cancelled`` means this app will not record\nthe answer, never that Genie's own message was cancelled.",
+        "operationId": "post_api_v1_genie_message_cancel_genie_message_cancel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieCancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Message Cancel",
         "tags": [
           "genie"
         ]
