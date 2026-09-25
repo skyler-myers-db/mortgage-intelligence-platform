@@ -1,6 +1,6 @@
 /**
  * useLeadApprovalActions — the human-approval half of the ranked-borrower
- * table: single-row approve/reject, the reject panel's form state, the
+ * table: single-row approve/reject, which row's reject panel is open, the
  * selection set feeding the bulk toolbar, the chunked bulk-approve loop with
  * its synchronous in-flight latches, the bulk toast lifecycle, and the
  * post-bulk focus restore. Extracted from LeadTable.tsx (file-size gate,
@@ -116,11 +116,11 @@ export function useLeadApprovalActions({
   // The shared-rationale field: Shift+A and the Cmd-K verb open the bulk
   // gate and land focus here (they never submit the bulk run themselves).
   const bulkRationaleRef = useRef<HTMLInputElement | null>(null);
+  // Which row's reject panel is open. The panel's reason and rationale, and
+  // the bulk gate's shared rationale, are the panels' own state (audit
+  // runtime-04 slice 2): a keystroke re-renders the panel, never the table.
   const [pendingReject, setPendingReject] = useState<string | null>(null);
-  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>('low_intent');
-  const [rejectRationale, setRejectRationale] = useState('');
   const [bulkRationaleOpen, setBulkRationaleOpen] = useState(false);
-  const [bulkRationale, setBulkRationale] = useState('');
   const approveMutation = useApproveLead(queryClient);
   const rejectMutation = useRejectLead(queryClient);
   // Which rows have an approve or reject on the wire, and which decision.
@@ -387,15 +387,17 @@ export function useLeadApprovalActions({
     return rejected;
   }
 
-  /** Resolves with the rejected borrower id once the write returned, else null. */
-  async function submitReject(): Promise<string | null> {
+  /**
+   * The open reject panel's Submit, with the panel's own reason and
+   * rationale. Resolves with the rejected borrower id once the write
+   * returned, else null (the panel stays open with what was typed).
+   */
+  async function submitReject(reasonCode: RejectReasonCode, rationale: string): Promise<string | null> {
     if (!pendingReject) return null;
     const borrowerId = pendingReject;
-    const rejected = await rejectLead(borrowerId, rejectReasonCode, rejectRationale.trim() || null);
+    const rejected = await rejectLead(borrowerId, reasonCode, rationale.trim() || null);
     if (!rejected) return null;
     setPendingReject(null);
-    setRejectRationale('');
-    setRejectReasonCode('low_intent');
     return borrowerId;
   }
 
@@ -532,21 +534,26 @@ export function useLeadApprovalActions({
    *   sample drafts": those rows are approved with exactly that copy, so
    *   what was shown is what the audit rows certify, and no second draft
    *   is generated for them.
+   * @param rationale the gate's shared rationale (the toolbar's own state).
+   * @returns true once a run settled: the toolbar then clears its rationale.
    */
-  async function bulkApprove(sampleDrafts?: ReadonlyMap<string, OutreachDraftResult>) {
+  async function bulkApprove(
+    sampleDrafts: ReadonlyMap<string, OutreachDraftResult> | undefined,
+    rationale: string,
+  ): Promise<boolean> {
     // R5-04: the run's synchronous latch, read before any await.
-    if (bulkRun.isRunning() || bulkApproving) return;
-    if (!passesDecisionGate('approval')) return;
+    if (bulkRun.isRunning() || bulkApproving) return false;
+    if (!passesDecisionGate('approval')) return false;
     const drafts = sampleDrafts ?? new Map<string, OutreachDraftResult>();
     // Snapshot which ids to run: skip already-decided rows silently.
     const eligibleForApproval = new Set(approvalEligibleIds);
     const ids = [...selectedIds].filter((id) => eligibleForApproval.has(id));
-    if (ids.length === 0) return;
+    if (ids.length === 0) return false;
     const bulkId = ids.length > 1 ? _newBulkId() : null;
-    const sharedRationale = ids.length > 1 ? bulkRationale.trim() : '';
+    const sharedRationale = ids.length > 1 ? rationale.trim() : '';
     if (ids.length > 1 && sharedRationale.length === 0) {
       openBulkRationale();
-      return;
+      return false;
     }
     const snapshots = snapshotRows(ids);
     bulkRunIdsRef.current = new Set(ids);
@@ -563,10 +570,10 @@ export function useLeadApprovalActions({
     });
     bulkRunIdsRef.current = new Set();
     // null: unmount cut the run short (stashed, R5-21) or one was running.
-    if (!result) return;
+    if (!result) return false;
     setBulkRationaleOpen(false);
-    setBulkRationale('');
     settleRun(result);
+    return true;
   }
 
   // The bulkToast initializer read any partial run the previous mount left
@@ -611,10 +618,6 @@ export function useLeadApprovalActions({
     submitReject,
     pendingReject,
     setPendingReject,
-    rejectReasonCode,
-    setRejectReasonCode,
-    rejectRationale,
-    setRejectRationale,
     pendingDecisions,
     selectedIds,
     selectionCount,
@@ -636,8 +639,6 @@ export function useLeadApprovalActions({
     isBulkRunInFlight,
     bulkApproveBtnRef,
     bulkRationaleRef,
-    bulkRationale,
-    setBulkRationale,
     bulkRationaleOpen,
     bulkToast,
     setBulkToast,

@@ -12,13 +12,17 @@
  *     preview's estimate); overscan is 5.
  *   - The sort runs once per (rows, sort): sortValue is not called again
  *     on a re-render that changes neither.
+ *   - Form state lives in the forms (slice 2): a keystroke in the reject
+ *     rationale, the disposition notes or the bulk gate's shared rationale
+ *     re-renders that form only. The table's renders are counted through
+ *     useLeadTableFillHeight, which the shell calls once per render.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, useState, type ReactNode } from 'react';
+import { act, useEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { LeadSummary } from '../../types';
+import type { LeadSummary, SalesTeamMember } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import type { LeadTableSort } from './LeadTable.types';
@@ -26,7 +30,7 @@ import type { LeadTableSort } from './LeadTable.types';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const app = vi.hoisted(() => ({ density: 'comfortable' as 'comfortable' | 'compact' }));
-const counts = vi.hoisted(() => ({ sortValue: 0 }));
+const counts = vi.hoisted(() => ({ sortValue: 0, shellRenders: 0 }));
 const virtualizerOptions = vi.hoisted(() => [] as Array<{
   getItemKey: (index: number) => string | number;
   estimateSize: (index: number) => number;
@@ -86,6 +90,12 @@ vi.mock('./LeadTable.logic', async (importOriginal) => {
   };
 });
 
+vi.mock('./useLeadTableFillHeight', () => ({
+  useLeadTableFillHeight: () => {
+    counts.shellRenders += 1;
+  },
+}));
+
 import { LeadTable } from './LeadTable';
 
 const IDS = ['B-RENDERCOST001', 'B-RENDERCOST002', 'B-RENDERCOST003', 'B-RENDERCOST004'];
@@ -112,6 +122,26 @@ function lead(borrowerId: string, index: number): LeadSummary {
 }
 
 const LEADS = IDS.map(lead);
+const TEAM: SalesTeamMember[] = [
+  { email: 'lo.alpha@summit.example', display_label: 'Loan Officer A', role: 'loan_officer', region: 'Midwest', manager_email: null, capacity_per_day: 25, active: true },
+];
+
+/** Type one character at a time, as a person does: one input event per keystroke. */
+function typeInto(target: HTMLInputElement | HTMLTextAreaElement, text: string): void {
+  const prototype = target instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+  for (const character of text) {
+    act(() => {
+      setter?.call(target, `${target.value}${character}`);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+}
+
+function click(element: Element | null): void {
+  if (!(element instanceof HTMLElement)) throw new Error('nothing to click');
+  act(() => element.click());
+}
 
 let setTick: ((value: number) => void) | null = null;
 
@@ -120,7 +150,9 @@ function Harness({ sort, expandedId = null }: { sort: LeadTableSort | null; expa
   'use no memo';
 
   const [tick, setTickState] = useState(0);
-  setTick = setTickState;
+  useEffect(() => {
+    setTick = setTickState;
+  }, []);
   return (
     <div data-tick={tick}>
       <LeadTable
@@ -154,6 +186,7 @@ describe('LeadTable render cost (runtime-04)', () => {
     clearSingleKeyShortcutsPreference();
     app.density = 'comfortable';
     counts.sortValue = 0;
+    counts.shellRenders = 0;
     virtualizerOptions.length = 0;
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     container = document.createElement('div');
@@ -211,5 +244,41 @@ describe('LeadTable render cost (runtime-04)', () => {
     act(() => setTick?.(2));
 
     expect(counts.sortValue).toBe(afterSort);
+  });
+
+  it('a keystroke in the reject rationale never re-renders the table', () => {
+    render(<LeadTable leads={LEADS} />);
+    click(container.querySelector(`[data-testid="lead-reject-${IDS[0]}"]`));
+    const rationale = container.querySelector<HTMLTextAreaElement>('form.decision-panel textarea');
+    if (!rationale) throw new Error('the reject panel did not open');
+    const before = counts.shellRenders;
+    typeInto(rationale, 'hold note');
+    expect(rationale.value).toBe('hold note');
+    expect(counts.shellRenders).toBe(before);
+  });
+
+  it('a keystroke in the disposition notes never re-renders the table', () => {
+    render(<LeadTable leads={LEADS} salesTeam={TEAM} />);
+    click(container.querySelector(`[aria-label="Toggle preview for lead ${IDS[0]}"]`));
+    click(container.querySelector(`[aria-label="Log call disposition for ${IDS[0]}"]`));
+    const notes = [...container.querySelectorAll<HTMLTextAreaElement>('form.decision-panel textarea')][0];
+    if (!notes) throw new Error('the disposition panel did not open');
+    const before = counts.shellRenders;
+    typeInto(notes, 'left a message');
+    expect(notes.value).toBe('left a message');
+    expect(counts.shellRenders).toBe(before);
+  });
+
+  it('a keystroke in the bulk gate\'s shared rationale never re-renders the table', () => {
+    render(<LeadTable leads={LEADS} />);
+    click(container.querySelector(`[data-testid="lead-select-${IDS[0]}"]`));
+    click(container.querySelector(`[data-testid="lead-select-${IDS[1]}"]`));
+    click(container.querySelector('[data-testid="lead-bulk-approve"]'));
+    const rationale = container.querySelector<HTMLInputElement>('.bulk-actions__rationale input');
+    if (!rationale) throw new Error('the bulk gate did not open');
+    const before = counts.shellRenders;
+    typeInto(rationale, 'Q3 sweep');
+    expect(rationale.value).toBe('Q3 sweep');
+    expect(counts.shellRenders).toBe(before);
   });
 });

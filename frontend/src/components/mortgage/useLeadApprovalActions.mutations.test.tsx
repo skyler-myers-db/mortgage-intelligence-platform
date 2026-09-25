@@ -225,9 +225,8 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     });
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
     await act(async () => {
-      await actions!.bulkApprove();
+      await actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
 
     expect(maxInFlight).toBe(3);
@@ -255,10 +254,9 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
-    let run: Promise<void> = Promise.resolve();
+    let run: Promise<boolean> = Promise.resolve(false);
     await act(async () => {
-      run = actions!.bulkApprove();
+      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
     await flush();
     expect(apiMocks.approve).toHaveBeenCalledTimes(3);
@@ -286,9 +284,8 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       : Promise.resolve({ approved: true, audit_event_id: 'audit-bulk' })));
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
     await act(async () => {
-      await actions!.bulkApprove();
+      await actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
 
     expect(actions!.bulkRun.result?.failed).toEqual([
@@ -306,10 +303,9 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     }));
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
-    let run: Promise<void> = Promise.resolve();
+    let run: Promise<boolean> = Promise.resolve(false);
     await act(async () => {
-      run = actions!.bulkApprove();
+      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
     await flush();
     // A refetch lands mid-run with different evidence for a row not sent yet.
@@ -337,10 +333,9 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     }));
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
-    let run: Promise<void> | null = null;
+    let run: Promise<boolean> | null = null;
     await act(async () => {
-      run = actions!.bulkApprove();
+      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
     await flush();
     expect(apiMocks.approve).toHaveBeenCalledTimes(3);

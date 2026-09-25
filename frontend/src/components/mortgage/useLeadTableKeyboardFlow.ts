@@ -23,6 +23,7 @@ import { isLeadApprovalEligible, isLeadSelectableForSalesOps, isTerminalApproval
 import { isInsideLeadApproveReview, leadApproveReviewId } from './LeadApproveReview.ids';
 import { leadReceiptAnchorId } from './LeadRowPreview';
 import type { LeadDecisionToastState } from './LeadTableDecisionToast';
+import type { RejectReasonCode } from './LeadTable.types';
 import type { useLeadApprovalActions } from './useLeadApprovalActions';
 import { useLeadApproveReview } from './useLeadApproveReview';
 import { useLeadTableCursor } from './useLeadTableCursor';
@@ -374,14 +375,21 @@ export function useLeadTableKeyboardFlow({
     focusWhenRendered(leadReceiptAnchorId(borrowerId));
   }
 
-  /** Toolbar "Approve N eligible": one row opens its review, several run the gated bulk. */
-  function bulkApproveFromToolbar(sampleDrafts: ReadonlyMap<string, OutreachDraftResult>) {
+  /**
+   * Toolbar "Approve N eligible": one row opens its review, several run the
+   * gated bulk with the toolbar's shared rationale. Resolves true once a run
+   * settled (the toolbar then clears the rationale).
+   */
+  function bulkApproveFromToolbar(
+    sampleDrafts: ReadonlyMap<string, OutreachDraftResult>,
+    rationale: string,
+  ): Promise<boolean> {
     const ids = eligibleSelectedIds();
     if (ids.length === 1) {
       openReview(ids[0]);
-      return;
+      return Promise.resolve(false);
     }
-    void approval.bulkApprove(sampleDrafts);
+    return approval.bulkApprove(sampleDrafts, rationale);
   }
 
   /** Shift+A and the Cmd-K verb: open the SAME gate; never submit. */
@@ -420,18 +428,16 @@ export function useLeadTableKeyboardFlow({
    * in the table. The panel unmounts with focus inside it, which would drop
    * focus to <body> and leave the next J / K with nothing to act on.
    */
-  async function submitReject() {
-    const rejected = await approval.submitReject();
+  async function submitReject(reasonCode: RejectReasonCode, rationale: string) {
+    const rejected = await approval.submitReject(reasonCode, rationale);
     if (!rejected) return;
     cursor.advanceAfter(rejected);
     setRefocusTable(true);
   }
 
-  /** Cancel on the reject panel: nothing recorded; focus back in the table. */
+  /** Cancel on the reject panel: nothing recorded (the panel's fields go with it); focus back in the table. */
   function cancelReject() {
     approval.setPendingReject(null);
-    approval.setRejectRationale('');
-    approval.setRejectReasonCode('low_intent');
     setRefocusTable(true);
   }
 

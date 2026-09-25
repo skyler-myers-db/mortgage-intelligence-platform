@@ -111,7 +111,7 @@ describe('useLeadApprovalActions approver gate', () => {
     await act(async () => {
       approveOutcome = await actions!.approveLead(BORROWER);
       rejected = await actions!.rejectLead(BORROWER, 'low_intent');
-      await actions!.bulkApprove();
+      await actions!.bulkApprove(undefined, '');
     });
 
     expect(approveOutcome).toBe('backend');

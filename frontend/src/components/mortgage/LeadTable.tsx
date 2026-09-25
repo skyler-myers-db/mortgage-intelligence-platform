@@ -475,33 +475,25 @@ export function LeadTable({
         approverGate={approverGate}
         actorEmail={actorEmail}
       />
+      {/* Keyed by the row: each form owns its fields, and a new row starts clean. */}
       {approval.pendingReject && (
         <LeadRejectPanel
+          key={approval.pendingReject}
           borrowerId={approval.pendingReject}
-          reasonCode={approval.rejectReasonCode}
-          rationale={approval.rejectRationale}
-          onReasonChange={approval.setRejectReasonCode}
-          onRationaleChange={approval.setRejectRationale}
           reasonRef={flow.rejectReasonRef}
           onCancel={flow.cancelReject}
-          onSubmit={() => void flow.submitReject()}
+          onSubmit={(reasonCode, rationale) => void flow.submitReject(reasonCode, rationale)}
         />
       )}
       {sales.pendingDisposition && (
         <LeadDispositionPanel
+          key={sales.pendingDisposition}
           borrowerId={sales.pendingDisposition}
           salesTeam={salesTeam}
           salesBusy={sales.salesBusy}
-          loEmail={sales.dispositionLo}
-          outcome={sales.dispositionOutcome}
-          callbackAt={sales.dispositionCallbackAt}
-          notes={sales.dispositionNotes}
-          onLoChange={sales.setDispositionLo}
-          onOutcomeChange={sales.setDispositionOutcome}
-          onCallbackAtChange={sales.setDispositionCallbackAt}
-          onNotesChange={sales.setDispositionNotes}
+          initialLo={sales.dispositionInitialLo}
           onCancel={() => sales.setPendingDisposition(null)}
-          onSubmit={() => void sales.submitDisposition()}
+          onSubmit={(payload) => void sales.submitDisposition(payload)}
         />
       )}
       {exportState.status === 'done' && exportState.notice && (
@@ -675,8 +667,6 @@ export function LeadTable({
           selectedApprovalEligibleCount={approval.selectedApprovalEligibleCount}
           bulkApproving={approval.bulkApproving}
           bulkRationaleOpen={approval.bulkRationaleOpen}
-          bulkRationale={approval.bulkRationale}
-          onBulkRationaleChange={approval.setBulkRationale}
           campaignBindingBlocked={campaignBindingBlocked}
           approverGate={approverGate}
           salesTeam={salesTeam}
@@ -685,7 +675,7 @@ export function LeadTable({
           onSelectedAssigneeChange={sales.setSelectedAssignee}
           onAssign={assignSelected}
           onClearSelection={approval.clearSelection}
-          onBulkApprove={() => flow.bulkApproveFromToolbar(sampleDraftsRef.current)}
+          onBulkApprove={(rationale) => flow.bulkApproveFromToolbar(sampleDraftsRef.current, rationale)}
           bulkApproveBtnRef={approval.bulkApproveBtnRef}
           bulkRationaleRef={approval.bulkRationaleRef}
           assigneeRef={assigneeRef}
