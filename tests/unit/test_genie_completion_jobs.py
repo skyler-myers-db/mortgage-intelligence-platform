@@ -8,6 +8,12 @@ authorization, lease-based expiry on read and in the sweep every new job
 runs, a job-less async complete refused (a legacy one inline), canned
 failure hints only, and a stored
 result that holds neither the question nor any live authorization.
+
+Audit genie-03 / genie-01 risk 4: the heartbeat marks a cancel another
+process accepted, a cancel-requested job is never claimed, a table without
+the 2026_09_25 columns completes inline, the submit-time deep flag is
+stored, and a retry adopts (once) a queued job this process created but
+never ran.
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ from tests.fixtures.genie_job_lakebase import FakeJobLakebase
 from tests.fixtures.genie_job_turns import (
     ACTOR,
     CONV,
+    DEEP_QUESTION,
     HEADERS,
     MSG,
     QUESTION,
@@ -535,3 +542,182 @@ def test_the_browser_resume_window_stays_inside_the_token_that_authorizes_it() -
     resume_window_s = int(match.group(1)) * 60
     assert GENIE_PROGRESS_TOKEN_TTL_S == 15 * 60
     assert 0 < resume_window_s < GENIE_PROGRESS_TOKEN_TTL_S
+
+
+# ------------------------------------------ cancel marks (audit genie-03)
+
+
+def test_the_heartbeat_marks_a_cancel_another_process_accepted(monkeypatch: Any) -> None:
+    _client, _repo, _audit, lakebase = _setup(monkeypatch)
+    mine = _seed_own_job(lakebase, status="running", lease_owner=jobs.PROCESS_ID)
+    other = lakebase.insert_row(status="running", lease_owner=jobs.PROCESS_ID)
+    jobs.HEARTBEAT.track(mine["job_id"], lakebase)
+    jobs.HEARTBEAT.track(other["job_id"], lakebase)
+    try:
+        lakebase.rows[mine["job_id"]]["cancel_requested_at"] = lakebase.now
+        jobs.HEARTBEAT.beat()
+        marked = (jobs.CANCELS.is_marked(mine["job_id"]), jobs.CANCELS.is_marked(other["job_id"]))
+    finally:
+        jobs.HEARTBEAT.untrack(mine["job_id"])
+        jobs.HEARTBEAT.untrack(other["job_id"])
+        jobs.CANCELS.discard(mine["job_id"])
+
+    assert marked == (True, False)
+    assert "heartbeat" in lakebase.job_statements
+
+
+class _RunnerEndsDuringTheBeat(FakeJobLakebase):
+    """The job's runner finishes (untrack, then discard its mark) while the
+    heartbeat's renewal UPDATE is in flight, after the beat's snapshot."""
+
+    def fetchall(self, sql: str, params: dict[str, Any] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        rows = super().fetchall(sql, params, limit)
+        if sql is jobs._HEARTBEAT_SQL:
+            for job_id in (params or {})["job_ids"]:
+                jobs.HEARTBEAT.untrack(job_id)
+                jobs.CANCELS.discard(job_id)
+        return rows
+
+
+def test_the_heartbeat_never_marks_a_job_whose_runner_ended_during_the_beat() -> None:
+    lakebase = _RunnerEndsDuringTheBeat()
+    row = lakebase.insert_row(status="running", lease_owner=jobs.PROCESS_ID)
+    lakebase.rows[row["job_id"]]["cancel_requested_at"] = lakebase.now
+    jobs.HEARTBEAT.track(row["job_id"], lakebase)
+    try:
+        jobs.HEARTBEAT.beat()
+        marked = jobs.CANCELS.is_marked(row["job_id"])
+    finally:
+        jobs.CANCELS.discard(row["job_id"])
+
+    # The renewal returned cancel_requested for it, but nobody runs it any
+    # more: a mark now would outlive its job in the process set.
+    assert "heartbeat" in lakebase.job_statements
+    assert row["job_id"] not in jobs.HEARTBEAT.tracked()
+    assert not marked
+
+
+def test_claim_refuses_a_job_whose_cancel_was_requested(monkeypatch: Any) -> None:
+    _client, _repo, _audit, lakebase = _setup(monkeypatch)
+    row = _seed_own_job(lakebase, lease_owner=jobs.PROCESS_ID)
+    lakebase.rows[row["job_id"]]["cancel_requested_at"] = lakebase.now
+
+    assert jobs.claim(lakebase, row["job_id"]) is False
+    assert lakebase.rows[row["job_id"]]["status"] == "queued"
+
+
+def test_a_table_without_the_2026_09_25_columns_advertises_no_jobs_and_completes_inline(monkeypatch: Any) -> None:
+    repo, audit, lakebase = FakeRepo(), FakeAudit(), FakeJobLakebase(cancel_columns=False)
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+    monkeypatch.setattr(genie_api, "get_genie_client", lambda: _SubmitClient())
+    client = TestClient(app)
+
+    submitted = client.post("/api/genie/message/submit", json={"question": QUESTION}, headers=HEADERS)
+    legacy = post_complete(client, respond_async=False)
+
+    assert submitted.json()["completion_jobs"] is False
+    assert legacy.status_code == 200
+    assert lakebase.rows == {}
+    assert lakebase.job_statements == []
+    assert len(audit.run_query_rows()) == 1
+
+
+@pytest.mark.parametrize(("question", "deep"), [(QUESTION, False), (DEEP_QUESTION, True)])
+def test_the_submit_time_deep_flag_is_stored_on_the_job(monkeypatch: Any, question: str, deep: bool) -> None:
+    client, _repo, _audit, lakebase = _setup(monkeypatch)
+
+    assert post_complete(client, question=question).status_code == 202
+    wait_for_job(lakebase)
+
+    assert lakebase.only_job()["deep"] is deep
+
+
+# --------------------------------------------------- risk 4 (genie-01)
+
+
+def test_a_retry_adopts_this_process_untracked_queued_job_and_runs_it_once(monkeypatch: Any) -> None:
+    # The creating request inserted the row and failed before enqueueing it.
+    client, repo, audit, lakebase = _setup(monkeypatch)
+    row = _seed_own_job(lakebase, lease_owner=jobs.PROCESS_ID)
+
+    res = post_complete(client)
+    job = wait_for_job(lakebase)
+
+    assert res.status_code == 202
+    assert res.json()["job_id"] == row["job_id"]
+    assert job["status"] == "succeeded"
+    assert "insert" in lakebase.job_statements and "select_turn" in lakebase.job_statements
+    assert lakebase.job_statements.count("claim") == 1
+    assert len(repo.calls) == 1
+    assert len(audit.run_query_rows()) == 1
+
+
+@pytest.mark.parametrize("case", ["tracked", "other_process", "cancel_requested"])
+def test_a_job_that_is_running_elsewhere_or_stopped_is_never_adopted(monkeypatch: Any, case: str) -> None:
+    client, repo, _audit, lakebase = _setup(monkeypatch)
+    owner = "other-process" if case == "other_process" else jobs.PROCESS_ID
+    row = _seed_own_job(lakebase, lease_owner=owner)
+    if case == "cancel_requested":
+        lakebase.rows[row["job_id"]].update(cancel_requested_at=lakebase.now, status="cancelled", stage="cancelled")
+    if case == "tracked":
+        jobs.HEARTBEAT.track(row["job_id"], lakebase)
+    try:
+        res = post_complete(client)
+    finally:
+        if case == "tracked":
+            jobs.HEARTBEAT.untrack(row["job_id"])
+
+    assert res.status_code == 202
+    assert "claim" not in lakebase.job_statements
+    assert repo.calls == []
+
+
+def test_two_adopters_of_one_job_give_one_claim_and_keep_its_lease_until_both_end(monkeypatch: Any) -> None:
+    gate = threading.Event()
+    _client, repo, audit, lakebase = _setup(monkeypatch, gate=gate)
+    row = _seed_own_job(lakebase, lease_owner=jobs.PROCESS_ID)
+    job = jobs._job_from_row(lakebase._view(lakebase.rows[row["job_id"]]))
+    turn = runner.GovernedTurn(
+        actor=ACTOR,
+        question=QUESTION,
+        conversation_id=CONV,
+        message_id=MSG,
+        live_campaign_run_marker=None,
+        repo=repo,  # type: ignore[arg-type]
+        audit=audit,  # type: ignore[arg-type]
+        lakebase=lakebase,  # type: ignore[arg-type]
+    )
+
+    # Observe the claim loser's untrack: the lease assertion below must run
+    # AFTER it, or it passes before the refcount is ever exercised.
+    real_untrack = jobs.HEARTBEAT.untrack
+    untracked: list[str] = []
+    loser_untracked = threading.Event()
+
+    def observed_untrack(job_id: str) -> None:
+        real_untrack(job_id)
+        untracked.append(job_id)
+        loser_untracked.set()
+
+    monkeypatch.setattr(jobs.HEARTBEAT, "untrack", observed_untrack)
+
+    assert jobs.adoptable(job)
+    runner.run_completion_job(turn, job, slot=None, correlation_id="adopt-1")
+    runner.run_completion_job(turn, job, slot=None, correlation_id="adopt-2")
+    assert repo.started.wait(10)
+    # The claim loser has ended (its untrack ran); the claimant, parked on
+    # the gate, has not untracked and still holds the lease.
+    assert loser_untracked.wait(10)
+    assert untracked == [row["job_id"]]
+    assert lakebase.job_statements.count("claim") == 2
+    assert row["job_id"] in jobs.HEARTBEAT.tracked()
+    assert not jobs.adoptable(job)
+    gate.set()
+    done = wait_for_job(lakebase)
+
+    assert done["status"] == "succeeded"
+    assert lakebase.job_statements.count("claim") == 2
+    assert len(repo.calls) == 1
+    assert len(audit.run_query_rows()) == 1
+    runner._reset_executor_for_tests()
+    assert row["job_id"] not in jobs.HEARTBEAT.tracked()

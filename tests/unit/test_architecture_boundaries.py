@@ -66,6 +66,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/genie/message/progress"): "tests/unit/test_genie_async_flow.py",
     ("POST", "/api/genie/message/complete"): "tests/unit/test_genie_async_flow.py",
     ("POST", "/api/genie/message/status"): "tests/unit/test_genie_completion_jobs.py",
+    ("POST", "/api/genie/message/cancel"): "tests/unit/test_genie_cancel.py",
     ("POST", "/api/genie/start"): "tests/unit/test_api_routes.py",
     ("GET", "/api/genie/sessions"): "tests/unit/test_genie_history_api.py",
     (

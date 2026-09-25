@@ -180,6 +180,12 @@ class BackpressureController:
             # Lakebase ledger write, not a Genie call: the mutation budget and
             # a Lakebase slot, never the Genie budget or a Genie slot.
             return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, "lakebase")
+        if method.upper() == "POST" and path == "/api/genie/message/cancel":
+            # The owner's Stop (audit genie-03) is one Lakebase transaction on
+            # the job row plus its audit row, never a Genie call: the mutation
+            # budget and a Lakebase slot. A Stop pressed while the Genie budget
+            # is spent must still land.
+            return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, "lakebase")
         if path.startswith("/api/genie"):
             return RouteBudget("genie", settings.mip_rate_limit_genie_per_minute, "genie")
         if method.upper() == "POST" and path in self._READ_ONLY_POSTS:

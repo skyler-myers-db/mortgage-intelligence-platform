@@ -193,6 +193,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # runner's audit write + finalize are pinned in test_genie_completion_runner.
     "genie_message_complete": ("create_or_join", "complete_governed_turn("),
     "genie_message_status": ("AUDIT EXEMPT: read-only poll of the caller's own completion job",),
+    "genie_message_cancel": ("request_cancel(",),
     "genie_action": ("handle_genie_action(",),
     "genie_feedback": ("record_genie_feedback(",),
     "genie_refusal_report": ("record_genie_refusal_report(",),

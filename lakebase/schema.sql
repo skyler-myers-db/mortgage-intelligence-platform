@@ -3660,3 +3660,111 @@ VALUES (
     'Server-side Genie completion jobs: one per actor/conversation/message, lease-based expiry on read, de-authorized question-free result served to the owning actor until expires_at'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Genie completion-job cancel ------------------------------------------
+-- Audit 2026-09-21 genie-03 / genie-01 (risk 4, typical duration). A user's
+-- Stop on a job-backed turn requests a cancel; the governed record (the
+-- RUN_GENIE row, action tokens, the session row) has ONE commit point,
+-- recorded_at, set by a conditional UPDATE that requires no cancel. The
+-- cancel sets cancel_requested_at by a conditional UPDATE that requires no
+-- record. Row locks serialize the two, and the CHECK below makes both being
+-- set impossible even under a code bug. The 2026_09_24 CREATE TABLE above
+-- stays byte-identical: its inline status/stage CHECKs are auto-named, so
+-- they are dropped by catalog lookup (single-column CHECKs on status or
+-- stage only; never result_json, failure_kind, the id/hash/parts CHECKs or
+-- the UNIQUE) and replaced by named, widened ones. Backward-compatible with
+-- the running App: nullable columns, widened CHECK sets. No question text.
+ALTER TABLE mip_app.genie_completion_jobs
+    ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ;
+ALTER TABLE mip_app.genie_completion_jobs
+    ADD COLUMN IF NOT EXISTS recorded_at TIMESTAMPTZ;
+ALTER TABLE mip_app.genie_completion_jobs
+    ADD COLUMN IF NOT EXISTS deep BOOLEAN;
+
+DO $$
+DECLARE
+    auto_named_check TEXT;
+BEGIN
+    FOR auto_named_check IN
+        SELECT c.conname
+          FROM pg_constraint c
+          JOIN pg_attribute a
+            ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+         WHERE c.conrelid = 'mip_app.genie_completion_jobs'::regclass
+           AND c.contype = 'c'
+           AND cardinality(c.conkey) = 1
+           AND a.attname IN ('status', 'stage')
+           AND c.conname NOT IN (
+               'genie_completion_jobs_status_chk', 'genie_completion_jobs_stage_chk'
+           )
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE mip_app.genie_completion_jobs DROP CONSTRAINT %I',
+            auto_named_check
+        );
+    END LOOP;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.genie_completion_jobs'::regclass
+          AND conname = 'genie_completion_jobs_status_chk'
+    ) THEN
+        ALTER TABLE mip_app.genie_completion_jobs
+            ADD CONSTRAINT genie_completion_jobs_status_chk
+            CHECK (status IN (
+                'queued', 'running', 'succeeded', 'failed', 'expired', 'cancelled'
+            ));
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.genie_completion_jobs'::regclass
+          AND conname = 'genie_completion_jobs_stage_chk'
+    ) THEN
+        ALTER TABLE mip_app.genie_completion_jobs
+            ADD CONSTRAINT genie_completion_jobs_stage_chk
+            CHECK (stage IN (
+                'queued', 'collecting', 'repairing', 'verifying', 'cross_checking',
+                'rewriting', 'planning', 'researching', 'synthesizing', 'finalizing',
+                'done', 'failed', 'expired', 'cancelled'
+            ));
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.genie_completion_jobs'::regclass
+          AND conname = 'genie_completion_jobs_cancel_or_record_chk'
+    ) THEN
+        ALTER TABLE mip_app.genie_completion_jobs
+            ADD CONSTRAINT genie_completion_jobs_cancel_or_record_chk
+            CHECK (cancel_requested_at IS NULL OR recorded_at IS NULL);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.genie_completion_jobs'::regclass
+          AND conname = 'genie_completion_jobs_cancelled_shape_chk'
+    ) THEN
+        ALTER TABLE mip_app.genie_completion_jobs
+            ADD CONSTRAINT genie_completion_jobs_cancelled_shape_chk
+            CHECK (
+                status <> 'cancelled'
+                OR (cancel_requested_at IS NOT NULL AND result_json IS NULL)
+            );
+    END IF;
+END $$;
+
+-- Typical-duration samples: recorded jobs of one class (deep or single),
+-- newest first.
+CREATE INDEX IF NOT EXISTS idx_genie_completion_jobs_recorded
+    ON mip_app.genie_completion_jobs (deep, created_at DESC)
+    WHERE recorded_at IS NOT NULL;
+COMMENT ON COLUMN mip_app.genie_completion_jobs.cancel_requested_at IS
+    'When the owning actor stopped this turn before its governed record existed; set once, in the same transaction as its GENIE_TURN_CANCELLED audit row. Never set together with recorded_at.';
+COMMENT ON COLUMN mip_app.genie_completion_jobs.recorded_at IS
+    'The one commit point of the governed record: set once, only while no cancel was requested, before the RUN_GENIE audit row, action tokens and session row. Never set together with cancel_requested_at.';
+COMMENT ON COLUMN mip_app.genie_completion_jobs.deep IS
+    'Whether the submitted turn routed to the deep-research sweep (a boolean derived server-side; NULL on rows created before 2026_09_25). Classes the typical-duration hint.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_09_25_genie_job_cancel',
+    'Genie completion-job cancel: cancel_requested_at and recorded_at (one commit point, never both), the submit-time deep flag, named widened status/stage CHECKs with cancelled, and the recorded-duration index'
+)
+ON CONFLICT (version) DO NOTHING;

@@ -655,19 +655,23 @@ def run_planned_sweep(
         }
         pending = set(futures)
         budget_end = started + _SWEEP_WALL_BUDGET_S
-        while pending:
-            remaining = budget_end - time.monotonic()
-            if remaining <= 0:
-                break
-            done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
-            for future in done:
-                try:
-                    results[futures[future]] = future.result()
-                except Exception:  # noqa: BLE001 - becomes a disclosed gap
-                    results[futures[future]] = None
-            report_stage(GenieJobStage.RESEARCHING, len(planned) - len(pending), len(planned))
-        for future in pending:
-            future.cancel()
+        try:
+            while pending:
+                remaining = budget_end - time.monotonic()
+                if remaining <= 0:
+                    break
+                done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+                for future in done:
+                    try:
+                        results[futures[future]] = future.result()
+                    except Exception:  # noqa: BLE001 - becomes a disclosed gap
+                        results[futures[future]] = None
+                report_stage(GenieJobStage.RESEARCHING, len(planned) - len(pending), len(planned))
+        finally:
+            # Also when a stage report raises the owner's cancel: sub-turns
+            # that have not started never start.
+            for future in pending:
+                future.cancel()
 
     sections: list[tuple[str, GenieMessageResponse]] = []
     gaps: list[str] = list(dropped)

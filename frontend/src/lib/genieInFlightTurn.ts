@@ -26,8 +26,11 @@ import {
   writeRecord,
   type PersistedTurnRecord,
 } from './genieInFlightRecord';
+import { requestGenieTurnCancel, type GenieTurnCancelTarget } from './genieTurnCancel';
 import {
   GENIE_RESUME_FAILED_REASON,
+  GENIE_STOP_CONFIRMED_REASON,
+  GENIE_STOP_RECORDED_REASON,
   GENIE_STOPPED_REASON,
   genieTurnOutcome,
   genieOutcomeAnnouncement,
@@ -131,6 +134,8 @@ export interface GenieTurnNote {
   readonly question: string;
   /** Settled turns that existed when the note was made (transcript order). */
   readonly atTurnIndex: number;
+  /** A Stopped note's turn generation: the server's confirmation replaces it. */
+  readonly stopId?: number;
 }
 
 /** The in-flight turn when an announcement was made during it (a copy
@@ -237,8 +242,8 @@ function patchTurn(gen: number, patch: Partial<GenieInFlightTurn>): void {
   update({ inFlight: { ...current, ...patch } });
 }
 
-function withNote(kind: GenieTurnNote['kind'], reason: string, question: string): readonly GenieTurnNote[] {
-  const note: GenieTurnNote = { kind, reason, question, atTurnIndex: getGenieTurns().length };
+function withNote(kind: GenieTurnNote['kind'], reason: string, question: string, stopId?: number): readonly GenieTurnNote[] {
+  const note: GenieTurnNote = { kind, reason, question, atTurnIndex: getGenieTurns().length, ...(stopId === undefined ? {} : { stopId }) };
   return [...snapshot.notes, note].slice(-MAX_NOTES);
 }
 
@@ -425,6 +430,7 @@ function showJob(gen: number, job: GenieCompletionJobStatus, reveal: boolean): v
       stage_label: job.stage_label,
       parts_done: job.parts_done,
       parts_planned: job.parts_planned,
+      typical_seconds: job.typical_seconds,
     },
   };
   patchTurn(gen, reveal && active ? { progress, question: active.question, revealed: true } : { progress });
@@ -529,7 +535,8 @@ async function runFreshTurn(
     messageId: submitted.messageId,
     progressToken: submitted.progressToken,
   };
-  recordPhase(gen, { phase: 'polling', deep: submitted.deep, ids, asyncComplete: submitted.completionJobs });
+  const { deep, completionJobs: asyncComplete, questionHash } = submitted;
+  recordPhase(gen, { phase: 'polling', deep, ids, asyncComplete, questionHash: questionHash ?? undefined });
   patchTurn(gen, { phase: 'polling', deep: submitted.deep });
   // Held from the moment the ids exist, so a duplicated tab (which copies
   // sessionStorage) cannot resume this turn while this tab runs it.
@@ -580,22 +587,43 @@ export function startGenieTurn({ question, conversationId, surface, startedAt }:
   return true;
 }
 
+/** Replace Stopped note `stopId` with the server's confirmed copy; nothing
+ *  when the note is gone (a reset or an actor change) or the call failed. */
+function confirmStop(stopId: number, target: GenieTurnCancelTarget): void {
+  void requestGenieTurnCancel(target).then((outcome) => {
+    const index = snapshot.notes.findIndex((note) => note.kind === 'stopped' && note.stopId === stopId);
+    if (outcome === null || index < 0) return;
+    const reason = outcome === 'recorded' ? GENIE_STOP_RECORDED_REASON : GENIE_STOP_CONFIRMED_REASON;
+    const notes = snapshot.notes.map((note, at) => (at === index ? { ...note, reason } : note));
+    update(outcome === 'recorded' ? { notes, ...announcing(reason, snapshot.inFlight) } : { notes });
+  });
+}
+
 /**
- * Stop waiting for the in-flight turn (client-only: there is no server
- * cancel). The generation bump makes a reply that still arrives land nowhere.
- * Returns the stopped question, or null when nothing (visible) was stopped.
+ * Stop waiting for the in-flight turn. The generation bump makes a reply
+ * that still arrives land nowhere. Once a 202 has named the turn's job, the
+ * server is also asked not to record the answer (audit `genie-03`); its
+ * reply only rewrites the note. Returns the stopped question, or null when
+ * nothing (visible) was stopped.
  */
 export function stopGenieTurn(): string | null {
   const inFlight = snapshot.inFlight;
   if (!inFlight) return null;
   const question = inFlight.revealed ? (active?.question ?? inFlight.question) : '';
+  const record = active?.record;
+  const target: GenieTurnCancelTarget | null =
+    record?.asyncComplete && record.jobId && record.ids && record.questionHash
+      ? { ids: record.ids, jobId: record.jobId, questionHash: record.questionHash }
+      : null;
+  const stopId = inFlight.generation;
   generation += 1;
   controller?.abort();
   finishActive();
   update({
     inFlight: null,
-    notes: question ? withNote('stopped', GENIE_STOPPED_REASON, question) : snapshot.notes,
+    notes: question ? withNote('stopped', GENIE_STOPPED_REASON, question, stopId) : snapshot.notes,
   });
+  if (target) confirmStop(stopId, target);
   return question || null;
 }
 

@@ -262,6 +262,10 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "conversation_id",
         "message_id",
         "question_hash",
+        # Genie completion job cancelled by its owner (audit genie-03): the
+        # job's server-issued UUID. Not ``job_id``, which carries Databricks
+        # job ids.
+        "genie_job_id",
         # Genie answer feedback (thumbs up/down). ``helpful`` is a bool;
         # ``comment_present`` records only whether a sanitized free-text note
         # accompanied the feedback -- the note itself is scrubbed and posted as
@@ -444,6 +448,7 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "loan_officer_id",
         "draft_generation_id",
         "growth_agent_run_id",
+        "genie_job_id",
     }
 )
 _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(

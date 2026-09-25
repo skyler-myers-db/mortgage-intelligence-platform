@@ -38,6 +38,12 @@ HEADERS = {"X-Forwarded-Email": ACTOR}
 CONV = "conv-job-1"
 MSG = "msg-job-1"
 QUESTION = "How many borrowers are currently in the money by state?"
+#: Routes to the deep-research sweep (``genie_turn_is_deep``).
+DEEP_QUESTION = (
+    "Analyze the full dataset of eligible borrowers, list the absolute top "
+    "potential borrowers, evaluate why each is a good candidate, and what the "
+    "best curated offer for each would be"
+)
 
 
 def token(*, actor: str = ACTOR, conversation_id: str = CONV, message_id: str = MSG, question: str = QUESTION) -> str:
