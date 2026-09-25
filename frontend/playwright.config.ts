@@ -24,15 +24,26 @@ const NESTED_SPEC = /.*\.nested\.ts$/;
 // amd64-Linux renders from the pinned Playwright container, so the spec is
 // collected ONLY when MIP_VRT=1, which only the e2e-visual CI job and
 // tools/update_visual_baselines.sh set (the spec also refuses any other
-// host). The perf budget spec (w2-build-currency) measures timing and runs
-// only in its single-worker CI step (MIP_PERF=1). Every other fixture run,
-// local or CI, ignores both. Each opt-in mode writes its own artifacts
-// (test-results/<mode>, playwright-report/<mode>) so a later step never
-// wipes an earlier step's failure report.
+// host). Every other fixture run, local or CI, ignores it and PERF_SPEC.
+// Each opt-in mode writes its own artifacts (test-results/<mode>,
+// playwright-report/<mode>) so a later step never wipes an earlier step's
+// failure report.
+//
+// PERF_SPEC contract (audit runtime-09): a spec it collects measures timing,
+// so it runs ONLY in the single-worker perf step of the e2e-fixture CI job
+// (MIP_PERF=1, `-- perf-budget interaction-budget --workers=1`; the filter is
+// required, because MIP_PERF=1 alone also collects every normal fixture
+// spec). Until its ceilings are calibrated from at least 3 reference-runner
+// medians (median x 1.2, rounded up) such a spec is REPORT-ONLY: it logs its
+// medians and asserts only functional invariants. perf-budget (bundle-08) is
+// calibrated and gates; interaction-budget (W4b lead-queue) starts
+// report-only. perf-motion.fixture.spec.ts is NOT a PERF_SPEC: it pins the
+// performance and motion quick wins functionally, not timings, and runs in
+// the normal suite.
 const vrtRun = fixtureE2E && process.env.MIP_VRT === '1';
 const perfRun = fixtureE2E && process.env.MIP_PERF === '1';
 const VRT_SPEC = /[\\/]visual\.fixture\.spec\.ts$/;
-const PERF_SPEC = /[\\/]perf-budget\.fixture\.spec\.ts$/;
+export const PERF_SPEC = /[\\/](perf-budget|interaction-budget)\.fixture\.spec\.ts$/;
 const fixtureIgnore = [...(vrtRun ? [] : [VRT_SPEC]), ...(perfRun ? [] : [PERF_SPEC])];
 const fixtureArtifacts = vrtRun ? 'vrt' : perfRun ? 'perf' : null;
 const outputDir = fixtureArtifacts ? `test-results/${fixtureArtifacts}` : 'test-results';

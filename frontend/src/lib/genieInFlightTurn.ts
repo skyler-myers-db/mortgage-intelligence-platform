@@ -345,14 +345,23 @@ function failureAnswer(err: unknown): string {
   return 'Genie session reset.';
 }
 
-function failTurn(gen: number, err: unknown): void {
+function failTurn(gen: number, err: unknown, deferred = false): void {
   // A reload or navigation cancels the page's requests, and they fail as
   // network errors while the page is going away. That is not the turn
   // failing: keep the record so the next page resumes the turn or notes the
   // interruption. Should the page come back from the back/forward cache
   // instead, the failure is handled then.
   if (pageHidden) {
-    deferredFailure = () => failTurn(gen, err);
+    deferredFailure = () => failTurn(gen, err, true);
+    return;
+  }
+  // Chromium 153 runs the cancelled fetch's rejection in a microtask during
+  // the pagehide dispatch, before this chunk's own (later-registered) pagehide
+  // listener has set pageHidden; Chromium 147 ran every listener first.
+  // Decide one task later, after the whole dispatch: an unloading page then
+  // finds pageHidden set (or never runs the timer), and the record survives.
+  if (!deferred) {
+    setTimeout(() => failTurn(gen, err, true), 0);
     return;
   }
   const turn = active;

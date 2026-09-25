@@ -17,6 +17,22 @@
 - Approval writes audit.
 - Genie fallback.
 
+### Real-PostgreSQL contracts
+
+Two suites run the ACTUAL SQL and DDL against a disposable PostgreSQL when `MIP_TEST_POSTGRES_DSN` names one, and skip otherwise: `tests/integration/test_genie_completion_jobs_postgres.py` (the Genie completion-job store, 8 tests) and `tests/integration/test_lakebase_schema_upgrade.py` (the Lakebase migration, 11 tests). In CI the `backend-tests` job runs a pinned `postgres:16.15-bookworm` service (by digest; 16 is assumed to be the Lakebase default major) with trust auth, and only the step "pytest (real PostgreSQL contracts, serial)" gets the DSN; the parallel step never does, so the suites skip there. That step revokes PostgreSQL's default PUBLIC privileges on schema `public` first (the dedicated Lakebase database's posture, which the migration closes itself where the provider schema exists), runs every DSN suite with `-n 0`, and fails when the junit report shows zero tests or any skip. A new DSN suite named `tests/integration/test_*_postgres.py` is picked up automatically; `tests/unit/test_ci_postgres_contracts.py` fails if any file under `tests/` reads the DSN but falls outside the step. Its shrink-only `KNOWN_UNRUN_DSN_SUITES` lists what the step does not gate on (each node id is deselected and re-run last with its recorded failure text: a pass fails the step as a stale entry, and a failure without that text fails it as a new defect); never add to it to go green.
+
+Run them locally on a unique port, never 5432 on a shared machine:
+
+```bash
+docker run --rm -d --name mip-pg-$USER -e POSTGRES_HOST_AUTH_METHOD=trust -p 5439:5432 postgres:16.15-bookworm
+psql 'host=127.0.0.1 port=5439 dbname=postgres user=postgres' -c 'REVOKE ALL ON SCHEMA public FROM PUBLIC'
+MIP_TEST_POSTGRES_DSN='host=127.0.0.1 port=5439 dbname=postgres user=postgres' \
+  pytest -n 0 -rs tests/integration/test_*_postgres.py tests/integration/test_lakebase_schema_upgrade.py
+docker rm -f mip-pg-$USER
+```
+
+`-n 0` is required, and the two suites must never run concurrently: both `DROP SCHEMA mip_app CASCADE` and recreate it in the same database. Point the DSN only at a throwaway database.
+
 ## E2E tests
 
 Playwright path:
@@ -65,7 +81,7 @@ npm --prefix frontend run e2e:fixture:ci                     # CI posture: forbi
 | `E2E_FIXTURE_NESTED=1` | unset | Internal to `runner.fixture.spec.ts`, which spawns a nested run that collects only `fixture/nested/*.nested.ts` (tests that fail on purpose) and starts no web server. Never set it by hand. |
 | `MIP_VRT=1` | unset | Collects `visual.fixture.spec.ts` (every other fixture run ignores it) and writes artifacts to `test-results/vrt` and `playwright-report/vrt`. Only the `e2e-visual` CI job and `tools/update_visual_baselines.sh` set it; see "Visual regression". |
 | `MIP_VRT_IMAGE` | unset | The Playwright image the run is inside. The VRT refuses to capture unless it is `mcr.microsoft.com/playwright:v<installed @playwright/test>-noble` on linux/x64. |
-| `MIP_PERF=1` | unset | Collects `perf-budget.fixture.spec.ts` (w2-build-currency) and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf budget" step of the `e2e-fixture` CI job sets it. |
+| `MIP_PERF=1` | unset | Collects the `PERF_SPEC` specs, `perf-budget.fixture.spec.ts` (bundle-08) and `interaction-budget.fixture.spec.ts` (runtime-09), and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf and interaction budgets" step of the `e2e-fixture` CI job sets it, with the file filters `perf-budget interaction-budget` (without them MIP_PERF=1 also collects every normal fixture spec). See "Perf budget". |
 
 Fixture pages run at 1440x900, `prefers-reduced-motion: reduce`, locale `en-US`, timezone `America/New_York`, with `Date` frozen at `2026-07-14T15:00:00Z` (`test.use({ fixtureNow: null })` restores the real clock). Rebuild after changing anything under `frontend/src`; the harness never rebuilds for you.
 
@@ -177,7 +193,15 @@ One analyze runs the WCAG 2.0/2.1/2.2 A and AA tags plus `best-practice`. A rule
 
 ### Perf budget
 
-`perf-budget.fixture.spec.ts` measures timing, so it runs only in its own single-worker step of the `e2e-fixture` job (`MIP_PERF=1`, `--workers=1`) and is ignored by every other run.
+`PERF_SPEC` in `playwright.config.ts` collects the specs that measure timing: `perf-budget.fixture.spec.ts` (LCP and TBT of cold, throttled loads; bundle-08) and `interaction-budget.fixture.spec.ts` (Lead Queue interactions; runtime-09, owned by the W4b lead-queue lane, which names its spec exactly that). They run only in the single-worker step "Run the perf and interaction budgets (single worker)" of the `e2e-fixture` job and are ignored by every other run:
+
+```bash
+MIP_PERF=1 npm --prefix frontend run e2e:fixture:ci -- perf-budget interaction-budget --workers=1
+```
+
+The file filters are required: `MIP_PERF=1` only stops ignoring `PERF_SPEC`, so without them the step would also run every normal fixture spec. A filter that matches no file yet adds nothing. `perf-motion.fixture.spec.ts` is not a `PERF_SPEC`: it pins motion and performance quick wins functionally and runs in the normal suite.
+
+The contract for a `PERF_SPEC` spec: until its ceilings are calibrated from at least 3 reference-runner medians (median x 1.2, rounded up), it is **report-only**, logging its medians and asserting only functional invariants. `perf-budget` is calibrated on the reference runner (home LCP 2600 / TBT 600 ms, lead-queue LCP 2700 / TBT 1200 ms) and gates; `interaction-budget` starts report-only. A ceiling is ratcheted down, never raised to make a run green.
 
 ### React Compiler coverage gate
 
@@ -188,6 +212,27 @@ node tools/react_compiler_coverage.mjs --check tools/react_compiler_allowlist.js
 ```
 
 It scans every `.tsx` and `.ts` file under `frontend/src` with the build's compiler options and fails on a bailout in a file the allowlist does not list, on a count above its entry, or on a stale entry (the file is gone, or it improved). Each entry records the counts, the owning finding, an owner and a date. When you fix a bailout, lower its entry in the same change with `--ratchet`, which only ever lowers counts and refuses while anything is unlisted or grown. **Never loosen the allowlist to go green**: fix a new bailout in code (hoist the value block, move the try/finally into a helper). A manual addition needs a finding id and a reviewer sign-off in the commit body. `--write-allowlist <path>` exists only to bootstrap a new list and refuses to overwrite one.
+
+### a11y lint ratchet (oxlint jsx-a11y)
+
+Audit a11y-05 item 2. The pinned `oxlint` (an exact devDependency) runs its built-in jsx-a11y plugin over `frontend/src` with `frontend/.oxlintrc.json`: the plugin list is exactly `["jsx-a11y"]`, every category is `off`, and every jsx-a11y rule the pinned version lists (`oxlint --rules --format json`) is named explicitly, so an oxlint bump cannot widen the gate silently (the tool fails while the installed oxlint lists a rule the config does not name). Test files, `src/test/**` and `src/mocks/**` are ignored. The `frontend-tests` CI job runs it as its own step, and `npm --prefix frontend run lint` runs it last:
+
+```bash
+npm --prefix frontend run lint:a11y     # = node ../tools/oxlint_ratchet.mjs --check oxlint-baseline.json
+```
+
+`frontend/oxlint-baseline.json` records the hits per **file + rule + count**, never by line, so moving code inside a file changes nothing. `--check` fails on an UNLISTED file+rule key, a GROWN count, a STALE entry (a lower count, or no hit left in the file), a baseline recorded with another oxlint version, and any suppression directive. It also fails closed on unparseable output or a config error, on any diagnostic that is not jsx-a11y (config drift), and on a vacuous run (no file linted, or a rule count other than the config enables). It prints the per-rule totals on every run.
+
+- **Fix a new hit in code; never add it.** A new file+rule key or a higher count is fixed in the component, not recorded.
+- **`--ratchet` only lowers.** `node tools/oxlint_ratchet.mjs --ratchet frontend/oxlint-baseline.json` lowers counts, drops files with no hit left and accepts a new `oxlintVersion`; it refuses while anything is unlisted, grown or suppressed. A fix lowers its entry in the same change.
+- **A pure move is governed.** When code moves to a NEW file, `--ratchet ... --moved-from <old> --moved-to <new>` (repeatable) transfers exactly the (rule, count) pairs that went stale in `<old>` to the new file's keys, refuses a move into a file the baseline already lists or a move that carries a new hit, never lets a per-rule total grow, and records the move in the baseline's `policy.moves`.
+- **No suppressions.** Any `oxlint-disable` directive under `frontend/src`, and an `eslint-disable` directive that is bare or names a `jsx-a11y/` rule (oxlint honours ESLint's disable comments too), fails the gate. Suppressions are banned, not ratcheted. The directive scan is deliberately stricter than oxlint's own scope: it also reads the test files, `src/test/**` and `src/mocks/**` that the config ignores, so a bare disable cannot sit in a file that later moves into scope (a disable that names a non-jsx-a11y rule stays allowed there).
+- **No config-level disables.** They are banned like directives. `.oxlintrc.json` may set only `$schema`, `plugins`, `categories`, `rules` and `ignorePatterns`, and `ignorePatterns` must be exactly the four patterns above. An `overrides` block, `extends`, `settings` or an extra ignore pattern would turn a rule off for a file outside the directive scan, so the tool reports it as config drift and refuses to lint (`validateConfig`, pinned in `tests/unit/test_ci_frontend_gates.py`).
+- **The baseline is a generated artifact.** Never hand-edit or hand-merge it. The integrator re-runs `--ratchet` after each merge; a lane commits only `--ratchet` output, in a separate final commit. `--write-baseline <new path>` exists only to bootstrap and refuses to overwrite.
+
+Rules set to `off`, each with its reason:
+
+- `jsx-a11y/prefer-tag-over-role`: its only remedy swaps a `div role="status|group|dialog|region|img|button"` for a native tag, which contradicts the prototype markup contract (`design_files/Module 0 Prototype.html` renders `div.genie role="dialog"`, `aside.tweaks role="dialog"` and `div.approval role="region"`; `design_files/Design System.html` renders `div.theme-toggle role="group"` and `role="button"` segment cards) and moves BEM selectors and VRT pixels. On 2026-09-25 it reported 159 hits in 81 files (80 of them `role="status"`).
 
 ### Fixture contract (every body against the backend's response model)
 
