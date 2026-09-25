@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { clickDialogBackdrop, evidenceDrawer, openEvidenceDrawer } from './helpers';
 
 const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 to run live hardening regression checks.');
@@ -423,27 +424,32 @@ test('clicking the centre of a segment card selects it instead of opening eviden
 
   await expect(select).toHaveAttribute('aria-pressed', 'true', { timeout: 20_000 });
   await expect(page).toHaveURL(/segment_codes=[^&]*itm/, { timeout: 20_000 });
-  await expect(page.locator('.drawer-scrim.is-open'), 'centre click must not open the Evidence Drawer').toHaveCount(0);
+  await expect(openEvidenceDrawer(page), 'centre click must not open the Evidence Drawer').toHaveCount(0);
 });
 
 /**
  * The drawer is modal, so a stray open blocks the page until it is dismissed.
- * Both dismissal paths must work: the scrim and Escape.
+ * Both dismissal paths must work: a press on the backdrop (the native
+ * dialog's `::backdrop`, which replaced the separate scrim element in wave
+ * 4a) and Escape.
  */
-test('the Evidence Drawer is dismissible by scrim click and by Escape', async ({ page }) => {
+test('the Evidence Drawer is dismissible by backdrop click and by Escape', async ({ page }) => {
   await gotoApp(page, '/segment-intelligence');
   const chip = page.locator('.seg-card .evidence-chip').first();
   await expect(chip, 'segment evidence chip should be ready').toBeVisible({ timeout: 45_000 });
+  const drawer = evidenceDrawer(page);
 
   await chip.click();
-  await expect(page.locator('.drawer.is-open')).toBeVisible({ timeout: 20_000 });
-  await page.locator('.drawer-scrim.is-open').click({ position: { x: 8, y: 8 } });
-  await expect(page.locator('.drawer-scrim.is-open')).toHaveCount(0, { timeout: 20_000 });
+  await expect(openEvidenceDrawer(page)).toBeVisible({ timeout: 20_000 });
+  await clickDialogBackdrop(page, drawer);
+  await expect(openEvidenceDrawer(page)).toHaveCount(0, { timeout: 20_000 });
+  await expect(drawer).not.toHaveAttribute('open', { timeout: 20_000 });
 
   await chip.click();
-  await expect(page.locator('.drawer.is-open')).toBeVisible({ timeout: 20_000 });
+  await expect(openEvidenceDrawer(page)).toBeVisible({ timeout: 20_000 });
   await page.keyboard.press('Escape');
-  await expect(page.locator('.drawer-scrim.is-open')).toHaveCount(0, { timeout: 20_000 });
+  await expect(openEvidenceDrawer(page)).toHaveCount(0, { timeout: 20_000 });
+  await expect(drawer).not.toHaveAttribute('open', { timeout: 20_000 });
 
   // Page is usable again: selection still works after the drawer closes.
   await clickSegment(page, 'Prime Refi Candidates');

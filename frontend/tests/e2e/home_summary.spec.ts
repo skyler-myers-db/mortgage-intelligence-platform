@@ -14,6 +14,7 @@
  *    (welcome copy, no fake deltas).
  */
 import { test, expect, type Page } from '@playwright/test';
+import { evidenceDrawer } from './helpers';
 
 const API_PREFIX = /\/api\/(?:v1\/)?/;
 const apiPattern = (path: string) => new RegExp(`${API_PREFIX.source}${path}`);
@@ -281,7 +282,7 @@ test.describe('S4 home summary — pinned response cross-check', () => {
 
     for (let i = 0; i < PINNED_SUMMARY.highlights.length; i += 1) {
       await summary.locator('.evidence-chip').nth(i).click();
-      const drawer = page.locator('.drawer');
+      const drawer = evidenceDrawer(page);
       await expect(drawer).toBeVisible();
       await expect(drawer).toContainText('mip_app.kpi_snapshots');
       await expect(drawer).toContainText('mip.semantics.portfolio_headline_metric_view');
@@ -333,7 +334,7 @@ test.describe('S4 home summary — live API cross-check', () => {
       await expect(summary).toContainText('Since your last login');
       // Evidence: a delta number cites the real snapshot row + metric view.
       await summary.locator('.evidence-chip').first().click();
-      const drawer = page.locator('.drawer');
+      const drawer = evidenceDrawer(page);
       await expect(drawer).toBeVisible();
       await expect(drawer).toContainText('mip_app.kpi_snapshots');
       await expect(drawer).toContainText('mip.semantics.portfolio_headline_metric_view');
