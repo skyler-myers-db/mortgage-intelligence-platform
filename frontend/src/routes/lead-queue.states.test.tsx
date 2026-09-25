@@ -18,7 +18,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -94,6 +94,12 @@ vi.mock('../lib/api', () => {
 });
 
 import LeadQueue from './lead-queue';
+import { preloadAsyncFailure } from '../components/ui/AsyncState';
+
+// The red callout is its own chunk (loaded on the first failure).
+beforeAll(async () => {
+  await preloadAsyncFailure();
+});
 
 function warmingError() {
   return Object.assign(new Error('warehouse warming'), {
@@ -180,6 +186,12 @@ describe('LeadQueue never shows a zero count it did not measure', () => {
       if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1);
       else await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
+    // A measured zero loads its EmptyState chunk.
+    if (!vi.isFakeTimers()) {
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+    }
   }
 
   const text = () => document.body.textContent ?? '';

@@ -4,7 +4,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/apiTransport';
 import type { LeadExportContext } from '../components/mortgage/LeadTable';
 import {
@@ -182,6 +182,13 @@ vi.mock('../components/mortgage/LeadTable', () => ({
 }));
 
 import SegmentIntelligence from './segment-intelligence';
+import { preloadAsyncFailure } from '../components/ui/AsyncState';
+
+// The failure chunk, and the measured-zero EmptyState chunk transformed once
+// up front, so a loaded machine cannot push the first zero past the timeout.
+beforeAll(async () => {
+  await Promise.all([preloadAsyncFailure(), import('../components/ui/EmptyState')]);
+}, 60_000);
 
 const T0 = new Date('2026-09-25T12:00:00Z').getTime();
 const SEGMENT = {
@@ -228,7 +235,7 @@ describe('Segment Intelligence rendered states', () => {
     document.body.innerHTML = '';
   });
 
-  function mount(url = '/segment-intelligence') {
+  async function mount(url = '/segment-intelligence') {
     act(() => {
       root.render(
         <MemoryRouter initialEntries={[url]}>
@@ -237,22 +244,26 @@ describe('Segment Intelligence rendered states', () => {
         </MemoryRouter>,
       );
     });
+    // A measured zero loads its EmptyState chunk.
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
   }
 
   const text = () => document.body.textContent ?? '';
   const empties = () => [...document.querySelectorAll('.empty')];
 
-  it('a measured zero of segments is the day-zero EmptyState, never "Loading segments…"', () => {
+  it('a measured zero of segments is the day-zero EmptyState, never "Loading segments…"', async () => {
     reads.segments = read({ data: [] });
-    mount();
+    await mount();
     expect(empties()[0]?.getAttribute('data-empty-cause')).toBe('day-zero');
     expect(text()).not.toContain('Loading segments');
     expect(document.querySelector('.seg-card--skeleton')).toBeNull();
   });
 
-  it('a filtered zero of segments offers Clear filters, which clears the URL in one step', () => {
+  it('a filtered zero of segments offers Clear filters, which clears the URL in one step', async () => {
     reads.segments = read({ data: [] });
-    mount('/segment-intelligence?segment=itm&owner_link=Portfolio%20investor%20(5%2B)');
+    await mount('/segment-intelligence?segment=itm&owner_link=Portfolio%20investor%20(5%2B)');
     expect(empties()[0]?.getAttribute('data-empty-cause')).toBe('filtered');
     expect(empties()[0]?.textContent).toContain('No segments match these filters.');
     act(() => document.querySelector<HTMLButtonElement>('button[aria-label="Clear all segment filters"]')?.click());
@@ -263,36 +274,36 @@ describe('Segment Intelligence rendered states', () => {
     ['loading', read()],
     ['warming', read({ warmingUp: { dependency: 'warehouse', label: 'Warehouse warming up', attempt: 1, maxAttempts: 6, correlationId: null } })],
     ['a placeholder zero', read({ data: [], isPlaceholderData: true })],
-  ])('while %s the grid keeps its skeletons and says no zero', (_label, segments) => {
+  ])('while %s the grid keeps its skeletons and says no zero', async (_label, segments) => {
     reads.segments = segments;
-    mount();
+    await mount();
     expect(empties()).toHaveLength(0);
     expect(document.querySelector('.seg-card--skeleton')).not.toBeNull();
   });
 
-  it('a failed segment read speaks the shared vocabulary in its own region, never the transport message', () => {
+  it('a failed segment read speaks the shared vocabulary in its own region, never the transport message', async () => {
     reads.segments = read({ error: new ApiError('SENTINEL 500 Internal Server Error', { path: '/api/v1/segments', status: 500 }) });
-    mount();
+    await mount();
     const alert = document.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Couldn't load segment catalog.");
     expect(text()).not.toContain('SENTINEL');
   });
 
-  it('a measured zero of ranked rows replaces the table with an EmptyState', () => {
+  it('a measured zero of ranked rows replaces the table with an EmptyState', async () => {
     reads.leads = read({ data: leadsPage([]) });
-    mount();
+    await mount();
     expect(document.querySelector('[data-testid="lead-table"]')).toBeNull();
     expect(empties().map((node) => node.getAttribute('data-empty-cause'))).toEqual(['filtered']);
   });
 
-  it('an empty all-mode intersection says it is a real result', () => {
+  it('an empty all-mode intersection says it is a real result', async () => {
     reads.leads = read({ data: leadsPage([]) });
-    mount('/segment-intelligence?segment_codes=itm,equity&segment_mode=all');
+    await mount('/segment-intelligence?segment_codes=itm,equity&segment_mode=all');
     expect(empties().map((node) => node.getAttribute('data-empty-cause'))).toEqual(['intersection']);
   });
 
-  it('hands LeadTable the export provenance and the FetchedAt header status', () => {
-    mount();
+  it('hands LeadTable the export provenance and the FetchedAt header status', async () => {
+    await mount();
     expect(tableProps.current?.exportContext).toEqual({
       refreshedAt: '2026-09-24T07:30:00Z',
       exportBlockedReason: null,
@@ -302,9 +313,9 @@ describe('Segment Intelligence rendered states', () => {
     expect(reads.leads.manualRetry).toHaveBeenCalledTimes(1);
   });
 
-  it('blocks the export while placeholder rows are on screen', () => {
+  it('blocks the export while placeholder rows are on screen', async () => {
     reads.leads = read({ data: leadsPage([LEAD]), isPlaceholderData: true });
-    mount();
+    await mount();
     expect(tableProps.current?.exportContext?.exportBlockedReason).toBe('Export waits for the rows of the current filters');
   });
 });

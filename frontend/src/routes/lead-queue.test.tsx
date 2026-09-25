@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildLeadQueueExportFilters,
   searchParamsAfterSegmentRemoval,
@@ -117,10 +117,20 @@ vi.mock('../lib/api', () => ({
 
 import LeadQueue from './lead-queue';
 
+// The measured zero's EmptyState chunk, transformed once up front so a loaded
+// machine cannot push the first zero-row mount past the per-test timeout.
+beforeAll(async () => {
+  await import('../components/mortgage/LeadQueueEmptyState');
+}, 60_000);
+
 async function settle(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+  // The measured zero's EmptyState is its own chunk, loaded when a zero shows.
+  await act(async () => {
+    await vi.dynamicImportSettled();
   });
 }
 

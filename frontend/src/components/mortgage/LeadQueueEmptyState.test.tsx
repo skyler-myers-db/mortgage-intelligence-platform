@@ -9,14 +9,15 @@ import {
   genieLeadPrompt,
   genieSegmentPrompt,
   genieStatePrompt,
-} from '../lib/genieContext';
-import { SEGMENT_CODES } from './lead-queue.filters';
-import { LeadQueueEmptyState, queueFilterGeniePrompt } from './lead-queue.empty';
+} from '../../lib/genieContext';
+import { leadQueueFilterParams } from '../../routes/lead-queue.activeFilters';
+import { SEGMENT_CODES } from '../../routes/lead-queue.filters';
+import { LeadQueueEmptyState, queueFilterGeniePrompt } from './LeadQueueEmptyState';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const genieMocks = vi.hoisted(() => ({ openGenie: vi.fn() }));
-vi.mock('../lib/genieOpen', () => ({ openGenie: genieMocks.openGenie }));
+vi.mock('../../lib/genieOpen', () => ({ openGenie: genieMocks.openGenie }));
 
 /**
  * The Lead Queue's measured zero (audit states-v2): its cause, Clear filters,
@@ -25,7 +26,8 @@ vi.mock('../lib/genieOpen', () => ({ openGenie: genieMocks.openGenie }));
 
 const STATES = Object.keys(US_STATE_NAME_BY_CODE);
 const SEGMENTS = [...SEGMENT_CODES];
-const sp = (query: string) => new URLSearchParams(query);
+/** The route's view of a URL: its filter params, display params removed. */
+const filters = (query: string) => leadQueueFilterParams(new URLSearchParams(query));
 
 describe('queueFilterGeniePrompt', () => {
   it('only ever renders a reviewed template, over the full state x segment grid', () => {
@@ -46,18 +48,18 @@ describe('queueFilterGeniePrompt', () => {
     const outputs: string[] = [];
     for (const state of STATES) {
       for (const query of [`state=${state}`, `states=${state}`, `state=${state.toLowerCase()}`]) {
-        const prompt = queueFilterGeniePrompt(sp(query));
+        const prompt = queueFilterGeniePrompt(filters(query));
         if (prompt) outputs.push(prompt);
       }
       for (const segment of SEGMENTS) {
         for (const query of [`state=${state}&segment=${segment}`, `states=${state}&segment_codes=${segment}&segment_mode=all`]) {
-          const prompt = queueFilterGeniePrompt(sp(query));
+          const prompt = queueFilterGeniePrompt(filters(query));
           if (prompt) outputs.push(prompt);
         }
       }
     }
     for (const segment of SEGMENTS) {
-      const prompt = queueFilterGeniePrompt(sp(`segment=${segment}`));
+      const prompt = queueFilterGeniePrompt(filters(`segment=${segment}`));
       if (prompt) outputs.push(prompt);
     }
 
@@ -67,11 +69,11 @@ describe('queueFilterGeniePrompt', () => {
   });
 
   it('asks about one state and one segment with the lead template', () => {
-    expect(queueFilterGeniePrompt(sp('state=TX&segment=itm'))).toBe(genieLeadPrompt({ segmentCodes: ['itm'], stateCode: 'TX' }));
-    expect(queueFilterGeniePrompt(sp('segment=itm'))).toBe(genieSegmentPrompt('itm'));
-    expect(queueFilterGeniePrompt(sp('state=TX'))).toBe(genieStatePrompt('TX'));
+    expect(queueFilterGeniePrompt(filters('state=TX&segment=itm'))).toBe(genieLeadPrompt({ segmentCodes: ['itm'], stateCode: 'TX' }));
+    expect(queueFilterGeniePrompt(filters('segment=ITM'))).toBe(genieSegmentPrompt('itm'));
+    expect(queueFilterGeniePrompt(filters('state=TX'))).toBe(genieStatePrompt('TX'));
     // The column preset and the table place are display state, not filters.
-    expect(queueFilterGeniePrompt(sp('state=TX&view=compact&sort=equity&dir=desc&row=B-0123456789ABC'))).toBe(genieStatePrompt('TX'));
+    expect(queueFilterGeniePrompt(filters('state=TX&view=compact&sort=equity&dir=desc&row=B-0123456789ABC'))).toBe(genieStatePrompt('TX'));
   });
 
   it.each([
@@ -90,12 +92,12 @@ describe('queueFilterGeniePrompt', () => {
     ['an unknown segment', 'segment=not-a-segment'],
     ['a state outside the federal list', 'state=ZZ'],
   ])('is null for %s', (_label, query) => {
-    expect(queueFilterGeniePrompt(sp(query))).toBeNull();
+    expect(queueFilterGeniePrompt(filters(query))).toBeNull();
   });
 
   it('never lets a county, ZIP, city or borrower id reach a prompt', () => {
     for (const query of ['state=TX&county=48201', 'state=TX&zip=77002', 'state=TX&cities=HOUSTON~TX', 'state=TX&borrower_ids=B-0123456789ABC']) {
-      expect(queueFilterGeniePrompt(sp(query))).toBeNull();
+      expect(queueFilterGeniePrompt(filters(query))).toBeNull();
     }
   });
 });
@@ -119,8 +121,7 @@ describe('LeadQueueEmptyState', () => {
     act(() => {
       root.render(
         <LeadQueueEmptyState
-          searchParams={sp(query)}
-          filtersActive={query !== ''}
+          filterParams={filters(query)}
           countyNoCoverage={false}
           intersection={false}
           onClearFilters={onClearFilters}
@@ -161,7 +162,7 @@ describe('LeadQueueEmptyState', () => {
   });
 
   it('an unfiltered zero says what the default view lists, with no Clear and no Ask', () => {
-    renderEmpty('');
+    renderEmpty('view=compact&sort=equity');
     expect(cause()).toBe('filtered');
     expect(document.querySelector('.empty__copy')?.textContent).toBe('The default view lists marketing-eligible borrowers only.');
     expect(clear()).toBeNull();

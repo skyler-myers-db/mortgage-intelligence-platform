@@ -1,12 +1,8 @@
 import type { ReactNode } from 'react';
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
-import { describeApiError, type ApiErrorDescription } from '../../lib/describeApiError';
-import { copyLink } from '../../lib/copyLink';
-import { useOptionalHealth } from '../HealthProvider';
-import { degradedDependency, friendlyDependencyName, isBanneredOutage } from '../healthRecovery';
-import { Countdown, useSecondsUntil } from './RetryClock';
+import { isAbortError } from '../../lib/apiTransport';
+import { lazyModule, useLazyModule } from '../mortgage/useLazyModule';
 import { WarmingUpBlock } from './WarmingUpBlock';
-import './AsyncState.css';
 
 /**
  * AsyncState / AsyncStatus — the one loading / warming / error / empty
@@ -17,18 +13,18 @@ import './AsyncState.css';
  *   AsyncStatus, at most one of:
  *     1. warming with no data yet   -> WarmingUpBlock (it steps aside for
  *                                      the banner by itself);
- *     2. the bannered outage        -> a calm role=status line: "This panel
- *                                      reloads when the <dep> reconnects",
- *                                      plus a secondary Retry. Never an alert
- *                                      under a banner that already says it;
- *     3. any other failure          -> a role=alert callout with the
- *                                      describeApiError title and body, ONE
- *                                      action, and the support reference as
- *                                      a copyable mono chip. A 429's Retry
- *                                      is aria-disabled while it counts down;
- *     4. nothing.
+ *     2. a failure                  -> AsyncFailure (AsyncFailure.tsx): the
+ *                                      calm bannered status under a banner
+ *                                      that already names the outage, else a
+ *                                      role=alert callout in the
+ *                                      describeApiError vocabulary;
+ *     3. nothing.
  *   AsyncState adds the data slot: children(data) when there is a payload,
  *   `empty` ONLY for a settled, measured zero, else `loading`.
+ *
+ * The failure half is a separate chunk loaded only once a failure needs it,
+ * so the natural load of every route carries none of it. While it loads (or
+ * if it cannot) a neutral line says the panel could not load.
  */
 
 /** The useWarmingUpRetry result, or an adapter of the same shape. */
@@ -51,124 +47,36 @@ interface AsyncStatusProps {
   compact?: boolean;
 }
 
+const FAILURE = lazyModule(() => import('./AsyncFailure'));
+
+/** Load the failure half ahead of need (a server render, a test); later mounts render it at once. */
+export const preloadAsyncFailure = (): Promise<unknown> => FAILURE.load();
+
 export function AsyncStatus({ query, subject, onClearFilters, compact }: AsyncStatusProps) {
-  const healthCtx = useOptionalHealth();
+  const { error } = query;
+  const failure = useLazyModule(FAILURE, error !== null && !isAbortError(error)).module;
   // TanStack keeps `failureReason` after the last retry, so `warmingUp`
   // outlives the loop; once `error` is set the honest surface is the error.
-  const warming = query.error === null ? query.warmingUp : null;
+  const warming = error === null ? query.warmingUp : null;
   if (warming && query.data === null) {
     return <WarmingUpBlock state={warming} title={`${subject} loading`} compact={compact} />;
   }
-  const { error } = query;
-  if (!error) return null;
-  const health = healthCtx?.health ?? null;
-  const connection = healthCtx?.connection ?? 'online';
-  if (isBanneredOutage(error, health, connection)) {
-    const dependency = friendlyDependencyName(degradedDependency(health) ?? '');
+  if (error === null || isAbortError(error)) return null;
+  if (!failure) {
     return (
-      <div className="status-callout" role="status" aria-live="polite" data-async-status="bannered">
-        <strong>{subject}</strong> This panel reloads when the {dependency} reconnects.{' '}
-        <RetryButton subject={subject} onRetry={query.manualRetry} />
+      <div className="status-callout" role="status" data-async-status="pending">
+        {subject} could not load.
       </div>
     );
   }
-  const description = describeApiError(error, { subject });
-  if (description.kind === 'aborted') return null;
   return (
-    <ErrorCallout
-      description={description}
+    <failure.AsyncFailure
+      error={error}
       subject={subject}
       onRetry={query.manualRetry}
       onClearFilters={onClearFilters}
       errorUpdatedAt={query.errorUpdatedAt ?? null}
     />
-  );
-}
-
-function ErrorCallout({
-  description,
-  subject,
-  onRetry,
-  onClearFilters,
-  errorUpdatedAt,
-}: {
-  description: ApiErrorDescription;
-  subject: string;
-  onRetry: () => void;
-  onClearFilters?: () => void;
-  errorUpdatedAt: number | null;
-}) {
-  const tone = description.tone === 'warning' ? 'status-callout--warning' : 'status-callout--danger';
-  const waitUntil = description.kind === 'rate_limited' && description.retryAfterMs !== null && errorUpdatedAt !== null
-    ? errorUpdatedAt + description.retryAfterMs
-    : null;
-  return (
-    <div className={`status-callout ${tone}`} role="alert" data-async-status={description.kind}>
-      <span>
-        <strong>{description.title}.</strong> {description.body}
-      </span>
-      {description.action === 'retry' && (waitUntil === null
-        ? <RetryButton subject={subject} onRetry={onRetry} />
-        : <CountdownRetry key={waitUntil} until={waitUntil} subject={subject} onRetry={onRetry} />)}
-      {description.action === 'clear-filters' && onClearFilters && (
-        <button type="button" className="btn btn--ghost btn--sm" onClick={onClearFilters} aria-label="Clear the invalid filters">
-          Clear filters
-        </button>
-      )}
-      {description.action === 'reload' && (
-        <button type="button" className="btn btn--ghost btn--sm" onClick={() => window.location.reload()}>
-          Reload
-        </button>
-      )}
-      {description.correlationId && <Reference id={description.correlationId} />}
-    </div>
-  );
-}
-
-function RetryButton({ subject, onRetry }: { subject: string; onRetry: () => void }) {
-  return (
-    <button type="button" className="btn btn--ghost btn--sm" onClick={onRetry} aria-label={`Retry loading ${subject.toLowerCase()}`}>
-      Retry
-    </button>
-  );
-}
-
-/** A 429's Retry: aria-disabled (never native disabled) until the server's wait ends. */
-function CountdownRetry({ until, subject, onRetry }: { until: number; subject: string; onRetry: () => void }) {
-  const left = useSecondsUntil(until);
-  const waiting = left > 0;
-  return (
-    <span className="async-status__wait">
-      {waiting && (
-        <span className="muted">
-          Try again in <Countdown until={until} />
-        </span>
-      )}
-      <button
-        type="button"
-        className="btn btn--ghost btn--sm"
-        aria-disabled={waiting || undefined}
-        aria-label={`Retry loading ${subject.toLowerCase()}`}
-        onClick={waiting ? undefined : onRetry}
-      >
-        Retry
-      </button>
-    </span>
-  );
-}
-
-function Reference({ id }: { id: string }) {
-  return (
-    <div className="async-status__ref">
-      Reference <span className="callout-code" data-testid="async-status-reference">{id}</span>
-      <button
-        type="button"
-        className="btn btn--ghost btn--sm"
-        onClick={() => void copyLink(id, { success: 'Reference copied', failure: 'Copy failed' })}
-      >
-        Copy
-      </button>
-    </div>
   );
 }
 

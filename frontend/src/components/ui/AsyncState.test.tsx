@@ -3,10 +3,10 @@
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/apiTransport';
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
-import { AsyncState, AsyncStatus, type AsyncQuery } from './AsyncState';
+import { AsyncState, AsyncStatus, preloadAsyncFailure, type AsyncQuery } from './AsyncState';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -48,6 +48,12 @@ function outage(reason = 'retries_exhausted'): ApiError {
 }
 
 let root: Root;
+
+// The red callout is its own chunk (loaded on the first failure); load it up
+// front so every render below is synchronous.
+beforeAll(async () => {
+  await preloadAsyncFailure();
+});
 
 beforeEach(() => {
   vi.useFakeTimers();

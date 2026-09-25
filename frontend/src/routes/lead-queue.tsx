@@ -5,13 +5,15 @@ import { api } from '../lib/api';
 import { leadsQuery, type LeadsRequest } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import { describeApiError } from '../lib/describeApiError';
+import { isAbortError } from '../lib/apiTransport';
 import type { SalesTeamMember } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable, type LeadExportContext } from '../components/mortgage/LeadTable';
 import { PropertyLookupPanel } from '../components/mortgage/PropertyLookupPanel';
 import { Chip } from '../components/Primitives';
 import { AsyncState } from '../components/ui/AsyncState';
+import { DescribedErrorBody } from '../components/ui/DescribedError';
+import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { useApp } from '../components/AppContext';
@@ -20,7 +22,6 @@ import { queueFilterLabel, usePublishQueueContext } from '../lib/queueContextPub
 import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
-import { LeadQueueEmptyState } from './lead-queue.empty';
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
@@ -28,6 +29,7 @@ import { copyLink } from '../lib/copyLink';
 import {
   hasLeadQueueFilters,
   leadQueueActiveFilterChips,
+  leadQueueFilterParams,
   moreFiltersActiveCount,
   searchParamsCleared,
   searchParamsWithoutFilter,
@@ -103,6 +105,7 @@ function selectCountyZips(payload: Awaited<ReturnType<typeof api.zipRollups>>): 
 }
 
 const RULES_VERSION_STALE_MS = 5 * 60_000;
+const EMPTY_STATE = lazyModule(() => import('../components/mortgage/LeadQueueEmptyState'));
 const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters';
 
 export default function LeadQueue() {
@@ -200,10 +203,7 @@ export default function LeadQueue() {
   const actorIsListedLo = Boolean(actorEmail) && salesTeam.some(
     (member) => member.email.toLowerCase() === actorEmail?.toLowerCase(),
   );
-  // The buyer-safe vocabulary, never the transport message (audit states-04).
-  const salesTeamError = salesTeamQuery.error
-    ? describeApiError(salesTeamQuery.error, { subject: 'the sales team' })
-    : null;
+  const salesTeamError = salesTeamQuery.error && !isAbortError(salesTeamQuery.error) ? salesTeamQuery.error : null;
   const segmentFilter = segmentFilterDisplayValue(segment, segmentCodes, segmentMode);
   const segmentFilterOptions = optionsWithCurrentValue(SEGMENT_FILTER_OPTIONS, segmentFilter);
   // S8: one removable chip per active segment. Removing a chip rewrites the
@@ -316,6 +316,11 @@ export default function LeadQueue() {
   const queueStatusLabel = queueRefetchWarming
     ? `${warming.label} (${warming.attempt}/${warming.maxAttempts})`
     : 'updating';
+  // The measured zero's EmptyState (and its Ask Genie template) loads only
+  // when a zero is on screen: none of it rides the natural load.
+  const measuredZero = hasQueue && !leadsPlaceholderData && error === null && warming === null
+    && leadsData.leads.length === 0;
+  const emptyModule = useLazyModule(EMPTY_STATE, measuredZero).module;
   // "Fetched 3m ago · Refresh" / "Queue updated · Refresh" (audit states-09):
   // an audit-free version poll; Refresh is the one explicit re-read.
   const freshness = useLeadQueueFreshness({
@@ -684,9 +689,12 @@ export default function LeadQueue() {
           Analytics "Sales ops" tab, but the ASSIGNED filter + LeadTable assign
           actions still depend on the sales team, so surface its outage here,
           directly above the ranked-borrowers region. */}
-      {salesTeamError && salesTeamError.kind !== 'aborted' && (
+      {salesTeamError && (
         <div role="alert" className="status-callout status-callout--warning mb-grid">
-          Sales team unavailable: {salesTeamError.body} Lead assignment to LOs is degraded until it reconnects.
+          {/* The buyer-safe vocabulary, never the transport message (audit states-04). */}
+          Sales team unavailable:{' '}
+          <DescribedErrorBody error={salesTeamError} subject="the sales team" />{' '}
+          Lead assignment to LOs is degraded until it reconnects.
         </div>
       )}
       {meWithoutEmail && (
@@ -715,10 +723,9 @@ export default function LeadQueue() {
           isEmpty={(page) => page.leads.length === 0}
           empty={countyLoading ? (
             <div className="muted body mb-grid">Resolving county ZIPs…</div>
-          ) : (
-            <LeadQueueEmptyState
-              searchParams={searchParams}
-              filtersActive={filtersActive}
+          ) : emptyModule && (
+            <emptyModule.LeadQueueEmptyState
+              filterParams={leadQueueFilterParams(searchParams)}
               countyNoCoverage={Boolean(countyFilter && countyZips && countyZips.size === 0)}
               intersection={segmentChips.length > 1 && segmentMode === 'all'}
               onClearFilters={clearAllFilters}

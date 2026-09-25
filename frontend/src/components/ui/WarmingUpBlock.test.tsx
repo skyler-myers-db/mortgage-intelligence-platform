@@ -3,9 +3,9 @@
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
-import { WAREHOUSE_WARMING_BODY, WarmingUpBlock } from './WarmingUpBlock';
+import { WAREHOUSE_WARMING_BODY, WarmingUpBlock, preloadWarmingExtras } from './WarmingUpBlock';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -35,6 +35,11 @@ function warming(overrides: Partial<WarmingUpState> = {}): WarmingUpState {
 }
 
 let root: Root;
+
+// The clocks are their own chunk (loaded with the first warm-up).
+beforeAll(async () => {
+  await preloadWarmingExtras();
+});
 
 beforeEach(() => {
   vi.useFakeTimers();

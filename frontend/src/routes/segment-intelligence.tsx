@@ -13,8 +13,8 @@ import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { AsyncStatus } from '../components/ui/AsyncState';
-import { EmptyState } from '../components/ui/EmptyState';
 import { FetchedAt } from '../components/ui/FetchedAt';
+import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
 import { leadsQuery } from '../lib/leadsQuery';
@@ -65,6 +65,8 @@ import { formatCount } from '../lib/formatters';
  * only "All" appears instead of exposing generic US-state metadata as if it
  * were tenant coverage.
  */
+const EMPTY_STATE = lazyModule(() => import('../components/ui/EmptyState'));
+
 function buildLocationToStates(
   states: ReadonlyArray<{ state_code: string; state_name: string }>,
 ): Record<string, string[]> {
@@ -248,6 +250,8 @@ export default function SegmentIntelligence() {
   const filtered = useMemo(() => applySecondaryLeadFilters(leads, chipFilters), [leads, chipFilters]);
   const leadsMeasuredZero = leadsData !== null && filtered.length === 0
     && !leadsPlaceholder && !leadsError && !leadsWarming;
+  // EmptyState loads only when a measured zero is on screen.
+  const EmptyState = useLazyModule(EMPTY_STATE, segmentsMeasuredZero || leadsMeasuredZero).module?.EmptyState;
   const uniqueCohortTotal = totalMatching ?? filtered.length;
   const rankedScopeEyebrow = hasSelectedSegments
     ? 'Ranked borrowers · selected segment cohort'
@@ -352,7 +356,7 @@ export default function SegmentIntelligence() {
           what failed in the shared vocabulary, calmly under a banner that
           already names the outage. One warming block at a time. */}
       <AsyncStatus query={segmentsQuery} subject="Segment catalog" compact />
-      {segmentsMeasuredZero ? (
+      {segmentsMeasuredZero ? EmptyState && (
         <EmptyState
           cause={filtersDirty ? 'filtered' : 'day-zero'}
           title={filtersDirty ? 'No segments match these filters.' : undefined}
@@ -588,7 +592,7 @@ export default function SegmentIntelligence() {
         className={`layoutA-grid layoutA-grid--segment-workbench stable-refresh-region ${leadsUpdating ? 'is-updating' : ''}`}
         aria-busy={leadsUpdating || leadsInitialLoading}
       >
-        {leadsMeasuredZero ? (
+        {leadsMeasuredZero ? EmptyState && (
           <EmptyState cause={leads.length === 0 && activeSegs.length > 1 && segmentMode === 'all' ? 'intersection' : 'filtered'} />
         ) : (
           <LeadTable

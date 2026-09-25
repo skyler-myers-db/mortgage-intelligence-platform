@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 
@@ -50,6 +50,12 @@ import Home, {
 } from './home';
 import { WAREHOUSE_WARMING_BODY } from '../components/ui/WarmingUpBlock';
 import { ApiError } from '../lib/apiTransport';
+import { preloadAsyncFailure } from '../components/ui/AsyncState';
+
+// A server render shows only loaded chunks: load the red callout up front.
+beforeAll(async () => {
+  await preloadAsyncFailure();
+});
 
 /** The backend's retryable 503 for a warehouse whose retry budget is spent. */
 function warehouseOutage(): ApiError {

@@ -77,6 +77,10 @@ async function mount() {
       </QueryClientProvider>,
     );
   });
+  // A failed read's page is its own chunk, loaded on the failure.
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
 }
 
 const text = () => document.body.textContent ?? '';

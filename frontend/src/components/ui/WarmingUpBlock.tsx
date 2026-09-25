@@ -1,11 +1,15 @@
-import { useState } from 'react';
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
-import { copyLink } from '../../lib/copyLink';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { useOptionalHealth } from '../HealthProvider';
 import { blockDefersToBanner } from '../healthRecovery';
-import { Countdown, WaitClock } from './RetryClock';
+import { lazyModule, useLazyModule } from '../mortgage/useLazyModule';
+
+/** The wait clocks and the reference disclosure, loaded with the first warm-up. */
+const WAIT_EXTRAS = lazyModule(() => import('./WarmingUpBlock.wait'));
+
+/** Load the clocks ahead of need (a server render, a test); later mounts render them at once. */
+export const preloadWarmingExtras = (): Promise<unknown> => WAIT_EXTRAS.load();
 
 /**
  * WarmingUpBlock — shared presentational component for the cold-start
@@ -77,9 +81,12 @@ export function WarmingUpBlock({
   // for its dependency (or it named none), so a genuine per-route warm-up
   // still shows while an unrelated dependency is down.
   const healthCtx = useOptionalHealth();
-  if (healthCtx && blockDefersToBanner(state.dependency, healthCtx.health, healthCtx.connection ?? 'online')) {
-    return null;
-  }
+  const defers = healthCtx
+    ? blockDefersToBanner(state.dependency, healthCtx.health, healthCtx.connection ?? 'online')
+    : false;
+  // The clocks load only for a block that shows.
+  const extras = useLazyModule(WAIT_EXTRAS, !defers).module;
+  if (defers) return null;
   return (
     <div
       className={`surface warming-block ${compact ? 'warming-block--compact' : ''}`}
@@ -115,54 +122,10 @@ export function WarmingUpBlock({
         <div className="warming-block__footer">
           <Icon name="db" size={11} />
           <span className="muted warming-block__meta">{cadenceFor(state.label)}</span>
-          <WaitLine attempt={state.attempt} intervalMs={state.intervalMs} />
+          {extras && <extras.WaitLine attempt={state.attempt} intervalMs={state.intervalMs} />}
         </div>
-        {state.correlationId && <ReferenceDetails reference={state.correlationId} />}
+        {extras && state.correlationId && <extras.ReferenceDetails reference={state.correlationId} />}
       </div>
     </div>
-  );
-}
-
-/**
- * "Waiting 0:42 · next try in 4 s" (audit states-08 part 4). The wait runs
- * from when this line mounted with the block; the next try is due one plan
- * interval after the attempt count last changed (TanStack exposes no failure
- * times, so the clock lives here, keyed by the attempt, not in the hook).
- */
-function WaitLine({ attempt, intervalMs }: { attempt: number; intervalMs?: number }) {
-  const [since] = useState(() => Date.now());
-  return (
-    <span className="muted warming-block__meta" data-testid="warming-up-wait">
-      · Waiting <WaitClock since={since} />
-      {intervalMs !== undefined && <NextTry key={attempt} intervalMs={intervalMs} />}
-    </span>
-  );
-}
-
-function NextTry({ intervalMs }: { intervalMs: number }) {
-  const [until] = useState(() => Date.now() + intervalMs);
-  return (
-    <>
-      {' · next try in '}
-      <Countdown until={until} />
-    </>
-  );
-}
-
-/** The support reference, behind a disclosure: a copyable id, never prose. */
-function ReferenceDetails({ reference }: { reference: string }) {
-  return (
-    <details className="warming-block__details">
-      <summary className="muted fs-12">Details</summary>
-      <span className="muted fs-12">Reference </span>
-      <span className="mono fs-12" data-testid="warming-up-reference">{reference}</span>{' '}
-      <button
-        type="button"
-        className="btn btn--ghost btn--sm"
-        onClick={() => void copyLink(reference, { success: 'Reference copied', failure: 'Copy failed' })}
-      >
-        Copy
-      </button>
-    </details>
   );
 }
