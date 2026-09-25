@@ -23,6 +23,7 @@
  */
 import type { Borrower360, BorrowerProof, ProofMargin, ProofScoreComponent } from '../../../../src/types';
 import type { AuditEventPage, AuditEventRow, DecisionReceipt } from '../../../../src/lib/apiTypes';
+import type { ContractSample } from '../contractSamples';
 import { json, type MockApi } from '../mockApi';
 import { PRIMARY_BORROWER, borrowerById } from './borrowers';
 import { type RequestGate, ledgerReceipt } from './decisionReceipt';
@@ -160,48 +161,43 @@ export function registerExplorerDecisionRows(mockApi: MockApi): void {
   );
 }
 
-export interface ContractSample {
-  method: 'GET' | 'POST';
-  pattern: string;
-  path: string;
-  query: Record<string, string>;
-  status: number;
-  body: unknown;
-}
-
 /** Every payload this module can register, for the fixture contract exporter. */
 export function contractSamples(): ContractSample[] {
   const id = PRIMARY_BORROWER.borrower_id;
   return [
-    ...(['trusted', 'untrusted'] as const).map((kind) => ({
-      method: 'GET' as const,
+    ...(['trusted', 'untrusted'] as const).map((kind): ContractSample => ({
+      source: `anatomyProof(${kind})`,
+      method: 'GET',
       pattern: '/api/borrowers/:id/proof',
       path: `/api/borrowers/${id}/proof`,
-      query: {},
+      query: '',
       status: 200,
       body: anatomyProof(PRIMARY_BORROWER, kind),
     })),
     {
+      source: 'routedApproveResult',
       method: 'POST',
       pattern: '/api/outreach/approve',
       path: '/api/outreach/approve',
-      query: {},
+      query: '',
       status: 200,
       body: routedApproveResult().body,
     },
     {
+      source: 'EXPLORER_ROWS',
       method: 'GET',
       pattern: '/api/audit/events/page',
       path: '/api/audit/events/page',
-      query: {},
+      query: '',
       status: 200,
       body: { items: [EXPLORER_DECISION_ROW, EXPLORER_VIEW_ROW], next_cursor: null } satisfies AuditEventPage,
     },
     {
+      source: 'ledgerReceipt(approved)',
       method: 'GET',
       pattern: '/api/audit/receipt/:id',
       path: `/api/audit/receipt/${ROUTED_APPROVE_AUDIT_ID}`,
-      query: {},
+      query: '',
       status: 200,
       body: ledgerReceipt(ROUTED_APPROVE_AUDIT_ID, PRIMARY_BORROWER, 'approved'),
     },

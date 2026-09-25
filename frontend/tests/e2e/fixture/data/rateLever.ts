@@ -14,6 +14,7 @@
  * class 4 at -100 bps.
  */
 import type { RateSensitivityResponse, RateSensitivityState } from '../../../../src/types/rateScenario';
+import type { ContractSample } from '../contractSamples';
 import { fixture, json, type FixtureEntry } from '../mockApi';
 import { SNAPSHOT_AT, STATES } from './reference';
 
@@ -93,9 +94,9 @@ export const rateLeverFixtures: FixtureEntry[] = [
 ];
 
 /** Curated bodies for the fixture contract exporter (w3-api-contract). */
-export function contractSamples() {
+export function contractSamples(): ContractSample[] {
   return [
-    { method: 'GET', pattern: '/api/geo/rate-sensitivity', path: '/api/geo/rate-sensitivity', query: '', status: 200, body: RATE_LEVER },
-    { method: 'GET', pattern: '/api/geo/rate-sensitivity', path: '/api/geo/rate-sensitivity', query: '', status: 200, body: RATE_LEVER_NOT_BUILT },
+    { source: 'RATE_LEVER', method: 'GET', pattern: '/api/geo/rate-sensitivity', path: '/api/geo/rate-sensitivity', query: '', status: 200, body: RATE_LEVER },
+    { source: 'RATE_LEVER_NOT_BUILT', method: 'GET', pattern: '/api/geo/rate-sensitivity', path: '/api/geo/rate-sensitivity', query: '', status: 200, body: RATE_LEVER_NOT_BUILT },
   ];
 }
