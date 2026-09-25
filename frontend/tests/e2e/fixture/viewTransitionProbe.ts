@@ -12,6 +12,9 @@
  *    its pseudo-element, its end time (delay + duration) and, for group
  *    animations, the largest translation any of its keyframes applies;
  *  - whether it finished.
+ * It also records every CSS animation that STARTS on a `.route-transition`
+ * wrapper (route-in), from an animationstart listener, since a 200 ms
+ * animation is gone before most reads.
  * Every promise it touches is caught, so a skipped transition never becomes
  * an unhandled rejection the hygiene gate would report.
  */
@@ -34,6 +37,8 @@ export interface ViewTransitionLog {
   supported: boolean;
   calls: number;
   transitions: TransitionRecord[];
+  /** Every CSS animation that STARTED on a `.route-transition` wrapper (class: name). */
+  routeAnimations: string[];
 }
 
 type ProbeWindow = Window & { __mipViewTransitions?: ViewTransitionLog };
@@ -44,8 +49,16 @@ export async function installViewTransitionProbe(page: Page): Promise<void> {
     type Starter = (arg?: unknown) => ViewTransition;
     const doc = document as Document & { startViewTransition?: Starter };
     const original = typeof doc.startViewTransition === 'function' ? doc.startViewTransition.bind(doc) : null;
-    const log = { supported: original !== null, calls: 0, transitions: [] as unknown[] };
+    const log = { supported: original !== null, calls: 0, transitions: [] as unknown[], routeAnimations: [] as string[] };
     (window as ProbeWindow).__mipViewTransitions = log as ViewTransitionLog;
+    // route-in lasts 200 ms, so a later getAnimations() read can miss it;
+    // the start event cannot.
+    document.addEventListener('animationstart', (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.classList.contains('route-transition')) {
+        log.routeAnimations.push(`${target.className}: ${event.animationName}`);
+      }
+    }, true);
     if (!original) return;
 
     // How far a group moves: its keyframes place it at its snapshot's
@@ -116,7 +129,9 @@ export async function installViewTransitionProbe(page: Page): Promise<void> {
 export async function readViewTransitions(page: Page): Promise<ViewTransitionLog> {
   return page.evaluate(() => {
     const log = (window as ProbeWindow).__mipViewTransitions;
-    return log ? JSON.parse(JSON.stringify(log)) as ViewTransitionLog : { supported: false, calls: 0, transitions: [] };
+    return log
+      ? JSON.parse(JSON.stringify(log)) as ViewTransitionLog
+      : { supported: false, calls: 0, transitions: [], routeAnimations: [] };
   });
 }
 
@@ -129,13 +144,7 @@ export async function waitForViewTransitionsToFinish(page: Page): Promise<ViewTr
   return readViewTransitions(page);
 }
 
-/** CSS animations (not transitions) running on the painted route wrapper or its fallback. */
-export async function routeWrapperAnimations(page: Page): Promise<string[]> {
-  return page.evaluate(() =>
-    Array.from(document.querySelectorAll('#main-content .route-transition')).flatMap((node) =>
-      node.getAnimations().flatMap((animation) =>
-        animation instanceof CSSAnimation ? [`${node.className}: ${animation.animationName}`] : [],
-      ),
-    ),
-  );
+/** CSS animations that started on a route wrapper (painted or fallback) after `before` was read. */
+export function newRouteAnimations(after: ViewTransitionLog, before?: ViewTransitionLog): string[] {
+  return after.routeAnimations.slice(before?.routeAnimations.length ?? 0);
 }

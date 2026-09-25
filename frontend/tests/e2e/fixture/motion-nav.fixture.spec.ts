@@ -29,8 +29,8 @@
 import type { Page, Route } from '@playwright/test';
 import {
   installViewTransitionProbe,
+  newRouteAnimations,
   readViewTransitions,
-  routeWrapperAnimations,
   waitForViewTransitionsToFinish,
   type ViewTransitionLog,
 } from './viewTransitionProbe';
@@ -91,7 +91,7 @@ test.describe('with motion allowed', () => {
     for (const animation of animations) {
       expect(animation.endMs, `${animation.pseudo} ends within ${MOTION_CEILING_MS} ms`).toBeLessThanOrEqual(MOTION_CEILING_MS);
     }
-    expect(await routeWrapperAnimations(page), 'route-in never doubles the View Transition').toEqual([]);
+    expect(newRouteAnimations(log, before), 'route-in never doubles the View Transition').toEqual([]);
     await expect(page.locator('#main-content h1')).toHaveText('Mortgage intelligence glossary');
   });
 
@@ -224,8 +224,8 @@ test.describe('with motion allowed', () => {
     const fallback = page.locator('#main-content .route-transition--fallback');
     await expect(fallback).toHaveCount(1);
     await expect(fallback.locator('[data-route-fallback]')).toBeVisible();
-    expect(await routeWrapperAnimations(page), 'the fallback wrapper runs no CSS animation').toEqual([]);
     const held = await readViewTransitions(page);
+    expect(newRouteAnimations(held), 'the fallback wrapper runs no CSS animation').toEqual([]);
 
     chunk.release();
     await expect(page.locator('#main-content h1')).toHaveText('Mortgage intelligence glossary');
@@ -236,7 +236,7 @@ test.describe('with motion allowed', () => {
       .flatMap((record) => record.ready ?? [])
       .filter((animation) => animation.pseudo.startsWith('::view-transition-new(') && !animation.pseudo.endsWith('(root)'));
     expect(entrances.length, 'one route entrance').toBeLessThanOrEqual(1);
-    expect(await routeWrapperAnimations(page), 'route-in does not add a second').toEqual([]);
+    expect(newRouteAnimations(log), 'route-in does not add a second').toEqual([]);
   });
 });
 
@@ -288,5 +288,5 @@ test('(c) under reduced motion nothing calls startViewTransition, on a cold load
   const log = await readViewTransitions(page);
   expect(log.supported).toBe(true);
   expect(log.calls).toBe(0);
-  expect(await routeWrapperAnimations(page)).toEqual([]);
+  expect(newRouteAnimations(log)).toEqual([]);
 });
