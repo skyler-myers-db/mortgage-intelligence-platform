@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useEffectEvent, type RefObject } from 'react';
 import { pushEscapeLayer } from '../lib/escapeStack';
 
 const FOCUSABLE_SELECTOR = [
@@ -32,11 +32,10 @@ export function useFocusTrap<TContainer extends HTMLElement, TInitial extends HT
   initialFocusRef,
   onClose,
 }: UseFocusTrapOptions<TContainer, TInitial>) {
-  const onCloseRef = useRef(onClose);
-
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
+  // The latest onClose, read when Escape fires; not a dependency of the trap
+  // (stack-04 tail), so a caller's inline handler never re-runs the trap and
+  // never re-focuses the initial target.
+  const onCloseEvent = useEffectEvent(onClose);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -73,7 +72,7 @@ export function useFocusTrap<TContainer extends HTMLElement, TInitial extends HT
     // runtime-v2): a trap opened above another overlay closes ALONE, instead
     // of every open layer reacting to the same keypress.
     const popEscapeLayer = pushEscapeLayer(() => {
-      onCloseRef.current();
+      onCloseEvent();
     });
 
     const onKeyDown = (event: KeyboardEvent) => {

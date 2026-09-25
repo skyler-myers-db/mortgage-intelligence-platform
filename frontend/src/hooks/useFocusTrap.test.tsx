@@ -94,4 +94,41 @@ describe('useFocusTrap', () => {
     expect(document.activeElement).toBe(launcher);
     expect(escapeLayerCount()).toBe(0);
   });
+
+  // stack-04 tail: onClose is an Effect Event, not a trap dependency. A
+  // caller that passes a fresh inline handler on every render must neither
+  // re-run the trap (which re-focused the initial target, and restored and
+  // re-took focus in between) nor leave Escape calling a stale handler.
+  it('calls the latest onClose on Escape without re-running the trap when the handler changes', async () => {
+    (document.getElementById('launcher') as HTMLButtonElement).focus();
+    let initialFocuses = 0;
+    const countInitialFocus = (event: FocusEvent) => {
+      if ((event.target as HTMLElement | null)?.textContent === 'Close') initialFocuses += 1;
+    };
+    document.addEventListener('focusin', countInitialFocus);
+    try {
+      const first = vi.fn();
+      const second = vi.fn();
+      await act(async () => {
+        root.render(<TrapHarness open onClose={first} />);
+      });
+      await settle();
+      expect(initialFocuses).toBe(1);
+
+      await act(async () => {
+        root.render(<TrapHarness open onClose={second} />);
+      });
+      await settle();
+      expect(initialFocuses, 'the initial target is focused once, not again on a new handler').toBe(1);
+      expect(escapeLayerCount()).toBe(1);
+
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      });
+      expect(first).not.toHaveBeenCalled();
+      expect(second).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener('focusin', countInitialFocus);
+    }
+  });
 });
