@@ -305,6 +305,47 @@ test.describe('approve review', () => {
     expect(echo.calls).toEqual([target.borrower_id]);
   });
 
+  // Wave-3 integration: the expanded row lives in the URL (w3-queue-place),
+  // and the data router commits a URL write in a transition. A pressed in the
+  // same task as the Enter that expands a row once read the previous row and
+  // opened the review as a dialog (CI run 36094178177). The keys go in one
+  // task with microtasks between them, after the review chunk has loaded,
+  // which is that timing exactly rather than by chance.
+  test('A in the same task as the Enter that expands the row opens the review in that row, not a dialog', async ({ app, mockApi, page }) => {
+    registerDraftEcho(mockApi);
+    registerHeldDecision(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await scrollRegion(page).focus();
+    await page.keyboard.press('j');
+    // Warm the review chunk (an Approve waiting on the chunk decides its
+    // mode later, after the URL has caught up): open it once, abandon it.
+    await page.keyboard.press('a');
+    const dialog = page.locator('dialog.lead-approve-dialog');
+    await expect(dialog.getByTestId('lead-approve-review-confirm')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(scrollRegion(page)).toBeFocused();
+
+    // Separate key events with only microtasks between them, as real input
+    // has: React's synchronous state for Enter commits (a microtask), while
+    // the router's transition-scheduled URL commit (a scheduler task) is
+    // still pending when A arrives.
+    await scrollRegion(page).evaluate(async (region) => {
+      const press = (key: string) => {
+        region.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+        region.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }));
+      };
+      press('Enter');
+      for (let hop = 0; hop < 8; hop += 1) await Promise.resolve();
+      press('a');
+    });
+
+    const inline = page.locator('table.tbl tr.tbl__expand').getByTestId('lead-approve-review');
+    await expect(inline.getByTestId('lead-approve-review-confirm')).toBeFocused();
+    await expect(dialog).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`[?&]row=${LEADS[0].borrower_id}(&|$)`));
+  });
+
   for (const how of ['keyboard', 'pointer'] as const) {
     test(`an evidence chip in the review dialog (${how}) opens the drawer holding focus: Enter there approves nothing, Escape returns into the inline review`, async ({ app, mockApi, page }) => {
       const echo = registerDraftEcho(mockApi);

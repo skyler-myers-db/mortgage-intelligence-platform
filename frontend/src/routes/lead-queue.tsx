@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useSearchParams } from 'react-router';
 import { api } from '../lib/api';
@@ -342,7 +342,17 @@ export default function LeadQueue() {
   const settledRowIds = leadsData && !leadsPlaceholderData
     ? new Set(visibleLeads.map((lead) => lead.borrower_id))
     : null;
-  const expandedRow = place.row !== null && settledRowIds?.has(place.row) ? place.row : null;
+  const committedRow = place.row !== null && settledRowIds?.has(place.row) ? place.row : null;
+  // An expand or collapse the table asked for, until its URL write commits.
+  // The data router applies setSearchParams in a transition, so for a moment
+  // `?row=` still names the previous row; the table's keyboard flow reading
+  // that (A pressed in the same task as the Enter that expanded the row)
+  // opened the review as a dialog instead of in the row. The request counts
+  // only while the search params are the very object it was made against:
+  // once any URL write commits (this one, Back, a filter) it is spent, so a
+  // later return to the same URL can never resurrect it.
+  const [requestedRow, setRequestedRow] = useState<{ row: string | null; against: URLSearchParams } | null>(null);
+  const expandedRow = requestedRow !== null && requestedRow.against === searchParams ? requestedRow.row : committedRow;
 
   const countyLoading = Boolean(countyFilter) && countyZipsQuery.isPending;
   // Export provenance (audit delivery-08): the rows' own refresh time from
@@ -751,10 +761,13 @@ export default function LeadQueue() {
               searchParamsWithLeadTablePlace(searchParams, { sort: next, row: expandedRow }),
             )}
             expandedId={expandedRow}
-            onExpandedChange={(borrowerId) => setSearchParams(
-              searchParamsWithLeadTablePlace(searchParams, { row: borrowerId }),
-              { replace: true },
-            )}
+            onExpandedChange={(borrowerId) => {
+              setRequestedRow({ row: borrowerId, against: searchParams });
+              setSearchParams(
+                searchParamsWithLeadTablePlace(searchParams, { row: borrowerId }),
+                { replace: true },
+              );
+            }}
           />
         </div>
       )}
