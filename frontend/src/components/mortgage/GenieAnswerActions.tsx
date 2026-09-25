@@ -97,7 +97,12 @@ export function GenieActions({
                     setPendingActionId(action.id);
                     setConfirmActionId(null);
                     // Pessimistic: "Recording…" holds until the action settles.
-                    void runConfirmedAction(onAction, action).finally(() => setPendingActionId(null));
+                    // A rejected action already reported itself through its
+                    // surface; the chain ends here so it never becomes an
+                    // unhandled rejection.
+                    void runConfirmedAction(onAction, action)
+                      .finally(() => setPendingActionId(null))
+                      .catch(() => undefined);
                   }}
                 >
                   {pending ? 'Recording…' : 'Confirm'}

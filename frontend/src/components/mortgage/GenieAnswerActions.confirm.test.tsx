@@ -14,6 +14,12 @@ import { GenieActions } from './GenieAnswerActions';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+/** Vitest reports an unhandled rejection through Node's process event. */
+declare const process: {
+  on(event: 'unhandledRejection', listener: (reason: unknown) => void): void;
+  off(event: 'unhandledRejection', listener: (reason: unknown) => void): void;
+};
+
 const ACTION: GenieActionSuggestion = {
   id: 'save-1',
   label: 'Save reviewed cohort',
@@ -60,6 +66,34 @@ describe('GenieActions confirm', () => {
     expect(button('Run Save reviewed cohort')!.textContent).toContain('Run');
     expect(button('Run Save reviewed cohort')!.textContent).not.toContain('Recording');
     expect(button('Run Save reviewed cohort')!.disabled).toBe(false);
+  });
+
+  it('a rejecting action clears "Recording…" and raises no unhandled rejection', async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (event: PromiseRejectionEvent) => {
+      event.preventDefault();
+      rejections.push(event.reason);
+    };
+    const onNodeRejection = (reason: unknown) => rejections.push(reason);
+    window.addEventListener('unhandledrejection', onRejection);
+    process.on('unhandledRejection', onNodeRejection);
+    try {
+      const onAction = vi.fn(() => Promise.reject(new Error('action refused')));
+      act(() => root.render(<GenieActions actions={[ACTION]} onAction={onAction} />));
+      act(() => button('Run Save reviewed cohort')!.click());
+      await act(async () => {
+        button('Confirm Save reviewed cohort')!.click();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(onAction).toHaveBeenCalledTimes(1);
+      const run = button('Run Save reviewed cohort')!;
+      expect(run.textContent).not.toContain('Recording');
+      expect(run.disabled).toBe(false);
+      expect(rejections).toEqual([]);
+    } finally {
+      window.removeEventListener('unhandledrejection', onRejection);
+      process.off('unhandledRejection', onNodeRejection);
+    }
   });
 
   it('a handler that returns nothing releases the controls at once', async () => {
