@@ -90,6 +90,23 @@ describe('useGenieTurnCollapse + GenieCollapsedTurn', () => {
     expect(toggle?.hasAttribute('aria-controls')).toBe(false);
   });
 
+  it('describes each collapsed toggle by its own digest, so same-named toggles differ', () => {
+    renderThread([turn(1), turn(2), turn(3)]);
+    const toggles = Array.from(container.querySelectorAll<HTMLButtonElement>('button.genie-collapse__toggle'));
+    const descriptions = toggles.map((toggle) => {
+      const id = toggle.getAttribute('aria-describedby');
+      return id ? document.getElementById(id)?.textContent : null;
+    });
+    expect(toggles.map((toggle) => toggle.textContent)).toEqual(['Show full answer', 'Show full answer']);
+    expect(descriptions).toEqual([
+      'Answer 1: Illinois leads with 1,000 borrowers.',
+      'Answer 2: Illinois leads with 2,000 borrowers.',
+    ]);
+    // Open, the digest is gone and so is the description.
+    act(() => toggles[0].click());
+    expect(toggles[0].hasAttribute('aria-describedby')).toBe(false);
+  });
+
   it('leaves a 2-turn thread alone', () => {
     renderThread([turn(1), turn(2)]);
     expect(states()).toEqual(['full', 'full']);
