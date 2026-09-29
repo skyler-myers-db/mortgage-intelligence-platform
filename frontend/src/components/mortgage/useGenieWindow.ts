@@ -224,6 +224,17 @@ interface GestureCommit {
 }
 
 /**
+ * The size a gesture's frame shows: its preferred size fitted to the
+ * viewport, exactly what React renders once the gesture commits. React diffs
+ * style props, not the DOM, so an unfitted frame size would outlive a commit
+ * whose fitted size did not change (a panel taller than the viewport).
+ */
+function renderedGestureSize(gesture: GenieGesture): GenieSize {
+  const viewport = currentViewport();
+  return viewport ? fitGenieSizeToViewport(gesture, viewport) : gesture;
+}
+
+/**
  * One frame of a gesture, written straight onto the panel. The offset uses
  * the CSS `translate` property: it composes with the open/close `transform`
  * (which carries a --dur-slow transition) instead of replacing it, so the
@@ -232,9 +243,10 @@ interface GestureCommit {
  */
 function applyGestureFrame(panel: HTMLElement, gesture: GenieGesture): void {
   if (gesture.handle) {
-    panel.style.width = `${gesture.w}px`;
-    panel.style.height = `${gesture.h}px`;
-    panel.style.maxHeight = `${gesture.h}px`;
+    const { w, h } = renderedGestureSize(gesture);
+    panel.style.width = `${w}px`;
+    panel.style.height = `${h}px`;
+    panel.style.maxHeight = `${h}px`;
   }
   const dx = gesture.x - gesture.startX;
   const dy = gesture.y - gesture.startY;
@@ -308,21 +320,21 @@ function moveGesture(
   if (!gesture) return;
   const dx = event.clientX - gesture.pointerX;
   const dy = event.clientY - gesture.pointerY;
-  let target: GeniePosition = { x: gesture.startX + dx, y: gesture.startY + dy };
-  if (gesture.handle) {
-    const signature = RESIZE_MATRIX[gesture.handle];
+  const signature = gesture.handle ? RESIZE_MATRIX[gesture.handle] : null;
+  if (signature) {
     gesture.w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, gesture.startW + signature.wSign * dx));
     gesture.h = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, gesture.startH + signature.hSign * dy));
-    target = {
-      x: gesture.startX - signature.xSign * (gesture.w - gesture.startW),
-      y: gesture.startY - signature.ySign * (gesture.h - gesture.startH),
-    };
   } else if (Math.abs(dx) < 3 && Math.abs(dy) < 3 && !gesture.didMove) {
     return;
   }
   gesture.didMove = true;
-  if (!gesture.handle || gesture.undocked) {
-    const clamped = clampGeniePosition(target, gesture.w, gesture.h, currentViewport(), latest.rightInset);
+  if (!signature || gesture.undocked) {
+    // Left / top follow the size the panel shows, not the preferred size.
+    const shown = renderedGestureSize(gesture);
+    const target = signature
+      ? { x: gesture.startX - signature.xSign * (shown.w - gesture.startW), y: gesture.startY - signature.ySign * (shown.h - gesture.startH) }
+      : { x: gesture.startX + dx, y: gesture.startY + dy };
+    const clamped = clampGeniePosition(target, shown.w, shown.h, currentViewport(), latest.rightInset);
     gesture.x = clamped.x;
     gesture.y = clamped.y;
   }

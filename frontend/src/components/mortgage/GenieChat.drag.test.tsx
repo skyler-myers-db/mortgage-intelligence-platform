@@ -225,6 +225,59 @@ describe('dragging and resizing the Genie panel', () => {
     expect(panel.style.getPropertyValue('translate')).toBe('');
   });
 
+  // A resize frame writes only the size React renders (fitGenieSizeToViewport):
+  // React diffs style props, not the DOM, so an unfitted frame size would
+  // outlive a commit whose fitted size did not change.
+  describe.each([
+    { variant: 'undocked', pos: { x: 400, y: 16 } },
+    { variant: 'docked', pos: null },
+  ])('a resize at the fitted maximum ($variant, 1440 x 900)', ({ pos }) => {
+    const FITTED_H = VIEWPORT.h - 16 * 2;
+
+    it('never writes a height taller than the viewport fit, and the commit leaves the fitted height', async () => {
+      window.localStorage.setItem(SIZE_KEY, JSON.stringify({ w: PANEL.w, h: 900 }));
+      if (pos) window.localStorage.setItem(POSITION_KEY, JSON.stringify({ pos }));
+      const panel = await mount();
+      expect(panel.style.height).toBe(`${FITTED_H}px`);
+      const edge = panel.querySelector<HTMLElement>('.genie__resize-edge--n');
+      if (!edge) throw new Error('resize edge not rendered');
+
+      act(() => pointer('pointerdown', edge, 600, 16));
+      for (const y of [0, -15, -30]) {
+        act(() => pointer('pointermove', edge, 600, y));
+        runFrame();
+        expect(panel.style.height, `the frame at y=${y}`).toBe(`${FITTED_H}px`);
+        expect(panel.style.maxHeight, `the frame at y=${y}`).toBe(`${FITTED_H}px`);
+      }
+      act(() => pointer('pointerup', edge, 600, -30));
+
+      expect(panel.style.height).toBe(`${FITTED_H}px`);
+      expect(panel.style.maxHeight).toBe(`${FITTED_H}px`);
+      expect(panel.style.getPropertyValue('translate')).toBe('');
+      if (pos) {
+        // The undocked panel's box stays inside the viewport's gutters.
+        expect(panel.style.top).toBe('16px');
+        expect(Number.parseFloat(panel.style.top) + FITTED_H).toBeLessThanOrEqual(VIEWPORT.h - 16);
+      }
+    });
+  });
+
+  it('a width resize below the maximum width writes the viewport-fitted width (800 x 900)', async () => {
+    setViewport(800, VIEWPORT.h);
+    window.localStorage.setItem(SIZE_KEY, JSON.stringify({ w: 900, h: PANEL.h }));
+    const panel = await mount();
+    const edge = panel.querySelector<HTMLElement>('.genie__resize-edge--w');
+    if (!edge) throw new Error('resize edge not rendered');
+    expect(panel.style.width).toBe('768px');
+
+    act(() => pointer('pointerdown', edge, 100, 400));
+    act(() => pointer('pointermove', edge, 40, 400));
+    runFrame();
+    expect(panel.style.width).toBe('768px');
+    act(() => pointer('pointerup', edge, 40, 400));
+    expect(panel.style.width).toBe('768px');
+  });
+
   it('with the Console open, a drag into the right zone stops clear of the Console (1440 x 900)', async () => {
     appState.consoleOpen = true;
     const panel = await mount();
