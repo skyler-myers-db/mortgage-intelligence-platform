@@ -15,7 +15,7 @@
  * own place helpers, exactly as lead-queue.tsx wires it.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, useState } from 'react';
+import { act, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createMemoryRouter, useSearchParams } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
@@ -126,7 +126,9 @@ const placeholder = { active: false, rerender: (): void => undefined };
 function PlaceQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [, setTick] = useState(0);
-  placeholder.rerender = () => setTick((tick) => tick + 1);
+  useEffect(() => {
+    placeholder.rerender = () => setTick((tick) => tick + 1);
+  }, []);
   const place = parseLeadTablePlace(searchParams);
   return (
     <LeadTable
