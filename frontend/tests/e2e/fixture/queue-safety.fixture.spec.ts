@@ -159,6 +159,8 @@ test.describe('approver gate', () => {
     expect(draftCalls(mockApi)).toBe(0);
     expect(approveCalls(mockApi)).toBe(0);
     await expect(page.locator('.table-error')).toHaveCount(0);
+    // A gated actor's keys are not registered: no refusal toast either.
+    await expect(page.locator('.toast[role="alert"]')).toHaveCount(0);
 
     // Offer Orchestrator's banner explains the gate and never claims an approver.
     await app.gotoRoute(`/offer-orchestrator/${id}`);

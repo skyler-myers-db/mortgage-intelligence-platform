@@ -16,7 +16,10 @@ import { useLeadApproveReview } from './useLeadApproveReview';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('../../lib/api', () => ({ isAbortError: () => false }));
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  isAbortError: () => false,
+}));
 
 const BORROWER = 'B-HOOKREVIEW001';
 

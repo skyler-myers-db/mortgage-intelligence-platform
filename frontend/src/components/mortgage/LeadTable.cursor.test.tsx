@@ -202,7 +202,8 @@ describe('LeadTable keyboard row cursor', () => {
     const otherApprove = container.querySelector(`[data-testid="lead-approve-${IDS[2]}"]`);
     expect(approveButton?.getAttribute('aria-keyshortcuts')).toBe('A');
     expect(otherApprove?.getAttribute('aria-keyshortcuts')).toBeNull();
-    expect(container.querySelector(`[data-testid="lead-select-${IDS[0]}"]`)?.getAttribute('aria-keyshortcuts')).toBe('X');
+    // X toggles the row; Shift+X selects the range to it (tables-07).
+    expect(container.querySelector(`[data-testid="lead-select-${IDS[0]}"]`)?.getAttribute('aria-keyshortcuts')).toBe('X Shift+X');
   });
 
   it('R opens the reject panel for the cursor row, and a returned reject advances to the next pending row', async () => {

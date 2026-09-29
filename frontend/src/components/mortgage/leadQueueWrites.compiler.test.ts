@@ -56,6 +56,41 @@ describe('Lead Queue write surfaces under the production React Compiler configur
     expect(compiled?.memoSlots).toBeGreaterThan(0);
   }, COMPILE_TIMEOUT_MS);
 
+  // Budget trades (the wave-4b lane's cuts 4-5 and after): the cursor, the
+  // hotkeys, the approve review and the assignment advance had their
+  // bailouts fixed in code (an Effect Event for the one-shot advance, a
+  // layout-effect ref sync, cancel declared before its callers, the
+  // lifecycle writes as module helpers) and carry only 'use no memo'. Pinned: nothing but the pragma
+  // stands between each and a clean compile, so deleting the line compiles.
+  it.each([
+    ['useLeadTableCursor.ts', 'useLeadTableCursor'],
+    ['useLeadTableHotkeys.ts', 'useLeadTableHotkeys'],
+    ['useLeadApproveReview.ts', 'useLeadApproveReview'],
+    // critic-06 item 7(c): its two writes are module helpers returning a
+    // result object, so the component carries no try/finally.
+    ['AssignmentLifecycleAdvance.tsx', 'AssignmentLifecycleAdvance'],
+  ] as const)('%s bails out only on its budget-trade pragma', (file, fnName) => {
+    const text = source(file);
+    expect(text.match(/'use no memo';/g)).toHaveLength(1);
+    const report = analyze(repoPath(file), text.replace(/\n\s*'use no memo';\n/, '\n'));
+    expect(report.optOutPragmas).toEqual([]);
+    expect(report.compileErrors).toEqual([]);
+    expect(report.compileSkips).toEqual([]);
+    expect(report.compiledFunctions.find((fn) => fn.name === fnName)?.emitted).toBe(true);
+  }, COMPILE_TIMEOUT_MS);
+
+  // Control: the virtualizer's file reports exactly its pragma and the
+  // incompatible library it exists to contain (runtime-04 slice 3).
+  it('control: LeadTableBody reports exactly its pragma and the incompatible library', () => {
+    const report = analyze(repoPath('LeadTableBody.tsx'));
+
+    expect(report.optOutPragmas).toHaveLength(1);
+    expect(report.compileErrors.map((error) => error.reason)).toEqual([
+      expect.stringContaining('incompatible library'),
+    ]);
+    expect(report.compileSkips).toEqual([]);
+  }, COMPILE_TIMEOUT_MS);
+
   // Non-vacuity control: the pre-rewrite guard (try/finally, no catch) must
   // still bail. If this stops failing, the compiler learned the construct.
   it('control: the pre-rewrite try/finally guard in ApprovalBanner still bails out', () => {

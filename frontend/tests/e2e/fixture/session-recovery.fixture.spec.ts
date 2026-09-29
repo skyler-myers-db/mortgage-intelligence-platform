@@ -331,8 +331,9 @@ test.describe('a change attempted offline', () => {
     await review.getByTestId('lead-approve-review-confirm').click();
     // A write that failed offline is never replayed on reconnect, so its
     // error must not borrow a read's "this will load" promise.
-    const error = page.locator('.table-error[role="alert"]');
-    await expect(error).toHaveText(`Couldn't approve ${id}: You are offline. Reconnect, then try again.`);
+    const error = page.locator('.toast[role="alert"]');
+    await expect(error.locator('.toast__title')).toHaveText(`Couldn't approve ${id}`);
+    await expect(error.locator('.toast__detail')).toHaveText('You are offline. Reconnect, then try again.');
     await expect(cell).not.toContainText('Approved');
     await expect(sessionDialog(page)).toHaveCount(0);
   });

@@ -13,7 +13,7 @@
  * window of rows in the DOM: a cursor row outside it is brought in with the
  * virtualizer's `scrollToIndex`, then scrolled fully into view once rendered.
  */
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useEffectEvent, useState, type RefObject } from 'react';
 import type { LeadSummary } from '../../types';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 
@@ -38,6 +38,13 @@ interface UseLeadTableCursorInput {
    * Read once; it moves nothing and fetches nothing.
    */
   initialCursorId?: string | null;
+  /**
+   * Called synchronously before every cursor move, with the row it moves
+   * to (J / K, a click, a focus, an advance): the flow drops an Approve
+   * waiting on the review chunk when the cursor leaves its row, without an
+   * effect (w3-queue-place #11a).
+   */
+  onMove?: (borrowerId: string) => void;
 }
 
 function findRow(scope: HTMLElement | null, borrowerId: string): HTMLElement | null {
@@ -52,10 +59,22 @@ export function useLeadTableCursor({
   statusOf,
   isPending,
   initialCursorId = null,
+  onMove,
 }: UseLeadTableCursorInput) {
+  // Budget trade (audit runtime-03 / runtime-04, the wave-4b lane's cut 4):
+  // the bailout this hook had is fixed, so it compiles cleanly without this
+  // line, but the LeadTable shell that calls it stays uncompiled (cut 5), so
+  // nothing reads its memoized values and the memo caches only cost bytes
+  // (the family compile measured +0.58 KiB br on the LeadTable chunk).
+  // Delete this line once the shell compiles.
   'use no memo';
 
-  const [cursorId, setCursorId] = useState<string | null>(initialCursorId);
+  const [cursorId, setCursorState] = useState<string | null>(initialCursorId);
+  /** Every move goes through here, so the flow hears it synchronously. */
+  function setCursorId(borrowerId: string) {
+    onMove?.(borrowerId);
+    setCursorState(borrowerId);
+  }
   const [announcement, setAnnouncement] = useState('');
   // A decision to advance from, resolved after the render that carries the
   // decided row's new state (so "next pending" reads fresh approvals).
@@ -123,19 +142,23 @@ export function useLeadTableCursor({
     setAdvanceFrom(decidedId);
   }
 
-  // Runs after the render that carries the decision (its approval state and
-  // the request land in one batch), so this render's closures are fresh.
-  useEffect(() => {
-    if (advanceFrom === null) return;
-    const from = sortedLeads.findIndex((lead) => lead.borrower_id === advanceFrom);
+  // The advance reads this render's rows and approvals (an Effect Event), but
+  // only a new request re-runs it: it is keyed on the one-shot request.
+  const advanceToNextPending = useEffectEvent((decidedId: string) => {
+    const from = sortedLeads.findIndex((lead) => lead.borrower_id === decidedId);
     const order = from < 0
       ? sortedLeads
       : [...sortedLeads.slice(from + 1), ...sortedLeads.slice(0, from)];
-    const next = order.find((lead) => lead.borrower_id !== advanceFrom && isPending(lead));
+    const next = order.find((lead) => lead.borrower_id !== decidedId && isPending(lead));
+    if (next) moveTo(next.borrower_id);
+  });
+  // Runs after the render that carries the decision (its approval state and
+  // the request land in one batch), so the rows it reads are fresh.
+  useEffect(() => {
+    if (advanceFrom === null) return;
     // A one-shot request, consumed after the decision's render.
     setAdvanceFrom(null);
-    if (next) moveTo(next.borrower_id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the one-shot request only
+    advanceToNextPending(advanceFrom);
   }, [advanceFrom]);
 
   return {

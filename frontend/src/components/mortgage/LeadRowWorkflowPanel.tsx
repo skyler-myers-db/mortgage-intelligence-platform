@@ -7,7 +7,12 @@ import {
   assignmentStatusVariant,
   formatDateTimeShort,
 } from './LeadTable.logic';
-import { leadComplianceFlags, leadWorkflowStates, type LeadStatusEntry } from './LeadTable.status';
+import {
+  leadComplianceFlags,
+  leadEligibilitySourceText,
+  leadWorkflowStates,
+  type LeadStatusEntry,
+} from './LeadTable.status';
 
 /**
  * Workflow strip of the expanded lead row (audit tables-04). The one-line
@@ -61,6 +66,10 @@ export function LeadRowWorkflowPanel({
                 : flag.label}
             </Chip>
           ))}
+          {/* The compliance source, as text (critic-08), not only a chip title. */}
+          <span className="muted fs-12" data-testid={`lead-eligibility-source-${lead.borrower_id}`}>
+            {leadEligibilitySourceText(lead)}
+          </span>
         </Field>
         <Field label="Assigned to">
           {lead.assigned_to_email ? (
