@@ -72,12 +72,19 @@
   background: var(--bg-3);
   overflow: hidden;
 }
+/* motion-08 (bars): a full-width fill slides to its share inside the
+   overflow-hidden track, so a filter change eases the bar instead of
+   snapping it. Translate, not scaleX (which squashes the rounded end) and
+   not width (which re-lays out); the global reduced-motion reset makes it
+   instant. */
 .analytics-bars__fill {
   position: absolute;
-  inset: 0 auto 0 0;
-  width: var(--bar-pct, 0%);
+  inset: 0;
+  inline-size: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--seg-itm), var(--accent-data));
+  translate: calc(var(--bar-pct, 0%) - 100%) 0;
+  transition: translate var(--dur-base) var(--ease-standard);
 }
 .analytics-bars__value {
   justify-self: end;

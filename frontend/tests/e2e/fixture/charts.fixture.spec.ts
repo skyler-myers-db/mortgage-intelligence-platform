@@ -369,3 +369,31 @@ test('analytics: the view tabs are content-sized, not a full-width tray (w3 moti
   });
   expect(widths.own, `tray ${widths.own}px in a ${widths.content}px column`).toBeLessThan(widths.content - 1);
 });
+
+test('executive: each Pipeline Metrics bar shows exactly its share, sliding by translate, instant under reduced motion (motion-08)', async ({ app, page }) => {
+  await app.gotoRoute('/analytics');
+  const fills = page.locator('#main-content .analytics-bars__fill');
+  await expect(fills.first()).toBeAttached();
+  const bars = await fills.evaluateAll((spans) =>
+    spans.map((fill) => {
+      const track = (fill.parentElement as HTMLElement).getBoundingClientRect();
+      const box = fill.getBoundingClientRect();
+      const style = getComputedStyle(fill);
+      return {
+        share: Number.parseFloat((fill as HTMLElement).style.getPropertyValue('--bar-pct')) / 100,
+        shown: Math.max(0, Math.min(box.right, track.right) - track.left),
+        track: track.width,
+        property: style.transitionProperty,
+        duration: Number.parseFloat(style.transitionDuration),
+        reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
+      };
+    }),
+  );
+  expect(bars.length).toBeGreaterThan(1);
+  for (const bar of bars) {
+    expect(Math.abs(bar.shown - bar.share * bar.track), `a ${bar.share} bar shows ${bar.shown}px of ${bar.track}px`).toBeLessThanOrEqual(1);
+    expect(bar.property).toBe('translate');
+    expect(bar.reduced, 'the harness runs under reduced motion').toBe(true);
+    expect(bar.duration).toBeLessThan(0.001);
+  }
+});
