@@ -16,6 +16,14 @@
  *     rationale, the disposition notes or the bulk gate's shared rationale
  *     re-renders that form only. The table's renders are counted through
  *     useLeadTableFillHeight, which the shell calls once per render.
+ *   - The shell compiles and its row callbacks keep one identity (slice 3):
+ *     a row expand, or an unrelated AppContext change, re-derives no other
+ *     borrower's workflow states (a counting partial mock of
+ *     leadWorkflowStates, which every row's Status cell calls) and
+ *     re-renders no other borrower's Status cell (a counting wrapper: the
+ *     cell's onExpand closes over the row's toggle callback, so a callback
+ *     with a new identity re-renders it even where the compiled cell's own
+ *     leadWorkflowStates memo still hits).
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect, useState, type ReactNode } from 'react';
@@ -29,8 +37,24 @@ import type { LeadTableSort } from './LeadTable.types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const app = vi.hoisted(() => ({ density: 'comfortable' as 'comfortable' | 'compact' }));
+const app = vi.hoisted(() => ({
+  density: 'comfortable' as 'comfortable' | 'compact',
+  // An AppContext field no table input reads (the open evidence drawer).
+  drawer: null as string | null,
+}));
 const counts = vi.hoisted(() => ({ sortValue: 0, shellRenders: 0 }));
+const workflowCalls = vi.hoisted(() => [] as string[]);
+const statusCellRenders = vi.hoisted(() => [] as string[]);
+// Stable, like the real AppContext's value members.
+const appValues = vi.hoisted(() => ({
+  approvals: {},
+  setApproval: () => undefined,
+  setLastBorrowerId: () => undefined,
+  openConsoleRecentActivity: () => undefined,
+  saveLead: () => undefined,
+  isLeadSaved: () => false,
+  setDrawer: () => undefined,
+}));
 const virtualizerOptions = vi.hoisted(() => [] as Array<{
   getItemKey: (index: number) => string | number;
   estimateSize: (index: number) => number;
@@ -40,13 +64,8 @@ const virtualizerOptions = vi.hoisted(() => [] as Array<{
 
 vi.mock('../AppContext', () => ({
   useApp: () => ({
-    approvals: {},
-    setApproval: vi.fn(),
-    setLastBorrowerId: vi.fn(),
-    openConsoleRecentActivity: vi.fn(),
-    saveLead: vi.fn(),
-    isLeadSaved: () => false,
-    setDrawer: vi.fn(),
+    ...appValues,
+    drawer: app.drawer,
     showEvidence: true,
     showConfidence: true,
     canApprove: true,
@@ -88,6 +107,28 @@ vi.mock('./LeadTable.logic', async (importOriginal) => {
       return actual.sortValue(...args);
     },
   };
+});
+
+vi.mock('./LeadTable.status', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./LeadTable.status')>();
+  return {
+    ...actual,
+    leadWorkflowStates: (...args: Parameters<typeof actual.leadWorkflowStates>) => {
+      workflowCalls.push(args[0].borrower_id);
+      return actual.leadWorkflowStates(...args);
+    },
+  };
+});
+
+vi.mock('./LeadTableWorkflowCells', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./LeadTableWorkflowCells')>();
+  function CountedStatusCell(props: Parameters<typeof actual.LeadStatusCell>[0]) {
+    'use no memo';
+
+    statusCellRenders.push(props.lead.borrower_id);
+    return <actual.LeadStatusCell {...props} />;
+  }
+  return { ...actual, LeadStatusCell: CountedStatusCell };
 });
 
 vi.mock('./useLeadTableFillHeight', () => ({
@@ -185,6 +226,9 @@ describe('LeadTable render cost (runtime-04)', () => {
     installLocalStorage();
     clearSingleKeyShortcutsPreference();
     app.density = 'comfortable';
+    app.drawer = null;
+    workflowCalls.length = 0;
+    statusCellRenders.length = 0;
     counts.sortValue = 0;
     counts.shellRenders = 0;
     virtualizerOptions.length = 0;
@@ -244,6 +288,35 @@ describe('LeadTable render cost (runtime-04)', () => {
     act(() => setTick?.(2));
 
     expect(counts.sortValue).toBe(afterSort);
+  });
+
+  it('a row expand re-derives no other borrower\'s workflow states', () => {
+    render(<LeadTable leads={LEADS} />);
+    expect(new Set(workflowCalls), 'precondition: every row\'s Status cell read its states').toEqual(new Set(IDS));
+    workflowCalls.length = 0;
+    statusCellRenders.length = 0;
+
+    click(container.querySelector(`[aria-label="Toggle preview for lead ${IDS[1]}"]`));
+
+    expect(container.querySelector(`tr[data-borrower-row="${IDS[1]}"]`)?.classList.contains('is-expanded')).toBe(true);
+    expect(workflowCalls, 'non-vacuity: the expanded row re-read its own states').toContain(IDS[1]);
+    expect(workflowCalls.filter((id) => id !== IDS[1])).toEqual([]);
+    expect(statusCellRenders, 'non-vacuity: the expanded row\'s Status cell re-rendered').toContain(IDS[1]);
+    expect(statusCellRenders.filter((id) => id !== IDS[1])).toEqual([]);
+  });
+
+  it('an unrelated AppContext change re-derives no row\'s workflow states', () => {
+    render(<Harness sort={null} />);
+    workflowCalls.length = 0;
+    statusCellRenders.length = 0;
+    const before = counts.shellRenders;
+
+    app.drawer = 'evidence-panel';
+    act(() => setTick?.(1));
+
+    expect(counts.shellRenders, 'precondition: the change re-rendered the table').toBeGreaterThan(before);
+    expect(workflowCalls).toEqual([]);
+    expect(statusCellRenders).toEqual([]);
   });
 
   it('a keystroke in the reject rationale never re-renders the table', () => {

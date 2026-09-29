@@ -56,6 +56,18 @@ describe('Lead Queue write surfaces under the production React Compiler configur
     expect(compiled?.memoSlots).toBeGreaterThan(0);
   }, COMPILE_TIMEOUT_MS);
 
+  // Control: the virtualizer's file reports exactly its pragma and the
+  // incompatible library it exists to contain (runtime-04 slice 3).
+  it('control: LeadTableBody reports exactly its pragma and the incompatible library', () => {
+    const report = analyze(repoPath('LeadTableBody.tsx'));
+
+    expect(report.optOutPragmas).toHaveLength(1);
+    expect(report.compileErrors.map((error) => error.reason)).toEqual([
+      expect.stringContaining('incompatible library'),
+    ]);
+    expect(report.compileSkips).toEqual([]);
+  }, COMPILE_TIMEOUT_MS);
+
   // Non-vacuity control: the pre-rewrite guard (try/finally, no catch) must
   // still bail. If this stops failing, the compiler learned the construct.
   it('control: the pre-rewrite try/finally guard in ApprovalBanner still bails out', () => {

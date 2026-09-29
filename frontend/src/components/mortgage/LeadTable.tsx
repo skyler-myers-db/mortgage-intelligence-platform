@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../Icon';
@@ -16,6 +16,7 @@ import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.co
 import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
 import { sortValue, verifiedCampaignBinding } from './LeadTable.logic';
 import { LeadTableBody } from './LeadTableBody';
+import { useStableRowCallbacks } from './LeadTable.rowCallbacks';
 import { LeadTableHead } from './LeadTableHead';
 import { LeadTableViewControl } from './LeadTableViewControl';
 import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
@@ -106,6 +107,13 @@ export function LeadTable({
   restoreScroll = false,
   headerStatus,
 }: LeadTableProps) {
+  // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
+  // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
+  // 38.44, over its 38 KiB gate). It stays uncompiled with targeted manual
+  // memoization instead: the sort and the id list (useMemo), the row
+  // callbacks (useStableRowCallbacks) and the virtualizer inputs
+  // (LeadTableBody). The chunk reads below rely on this pragma: compiled,
+  // `REVIEW_CHUNK.current()` would be memoized once (the 5451de15 defect).
   'use no memo';
 
   const queryClient = useQueryClient();
@@ -296,15 +304,22 @@ export function LeadTable({
     onInspectEvidence: openReview.mode === 'dialog' ? flow.inspectEvidenceFromDialog : undefined,
   };
   const skipTargetId = `${useId()}-end`;
-  // Row callbacks are made here, once, never per row: a compiled LeadTableRow
-  // then gets identical props (LeadTableBody).
-  const toggleRow = useCallback((row: LeadSummary, open: boolean) => {
-    setLastBorrowerId(row.borrower_id);
-    flow.toggleRow(row, open);
-  }, [setLastBorrowerId, flow]);
-  const toggleSelect = useCallback((borrowerId: string, range: boolean) => (range
-    ? approval.selectRange(borrowerId, rowIds)
-    : approval.toggleSelect(borrowerId)), [approval, rowIds]);
+  // Row callbacks are made here, once, never per row, with one identity for
+  // the table's life: a compiled LeadTableRow then gets identical props
+  // (LeadTableBody) and skips its cells on an expand elsewhere.
+  const rowCallbacks = useStableRowCallbacks({
+    onToggleRow: (row: LeadSummary, open: boolean) => {
+      setLastBorrowerId(row.borrower_id);
+      flow.toggleRow(row, open);
+    },
+    onToggleSelect: (borrowerId: string, range: boolean) => (range
+      ? approval.selectRange(borrowerId, rowIds)
+      : approval.toggleSelect(borrowerId)),
+    onApprove: flow.openReview,
+    onReject: flow.openReject,
+    onOpenDisposition: sales.openDisposition,
+    onAssignmentUpdate: sales.applyLeadUpdate,
+  });
   // An Approve waiting on the review chunk (nothing drafted yet), or a
   // review whose chunk is still rendering in.
   const reviewOpeningFor = flow.reviewLoading
@@ -564,12 +579,7 @@ export function LeadTable({
             reviewSlot={reviewProps && ReviewInline && openReview?.mode === 'inline'
               ? { borrowerId: openReview.borrowerId, node: <ReviewInline {...reviewProps} /> }
               : null}
-            onToggleRow={toggleRow}
-            onToggleSelect={toggleSelect}
-            onApprove={flow.openReview}
-            onReject={flow.openReject}
-            onOpenDisposition={sales.openDisposition}
-            onAssignmentUpdate={sales.applyLeadUpdate}
+            rowCallbacks={rowCallbacks}
           />
         </table>
       </div>

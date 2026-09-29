@@ -8,6 +8,7 @@ import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { LeadTableRow } from './LeadTableRow';
 import { useLeadTableInitialOffset, useLeadTableScroll } from './useLeadTableScroll';
 import type { OutreachDecision } from '../../lib/mutations/outreach';
+import type { LeadRowCallbacks } from './LeadTable.rowCallbacks';
 
 /** The approve review rendered inline in its (expanded) row, when there is one. */
 export interface LeadTableReviewSlot {
@@ -44,12 +45,8 @@ export interface LeadTableBodyProps {
   salesTeamCount: number;
   shortcutsLive: boolean;
   reviewSlot: LeadTableReviewSlot | null;
-  onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
-  onToggleSelect: (borrowerId: string, range: boolean) => void;
-  onApprove: (borrowerId: string) => void;
-  onReject: (borrowerId: string) => void;
-  onOpenDisposition: (borrowerId: string) => void;
-  onAssignmentUpdate: (borrowerId: string, update: Partial<LeadSummary>) => void;
+  /** The shell's row callbacks, one identity for the table's life (useStableRowCallbacks). */
+  rowCallbacks: LeadRowCallbacks;
 }
 
 /**
@@ -94,12 +91,7 @@ export function LeadTableBody({
   salesTeamCount,
   shortcutsLive,
   reviewSlot,
-  onToggleRow,
-  onToggleSelect,
-  onApprove,
-  onReject,
-  onOpenDisposition,
-  onAssignmentUpdate,
+  rowCallbacks,
 }: LeadTableBodyProps) {
   'use no memo';
 
@@ -198,12 +190,12 @@ export function LeadTableBody({
               isCursor={cursorId === lead.borrower_id}
               shortcutsLive={shortcutsLive}
               reviewSlot={isOpen && reviewSlot?.borrowerId === lead.borrower_id ? reviewSlot.node : null}
-              onToggleRow={onToggleRow}
-              onToggleSelect={onToggleSelect}
-              onApprove={onApprove}
-              onReject={onReject}
-              onOpenDisposition={onOpenDisposition}
-              onAssignmentUpdate={onAssignmentUpdate}
+              onToggleRow={rowCallbacks.onToggleRow}
+              onToggleSelect={rowCallbacks.onToggleSelect}
+              onApprove={rowCallbacks.onApprove}
+              onReject={rowCallbacks.onReject}
+              onOpenDisposition={rowCallbacks.onOpenDisposition}
+              onAssignmentUpdate={rowCallbacks.onAssignmentUpdate}
             />
           </tbody>
         );

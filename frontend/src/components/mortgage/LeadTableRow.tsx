@@ -288,6 +288,11 @@ export function LeadTableRow({
     ),
   };
 
+  // Built apart from the <tr> so the compiler keys the cells on their own
+  // inputs: an expand above this row shifts its aria-rowindex, and that
+  // must not re-render every cell (runtime-04 slice 3).
+  const cellNodes = columns.map((column) => <Fragment key={column.key}>{cells[column.key]()}</Fragment>);
+
   return (
     <Fragment>
       <tr
@@ -297,7 +302,7 @@ export function LeadTableRow({
         data-borrower-row={lead.borrower_id}
         onClick={toggleRow}
       >
-        {columns.map((column) => <Fragment key={column.key}>{cells[column.key]()}</Fragment>)}
+        {cellNodes}
       </tr>
       {isOpen && (
         <tr className="tbl__expand" aria-rowindex={resolvedAriaRowIndex + 1}>
