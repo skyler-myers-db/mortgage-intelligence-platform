@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 // @ts-expect-error see node:fs note above.
 import { join } from 'node:path';
 import { designCss } from '../test/designCss';
+import { escapeLayerCount, pushEscapeLayer } from '../lib/escapeStack';
 import {
   SCORE_BAND_HIGH_MIN,
   SCORE_BAND_MED_MIN,
@@ -265,6 +266,50 @@ describe('Equity versus rate spread score-band legend', () => {
       expect(marker!.getAttribute('aria-expanded')).toBe('false');
       expect(panel!.hidden).toBe(true);
       expect(document.activeElement).toBe(marker);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it('puts an open cluster on the Escape stack: a higher layer takes Escape first, then Escape closes it back to the marker (a11y-07)', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const baseline = escapeLayerCount();
+    try {
+      act(() => {
+        root.render(
+          <MemoryRouter>
+            <EquitySpreadPointsView payload={collisionDrilldown} />
+          </MemoryRouter>,
+        );
+      });
+      const marker = container.querySelector<HTMLButtonElement>('.analytics-scatter__cluster-marker')!;
+      const panel = container.querySelector<HTMLElement>('.analytics-scatter__cluster-panel')!;
+      expect(escapeLayerCount()).toBe(baseline);
+      act(() => marker.click());
+      expect(escapeLayerCount()).toBe(baseline + 1);
+
+      // A layer opened above the cluster (a drawer, the palette) takes the key.
+      let higherTook = 0;
+      const popHigher = pushEscapeLayer(() => {
+        higherTook += 1;
+      });
+      const escape = () => act(() => {
+        (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      });
+      panel.querySelector<HTMLAnchorElement>('a')?.focus();
+      escape();
+      expect(higherTook).toBe(1);
+      expect(panel.hidden).toBe(false);
+      popHigher();
+
+      escape();
+      expect(panel.hidden).toBe(true);
+      expect(marker.getAttribute('aria-expanded')).toBe('false');
+      expect(document.activeElement).toBe(marker);
+      expect(escapeLayerCount()).toBe(baseline);
     } finally {
       act(() => root.unmount());
       container.remove();

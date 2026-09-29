@@ -3,6 +3,8 @@
 'use no memo';
 
 import {
+  useEffect,
+  useEffectEvent,
   useId,
   useRef,
   useState,
@@ -14,6 +16,7 @@ import { Link } from 'react-router';
 import { EvidenceChip } from '../components/Primitives';
 import { api, type AnalyticsQueryOptions } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { pushEscapeLayer } from '../lib/escapeStack';
 import {
   SCORE_BAND_HIGH_MIN,
   SCORE_BAND_MED_MIN,
@@ -502,6 +505,19 @@ function ScatterPointCluster({
       ? 'analytics-scatter__cluster--align-end'
       : '';
   const vertical = position.yPct > 58 ? 'analytics-scatter__cluster--above' : '';
+  // An open cluster panel is the topmost Escape layer (lib/escapeStack.ts,
+  // a11y-07): Escape closes it and returns focus to its marker, and a layer
+  // opened above it (a drawer, the palette) takes Escape first.
+  const dismiss = useEffectEvent(() => {
+    onOpenChange(false);
+    markerRef.current?.focus();
+  });
+  useEffect(() => {
+    if (!open) return;
+    return pushEscapeLayer(() => {
+      dismiss();
+    });
+  }, [open]);
   return (
     <div
       className={`analytics-scatter__cluster ${alignment} ${vertical}`}
@@ -509,12 +525,6 @@ function ScatterPointCluster({
         '--dot-x': `${position.xPct}%`,
         '--dot-y': `${position.yPct}%`,
       } as CSSProperties}
-      onKeyDown={(event) => {
-        if (event.key !== 'Escape' || !open) return;
-        event.preventDefault();
-        onOpenChange(false);
-        markerRef.current?.focus();
-      }}
     >
       <button
         ref={markerRef}
