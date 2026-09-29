@@ -7,7 +7,7 @@
  * the table view and the frame's live region carry the same values to
  * assistive technology.
  */
-import type { CSSProperties, ReactNode, RefObject } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { ChartCursorSurfaceProps } from './useChartCursor';
 
 export interface ChartTooltipPoint {
@@ -24,20 +24,17 @@ const FLIP_AT_PCT = 60;
 
 export function ChartTooltip({
   point,
-  surfaceRef,
   surfaceProps,
   crosshair = true,
 }: {
   point: ChartTooltipPoint | null;
-  /** The pointer surface: omitted where the marks take the pointer themselves (the scatter). */
-  surfaceRef?: RefObject<HTMLDivElement | null>;
+  /** The pointer surface's handlers: omitted where the marks take the pointer themselves (the scatter). */
   surfaceProps?: ChartCursorSurfaceProps;
   crosshair?: boolean;
 }) {
   const at = point ? ({ '--hover-x': `${point.x}%`, '--hover-y': `${point.y}%` } as CSSProperties) : undefined;
   return (
     <div
-      ref={surfaceRef}
       className={`analytics-chart__hover${surfaceProps ? '' : ' analytics-chart__hover--passive'}`}
       aria-hidden="true"
       {...surfaceProps}

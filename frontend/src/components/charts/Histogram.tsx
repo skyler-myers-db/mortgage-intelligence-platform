@@ -164,7 +164,6 @@ export function Histogram({
                 label: formatRange(active.start),
                 value: `${formatCount(active.count)} ${unit}`,
               } : null}
-              surfaceRef={cursor.surfaceRef}
               surfaceProps={cursor.surfaceProps}
             />
             <div className="analytics-chart__x-ticks" aria-hidden="true">

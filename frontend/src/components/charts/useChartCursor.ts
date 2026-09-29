@@ -10,9 +10,9 @@
  *    focus alone announces nothing (the plot's description already speaks).
  *
  * `positions` are the points' x in percent (0-100) of the surface the
- * pointer handlers are attached to.
+ * pointer handlers are attached to (the tooltip layer, which spans the plot).
  */
-import { useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
+import { useState, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react';
 
 export interface ChartCursorPlotProps {
   tabIndex: 0;
@@ -29,7 +29,6 @@ export interface ChartCursorSurfaceProps {
 export interface ChartCursor {
   index: number | null;
   liveIndex: number | null;
-  surfaceRef: RefObject<HTMLDivElement | null>;
   surfaceProps: ChartCursorSurfaceProps;
   plotProps: ChartCursorPlotProps;
 }
@@ -49,14 +48,13 @@ export function nearestIndex(positions: readonly number[], pct: number): number 
 }
 
 export function useChartCursor(count: number, positions: readonly number[]): ChartCursor {
-  const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [keyIndex, setKeyIndex] = useState<number | null>(null);
   const [liveIndex, setLiveIndex] = useState<number | null>(null);
 
   const onPointerMove = (event: PointerEvent<HTMLElement>) => {
     if (count <= 0 || positions.length === 0) return;
-    const rect = (surfaceRef.current ?? event.currentTarget).getBoundingClientRect();
+    const rect = event.currentTarget.getBoundingClientRect();
     if (rect.width === 0) return;
     setHoverIndex(nearestIndex(positions, ((event.clientX - rect.left) / rect.width) * 100));
   };
@@ -89,7 +87,6 @@ export function useChartCursor(count: number, positions: readonly number[]): Cha
   return {
     index: clampIndex(hoverIndex ?? keyIndex, count),
     liveIndex: clampIndex(liveIndex, count),
-    surfaceRef,
     surfaceProps: { onPointerMove, onPointerLeave: () => setHoverIndex(null) },
     plotProps: { tabIndex: 0, onKeyDown, onFocus, onBlur },
   };
