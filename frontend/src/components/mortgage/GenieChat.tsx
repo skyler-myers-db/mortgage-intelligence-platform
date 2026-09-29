@@ -109,7 +109,7 @@ const NO_STARTERS: string[] = [];
 const ACTION_REASON = 'A governed action is running. Ask unlocks when it finishes.';
 
 export function GenieChat() {
-  const { genieOpen, setGenieOpen, lender, refreshWorkspace } = useApp();
+  const { genieOpen, setGenieOpen, lender, refreshWorkspace, consoleOpen } = useApp();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   // The settled transcript and the in-flight turn are two external stores
@@ -196,6 +196,9 @@ export function GenieChat() {
     };
   }, []);
 
+  // The panel element: a drag or resize moves it directly (useGenieWindow,
+  // audit runtime-v1), and the dismissal hook reads it below.
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const {
     effectiveSize,
     position: pos,
@@ -207,7 +210,7 @@ export function GenieChat() {
     onDragPointerMove,
     onDragPointerUp,
     redock: onDragDoubleClick,
-  } = useGenieWindow({ open: genieOpen });
+  } = useGenieWindow({ open: genieOpen, panelRef, consoleOpen });
 
   // R5-12 (2026-04-23): dialog a11y. Mirrors the EvidenceDrawer pattern
   // — initial focus lands on the input, ESC closes, focus restores to
@@ -216,7 +219,6 @@ export function GenieChat() {
   // Tab: the floating panel is a non-modal dialog, and the rest of the
   // workspace stays interactive while it is open.
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
   const fabRef = useRef<HTMLButtonElement | null>(null);
   const lastAnswerRef = useRef<HTMLDivElement | null>(null);
   const closePanel = useCallback(() => setGenieOpen(false), [setGenieOpen]);
