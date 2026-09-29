@@ -48,6 +48,7 @@ import {
 } from '../../lib/genieInFlightTurn';
 import {
   GENIE_LAUNCHER_STATUS_ID,
+  claimGenieLauncherStatus,
   genieLauncherStateClass,
   genieLauncherStatusText,
   setGenieTurnStatus,
@@ -136,8 +137,16 @@ export function GenieChat() {
   }, [genieOpen]);
 
   // The store owns the turn, so unmounting stops nothing; only the launcher
-  // signal this panel drives goes back to idle.
-  useEffect(() => () => setGenieTurnStatus('idle'), []);
+  // signal this panel drives goes back to idle. While mounted the panel
+  // holds the signal's claim, so the pre-open writer (lib/genieLauncherSignal)
+  // stays quiet.
+  useEffect(() => {
+    const release = claimGenieLauncherStatus();
+    return () => {
+      release();
+      setGenieTurnStatus('idle');
+    };
+  }, []);
   // A reload may have interrupted a turn: resume it, once per page.
   useEffect(() => {
     resumeGenieTurnFromSession();
@@ -304,9 +313,10 @@ export function GenieChat() {
       : unseen
         ? 'ready'
         : 'idle';
+  const launcherOutcome = unseen ?? 'answered';
   useEffect(() => {
-    setGenieTurnStatus(launcherStatus);
-  }, [launcherStatus]);
+    setGenieTurnStatus(launcherStatus, launcherOutcome);
+  }, [launcherStatus, launcherOutcome]);
 
   /**
    * Start a turn. `startedAt` is the moment of the user's action and is read
@@ -455,7 +465,7 @@ export function GenieChat() {
           polite announcer (audit `a11y-06`). The elapsed ticker is nowhere
           near it. */}
       <span id={GENIE_LAUNCHER_STATUS_ID} className="sr-only">
-        {genieLauncherStatusText(launcherStatus, unseen ?? 'answered')}
+        {genieLauncherStatusText(launcherStatus, launcherOutcome)}
       </span>
       <GenieAnnouncerRegion surface="panel" visible={genieOpen} />
       <button

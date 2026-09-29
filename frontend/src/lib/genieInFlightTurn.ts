@@ -629,8 +629,8 @@ export function stopGenieTurn(): string | null {
 
 /**
  * Resume a turn a reload interrupted. Runs once per page, from the first
- * Genie surface to mount (never at module evaluation: the chunk is
- * idle-preloaded without a surface).
+ * resuming surface: the shell (GenieDock, via lib/genieLauncherSignal, when a
+ * record exists), the panel or /ask-genie. Never at module evaluation.
  */
 export function resumeGenieTurnFromSession(): void {
   if (resumeChecked) return;

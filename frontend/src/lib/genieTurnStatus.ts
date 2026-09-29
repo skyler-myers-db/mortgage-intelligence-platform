@@ -13,10 +13,15 @@ import { useSyncExternalStore } from 'react';
  * This is a status SIGNAL, not the in-flight turn itself: the turn (its
  * promise, progress, persisted record and abort controller) lives in the lazy
  * in-flight turn store (lib/genieInFlightTurn.ts, wave 2 `runtime-01`), which
- * this initial-chunk module deliberately does not import. The panel drives
- * this signal from the store, because the launchers' `aria-describedby`
- * target lives in GenieChat; a route turn started before the panel's first
- * mount therefore shows no ring (declared gap).
+ * this initial-chunk module deliberately does not import. Two writers, never
+ * at once (audit `genie-02` item 2, Genie residual #2):
+ *   - the mounted panel (GenieChat) claims the signal and drives it;
+ *   - before the panel's first mount, the lazy lib/genieLauncherSignal
+ *     drives it from the store: the shell loads it when a reload left a turn
+ *     to resume, and /ask-genie when it mounts, so a turn resumed on any
+ *     route, or started on the route, rings the launchers.
+ * The launchers' `aria-describedby` target is GenieDock's until the panel
+ * mounts, then GenieChat's.
  *
  *   idle    — nothing to tell the user (no turn, or the panel is open)
  *   running — a turn is in flight while the panel is closed
@@ -31,16 +36,40 @@ export type GenieLauncherOutcome = 'answered' | 'withheld' | 'failed';
 export const GENIE_LAUNCHER_STATUS_ID = 'genie-launcher-status';
 
 let status: GenieTurnStatus = 'idle';
+let outcome: GenieLauncherOutcome = 'answered';
+let claims = 0;
 const listeners = new Set<() => void>();
 
 export function getGenieTurnStatus(): GenieTurnStatus {
   return status;
 }
 
-export function setGenieTurnStatus(next: GenieTurnStatus): void {
-  if (next === status) return;
+/** How the unseen turn ended ('answered' unless the status is 'ready'). */
+export function getGenieLauncherOutcome(): GenieLauncherOutcome {
+  return outcome;
+}
+
+export function setGenieTurnStatus(next: GenieTurnStatus, nextOutcome: GenieLauncherOutcome = 'answered'): void {
+  if (next === status && nextOutcome === outcome) return;
   status = next;
+  outcome = nextOutcome;
   for (const listener of listeners) listener();
+}
+
+/** The mounted panel claims the signal: the store-driven writer then writes
+ *  nothing. Returns the release. */
+export function claimGenieLauncherStatus(): () => void {
+  claims += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    claims -= 1;
+  };
+}
+
+export function isGenieLauncherStatusClaimed(): boolean {
+  return claims > 0;
 }
 
 export function subscribeGenieTurnStatus(listener: () => void): () => void {
@@ -52,6 +81,10 @@ export function subscribeGenieTurnStatus(listener: () => void): () => void {
 
 export function useGenieTurnStatus(): GenieTurnStatus {
   return useSyncExternalStore(subscribeGenieTurnStatus, getGenieTurnStatus, getGenieTurnStatus);
+}
+
+export function useGenieLauncherOutcome(): GenieLauncherOutcome {
+  return useSyncExternalStore(subscribeGenieTurnStatus, getGenieLauncherOutcome, getGenieLauncherOutcome);
 }
 
 /** State class shared by both launchers (`.genie__fab`, `.topbar__icon-btn`). */

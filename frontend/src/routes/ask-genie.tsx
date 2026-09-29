@@ -30,6 +30,7 @@ import {
   startGenieTurn,
   subscribeGenieTurnSettled,
 } from '../lib/genieInFlightTurn';
+import { ensureGenieLauncherSignal } from '../lib/genieLauncherSignal';
 import { genieStartQueryOptions } from '../lib/genieStartQuery';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 import { GrowthAgentMonitorsPanel } from './ask-genie.growth-agent-monitors';
@@ -103,8 +104,11 @@ export default function AskGenie() {
   const trustedAssets = trustedAssetsForCatalog(genieStartQuery.data?.trusted_assets);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
 
-  // A reload may have interrupted a turn: resume it, once per page.
+  // The launchers ring for a turn asked here even before the floating panel
+  // first mounts (Genie residual #2), and a reload may have interrupted a
+  // turn: resume it, once per page.
   useEffect(() => {
+    ensureGenieLauncherSignal();
     resumeGenieTurnFromSession();
   }, []);
 
