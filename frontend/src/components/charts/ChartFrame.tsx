@@ -42,11 +42,9 @@ export function ChartFrame({
   return (
     <figure className="chart-frame">
       <figcaption id={summaryId} className="chart-frame__summary">{summary}</figcaption>
-      <div className="chart-frame__toolbar">
-        <button type="button" className="btn btn--sm chart-frame__toggle" onClick={() => setAsTable((current) => !current)}>
-          {asTable ? 'View as chart' : 'View as table'}
-        </button>
-      </div>
+      <button type="button" className="btn btn--sm chart-frame__toggle" onClick={() => setAsTable((current) => !current)}>
+        {asTable ? 'View as chart' : 'View as table'}
+      </button>
       {asTable ? (
         <div className="chart-frame__table">{table}</div>
       ) : (

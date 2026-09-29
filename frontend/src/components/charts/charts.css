@@ -17,7 +17,7 @@
   font-size: var(--fs-12);
   line-height: var(--lh-snug);
 }
-.chart-frame__toolbar {
+.chart-frame__toggle {
   grid-column: 2;
 }
 .chart-frame__plot,
