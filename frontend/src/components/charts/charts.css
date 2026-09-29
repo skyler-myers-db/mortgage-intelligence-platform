@@ -33,16 +33,6 @@
   margin: 0;
 }
 
-/* The kit's value axes (dataviz-07): the y-tick column is exactly the plot's
-   height, so each label sits on its own gridline. The shared column stretches
-   to the canvas row, which adds the x-tick band below the plot, and the same
-   --tick-pos then landed up to 29px below its gridline. Scoped to the frame:
-   the scatter and the rate window keep their own axes. */
-.chart-frame .analytics-chart__y-ticks {
-  align-self: start;
-  block-size: var(--analytics-chart-h);
-}
-
 /* Edge-anchored x ticks (stack-06): the first label starts at the plot's
    left edge and the last ends at its right edge instead of centring on the
    edge, where the last evidence date spilled past its surface. Doubled with

@@ -208,9 +208,15 @@
   min-height: var(--analytics-chart-h);
   padding-block-end: var(--sp-6);
 }
+/* The y-tick column is exactly the plot's height, top-aligned, so each label
+   and its gridline share one --tick-pos space (dataviz-07). Stretched to the
+   canvas row, it took the x-tick band below the plot as well, and a label
+   landed up to about 30px below its gridline on the kit charts, the equity
+   scatter and the rate window's in-the-money panel. */
 .analytics-chart__y-ticks {
   position: relative;
-  min-block-size: var(--analytics-chart-h);
+  align-self: start;
+  block-size: var(--analytics-chart-h);
   color: var(--text-1);
   font-family: var(--font-mono);
   font-size: var(--fs-12);

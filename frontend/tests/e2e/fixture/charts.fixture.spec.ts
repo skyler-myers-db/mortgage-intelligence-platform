@@ -146,38 +146,51 @@ test.describe('analytics charts: 1-2-5 axes', () => {
 /**
  * Each y label's vertical centre minus its gridline's, top to bottom (px).
  * Both lists sort by position, so the Nth label pairs with the Nth gridline.
+ * Only horizontal gridlines count: the scatter also draws vertical ones.
  */
-async function yLabelOffsets(figure: Locator): Promise<number[]> {
-  return figure.evaluate((fig) => {
+async function yLabelOffsets(chart: Locator): Promise<number[]> {
+  return chart.evaluate((root) => {
     const centre = (el: Element) => {
       const box = el.getBoundingClientRect();
       return box.top + box.height / 2;
     };
-    const labels = [...fig.querySelectorAll('.analytics-chart__tick--y')].map(centre).sort((a, b) => a - b);
-    const grid = [...fig.querySelectorAll('line.analytics-chart__grid')].map(centre).sort((a, b) => a - b);
+    const labels = [...root.querySelectorAll('.analytics-chart__tick--y')].map(centre).sort((a, b) => a - b);
+    const grid = [...root.querySelectorAll('line.analytics-chart__grid')]
+      .filter((line) => line.getAttribute('y1') === line.getAttribute('y2'))
+      .map(centre)
+      .sort((a, b) => a - b);
     if (labels.length !== grid.length) throw new Error(`${labels.length} y labels for ${grid.length} gridlines`);
     return labels.map((label, idx) => Math.round((label - grid[idx]) * 10) / 10);
   });
 }
 
-/** The kit's value-axis charts and the tab each sits on. */
-const VALUE_AXIS_CHARTS = [
-  { title: 'Opportunity Score Distribution', path: '/analytics' },
-  { title: 'Rate Spread Distribution', path: '/analytics?view=economics' },
-  { title: 'Evidence Events Per Day', path: '/analytics?view=signals' },
-] as const;
+/**
+ * Every value axis on the Analytics tabs and the tab it sits on: the kit's
+ * three charts, the equity scatter and both rate-window panels share the
+ * y-tick column.
+ */
+const VALUE_AXES: ReadonlyArray<{ title: string; path: string; locate: (page: Page) => Locator }> = [
+  { title: 'Opportunity Score Distribution', path: '/analytics', locate: (page) => figureOf(page, 'Opportunity Score Distribution') },
+  { title: 'Rate window: 30-year fixed', path: '/analytics', locate: (page) => page.getByTestId('rate-window-rates') },
+  { title: 'Rate window: liens in the money', path: '/analytics', locate: (page) => page.getByTestId('rate-window-itm') },
+  { title: 'Rate Spread Distribution', path: '/analytics?view=economics', locate: (page) => figureOf(page, 'Rate Spread Distribution') },
+  { title: 'Equity vs Rate Spread', path: '/analytics?view=economics', locate: (page) => page.locator('.analytics-scatter-wrap').first() },
+  { title: 'Evidence Events Per Day', path: '/analytics?view=signals', locate: (page) => figureOf(page, 'Evidence Events Per Day') },
+];
 
 test.describe('analytics charts: y labels on their gridlines (dataviz-07)', () => {
   for (const theme of ['dark', 'light'] as const) {
-    test(`${theme}: every y label of the score, spread and evidence charts sits within 1px of its gridline`, async ({ app, page }) => {
+    test(`${theme}: every y label of the kit charts, the equity scatter and the rate window sits within 1px of its gridline`, async ({ app, page }) => {
       await app.setTheme(theme);
-      for (const chart of VALUE_AXIS_CHARTS) {
-        await app.gotoRoute(chart.path);
-        const figure = figureOf(page, chart.title);
-        await expect(figure.locator('line.analytics-chart__grid').first()).toBeAttached();
-        const offsets = await yLabelOffsets(figure);
-        expect(offsets.length, `${chart.title} draws a y axis`).toBeGreaterThanOrEqual(3);
-        expect(offsets.filter((offset) => Math.abs(offset) > 1), `${chart.title} label - gridline offsets (px): ${offsets.join(', ')}`).toEqual([]);
+      let path = '';
+      for (const axis of VALUE_AXES) {
+        if (axis.path !== path) await app.gotoRoute(axis.path);
+        path = axis.path;
+        const chart = axis.locate(page);
+        await expect(chart.locator('line.analytics-chart__grid').first()).toBeAttached();
+        const offsets = await yLabelOffsets(chart);
+        expect(offsets.length, `${axis.title} draws a y axis`).toBeGreaterThanOrEqual(3);
+        expect(offsets.filter((offset) => Math.abs(offset) > 1), `${axis.title} label - gridline offsets (px): ${offsets.join(', ')}`).toEqual([]);
       }
     });
   }

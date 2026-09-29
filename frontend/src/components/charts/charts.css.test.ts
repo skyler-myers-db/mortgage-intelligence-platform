@@ -2,8 +2,9 @@
  * Source pins for the chart kit's CSS contracts (2026-09-21 audit stack-06,
  * motion-08). The rendered proofs are tests/e2e/fixture/charts.fixture.spec.ts.
  *
- *  - The frame's y-tick column is the plot's height, so a label and its
- *    gridline share one --tick-pos space (dataviz-07).
+ *  - The shared y-tick column is the plot's height, so a label and its
+ *    gridline share one --tick-pos space (dataviz-07) on the kit charts, the
+ *    equity scatter and the rate window alike.
  *  - Edge-anchored x ticks: the first label starts at the plot's left edge,
  *    the last ends at its right edge, instead of centring on the edge.
  *  - The analytics bars move by translating a full-width fill inside the
@@ -35,11 +36,13 @@ describe('chart kit CSS (charts.css)', () => {
     expect(chartsCss).toContain('.chart-frame');
   });
 
-  it("gives the frame's y-tick column the plot's height, not the canvas row's, so each label sits on its gridline", () => {
-    expect(rule(chartsCss, '.chart-frame .analytics-chart__y-ticks')).toEqual({
-      'align-self': 'start',
-      'block-size': 'var(--analytics-chart-h)',
-    });
+  it("gives the shared y-tick column the plot's height, not the canvas row's, so each label sits on its gridline", () => {
+    const yTicks = rule(designCss(), '.analytics-chart__y-ticks');
+    expect(yTicks['align-self']).toBe('start');
+    expect(yTicks['block-size']).toBe('var(--analytics-chart-h)');
+    expect(yTicks).not.toHaveProperty('min-block-size');
+    // One rule for every consumer: the kit sheet no longer scopes its own.
+    expect(chartsCss).not.toContain('.analytics-chart__y-ticks');
   });
 
   it('anchors the first x tick at the left edge and the last at the right edge', () => {
