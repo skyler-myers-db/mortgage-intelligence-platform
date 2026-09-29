@@ -20,6 +20,7 @@ import { useStableRowCallbacks } from './LeadTable.rowCallbacks';
 import { LeadTableHead } from './LeadTableHead';
 import { LeadTableViewControl } from './LeadTableViewControl';
 import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
+import { LeadBulkRunProgressFallback, LeadBulkRunResultFallback } from './LeadBulkRunFallback';
 import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
 import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyboardHint';
@@ -664,9 +665,12 @@ export function LeadTable({
           shortcutsLive={singleKeysOn}
           samplesShown={samplesShown}
           runKind={bulkRun.progress?.kind ?? null}
-          runStatus={bulkRun.progress && BulkRunProgress
-            ? <BulkRunProgress progress={bulkRun.progress} onStop={bulkRun.requestStop} />
-            : null}
+          runStatus={!bulkRun.progress
+            ? null
+            : BulkRunProgress
+              ? <BulkRunProgress progress={bulkRun.progress} onStop={bulkRun.requestStop} />
+              // The bulk chunk failed to load: a static line still counts and stops the run.
+              : bulkChunk.failed && <LeadBulkRunProgressFallback progress={bulkRun.progress} onStop={bulkRun.requestStop} />}
           gateReview={BulkReview ? (
             <BulkReview
               // Samples drafted under one campaign binding go with it.
@@ -682,9 +686,9 @@ export function LeadTable({
           ) : null}
         />
       )}
-      {bulkRun.result && BulkRunResult && (
-        <BulkRunResult result={bulkRun.result} onDismiss={bulkRun.dismissResult} />
-      )}
+      {bulkRun.result && (BulkRunResult
+        ? <BulkRunResult result={bulkRun.result} onDismiss={bulkRun.dismissResult} />
+        : bulkChunk.failed && <LeadBulkRunResultFallback result={bulkRun.result} onDismiss={bulkRun.dismissResult} />)}
       {approval.bulkToast && (
         <LeadTableBulkToast
           toast={approval.bulkToast}
