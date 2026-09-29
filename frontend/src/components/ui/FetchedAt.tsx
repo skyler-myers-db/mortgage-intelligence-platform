@@ -15,7 +15,10 @@ import './FetchedAt.css';
  * control); colocated CSS, lazy with the routes that show it.
  */
 interface FetchedAtProps {
-  /** When the view's rows were fetched (epoch ms); null renders nothing. */
+  /**
+   * When the view's rows were fetched (epoch ms), or null when the current
+   * key has no fetch of its own; null renders nothing unless a read is in flight.
+   */
   at: number | null;
   /** What Refresh re-reads, for its accessible name: "ranked borrowers". */
   subject: string;
@@ -24,12 +27,19 @@ interface FetchedAtProps {
 }
 
 export function FetchedAt({ at, subject, isFetching, onRefresh }: FetchedAtProps) {
-  if (at === null) return null;
+  // A filter change keeps the previous rows as placeholder data, and the new
+  // key has no fetch time yet (at === null). Unmounting then dropped the
+  // header row to the title's height and moved everything under the table
+  // (the Segment Intelligence map) 9px up and back down when the rows landed
+  // (layout-stability.spec.ts). The in-flight read keeps its "Refreshing…" button.
+  if (at === null && !isFetching) return null;
   return (
     <span className="fetched-at" data-testid="fetched-at">
-      <span className="fetched-at__label">
-        Fetched <Timestamp value={at} relativeStyle="narrow" />
-      </span>
+      {at !== null && (
+        <span className="fetched-at__label">
+          Fetched <Timestamp value={at} relativeStyle="narrow" />
+        </span>
+      )}
       <RefreshButton subject={subject} isFetching={isFetching} onRefresh={onRefresh} />
     </span>
   );

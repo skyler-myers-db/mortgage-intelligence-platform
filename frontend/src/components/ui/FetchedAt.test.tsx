@@ -57,4 +57,19 @@ describe('FetchedAt', () => {
     act(() => root.render(<FetchedAt at={null} subject="ranked borrowers" isFetching={false} onRefresh={vi.fn()} />));
     expect(document.querySelector('.fetched-at')).toBeNull();
   });
+
+  it('keeps the disabled "Refreshing…" control, without an age, while a new key is read', () => {
+    // keepPreviousData: the previous rows stay on screen and the new key has
+    // no fetch time yet. Unmounting here collapsed the table header by the
+    // button's height, so everything under the table jumped (layout-stability.spec.ts).
+    const refresh = vi.fn();
+    act(() => root.render(<FetchedAt at={T0} subject="ranked borrowers" isFetching={false} onRefresh={refresh} />));
+    act(() => root.render(<FetchedAt at={null} subject="ranked borrowers" isFetching onRefresh={refresh} />));
+    expect(document.querySelector('[data-testid="fetched-at"]')).not.toBeNull();
+    expect(document.querySelector('.fetched-at__label')).toBeNull();
+    expect(button()?.getAttribute('aria-disabled')).toBe('true');
+    expect(button()?.textContent).toBe('Refreshing…');
+    act(() => button()?.click());
+    expect(refresh).not.toHaveBeenCalled();
+  });
 });
