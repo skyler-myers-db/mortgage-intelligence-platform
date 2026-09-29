@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Borrower360, BorrowerLifecycle, OfferRecommendation, SalesTeamMember } from '../types';
 import type { OutreachDraftResult } from '../lib/apiTypes';
 import { clearQueueContext, storeQueueContext } from '../lib/queueContext';
+import { isDecisionPending, outreachMutationKeys } from '../lib/mutations/outreach';
 
 const apiMocks = vi.hoisted(() => ({
   borrower: vi.fn(),
@@ -456,6 +457,38 @@ describe('Offer Orchestrator writes', () => {
     });
     await waitUntil(() => appMocks.approvals[ID] === 'approved');
     expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+  });
+
+  it('never sends a decision while another surface holds one on the wire for this borrower (the mutation latch)', async () => {
+    // ApprovalBanner's own latch only stops a same-tick double click on THIS
+    // button. The route's latch is the query layer's: a Lead Queue approve
+    // for the same borrower (same outreach mutation keys) is still pending.
+    mount();
+    await waitUntil(() => loaded());
+    let releaseQueueWrite: (value: unknown) => void = () => undefined;
+    const queueWrite = queryClient.getMutationCache().build(queryClient, {
+      mutationKey: outreachMutationKeys.approve,
+      mutationFn: () => new Promise((resolve) => {
+        releaseQueueWrite = resolve;
+      }),
+    });
+    void queueWrite.execute({ decision: 'approve', borrowerId: ID, requestId: 'lead-queue-request' });
+    expect(isDecisionPending(queryClient, ID)).toBe(true);
+    await act(async () => {
+      button('Approve outreach').click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(apiMocks.approve).not.toHaveBeenCalled();
+    await act(async () => {
+      releaseQueueWrite({ approved: true });
+    });
+    await waitUntil(() => !isDecisionPending(queryClient, ID));
+    await act(async () => {
+      button('Approve outreach').click();
+    });
+    await waitUntil(() => apiMocks.approve.mock.calls.length === 1);
   });
 
   it('Approve and Confirm reject stay disabled while this open re-reads a hydrated snapshot', async () => {
