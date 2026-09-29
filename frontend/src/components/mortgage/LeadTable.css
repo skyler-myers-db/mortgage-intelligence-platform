@@ -106,6 +106,13 @@
   margin-block-start: var(--sp-1);
 }
 
+/* The expanded row's approval banner (audit tables-01) sits under the
+   Primary offer card, as the prototype places it (design_files/Module 0
+   Prototype.html:1981-1986). Declared departure: the prototype's `.approval`
+   is one no-wrap row; in the preview's third column (~380px with the Console
+   open) its actions wrap under the copy instead of squeezing it. */
+.tbl__expand-inner--lead .approval { flex-wrap: wrap; }
+
 /* Expanded row: the workflow strip that took the row's timestamps,
    lifecycle-advance control and Log button. Pinned to the scrollport's
    start edge like the preview above it. */

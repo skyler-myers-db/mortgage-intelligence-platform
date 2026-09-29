@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useRef, type CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
@@ -22,6 +22,13 @@ import { dispositionLabel, outreachLabel } from './LeadTable.logic';
 // Queue's route closure (budget, wave 3). The row's status chip states the
 // outcome meanwhile, and the receipt reads nothing before it mounts.
 const RECEIPT_CHUNK = lazyModule(() => import('./DecisionReceipt'));
+// The row's approval banner (tables-01) is the prototype ApprovalBanner, which
+// Offer Orchestrator ships in its own route chunk. A static import here moved
+// it into a chunk shared with both queue routes (+1.06 KiB br on each route
+// closure, measured); loaded on the first eligible expand instead (an expand
+// already warms Offer Orchestrator's route code, which carries it), it adds
+// nothing to their natural-load closures. Code only: the banner reads nothing.
+const BANNER_CHUNK = lazyModule(() => import('./ApprovalBanner'));
 
 /**
  * id of the expanded row's receipt block: the queue's "View receipt" toast
@@ -29,6 +36,27 @@ const RECEIPT_CHUNK = lazyModule(() => import('./DecisionReceipt'));
  */
 export function leadReceiptAnchorId(borrowerId: string): string {
   return `lead-receipt-${borrowerId}`;
+}
+
+/**
+ * The expanded row's approval gate (audit tables-01): the prototype's
+ * ApprovalBanner under the Primary offer card (design_files/Module 0
+ * Prototype.html:1981-1986). The row passes it only while this row can
+ * still be approved from here: eligible, no terminal approval, no decision
+ * receipt, and no approve review open or opening for it (two `.approval`
+ * gates never stack). Its Approve is the row's Approve (it opens the
+ * review, which drafts on that explicit intent); it never approves or
+ * drafts by itself, and it reads nothing.
+ */
+export interface RowPreviewApprovalGate {
+  /** Non-null = the actor may not approve: a visible, disabled gate with this reason. */
+  approverGate: string | null;
+  /** The campaign binding blocks decisions (the row's buttons are disabled too). */
+  blocked: boolean;
+  /** An approve or reject for this row is on the wire. */
+  submitting: boolean;
+  onApprove: (borrowerId: string) => void;
+  onReject: (borrowerId: string) => void;
 }
 
 /**
@@ -45,18 +73,24 @@ export function leadReceiptAnchorId(borrowerId: string): string {
  *   read-back is refused or fails.
  *   The reveal plays once per decision: after it has played, a collapse +
  *   re-expand renders the receipt finished (motion-06).
+ * @param approvalGate The row's approval banner, or null when it must not show.
  */
 export function RowPreview({
   lead,
   approval,
   decisionReceipt = null,
+  approvalGate = null,
 }: {
   lead: LeadSummary;
   approval?: string;
   decisionReceipt?: LeadDecisionReceipt | null;
+  approvalGate?: RowPreviewApprovalGate | null;
 }) {
-  const { setLastBorrowerId, saveLead, isLeadSaved } = useApp();
-  const DecisionReceipt = useLazyModule(RECEIPT_CHUNK, Boolean(decisionReceipt?.auditEventId)).module?.DecisionReceipt;
+  const { setLastBorrowerId, saveLead, isLeadSaved, actorEmail } = useApp();
+  const gateRef = useRef<HTMLDivElement | null>(null);
+  const receiptChunk = useLazyModule(RECEIPT_CHUNK, Boolean(decisionReceipt?.auditEventId));
+  const DecisionReceipt = receiptChunk.module?.DecisionReceipt;
+  const ApprovalBanner = useLazyModule(BANNER_CHUNK, approvalGate !== null).module?.ApprovalBanner;
   const queueLinkState = useQueueLinkState(); // shell-04: dossier crumbs + pager
   // Prefer the display-safe Cotality property ref projected by the
   // backend. Raw CLIP is masked server-side for public demo safety.
@@ -215,6 +249,25 @@ export function RowPreview({
             </Button>
           </div>
         </div>
+        {approvalGate && ApprovalBanner && (
+          <div ref={gateRef} className="mt-3" data-testid={`lead-row-approval-${lead.borrower_id}`}>
+            <ApprovalBanner
+              text={`Approve ${lead.borrower_id} for outreach? Nothing is sent until you approve.`}
+              onApprove={() => {
+                // The banner unmounts as the review opens: keep the keyboard
+                // in the table so the drafted review's Confirm can take focus.
+                gateRef.current?.closest<HTMLElement>('.tbl-wrap')?.focus({ preventScroll: true });
+                approvalGate.onApprove(lead.borrower_id);
+              }}
+              onReject={() => approvalGate.onReject(lead.borrower_id)}
+              isSubmitting={approvalGate.submitting}
+              approverGate={approvalGate.approverGate}
+              approveDisabled={approvalGate.blocked}
+              rejectDisabled={approvalGate.blocked}
+              actorEmail={actorEmail}
+            />
+          </div>
+        )}
       </div>
     </div>
     </>

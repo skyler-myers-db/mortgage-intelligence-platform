@@ -577,6 +577,8 @@ export function LeadTable({
             reviewSlot={reviewProps && ReviewInline && openReview?.mode === 'inline'
               ? { borrowerId: openReview.borrowerId, node: <ReviewInline {...reviewProps} /> }
               : null}
+            // From the flow state, not from whether the review chunk rendered.
+            reviewBorrowerId={openReview?.borrowerId ?? flow.reviewLoading}
             rowCallbacks={rowCallbacks}
           />
         </table>

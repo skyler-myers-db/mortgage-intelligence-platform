@@ -52,6 +52,11 @@ interface LeadTableRowProps {
   shortcutsLive?: boolean;
   /** The approve review, when it is open inline for this (expanded) row. */
   reviewSlot?: ReactNode;
+  /**
+   * An approve review is open or opening for this row (any mode): its
+   * preview's approval banner stands down, so two gates never stack.
+   */
+  reviewActive?: boolean;
   onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
   /** `range`: Shift was held (audit tables-07): select from the anchor to this row. */
   onToggleSelect: (borrowerId: string, range: boolean) => void;
@@ -97,6 +102,7 @@ export function LeadTableRow({
   isCursor = false,
   shortcutsLive = true,
   reviewSlot = null,
+  reviewActive = false,
   onToggleRow,
   onToggleSelect,
   onApprove,
@@ -308,7 +314,20 @@ export function LeadTableRow({
         <tr className="tbl__expand" aria-rowindex={resolvedAriaRowIndex + 1}>
           <td colSpan={columns.length}>
             {reviewSlot}
-            <RowPreview lead={lead} approval={approval} decisionReceipt={decisionReceipt} />
+            <RowPreview
+              lead={lead}
+              approval={approval}
+              decisionReceipt={decisionReceipt}
+              approvalGate={isApprovalEligible && !approval && !decisionReceipt && !reviewActive
+                ? {
+                    approverGate,
+                    blocked: approvalActionsDisabled,
+                    submitting: decisionPending,
+                    onApprove,
+                    onReject,
+                  }
+                : null}
+            />
             <LeadRowWorkflowPanel
               lead={lead}
               salesBusy={salesBusy}

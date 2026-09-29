@@ -45,6 +45,8 @@ export interface LeadTableBodyProps {
   salesTeamCount: number;
   shortcutsLive: boolean;
   reviewSlot: LeadTableReviewSlot | null;
+  /** The row an approve review is open or opening for, in any mode. */
+  reviewBorrowerId: string | null;
   /** The shell's row callbacks, one identity for the table's life (useStableRowCallbacks). */
   rowCallbacks: LeadRowCallbacks;
 }
@@ -91,6 +93,7 @@ export function LeadTableBody({
   salesTeamCount,
   shortcutsLive,
   reviewSlot,
+  reviewBorrowerId,
   rowCallbacks,
 }: LeadTableBodyProps) {
   'use no memo';
@@ -190,6 +193,7 @@ export function LeadTableBody({
               isCursor={cursorId === lead.borrower_id}
               shortcutsLive={shortcutsLive}
               reviewSlot={isOpen && reviewSlot?.borrowerId === lead.borrower_id ? reviewSlot.node : null}
+              reviewActive={reviewBorrowerId === lead.borrower_id}
               onToggleRow={rowCallbacks.onToggleRow}
               onToggleSelect={rowCallbacks.onToggleSelect}
               onApprove={rowCallbacks.onApprove}
