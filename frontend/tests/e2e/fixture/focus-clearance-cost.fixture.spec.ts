@@ -33,7 +33,10 @@ const ANCESTOR_HAS_RULE = '@media (min-height: 40rem) {'
   + ' :where(.main:has(.route-nav):not(:has(.genie-composer:not([hidden] *))) :not(.route-nav *, .tbl-wrap *))'
   + ' { scroll-margin-block-start: 61px; } }';
 
-/** The shipped clearance's rules carry this custom property; nothing else does. */
+/**
+ * The shipped clearance's rules carry this custom property (38's two, and
+ * LeadTable.css's table rule that reads it); nothing else does.
+ */
 const CLEARANCE_MARKER = '--nav-clear';
 
 const SCROLL_STEPS = 25;

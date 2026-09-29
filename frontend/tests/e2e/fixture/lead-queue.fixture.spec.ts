@@ -14,14 +14,18 @@
  *      line, and its actions wrap under it, Console closed and open.
  *  (b) The focus-obscured walk (a11y-v2): no focus stop's box is fully
  *      covered by the sticky thead, the pinned Approval column, the bulk
- *      bar or the sticky route nav; with the scroll-padding zeroed the same
- *      walk does find a covered stop. A control focused from behind the
- *      sticky route nav (/glossary) stops below it, and not with the
- *      scroll-margin zeroed; /ask-genie's Ask tab clears the nav once (its
- *      own padding), its Workflows tab through 38-focus-clearance.css. A
- *      focus on a pinned Approve / Reject leaves the table's scrollLeft where
- *      it was (the pin's own controls are not "revealed"), and a pointer pick
- *      in a scrolled STATE menu writes the option aimed at (the nav's margin
+ *      bar or the sticky route nav; with the table's clearances zeroed the
+ *      same walk does find a covered stop. With `.main` at its natural
+ *      end (1440x900, no spacer) the rows run up under the route nav: a
+ *      Shift+Tab walk up them (/lead-queue and /segment-intelligence) and
+ *      K's cursor row stop below it, and not with the table's block margin
+ *      zeroed. A control focused from behind the sticky route nav
+ *      (/glossary) stops below it, and not with the scroll-margin zeroed;
+ *      /ask-genie's Ask tab clears the nav once (its own padding), its
+ *      Workflows tab through 38-focus-clearance.css. A focus on a pinned
+ *      Approve / Reject leaves the table's scrollLeft where it was (the
+ *      pin's own controls are not "revealed"), and a pointer pick in a
+ *      scrolled STATE menu writes the option aimed at (the nav's margin
  *      stays out of the in-place listbox); each with its non-vacuity twin.
  *      The clearance's style cost: focus-clearance-cost.fixture.spec.ts.
  *  (d) The assignment outcome (critic-06): Escape and Cancel make no POST
@@ -281,7 +285,7 @@ async function walk(page: Page, key: 'Tab' | 'Shift+Tab', presses: number): Prom
 /**
  * Scroll the table so row `index` sits exactly behind the sticky header,
  * inside the scrollport. A control there is the worst case: the browser
- * treats it as already in view, so without scroll-padding a focus leaves it
+ * treats it as already in view, so without the table's clearance a focus leaves it
  * hidden under the header.
  */
 async function rowBehindHeader(page: Page, index: number): Promise<string> {
@@ -294,6 +298,64 @@ async function rowBehindHeader(page: Page, index: number): Promise<string> {
   expect(placed.id, 'the row exists').not.toBe('');
   expect(Math.abs(placed.offset), 'precondition: the row starts at the scrollport top, behind the header').toBeLessThanOrEqual(1);
   return placed.id;
+}
+
+/** How far below `.main`'s scrollport top the walks below start. */
+const WALK_START_DEPTH = 250;
+
+/**
+ * `.main` scrolled to its natural end (no spacer: at 1440x900 the page
+ * scrolls by itself) and the table scroller to its middle, so the rows the
+ * table shows run up under the sticky route nav, where the browser counts a
+ * control as in view. Returns the row checkbox a walk up the rows starts
+ * from, exactly WALK_START_DEPTH below `.main`'s scrollport top: the table
+ * scroller is nudged (less than a row) to put one there, so each row's
+ * place against the nav is the same on every run. Where the table ends
+ * above that depth with `.main` at its end (/segment-intelligence, whose
+ * page runs on below the table), `.main` backs off just enough to show it.
+ */
+async function tableUpUnderRouteNav(page: Page): Promise<Locator> {
+  const placed = await page.locator('.main').evaluate((main, depth) => {
+    const nav = main.querySelector<HTMLElement>('.route-nav');
+    const wrap = main.querySelector<HTMLElement>('.tbl-wrap');
+    if (!nav || !wrap || getComputedStyle(nav).position !== 'sticky') throw new Error('no sticky route nav or no table');
+    const boxes = [...wrap.querySelectorAll<HTMLElement>('tr[data-borrower-row] [data-testid^="lead-select-"]')];
+    const boxHeight = boxes[0]?.getBoundingClientRect().height ?? 0;
+    main.scrollTop = main.scrollHeight - main.clientHeight;
+    const target = main.getBoundingClientRect().top + depth;
+    const shortfall = target + boxHeight + 4 - wrap.getBoundingClientRect().bottom;
+    if (shortfall > 0) main.scrollTop -= shortfall;
+    wrap.scrollTop = Math.round((wrap.scrollHeight - wrap.clientHeight) / 2);
+    const below = boxes.find((box) => box.getBoundingClientRect().top >= target);
+    if (below) wrap.scrollTop += below.getBoundingClientRect().top - target;
+    const view = main.getBoundingClientRect();
+    const port = wrap.getBoundingClientRect();
+    const start = below?.getBoundingClientRect();
+    return {
+      mainAtEnd: main.scrollHeight - main.clientHeight - main.scrollTop,
+      mainScrollTop: main.scrollTop,
+      tableScrollTop: wrap.scrollTop,
+      tableTopUnderNav: port.top < nav.getBoundingClientRect().bottom,
+      startOffset: start ? start.top - (view.top + depth) : Number.NaN,
+      startInView: start ? start.bottom <= Math.min(port.bottom, view.bottom) : false,
+      start: below?.dataset.testid ?? '',
+    };
+  }, WALK_START_DEPTH);
+  expect(placed.mainScrollTop, `precondition: \`.main\` scrolls by itself at 1440x900 (${placed.mainAtEnd}px short of its end)`).toBeGreaterThan(0);
+  expect(placed.tableScrollTop, 'precondition: the table scroller sits part-way down').toBeGreaterThan(0);
+  expect(placed.tableTopUnderNav, 'precondition: the table\'s top edge is up under (or past) the route nav').toBe(true);
+  expect(placed.start, `precondition: a row checkbox ${WALK_START_DEPTH}px below the scrollport top`).not.toBe('');
+  expect(Math.abs(placed.startOffset), 'precondition: the start sits at that depth').toBeLessThanOrEqual(1);
+  expect(placed.startInView, 'precondition: the start is in full view').toBe(true);
+  return page.getByTestId(placed.start);
+}
+
+/** The cursor row's top edge below the route nav's bottom edge (negative: under it). */
+async function cursorGapBelowRouteNav(page: Page): Promise<{ id: string; gap: number }> {
+  return page.locator('table.tbl tr.is-cursor').evaluate((row) => ({
+    id: row.getAttribute('data-borrower-row') ?? '',
+    gap: row.getBoundingClientRect().top - (document.querySelector('.route-nav')?.getBoundingClientRect().bottom ?? 0),
+  }));
 }
 
 /** Scroll the table sideways so `target` sits fully under the pinned Approval column. */
@@ -310,7 +372,10 @@ async function underPinnedColumn(page: Page, target: Locator): Promise<void> {
   expect(inside, 'precondition: the control sits under the pinned column').toBe(true);
 }
 
-const ZERO_PADDING = '.tbl-wrap, .main { scroll-padding: 0px !important; }';
+/** LeadTable.css's clearance of the route nav (and the thead) on the table's focus targets. */
+const ZERO_TABLE_BLOCK_MARGIN = '.lead-table__table tr, .lead-table__table tr * { scroll-margin-block-start: 0px !important; }';
+/** Both of LeadTable.css's clearances: that margin, and the scroller's inline-end padding for the pin. */
+const ZERO_TABLE_CLEARANCE = `${ZERO_TABLE_BLOCK_MARGIN} .tbl-wrap { scroll-padding: 0px !important; }`;
 /** 38-focus-clearance.css's mechanism: the nav's size as scroll-margin on what is outside it. */
 const ZERO_NAV_MARGIN = '.main * { scroll-margin-block-start: 0px !important; }';
 /** --focus-ring-width + --focus-ring-offset (tokens.css). */
@@ -418,7 +483,55 @@ async function pointerPickTopVisibleState(page: Page, menu: Locator): Promise<{ 
 }
 
 test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
-  test('Shift+Tab up the rows stops clear of the sticky header and the route nav, with a selection bar up', async ({ app, page }) => {
+  for (const route of ['/lead-queue', '/segment-intelligence'] as const) {
+    test(`${route}: with .main at its end, Shift+Tab up the rows stops clear of the sticky route nav`, async ({ app, page }) => {
+      await app.gotoRoute(route);
+      await (await tableUpUnderRouteNav(page)).focus();
+      const stops = await walk(page, 'Shift+Tab', 30);
+      expect(stops.length, 'non-vacuity: the walk moved focus').toBeGreaterThan(20);
+      expect(stops.filter((stop) => stop.covered.length > 0)).toEqual([]);
+    });
+
+    test(`${route} non-vacuity: with the table's block margin zeroed, the same walk stops under the route nav`, async ({ app, page }) => {
+      await app.gotoRoute(route);
+      await page.addStyleTag({ content: ZERO_TABLE_BLOCK_MARGIN });
+      await (await tableUpUnderRouteNav(page)).focus();
+      const stops = await walk(page, 'Shift+Tab', 30);
+      expect(stops.filter((stop) => stop.covered.includes('route nav')).length, 'a stop under the nav').toBeGreaterThan(0);
+    });
+  }
+
+  /** K from the walk's start, `presses` times: the cursor row's gap below the nav after each move. */
+  async function cursorWalkUp(page: Page, presses: number): Promise<Array<{ id: string; gap: number }>> {
+    await (await tableUpUnderRouteNav(page)).focus();
+    const gaps: Array<{ id: string; gap: number }> = [];
+    let previous = (await cursorGapBelowRouteNav(page)).id;
+    expect(previous, 'precondition: the focus put the cursor on the start row').not.toBe('');
+    for (let index = 0; index < presses; index += 1) {
+      await page.keyboard.press('k');
+      await expect.poll(async () => (await cursorGapBelowRouteNav(page)).id, 'K moved the cursor').not.toBe(previous);
+      await settleFrames(page);
+      const stop = await cursorGapBelowRouteNav(page);
+      gaps.push(stop);
+      previous = stop.id;
+    }
+    return gaps;
+  }
+
+  test('/lead-queue: with .main at its end, K brings the cursor row up clear of the sticky route nav', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    const gaps = await cursorWalkUp(page, 8);
+    expect(gaps.filter((stop) => stop.gap < -0.5)).toEqual([]);
+  });
+
+  test('/lead-queue non-vacuity: with the table\'s block margin zeroed, K leaves a cursor row under the route nav', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    await page.addStyleTag({ content: ZERO_TABLE_BLOCK_MARGIN });
+    const gaps = await cursorWalkUp(page, 8);
+    expect(gaps.filter((stop) => stop.gap < -0.5).length, 'a cursor row under the nav').toBeGreaterThan(0);
+  });
+
+  test('Shift+Tab up the rows stops clear of the sticky header, with a selection bar up', async ({ app, page }) => {
     await app.gotoRoute('/lead-queue');
     await page.getByTestId(`lead-select-${LEADS[0].borrower_id}`).check();
     await page.getByTestId(`lead-select-${LEADS[2].borrower_id}`).check();
@@ -454,10 +567,10 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
     expect((await focusStop(page))?.covered, 'a control under the pin scrolls clear of it').toEqual([]);
   });
 
-  test('non-vacuity: with the scroll-padding zeroed, the same stops are covered', async ({ app, mockApi, page }) => {
+  test('non-vacuity: with the table\'s clearances zeroed, the same stops are covered', async ({ app, mockApi, page }) => {
     registerQueueLayoutLeads(mockApi);
     await app.gotoRoute('/lead-queue');
-    await page.addStyleTag({ content: ZERO_PADDING });
+    await page.addStyleTag({ content: ZERO_TABLE_CLEARANCE });
     // A focus moved to a control behind the header (the flow's focus hand-offs,
     // J / K's scrollIntoView) is left there: the browser counts it as in view.
     const hidden = await rowBehindHeader(page, 5);

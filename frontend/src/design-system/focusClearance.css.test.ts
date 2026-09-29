@@ -11,15 +11,16 @@ import { featureStylesheets } from '../test/featureCss';
  * The Lead Queue lane's CSS pins (wave 4b; never components.test.ts):
  *
  *   - Focus Not Obscured (audit a11y-v2, WCAG 2.2 SC 2.4.11, technique
- *     C43): the Lead Queue scroller clears its sticky thead and the pinned
- *     Approval column (scroll-padding), and what `.main` holds outside the
- *     nav clears the sticky route nav (scroll-margin) inside the same 40rem
- *     condition that docks it. Rendered proof: the
- *     focus-obscured walk in tests/e2e/fixture/lead-queue.fixture.spec.ts.
- *     The pin's own controls cancel the inline-end padding, the in-place
- *     filter listboxes are left out of the nav's margin, and every :has()
- *     stays on `.main` itself (cost proof:
- *     focus-clearance-cost.fixture.spec.ts).
+ *     C43): what `.main` holds outside the nav clears the sticky route nav
+ *     (scroll-margin) inside the same 40rem condition that docks it, except
+ *     the ranked-borrower table, whose focus targets carry their own
+ *     scroll-margin at the block start (the larger of the nav's clearance
+ *     and the sticky thead's), and whose scroller clears the pinned
+ *     Approval column with scroll-padding at the inline end, cancelled on
+ *     the pin's own controls. Rendered proof: the focus-obscured walk in
+ *     tests/e2e/fixture/lead-queue.fixture.spec.ts. The in-place filter
+ *     listboxes are left out of the nav's margin, and every :has() stays on
+ *     `.main` itself (cost proof: focus-clearance-cost.fixture.spec.ts).
  *   - The row-expand motion (audit motion-08 slice 1, queue part): one
  *     chevron that rotates, an opacity-only fade in, both on --dur-fast /
  *     --ease and off under prefers-reduced-motion.
@@ -32,6 +33,14 @@ function leadTableCss(): string {
   const sheet = featureStylesheets().find((entry) => entry.file === 'src/components/mortgage/LeadTable.css');
   expect(sheet, 'LeadTable.css is a feature stylesheet').toBeDefined();
   return stripComments(sheet!.css);
+}
+
+/** The body of the first rule whose selector list is exactly `selectors` (in order, any whitespace). */
+function ruleFor(css: string, selectors: readonly string[]): string {
+  const rule = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .find((match) => match[1].split(',').map((part) => part.trim()).join('|') === selectors.join('|'));
+  expect(rule, `${selectors.join(', ')} is declared`).toBeDefined();
+  return rule![2];
 }
 
 /** The body of the first rule whose selector list is exactly `selector`. */
@@ -73,16 +82,38 @@ describe('focus clearance (a11y-v2)', () => {
     expect(imports[at37 + 1]).toBe('@import "./components/38-focus-clearance.css";');
   });
 
-  it('the ranked-borrower scroller clears its sticky thead: the measured size, one row until measured, plus the ring', () => {
+  it('the ranked-borrower scroller sets the block clearance: the larger of the route nav\'s and the thead\'s, never as scroll-padding', () => {
     const wrap = block(leadTableCss(), '.tbl-wrap:has(> .lead-table__table)');
+    // The measured size (useTableScrollClearance): one row until measured.
     expect(wrap).toMatch(/--tbl-head-block-size:\s*var\(--row-h\);/);
-    expect(wrap).toMatch(new RegExp(String.raw`scroll-padding-block-start:\s*calc\(\s*var\(--tbl-head-block-size\)\s*${RING}\s*\);`));
+    // --nav-clear is `.main`'s (38-focus-clearance.css, ring included); absent
+    // (no docked nav, the Ask tab, a short viewport), the thead's alone.
+    expect(wrap).toMatch(new RegExp(
+      String.raw`--tbl-focus-clear:\s*max\(\s*var\(--nav-clear,\s*0px\),\s*calc\(\s*var\(--tbl-head-block-size\)\s*${RING}\s*\)\s*\);`,
+    ));
+    // A block-start scroll-padding on the table cleared the thead only, never
+    // the nav (38 leaves the table's contents out).
+    expect(leadTableCss()).not.toMatch(/scroll-padding(?:-block|-top|:)/);
+  });
+
+  it('every focus target in the table carries that clearance at its block start: row controls, the expanded row and its review', () => {
+    const targets = ruleFor(leadTableCss(), [
+      '.lead-table__table tr[data-borrower-row] *',
+      '.lead-table__table tr.tbl__expand',
+      '.lead-table__table tr.tbl__expand *',
+    ]);
+    expect(targets).toMatch(/^\s*scroll-margin-block-start:\s*var\(--tbl-focus-clear\);\s*$/);
+  });
+
+  it('the J / K cursor row carries it too, plus --sp-2 of air at each end', () => {
+    const row = block(leadTableCss(), '.lead-table__table tr[data-borrower-row]');
+    expect(row).toMatch(/^\s*scroll-margin-block:\s*calc\(\s*var\(--tbl-focus-clear\)\s*\+\s*var\(--sp-2\)\s*\)\s+var\(--sp-2\);\s*$/);
   });
 
   it('the ranked-borrower scroller clears the pinned Approval column at its inline end', () => {
     const pin = block(leadTableCss(), '.tbl-wrap:has(> .lead-table__table)');
     expect(pin).toMatch(/--tbl-pin-inline-size:\s*0px;/);
-    expect(pin).toMatch(new RegExp(String.raw`scroll-padding-inline-end:\s*calc\(\s*var\(--tbl-pin-inline-size\)\s*${RING}\s*\);`));
+    expect(pin).toMatch(new RegExp(String.raw`scroll-padding-inline-end:\s*calc\(\s*${PIN_CLEAR}\s*\);`));
   });
 
   it('moves the pin\'s own controls back by that padding, so a focus on one never scrolls the table sideways', () => {

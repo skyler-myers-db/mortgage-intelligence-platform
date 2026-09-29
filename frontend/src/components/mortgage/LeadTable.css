@@ -174,23 +174,46 @@
     inset 0 -1px 0 var(--line-2);
 }
 /* Focus Not Obscured (audit a11y-v2; WCAG 2.2 SC 2.4.11, technique C43):
-   a row control focused from outside the view stops below the sticky thead
-   (Shift+Tab up the rows) and, with the Console open (the table scrolls
-   horizontally), clear of the pinned Approval column (Tab across a row),
-   not under them. Their measured sizes are written by
-   useTableScrollClearance; one row and 0px until then. Here, in the lazy
-   LeadTable sheet, not on 03-score-and-table.css's `.tbl-wrap`: the shell
-   stylesheet's raw and gzip gates had no room for it (measured +0.14 KiB
-   raw), so tables other than the ranked-borrower table keep the base. */
+   what takes focus in the table (a row's controls, the J / K cursor row, the
+   expanded row and its inline review) stops clear of the sticky thead
+   (Shift+Tab up the rows), of the sticky route nav once `.main` has scrolled
+   the table up under it, and, with the Console open (the table scrolls
+   horizontally), of the pinned Approval column (Tab across a row). Their
+   measured sizes are written by useTableScrollClearance; one row and 0px
+   until then. Here, in the lazy LeadTable sheet, not on
+   03-score-and-table.css's `.tbl-wrap`: the shell stylesheet's raw and gzip
+   gates had no room for it, so tables other than the ranked-borrower table
+   keep the base.
+
+   Block start: scroll-margin on the focus targets, not scroll-padding on
+   the scroller (offer-orchestrator.action-bar.css does the same for its
+   docked bar). One margin serves both scrollers a row control is focused
+   through, the table's own and `.main`: the larger of the route nav's
+   clearance (--nav-clear, inherited from `.main`, 38-focus-clearance.css;
+   absent without a docked nav) and the thead's, each with the ring. A
+   scroll-padding on the table cleared the thead only, and 38 leaves the
+   table's contents out, so a row control up under the nav stayed there.
+
+   Inline end: scroll-padding on the scroller. A margin cannot do it here:
+   Chromium's focus() does not scroll sideways for a control any part of
+   whose box is in view, whatever its inline-end margin (measured), so a
+   control under the pin stayed there; only a padded view that the control
+   lies wholly outside of makes a focus reveal it. */
 .tbl-wrap:has(> .lead-table__table) {
   --tbl-head-block-size: var(--row-h);
   --tbl-pin-inline-size: 0px;
-  scroll-padding-block-start: calc(
-    var(--tbl-head-block-size) + var(--focus-ring-width) + var(--focus-ring-offset)
+  --tbl-focus-clear: max(
+    var(--nav-clear, 0px),
+    calc(var(--tbl-head-block-size) + var(--focus-ring-width) + var(--focus-ring-offset))
   );
   scroll-padding-inline-end: calc(
     var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)
   );
+}
+.lead-table__table tr[data-borrower-row] *,
+.lead-table__table tr.tbl__expand,
+.lead-table__table tr.tbl__expand * {
+  scroll-margin-block-start: var(--tbl-focus-clear);
 }
 /* ...except for what sits IN the pin. A pinned Approve / Reject is sticky
    inside that inline-end padding by construction, so a focus on one (Tab,
@@ -203,10 +226,10 @@
   scroll-margin-inline: calc(var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset))
     calc(-1 * (var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)));
 }
-/* J / K scroll the cursor row into view: the scroller's scroll-padding
-   (above) keeps it clear of the sticky header; the row adds a little air. */
+/* J / K scroll the cursor row into view: the same clearance, plus a little
+   air at each end. */
 .lead-table__table tr[data-borrower-row] {
-  scroll-margin-block: var(--sp-2);
+  scroll-margin-block: calc(var(--tbl-focus-clear) + var(--sp-2)) var(--sp-2);
 }
 
 /* Row expand motion (audit motion-08 slice 1, queue part): the expand

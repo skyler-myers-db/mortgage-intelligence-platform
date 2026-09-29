@@ -3,7 +3,7 @@
  *
  * useTableScrollClearance (audit a11y-v2): measures the sticky thead and the
  * pinned Approval header and writes them as the custom properties the
- * scroll-padding rules in LeadTable.css read. A resize is written in the
+ * clearance rules in LeadTable.css read. A resize is written in the
  * next animation frame, never inside the ResizeObserver callback; both are
  * removed on unmount. The sticky route nav is 38-focus-clearance.css's (its
  * one-line size, on every route): nothing here writes to `.main`. The

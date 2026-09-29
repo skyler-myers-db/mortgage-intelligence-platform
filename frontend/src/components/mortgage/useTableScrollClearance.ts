@@ -18,13 +18,15 @@ function writePx(element: HTMLElement, property: string, size: number): void {
  * Lead Queue, the pinned Approval column at its end edge. A row control that
  * takes focus from outside the view (Shift+Tab up the rows, Tab across a row
  * to its Approval cell with the Console open) was scrolled only to the
- * scroller's edge, behind one of them. LeadTable.css gives the scroller
- * scroll-padding of these sizes plus the focus ring, so focus scrolling
- * stops clear of them; this hook measures the real sizes (the header wraps,
- * the pin follows its column width) and writes them as custom properties.
- * Each is declared with a fallback in that sheet, so nothing depends on this
- * having run. (The sticky route nav above `.main` is cleared by
- * 38-focus-clearance.css at its one-line size, on every route.)
+ * scroller's edge, behind one of them. LeadTable.css clears them by these
+ * sizes plus the focus ring: the table's focus targets take scroll-margin
+ * at the block start (the larger of the thead's size and the sticky route
+ * nav's, which 38-focus-clearance.css sets on `.main` at its one-line
+ * size), and the scroller takes scroll-padding at the inline end for the
+ * pin, so focus scrolling stops clear of them. This hook measures the real
+ * sizes (the header wraps, the pin follows its column width) and writes
+ * them as custom properties. Each is declared with a fallback in that
+ * sheet, so nothing depends on this having run.
  *
  * Measured on mount and whenever one of them resizes. The write happens in
  * the next animation frame, never inside the ResizeObserver callback (as
