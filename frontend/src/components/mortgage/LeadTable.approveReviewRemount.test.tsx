@@ -162,7 +162,11 @@ function hold<T>(fn: typeof approve, reply: (borrowerId: string) => T) {
   };
 }
 
-describe('LeadTable: a decision on the wire locks its row\'s review, across a remount', () => {
+// Sized for a loaded CI runner (the W4b VITEST TIMEOUTS rule): these tests
+// mount the table, wait up to 15s for the lazy review chunk, then act on it.
+const LOADED_RUNNER_TEST_TIMEOUT_MS = 30_000;
+
+describe('LeadTable: a decision on the wire locks its row\'s review, across a remount', { timeout: LOADED_RUNNER_TEST_TIMEOUT_MS }, () => {
   let container: HTMLDivElement;
   let root: Root;
   let client: QueryClient;

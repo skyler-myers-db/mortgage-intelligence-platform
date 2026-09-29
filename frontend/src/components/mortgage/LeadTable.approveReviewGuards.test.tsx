@@ -165,7 +165,13 @@ function holdApprovals() {
   };
 }
 
-describe('LeadTable approve review guards', () => {
+// Sized for a loaded CI runner (the W4b VITEST TIMEOUTS rule): these tests
+// mount the table, wait up to 15s for the lazy review chunk, then act on it;
+// at the 5s default they timed out under load and the next test in the file
+// then failed on a half-torn-down render.
+const LOADED_RUNNER_TEST_TIMEOUT_MS = 30_000;
+
+describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOUT_MS }, () => {
   let container: HTMLDivElement;
   let root: Root;
 
