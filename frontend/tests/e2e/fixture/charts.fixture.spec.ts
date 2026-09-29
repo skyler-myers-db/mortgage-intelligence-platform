@@ -8,7 +8,7 @@
  * governed values; the keyboard cursor and the table twin.
  */
 import type { Locator, Page } from '@playwright/test';
-import type { ExecutiveAnalyticsResponse } from '../../../src/types';
+import type { EquitySpreadPointsResponse, ExecutiveAnalyticsResponse } from '../../../src/types';
 import {
   ECONOMICS_THRESHOLDS,
   SCORE_BUCKETS,
@@ -18,6 +18,7 @@ import {
   analyticsFixtures,
   economicsBody,
 } from './data/analytics';
+import { BORROWERS } from './data/borrowers';
 import { TOTALS } from './data/reference';
 import { expectAxeClean } from './axe';
 import { json } from './mockApi';
@@ -569,4 +570,71 @@ test('executive: each Pipeline Metrics bar shows exactly its share, sliding by t
     expect(bar.reduced, 'the harness runs under reduced motion').toBe(true);
     expect(bar.duration).toBeLessThan(0.001);
   }
+});
+
+test('economics zoom: an open cluster leaves Escape to the Genie composer, then still closes to its marker (a11y-07)', async ({ app, mockApi, page }) => {
+  // Two borrowers at one exact coordinate in whatever window the zoom asks
+  // for: the zoom renders one numbered cluster marker.
+  mockApi.register<EquitySpreadPointsResponse>('GET', '/api/analytics/economics/points', ({ query }) => {
+    const viewport = {
+      equity_min: Number(query.get('equity_min') ?? 0),
+      equity_max: Number(query.get('equity_max') ?? 80),
+      spread_min: Number(query.get('spread_min') ?? 0),
+      spread_max: Number(query.get('spread_max') ?? 250),
+    };
+    const equity = Math.round((viewport.equity_min + viewport.equity_max) / 2);
+    const spread = Math.round((viewport.spread_min + viewport.spread_max) / 2);
+    const points = BORROWERS.slice(0, 2).map((borrower) => ({
+      borrower_id: borrower.borrower_id,
+      display_name: borrower.display_name,
+      segment: borrower.segment_codes[0],
+      state: borrower.state,
+      equity_pct: equity,
+      rate_spread_bps: spread,
+      opportunity_score: borrower.opportunity_score,
+      coordinate_total: 2,
+    }));
+    return json<EquitySpreadPointsResponse>({
+      points,
+      total_matching: 2,
+      showing: 2,
+      point_cap: 500,
+      truncated: false,
+      viewport,
+      source_table: 'mip.gold.borrower_360',
+    });
+  });
+  await app.gotoRoute('/analytics?view=economics');
+  const cells = page.locator('#main-content .analytics-scatter__bin');
+  await expect(cells.first()).toBeVisible();
+  await cells.first().click();
+  const marker = page.locator('#main-content button.analytics-scatter__cluster-marker');
+  const clusterPanel = page.locator('#main-content .analytics-scatter__cluster-panel');
+  await expect(marker).toHaveCount(1);
+
+  // Genie opens first, so its non-modal layer sits BELOW the cluster's.
+  const genie = await app.openGenie();
+  const composer = genie.getByRole('textbox', { name: 'Ask Genie' });
+  // Open the cluster from the keyboard: the floating panel may cover it.
+  await marker.focus();
+  await page.keyboard.press('Enter');
+  await expect(marker).toHaveAttribute('aria-expanded', 'true');
+  await expect(clusterPanel).toBeVisible();
+
+  // Back in the composer, Escape belongs to Genie: the cluster stays open
+  // and focus is never pulled to the marker behind the panel.
+  await composer.click();
+  await expect(composer).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(genie).toBeHidden();
+  await expect(marker).toHaveAttribute('aria-expanded', 'true');
+  await expect(clusterPanel).toBeVisible();
+  await expect(marker).not.toBeFocused();
+
+  // Inside the cluster, Escape still closes it back to its marker.
+  await clusterPanel.locator('a').first().focus();
+  await page.keyboard.press('Escape');
+  await expect(marker).toHaveAttribute('aria-expanded', 'false');
+  await expect(clusterPanel).toBeHidden();
+  await expect(marker).toBeFocused();
 });
