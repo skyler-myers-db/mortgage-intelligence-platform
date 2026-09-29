@@ -1,0 +1,47 @@
+/* Field / FieldReadout (components/ui/Field.tsx, 2026-09-21 audit critic-04).
+   DECLARED APP EXTENSION: the prototype (design_files/index.html) has no
+   field system; this reuses its `.field__label` / `.field__value` pair and
+   adds only the pieces a form needs. Tokens only. Loaded with the route
+   chunk that imports Field (Portfolio Builder today), never the shell. */
+
+.field__control {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.field__control > .form-input { min-width: 0; }
+
+/* A unit beside the control ('$', '%'). `.field` raises the specificity past
+   a route's `… span` label rule (campaign setup uppercases its labels). */
+.field .field__adornment {
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.field__hint,
+.field__notice,
+.field__error {
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+}
+.field__hint { color: var(--text-3); }
+.field__notice { color: var(--text-2); }
+.field__error { color: var(--status-danger-ink); }
+
+/* Read-only copy as text, not as an input that invites typing. */
+.field--readout,
+.field--readout > dd { margin: 0; }
+.field__readout {
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.field .field__readout-empty { color: var(--text-3); }

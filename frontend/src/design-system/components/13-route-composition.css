@@ -545,6 +545,22 @@
 /* Focus shows the global --focus-ring-* ring, not only this border swap
    (2026-09-21 audit a11y-01; see .genie__input input). */
 .form-input:focus { border-color: var(--accent); }
+/* State styles (2026-09-21 audit critic-04). :read-only is scoped to the
+   text-entry elements: a <select> is :read-only by definition. :user-invalid
+   waits for the user's own edit, so a pristine field never shows red. */
+input.form-input:read-only,
+textarea.form-input:read-only {
+  background: var(--bg-1);
+  color: var(--text-2);
+  cursor: default;
+}
+.form-input:disabled {
+  background: var(--bg-3);
+  border-color: var(--line-2);
+  color: var(--text-2);
+  cursor: not-allowed;
+}
+.form-input:user-invalid { border-color: var(--status-danger-line-strong); }
 .campaign-recommendation {
   display: grid;
   gap: var(--sp-3);
@@ -660,7 +676,8 @@
   gap: var(--sp-2);
   min-width: 0;
 }
-.campaign-setup__field span {
+.campaign-setup__field span,
+.campaign-setup__field > .field__label {
   color: var(--text-3);
   font-size: var(--fs-12);
   letter-spacing: var(--tracking-caps);

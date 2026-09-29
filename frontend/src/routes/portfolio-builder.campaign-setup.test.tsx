@@ -41,6 +41,30 @@ const CACHED_RECOMMENDATION: CampaignRecommendationResponse = {
   warnings: [],
 };
 
+/** The control a Field's <label for> names (critic-04: labels are bound by id, not aria-label). */
+function control(label: string): HTMLInputElement {
+  const labelEl = [...document.querySelectorAll<HTMLLabelElement>('label.field__label')]
+    .find((node) => node.textContent === label);
+  const input = labelEl ? document.getElementById(labelEl.htmlFor) : null;
+  if (!(input instanceof HTMLInputElement)) throw new Error(`no control labelled ${label}`);
+  return input;
+}
+
+/** The read-only copy under a FieldReadout label. */
+function readout(label: string): HTMLElement {
+  const dt = [...document.querySelectorAll<HTMLElement>('dt.field__label')].find((node) => node.textContent === label);
+  const dd = dt?.nextElementSibling;
+  if (!(dd instanceof HTMLElement) || dd.tagName !== 'DD') throw new Error(`no readout labelled ${label}`);
+  return dd;
+}
+
+/** A Field's polite status region, found from its control. */
+function notice(input: HTMLElement): HTMLElement {
+  const region = input.closest('.field')?.querySelector<HTMLElement>('.field__notice');
+  if (!region) throw new Error('no notice region');
+  return region;
+}
+
 function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location">{`${location.pathname}${location.search}${location.hash}`}</output>;
@@ -289,10 +313,21 @@ describe('CampaignSetupPanel', () => {
     const applyButton = [...document.querySelectorAll('button')].find((button) => (
       button.textContent?.includes('Apply variants')
     ));
-    expect(document.querySelector<HTMLInputElement>('[aria-label="Benefit-led subject"]')?.readOnly)
-      .toBe(true);
-    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Benefit-led message"]')?.readOnly)
-      .toBe(true);
+    // critic-04: the copy is text under its label, with no input or textarea
+    // left to type into (or to DOM-tamper); an empty one reads as a muted dash.
+    expect(readout('Benefit-led subject').textContent).toBe('Operator-edited subject');
+    expect(readout('Benefit-led message').textContent).toBe('Operator-edited message');
+    expect(readout('Benefit-led subject').getAttribute('aria-labelledby'))
+      .toBe(readout('Benefit-led subject').previousElementSibling?.id);
+    const empty = readout('Guidance-led subject');
+    expect(empty.querySelector('[aria-hidden="true"]')?.textContent).toBe('—');
+    expect(empty.querySelector('.sr-only')?.textContent).toBe('Not set');
+    for (const label of ['Benefit-led subject', 'Guidance-led subject', 'Benefit-led message', 'Guidance-led message']) {
+      expect(readout(label).closest('.campaign-setup')).not.toBeNull();
+      expect(readout(label).closest('dl')?.querySelector('input, textarea')).toBeNull();
+    }
+    expect(document.querySelectorAll('.campaign-setup textarea')).toHaveLength(0);
+    expect(document.querySelectorAll('.campaign-setup input[readonly]')).toHaveLength(0);
     expect(document.body.textContent).toContain('rendered from reviewed server templates');
     act(() => applyButton?.click());
     expect(apply).toHaveBeenCalledTimes(1);
@@ -377,13 +412,94 @@ describe('CampaignSetupPanel', () => {
             </MemoryRouter>,
           );
         });
-        const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
-        expect(input?.min, field).toBe(String(bounds.min));
-        expect(input?.max, field).toBe(String(bounds.max));
-        expect(input?.step, field).toBe(String(bounds.step));
-        act(() => input?.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+        const input = control(label);
+        expect(input.min, field).toBe(String(bounds.min));
+        expect(input.max, field).toBe(String(bounds.max));
+        expect(input.step, field).toBe(String(bounds.step));
+        act(() => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
         expect(commit).toHaveBeenLastCalledWith(field, expected);
       }
+    }
+  });
+
+  function renderSetup(setup: typeof DEFAULT_CAMPAIGN_SETUP, commit = vi.fn()) {
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <CampaignSetupPanel
+            setup={setup}
+            recommendationPending={false}
+            recommendationError={false}
+            recommendationFetching={false}
+            canRecommend={false}
+            onFieldChange={() => vi.fn()}
+            onNumericFieldCommit={commit}
+            onToggleHouseholdDedup={vi.fn()}
+            onRegenerate={vi.fn()}
+            onApply={vi.fn()}
+          />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  function blur(input: HTMLInputElement) {
+    act(() => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+  }
+
+  it('announces a clamp in the field notice and clears it on the next in-range commit (critic-04)', () => {
+    const commit = vi.fn();
+    renderSetup({ ...DEFAULT_CAMPAIGN_SETUP, holdoutPct: '80', budget: '20000000' }, commit);
+    const holdout = control('Holdout % (0-50)');
+    const region = notice(holdout);
+    // The polite region is mounted (and empty) before anything is announced.
+    expect(region.getAttribute('role')).toBe('status');
+    expect(region.getAttribute('aria-live')).toBe('polite');
+    expect(region.textContent).toBe('');
+    expect(holdout.getAttribute('aria-describedby')).toBeNull();
+
+    blur(holdout);
+    expect(commit).toHaveBeenLastCalledWith('holdoutPct', '50');
+    expect(notice(control('Holdout % (0-50)'))).toBe(region);
+    expect(region.textContent).toBe('Capped at 50%');
+    expect(control('Holdout % (0-50)').getAttribute('aria-describedby')).toBe(region.id);
+
+    blur(control('Budget'));
+    expect(commit).toHaveBeenLastCalledWith('budget', '10000000');
+    expect(notice(control('Budget')).textContent).toBe('Capped at $10,000,000');
+
+    renderSetup({ ...DEFAULT_CAMPAIGN_SETUP, holdoutPct: '25', budget: '20000000' }, commit);
+    blur(control('Holdout % (0-50)'));
+    expect(commit).toHaveBeenLastCalledWith('holdoutPct', '25');
+    expect(region.isConnected).toBe(true);
+    expect(region.textContent).toBe('');
+    expect(control('Holdout % (0-50)').getAttribute('aria-describedby')).toBeNull();
+    // The other field's notice is its own.
+    expect(notice(control('Budget')).textContent).toBe('Capped at $10,000,000');
+  });
+
+  it('binds every setup label to its control and shows the unit adornments', () => {
+    renderSetup(DEFAULT_CAMPAIGN_SETUP);
+    const adornments = (label: string) => {
+      const field = control(label).closest('.field');
+      return [...(field?.querySelectorAll<HTMLElement>('.field__adornment') ?? [])].map((node) => [
+        node.textContent,
+        node.compareDocumentPosition(control(label)) & Node.DOCUMENT_POSITION_FOLLOWING ? 'prefix' : 'suffix',
+        node.getAttribute('aria-hidden'),
+      ]);
+    };
+    expect(adornments('Holdout % (0-50)')).toEqual([['%', 'suffix', 'true']]);
+    for (const label of ['Budget', 'Email cost', 'SMS cost', 'Mail cost']) {
+      expect(adornments(label), label).toEqual([['$', 'prefix', 'true']]);
+    }
+    for (const label of ['Send start', 'Send end']) {
+      expect(adornments(label), label).toEqual([]);
+      expect(control(label).type).toBe('time');
+    }
+    for (const label of ['Holdout % (0-50)', 'Budget', 'Email cost', 'SMS cost', 'Mail cost', 'Send start', 'Send end']) {
+      const input = control(label);
+      expect(input.hasAttribute('aria-label'), label).toBe(false);
+      expect(input.labels?.[0]?.textContent, label).toBe(label);
     }
   });
 });

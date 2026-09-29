@@ -1,12 +1,14 @@
-import type { ChangeEvent } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip, SurfaceTitle } from '../components/Primitives';
+import { Field, FieldReadout } from '../components/ui/Field';
 import { drawerForAsset } from '../lib/drawerSources';
 import type { CampaignRecommendationResponse } from '../types';
 import { publicAgentResponsesText } from '../lib/agentLabels';
 import {
   CAMPAIGN_NUMERIC_BOUNDS,
+  campaignNumericNotice,
   normalizeCampaignNumericValue,
   type CampaignNumericField,
   type CampaignSetupState,
@@ -203,21 +205,23 @@ export function CampaignSetupPanel({
           ) : null}
         </div>
         <div className="campaign-setup">
-          <CampaignTextField label="Benefit-led subject" value={setup.subjectA} maxLength={120} readOnly />
-          <CampaignTextField label="Guidance-led subject" value={setup.subjectB} maxLength={120} readOnly />
-          <CampaignTextField label="Benefit-led message" value={setup.bodyA} maxLength={700} multiline readOnly />
-          <CampaignTextField label="Guidance-led message" value={setup.bodyB} maxLength={700} multiline readOnly />
+          {/* critic-04: server-authored copy is text, not an input that invites
+              typing. Save still sends only the setup state. */}
+          <FieldReadout className="campaign-setup__field" label="Benefit-led subject" value={setup.subjectA} />
+          <FieldReadout className="campaign-setup__field" label="Guidance-led subject" value={setup.subjectB} />
+          <FieldReadout className="campaign-setup__field campaign-setup__field--wide" label="Benefit-led message" value={setup.bodyA} />
+          <FieldReadout className="campaign-setup__field campaign-setup__field--wide" label="Guidance-led message" value={setup.bodyB} />
           <div className="campaign-setup__field campaign-setup__field--wide muted fs-12">
             Borrower copy is rendered from reviewed server templates. Apply or regenerate the
             recommendation to change it.
           </div>
-          <CampaignNumericFieldEditor label="Holdout % (0-50)" field="holdoutPct" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} onCommit={onNumericFieldCommit} />
-          <CampaignTextField label="Send start" value={setup.startLocal} onChange={onFieldChange('startLocal')} type="time" />
-          <CampaignTextField label="Send end" value={setup.endLocal} onChange={onFieldChange('endLocal')} type="time" />
-          <CampaignNumericFieldEditor label="Budget" field="budget" value={setup.budget} onChange={onFieldChange('budget')} onCommit={onNumericFieldCommit} placeholder="optional" />
-          <CampaignNumericFieldEditor label="Email cost" field="emailCost" value={setup.emailCost} onChange={onFieldChange('emailCost')} onCommit={onNumericFieldCommit} />
-          <CampaignNumericFieldEditor label="SMS cost" field="smsCost" value={setup.smsCost} onChange={onFieldChange('smsCost')} onCommit={onNumericFieldCommit} />
-          <CampaignNumericFieldEditor label="Mail cost" field="mailCost" value={setup.mailCost} onChange={onFieldChange('mailCost')} onCommit={onNumericFieldCommit} />
+          <CampaignNumericFieldEditor label="Holdout % (0-50)" field="holdoutPct" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} onCommit={onNumericFieldCommit} suffix="%" />
+          <CampaignTimeField label="Send start" value={setup.startLocal} onChange={onFieldChange('startLocal')} />
+          <CampaignTimeField label="Send end" value={setup.endLocal} onChange={onFieldChange('endLocal')} />
+          <CampaignNumericFieldEditor label="Budget" field="budget" value={setup.budget} onChange={onFieldChange('budget')} onCommit={onNumericFieldCommit} placeholder="optional" prefix="$" />
+          <CampaignNumericFieldEditor label="Email cost" field="emailCost" value={setup.emailCost} onChange={onFieldChange('emailCost')} onCommit={onNumericFieldCommit} prefix="$" />
+          <CampaignNumericFieldEditor label="SMS cost" field="smsCost" value={setup.smsCost} onChange={onFieldChange('smsCost')} onCommit={onNumericFieldCommit} prefix="$" />
+          <CampaignNumericFieldEditor label="Mail cost" field="mailCost" value={setup.mailCost} onChange={onFieldChange('mailCost')} onCommit={onNumericFieldCommit} prefix="$" />
           <div className="campaign-setup__field campaign-setup__field--wide">
             <div className="campaign-setup__toggle">
               <div className="campaign-setup__toggle-copy">
@@ -260,6 +264,8 @@ function CampaignNumericFieldEditor({
   onChange,
   onCommit,
   placeholder,
+  prefix,
+  suffix,
 }: {
   label: string;
   field: CampaignNumericField;
@@ -267,83 +273,50 @@ function CampaignNumericFieldEditor({
   onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
   onCommit: (field: CampaignNumericField, value: string) => void;
   placeholder?: string;
+  prefix?: string;
+  suffix?: string;
 }) {
   const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
+  // critic-04: a clamp is announced in the field's polite notice ('Capped at
+  // 50%') and cleared by the next in-range commit, never applied silently.
+  const [notice, setNotice] = useState<string | null>(null);
   return (
-    <CampaignTextField
-      label={label}
-      value={value}
-      onChange={onChange}
-      onCommit={(raw) => onCommit(field, normalizeCampaignNumericValue(field, raw))}
-      type="number"
-      inputMode="decimal"
-      min={bounds.min}
-      max={bounds.max}
-      step={bounds.step}
-      placeholder={placeholder}
-    />
+    <Field className="campaign-setup__field" label={label} prefix={prefix} suffix={suffix} notice={notice}>
+      {(control) => (
+        <input
+          {...control}
+          className="form-input"
+          value={value}
+          onChange={onChange}
+          type="number"
+          inputMode="decimal"
+          placeholder={placeholder}
+          min={bounds.min}
+          max={bounds.max}
+          step={bounds.step}
+          onBlur={(event) => {
+            const normalized = normalizeCampaignNumericValue(field, event.currentTarget.value);
+            setNotice(campaignNumericNotice(field, normalized));
+            onCommit(field, normalized.value);
+          }}
+        />
+      )}
+    </Field>
   );
 }
 
-function CampaignTextField({
+function CampaignTimeField({
   label,
   value,
   onChange,
-  maxLength,
-  multiline = false,
-  type,
-  inputMode,
-  placeholder,
-  onCommit,
-  min,
-  max,
-  step,
-  readOnly = false,
 }: {
   label: string;
   value: string;
-  onChange?: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
-  maxLength?: number;
-  multiline?: boolean;
-  type?: string;
-  inputMode?: 'decimal';
-  placeholder?: string;
-  onCommit?: (value: string) => void;
-  min?: number;
-  max?: number;
-  step?: number;
-  readOnly?: boolean;
+  onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
 }) {
-  const className = `campaign-setup__field${multiline ? ' campaign-setup__field--wide' : ''}`;
   return (
-    <label className={className}>
-      <span>{label}</span>
-      {multiline ? (
-        <textarea
-          className="form-input campaign-setup__textarea"
-          aria-label={label}
-          value={value}
-          onChange={onChange}
-          readOnly={readOnly}
-          maxLength={maxLength}
-        />
-      ) : (
-        <input
-          className="form-input"
-          aria-label={label}
-          value={value}
-          onChange={onChange}
-          readOnly={readOnly}
-          maxLength={maxLength}
-          type={type}
-          inputMode={inputMode}
-          placeholder={placeholder}
-          min={min}
-          max={max}
-          step={step}
-          onBlur={(event) => onCommit?.(event.currentTarget.value)}
-        />
-      )}
-    </label>
+    <Field className="campaign-setup__field" label={label}>
+      {(control) => <input {...control} className="form-input" value={value} onChange={onChange} type="time" />}
+    </Field>
   );
 }
