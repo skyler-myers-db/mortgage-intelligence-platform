@@ -383,6 +383,65 @@ test.describe('analytics charts: forced colors (a11y-10 / responsive-v3 / css-06
     expect(probe).toBe('none');
   });
 
+  test('economics zoom: the borrower dots keep per-band cues, and a cluster marker edges its band at 2px', async ({ app, page }) => {
+    await app.gotoRoute('/analytics?view=economics');
+    const cells = page.locator('#main-content .analytics-scatter__bin');
+    await expect(cells.first()).toBeVisible();
+    await cells.first().click();
+    const dots = page.locator('#main-content .analytics-scatter__dot--band');
+    await expect(dots.first()).toBeAttached();
+    const read = await page.locator('#main-content .analytics-chart-panel--scatter').evaluate((panel) => {
+      const BANDS = ['high', 'med', 'low'] as const;
+      const cueOf = (el: Element) => {
+        const style = getComputedStyle(el);
+        return `${style.backgroundColor} | ${style.borderTopStyle} | ${style.borderTopWidth}`;
+      };
+      // One probe per band (the zoom may not hold every band), read in the
+      // panel that carries the forced band tokens, then removed.
+      const probe = (tag: string, className: string) => {
+        const el = document.createElement(tag);
+        el.className = className;
+        panel.appendChild(el);
+        const style = getComputedStyle(el);
+        const cue = { cue: cueOf(el), edge: `${style.borderTopStyle} ${style.borderTopWidth}` };
+        el.remove();
+        return cue;
+      };
+      // A system colour as rgb: the probe opts out, or forced colours would
+      // repaint its `color` as CanvasText whatever it names.
+      const system = (value: string) => {
+        const el = document.createElement('span');
+        el.style.forcedColorAdjust = 'none';
+        el.style.color = value;
+        panel.appendChild(el);
+        const rgb = getComputedStyle(el).color;
+        el.remove();
+        return rgb;
+      };
+      return {
+        canvas: system('Canvas'),
+        canvasText: system('CanvasText'),
+        dotProbes: Object.fromEntries(BANDS.map((band) => [band, probe('a', `analytics-scatter__dot analytics-scatter__dot--band score--${band}`).cue])),
+        markerEdges: BANDS.map((band) => probe('button', `analytics-scatter__cluster-marker score--${band}`).edge),
+        dots: [...panel.querySelectorAll('.analytics-scatter__dot--band')].map((el) => ({
+          band: BANDS.find((band) => el.classList.contains(`score--${band}`)) ?? 'none',
+          cue: cueOf(el),
+        })),
+      };
+    });
+    expect(read.canvas).not.toBe(read.canvasText);
+    expect(read.dotProbes).toEqual({
+      high: `${read.canvasText} | none | 0px`,
+      med: `${read.canvas} | solid | 2px`,
+      low: `${read.canvas} | dashed | 1px`,
+    });
+    // Every real zoom dot paints its own band's cue.
+    expect(read.dots.length).toBeGreaterThan(0);
+    for (const dot of read.dots) expect(dot.cue, `a ${dot.band} dot`).toBe(read.dotProbes[dot.band as 'high' | 'med' | 'low']);
+    // Cluster markers stay forced (they carry their count) and edge the band.
+    expect(read.markerEdges).toEqual(['solid 2px', 'dashed 2px', 'dotted 2px']);
+  });
+
   test('lead queue: a confidence bar on and off differ in fill and in edge style', async ({ app, page }) => {
     await app.gotoRoute('/lead-queue');
     const on = page.locator('#main-content .conf__bar.on').first();
