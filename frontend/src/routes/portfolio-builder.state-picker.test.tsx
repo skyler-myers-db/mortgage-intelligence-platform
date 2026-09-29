@@ -358,6 +358,32 @@ describe('Portfolio Builder reconciles GEO and filters in render (no effect)', (
     expect(lastCriteria()).toMatchObject({ states: ['IL'] });
   });
 
+  it('a footprint change drops a committed state the URL reconcile does not reach', async () => {
+    // Run with AZ + IL, then deselect AZ in the picker without running: the
+    // picker holds [IL], the committed build (and the URL) still [AZ, IL].
+    render(['/portfolio-builder?states=AZ,IL'], 0);
+    await waitUntil(() => apiMocks.portfolioPreview.mock.calls.length === 1);
+    await waitUntil(() => committedQuery().get('states') === 'AZ,IL');
+    const geo = container.querySelector<HTMLButtonElement>('button[aria-label^="GEO:"]')!;
+    act(() => geo.focus());
+    press('ArrowDown'); // opens on the first selected state, Arizona
+    expect(activeOption()?.textContent).toBe('Arizona');
+    press(' ');
+    press('Escape');
+    expect(label('GEO')).toBe('GEO: Illinois');
+    expect(committedQuery().get('states')).toBe('AZ,IL');
+
+    // The footprint loses AZ. Parsed against it the URL now reads [IL], which
+    // equals the picker, so the URL reconcile has nothing to do; only the
+    // footprint sanitize takes AZ out of the committed build.
+    footprintMock.value = { ready: true, usingFallback: false, states: AZ_IL_TX.slice(1) };
+    render(['/portfolio-builder?states=AZ,IL'], 0);
+    await waitUntil(() => apiMocks.portfolioPreview.mock.calls.length === 2);
+    expect(lastCriteria()).toMatchObject({ states: ['IL'] });
+    await waitUntil(() => committedQuery().get('states') === 'IL');
+    expect(label('GEO')).toBe('GEO: Illinois');
+  });
+
   it('keeps the route free of the eslint-disable that made React Compiler skip it', () => {
     const source = readFileSync(join(process.cwd(), 'src', 'routes', 'portfolio-builder.tsx'), 'utf-8');
     expect(source).not.toMatch(/eslint-disable[^\n]*react-hooks/);
