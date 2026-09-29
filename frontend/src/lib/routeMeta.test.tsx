@@ -15,8 +15,13 @@ vi.mock('../components/AppContext', () => ({
   useApp: () => ({ lastBorrowerId: null }),
 }));
 
-vi.mock('./api', () => ({
-  api: { session: vi.fn() },
+const apiMocks = vi.hoisted(() => ({ session: vi.fn() }));
+
+// The bde112b0 shape: only `api` is replaced; ApiError and the other exports
+// stay real.
+vi.mock('./api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./api')>()),
+  api: apiMocks,
 }));
 
 import { RouteNav } from '../components/layout/RouteNav';
@@ -35,6 +40,7 @@ import {
   indexPathOf,
   resolveRouteMeta,
   routePageLabel,
+  routeSurfacePath,
 } from './routeMeta';
 
 /**
@@ -87,6 +93,36 @@ describe('documentTitleFor / routePageLabel', () => {
   it('names the legacy outreach redirects after their destination', () => {
     expect(routePageLabel('/outreach-composer')).toBe('Lead Queue');
     expect(routePageLabel('/outreach-composer/B-0123456789ABC')).toBe('Lead Queue');
+  });
+
+  it('titles a Genie conversation link "Ask Genie" and never shows its id (audit shell-03)', () => {
+    expect(ROUTES.askGenieConversation.pattern).toBe('/ask-genie/:conversationId');
+    expect(ROUTES.askGenieConversation.detail).toBe('conversation');
+    expect(NAVIGATION_ROUTE_IDS).not.toContain('askGenieConversation');
+    for (const id of [
+      '0123456789abcdef0123456789abcdef',
+      '01234567-89ab-cdef-0123-456789abcdef',
+      'B-0123456789ABC',
+      'not-an-id',
+    ]) {
+      const pathname = `/ask-genie/${id}`;
+      expect(resolveRouteMeta(pathname).id).toBe('askGenieConversation');
+      expect(routePageLabel(pathname)).toBe('Ask Genie');
+      expect(documentTitleFor(pathname)).toBe('Ask Genie · Mortgage Intelligence Platform');
+      expect(documentTitleFor(pathname)).not.toContain(id);
+    }
+    expect(resolveRouteMeta('/ask-genie/a/b')).toBe(NOT_FOUND_ROUTE_META);
+  });
+
+  it('routeSurfacePath maps a conversation link to its index page and leaves every other path alone', () => {
+    expect(routeSurfacePath('/ask-genie/0123456789abcdef0123456789abcdef')).toBe('/ask-genie');
+    expect(routeSurfacePath('/ask-genie/not-an-id')).toBe('/ask-genie');
+    expect(routeSurfacePath('/ask-genie')).toBe('/ask-genie');
+    // A borrower detail route is a different page per borrower.
+    expect(routeSurfacePath('/borrower-360/B-0123456789ABC')).toBe('/borrower-360/B-0123456789ABC');
+    expect(routeSurfacePath('/offer-orchestrator/B-0123456789ABC')).toBe('/offer-orchestrator/B-0123456789ABC');
+    expect(routeSurfacePath('/lead-queue')).toBe('/lead-queue');
+    expect(routeSurfacePath('/nope')).toBe('/nope');
   });
 
   it('shares the canonical masked-id shape with the Genie cell links', () => {
