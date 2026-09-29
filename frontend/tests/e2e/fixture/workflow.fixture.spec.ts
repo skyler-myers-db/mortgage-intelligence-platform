@@ -15,7 +15,9 @@
  *      and hovering the pager, the Next link or the nav "Offer" reads nothing.
  *   5. A retries_exhausted 503 on the borrower read, then a health down -> up
  *      flip: exactly one more borrower / recommend / lifecycle read, no /draft.
- *   6. Campaign setup announces clamps in the field.
+ *   6. Campaign setup announces clamps in the field, and a value it accepts
+ *      and commits is never flagged invalid by the control (step = the
+ *      committed precision).
  *   7. axe-clean on those Portfolio Builder and Offer states.
  */
 import type { Locator, Page } from '@playwright/test';
@@ -299,4 +301,25 @@ test.describe('campaign setup: Field and clamps (critic-04)', () => {
       await expectAxeClean(page, { key: { route: 'portfolio-builder', state: 'clamp-notice' }, theme, known: {} });
     });
   }
+
+  test('a committed value the app accepts is never :user-invalid (the step is the committed precision)', async ({ app, page }) => {
+    await app.gotoRoute('/portfolio-builder');
+    // Cents on the budget and a hundredth of a percent on the holdout are
+    // what normalizeCampaignNumericValue commits (and what the backend's
+    // two-decimal holdout accepts). Before, step=1 / step=0.1 made Chromium
+    // flag both as a step mismatch the moment the operator left the field.
+    await commit(page, 'Budget', '1250.50');
+    await expect(field(page, 'Budget')).toHaveValue('1250.5');
+    await commit(page, 'Holdout % (0-50)', '10.05');
+    await expect(field(page, 'Holdout % (0-50)')).toHaveValue('10.05');
+    for (const name of ['Budget', 'Holdout % (0-50)']) {
+      const validity = await field(page, name).evaluate((input: HTMLInputElement) => ({
+        userInvalid: input.matches(':user-invalid'),
+        stepMismatch: input.validity.stepMismatch,
+        valid: input.validity.valid,
+      }));
+      expect(validity, name).toEqual({ userInvalid: false, stepMismatch: false, valid: true });
+    }
+    await expect(page.locator('.field', { has: field(page, 'Budget') }).getByRole('status')).toHaveText('');
+  });
 });

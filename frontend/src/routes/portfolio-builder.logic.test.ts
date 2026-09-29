@@ -147,6 +147,19 @@ describe('portfolio campaign config', () => {
     expect(normalizeCampaignNumericValue('budget', '')).toEqual({ value: '', clamped: false, bound: null });
   });
 
+  it('commits at the precision each control steps by, so an accepted value is never a step mismatch', () => {
+    for (const field of Object.keys(CAMPAIGN_NUMERIC_BOUNDS) as CampaignNumericField[]) {
+      const { step } = CAMPAIGN_NUMERIC_BOUNDS[field];
+      for (const raw of ['1250.50', '10.05', '12.5', '1.234', '0.01']) {
+        const committed = Number(normalizeCampaignNumericValue(field, raw).value);
+        const steps = committed / step;
+        expect(Math.abs(steps - Math.round(steps)), `${field} ${raw}`).toBeLessThan(1e-6);
+      }
+      // The step is not coarser than a commit either: a hundredth survives.
+      expect(normalizeCampaignNumericValue(field, '10.05').value, field).toBe('10.05');
+    }
+  });
+
   it('words each clamp through lib/formatters, and says nothing for an in-range commit', () => {
     const notice = (field: CampaignNumericField, raw: string) =>
       campaignNumericNotice(field, normalizeCampaignNumericValue(field, raw));

@@ -94,14 +94,18 @@ export type CampaignSetupState = {
 
 export type CampaignNumericField = 'holdoutPct' | 'budget' | 'emailCost' | 'smsCost' | 'mailCost';
 
+// `step` is the precision normalizeCampaignNumericValue commits (two
+// decimals, which is also what the backend's holdout accepts). A coarser step
+// made the browser flag a value the app had just accepted as a step mismatch
+// (:user-invalid, and an "invalid entry" for assistive tech).
 export const CAMPAIGN_NUMERIC_BOUNDS: Record<CampaignNumericField, {
   min: number;
   max: number;
   fallback: number | null;
   step: number;
 }> = {
-  holdoutPct: { min: 0, max: 50, fallback: 10, step: 0.1 },
-  budget: { min: 0, max: 10_000_000, fallback: null, step: 1 },
+  holdoutPct: { min: 0, max: 50, fallback: 10, step: 0.01 },
+  budget: { min: 0, max: 10_000_000, fallback: null, step: 0.01 },
   emailCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
   smsCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
   mailCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
