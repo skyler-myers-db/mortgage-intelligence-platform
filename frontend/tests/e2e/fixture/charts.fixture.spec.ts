@@ -20,6 +20,7 @@ import {
 } from './data/analytics';
 import { TOTALS } from './data/reference';
 import { json } from './mockApi';
+import { asComputedRgb } from './renderedColor';
 import { expect, test } from './test';
 import { expectNoSurfaceOverflow } from './visual';
 
@@ -299,4 +300,44 @@ test.describe('analytics charts: governed histograms', () => {
       expect(inked).toBe(true);
     });
   }
+});
+
+test.describe('analytics charts: forced colors (a11y-10 / responsive-v3 / css-06)', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ forcedColors: 'active' });
+  });
+
+  /** Computed fill, edge style and edge width of an element: the forced-colors cue. */
+  const cue = (target: Locator) =>
+    target.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return `${style.backgroundColor} | ${style.borderTopStyle} | ${style.borderTopWidth}`;
+    });
+
+  test('economics: the scatter bands keep pairwise-distinct cues, apart from the chip edge', async ({ app, page }) => {
+    await app.gotoRoute('/analytics?view=economics');
+    const bin = (band: string) => page.locator(`#main-content .analytics-scatter__bin.score--${band}`).first();
+    await expect(bin('high')).toBeVisible();
+    const cues = [await cue(bin('high')), await cue(bin('med')), await cue(bin('low'))];
+    expect(new Set(cues).size, `three distinct cues: ${cues.join(' / ')}`).toBe(3);
+    expect(cues[0]).toBe(`${await asComputedRgb(page, 'CanvasText')} | none | 0px`);
+    // The chip rule is scoped to .score: the high bin does not take its solid
+    // focus-ring-width edge, and a real legend chip still does.
+    const chip = (band: string) => page.locator(`#main-content .score.score--${band}.analytics-scatter-legend__band`);
+    const ringWidth = await chip('high').evaluate((el) => getComputedStyle(el).getPropertyValue('--focus-ring-width').trim());
+    expect(await chip('high').evaluate((el) => `${getComputedStyle(el).borderTopStyle} ${getComputedStyle(el).borderTopWidth}`)).toBe(`solid ${ringWidth}`);
+    expect(await chip('med').evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe('dashed');
+    expect(await bin('high').evaluate((el) => getComputedStyle(el).borderTopStyle)).not.toBe('solid');
+  });
+
+  test('lead queue: a confidence bar on and off differ in fill and in edge style', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    const on = page.locator('#main-content .conf__bar.on').first();
+    const off = page.locator('#main-content .conf__bar:not(.on)').first();
+    await expect(on).toBeVisible();
+    const [onFill, onStyle] = (await cue(on)).split(' | ');
+    const [offFill, offStyle] = (await cue(off)).split(' | ');
+    expect(onFill).not.toBe(offFill);
+    expect([onStyle, offStyle]).toEqual(['solid', 'dashed']);
+  });
 });
