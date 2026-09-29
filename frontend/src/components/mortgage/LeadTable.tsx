@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../Icon';
 import { Button, SurfaceTitle } from '../Primitives';
@@ -13,22 +12,11 @@ import { queryKeys } from '../../lib/queryKeys';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import { planLeadCsvExport } from './LeadTable.csv';
 import { useLeadCsvExport } from './useLeadCsvExport';
-import {
-  LEAD_EXPANDED_PREVIEW_ESTIMATE_PX,
-  LEAD_ROW_OVERSCAN,
-  LEAD_VIRTUALIZATION_THRESHOLD,
-  leadRowEstimatePx,
-} from './LeadTable.constants';
+import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.constants';
 import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
-import {
-  isLeadApprovalEligible,
-  isLeadSelectableForSalesOps,
-  isTerminalApproval,
-  sortValue,
-  verifiedCampaignBinding,
-} from './LeadTable.logic';
+import { sortValue, verifiedCampaignBinding } from './LeadTable.logic';
+import { LeadTableBody } from './LeadTableBody';
 import { LeadTableHead } from './LeadTableHead';
-import { LeadTableRow } from './LeadTableRow';
 import { LeadTableViewControl } from './LeadTableViewControl';
 import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
 import { LeadTableStatusChips } from './LeadTableStatusChips';
@@ -39,12 +27,12 @@ import { useLeadApprovalActions, type CampaignBindingState } from './useLeadAppr
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
-import { useLeadTableInitialOffset, useLeadTableScroll } from './useLeadTableScroll';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
 import { ariaKeyShortcuts } from '../../lib/keymap';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
+import type { LeadSummary } from '../../types';
 import type { LeadTableProps, LeadTableSort, SortDir, SortKey } from './LeadTable.types';
 import './LeadTable.css';
 
@@ -70,8 +58,9 @@ const BULK_REVIEW_CHUNK = lazyModule(() => import('./LeadBulkApproveReview'));
  * AppContext; a chip on the rightmost column shows Pending / Approved /
  * Rejected.
  *
- * This module is the table SHELL: props, campaign binding, sorting,
- * virtualization, the thead/tbody composition, and CSV export. The behavior
+ * This module is the table SHELL: props, campaign binding, sorting, the
+ * thead/tbody composition, and CSV export; the rows and their virtualizer
+ * are LeadTableBody (runtime-04 slice 3). The behavior
  * lives in focused siblings — `useLeadApprovalActions` (approve / reject /
  * bulk approve / selection), `useLeadSalesActions` (assignment, disposition,
  * optimistic row overrides), `useLeadTableKeyboardFlow` (row cursor, approve
@@ -95,6 +84,10 @@ const BULK_REVIEW_CHUNK = lazyModule(() => import('./LeadBulkApproveReview'));
  * drafts samples only on "Preview 3 sample drafts". Shift+A and the Cmd-K
  * verb open that same gate; one selected row opens its own review instead.
  */
+
+function ignoreScrollToIndex(): void {
+  // Replaced by LeadTableBody once it has mounted its virtualizer.
+}
 
 export function LeadTable({
   leads,
@@ -200,45 +193,11 @@ export function LeadTable({
   const expandedRowIndex = expanded ? rowIds.indexOf(expanded) : -1;
   const hasExpandedRow = expandedRowIndex >= 0;
   const shouldVirtualize = sortedLeads.length > LEAD_VIRTUALIZATION_THRESHOLD;
-  // Stable virtualizer inputs: an inline getItemKey is a virtual-core memo
-  // dependency, so a new one on every render rebuilt all 500 measurements.
   // The row estimate follows the density (responsive-09 item 3).
   const rowEstimatePx = leadRowEstimatePx(density);
-  const getItemKey = useCallback((index: number) => rowIds[index] ?? index, [rowIds]);
-  const estimateSize = useCallback((index: number) => rowEstimatePx + (
-    index === expandedRowIndex ? LEAD_EXPANDED_PREVIEW_ESTIMATE_PX : 0
-  ), [rowEstimatePx, expandedRowIndex]);
-  // Back to this entry: the virtualizer starts at the saved offset (runtime-08).
-  const initialTableOffset = useLeadTableInitialOffset(restoreScroll);
-  // TanStack Virtual returns imperative instance methods tied to the scroll
-  // element. The hook stays local to this table and its methods are not passed
-  // into memoized children, so React Compiler's library advisory is expected.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const rowVirtualizer = useVirtualizer({
-    count: sortedLeads.length,
-    enabled: shouldVirtualize,
-    estimateSize,
-    getItemKey,
-    getScrollElement: () => tableWrapRef.current,
-    overscan: LEAD_ROW_OVERSCAN,
-    initialOffset: initialTableOffset,
-  });
-  useLeadTableScroll({
-    enabled: restoreScroll,
-    tableWrapRef,
-    virtualizer: shouldVirtualize ? rowVirtualizer : null,
-  });
-  const virtualItems = shouldVirtualize ? rowVirtualizer.getVirtualItems() : [];
-  const visibleRows = shouldVirtualize
-    ? virtualItems.map((item) => ({
-        lead: sortedLeads[item.index],
-        virtualIndex: item.index,
-      }))
-    : sortedLeads.map((lead, virtualIndex) => ({ lead, virtualIndex }));
-  const topSpacerHeight = virtualItems[0]?.start ?? 0;
-  const bottomSpacerHeight = virtualItems.length > 0
-    ? Math.max(0, rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end)
-    : 0;
+  // LeadTableBody owns the virtualizer and publishes its scrollToIndex here;
+  // the keyboard flow reads it when it moves the cursor out of the window.
+  const scrollToIndexRef = useRef<(index: number) => void>(ignoreScrollToIndex);
 
   const approval = useLeadApprovalActions({
     displayLeads,
@@ -281,7 +240,7 @@ export function LeadTable({
     assigneeRef,
     tableWrapRef,
     virtualized: shouldVirtualize,
-    scrollToIndex: (index) => rowVirtualizer.scrollToIndex(index, { align: 'auto' }),
+    scrollToIndex: (index) => scrollToIndexRef.current(index),
     openEvidence: setDrawer,
     reviewChunk: {
       isReady: () => REVIEW_CHUNK.current() !== null,
@@ -337,6 +296,15 @@ export function LeadTable({
     onInspectEvidence: openReview.mode === 'dialog' ? flow.inspectEvidenceFromDialog : undefined,
   };
   const skipTargetId = `${useId()}-end`;
+  // Row callbacks are made here, once, never per row: a compiled LeadTableRow
+  // then gets identical props (LeadTableBody).
+  const toggleRow = useCallback((row: LeadSummary, open: boolean) => {
+    setLastBorrowerId(row.borrower_id);
+    flow.toggleRow(row, open);
+  }, [setLastBorrowerId, flow]);
+  const toggleSelect = useCallback((borrowerId: string, range: boolean) => (range
+    ? approval.selectRange(borrowerId, rowIds)
+    : approval.toggleSelect(borrowerId)), [approval, rowIds]);
   // An Approve waiting on the review chunk (nothing drafted yet), or a
   // review whose chunk is still rendering in.
   const reviewOpeningFor = flow.reviewLoading
@@ -570,80 +538,39 @@ export function LeadTable({
             selectAllDisabled={approval.selectableIds.length === 0 || approval.bulkApproving}
             onToggleSelectAll={approval.toggleSelectAll}
           />
-          {shouldVirtualize && topSpacerHeight > 0 && (
-            <tbody aria-hidden="true">
-              <tr aria-hidden="true" className="lead-table__virtual-spacer">
-                <td colSpan={columnCount} style={{ height: topSpacerHeight }} />
-              </tr>
-            </tbody>
-          )}
-            {visibleRows.map(({ lead, virtualIndex }) => {
-              const isOpen = expanded === lead.borrower_id;
-              // Prefer in-session AppContext override (set optimistically on
-              // approve/reject); fall back to the server-projected
-              // approval_status so a page reload doesn't make approved
-              // borrowers look pending. Round-2 hole-finder #12, 2026-04-23.
-              const serverStatus = lead.approval_status;
-              const rowApproval: string | undefined = approvals[lead.borrower_id]
-                ?? (isTerminalApproval(serverStatus)
-                    ? serverStatus
-                    : undefined);
-              const isSelected = approval.selectedIds.has(lead.borrower_id);
-              const isSelectable = isLeadSelectableForSalesOps(serverStatus, rowApproval, lead);
-              const isApprovalEligible = isLeadApprovalEligible(serverStatus, rowApproval, lead);
-              return (
-                <tbody
-                  key={lead.borrower_id}
-                  data-index={shouldVirtualize ? virtualIndex : undefined}
-                  ref={shouldVirtualize ? rowVirtualizer.measureElement : undefined}
-                >
-                  <LeadTableRow
-                    lead={lead}
-                    virtualIndex={virtualIndex}
-                    view={view}
-                    ariaRowIndex={virtualIndex + 2 + (
-                      hasExpandedRow && virtualIndex > expandedRowIndex ? 1 : 0
-                    )}
-                    isOpen={isOpen}
-                    approval={rowApproval}
-                    isSelected={isSelected}
-                    isSelectable={isSelectable}
-                    isApprovalEligible={isApprovalEligible}
-                    approvalActionsDisabled={campaignBindingBlocked}
-                    approverGate={approverGate}
-                    bulkApproving={approval.bulkApproving}
-                    salesBusy={sales.salesBusy}
-                    salesTeamCount={salesTeam.length}
-                    pendingDecision={approval.pendingDecisions.get(lead.borrower_id) ?? null}
-                    decisionReceipt={approval.decisionReceipts[lead.borrower_id] ?? null}
-                    isCursor={flow.cursor.cursorId === lead.borrower_id}
-                    shortcutsLive={singleKeysOn}
-                    reviewSlot={reviewProps && ReviewInline && isOpen && openReview?.mode === 'inline'
-                      && openReview.borrowerId === lead.borrower_id
-                      ? <ReviewInline {...reviewProps} />
-                      : null}
-                    onToggleRow={(row, open) => {
-                      setLastBorrowerId(row.borrower_id);
-                      flow.toggleRow(row, open);
-                    }}
-                    onToggleSelect={(borrowerId, range) => (range
-                      ? approval.selectRange(borrowerId, rowIds)
-                      : approval.toggleSelect(borrowerId))}
-                    onApprove={flow.openReview}
-                    onReject={flow.openReject}
-                    onOpenDisposition={sales.openDisposition}
-                    onAssignmentUpdate={sales.applyLeadUpdate}
-                  />
-                </tbody>
-              );
-            })}
-            {shouldVirtualize && bottomSpacerHeight > 0 && (
-              <tbody aria-hidden="true">
-              <tr aria-hidden="true" className="lead-table__virtual-spacer">
-                <td colSpan={columnCount} style={{ height: bottomSpacerHeight }} />
-              </tr>
-              </tbody>
-            )}
+          <LeadTableBody
+            rows={sortedLeads}
+            rowIds={rowIds}
+            view={view}
+            columnCount={columnCount}
+            expanded={expanded}
+            expandedRowIndex={expandedRowIndex}
+            virtualized={shouldVirtualize}
+            rowEstimatePx={rowEstimatePx}
+            restoreScroll={restoreScroll}
+            tableWrapRef={tableWrapRef}
+            scrollToIndexRef={scrollToIndexRef}
+            approvals={approvals}
+            selectedIds={approval.selectedIds}
+            pendingDecisions={approval.pendingDecisions}
+            decisionReceipts={approval.decisionReceipts}
+            cursorId={flow.cursor.cursorId}
+            campaignBindingBlocked={campaignBindingBlocked}
+            approverGate={approverGate}
+            bulkApproving={approval.bulkApproving}
+            salesBusy={sales.salesBusy}
+            salesTeamCount={salesTeam.length}
+            shortcutsLive={singleKeysOn}
+            reviewSlot={reviewProps && ReviewInline && openReview?.mode === 'inline'
+              ? { borrowerId: openReview.borrowerId, node: <ReviewInline {...reviewProps} /> }
+              : null}
+            onToggleRow={toggleRow}
+            onToggleSelect={toggleSelect}
+            onApprove={flow.openReview}
+            onReject={flow.openReject}
+            onOpenDisposition={sales.openDisposition}
+            onAssignmentUpdate={sales.applyLeadUpdate}
+          />
         </table>
       </div>
       <span id={skipTargetId} className="sr-only lead-table__skip-target" tabIndex={-1}>End of ranked borrowers table</span>
