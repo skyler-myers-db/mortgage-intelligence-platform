@@ -76,8 +76,9 @@ function consoleWidth(): number {
  * offset the DOCKED panel already takes in CSS
  * (`[data-console="open"] .genie:not(.is-undocked)`); 0 otherwise.
  */
-export function genieRightInset(consoleOpen: boolean, viewport: GenieSize, consoleW = consoleWidth()): number {
-  return consoleOpen && viewport.w >= CONSOLE_DOCK_MIN_VIEWPORT ? consoleW + VIEWPORT_GUTTER * 2 : 0;
+export function genieRightInset(consoleOpen: boolean, viewport: GenieSize, consoleW?: number): number {
+  // --console-w is read only while the Console is docked: never on a closed-Console render.
+  return consoleOpen && viewport.w >= CONSOLE_DOCK_MIN_VIEWPORT ? (consoleW ?? consoleWidth()) + VIEWPORT_GUTTER * 2 : 0;
 }
 
 /** The x the panel treats as the viewport's right edge: the Console's left edge while it is open. */

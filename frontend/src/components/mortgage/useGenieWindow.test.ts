@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   clampGeniePosition,
   fitGenieSizeToViewport,
@@ -103,6 +103,21 @@ describe('Genie window geometry', () => {
       expect(genieRightInset(false, { w: 1440, h: 900 }, 300)).toBe(0);
       expect(genieRightInset(true, { w: 1279, h: 900 }, 300)).toBe(0);
       expect(clampGeniePosition({ x: 1440, y: 100 }, 420, 640, { w: 1440, h: 900 }, 0)).toEqual({ x: 1004, y: 100 });
+    });
+
+    it('reads --console-w only while the Console is docked, never on a closed-Console render', () => {
+      const readStyle = vi.fn(() => ({ getPropertyValue: () => '320px' }));
+      vi.stubGlobal('document', { documentElement: {} });
+      vi.stubGlobal('getComputedStyle', readStyle);
+      try {
+        expect(genieRightInset(false, { w: 1440, h: 900 })).toBe(0);
+        expect(genieRightInset(true, { w: 1279, h: 900 })).toBe(0);
+        expect(readStyle).not.toHaveBeenCalled();
+        expect(genieRightInset(true, { w: 1440, h: 900 })).toBe(320 + 32);
+        expect(readStyle).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 
