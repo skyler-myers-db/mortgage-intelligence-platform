@@ -779,3 +779,9 @@ export default function OfferOrchestrator() {
     </PageShell>
   );
 }
+
+// The Lead Queue's expanded row renders the ApprovalBanner this route ships
+// (audit tables-01): LeadRowPreview takes it from this module through
+// OfferOrchestratorRoute.preload(), which a row expand already runs, so the
+// banner is bundled once, here.
+export { ApprovalBanner } from '../components/mortgage/ApprovalBanner';

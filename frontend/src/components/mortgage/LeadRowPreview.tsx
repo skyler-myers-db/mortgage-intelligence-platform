@@ -7,7 +7,9 @@ import { offerDisplayLabel, offerRationale, offerShortDescription } from '../../
 import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
 import { genieLeadPrompt } from '../../lib/genieContext';
 import { useQueueLinkState } from '../../lib/queueContext';
+import { OfferOrchestratorRoute } from '../../lib/routePreloaders';
 import { useApp } from '../AppContext';
+import type { ApprovalBanner as ApprovalBannerComponent } from './ApprovalBanner';
 import { GenieAskAbout } from './GenieAskAbout';
 import { Button, EvidenceChip } from '../Primitives';
 import { ConfidenceMeter } from './ConfidenceMeter';
@@ -23,12 +25,21 @@ import { dispositionLabel, outreachLabel } from './LeadTable.logic';
 // outcome meanwhile, and the receipt reads nothing before it mounts.
 const RECEIPT_CHUNK = lazyModule(() => import('./DecisionReceipt'));
 // The row's approval banner (tables-01) is the prototype ApprovalBanner, which
-// Offer Orchestrator ships in its own route chunk. A static import here moved
-// it into a chunk shared with both queue routes (+1.06 KiB br on each route
-// closure, measured); loaded on the first eligible expand instead (an expand
-// already warms Offer Orchestrator's route code, which carries it), it adds
-// nothing to their natural-load closures. Code only: the banner reads nothing.
-const BANNER_CHUNK = lazyModule(() => import('./ApprovalBanner'));
+// Offer Orchestrator ships in its route chunk, and a row expand already warms
+// that chunk (LeadTable's preloadRouteForPath). The banner is taken from it,
+// through the same route preloader (one load, and no second preload list in
+// this chunk): a static import here moved the banner into a chunk shared
+// with both queue routes (+1.06 KiB br on each route closure), a dynamic
+// import of ./ApprovalBanner split it out of the route chunk into one of its
+// own (+0.63 KiB br of total JS), and an import() of the route module from
+// here added its preload list to the LeadTable chunk (+0.14 KiB br; all
+// measured). The preloader's type names only the default export, so the
+// banner is read as optional: a route module without it renders no banner
+// (the row's own Approve stays). Code only: the banner, and the route
+// module's evaluation, read nothing.
+const BANNER_CHUNK = lazyModule<{ default: unknown; ApprovalBanner?: typeof ApprovalBannerComponent }>(
+  () => OfferOrchestratorRoute.preload(),
+);
 
 /**
  * id of the expanded row's receipt block: the queue's "View receipt" toast

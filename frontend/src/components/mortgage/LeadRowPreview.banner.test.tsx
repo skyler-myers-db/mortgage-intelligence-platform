@@ -115,8 +115,9 @@ describe('the expanded row\'s approval banner', () => {
   const button = (name: string) => [...(gate()?.querySelectorAll('button') ?? [])]
     .find((candidate) => candidate.textContent?.trim() === name) ?? null;
 
-  // The banner is a lazily loaded chunk (the queue routes' closure budget).
-  // Load it once, so every render below is synchronous.
+  // The banner is taken from Offer Orchestrator's route chunk, loaded on
+  // demand (the budget; LeadRowPreview). Load it once, for real, so every
+  // render below is synchronous.
   beforeAll(async () => {
     document.body.innerHTML = '<table><tbody id="root"></tbody></table>';
     root = createRoot(document.getElementById('root') as HTMLElement);
@@ -127,6 +128,7 @@ describe('the expanded row\'s approval banner', () => {
       });
       expect(gate()).not.toBeNull();
     }, { timeout: 15_000 });
+    expect(apiCalls, 'loading the route chunk that carries the banner reads nothing').toEqual([]);
     act(() => root.unmount());
   }, 30_000);
 
