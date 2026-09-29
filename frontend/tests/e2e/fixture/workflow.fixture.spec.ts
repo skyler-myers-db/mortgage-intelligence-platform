@@ -1,7 +1,7 @@
 /**
  * Rendered-layer proofs for the wave-4b lane "w4-workflow" (audit 2026-09-21
  * shell-04 / flow-09, runtime-06, delivery-08 L slice, states-03 item 2,
- * critic-04, critic-v3, a11y-05 item 4), in the production build at 1440x900:
+ * critic-04, a11y-05 item 4), in the production build at 1440x900:
  *
  *   1. "Build offer" from a filtered queue opens Offer with the queue pager
  *      ("2 of 3 ranked in IL"), clear of the docked decision bar with the
@@ -15,18 +15,15 @@
  *      and hovering the pager, the Next link or the nav "Offer" reads nothing.
  *   5. A retries_exhausted 503 on the borrower read, then a health down -> up
  *      flip: exactly one more borrower / recommend / lifecycle read, no /draft.
- *   6-8. Campaign setup announces clamps, restores the operator's draft after
- *      a reload (cleared by a save and by an actor change), and shows the
- *      server copy as text.
+ *   6-8. Campaign setup announces clamps and shows the server copy as text.
  *   9. axe-clean on those Portfolio Builder and Offer states.
  */
 import type { Locator, Page } from '@playwright/test';
-import type { DecisionReceipt, HealthPayload } from '../../../src/lib/apiTypes';
+import type { DecisionReceipt } from '../../../src/lib/apiTypes';
 import { expectAxeClean, KNOWN_VIOLATIONS } from './axe';
 import { BORROWERS } from './data/borrowers';
 import { RequestGate, approveResult, ledgerReceipt } from './data/decisionReceipt';
 import { WAREHOUSE_OUTAGE_503 } from './data/errorSurfaces';
-import { portfolioCreated } from './data/feedbackGuard';
 import { HEALTH_OK } from './data/shell';
 import { HEALTH_WAREHOUSE_DOWN, switchHealth } from './data/warehouseResume';
 import { json, type MockApi } from './mockApi';
@@ -35,7 +32,6 @@ import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 import { expect, test } from './test';
 
 const MAIN = '#main-content';
-const CAMPAIGN_DRAFT_KEY = 'mip.campaignDraft';
 
 interface Box {
   left: number;
@@ -278,24 +274,13 @@ test.describe('Offer queue pager and Next in queue (shell-04 / flow-09)', () => 
   });
 });
 
-test.describe('campaign setup: Field, clamps and the restored draft (critic-04, critic-v3)', () => {
+test.describe('campaign setup: Field and clamps (critic-04)', () => {
   const field = (page: Page, name: string) => page.getByRole('spinbutton', { name, exact: true });
-  const draftChip = (page: Page) => page.getByTestId('campaign-draft-restored');
-  const storedDraft = (page: Page) => page.evaluate((key) => window.sessionStorage.getItem(key), CAMPAIGN_DRAFT_KEY);
 
   async function commit(page: Page, name: string, value: string): Promise<void> {
     await field(page, name).click();
     await field(page, name).fill(value);
     await field(page, name).blur();
-  }
-
-  /** Reload through the unsaved-changes prompt a dirty setup raises. */
-  async function reloadThroughPrompt(page: Page, app: { settle(): Promise<void> }): Promise<void> {
-    const accept = (dialog: { accept(): Promise<void> }) => void dialog.accept();
-    page.on('dialog', accept);
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    page.off('dialog', accept);
-    await app.settle();
   }
 
   for (const theme of FIXTURE_THEMES) {
@@ -322,56 +307,4 @@ test.describe('campaign setup: Field, clamps and the restored draft (critic-04, 
       await expect(subject).toHaveJSProperty('tagName', 'DD');
     });
   }
-
-  test('a draft comes back after a reload with the chip and Reset, and a save clears it', async ({ app, page, mockApi }) => {
-    mockApi.register('POST', '/api/portfolio/create', (request) =>
-      portfolioCreated(String((request.body as { name?: unknown } | null)?.name ?? '')));
-    await app.gotoRoute('/portfolio-builder');
-    await commit(page, 'Budget', '25000');
-    await expect.poll(() => storedDraft(page)).not.toBeNull();
-    const stored = JSON.parse((await storedDraft(page)) ?? '{}') as { setup?: Record<string, unknown> };
-    expect(Object.keys(stored.setup ?? {}).sort()).toEqual([
-      'budget', 'emailCost', 'endLocal', 'holdoutPct', 'mailCost', 'marketHouseholdTogether', 'smsCost', 'startLocal',
-    ]);
-
-    await reloadThroughPrompt(page, app);
-    await expect(draftChip(page)).toContainText('Draft restored');
-    await expect(field(page, 'Budget')).toHaveValue('25000');
-    await expectAxeClean(page, { key: { route: 'portfolio-builder', state: 'draft-restored' }, theme: 'dark', known: {} });
-
-    await draftChip(page).getByRole('button', { name: 'Reset restored draft' }).click();
-    await expect(draftChip(page)).toHaveCount(0);
-    await expect(field(page, 'Budget')).toHaveValue('');
-    await expect.poll(() => storedDraft(page)).toBeNull();
-
-    // A saved build is the new baseline: its setup is not a draft any more.
-    await commit(page, 'Budget', '30000');
-    await expect.poll(() => storedDraft(page)).not.toBeNull();
-    await page.getByTestId('portfolio-save-build').click();
-    await page.getByTestId('portfolio-save-confirm').click();
-    await expect(page.getByTestId('portfolio-save-name')).toHaveCount(0);
-    await expect.poll(() => storedDraft(page)).toBeNull();
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await app.settle();
-    await expect(draftChip(page)).toHaveCount(0);
-  });
-
-  test('an actor_cache_key change clears the draft, so the next actor restores nothing', async ({ app, page, mockApi }) => {
-    let actor = 'fixture-actor-a';
-    mockApi.register('GET', '/api/health', () => json<HealthPayload>({ ...HEALTH_OK, actor_cache_key: actor }));
-    await app.gotoRoute('/portfolio-builder');
-    await commit(page, 'Budget', '25000');
-    await expect.poll(() => storedDraft(page)).not.toBeNull();
-
-    actor = 'fixture-actor-b';
-    const healthCalls = () => mockApi.calls.filter((call) => /^\/api(\/v1)?\/health$/.test(call.path)).length;
-    const healthBefore = healthCalls();
-    await page.clock.runFor(8_000);
-    await expect.poll(healthCalls, { timeout: 15_000 }).toBeGreaterThan(healthBefore);
-    await expect.poll(() => storedDraft(page)).toBeNull();
-
-    await reloadThroughPrompt(page, app);
-    await expect(draftChip(page)).toHaveCount(0);
-    await expect(field(page, 'Budget')).toHaveValue('');
-  });
 });

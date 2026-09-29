@@ -40,8 +40,6 @@ export function CampaignSetupPanel({
   onToggleHouseholdDedup,
   onRegenerate,
   onApply,
-  draftRestored = false,
-  onResetDraft,
 }: {
   setup: CampaignSetupState;
   recommendation?: CampaignRecommendationResponse;
@@ -57,9 +55,6 @@ export function CampaignSetupPanel({
   onToggleHouseholdDedup: () => void;
   onRegenerate: () => void;
   onApply: () => void;
-  /** critic-v3: the setup fields came back from this tab's unsaved draft. */
-  draftRestored?: boolean;
-  onResetDraft?: () => void;
 }) {
   const recommendationActionable = Boolean(
     canRecommend
@@ -86,17 +81,7 @@ export function CampaignSetupPanel({
             </div>
           </div>
         </div>
-        {draftRestored ? (
-          <div className="chip-row" data-testid="campaign-draft-restored">
-            <span className="chip chip--neutral" role="status">Draft restored</span>
-            <Button variant="ghost" size="sm" onClick={onResetDraft} aria-label="Reset restored draft">
-              Reset
-            </Button>
-            <span className="chip chip--success">eligible only · 30d cap</span>
-          </div>
-        ) : (
-          <span className="chip chip--success">eligible only · 30d cap</span>
-        )}
+        <span className="chip chip--success">eligible only · 30d cap</span>
       </div>
       <div className="surface__body">
         <div className="campaign-recommendation" aria-live="polite">

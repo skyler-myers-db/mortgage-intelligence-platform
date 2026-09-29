@@ -56,13 +56,6 @@ import {
   type CampaignSetupState,
 } from './portfolio-builder.logic';
 import { campaignSetupsEqual, portfolioUnsavedMessage } from './portfolio-builder.unsaved';
-import {
-  applyCampaignDraft,
-  campaignDraftOf,
-  clearCampaignDraft,
-  readCampaignDraft,
-  useCampaignDraftPersistence,
-} from './portfolio-builder.draft';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { populationKpiLabel } from '../lib/populationLabels';
 
@@ -151,24 +144,9 @@ export default function PortfolioBuilder() {
   const [savePanelOpen, setSavePanelOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [saveValidationError, setSaveValidationError] = useState<string | null>(null);
-  // critic-v3: the operator's unsaved setup fields (never the server copy)
-  // come back after a link, a route change or a reload in this tab. A
-  // restored draft is unsaved work for the states-05 guard.
-  const [restoredDraft] = useState(readCampaignDraft);
-  const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(
-    () => applyCampaignDraft(DEFAULT_CAMPAIGN_SETUP, restoredDraft),
-  );
+  const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
   // The setup last persisted with a build: the unsaved-changes baseline.
   const [savedCampaignSetup, setSavedCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
-  const [draftRestored, setDraftRestored] = useState(
-    () => !campaignSetupsEqual(applyCampaignDraft(DEFAULT_CAMPAIGN_SETUP, restoredDraft), DEFAULT_CAMPAIGN_SETUP),
-  );
-  useCampaignDraftPersistence(campaignSetup, savedCampaignSetup);
-  const resetCampaignDraft = () => {
-    setCampaignSetup((current) => ({ ...current, ...campaignDraftOf(savedCampaignSetup) }));
-    clearCampaignDraft();
-    setDraftRestored(false);
-  };
   const campaignBuildConfig = useMemo(() => {
     const config = buildCampaignConfig(campaignSetup);
     return {
@@ -391,8 +369,6 @@ export default function PortfolioBuilder() {
     }
     saveRequestIds.settle(intent);
     setSavedCampaignSetup(campaignSetup);
-    clearCampaignDraft();
-    setDraftRestored(false);
     setSavePanelOpen(false);
     toast.success('Build saved', { detail: name, auditEventId: created?.audit_event_id ?? null });
   }, [
@@ -744,8 +720,6 @@ export default function PortfolioBuilder() {
         onToggleHouseholdDedup={toggleHouseholdDedup}
         onRegenerate={() => void recommendationQuery.refetch()}
         onApply={applyRecommendation}
-        draftRestored={draftRestored}
-        onResetDraft={resetCampaignDraft}
       />
 
       <SavedCampaignsPanel
