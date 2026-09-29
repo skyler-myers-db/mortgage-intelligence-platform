@@ -4,6 +4,14 @@ import { SINGLE_KEY_SHORTCUTS_STORAGE_KEY, clearSingleKeyShortcutsPreference } f
 import { clearPinnedInsights } from './pinnedInsights';
 import { QUEUE_CONTEXT_STORAGE_KEY, clearQueueContext } from './queueContext';
 
+/**
+ * Portfolio Builder's unsaved campaign setup (audit critic-v3): operator setup
+ * fields only, per tab. Declared here so the actor-change clear below needs
+ * only the string; the store itself rides the portfolio chunk
+ * (routes/portfolio-builder.draft.ts).
+ */
+export const CAMPAIGN_DRAFT_STORAGE_KEY = 'mip.campaignDraft';
+
 export const ACTOR_SCOPED_LOCAL_STORAGE_KEYS = [
   'mip.lastBorrowerId',
   // The Console "Single-key shortcuts" choice (WCAG 2.1.4) is per actor.
@@ -21,6 +29,8 @@ export const ACTOR_SCOPED_SESSION_STORAGE_KEYS = [
   // Lead Queue context behind the dossier breadcrumbs and pager (masked ids
   // only). Clearing it also invalidates the copies history entries carry.
   QUEUE_CONTEXT_STORAGE_KEY,
+  // One operator's unsaved campaign setup never restores for the next one.
+  CAMPAIGN_DRAFT_STORAGE_KEY,
 ] as const;
 
 /**

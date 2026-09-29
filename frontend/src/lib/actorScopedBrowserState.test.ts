@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ACTOR_SCOPED_LOCAL_STORAGE_KEYS,
   ACTOR_SCOPED_SESSION_STORAGE_KEYS,
+  CAMPAIGN_DRAFT_STORAGE_KEY,
   clearActorScopedBrowserState,
 } from './actorScopedBrowserState';
 import {
@@ -65,6 +66,16 @@ describe('actor-scoped browser state', () => {
     }
     expect(window.localStorage.getItem(GENIE_CONVERSATION_STORAGE_KEY)).toBeNull();
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the unsaved campaign draft, so a setup never restores for the next operator (critic-v3)', () => {
+    // The key string is declared here (the shell's closure); the store that
+    // writes it rides the lazy portfolio chunk.
+    expect(CAMPAIGN_DRAFT_STORAGE_KEY).toBe('mip.campaignDraft');
+    expect(ACTOR_SCOPED_SESSION_STORAGE_KEYS).toContain(CAMPAIGN_DRAFT_STORAGE_KEY);
+    window.sessionStorage.setItem(CAMPAIGN_DRAFT_STORAGE_KEY, '{"v":1,"setup":{"budget":"25000"}}');
+    clearActorScopedBrowserState();
+    expect(window.sessionStorage.getItem(CAMPAIGN_DRAFT_STORAGE_KEY)).toBeNull();
   });
 
   it('clears the in-flight Genie turn record, so a reload after an actor change resumes nothing', () => {
