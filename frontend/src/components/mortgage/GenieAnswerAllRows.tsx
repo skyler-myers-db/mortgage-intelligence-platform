@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type FocusEvent, type UIEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type UIEvent } from 'react';
 import { Link } from 'react-router';
 import { formatCount } from '../../lib/formatters';
 import { genieCellHref, type GenieAnswerCohort } from '../../lib/genieCellLinks';
@@ -89,16 +89,30 @@ export default function GenieAnswerAllRows({
   // The row holding focus (a cell link), tracked from focusin / focusout on
   // the body: it stays mounted when it scrolls out of the window, so the
   // focused link is never unmounted under the reader (w3-genie-reading
-  // review; genie-06 item 3).
+  // review; genie-06 item 3). Native listeners, not JSX onFocus / onBlur: a
+  // focus handler on the (non-interactive) tbody is a jsx-a11y hit, and the
+  // tbody only observes focus that its links take.
+  const bodyRef = useRef<HTMLTableSectionElement | null>(null);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
-  const onBodyFocus = (event: FocusEvent<HTMLTableSectionElement>) => {
-    const rowIndex = Number(event.target.closest('tr')?.getAttribute('aria-rowindex'));
-    setFocusedIndex(Number.isInteger(rowIndex) && rowIndex >= 2 ? rowIndex - 2 : null);
-  };
-  const onBodyBlur = (event: FocusEvent<HTMLTableSectionElement>) => {
-    const next = event.relatedTarget;
-    if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFocusedIndex(null);
-  };
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return undefined;
+    const onFocusIn = (event: FocusEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const rowIndex = Number(target?.closest('tr')?.getAttribute('aria-rowindex'));
+      setFocusedIndex(Number.isInteger(rowIndex) && rowIndex >= 2 ? rowIndex - 2 : null);
+    };
+    const onFocusOut = (event: FocusEvent) => {
+      const next = event.relatedTarget;
+      if (!(next instanceof Node) || !body.contains(next)) setFocusedIndex(null);
+    };
+    body.addEventListener('focusin', onFocusIn);
+    body.addEventListener('focusout', onFocusOut);
+    return () => {
+      body.removeEventListener('focusin', onFocusIn);
+      body.removeEventListener('focusout', onFocusOut);
+    };
+  }, []);
 
   const inView = Math.ceil(view.viewHeight / view.rowHeight);
   const start = Math.max(0, Math.min(rows.length, Math.floor(view.scrollTop / view.rowHeight) - OVERSCAN_ROWS));
@@ -177,7 +191,7 @@ export default function GenieAnswerAllRows({
               ))}
             </tr>
           </thead>
-          <tbody onFocus={onBodyFocus} onBlur={onBodyBlur}>
+          <tbody ref={bodyRef}>
             {bodyRows}
           </tbody>
         </table>
