@@ -107,7 +107,7 @@ export function GenieDock({ open, onOpen, onClose, onWarm, Chat }: GenieDockProp
             {genieLauncherStatusText(status, outcome)}
           </span>
           <button
-            className={['genie__fab', genieLauncherStateClass(status)].filter(Boolean).join(' ')}
+            className={`genie__fab ${genieLauncherStateClass(status)}`}
             onClick={onOpen}
             onMouseEnter={onWarm}
             onFocus={onWarm}

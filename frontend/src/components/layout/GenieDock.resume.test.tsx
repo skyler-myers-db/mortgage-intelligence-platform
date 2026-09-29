@@ -109,7 +109,7 @@ describe('GenieDock resumes a turn before the first open', () => {
     expect(signal.imports).toBe(0);
     expect(signal.ensure).not.toHaveBeenCalled();
     expect(signal.resume).not.toHaveBeenCalled();
-    expect(fab()!.className).toBe('genie__fab');
+    expect([...fab()!.classList]).toEqual(['genie__fab']);
     expect(fab()!.hasAttribute('aria-describedby')).toBe(false);
     expect(description()?.textContent).toBe('');
   }, MODULE_GRAPH_BUDGET_MS);
