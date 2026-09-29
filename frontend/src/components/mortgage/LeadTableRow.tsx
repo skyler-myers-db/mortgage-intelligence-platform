@@ -145,7 +145,8 @@ export function LeadTableRow({
             event.stopPropagation();
             onToggleSelect(lead.borrower_id, event.shiftKey);
           }}
-          aria-keyshortcuts={rowKeys ? 'X' : undefined}
+          // X toggles the row, Shift+X selects the range to it (tables-07).
+          aria-keyshortcuts={rowKeys ? 'X Shift+X' : undefined}
           data-testid={`lead-select-${lead.borrower_id}`}
         />
       </td>
