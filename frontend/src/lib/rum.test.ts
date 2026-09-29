@@ -28,6 +28,31 @@ describe('sanitizeRumRoute', () => {
     expect(sanitizeRumRoute('/audit/events/123456789')).toBe('/audit/events/:numeric_id');
   });
 
+  it('templates any Ask Genie conversation segment, malformed or not (audit shell-03)', () => {
+    for (const id of [
+      '0123456789abcdef0123456789abcdef',
+      '01234567-89ab-cdef-0123-456789abcdef',
+      'not-an-id',
+      'Alice%20Smith',
+      'a/b',
+    ]) {
+      expect(sanitizeRumRoute(`/ask-genie/${id}`)).toBe('/ask-genie/:conversation_id');
+      expect(sanitizeRumRoute(`/ask-genie/${id}?tab=ask#latest`)).toBe('/ask-genie/:conversation_id');
+    }
+    // The index route and a trailing slash hold no conversation segment.
+    expect(sanitizeRumRoute('/ask-genie')).toBe('/ask-genie');
+    expect(sanitizeRumRoute('/ask-genie?tab=history')).toBe('/ask-genie');
+    expect(sanitizeRumRoute('/ask-genie/')).toBe('/ask-genie/');
+  });
+
+  it('templates a bare 32-hex segment on any other path', () => {
+    expect(sanitizeRumRoute('/audit/0123456789ABCDEF0123456789abcdef')).toBe('/audit/:hex_id');
+    // Not a whole segment: left alone.
+    expect(sanitizeRumRoute('/glossary/x0123456789abcdef0123456789abcdef')).toBe(
+      '/glossary/x0123456789abcdef0123456789abcdef',
+    );
+  });
+
   it('keeps stable public routes unchanged', () => {
     expect(sanitizeRumRoute('/segment-intelligence')).toBe('/segment-intelligence');
     expect(sanitizeRumRoute('/lead-queue')).toBe('/lead-queue');

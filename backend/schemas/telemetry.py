@@ -55,6 +55,12 @@ _STREET_RE = re.compile(
 )
 _NAME_SHAPE_RE = re.compile(r"\b[A-Z][a-z]{1,30}\s+[A-Z][a-z]{1,30}\b")
 _UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b")
+# A bare 32-hex token: the dashless shape of a Genie conversation id (audit
+# 2026-09-21 shell-03, /ask-genie/:conversationId).
+_HEX32_RE = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{32}(?![0-9A-Fa-f])")
+# The Ask Genie conversation deep link: its id segment is only ever sent
+# templated (a `:name`), whatever it holds; a malformed id can be typed text.
+_ASK_GENIE_CONVERSATION_PREFIX = "/ask-genie/"
 RumNavigationType = Literal["navigate", "reload", "back_forward", "prerender"]
 
 _NUMERIC_DETAIL_KEYS = frozenset({
@@ -164,6 +170,8 @@ def _assert_public_value(value: Any) -> None:
             raise ValueError("RUM payload values must not include CLIP ids")
         if _UUID_RE.search(value):
             raise ValueError("RUM payload values must not include raw UUIDs")
+        if _HEX32_RE.search(value):
+            raise ValueError("RUM payload values must not include raw hex identifiers")
         if _PHONE_RE.search(value):
             raise ValueError("RUM payload values must not include phone numbers")
         if _SSN_RE.search(value):
@@ -183,6 +191,15 @@ def _assert_public_value(value: Any) -> None:
             _assert_public_value(nested)
 
 
+def _assert_conversation_route_templated(value: str) -> None:
+    """`/ask-genie/<x>` is accepted only as a template (`<x>` starts with `:`)."""
+    if not value.startswith(_ASK_GENIE_CONVERSATION_PREFIX):
+        return
+    segment = value[len(_ASK_GENIE_CONVERSATION_PREFIX) :]
+    if segment and not segment.startswith(":"):
+        raise ValueError("an Ask Genie conversation route must be templated")
+
+
 class RumEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -199,6 +216,7 @@ class RumEvent(BaseModel):
         if not value.startswith("/"):
             raise ValueError("route must be a sanitized absolute path")
         _assert_public_value(value)
+        _assert_conversation_route_templated(value)
         return value
 
     @field_validator("navigation_type")
@@ -243,6 +261,7 @@ class RumEvent(BaseModel):
                     raise ValueError("from_route must be a sanitized absolute path")
                 if any(ch.isspace() for ch in value):
                     raise ValueError("from_route must not contain whitespace")
+                _assert_conversation_route_templated(value)
                 continue
             if key == "cache":
                 if value not in RUM_CACHE_STATES:
