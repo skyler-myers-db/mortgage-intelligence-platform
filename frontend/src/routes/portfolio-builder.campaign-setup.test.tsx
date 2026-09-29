@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 
-import { act } from 'react';
+import { act, useEffect, useState, type ChangeEvent } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -428,9 +428,47 @@ describe('CampaignSetupPanel', () => {
     act(() => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
   }
 
+  /** Campaign setup under a parent that owns the setup state, as the route does. */
+  const outside: { current: ((patch: Partial<typeof DEFAULT_CAMPAIGN_SETUP>) => void) | null } = { current: null };
+  function StatefulSetup({ commit }: { commit: (field: CampaignNumericField, value: string) => void }) {
+    const [setup, setSetup] = useState(DEFAULT_CAMPAIGN_SETUP);
+    useEffect(() => {
+      outside.current = (patch) => setSetup((current) => ({ ...current, ...patch }));
+    }, []);
+    return (
+      <MemoryRouter>
+        <CampaignSetupPanel
+          setup={setup}
+          recommendationPending={false}
+          recommendationError={false}
+          recommendationFetching={false}
+          canRecommend={false}
+          onFieldChange={(key) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+            const next = event.target.value;
+            setSetup((current) => ({ ...current, [key]: next }));
+          }}
+          onNumericFieldCommit={(field, value) => {
+            commit(field, value);
+            setSetup((current) => ({ ...current, [field]: value }));
+          }}
+          onToggleHouseholdDedup={vi.fn()}
+          onRegenerate={vi.fn()}
+          onApply={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+  }
+
+  function type(input: HTMLInputElement, value: string) {
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
   it('announces a clamp in the field notice and clears it on the next in-range commit (critic-04)', () => {
     const commit = vi.fn();
-    renderSetup({ ...DEFAULT_CAMPAIGN_SETUP, holdoutPct: '80', budget: '20000000' }, commit);
+    act(() => root.render(<StatefulSetup commit={commit} />));
     const holdout = control('Holdout % (0-50)');
     const region = notice(holdout);
     // The polite region is mounted (and empty) before anything is announced.
@@ -439,17 +477,20 @@ describe('CampaignSetupPanel', () => {
     expect(region.textContent).toBe('');
     expect(holdout.getAttribute('aria-describedby')).toBeNull();
 
+    type(holdout, '80');
     blur(holdout);
     expect(commit).toHaveBeenLastCalledWith('holdoutPct', '50');
+    expect(control('Holdout % (0-50)').value).toBe('50');
     expect(notice(control('Holdout % (0-50)'))).toBe(region);
     expect(region.textContent).toBe('Capped at 50%');
     expect(control('Holdout % (0-50)').getAttribute('aria-describedby')).toBe(region.id);
 
+    type(control('Budget'), '20000000');
     blur(control('Budget'));
     expect(commit).toHaveBeenLastCalledWith('budget', '10000000');
     expect(notice(control('Budget')).textContent).toBe('Capped at $10,000,000');
 
-    renderSetup({ ...DEFAULT_CAMPAIGN_SETUP, holdoutPct: '25', budget: '20000000' }, commit);
+    type(control('Holdout % (0-50)'), '25');
     blur(control('Holdout % (0-50)'));
     expect(commit).toHaveBeenLastCalledWith('holdoutPct', '25');
     expect(region.isConnected).toBe(true);
@@ -457,6 +498,23 @@ describe('CampaignSetupPanel', () => {
     expect(control('Holdout % (0-50)').getAttribute('aria-describedby')).toBeNull();
     // The other field's notice is its own.
     expect(notice(control('Budget')).textContent).toBe('Capped at $10,000,000');
+  });
+
+  it('drops a clamp notice once the value changes from outside the field (Apply variants)', () => {
+    act(() => root.render(<StatefulSetup commit={vi.fn()} />));
+    type(control('Holdout % (0-50)'), '80');
+    blur(control('Holdout % (0-50)'));
+    const region = notice(control('Holdout % (0-50)'));
+    expect(region.textContent).toBe('Capped at 50%');
+
+    // Apply variants writes the recommendation's holdout into the setup: the
+    // field now shows 15, and "Capped at 50%" would describe a value it no
+    // longer holds.
+    act(() => outside.current?.({ holdoutPct: '15' }));
+    expect(control('Holdout % (0-50)').value).toBe('15');
+    expect(region.isConnected).toBe(true);
+    expect(region.textContent).toBe('');
+    expect(control('Holdout % (0-50)').getAttribute('aria-describedby')).toBeNull();
   });
 
   it('binds every numeric setup label to its control by id', () => {

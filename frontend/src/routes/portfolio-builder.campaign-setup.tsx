@@ -272,10 +272,13 @@ function CampaignNumericFieldEditor({
 }) {
   const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
   // critic-04: a clamp is announced in the field's polite notice ('Capped at
-  // 50%') and cleared by the next in-range commit, never applied silently.
-  const [notice, setNotice] = useState<string | null>(null);
+  // 50%'), never applied silently. The notice belongs to the value it was
+  // written for: the next in-range commit, a keystroke, or a value set from
+  // outside the field (Apply variants) clears it.
+  const [notice, setNotice] = useState<{ text: string; value: string } | null>(null);
+  if (notice !== null && notice.value !== value) setNotice(null);
   return (
-    <Field className="campaign-setup__field" label={label} notice={notice}>
+    <Field className="campaign-setup__field" label={label} notice={notice?.text ?? null}>
       {(control) => (
         <input
           {...control}
@@ -290,7 +293,8 @@ function CampaignNumericFieldEditor({
           step={bounds.step}
           onBlur={(event) => {
             const normalized = normalizeCampaignNumericValue(field, event.currentTarget.value);
-            setNotice(campaignNumericNotice(field, normalized));
+            const text = campaignNumericNotice(field, normalized);
+            setNotice(text === null ? null : { text, value: normalized.value });
             onCommit(field, normalized.value);
           }}
         />
