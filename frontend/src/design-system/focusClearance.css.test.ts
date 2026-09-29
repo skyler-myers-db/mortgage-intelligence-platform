@@ -77,3 +77,24 @@ describe('focus clearance (a11y-v2)', () => {
     expect(genie?.css).toMatch(/\.main:has\(section\[role="tabpanel"\]:not\(\[hidden\]\) \.genie-composer\)\s*\{\s*scroll-padding-block-start/);
   });
 });
+
+describe('row-expand motion (motion-08 slice 1, queue part)', () => {
+  it('turns one chevron a quarter on the expanded row, on --dur-fast / --ease', () => {
+    const css = leadTableCss();
+    expect(block(css, '.lead-table__chevron')).toMatch(/transition:\s*rotate\s+var\(--dur-fast\)\s+var\(--ease\);/);
+    expect(block(css, '.lead-table__table tr.is-expanded .lead-table__chevron')).toMatch(/rotate:\s*90deg;/);
+  });
+
+  it('fades the expanded preview in with opacity only: no height, so row measurements stay put', () => {
+    const css = leadTableCss();
+    expect(block(css, '.lead-table__table .tbl__expand-inner')).toMatch(/^\s*transition:\s*opacity\s+var\(--dur-fast\)\s+var\(--ease\);\s*$/);
+    const starting = /@starting-style\s*\{\s*\.lead-table__table \.tbl__expand-inner\s*\{([^}]*)\}\s*\}/.exec(css);
+    expect(starting, '@starting-style entry').not.toBeNull();
+    expect(starting![1].trim()).toBe('opacity: 0;');
+  });
+
+  it('switches both transitions off under prefers-reduced-motion', () => {
+    const reduced = /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.lead-table__chevron,\s*\.lead-table__table \.tbl__expand-inner\s*\{\s*transition:\s*none;\s*\}\s*\}/;
+    expect(leadTableCss()).toMatch(reduced);
+  });
+});

@@ -152,7 +152,8 @@ export function LeadTableRow({
     ),
     expand: () => (
       <td>
-        <Icon name={isOpen ? 'down' : 'chevright'} size={14} className="muted" />
+        {/* One chevron that turns (motion-08), not an icon swap. */}
+        <Icon name="chevright" size={14} className="muted lead-table__chevron" />
       </td>
     ),
     borrower: () => (

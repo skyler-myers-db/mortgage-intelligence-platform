@@ -181,6 +181,27 @@
   scroll-margin-block: var(--sp-2);
 }
 
+/* Row expand motion (audit motion-08 slice 1, queue part): the expand
+   column's one chevron turns a quarter on the expanded row (replacing the
+   right/down icon swap), and the expanded preview fades in. Opacity only,
+   never height: the virtualizer measures the row as it lands. */
+.lead-table__chevron {
+  transition: rotate var(--dur-fast) var(--ease);
+}
+.lead-table__table tr.is-expanded .lead-table__chevron {
+  rotate: 90deg;
+}
+.lead-table__table .tbl__expand-inner {
+  transition: opacity var(--dur-fast) var(--ease);
+}
+@starting-style {
+  .lead-table__table .tbl__expand-inner { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lead-table__chevron,
+  .lead-table__table .tbl__expand-inner { transition: none; }
+}
+
 /* "Skip table": the shell's visually-hidden skip link, shown in place (not
    at the page corner) when it takes focus. */
 .lead-table__skip:focus,
