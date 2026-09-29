@@ -1,4 +1,4 @@
-import { lazy, Suspense, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useState, useSyncExternalStore } from 'react';
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { ApiError, api } from '../lib/api';
 import type { GenieTurn } from '../lib/genieConversationStore';
@@ -92,15 +92,20 @@ function genieConversationQuery(param: string | undefined) {
 
 export function useGenieConversationLink(param: string | undefined): GenieConversationLink {
   const query = useQuery(genieConversationQuery(param));
+  // A Retry's refetch puts the errored read back to pending (TanStack v5).
+  // The link stays 'unavailable' while it runs, so Retry keeps keyboard focus.
+  const [retriedId, setRetriedId] = useState<string>();
   if (param === undefined) return NO_LINK;
   if (!isGenieConversationId(param)) return NOT_FOUND;
   if (query.data) return { kind: 'ok', conversation: query.data };
-  if (!query.isError) return LOADING;
+  const retrying = retriedId === param && query.isFetching;
+  if (!query.isError && !retrying) return LOADING;
   if (isNotFound(query.error)) return NOT_FOUND;
   return {
     kind: 'unavailable',
-    retrying: query.isFetching,
+    retrying,
     retry: () => {
+      setRetriedId(param);
       void query.refetch();
     },
   };

@@ -57,7 +57,9 @@ export default function GenieConversationLinkState({
             <p>{failed ? GENIE_LINK_UNAVAILABLE_COPY : GENIE_LINK_NOT_FOUND_COPY}</p>
             <div className="chip-row">
               {failed && (
-                <Button type="button" variant="primary" onClick={onRetry} disabled={retrying}>
+                // aria-disabled, never native disabled: a disabled button
+                // drops a keyboard user's focus to <body> mid-retry.
+                <Button type="button" variant="primary" onClick={retrying ? undefined : onRetry} aria-disabled={retrying || undefined}>
                   {retrying ? 'Retrying…' : 'Retry'}
                 </Button>
               )}

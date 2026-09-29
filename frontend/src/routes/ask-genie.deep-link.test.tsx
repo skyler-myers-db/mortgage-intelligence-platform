@@ -307,6 +307,32 @@ describe('/ask-genie/:conversationId', () => {
     expect(apiMocks.genieSession).toHaveBeenCalledTimes(2);
   }, TIMEOUT_MS);
 
+  it('a Retry in flight keeps focus on the button, ignores a second press, and a failed retry leaves focus there', async () => {
+    let failRetry: (reason: unknown) => void = () => undefined;
+    apiMocks.genieSession
+      .mockRejectedValueOnce(apiError(503))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { failRetry = reject; }));
+    mountAt(`/ask-genie/${HEX_ID}`);
+    await waitUntil(() => linkState() === 'unavailable');
+    const retry = button('Retry');
+    if (!retry) throw new Error('Retry not rendered');
+    act(() => retry.focus());
+
+    act(() => retry.click());
+    await waitUntil(() => retry.textContent?.trim() === 'Retrying…');
+    expect(retry.disabled, 'never native disabled mid-retry').toBe(false);
+    expect(retry.getAttribute('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(retry);
+    act(() => retry.click());
+    expect(apiMocks.genieSession, 'a press during the retry starts no second read').toHaveBeenCalledTimes(2);
+
+    await act(async () => failRetry(apiError(503)));
+    await waitUntil(() => retry.textContent?.trim() === 'Retry');
+    expect(retry.hasAttribute('aria-disabled')).toBe(false);
+    expect(document.activeElement).toBe(retry);
+    expect(linkState()).toBe('unavailable');
+  }, TIMEOUT_MS);
+
   it('Open Ask Genie replaces the URL with /ask-genie and hands focus to the composer', async () => {
     mountAt('/ask-genie/not-an-id?tab=ask');
     await waitUntil(() => linkState() === 'not-found');
