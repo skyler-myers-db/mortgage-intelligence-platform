@@ -1,10 +1,11 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { useApp } from '../components/AppContext';
 import { Icon } from '../components/Icon';
 import { Button, SurfaceTitle } from '../components/Primitives';
-import { api } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { campaignMutationKeys, useArchiveCampaign } from '../lib/mutations/campaigns';
 import { formatCount } from '../lib/formatters';
 import { formatDate, parseBackendTimestamp } from '../lib/time';
 import type { CampaignSummary, PortfolioPreview } from '../types';
@@ -23,6 +24,24 @@ type CampaignArchiveFeedback = {
   state: 'pending' | 'success' | 'error';
   message: string;
 };
+
+/** The archive's feedback, derived from the mutation's state (same copy as before the port). */
+function archiveFeedbackFor(
+  campaign: { campaignId: string; name: string } | undefined,
+  status: 'idle' | 'pending' | 'success' | 'error',
+): CampaignArchiveFeedback | null {
+  if (!campaign || status === 'idle') return null;
+  const { campaignId, name } = campaign;
+  if (status === 'pending') return { campaignId, state: 'pending', message: `Archiving ${name}…` };
+  if (status === 'success') {
+    return { campaignId, state: 'success', message: `${name} was archived with an audited campaign transition.` };
+  }
+  return {
+    campaignId,
+    state: 'error',
+    message: `${name} could not be archived. Its quarantine remains in place; try again.`,
+  };
+}
 
 function formatSavedCampaignDate(iso: string | null): string | null {
   const parsed = parseBackendTimestamp(iso);
@@ -91,36 +110,20 @@ export function SavedCampaignsPanel({
   onRefresh: () => Promise<unknown>;
 }) {
   const { setDrawer } = useApp();
+  const queryClient = useQueryClient();
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({});
-  const [archiveFeedback, setArchiveFeedback] = useState<CampaignArchiveFeedback | null>(null);
+  // Pessimistic (states-07): pending, success and failure are the archive
+  // mutation's own state; the list is re-read from the server on success.
+  const archive = useArchiveCampaign(queryClient);
+  const archiveFeedback = archiveFeedbackFor(archive.variables, archive.status);
 
-  const onArchive = useCallback(async (campaign: CampaignSummary) => {
-    if (!savedCampaignCanArchive(campaign) || archiveFeedback?.state === 'pending') return;
-    setArchiveFeedback({
-      campaignId: campaign.campaign_id,
-      state: 'pending',
-      message: `Archiving ${campaign.name}…`,
-    });
-    try {
-      await api.campaignStatus(
-        campaign.campaign_id,
-        'archived',
-        'Archived because immutable campaign treatment proof was unavailable.',
-      );
-      setArchiveFeedback({
-        campaignId: campaign.campaign_id,
-        state: 'success',
-        message: `${campaign.name} was archived with an audited campaign transition.`,
-      });
-      await onRefresh();
-    } catch {
-      setArchiveFeedback({
-        campaignId: campaign.campaign_id,
-        state: 'error',
-        message: `${campaign.name} could not be archived. Its quarantine remains in place; try again.`,
-      });
-    }
-  }, [archiveFeedback?.state, onRefresh]);
+  const onArchive = (campaign: CampaignSummary) => {
+    // Synchronous latch: one archive on the wire at a time.
+    if (!savedCampaignCanArchive(campaign)) return;
+    if (queryClient.isMutating({ mutationKey: campaignMutationKeys.archive }) > 0) return;
+    // mutate, not mutateAsync: a failure is read from the mutation's state.
+    archive.mutate({ campaignId: campaign.campaign_id, name: campaign.name });
+  };
 
   return (
     <div className="surface mt-4">
@@ -262,7 +265,7 @@ export function SavedCampaignsPanel({
                           variant="ghost"
                           size="sm"
                           icon="audit"
-                          onClick={() => void onArchive(campaign)}
+                          onClick={() => onArchive(campaign)}
                           disabled={archivePending}
                           aria-busy={archivePending}
                           aria-label={`Archive quarantined campaign ${campaign.name}`}

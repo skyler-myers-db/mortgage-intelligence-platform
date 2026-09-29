@@ -483,6 +483,24 @@ export function parseStateCodesFromUrl(
   return out.length === states.length ? [] : out;
 }
 
+/**
+ * Keep only the codes inside the footprint; every footprint state selected
+ * collapses to [] (the "All N states" default). Identity-preserving no-op
+ * guard (re-audit #3, 2026-06-12): the same values in return the same
+ * reference, so a reconciliation that changes nothing never re-renders.
+ */
+export function sanitizeFootprintStateCodes(
+  codes: string[],
+  states: ReadonlyArray<FootprintState>,
+): string[] {
+  const allowed = new Set(states.map((state) => state.state_code));
+  const next = codes.filter((code) => allowed.has(code));
+  const collapsed = states.length > 0 && next.length === states.length ? [] : next;
+  return collapsed.length === codes.length && collapsed.every((code, i) => code === codes[i])
+    ? codes
+    : collapsed;
+}
+
 export function stateLabel(code: string, states: ReadonlyArray<FootprintState>): string {
   return states.find((state) => state.state_code === code)?.state_name ?? code;
 }
