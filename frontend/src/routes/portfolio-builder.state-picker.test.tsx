@@ -11,10 +11,46 @@
  * the keyboard alone. No test here clicks.
  */
 
-import { act, useState } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// unit test reads the route source under Vitest only.
+import { readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import { StateMultiSelect } from './portfolio-builder.components';
+
+declare const process: { cwd(): string };
+
+// The route-level cases below (browser back/forward and a footprint change)
+// render PortfolioBuilder itself; StateMultiSelect imports none of these.
+const apiMocks = vi.hoisted(() => ({
+  portfolioPreview: vi.fn(),
+  campaigns: vi.fn(),
+  salesCampaignPerformance: vi.fn(),
+  campaignRecommendation: vi.fn(),
+}));
+const footprintMock = vi.hoisted(() => ({
+  value: { ready: true, usingFallback: false, states: [] as Array<{ state_code: string; state_name: string }> },
+}));
+
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
+  api: apiMocks,
+}));
+vi.mock('../lib/configOptionsQuery', () => {
+  const STABLE = { data: { target_lender_refs: ['All'], target_lender_refs_status: 'live' }, isError: false };
+  return { useConfigOptionsQuery: () => STABLE };
+});
+vi.mock('../components/FootprintProvider', () => ({ useFootprint: () => footprintMock.value }));
+vi.mock('../components/AppContext', () => ({
+  useApp: () => ({ setDrawer: vi.fn(), showEvidence: true, showConfidence: true, canAccessAdmin: false }),
+}));
+
+import PortfolioBuilder from './portfolio-builder';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -206,5 +242,151 @@ describe('Portfolio Builder state picker — keyboard operation', () => {
     // wherever the browser lands after the focused option unmounts.
     expect(tab.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(trigger());
+  });
+});
+
+describe('Portfolio Builder reconciles GEO and filters in render (no effect)', () => {
+  const AZ_IL_TX = [
+    { state_code: 'AZ', state_name: 'Arizona' },
+    { state_code: 'IL', state_name: 'Illinois' },
+    { state_code: 'TX', state_name: 'Texas' },
+  ];
+  let root: Root;
+  let container: HTMLDivElement;
+  let navigate: NavigateFunction | null = null;
+  let queryClient: QueryClient;
+  const keepNavigate = (next: NavigateFunction) => {
+    navigate = next;
+  };
+
+  function NavigateProbe({ onNavigate }: { onNavigate: (next: NavigateFunction) => void }) {
+    const next = useNavigate();
+    useEffect(() => onNavigate(next), [next, onNavigate]);
+    return null;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    footprintMock.value = { ready: true, usingFallback: false, states: AZ_IL_TX };
+    apiMocks.portfolioPreview.mockResolvedValue({ marketable_population: 0, high_intent_leads: 5, campaign_build_eligible: false });
+    apiMocks.campaigns.mockResolvedValue({ campaigns: [] });
+    apiMocks.salesCampaignPerformance.mockReturnValue(new Promise(() => undefined));
+    apiMocks.campaignRecommendation.mockReturnValue(new Promise(() => undefined));
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    queryClient.clear();
+    container.remove();
+    navigate = null;
+  });
+
+  function render(entries: string[], index: number) {
+    act(() => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={entries} initialIndex={index}>
+            <NavigateProbe onNavigate={keepNavigate} />
+            <PortfolioBuilder />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+  }
+
+  async function waitUntil(condition: () => boolean, ms = 4000) {
+    const started = Date.now();
+    while (!condition()) {
+      if (Date.now() - started > ms) throw new Error('waitUntil timeout');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    }
+  }
+
+  const label = (prefix: string) =>
+    container.querySelector<HTMLButtonElement>(`button[aria-label^="${prefix}:"]`)?.getAttribute('aria-label');
+  const lastCriteria = () => {
+    const calls = apiMocks.portfolioPreview.mock.calls;
+    return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
+  };
+  /** The Lead Queue CTA is built from the COMMITTED build (filters + states). */
+  const committedQuery = () => {
+    const link = [...container.querySelectorAll<HTMLAnchorElement>('a')].find((a) => a.textContent?.includes('Open lead queue'));
+    return new URL(link?.getAttribute('href') ?? '/', 'https://mip.local').searchParams;
+  };
+
+  it('browser back and forward reset the filters, the GEO picker and the committed build to the URL', async () => {
+    render(['/portfolio-builder?occupancy=Non-owner-occupied&states=IL', '/portfolio-builder'], 1);
+    await waitUntil(() => apiMocks.portfolioPreview.mock.calls.length === 1);
+    expect(label('OCCUPANCY')).toBe('OCCUPANCY: Owner-occupied');
+    expect(label('GEO')).toBe('GEO: All 3 states');
+
+    await act(async () => {
+      void navigate?.(-1);
+    });
+    await waitUntil(() => apiMocks.portfolioPreview.mock.calls.length === 2);
+    expect(label('OCCUPANCY')).toBe('OCCUPANCY: Non-owner-occupied');
+    expect(label('GEO')).toBe('GEO: Illinois');
+    expect(lastCriteria()).toMatchObject({ occupancy: 'Non-owner-occupied', states: ['IL'] });
+    await waitUntil(() => committedQuery().get('states') === 'IL');
+    expect(committedQuery().get('occupancy')).toBe('Non-owner-occupied');
+
+    await act(async () => {
+      void navigate?.(1);
+    });
+    await waitUntil(() => label('OCCUPANCY') === 'OCCUPANCY: Owner-occupied');
+    expect(label('GEO')).toBe('GEO: All 3 states');
+    expect(committedQuery().get('states')).toBeNull();
+    expect(committedQuery().get('occupancy')).toBe('Owner-occupied');
+  });
+
+  it('a footprint change drops the selected states outside it', async () => {
+    render(['/portfolio-builder?states=AZ,IL'], 0);
+    await waitUntil(() => apiMocks.portfolioPreview.mock.calls.length === 1);
+    expect(label('GEO')).toBe('GEO: 2 states');
+    expect(lastCriteria()).toMatchObject({ states: ['AZ', 'IL'] });
+
+    footprintMock.value = { ready: true, usingFallback: false, states: AZ_IL_TX.slice(1) };
+    render(['/portfolio-builder?states=AZ,IL'], 0);
+    await waitUntil(() => label('GEO') === 'GEO: Illinois');
+    await waitUntil(() => apiMocks.portfolioPreview.mock.calls.length === 2);
+    expect(lastCriteria()).toMatchObject({ states: ['IL'] });
+  });
+
+  it('a footprint change drops a committed state the URL reconcile does not reach', async () => {
+    // Run with AZ + IL, then deselect AZ in the picker without running: the
+    // picker holds [IL], the committed build (and the URL) still [AZ, IL].
+    render(['/portfolio-builder?states=AZ,IL'], 0);
+    await waitUntil(() => apiMocks.portfolioPreview.mock.calls.length === 1);
+    await waitUntil(() => committedQuery().get('states') === 'AZ,IL');
+    const geo = container.querySelector<HTMLButtonElement>('button[aria-label^="GEO:"]')!;
+    act(() => geo.focus());
+    press('ArrowDown'); // opens on the first selected state, Arizona
+    expect(activeOption()?.textContent).toBe('Arizona');
+    press(' ');
+    press('Escape');
+    expect(label('GEO')).toBe('GEO: Illinois');
+    expect(committedQuery().get('states')).toBe('AZ,IL');
+
+    // The footprint loses AZ. Parsed against it the URL now reads [IL], which
+    // equals the picker, so the URL reconcile has nothing to do; only the
+    // footprint sanitize takes AZ out of the committed build.
+    footprintMock.value = { ready: true, usingFallback: false, states: AZ_IL_TX.slice(1) };
+    render(['/portfolio-builder?states=AZ,IL'], 0);
+    await waitUntil(() => apiMocks.portfolioPreview.mock.calls.length === 2);
+    expect(lastCriteria()).toMatchObject({ states: ['IL'] });
+    await waitUntil(() => committedQuery().get('states') === 'IL');
+    expect(label('GEO')).toBe('GEO: Illinois');
+  });
+
+  it('keeps the route free of the eslint-disable that made React Compiler skip it', () => {
+    const source = readFileSync(join(process.cwd(), 'src', 'routes', 'portfolio-builder.tsx'), 'utf-8');
+    expect(source).not.toMatch(/eslint-disable[^\n]*react-hooks/);
+    expect(source).not.toMatch(/useEffect\(/);
   });
 });

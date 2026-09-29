@@ -1,12 +1,14 @@
-import type { ChangeEvent } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip, SurfaceTitle } from '../components/Primitives';
+import { Field } from '../components/ui/Field';
 import { drawerForAsset } from '../lib/drawerSources';
 import type { CampaignRecommendationResponse } from '../types';
 import { publicAgentResponsesText } from '../lib/agentLabels';
 import {
   CAMPAIGN_NUMERIC_BOUNDS,
+  campaignNumericNotice,
   normalizeCampaignNumericValue,
   type CampaignNumericField,
   type CampaignSetupState,
@@ -155,12 +157,7 @@ export function CampaignSetupPanel({
                 </div>
                 <dl className="campaign-recommendation__hypothesis-list">
                   {recommendation.variants.map((variant) => (
-                    <div
-                      className="campaign-recommendation__hypothesis"
-                      role="group"
-                      aria-label={`${variant.variant_name} hypothesis`}
-                      key={variant.variant_name}
-                    >
+                    <div className="campaign-recommendation__hypothesis" key={variant.variant_name}>
                       <dt>
                         <strong>{variant.variant_name}</strong>
                         <span className="chip chip--neutral">Hypothesis</span>
@@ -274,19 +271,35 @@ function CampaignNumericFieldEditor({
   placeholder?: string;
 }) {
   const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
+  // critic-04: a clamp is announced in the field's polite notice ('Capped at
+  // 50%'), never applied silently. The notice belongs to the value it was
+  // written for: the next in-range commit, a keystroke, or a value set from
+  // outside the field (Apply variants) clears it.
+  const [notice, setNotice] = useState<{ text: string; value: string } | null>(null);
+  if (notice !== null && notice.value !== value) setNotice(null);
   return (
-    <CampaignTextField
-      label={label}
-      value={value}
-      onChange={onChange}
-      onCommit={(raw) => onCommit(field, normalizeCampaignNumericValue(field, raw))}
-      type="number"
-      inputMode="decimal"
-      min={bounds.min}
-      max={bounds.max}
-      step={bounds.step}
-      placeholder={placeholder}
-    />
+    <Field className="campaign-setup__field" label={label} notice={notice?.text ?? null}>
+      {(control) => (
+        <input
+          {...control}
+          className="form-input"
+          value={value}
+          onChange={onChange}
+          type="number"
+          inputMode="decimal"
+          placeholder={placeholder}
+          min={bounds.min}
+          max={bounds.max}
+          step={bounds.step}
+          onBlur={(event) => {
+            const normalized = normalizeCampaignNumericValue(field, event.currentTarget.value);
+            const text = campaignNumericNotice(field, normalized);
+            setNotice(text === null ? null : { text, value: normalized.value });
+            onCommit(field, normalized.value);
+          }}
+        />
+      )}
+    </Field>
   );
 }
 
@@ -297,12 +310,6 @@ function CampaignTextField({
   maxLength,
   multiline = false,
   type,
-  inputMode,
-  placeholder,
-  onCommit,
-  min,
-  max,
-  step,
   readOnly = false,
 }: {
   label: string;
@@ -311,12 +318,6 @@ function CampaignTextField({
   maxLength?: number;
   multiline?: boolean;
   type?: string;
-  inputMode?: 'decimal';
-  placeholder?: string;
-  onCommit?: (value: string) => void;
-  min?: number;
-  max?: number;
-  step?: number;
   readOnly?: boolean;
 }) {
   const className = `campaign-setup__field${multiline ? ' campaign-setup__field--wide' : ''}`;
@@ -341,12 +342,6 @@ function CampaignTextField({
           readOnly={readOnly}
           maxLength={maxLength}
           type={type}
-          inputMode={inputMode}
-          placeholder={placeholder}
-          min={min}
-          max={max}
-          step={step}
-          onBlur={(event) => onCommit?.(event.currentTarget.value)}
         />
       )}
     </label>

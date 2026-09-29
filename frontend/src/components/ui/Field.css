@@ -1,0 +1,16 @@
+/* Field (components/ui/Field.tsx, 2026-09-21 audit critic-04).
+   DECLARED APP EXTENSION: the prototype (design_files/index.html) has no
+   field system; this reuses its `.field__label` and adds only the message
+   lines a form needs. Tokens only. Loaded with the route chunk that imports
+   Field (Portfolio Builder today), never the shell. */
+
+.field__hint,
+.field__notice,
+.field__error {
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+}
+.field__hint { color: var(--text-3); }
+.field__notice { color: var(--text-2); }
+.field__error { color: var(--status-danger-ink); }

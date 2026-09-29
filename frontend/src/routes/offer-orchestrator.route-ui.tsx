@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { TopLeadsQuickPick } from '../components/mortgage/TopLeadsQuickPick';
@@ -34,13 +34,14 @@ export function useOfferCampaignBinding(): {
   };
 }
 
-export function OfferOrchestratorEmptyRoute() {
+/** `backTo`: the exact filtered queue the page was opened from (queueHref), else '/lead-queue'. */
+export function OfferOrchestratorEmptyRoute({ backTo }: { backTo: string }) {
   return (
     <PageShell
       eyebrow="Offer Orchestrator"
       title="Choose a borrower to compose an offer"
       lede="Offer Orchestrator explains the selected offer path, considered alternatives, and borrower-facing draft before any outreach can be approved. Pick a borrower to begin."
-      heroRight={<OfferOrchestratorEmptyHero to="/lead-queue" />}
+      heroRight={<OfferOrchestratorEmptyHero to={backTo} />}
     >
       <OfferOrchestratorEmptyState />
       <TopLeadsQuickPick basePath="/offer-orchestrator" />
@@ -51,9 +52,12 @@ export function OfferOrchestratorEmptyRoute() {
 export function OfferWarmingRoute({
   borrowerId,
   warmingUp,
+  pager = null,
 }: {
   borrowerId: string;
   warmingUp: WarmingUpState;
+  /** The queue pager, so the reviewer can step past a borrower that will not load. */
+  pager?: ReactNode;
 }) {
   return (
     <PageShell
@@ -61,6 +65,7 @@ export function OfferWarmingRoute({
       title={`Loading ${borrowerId}…`}
       lede={WAREHOUSE_WARMING_BODY}
     >
+      {pager}
       <WarmingUpBlock state={warmingUp} title={`Loading offer for ${borrowerId}`} />
     </PageShell>
   );
@@ -71,11 +76,16 @@ export function OfferLoadErrorRoute({
   loadError,
   notFound,
   onRetry,
+  backTo,
+  pager = null,
 }: {
   borrowerId: string;
   loadError: string;
   notFound: boolean;
   onRetry: () => void;
+  /** The exact filtered queue the page was opened from (queueHref), else '/lead-queue'. */
+  backTo: string;
+  pager?: ReactNode;
 }) {
   return (
     <PageShell
@@ -83,6 +93,7 @@ export function OfferLoadErrorRoute({
       title={notFound ? `Borrower ${borrowerId} not found` : `Couldn't load ${borrowerId}`}
       lede={notFound ? `Borrower ${borrowerId} was not found. Check the ID, use search, or return to the lead queue.` : loadError}
     >
+      {pager}
       <div className="surface">
         <div className="surface__body surface__body--inline">
           <Chip variant={notFound ? 'warning' : 'danger'} icon={notFound ? 'search' : 'cross'}>
@@ -98,7 +109,7 @@ export function OfferLoadErrorRoute({
               Retry
             </button>
           )}
-          <Link className="btn" to="/lead-queue">
+          <Link className="btn" to={backTo}>
             Back to lead queue
           </Link>
         </div>
