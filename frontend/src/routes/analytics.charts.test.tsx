@@ -5,7 +5,8 @@ import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import type { UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { designCss } from '../test/designCss';
-import { BAR_FLOOR_PCT, Bars, LoadState } from './analytics.charts';
+import { histogramModel } from './analytics.chart-model';
+import { BAR_FLOOR_PCT, Bars, HistogramTable, LoadState } from './analytics.charts';
 
 /** Rendered `--bar-pct` of each bar fill, and the not-to-scale note, in the DOM Bars produces. */
 function renderBars(values: number[]): { pcts: string[]; note: string | null } {
@@ -39,6 +40,50 @@ describe('Bars scale (dataviz-03)', () => {
   it('keeps no CSS minimum width that would floor a bar behind the note', () => {
     const fill = /\.analytics-bars__fill\s*\{([^}]*)\}/.exec(designCss())?.[1] ?? '';
     expect(fill).not.toMatch(/min-(?:width|inline-size)/);
+  });
+});
+
+/** Header and body cells of the table twin HistogramTable renders over 25-wide bins. */
+function renderHistogramTable(threshold: number | null, pastLabel: string | null) {
+  const model = histogramModel(
+    [{ start: 25, count: 10 }, { start: 50, count: 20 }, { start: 75, count: 30 }],
+    25,
+    threshold,
+  );
+  const host = document.createElement('div');
+  host.innerHTML = renderToStaticMarkup(
+    <HistogramTable model={model} rangeLabel="Spread bps" pastLabel={pastLabel} formatRange={(start) => `${start}–${start + 24}`} />,
+  );
+  return {
+    head: [...host.querySelectorAll('thead th')].map((th) => th.textContent),
+    rows: [...host.querySelectorAll('tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent)),
+  };
+}
+
+describe('HistogramTable (dataviz-10)', () => {
+  it('says Partly for the bin a non-aligned threshold falls inside, not No', () => {
+    expect(renderHistogramTable(60, 'At or past the screen')).toEqual({
+      head: ['Spread bps', 'Borrowers', 'At or past the screen'],
+      rows: [
+        ['25–49', '10', 'No'],
+        ['50–74', '20', 'Partly'],
+        ['75–99', '30', 'Yes'],
+      ],
+    });
+  });
+
+  it('keeps Yes and No when the threshold sits on a bin edge', () => {
+    expect(renderHistogramTable(75, 'At or past the screen').rows.map((row) => row[2])).toEqual(['No', 'No', 'Yes']);
+  });
+
+  it('drops the column when there is no threshold, instead of a column of dashes', () => {
+    const table = renderHistogramTable(null, null);
+    expect(table.head).toEqual(['Spread bps', 'Borrowers']);
+    expect(table.rows).toEqual([
+      ['25–49', '10'],
+      ['50–74', '20'],
+      ['75–99', '30'],
+    ]);
   });
 });
 

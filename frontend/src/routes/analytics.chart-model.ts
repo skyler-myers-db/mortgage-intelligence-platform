@@ -30,6 +30,8 @@ export interface HistogramModelBin extends HistogramBin {
   end: number;
   /** Lower edge at or above the threshold: a bin straddling the threshold is not past. */
   past: boolean;
+  /** The threshold falls strictly inside the bin, so part of it is past. */
+  straddles: boolean;
 }
 
 export interface HistogramModel {
@@ -45,7 +47,13 @@ export function histogramModel(rows: ReadonlyArray<HistogramBin>, width: number,
   const bins = [...rows]
     .filter((row) => Number.isFinite(row.start) && Number.isFinite(row.count))
     .sort((a, b) => a.start - b.start)
-    .map((row) => ({ start: row.start, end: row.start + width, count: Math.max(0, row.count), past: binIsPast(row.start, threshold) }));
+    .map((row) => ({
+      start: row.start,
+      end: row.start + width,
+      count: Math.max(0, row.count),
+      past: binIsPast(row.start, threshold),
+      straddles: threshold !== null && row.start < threshold && threshold < row.start + width,
+    }));
   let modal: HistogramModelBin | null = null;
   for (const bin of bins) if (modal === null || bin.count > modal.count) modal = bin;
   const total = bins.reduce((sum, bin) => sum + bin.count, 0);

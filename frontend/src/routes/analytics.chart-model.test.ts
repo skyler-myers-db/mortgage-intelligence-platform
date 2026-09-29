@@ -38,6 +38,10 @@ describe('histogramModel', () => {
 
   it('never counts a straddled bin, and has no past count without a threshold', () => {
     expect(histogramModel(SPREAD, SPREAD_BUCKET_BPS, 60).past).toBe(80);
+    // 60 falls inside the 50-74 bin only; an edge-aligned threshold straddles none.
+    expect(histogramModel(SPREAD, SPREAD_BUCKET_BPS, 60).bins.map((bin) => bin.straddles)).toEqual([false, false, false, true, false, false]);
+    expect(histogramModel(SPREAD, SPREAD_BUCKET_BPS, 75).bins.some((bin) => bin.straddles)).toBe(false);
+    expect(histogramModel(SPREAD, SPREAD_BUCKET_BPS, null).bins.some((bin) => bin.straddles)).toBe(false);
     expect(histogramModel(SPREAD, SPREAD_BUCKET_BPS, null).past).toBeNull();
     const tie = histogramModel([{ start: 0, count: 5 }, { start: 5, count: 5 }], SCORE_BUCKET_WIDTH, null);
     expect(tie.modal?.start).toBe(0);

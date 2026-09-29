@@ -379,7 +379,9 @@ export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] })
 
 /**
  * The table twin of a histogram (dataviz-10): the same bins the chart plots,
- * with the threshold partition as a column. `pastLabel` null: no threshold.
+ * with the threshold partition as a column: Yes from the threshold's bin edge
+ * up, Partly for a bin the threshold falls inside. `pastLabel` null: there is
+ * no threshold, so there is no column.
  */
 export function HistogramTable({
   model,
@@ -399,7 +401,9 @@ export function HistogramTable({
       columns={[
         { key: 'range', label: rangeLabel, render: (bin) => formatRange(bin.start) },
         { key: 'borrowers', label: 'Borrowers', render: (bin) => formatCount(bin.count) },
-        { key: 'past', label: pastLabel ?? 'At or past the screen', render: (bin) => (pastLabel === null ? '—' : bin.past ? 'Yes' : 'No') },
+        ...(pastLabel === null
+          ? []
+          : [{ key: 'past', label: pastLabel, render: (bin: HistogramModelBin) => (bin.past ? 'Yes' : bin.straddles ? 'Partly' : 'No') }]),
       ]}
     />
   );
