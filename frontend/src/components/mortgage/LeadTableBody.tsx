@@ -66,8 +66,10 @@ export interface LeadTableBodyProps {
  * returns an imperative instance whose methods read live scroll state, which
  * React Compiler cannot memoize (the incompatible-library advisory), and
  * the virtualizer re-renders this component on every window change. Keeping
- * it here lets the shell (LeadTable) compile: a scroll re-renders only this
- * body, and a shell render with unchanged inputs skips it.
+ * it here means a scroll re-renders only this body, never the shell, and it
+ * leaves the shell (LeadTable) compilable: it compiles clean once its own
+ * 'use no memo' goes, which stays for now as the lane's budget cut 5 (the
+ * compiled shell measured +2.63 KiB br on the LeadTable chunk).
  *
  * Nothing here creates a per-row closure: every row callback comes from the
  * shell, so a compiled LeadTableRow gets identical props and its memo cache
