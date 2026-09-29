@@ -18,7 +18,11 @@
  *      walk does find a covered stop. A control focused from behind the
  *      sticky route nav (/glossary) stops below it, and not with the
  *      scroll-margin zeroed; /ask-genie's Ask tab clears the nav once (its
- *      own padding), its Workflows tab through 38-focus-clearance.css.
+ *      own padding), its Workflows tab through 38-focus-clearance.css. A
+ *      pointer pick in a scrolled STATE menu writes the option aimed at (the
+ *      nav's margin stays out of the in-place listbox), with its non-vacuity
+ *      twin.
+ *      The clearance's style cost: focus-clearance-cost.fixture.spec.ts.
  *  (d) The assignment outcome (critic-06): Escape and Cancel make no POST
  *      and hand focus back; Record needs its confirm row, then one POST; a
  *      409 keeps the stage and shows the error.
@@ -42,7 +46,13 @@ import type { LeadSummary, SessionResponse } from '../../../src/types';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { LEADS, PRIMARY_BORROWER } from './data/borrowers';
 import { APPROVE_AUDIT_ID, approveResult, ledgerReceipt } from './data/decisionReceipt';
-import { ACTIONED_LEAD, registerAssignmentOutcome, registerLeadQueue, registerRejectRecorder } from './data/leadQueue';
+import {
+  ACTIONED_LEAD,
+  registerAssignmentOutcome,
+  registerLeadQueue,
+  registerRejectRecorder,
+  registerWideFootprint,
+} from './data/leadQueue';
 import { VIRTUAL_QUEUE, registerVirtualQueue } from './data/queueKeyboard';
 import { DNC_LEAD, QUEUE_LAYOUT_LEADS, registerQueueLayoutLeads } from './data/queueLayout';
 import { json, type MockApi } from './mockApi';
@@ -340,6 +350,50 @@ async function gapBelowRouteNav(target: Locator): Promise<number> {
   ));
 }
 
+/** 38-focus-clearance.css's nav margin, put back on the in-place listbox's options. */
+const NAV_MARGIN_ON_MENU = '.filter-menu__item { scroll-margin-block-start: 61px !important; }';
+
+/** Two animation frames: a React effect run by the last event has painted. */
+async function settleFrames(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+}
+
+/**
+ * Scroll the open STATE menu (the pointer outside it), move the pointer to
+ * the centre of the top option it shows in full, let the hover settle, then
+ * press and release there. Returns the option aimed at and the `state`
+ * param the pick wrote (null: 'All states').
+ */
+async function pointerPickTopVisibleState(page: Page, menu: Locator): Promise<{ aimed: string; written: string | null }> {
+  const aim = await menu.evaluate((list) => {
+    list.scrollTop = 150;
+    const top = list.getBoundingClientRect().top + list.clientTop;
+    const option = [...list.querySelectorAll<HTMLElement>('[role="option"]')]
+      .find((candidate) => candidate.getBoundingClientRect().top >= top - 0.5);
+    if (!option) throw new Error('no option in view');
+    const box = option.getBoundingClientRect();
+    return {
+      text: option.textContent?.trim() ?? '',
+      x: box.left + box.width / 2,
+      y: box.top + box.height / 2,
+      offset: box.top - top,
+      scrollTop: list.scrollTop,
+    };
+  });
+  expect(aim.scrollTop, 'precondition: the menu scrolled').toBe(150);
+  expect(aim.offset, 'precondition: the aimed option sits inside the nav margin\'s reach').toBeLessThan(30);
+  await page.mouse.move(aim.x, aim.y);
+  await expect(menu.locator('.filter-menu__item.is-focused'), 'the hover made an option active').toHaveCount(1);
+  await settleFrames(page);
+  await settleFrames(page);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(menu).toHaveCount(0);
+  return { aimed: aim.text, written: new URL(page.url()).searchParams.get('state') };
+}
+
 test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
   test('Shift+Tab up the rows stops clear of the sticky header and the route nav, with a selection bar up', async ({ app, page }) => {
     await app.gotoRoute('/lead-queue');
@@ -439,6 +493,25 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
     });
     expect(gap, 'at or below the nav').toBeGreaterThanOrEqual(-0.5);
     expect(gap, 'one clearance').toBeLessThanOrEqual(FOCUS_RING_ROOM + 1);
+  });
+
+  test('a pointer pick of the top visible option in a scrolled STATE menu writes that option', async ({ app, mockApi, page }) => {
+    registerWideFootprint(mockApi);
+    await app.gotoRoute('/lead-queue');
+    const menu = await app.openFilterMenu('STATE');
+    await expect(menu.getByRole('option')).toHaveCount(25);
+    const pick = await pointerPickTopVisibleState(page, menu);
+    expect(pick.written, `aimed at ${pick.aimed}`).toBe(pick.aimed);
+  });
+
+  test('non-vacuity: with the nav\'s margin on the menu\'s options, the same pick writes another state', async ({ app, mockApi, page }) => {
+    registerWideFootprint(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await page.addStyleTag({ content: NAV_MARGIN_ON_MENU });
+    const menu = await app.openFilterMenu('STATE');
+    await expect(menu.getByRole('option')).toHaveCount(25);
+    const pick = await pointerPickTopVisibleState(page, menu);
+    expect(pick.written, `aimed at ${pick.aimed}: the hover rolled the menu back under the pointer`).not.toBe(pick.aimed);
   });
 });
 

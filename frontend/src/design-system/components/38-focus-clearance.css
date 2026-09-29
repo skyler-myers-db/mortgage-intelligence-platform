@@ -18,16 +18,31 @@
    nav link scrolled `.main` to its top first. The Back-restore on the next
    entry then saved 0 (continuity and motion-nav specs caught it).
 
+   Two rules, and every :has() is on `.main` itself. The first sets the
+   clearance, --nav-clear, on `.main` (it inherits); the second, a
+   universal rule with no :has() at all, reads it. A :has() in the
+   universal rule's ANCESTOR compound (`.main:has(...) *`) made Chromium
+   re-style the whole `.main` subtree on every node inserted into or
+   removed from it: every virtual-window shift of the Lead Queue's rows
+   (about 8x the style recalc of a wheel scroll, measured). Proof:
+   focus-clearance-cost.fixture.spec.ts. A `.main` with no nav (or on the
+   Ask tab, below) has no --nav-clear, so the margin is its initial 0.
+
    Left out:
    - `.tbl-wrap` contents: a table scroller clears its own sticky header
      (LeadTable.css); a margin here would add the nav's height inside it.
+   - `.filter-menu` contents: FilterSelect / MultiFilterSelect render their
+     listbox in place, a scroller of its own, and scroll the active option
+     into view ({block:'nearest'}) as the pointer moves over it. The nav's
+     margin there rolled a scrolled menu back under a still pointer, so a
+     click picked the option above the one aimed at.
    - /ask-genie while its Ask tab shows (a `.genie-composer` outside any
      hidden tabpanel): routes/ask-genie.css already clears the nav there
      with `.main` scroll-padding, and a margin as well put the nav in twice
      (a control scrolled into view landed 65px below the nav, not 4px). Its
      other tabs keep this rule.
-   The whole selector sits in :where(), so the rule carries no specificity
-   and a route's own scroll-margin (glossary.css, ask-genie.css
+   The universal rule sits in :where(), so it carries no specificity and a
+   route's own scroll-margin (glossary.css, ask-genie.css
    `.growth-agent-run`, `.genie__msg`) still wins.
 
    The size is the one-line nav: its --sp-3 padding at each end, a --sp-8
@@ -38,9 +53,12 @@
    gates set how short this rule is.
    ============================================================ */
 @media (min-height: 40rem) {
-  :where(.main:has(.route-nav):not(:has(.genie-composer:not([hidden] *))) :not(.route-nav *, .tbl-wrap *)) {
-    scroll-margin-block-start: calc(
+  .main:has(.route-nav):not(:has(.genie-composer:not([hidden] *))) {
+    --nav-clear: calc(
       var(--sp-3) * 2 + var(--sp-8) + 1px + var(--focus-ring-width) + var(--focus-ring-offset)
     );
+  }
+  :where(.main :not(.route-nav *, .tbl-wrap *, .filter-menu *)) {
+    scroll-margin-block-start: var(--nav-clear);
   }
 }

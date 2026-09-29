@@ -16,6 +16,9 @@ import { featureStylesheets } from '../test/featureCss';
  *     nav clears the sticky route nav (scroll-margin) inside the same 40rem
  *     condition that docks it. Rendered proof: the
  *     focus-obscured walk in tests/e2e/fixture/lead-queue.fixture.spec.ts.
+ *     The in-place filter listboxes are left out of the nav's margin, and
+ *     every :has() stays on `.main` itself (cost proof:
+ *     focus-clearance-cost.fixture.spec.ts).
  *   - The row-expand motion (audit motion-08 slice 1, queue part): one
  *     chevron that rotates, an opacity-only fade in, both on --dur-fast /
  *     --ease and off under prefers-reduced-motion.
@@ -39,6 +42,20 @@ function block(css: string, selector: string): string {
 }
 
 const RING = String.raw`\+\s*var\(--focus-ring-width\)\s*\+\s*var\(--focus-ring-offset\)`;
+
+function focusClearancePartial(): string {
+  return stripComments(readFileSync(`${process.cwd()}/src/design-system/components/38-focus-clearance.css`, 'utf8') as string);
+}
+
+/** A selector with every parenthesized argument removed: its compounds and combinators only. */
+function topLevel(selector: string): string {
+  let text = selector;
+  for (let previous = ''; previous !== text;) {
+    previous = text;
+    text = text.replace(/\([^()]*\)/g, '');
+  }
+  return text;
+}
 /** routes/ask-genie.css's condition for its own nav clearance: the Ask tab (with its docked composer) shows. */
 const ASK_TAB = String.raw`section\[role="tabpanel"\]:not\(\[hidden\]\) \.genie-composer`;
 /** The same condition, short (the shell sheet's gates): a composer outside any hidden tabpanel. */
@@ -71,22 +88,46 @@ describe('focus clearance (a11y-v2)', () => {
 
   it('everything in .main outside the nav clears the sticky route nav, only inside the 40rem condition that docks it', () => {
     const css = components();
-    // Zero specificity (:where), so a route's own scroll-margin still wins;
-    // never while /ask-genie's Ask tab clears the nav itself (below).
+    // `.main` carries the clearance (never while /ask-genie's Ask tab clears
+    // the nav itself, below); a universal rule with zero specificity (:where,
+    // so a route's own scroll-margin still wins) reads it.
     const media = new RegExp(String.raw`@media\s*\(min-height:\s*40rem\)\s*\{\s*`
-      + String.raw`:where\(\.main:has\(\.route-nav\):not\(:has\(${ASK_TAB_SHORT}\)\) :not\(\.route-nav \*, \.tbl-wrap \*\)\)`
-      + String.raw`\s*\{([^}]*)\}\s*\}`).exec(css);
-    expect(media, 'the rule sits inside @media (min-height: 40rem)').not.toBeNull();
+      + String.raw`\.main:has\(\.route-nav\):not\(:has\(${ASK_TAB_SHORT}\)\)\s*\{([^}]*)\}\s*`
+      + String.raw`:where\(\.main :not\(\.route-nav \*, \.tbl-wrap \*, \.filter-menu \*\)\)\s*\{([^}]*)\}`
+      + String.raw`\s*\}`).exec(css);
+    expect(media, 'both rules sit inside @media (min-height: 40rem)').not.toBeNull();
     // The one-line nav (--sp-3 padding at each end, a --sp-8 link, the 1px border), plus the ring.
     expect(media![1]).toMatch(new RegExp(
-      String.raw`scroll-margin-block-start:\s*calc\(\s*var\(--sp-3\)\s*\*\s*2\s*\+\s*var\(--sp-8\)\s*\+\s*1px\s*${RING}\s*\);`,
+      String.raw`^\s*--nav-clear:\s*calc\(\s*var\(--sp-3\)\s*\*\s*2\s*\+\s*var\(--sp-8\)\s*\+\s*1px\s*${RING}\s*\);\s*$`,
     ));
+    // No fallback: a `.main` without the clearance leaves the margin at its initial 0.
+    expect(media![2]).toMatch(/^\s*scroll-margin-block-start:\s*var\(--nav-clear\);\s*$/);
     // The sticky nav is docked by the same condition (01-app-shell.css).
     expect(css).toMatch(/@media\s*\(min-height:\s*40rem\)\s*\{\s*\.route-nav\s*\{[^}]*position:\s*sticky;/);
     // Never scroll-padding on `.main` for the nav: it shrank the view for the
     // nav's own links, so a click on one scrolled `.main` to its top first.
     expect(css).not.toMatch(/\.main:has\(\.route-nav\)\s*\{[^}]*scroll-padding/);
     expect(css.match(/\.main:has\(\.route-nav\)/g)).toHaveLength(1);
+  });
+
+  it('keeps every :has() on `.main` itself, never in an ancestor compound', () => {
+    // `.main:has(...) *` made Chromium re-style the whole `.main` subtree on
+    // every node inserted into it (every virtual-window shift of the queue).
+    const selectors = [...focusClearancePartial().matchAll(/([^{}]+)\{/g)]
+      .map((match) => match[1].trim())
+      .filter((selector) => !selector.startsWith('@'));
+    const withHas = selectors.filter((selector) => selector.includes(':has('));
+    expect(withHas, 'non-vacuity: the partial gates on :has()').not.toEqual([]);
+    for (const selector of withHas) {
+      expect(topLevel(selector), selector).toMatch(/^\.main(?::[a-z-]+)+$/);
+    }
+    expect(selectors.filter((selector) => /\s/.test(topLevel(selector))), 'the universal rule sits in :where()').toEqual([]);
+  });
+
+  it('leaves the in-place filter listboxes out of the nav\'s margin', () => {
+    // FilterSelect / MultiFilterSelect scroll their active option into view
+    // on hover: the margin rolled a scrolled menu back under the pointer.
+    expect(focusClearancePartial()).toMatch(/:where\(\.main :not\([^)]*\.filter-menu \*[^)]*\)\)/);
   });
 
   // The rendered proofs that the two conditions agree (the Ask tab clears the

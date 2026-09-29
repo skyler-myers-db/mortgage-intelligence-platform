@@ -14,18 +14,22 @@
  *   - `ACTIONED_LEAD` / `registerAssignmentOutcome`: a row whose assignment
  *     is `actioned` (the outcome picker's step) and the outcome POST,
  *     answered with the recorded outcome or a 409 (a stale transition).
+ *   - `registerWideFootprint`: GET /api/config/footprint with 24 states, as
+ *     wide as live coverage runs, so the STATE filter's menu scrolls (the
+ *     default fixture's 8 states barely do).
  *   - `contractSamples()`: the 2xx bodies these helpers answer with, so the
  *     fixture contract validates them against the real response models.
  *
  * Synthetic only: masked ids in the production shape, no names or contacts.
  */
-import type { AssignmentOutcome, AssignmentOutcomeResponse, LeadSummary } from '../../../../src/types';
+import type { AssignmentOutcome, AssignmentOutcomeResponse, ConfigOptions, LeadSummary } from '../../../../src/types';
 import type { RejectResult } from '../../../../src/lib/apiTypes';
 import type { ContractSample } from '../contractSamples';
 import { json, type FixtureReply, type FixtureRequest, type MockApi } from '../mockApi';
 import { LEADS, maskedBorrowerId } from './borrowers';
 import { REJECT_AUDIT_ID, RequestGate, rejectResult } from './decisionReceipt';
 import { TOTALS } from './reference';
+import { GEOGRAPHY_SCOPE } from './shell';
 
 export const LEAD_QUEUE_SIZE = 500;
 
@@ -151,10 +155,51 @@ export function registerAssignmentOutcome(mockApi: MockApi, options: { conflict?
   return recorder;
 }
 
+/** Mirror of the un-exported `FootprintPayload` (see data/shell.ts). */
+interface FootprintPayload {
+  states: Array<{ state_code: string; state_name: string; display_order: number; is_default_state: boolean }>;
+  geography_scope: NonNullable<ConfigOptions['geography_scope']> | null;
+  using_fallback: boolean;
+}
+
+const WIDE_FOOTPRINT_STATES: ReadonlyArray<readonly [code: string, name: string]> = [
+  ['AL', 'Alabama'], ['AZ', 'Arizona'], ['CA', 'California'], ['CO', 'Colorado'], ['CT', 'Connecticut'],
+  ['FL', 'Florida'], ['GA', 'Georgia'], ['IL', 'Illinois'], ['IN', 'Indiana'], ['KY', 'Kentucky'],
+  ['MA', 'Massachusetts'], ['MD', 'Maryland'], ['MI', 'Michigan'], ['MN', 'Minnesota'], ['MO', 'Missouri'],
+  ['NC', 'North Carolina'], ['NJ', 'New Jersey'], ['NV', 'Nevada'], ['NY', 'New York'], ['OH', 'Ohio'],
+  ['OR', 'Oregon'], ['TN', 'Tennessee'], ['TX', 'Texas'], ['WA', 'Washington'],
+];
+
+function wideFootprint(): FootprintPayload {
+  return {
+    states: WIDE_FOOTPRINT_STATES.map(([code, name], index) => ({
+      state_code: code,
+      state_name: name,
+      display_order: index + 1,
+      is_default_state: code === 'IL',
+    })),
+    geography_scope: { ...GEOGRAPHY_SCOPE, state_count: WIDE_FOOTPRINT_STATES.length },
+    using_fallback: false,
+  };
+}
+
+export function registerWideFootprint(mockApi: MockApi): void {
+  mockApi.register<FootprintPayload>('GET', '/api/config/footprint', () => json<FootprintPayload>(wideFootprint()));
+}
+
 /** Every 2xx body the helpers above answer with (the exporter's record shape). */
 export function contractSamples(): ContractSample[] {
   const outcomePath = `/api/loan-officers/assignments/${ACTIONED_ASSIGNMENT_ID}/outcome`;
   return [
+    {
+      source: 'data/leadQueue.ts#registerWideFootprint',
+      method: 'GET',
+      pattern: '/api/config/footprint',
+      path: '/api/config/footprint',
+      query: '',
+      status: 200,
+      body: wideFootprint(),
+    },
     {
       source: 'data/leadQueue.ts#registerAssignmentOutcome',
       method: 'POST',
