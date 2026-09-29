@@ -4,6 +4,12 @@
  * S6 lifecycle-advance control: advances one legal step via the server,
  * collects the recorded outcome at the terminal step, surfaces a server
  * 409 honestly, and renders nothing once the lifecycle is closed.
+ *
+ * Audit critic-06: verb-first advance labels; the outcome is picked, then
+ * confirmed ("Record <outcome> for <id>?"); Cancel and Escape close the
+ * picker with zero writes and return focus to "Record outcome"; only
+ * Record posts, once. The compact stepper marks the current stage with
+ * aria-current="step" and never renders `.chip__label`.
  */
 
 import { act } from 'react';
@@ -18,13 +24,15 @@ const apiMocks = vi.hoisted(() => ({
   recordAssignmentOutcome: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: apiMocks,
 }));
 
-import { AssignmentLifecycleAdvance } from './AssignmentLifecycleAdvance';
+import { AssignmentLifecycleAdvance, AssignmentLifecycleSteps } from './AssignmentLifecycleAdvance';
 
 const ASSIGNMENT_ID = '66666666-6666-4666-8666-666666666601';
+const BORROWER = 'B-48291';
 
 async function settle(): Promise<void> {
   await act(async () => {
@@ -41,7 +49,7 @@ function render(status: AssignmentLifecycleStatus): void {
     <AssignmentLifecycleAdvance
       assignmentId={ASSIGNMENT_ID}
       status={status}
-      borrowerId="B-48291"
+      borrowerId={BORROWER}
       onAdvanced={onAdvanced}
     />,
   );
@@ -51,6 +59,20 @@ function buttonByText(text: string): HTMLButtonElement | undefined {
   return [...document.querySelectorAll<HTMLButtonElement>('button')].find(
     (btn) => btn.textContent?.trim() === text,
   );
+}
+
+function pressEscape(): void {
+  act(() => {
+    (document.activeElement ?? document.body).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+  });
+}
+
+async function openConfirm(outcome: 'Success' | 'No response' | 'Declined'): Promise<void> {
+  await act(async () => render('actioned'));
+  await act(async () => buttonByText('Record outcome')!.click());
+  await act(async () => buttonByText(outcome)!.click());
 }
 
 describe('AssignmentLifecycleAdvance', () => {
@@ -71,31 +93,78 @@ describe('AssignmentLifecycleAdvance', () => {
     });
     await act(async () => render('assigned'));
 
-    const advance = buttonByText('Contact drafted');
+    const advance = buttonByText('Mark contact drafted');
     expect(advance).toBeTruthy();
+    expect(advance!.getAttribute('aria-label')).toBe(`Advance assignment for ${BORROWER} to Contact drafted`);
     await act(async () => advance!.click());
     await settle();
 
+    expect(apiMocks.updateAssignmentStatus).toHaveBeenCalledTimes(1);
     expect(apiMocks.updateAssignmentStatus).toHaveBeenCalledWith(ASSIGNMENT_ID, 'contact_drafted');
-    expect(onAdvanced).toHaveBeenCalledWith('B-48291', { assignment_status: 'contact_drafted' });
+    expect(onAdvanced).toHaveBeenCalledWith(BORROWER, { assignment_status: 'contact_drafted' });
   });
 
-  it('collects the recorded outcome at the terminal step', async () => {
+  it('names every advance verb-first', async () => {
+    for (const [status, label] of [
+      ['assigned', 'Mark contact drafted'],
+      ['contact_drafted', 'Mark approved'],
+      ['approved', 'Mark actioned'],
+    ] as const) {
+      await act(async () => render(status));
+      expect(buttonByText(label), `${status} -> ${label}`).toBeTruthy();
+    }
+  });
+
+  it('records an outcome only after its confirm row: one POST, then the new stage', async () => {
     apiMocks.recordAssignmentOutcome.mockResolvedValue({
       assignment: { assignment_id: ASSIGNMENT_ID, status: 'outcome_recorded' },
       outcome: 'declined',
       feedback_id: 'fb-1',
     });
-    await act(async () => render('actioned'));
+    await openConfirm('Declined');
 
-    await act(async () => buttonByText('Record outcome')!.click());
-    expect(buttonByText('Success')).toBeTruthy();
-    expect(buttonByText('No response')).toBeTruthy();
-    await act(async () => buttonByText('Declined')!.click());
+    expect(apiMocks.recordAssignmentOutcome, 'picking an outcome writes nothing').not.toHaveBeenCalled();
+    const confirm = document.querySelector(`[data-testid="lifecycle-outcome-confirm-${BORROWER}"]`);
+    expect(confirm?.textContent).toContain(`Record Declined for ${BORROWER}?`);
+    expect(document.activeElement, 'focus moves to Record').toBe(buttonByText('Record'));
+
+    await act(async () => buttonByText('Record')!.click());
     await settle();
 
+    expect(apiMocks.recordAssignmentOutcome).toHaveBeenCalledTimes(1);
     expect(apiMocks.recordAssignmentOutcome).toHaveBeenCalledWith(ASSIGNMENT_ID, 'declined');
-    expect(onAdvanced).toHaveBeenCalledWith('B-48291', { assignment_status: 'outcome_recorded' });
+    expect(onAdvanced).toHaveBeenCalledWith(BORROWER, { assignment_status: 'outcome_recorded' });
+  });
+
+  it('Back returns to the outcome choice with no write', async () => {
+    await openConfirm('Success');
+    await act(async () => buttonByText('Back')!.click());
+    expect(buttonByText('No response')).toBeTruthy();
+    expect(apiMocks.recordAssignmentOutcome).not.toHaveBeenCalled();
+  });
+
+  it('Cancel closes the picker with zero writes and returns focus to Record outcome', async () => {
+    await act(async () => render('actioned'));
+    await act(async () => buttonByText('Record outcome')!.click());
+    expect(buttonByText('Cancel')).toBeTruthy();
+
+    await act(async () => buttonByText('Cancel')!.click());
+
+    expect(buttonByText('Success')).toBeUndefined();
+    expect(document.activeElement).toBe(buttonByText('Record outcome'));
+    expect(apiMocks.recordAssignmentOutcome).not.toHaveBeenCalled();
+    expect(onAdvanced).not.toHaveBeenCalled();
+  });
+
+  it('Escape closes the whole picker, even from the confirm row, with zero writes', async () => {
+    await openConfirm('No response');
+
+    pressEscape();
+
+    expect(document.querySelector(`[data-testid="lifecycle-outcome-confirm-${BORROWER}"]`)).toBeNull();
+    expect(buttonByText('Success')).toBeUndefined();
+    expect(document.activeElement).toBe(buttonByText('Record outcome'));
+    expect(apiMocks.recordAssignmentOutcome).not.toHaveBeenCalled();
   });
 
   it('surfaces a server 409 honestly instead of faking progress', async () => {
@@ -104,7 +173,7 @@ describe('AssignmentLifecycleAdvance', () => {
     );
     await act(async () => render('assigned'));
 
-    await act(async () => buttonByText('Contact drafted')!.click());
+    await act(async () => buttonByText('Mark contact drafted')!.click());
     await settle();
 
     expect(onAdvanced).not.toHaveBeenCalled();
@@ -112,8 +181,48 @@ describe('AssignmentLifecycleAdvance', () => {
     expect(alert?.textContent).toContain('illegal transition');
   });
 
+  it('keeps the stage and shows the error when the outcome write is refused (409)', async () => {
+    apiMocks.recordAssignmentOutcome.mockRejectedValue(new Error('assignment is not actioned'));
+    await openConfirm('Success');
+
+    await act(async () => buttonByText('Record')!.click());
+    await settle();
+
+    expect(apiMocks.recordAssignmentOutcome).toHaveBeenCalledTimes(1);
+    expect(onAdvanced).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('assignment is not actioned');
+  });
+
   it('renders nothing once the lifecycle is terminal', async () => {
     await act(async () => render('outcome_recorded'));
     expect(document.querySelectorAll('button').length).toBe(0);
+  });
+});
+
+describe('AssignmentLifecycleSteps', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+  });
+
+  it('lists the five stages in order and marks the current one with aria-current="step"', () => {
+    act(() => root.render(<AssignmentLifecycleSteps status="approved" />));
+    const steps = [...document.querySelectorAll('ol.lifecycle-steps > li')];
+    expect(steps.map((step) => step.textContent)).toEqual([
+      'Assigned', 'Contact drafted', 'Approved', 'Actioned', 'Outcome recorded',
+    ]);
+    expect(steps.filter((step) => step.getAttribute('aria-current') === 'step').map((step) => step.textContent))
+      .toEqual(['Approved']);
+    expect(steps.slice(0, 2).every((step) => step.classList.contains('lifecycle-steps__step--done'))).toBe(true);
+  });
+
+  it('never renders `.chip__label` (the stage chip stays the one specs read)', () => {
+    act(() => root.render(<AssignmentLifecycleSteps status="contact_drafted" />));
+    expect(document.querySelector('.chip__label')).toBeNull();
   });
 });

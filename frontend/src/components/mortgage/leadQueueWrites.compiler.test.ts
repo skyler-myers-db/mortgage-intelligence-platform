@@ -44,6 +44,9 @@ const TARGETS = [
   ['useLeadApproveReview.ts', 'useLeadApproveReview'],
   ['useLeadCsvExport.ts', 'useLeadCsvExport'],
   ['LeadBulkApproveReview.tsx', 'LeadBulkApproveReview'],
+  // critic-06 item 7(c): its two write paths are module helpers returning a
+  // result object, so the component carries no try/finally.
+  ['AssignmentLifecycleAdvance.tsx', 'AssignmentLifecycleAdvance'],
 ] as const;
 
 const repoPath = (file: string) => `frontend/src/components/mortgage/${file}`;
