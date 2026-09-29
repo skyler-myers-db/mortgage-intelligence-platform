@@ -3,9 +3,12 @@
    ============================================================ */
 /* The view tablist is the prototype's `.layout-tabs` (components/ui/
    LayoutTabs.css, lazy with the route); this keeps only its place in the
-   page and lets the seven tabs wrap. */
+   page and lets the seven tabs wrap. Content-sized like the prototype's
+   tray, never a full-width bar (w3 motion-nav #131). */
 .analytics-tabs {
   flex-wrap: wrap;
+  inline-size: fit-content;
+  max-inline-size: 100%;
   margin-bottom: var(--gap-grid);
 }
 .analytics-filters {

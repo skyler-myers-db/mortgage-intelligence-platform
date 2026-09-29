@@ -341,3 +341,10 @@ test.describe('analytics charts: forced colors (a11y-10 / responsive-v3 / css-06
     expect([onStyle, offStyle]).toEqual(['solid', 'dashed']);
   });
 });
+
+test('analytics: the view tabs are content-sized, not a full-width tray (w3 motion-nav #131)', async ({ app, page }) => {
+  await app.gotoRoute('/analytics');
+  const tablist = page.getByRole('tablist', { name: 'Analytics views' });
+  const widths = await tablist.evaluate((el) => ({ own: el.getBoundingClientRect().width, parent: el.parentElement?.getBoundingClientRect().width ?? 0 }));
+  expect(widths.own).toBeLessThan(widths.parent);
+});
