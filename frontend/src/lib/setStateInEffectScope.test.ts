@@ -42,6 +42,19 @@ const CONVERTED = [
   'src/components/ui/FetchedAt.tsx',
   'src/components/ui/RetryClock.tsx',
   'src/lib/queueVersion.ts',
+  // Wave 4b workflow.
+  'src/routes/offer-orchestrator.tsx',
+  'src/routes/offer-orchestrator.queries.ts',
+  'src/routes/offer-orchestrator.sales-team.ts',
+  'src/routes/portfolio-builder.tsx',
+  'src/routes/portfolio-builder.governance.tsx',
+  'src/routes/portfolio-builder.campaign-setup.tsx',
+  'src/components/mortgage/QueuePager.tsx',
+  'src/components/ui/Field.tsx',
+  // Wave 4b genie-client.
+  'src/components/mortgage/GenieAnswerFeedback.tsx',
+  'src/components/layout/GenieDock.tsx',
+  'src/routes/ask-genie.deep-link.tsx',
 ];
 
 const NOT_YET_CONVERTED = [

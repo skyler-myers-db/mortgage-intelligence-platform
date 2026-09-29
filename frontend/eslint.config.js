@@ -74,6 +74,21 @@ export const SET_STATE_IN_EFFECT_SCOPE = [
   "src/components/ui/FetchedAt.tsx",
   "src/components/ui/RetryClock.tsx",
   "src/lib/queueVersion.ts",
+  // Wave 4b workflow: Offer and Portfolio on the query layer, the queue pager
+  // and the Field primitive (each proven with the rule at error, zero hits).
+  "src/routes/offer-orchestrator.tsx",
+  "src/routes/offer-orchestrator.queries.ts",
+  "src/routes/offer-orchestrator.sales-team.ts",
+  "src/routes/portfolio-builder.tsx",
+  "src/routes/portfolio-builder.governance.tsx",
+  "src/routes/portfolio-builder.campaign-setup.tsx",
+  "src/components/mortgage/QueuePager.tsx",
+  "src/components/ui/Field.tsx",
+  // Wave 4b genie-client: the named set (GenieChat.tsx stays out: its open
+  // effect still sets state).
+  "src/components/mortgage/GenieAnswerFeedback.tsx",
+  "src/components/layout/GenieDock.tsx",
+  "src/routes/ask-genie.deep-link.tsx",
 ];
 
 /** Fixture harness files may import TYPES from frontend/src, never runtime code. */
