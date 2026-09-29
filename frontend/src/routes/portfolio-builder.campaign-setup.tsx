@@ -155,12 +155,7 @@ export function CampaignSetupPanel({
                 </div>
                 <dl className="campaign-recommendation__hypothesis-list">
                   {recommendation.variants.map((variant) => (
-                    <div
-                      className="campaign-recommendation__hypothesis"
-                      role="group"
-                      aria-label={`${variant.variant_name} hypothesis`}
-                      key={variant.variant_name}
-                    >
+                    <div className="campaign-recommendation__hypothesis" key={variant.variant_name}>
                       <dt>
                         <strong>{variant.variant_name}</strong>
                         <span className="chip chip--neutral">Hypothesis</span>

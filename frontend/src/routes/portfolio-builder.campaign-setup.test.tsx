@@ -154,12 +154,26 @@ describe('CampaignSetupPanel', () => {
     expect(document.body.textContent).toContain('Qualified team performance');
     expect(document.body.textContent).toContain('2,119 eligible refinance-economics borrowers');
     expect(document.body.textContent).toContain('Test immediate payment-value clarity');
-    const hypotheses = [...document.querySelectorAll<HTMLElement>('[role="group"]')]
-      .filter((node) => node.getAttribute('aria-label')?.endsWith(' hypothesis'));
-    expect(hypotheses.map((node) => node.getAttribute('aria-label'))).toEqual([
-      'Benefit-led hypothesis',
-      'Guidance-led hypothesis',
+    // a11y-05 item 4: each dt/dd pair sits in a plain <div> directly inside
+    // the <dl> (valid dl content). A role on the wrapper took the pair out of
+    // the list, which axe reported as definition-list + dlitem.
+    const list = document.querySelector<HTMLDListElement>('dl.campaign-recommendation__hypothesis-list');
+    expect(list).not.toBeNull();
+    const hypotheses = [...(list?.children ?? [])] as HTMLElement[];
+    expect(hypotheses.map((node) => [
+      node.tagName,
+      node.getAttribute('role'),
+      node.getAttribute('aria-label'),
+      [...node.children].map((child) => child.tagName).join('+'),
+    ])).toEqual([
+      ['DIV', null, null, 'DT+DD'],
+      ['DIV', null, null, 'DT+DD'],
     ]);
+    expect(hypotheses.map((node) => node.querySelector('dt strong')?.textContent)).toEqual([
+      'Benefit-led',
+      'Guidance-led',
+    ]);
+    expect(list?.querySelectorAll('[role]')).toHaveLength(0);
     expect(hypotheses[0].textContent).toContain(
       'Concrete benefit framing improves qualified responses.',
     );
