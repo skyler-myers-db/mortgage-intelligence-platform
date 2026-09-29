@@ -434,7 +434,11 @@ jobs:
     # request, or an API call with no registered fixture.
     name: e2e (fixture harness, every route)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Wave 4b (2026-09-29): the suite grew to 948 tests and the single-worker
+    # perf step now also runs the Lead Queue interaction budget (a 500-row
+    # queue at 4x CPU). Measured on run 36639466070: setup 4 min, harness
+    # 17 min, then the job hit the old 20-minute cap inside the perf step.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
