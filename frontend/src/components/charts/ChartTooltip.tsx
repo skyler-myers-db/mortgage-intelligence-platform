@@ -25,23 +25,17 @@ const FLIP_AT_PCT = 60;
 export function ChartTooltip({
   point,
   surfaceProps,
-  crosshair = true,
 }: {
   point: ChartTooltipPoint | null;
-  /** The pointer surface's handlers: omitted where the marks take the pointer themselves (the scatter). */
-  surfaceProps?: ChartCursorSurfaceProps;
-  crosshair?: boolean;
+  /** The pointer surface's handlers (the layer spans the plot). */
+  surfaceProps: ChartCursorSurfaceProps;
 }) {
   const at = point ? ({ '--hover-x': `${point.x}%`, '--hover-y': `${point.y}%` } as CSSProperties) : undefined;
   return (
-    <div
-      className={`analytics-chart__hover${surfaceProps ? '' : ' analytics-chart__hover--passive'}`}
-      aria-hidden="true"
-      {...surfaceProps}
-    >
+    <div className="analytics-chart__hover" aria-hidden="true" {...surfaceProps}>
       {point && (
         <>
-          {crosshair && <span className="analytics-chart__crosshair" style={at} />}
+          <span className="analytics-chart__crosshair" style={at} />
           <span className="analytics-chart__hover-dot" style={at} />
           <span className={`analytics-chart__tip${point.x > FLIP_AT_PCT ? ' analytics-chart__tip--flip' : ''}`} style={at}>
             <span className="analytics-chart__tip-x">{point.label}</span>

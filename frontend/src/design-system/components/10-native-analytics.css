@@ -265,9 +265,6 @@
   inset-inline: 0;
   block-size: var(--analytics-chart-h);
 }
-/* Where the marks take the pointer themselves (the scatter), the tip layer
-   must not swallow it. */
-.analytics-chart__hover--passive { pointer-events: none; }
 .analytics-chart__crosshair,
 .analytics-chart__hover-dot,
 .analytics-chart__tip {
