@@ -1,0 +1,106 @@
+/* Chart kit (components/charts; 2026-09-21 audit dataviz-07 step 2,
+   dataviz-10). App-extension BEM: the prototype draws no charts beyond its
+   KPI sparklines, so the frame is new; its axes, grid and tooltip reuse the
+   `.analytics-chart__*` chrome of 10-native-analytics.css. Tokens only.
+   Lazy: ChartFrame.tsx is the one importer. */
+.chart-frame {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-2) var(--sp-3);
+  margin: 0;
+}
+.chart-frame__summary {
+  grid-column: 1;
+  max-inline-size: 72ch;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
+.chart-frame__toggle {
+  grid-column: 2;
+}
+.chart-frame__plot,
+.chart-frame__table,
+.chart-frame__notice {
+  grid-column: 1 / -1;
+  min-inline-size: 0;
+}
+.chart-frame__plot {
+  border-radius: var(--r-md);
+}
+.chart-frame__notice {
+  margin: 0;
+}
+
+/* Edge-anchored x ticks (stack-06): the first label starts at the plot's
+   left edge and the last ends at its right edge instead of centring on the
+   edge, where the last evidence date spilled past its surface. Doubled with
+   the --x modifier so the lazy sheet never depends on load order. */
+.analytics-chart__tick--x.analytics-chart__tick--edge-start {
+  transform: none;
+}
+.analytics-chart__tick--x.analytics-chart__tick--edge-end {
+  transform: translateX(-100%);
+}
+
+/* Histogram (dataviz-06, visual-08 item 2). Bins below a threshold are the
+   muted --text-3; bins at or past it, and every bin when there is no
+   threshold, take the data ink. A 1px card-coloured edge separates bins. */
+.chart-hist {
+  display: block;
+  inline-size: 100%;
+  block-size: var(--analytics-chart-h);
+  overflow: hidden;
+}
+.chart-hist__bar {
+  fill: var(--text-3);
+  stroke: var(--bg-2);
+  stroke-width: 1;
+}
+.chart-hist__bar--past {
+  fill: var(--accent-data);
+}
+.chart-hist__rule {
+  stroke: var(--text-2);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.chart-hist__rule-label {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: var(--rule-x);
+  transform: translateX(var(--sp-1));
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: var(--z-raised);
+}
+.chart-hist__rule-label--end {
+  transform: translateX(calc(-100% - var(--sp-1)));
+}
+
+/* Forced colours (a11y-10 / responsive-v3): bins are non-text data marks,
+   so they keep their encoding in system colours. Past = solid CanvasText;
+   the rest = Canvas with a CanvasText edge; the rule stays CanvasText. */
+@media (forced-colors: active) {
+  .chart-hist__bar {
+    forced-color-adjust: none;
+    fill: Canvas;
+    stroke: CanvasText;
+  }
+  .chart-hist__bar.chart-hist__bar--past {
+    fill: CanvasText;
+  }
+  .chart-hist__rule {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+  }
+}

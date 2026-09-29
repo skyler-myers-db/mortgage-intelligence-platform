@@ -8,41 +8,13 @@
  * (the fixture spec checks the same sentence against the same numbers).
  */
 import type { RateWindowResponse } from '../types';
+import { niceTicks } from '../lib/chartTicks';
 import { roundTo } from '../lib/fixedPrecision';
 import { ratePct } from '../lib/formatters';
 import { DATE_UNKNOWN, formatMonthYear as formatMonthYearLabel } from '../lib/time';
 import { categoricalTickIndexes } from './analytics.lib';
 
 export const RATE_WINDOW_TITLE = 'Why now: the market rate against the book';
-
-/**
- * 1-2-5 "nice" ticks covering [min, max] with the bounds rounded outward.
- * Local to this surface on purpose: analytics.lib's makeTicks divides the
- * range evenly (the 6.03K-style ticks of dataviz-07) and a shared chart
- * foundation is a later wave.
- */
-export function niceTicks(min: number, max: number, count = 5): number[] {
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
-  let lo = Math.min(min, max);
-  let hi = Math.max(min, max);
-  if (hi === lo) {
-    if (lo === 0) return [0, 1];
-    lo = lo > 0 ? 0 : lo * 2;
-    hi = hi > 0 ? hi * 2 : 0;
-  }
-  const rawStep = (hi - lo) / Math.max(1, count - 1);
-  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
-  const residual = rawStep / magnitude;
-  const factor = residual <= 1 ? 1 : residual <= 2 ? 2 : residual <= 5 ? 5 : 10;
-  const step = factor * magnitude;
-  const decimals = Math.max(0, -Math.floor(Math.log10(step)));
-  // The epsilon keeps an exact multiple (6.3 / 0.05) from rounding a whole
-  // extra step outward when the division lands a few ulps off the integer.
-  const start = Math.floor(lo / step + 1e-9) * step;
-  const end = Math.ceil(hi / step - 1e-9) * step;
-  const steps = Math.round((end - start) / step);
-  return Array.from({ length: steps + 1 }, (_, idx) => roundTo(start + idx * step, decimals));
-}
 
 /**
  * Basis points the book's median note rate sits ABOVE the market rate

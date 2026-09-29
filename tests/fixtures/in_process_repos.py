@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from backend.schemas.analytics import (
     AnalyticsFilters,
     AnalyticsScope,
+    AnalyticsThresholds,
     EconomicsAnalyticsResponse,
     EquitySpreadBin,
     EquitySpreadOverview,
@@ -288,6 +289,9 @@ class InProcessMockAnalyticsRepository:
                     start=1,
                 )
             ],
+            # The governed refi screen (fn_in_the_money defaults, the same
+            # 75 bps / 15% the rate window and admin rules carry).
+            thresholds=AnalyticsThresholds(min_spread_bps=75, min_equity_pct=15, reason=None),
         )
 
     @staticmethod

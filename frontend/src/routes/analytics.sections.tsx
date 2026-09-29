@@ -3,10 +3,11 @@
 'use no memo';
 
 import { useMemo } from 'react';
-import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../lib/opportunityScore';
+import { HIGH_OPPORTUNITY_SCORE_LABEL, HIGH_OPPORTUNITY_THRESHOLD } from '../lib/opportunityScore';
 import { Link } from 'react-router';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { KpiCard } from '../components/mortgage/KpiCard';
+import { Histogram } from '../components/charts/Histogram';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { formatCompact, formatCount, formatFixed, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
 import { offerDisplayLabel } from '../lib/offerLanguage';
@@ -46,10 +47,19 @@ import {
   DataTable,
   FunnelBars,
   FunnelSankey,
-  LineChart,
+  HistogramTable,
   ScopeChip,
   SectionHeader,
 } from './analytics.charts';
+import {
+  SCORE_BUCKET_WIDTH,
+  SPREAD_BUCKET_BPS,
+  formatBinRange,
+  histogramModel,
+  scoreSummary,
+  spreadSummary,
+  thresholdNotice,
+} from './analytics.chart-model';
 import { EquitySpreadScatter } from './analytics.equity-scatter';
 import { RateWindowSection } from './analytics.rate-window';
 import type { AnalyticsQueryOptions } from '../lib/api';
@@ -80,6 +90,73 @@ export function ExecutiveProvenanceNote({
       reads the Lakebase approval tables directly and is exact, so a higher count there means this
       mirror is one sync behind &mdash; by design, not a discrepancy.
     </p>
+  );
+}
+
+const scoreRange = (start: number) => formatBinRange(start, SCORE_BUCKET_WIDTH);
+const spreadRange = (start: number) => formatBinRange(start, SPREAD_BUCKET_BPS, 'bps');
+
+/**
+ * Opportunity scores as a histogram (dataviz-06). The rule sits at the pinned
+ * high-opportunity threshold, and its label carries the governed
+ * high-opportunity count from the executive totals, never re-summed bins.
+ */
+export function ScoreDistribution({ data }: { data: ExecutiveAnalyticsResponse }) {
+  const model = histogramModel(
+    data.score_distribution.map((row) => ({ start: row.score_bucket, count: row.borrower_count })),
+    SCORE_BUCKET_WIDTH,
+    HIGH_OPPORTUNITY_THRESHOLD,
+  );
+  const pastLabel = `Score ${HIGH_OPPORTUNITY_SCORE_LABEL}`;
+  return (
+    <Histogram
+      title="Opportunity Score Distribution"
+      summary={scoreSummary(model, data.totals)}
+      bins={model.bins}
+      binWidth={SCORE_BUCKET_WIDTH}
+      threshold={HIGH_OPPORTUNITY_THRESHOLD}
+      ruleLabel={`${HIGH_OPPORTUNITY_SCORE_LABEL} · ${formatCount(data.totals.high_opportunity_borrowers)} borrowers`}
+      xLabel="Opportunity score"
+      yLabel="Borrowers"
+      formatRange={scoreRange}
+      table={<HistogramTable model={model} rangeLabel="Opportunity score" pastLabel={pastLabel} formatRange={scoreRange} />}
+    />
+  );
+}
+
+/**
+ * Rate spreads as a histogram with the refresh's governed refi screen
+ * (data.thresholds, dataviz-06): no rule and a notice when the refresh
+ * carries no single screen.
+ */
+export function SpreadDistribution({ data }: { data: EconomicsAnalyticsResponse }) {
+  const threshold = data.thresholds.min_spread_bps;
+  const model = histogramModel(
+    data.rate_spread_histogram.map((row) => ({ start: row.spread_bucket_bps, count: row.borrower_count })),
+    SPREAD_BUCKET_BPS,
+    threshold,
+  );
+  return (
+    <Histogram
+      title="Rate Spread Distribution"
+      summary={spreadSummary(model, data.thresholds)}
+      notice={thresholdNotice(data.thresholds)}
+      bins={model.bins}
+      binWidth={SPREAD_BUCKET_BPS}
+      threshold={threshold}
+      ruleLabel={threshold === null ? null : `Refi screen ≥ ${formatCount(threshold)} bps`}
+      xLabel="Spread bps"
+      yLabel="Borrowers"
+      formatRange={spreadRange}
+      table={
+        <HistogramTable
+          model={model}
+          rangeLabel="Spread bps"
+          pastLabel={threshold === null ? null : 'At or past the screen'}
+          formatRange={spreadRange}
+        />
+      }
+    />
   );
 }
 
@@ -129,13 +206,7 @@ export function ExecutiveView({
             <Link className="btn btn--sm" to={leadQueueHref(leadParams)}>Open queue</Link>
           </div>
           <div className="surface__body analytics-chart-panel">
-            <LineChart
-              rows={data.score_distribution}
-              x={(row) => 'score_bucket' in row ? row.score_bucket : row.spread_bucket_bps}
-              y={(row) => row.borrower_count}
-              xLabel="Opportunity score"
-              yLabel="Borrowers"
-            />
+            <ScoreDistribution data={data} />
           </div>
         </section>
         <section className="surface">
@@ -220,14 +291,7 @@ export function EconomicsView({
         <section className="surface">
           <div className="surface__hdr"><h2 className="h-3">Rate Spread Distribution</h2></div>
           <div className="surface__body analytics-chart-panel">
-            <LineChart
-              rows={data.rate_spread_histogram}
-              x={(row) => 'spread_bucket_bps' in row ? row.spread_bucket_bps : row.score_bucket}
-              y={(row) => row.borrower_count}
-              xLabel="Spread bps"
-              yLabel="Borrowers"
-              xUnit="bps"
-            />
+            <SpreadDistribution data={data} />
           </div>
         </section>
         <section className="surface">

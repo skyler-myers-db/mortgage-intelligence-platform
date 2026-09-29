@@ -243,6 +243,23 @@ class TopBorrowerAnalyticsRow(BaseModel):
     rank_overall: int = Field(ge=1)
 
 
+class AnalyticsThresholds(BaseModel):
+    """The refi screen this refresh applied, read from ``mip.gold.borrower_360``.
+
+    ``min_spread_bps`` / ``min_equity_pct`` are the ``*_applied`` columns when
+    every scored row carries one and the same value; the charts draw the
+    screen from here, never from a frontend constant. A field is None when
+    no single governed value exists. ``reason`` is None when both values are
+    present; otherwise ``not_uniform`` when either column disagrees across
+    the refresh (MIN != MAX, or NULL on some rows only), else ``not_built``
+    (every row NULL, or no rows).
+    """
+
+    min_spread_bps: int | None
+    min_equity_pct: int | None
+    reason: Literal["not_built", "not_uniform"] | None
+
+
 class EconomicsAnalyticsResponse(BaseModel):
     rate_spread_histogram: list[RateSpreadBucket]
     # S7: the scatter overview is server-side density bins over
@@ -251,6 +268,9 @@ class EconomicsAnalyticsResponse(BaseModel):
     # CHANGELOG).
     equity_spread: EquitySpreadOverview
     top_borrowers: list[TopBorrowerAnalyticsRow]
+    # Required, one wire location: the spread histogram's rule and the
+    # scatter guides both read this refresh-wide pair (dataviz-06).
+    thresholds: AnalyticsThresholds
 
 
 class SegmentOverviewRow(BaseModel):

@@ -32,7 +32,7 @@
     "frontend/src/components/mortgage/USChoroplethMapZipLevel.tsx": {"jsx-a11y/no-noninteractive-element-interactions":1,"jsx-a11y/no-redundant-roles":1},
     "frontend/src/components/ui/FilterSelect.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-noninteractive-element-to-interactive-role":2},
     "frontend/src/components/ui/MultiFilterSelect.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-noninteractive-element-to-interactive-role":2},
-    "frontend/src/routes/analytics.equity-scatter.tsx": {"jsx-a11y/no-static-element-interactions":3},
+    "frontend/src/routes/analytics.equity-scatter.tsx": {"jsx-a11y/no-static-element-interactions":2},
     "frontend/src/routes/portfolio-builder.tsx": {"jsx-a11y/no-autofocus":1}
   }
 }

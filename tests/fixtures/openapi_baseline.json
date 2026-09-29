@@ -1185,6 +1185,55 @@
         "title": "AnalyticsScope",
         "type": "object"
       },
+      "AnalyticsThresholds": {
+        "description": "The refi screen this refresh applied, read from ``mip.gold.borrower_360``.\n\n``min_spread_bps`` / ``min_equity_pct`` are the ``*_applied`` columns when\nevery scored row carries one and the same value; the charts draw the\nscreen from here, never from a frontend constant. A field is None when\nno single governed value exists. ``reason`` is None when both values are\npresent; otherwise ``not_uniform`` when either column disagrees across\nthe refresh (MIN != MAX, or NULL on some rows only), else ``not_built``\n(every row NULL, or no rows).",
+        "properties": {
+          "min_equity_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Equity Pct"
+          },
+          "min_spread_bps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Spread Bps"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_built",
+                  "not_uniform"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "min_spread_bps",
+          "min_equity_pct",
+          "reason"
+        ],
+        "title": "AnalyticsThresholds",
+        "type": "object"
+      },
       "ApprovalFunnelResponse": {
         "properties": {
           "approvals": {
@@ -4933,6 +4982,9 @@
             "title": "Rate Spread Histogram",
             "type": "array"
           },
+          "thresholds": {
+            "$ref": "#/components/schemas/AnalyticsThresholds"
+          },
           "top_borrowers": {
             "items": {
               "$ref": "#/components/schemas/TopBorrowerAnalyticsRow"
@@ -4944,7 +4996,8 @@
         "required": [
           "rate_spread_histogram",
           "equity_spread",
-          "top_borrowers"
+          "top_borrowers",
+          "thresholds"
         ],
         "title": "EconomicsAnalyticsResponse",
         "type": "object"
