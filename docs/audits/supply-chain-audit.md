@@ -29,13 +29,18 @@ this remediation pass.
   `.github/workflows/ci.yml`): a high or critical advisory fails CI;
   moderate and low advisories in dev-only tooling are tolerated and reviewed
   at the next dependency batch.
-- Backend `pip-audit`, 2026-09-24, over the `uv.lock` pins
-  (`pip-audit -r uv.lock --no-deps --disable-pip --strict`): no known
-  vulnerabilities. CI runs `pip-audit -r requirements.txt --strict
-  --ignore-vuln GHSA-h7x2-h6g9-p789` and carries that one ignore: the MLflow
-  tracking-server SSRF has no patched release and is unreachable here (see
-  the 2026-09-08 addendum below and the proof at the ci.yml call site). Its
-  review date is 2026-10-08.
+- Backend `pip-audit`, 2026-09-29, over the `uv.lock` pins
+  (`pip-audit -r uv.lock --no-deps --disable-pip --strict`): one known
+  vulnerability, GHSA-xpv3-w29h-x7cv (oauthlib 3.3.1). It has no installable
+  fix and is unreachable here (see the 2026-09-29 addendum below). CI runs
+  `pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789
+  --ignore-vuln GHSA-xpv3-w29h-x7cv` and carries two ignores, each with its
+  proof at the ci.yml call site:
+  - GHSA-h7x2-h6g9-p789, the MLflow tracking-server SSRF: no patched release,
+    unreachable here (see the 2026-09-08 addendum below). Review date
+    2026-10-08.
+  - GHSA-xpv3-w29h-x7cv, the oauthlib server-side PKCE timing attack. Review
+    date 2026-10-13.
 - The prior restricted commercial-use map-data dependency was removed from
   `frontend/package.json`, `frontend/package-lock.json`, and production source.
 - State map rendering now uses `us-atlas@3.0.1` (`ISC`) plus the existing
@@ -65,7 +70,7 @@ npm --prefix frontend audit --audit-level=high      # the CI gate
 npm --prefix frontend audit --audit-level=moderate  # advisory local read; not a gate
 npm --prefix frontend run test -- USChoroplethMap
 npm --prefix frontend run build
-./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789
+./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789 --ignore-vuln GHSA-xpv3-w29h-x7cv
 ./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py
 ./.venv/bin/python -m pytest -q tests/unit/test_error_sanitizer.py tests/unit/test_health_endpoint.py
 ```
@@ -255,3 +260,29 @@ This follow-up moves them together and re-runs the registry integration test:
 `uv.lock` was recompiled with `--upgrade-package` limited to these four
 distributions; no other pin moved. CI's pip-audit step now carries a single
 ignore, GHSA-h7x2-h6g9-p789, whose proof is unchanged.
+
+## 2026-09-29 addendum: PyJWT 2.14.0, and an oauthlib ignore
+
+Two advisories were published on 2026-09-29, a few hours before the wave-4b
+PR's CI run, and reddened `pip-audit` on main as well.
+
+| Advisory | Package | Action |
+|---|---|---|
+| GHSA-w6j9-cwv2-h6wq (medium): a malformed RSA JWK aborts parsing of the whole JWK Set | `pyjwt` 2.13.0 | Bumped to 2.14.0, the first patched release. `databricks-sql-connector` accepts `pyjwt>=2.0.0,<3.0.0`. Nothing in the repo imports `jwt`, and the connector's `auth.auth_utils` and `auth.oauth` modules (its only `jwt` users) import cleanly on 2.14.0. `uv.lock` was recompiled with `--upgrade-package pyjwt`; no other pin moved. |
+| GHSA-xpv3-w29h-x7cv (medium): a timing attack on the PKCE `code_verifier` comparison | `oauthlib` 3.3.1 | Ignored in CI with a review date of 2026-10-13. |
+
+Why the oauthlib advisory is ignored rather than fixed:
+- **The fix cannot be installed.** The only patched release is `oauthlib`
+  4.0.0, and every `databricks-sql-connector` release from 4.0.0 through 4.6.0
+  (the latest) requires `oauthlib>=3.1.0,<4.0.0`. Each release's metadata was
+  checked on PyPI.
+- **It is unreachable.** The vulnerable comparison is
+  `code_challenge_method_s256` / `_plain` in oauthlib's authorization-server
+  grant (`grant_types/authorization_code.py`, run by
+  `AuthorizationCodeGrant.validate_token_request`). Nothing in the repo
+  imports `oauthlib` or `databricks.sql`: the App's SQL goes through the
+  databricks-sdk Statements API. The connector's own `auth/oauth.py` uses only
+  the client side (`WebApplicationClient`, `OAuth2Error`).
+- **When to remove it:** as soon as a connector release admits oauthlib 4, or
+  the connector leaves the lock.
+
