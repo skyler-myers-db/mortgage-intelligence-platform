@@ -19,15 +19,7 @@ import { useId, useState, type ReactNode } from 'react';
 import type { ChartCursorPlotProps } from './useChartCursor';
 import './charts.css';
 
-export function ChartFrame({
-  title,
-  summary,
-  table,
-  notice = null,
-  liveText = '',
-  plotProps,
-  children,
-}: {
+export interface ChartFrameProps {
   /** The plot's accessible name: the section title it sits under. */
   title: string;
   summary: string;
@@ -36,13 +28,25 @@ export function ChartFrame({
   liveText?: string;
   plotProps?: ChartCursorPlotProps;
   children: ReactNode;
-}) {
+}
+
+/** A compiled shell over a plain render (see "Compiled shells" in CountChart.tsx). */
+export function ChartFrame(props: ChartFrameProps) {
   const summaryId = useId();
   const [asTable, setAsTable] = useState(false);
+  return chartFrame(props, summaryId, asTable, () => setAsTable((current) => !current));
+}
+
+function chartFrame(
+  { title, summary, table, notice = null, liveText = '', plotProps, children }: ChartFrameProps,
+  summaryId: string,
+  asTable: boolean,
+  toggle: () => void,
+) {
   return (
     <figure className="chart-frame">
       <figcaption id={summaryId} className="chart-frame__summary">{summary}</figcaption>
-      <button type="button" className="btn btn--sm chart-frame__toggle" onClick={() => setAsTable((current) => !current)}>
+      <button type="button" className="btn btn--sm chart-frame__toggle" onClick={toggle}>
         {asTable ? 'View as chart' : 'View as table'}
       </button>
       {asTable ? (

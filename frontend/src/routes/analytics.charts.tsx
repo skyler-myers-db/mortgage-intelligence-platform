@@ -14,12 +14,8 @@ import { Icon } from '../components/Icon';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
-import { ChartFrame } from '../components/charts/ChartFrame';
-import { ChartTooltip } from '../components/charts/ChartTooltip';
-import { PLOT_Y_RANGE } from '../components/charts/Histogram';
-import { linearScale, tickEdgeClass, utcDayScale } from '../components/charts/scales';
-import { useChartCursor } from '../components/charts/useChartCursor';
-import { niceTicks } from '../lib/chartTicks';
+import { CountChart } from '../components/charts/CountChart';
+import { utcDayScale } from '../components/charts/scales';
 import { fixedAttr } from '../lib/fixedPrecision';
 import { formatCompact, formatCount } from '../lib/formatters';
 import type { FunnelStage } from '../types';
@@ -342,33 +338,20 @@ export function FunnelSankey({
  * Evidence events per day on the chart kit (dataviz-v2, stack-06, dataviz-10).
  * Each day sits at its UTC-day offset along [first, last], never at its index,
  * so a day the rows skip keeps its width instead of compressing the axis. The
- * y axis is the 1-2-5 count domain; the first and last date labels are
- * edge-anchored; the kit cursor gives the hover and keyboard readout, and
- * the frame the summary and the date/events table.
+ * kit's CountChart gives the 1-2-5 count axis, the edge-anchored first and
+ * last date labels, the hover and keyboard readout, and the frame with the
+ * summary and the date/events table.
  */
 export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] }) {
   const ordered = [...rows].sort((a, b) => a.event_date.localeCompare(b.event_date));
-  const x = utcDayScale(ordered[0]?.event_date ?? '', ordered[ordered.length - 1]?.event_date ?? '');
-  const positions = ordered.map((row) => x(row.event_date));
-  const yTicks = niceTicks(0, Math.max(0, ...ordered.map((row) => row.event_count)), 5, { integer: true });
-  const y = linearScale([0, yTicks[yTicks.length - 1]], PLOT_Y_RANGE);
-  const cursor = useChartCursor(ordered.length, positions);
   const summary = evidenceSummary(ordered);
-
   if (summary === null) return <div className="analytics-empty">No daily evidence returned.</div>;
-  const readout = (idx: number | null) => (idx === null ? null : {
-    x: positions[idx],
-    y: y(ordered[idx].event_count),
-    label: formatShortDate(ordered[idx].event_date),
-    value: `${formatCount(ordered[idx].event_count)} events`,
-  });
-  const live = readout(cursor.liveIndex);
+  const x = utcDayScale(ordered[0].event_date, ordered[ordered.length - 1].event_date);
+  const points = ordered.map((row) => ({ x: x(row.event_date), count: row.event_count, label: formatShortDate(row.event_date) }));
   return (
-    <ChartFrame
+    <CountChart
       title="Evidence Events Per Day"
       summary={summary}
-      liveText={live ? `${live.label}: ${live.value}` : ''}
-      plotProps={cursor.plotProps}
       table={
         <DataTable<DailyEvidenceTotal>
           rows={ordered}
@@ -379,56 +362,18 @@ export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] })
           ]}
         />
       }
-    >
-      <div className="analytics-chart">
-        <div className="analytics-chart__plot">
-          <div className="analytics-chart__y-ticks" aria-hidden="true">
-            {[...yTicks].reverse().map((tick) => (
-              <span
-                key={tick}
-                className="analytics-chart__tick analytics-chart__tick--y"
-                style={{ '--tick-pos': `${y(tick)}%` } as CSSProperties}
-              >
-                {formatCompact(tick)}
-              </span>
-            ))}
-          </div>
-          <div className="analytics-chart__canvas">
-            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-line-chart" aria-hidden="true">
-              {yTicks.map((tick) => (
-                <line
-                  key={tick}
-                  x1="0"
-                  x2="100"
-                  y1={fixedAttr(y(tick))}
-                  y2={fixedAttr(y(tick))}
-                  className="analytics-chart__grid"
-                  vectorEffect="non-scaling-stroke"
-                />
-              ))}
-              <polyline
-                points={ordered.map((row, idx) => `${fixedAttr(positions[idx])},${fixedAttr(y(row.event_count))}`).join(' ')}
-                vectorEffect="non-scaling-stroke"
-              />
-            </svg>
-            <ChartTooltip point={readout(cursor.index)} surfaceProps={cursor.surfaceProps} />
-            <div className="analytics-chart__x-ticks" aria-hidden="true">
-              {categoricalTickIndexes(ordered.length).map((idx) => (
-                <span
-                  key={idx}
-                  className={`analytics-chart__tick analytics-chart__tick--x${tickEdgeClass(positions[idx])}`}
-                  style={{ '--tick-pos': `${positions[idx]}%` } as CSSProperties}
-                >
-                  {formatShortDate(ordered[idx].event_date)}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-        <div className="analytics-chart__axis analytics-chart__axis--x">Event date</div>
-        <div className="analytics-chart__axis analytics-chart__axis--y">Events</div>
-      </div>
-    </ChartFrame>
+      points={points}
+      xTicks={categoricalTickIndexes(points.length).map((idx) => points[idx])}
+      xLabel="Event date"
+      yLabel="Events"
+      svgClassName="analytics-line-chart"
+      marks={(y) => (
+        <polyline
+          points={points.map((point) => `${fixedAttr(point.x)},${fixedAttr(y(point.count))}`).join(' ')}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+    />
   );
 }
 
