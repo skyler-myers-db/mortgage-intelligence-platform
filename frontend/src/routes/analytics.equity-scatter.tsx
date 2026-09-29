@@ -505,9 +505,13 @@ function ScatterPointCluster({
       ? 'analytics-scatter__cluster--align-end'
       : '';
   const vertical = position.yPct > 58 ? 'analytics-scatter__cluster--above' : '';
-  // An open cluster panel is the topmost Escape layer (lib/escapeStack.ts,
-  // a11y-07): Escape closes it and returns focus to its marker, and a layer
-  // opened above it (a drawer, the palette) takes Escape first.
+  // An open cluster panel is an Escape layer (lib/escapeStack.ts, a11y-07):
+  // Escape closes it and returns focus to its marker, and a layer opened
+  // above it (a drawer, the palette) takes Escape first. The panel is
+  // non-modal, so, like the floating Genie panel, it DECLINES the key while
+  // focus is outside the cluster: an Escape typed in the Genie composer or a
+  // page field reaches that layer or the page, and focus stays where it is.
+  const rootRef = useRef<HTMLDivElement>(null);
   const dismiss = useEffectEvent(() => {
     onOpenChange(false);
     markerRef.current?.focus();
@@ -515,11 +519,14 @@ function ScatterPointCluster({
   useEffect(() => {
     if (!open) return;
     return pushEscapeLayer(() => {
+      if (!rootRef.current?.contains(document.activeElement)) return false;
       dismiss();
+      return undefined;
     });
   }, [open]);
   return (
     <div
+      ref={rootRef}
       className={`analytics-scatter__cluster ${alignment} ${vertical}`}
       style={{
         '--dot-x': `${position.xPct}%`,

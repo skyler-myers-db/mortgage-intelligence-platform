@@ -255,13 +255,17 @@ describe('Equity versus rate spread score-band legend', () => {
       expect(panel).not.toBeNull();
       expect(panel!.hidden).toBe(true);
 
+      // A mouse click focuses the button in Chromium and Firefox; happy-dom's
+      // click() does not, so focus it the way the browser would. A real
+      // Escape keypress targets the focused element.
+      marker!.focus();
       act(() => marker!.click());
       expect(marker!.getAttribute('aria-expanded')).toBe('true');
       expect(panel!.hidden).toBe(false);
       expect(panel!.querySelectorAll('a')).toHaveLength(2);
 
       act(() => {
-        panel!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       });
       expect(marker!.getAttribute('aria-expanded')).toBe('false');
       expect(panel!.hidden).toBe(true);
@@ -313,6 +317,84 @@ describe('Equity versus rate spread score-band legend', () => {
     } finally {
       act(() => root.unmount());
       container.remove();
+    }
+  });
+
+  it('declines Escape while focus is outside an open cluster: a lower non-modal layer keeps the key and focus stays put (a11y-07)', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    // A Genie-like non-modal layer opened BEFORE the cluster. It declines
+    // unless focus is inside it (the useGeniePanelDismissal contract).
+    const lower = document.createElement('div');
+    const composer = document.createElement('input');
+    lower.appendChild(composer);
+    document.body.appendChild(lower);
+    const pageField = document.createElement('input');
+    document.body.appendChild(pageField);
+    let lowerTook = 0;
+    const baseline = escapeLayerCount();
+    const popLower = pushEscapeLayer(() => {
+      if (!lower.contains(document.activeElement)) return false;
+      lowerTook += 1;
+      return undefined;
+    });
+    const escapeFrom = (target: Element) => {
+      const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      act(() => {
+        target.dispatchEvent(event);
+      });
+      return event;
+    };
+    try {
+      act(() => {
+        root.render(
+          <MemoryRouter>
+            <EquitySpreadPointsView payload={collisionDrilldown} />
+          </MemoryRouter>,
+        );
+      });
+      const marker = container.querySelector<HTMLButtonElement>('.analytics-scatter__cluster-marker')!;
+      const panel = container.querySelector<HTMLElement>('.analytics-scatter__cluster-panel')!;
+      marker.focus();
+      act(() => marker.click());
+      expect(panel.hidden).toBe(false);
+      expect(escapeLayerCount()).toBe(baseline + 2);
+
+      // Escape in the lower layer's input: that layer handles it, the cluster
+      // stays open and focus is not pulled back to the marker.
+      composer.focus();
+      expect(document.activeElement).toBe(composer);
+      escapeFrom(composer);
+      expect(lowerTook).toBe(1);
+      expect(panel.hidden).toBe(false);
+      expect(marker.getAttribute('aria-expanded')).toBe('true');
+      expect(document.activeElement).toBe(composer);
+
+      // Escape in an unrelated page field: no layer claims it, so the key
+      // reaches the page unconsumed and nothing moves.
+      pageField.focus();
+      const pageEscape = escapeFrom(pageField);
+      expect(pageEscape.defaultPrevented).toBe(false);
+      expect(lowerTook).toBe(1);
+      expect(panel.hidden).toBe(false);
+      expect(marker.getAttribute('aria-expanded')).toBe('true');
+      expect(document.activeElement).toBe(pageField);
+
+      // Back inside the cluster, Escape still closes it to its marker.
+      panel.querySelector<HTMLAnchorElement>('a')!.focus();
+      escapeFrom(document.activeElement!);
+      expect(lowerTook).toBe(1);
+      expect(panel.hidden).toBe(true);
+      expect(marker.getAttribute('aria-expanded')).toBe('false');
+      expect(document.activeElement).toBe(marker);
+      expect(escapeLayerCount()).toBe(baseline + 1);
+    } finally {
+      popLower();
+      act(() => root.unmount());
+      container.remove();
+      lower.remove();
+      pageField.remove();
     }
   });
 
