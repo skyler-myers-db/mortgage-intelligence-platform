@@ -127,7 +127,7 @@ export function useLeadApproveReview({
     }
     // Never abandon a review whose approval is on the wire.
     if (current?.phase === 'submitting') return 'busy';
-    if (!canStartApproval()) return 'blocked';
+    if (!canStartApproval(borrowerId)) return 'blocked';
     startDraft(borrowerId, mode);
     return 'opened';
   }
@@ -165,7 +165,7 @@ export function useLeadApproveReview({
       cancel();
       return;
     }
-    if (!canStartApproval()) return;
+    if (!canStartApproval(current.borrowerId)) return;
     startDraft(current.borrowerId, current.mode);
   }
 

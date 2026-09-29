@@ -160,9 +160,9 @@ export function LeadTable({
   const setSort = onSortChange ?? setOwnSort;
   const sortKey: SortKey = activeSort?.key ?? 'rank';
   const sortDir: SortDir = activeSort?.dir ?? 'desc';
-  // Shared error surface: both the approval path and the sales-ops path
-  // report into the single `.table-error` alert this shell renders.
-  const [approvalError, setApprovalError] = useState<string | null>(null);
+  // Approve, reject and assign failures and gate refusals raise an error
+  // toast on the shell region (states-07 item 2: leadWriteFailureToast);
+  // the table keeps only the export and review-loading lines.
   const {
     approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity,
     canApprove, canAccessAdmin, actorEmail, sessionStatus, setDrawer, density,
@@ -181,7 +181,6 @@ export function LeadTable({
     leads,
     salesTeam,
     queryClient,
-    setApprovalError,
   });
   const { displayLeads, leadsById } = sales;
   // Audit runtime-04 slice 1: sorted once per (rows, sort), not on every
@@ -218,7 +217,6 @@ export function LeadTable({
     campaignBindingBlocked,
     canApprove: approverGate === null,
     tableWrapRef,
-    setApprovalError,
   });
 
   /**
@@ -648,14 +646,6 @@ export function LeadTable({
             approval.setBulkToast(null);
           }}
         />
-      )}
-      {approvalError && (
-        <div
-          role="alert"
-          className="table-error"
-        >
-          {approvalError}
-        </div>
       )}
       <div className="surface__ft">
         Showing {formatCount(leads.length)} ranked borrower{leads.length === 1 ? '' : 's'}

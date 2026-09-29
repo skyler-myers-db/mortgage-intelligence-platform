@@ -25,12 +25,12 @@ const apiMocks = vi.hoisted(() => ({
   reject: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: apiMocks,
-  ApiError: class extends Error {},
-  isAbortError: () => false,
 }));
 
+import { clearToasts, getToasts } from '../../lib/toast';
 import { useLeadApprovalActions } from './useLeadApprovalActions';
 
 const BORROWER = 'B-AAAAAAAAAAAA1';
@@ -46,7 +46,6 @@ const LEAD = {
 
 type Actions = ReturnType<typeof useLeadApprovalActions>;
 let actions: Actions | null = null;
-const setApprovalError = vi.fn();
 
 function Harness({ canApprove }: { canApprove: boolean }) {
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
@@ -61,7 +60,6 @@ function Harness({ canApprove }: { canApprove: boolean }) {
     campaignBindingBlocked: false,
     canApprove,
     tableWrapRef,
-    setApprovalError,
   });
   // Expose the hook's latest closures to the test after every commit.
   useEffect(() => {
@@ -76,6 +74,7 @@ describe('useLeadApprovalActions approver gate', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearToasts();
     apiMocks.draftOutreach.mockResolvedValue({
       subject: 'Your governed mortgage review',
       body: 'draft',
@@ -119,7 +118,12 @@ describe('useLeadApprovalActions approver gate', () => {
     expect(apiMocks.draftOutreach).not.toHaveBeenCalled();
     expect(apiMocks.approve).not.toHaveBeenCalled();
     expect(apiMocks.reject).not.toHaveBeenCalled();
-    expect(setApprovalError).toHaveBeenCalledWith('Requires approver role.');
+    // Each refusal is an error toast on the shell region (states-07 item 2).
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['error', `Couldn't approve ${BORROWER}`, 'Requires approver role.'],
+      ['error', `Couldn't reject ${BORROWER}`, 'Requires approver role.'],
+      ['error', "Couldn't approve the selected leads", 'Requires approver role.'],
+    ]);
   });
 
   it('drafts and approves for an approver (the gate is not a blanket off switch)', async () => {

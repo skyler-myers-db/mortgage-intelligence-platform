@@ -60,10 +60,9 @@ function assignment(borrowerId: string, email: string) {
 
 type Sales = ReturnType<typeof useLeadSalesActions>;
 let sales: Sales | null = null;
-const setApprovalError = vi.fn();
 
 function Harness({ client, team }: { client: QueryClient; team: SalesTeamMember[] }) {
-  const current = useLeadSalesActions({ leads: LEADS, salesTeam: team, queryClient: client, setApprovalError });
+  const current = useLeadSalesActions({ leads: LEADS, salesTeam: team, queryClient: client });
   useEffect(() => {
     sales = current;
   });
@@ -169,6 +168,19 @@ describe('useLeadSalesActions on the sales mutations', () => {
     expect(sent).not.toContain('score_balanced');
   });
 
+  it('with no active loan officer, an assign sends nothing and says so in an error toast', async () => {
+    mount([]);
+    const onAssigned = vi.fn();
+    await act(async () => {
+      await sales!.assignSelected('round-robin', IDS, onAssigned);
+    });
+    expect(apiMocks.distributeLeads).not.toHaveBeenCalled();
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['error', "Couldn't assign the selected leads", 'No active loan officers are available for assignment.'],
+    ]);
+    expect(onAssigned).not.toHaveBeenCalled();
+  });
+
   it('raises an error toast for a failed assignment, not the table alert', async () => {
     apiMocks.distributeLeads.mockRejectedValue(new Error('assigned_to is outside the actor scope'));
     mount();
@@ -179,7 +191,6 @@ describe('useLeadSalesActions on the sales mutations', () => {
     expect(getToasts()).toEqual([
       expect.objectContaining({ tone: 'error', title: "Couldn't assign the selected leads", detail: 'assigned_to is outside the actor scope' }),
     ]);
-    expect(setApprovalError).not.toHaveBeenCalledWith(expect.stringContaining('outside the actor scope'));
     expect(onAssigned).not.toHaveBeenCalled();
   });
 

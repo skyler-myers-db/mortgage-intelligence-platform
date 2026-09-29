@@ -27,6 +27,7 @@ import {
 } from '../../lib/mutations/sales';
 import { toast } from '../../lib/toast';
 import { dispositionLabel } from './LeadTable.logic';
+import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
 /** One assignment row as returned by `assignLead` / `distributeLeads`. */
 export interface LeadAssignmentResult {
@@ -39,6 +40,8 @@ export interface LeadAssignmentResult {
   assignment_id?: string | null;
 }
 
+const ASSIGN_FAILED = "Couldn't assign the selected leads";
+
 /** What the disposition panel submits: the POST body, validated by the panel. */
 export type LeadDispositionPayload = LogDispositionVariables['payload'];
 
@@ -46,15 +49,12 @@ export interface UseLeadSalesActionsInput {
   leads: LeadSummary[];
   salesTeam: SalesTeamMember[];
   queryClient: QueryClient;
-  /** Shared with the approval hook: the table renders one error alert. */
-  setApprovalError: (message: string | null) => void;
 }
 
 export function useLeadSalesActions({
   leads,
   salesTeam,
   queryClient,
-  setApprovalError,
 }: UseLeadSalesActionsInput) {
   const [selectedAssignee, setSelectedAssignee] = useState<string>('');
   const [salesOverrides, setSalesOverrides] = useState<Record<string, Partial<LeadSummary>>>({});
@@ -146,11 +146,10 @@ export function useLeadSalesActions({
         ? [effectiveAssignee]
         : [];
     if (loEmails.length === 0) {
-      setApprovalError('No active loan officers are available for assignment.');
+      toastWriteRefusal(ASSIGN_FAILED, 'No active loan officers are available for assignment.');
       return Promise.resolve();
     }
     salesInFlightRef.current = true;
-    setApprovalError(null);
     const intent = intentFingerprint('assign', borrowerIds.join(','), loEmails.join(','));
     return latched(assignLeads.run({ borrowerIds, loEmails, requestId: requestIds.idFor(intent) }).then(
       (result) => {
@@ -161,7 +160,7 @@ export function useLeadSalesActions({
         onAssigned();
       },
       (err: unknown) => {
-        toast.error("Couldn't assign the selected leads", { detail: err instanceof Error ? err.message : null });
+        toastWriteFailure(ASSIGN_FAILED, err, 'the assignment');
       },
     ));
   }
@@ -170,7 +169,6 @@ export function useLeadSalesActions({
   function submitDisposition(payload: LeadDispositionPayload): Promise<void> {
     if (!pendingDisposition || salesWriteInFlight()) return Promise.resolve();
     salesInFlightRef.current = true;
-    setApprovalError(null);
     const borrowerId = pendingDisposition;
     const intent = intentFingerprint(
       'disposition', borrowerId, payload.lo_email, payload.outcome, payload.callback_at, payload.notes,

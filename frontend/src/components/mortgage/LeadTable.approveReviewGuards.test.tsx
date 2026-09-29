@@ -25,6 +25,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
+import { clearToasts, getToasts } from '../../lib/toast';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -85,7 +86,8 @@ vi.mock('../AppContext', async () => {
   };
 });
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
     approve: (...args: unknown[]) => approve(...args),
@@ -94,9 +96,6 @@ vi.mock('../../lib/api', () => ({
     auditReceipt: () => new Promise(() => {}),
     salesTeam: () => Promise.resolve({ members: [] }),
   },
-  ApiError: class extends Error {},
-  isAbortError: () => false,
-  isWarmingUpError: () => false,
 }));
 
 import { LeadTable } from './LeadTable';
@@ -172,6 +171,7 @@ describe('LeadTable approve review guards', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearToasts();
     store.reset(false);
     installLocalStorage();
     clearSingleKeyShortcutsPreference();
@@ -210,7 +210,13 @@ describe('LeadTable approve review guards', () => {
   const region = () => container.querySelector<HTMLDivElement>('.tbl-wrap')!;
   const review = () => document.querySelector<HTMLFormElement>('[data-testid="lead-approve-review"]');
   const confirmButton = () => document.querySelector<HTMLButtonElement>('[data-testid="lead-approve-review-confirm"]');
-  const tableAlert = () => container.querySelector('.table-error[role="alert"]')?.textContent ?? '';
+  // Refusals are error toasts on the shell region (states-07 item 2): the
+  // newest one's detail, and never a `.table-error` alert in the table.
+  const tableAlert = () => {
+    expect(container.querySelector('.table-error')).toBeNull();
+    const errors = getToasts().filter((toast) => toast.tone === 'error');
+    return errors[errors.length - 1]?.detail ?? '';
+  };
   const rationaleInput = () => container.querySelector<HTMLInputElement>('.bulk-actions__rationale input');
   const bulkApproveButton = () => container.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-approve"]')!;
 

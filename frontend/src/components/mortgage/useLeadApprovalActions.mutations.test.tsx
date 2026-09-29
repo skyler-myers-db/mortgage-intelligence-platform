@@ -27,24 +27,13 @@ const apiMocks = vi.hoisted(() => ({
   reject: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => {
-  class ApiError extends Error {
-    readonly status: number | null;
-    readonly aborted: boolean;
-    constructor(message: string, opts: { path?: string; status?: number | null; aborted?: boolean } = {}) {
-      super(message);
-      this.status = opts.status ?? null;
-      this.aborted = opts.aborted ?? false;
-    }
-  }
-  return {
-    api: apiMocks,
-    ApiError,
-    isAbortError: (err: unknown) => err instanceof ApiError && err.aborted,
-  };
-});
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  api: apiMocks,
+}));
 
 import { ApiError } from '../../lib/api';
+import { clearToasts, getToasts } from '../../lib/toast';
 import { useLeadApprovalActions } from './useLeadApprovalActions';
 
 const IDS = Array.from({ length: 7 }, (_, index) => `B-AAAAAAAAAAAA${index + 1}`);
@@ -80,7 +69,6 @@ function draft(generationId: string): OutreachDraftResult {
 type Actions = ReturnType<typeof useLeadApprovalActions>;
 let actions: Actions | null = null;
 const setApproval = vi.fn();
-const setApprovalError = vi.fn();
 
 function Harness({ client }: { client: QueryClient }) {
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
@@ -95,7 +83,6 @@ function Harness({ client }: { client: QueryClient }) {
     campaignBindingBlocked: false,
     canApprove: true,
     tableWrapRef,
-    setApprovalError,
   });
   useEffect(() => {
     actions = current;
@@ -128,6 +115,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearToasts();
     window.sessionStorage.clear();
     client = new QueryClient();
     apiMocks.draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draft(`gen-${borrowerId}`)));
@@ -292,8 +280,8 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       { borrowerId: IDS[4], outcome: 'backend', message: 'Draft proof is stale.' },
     ]);
     expect([...actions!.selectedIds]).toEqual([IDS[4]]);
-    // Bulk rows report in the run's result, not the table's single alert.
-    expect(setApprovalError).not.toHaveBeenCalledWith(expect.stringContaining("Couldn't approve"));
+    // Bulk rows report in the run's result, never a single-row toast.
+    expect(getToasts()).toEqual([]);
   });
 
   it('certifies the evidence and offer each row had when the run started, not a refetch mid-run', async () => {
@@ -390,6 +378,13 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       failed = await actions!.rejectLead(BORROWER, 'low_intent', 'No intent');
     });
     expect(failed).toBe(false);
+    // The single-row failure is an error toast with describeApiError's
+    // buyer-safe body, never the transport text (states-07 item 2).
+    await vi.waitFor(() => {
+      expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+        ['error', `Couldn't reject ${BORROWER}`, 'The server hit an unexpected error.'],
+      ]);
+    });
 
     let first: Promise<boolean> | null = null;
     let second: boolean | undefined;
