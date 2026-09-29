@@ -243,21 +243,14 @@
   .analytics-scatter__dot--band {
     forced-color-adjust: none;
   }
-  .analytics-chart-panel--scatter .analytics-scatter__bin.score--high,
-  .analytics-chart-panel--scatter .analytics-scatter__dot--band.score--high {
-    background-color: CanvasText;
-    border: 0 none;
+  /* The band fills above read these, so the marks paint system colours. */
+  .analytics-chart-panel--scatter {
+    --scatter-score-high: CanvasText;
+    --scatter-score-med: Canvas;
+    --scatter-score-low: Canvas;
   }
-  .analytics-chart-panel--scatter .analytics-scatter__bin.score--med,
-  .analytics-chart-panel--scatter .analytics-scatter__dot--band.score--med {
-    background-color: Canvas;
-    border: 2px solid CanvasText;
-  }
-  .analytics-chart-panel--scatter .analytics-scatter__bin.score--low,
-  .analytics-chart-panel--scatter .analytics-scatter__dot--band.score--low {
-    background-color: Canvas;
-    border: 1px dashed CanvasText;
-  }
+  :is(.analytics-scatter__bin, .analytics-scatter__dot--band).score--med { border: 2px solid CanvasText; }
+  :is(.analytics-scatter__bin, .analytics-scatter__dot--band).score--low { border: 1px dashed CanvasText; }
   .analytics-scatter__cluster-marker { border-width: 2px; }
   .analytics-scatter__cluster-marker.score--med { border-style: dashed; }
   .analytics-scatter__cluster-marker.score--low { border-style: dotted; }

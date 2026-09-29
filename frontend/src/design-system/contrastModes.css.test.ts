@@ -253,15 +253,15 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
   });
 
   it('gives each scatter band a distinct (fill, edge style, edge width) cue, and the cluster markers an explicit width', () => {
-    const cue = (band: string) => {
-      const rules = declarations.filter((d) => selectorList(d.selector).includes(`.analytics-chart-panel--scatter .analytics-scatter__bin.score--${band}`));
-      return Object.fromEntries(rules.map((d) => [d.property, d.value]));
-    };
-    expect([cue('high'), cue('med'), cue('low')]).toEqual([
-      { 'background-color': 'CanvasText', border: '0 none' },
-      { 'background-color': 'Canvas', border: '2px solid CanvasText' },
-      { 'background-color': 'Canvas', border: '1px dashed CanvasText' },
-    ]);
+    // The band fills read --scatter-score-*, which the forced block points at
+    // system colours; med and low add a distinct edge, high keeps none.
+    const panel = Object.fromEntries(
+      declarations.filter((d) => d.selector === '.analytics-chart-panel--scatter').map((d) => [d.property, d.value]),
+    );
+    expect(panel).toEqual({ '--scatter-score-high': 'CanvasText', '--scatter-score-med': 'Canvas', '--scatter-score-low': 'Canvas' });
+    const edge = (band: string) =>
+      declarations.find((d) => d.selector === `:is(.analytics-scatter__bin, .analytics-scatter__dot--band).score--${band}`)?.value;
+    expect([edge('high'), edge('med'), edge('low')]).toEqual([undefined, '2px solid CanvasText', '1px dashed CanvasText']);
     const marker = declarations.filter((d) => d.selector.startsWith('.analytics-scatter__cluster-marker'));
     expect(marker.map((d) => [d.selector, d.property, d.value])).toEqual([
       ['.analytics-scatter__cluster-marker', 'border-width', '2px'],
