@@ -34,9 +34,9 @@
      Its rows and expanded row carry their own instead, the larger of this
      clearance and the sticky thead's (LeadTable.css reads --nav-clear), so
      a row control up under the nav still stops below it. Its sticky
-     header's controls (sort, select-all) carry none: with a margin, a focus
-     on one while the table is scrolled scrolled it back to "reveal" a
-     header already stuck in view, and still left it under the nav
+     header's controls (sort, select-all) carry none: given a margin, a
+     focus on one with the table scrolled moved the table back to "reveal"
+     a header already stuck in view (45px) and still left it under the nav
      (measured). So a header control that takes focus while `.main` has
      scrolled the header up under the nav (Shift+Tab from the first row)
      stays under it.
