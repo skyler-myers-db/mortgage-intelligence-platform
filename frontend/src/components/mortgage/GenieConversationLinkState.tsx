@@ -30,19 +30,7 @@ export interface GenieConversationLinkStateProps {
 }
 
 export const GENIE_LINK_NOT_FOUND_COPY = "This conversation isn't available.";
-export const GENIE_LINK_NOT_FOUND_DETAIL =
-  'Open Ask Genie to ask a new question, or pick one of your conversations from History.';
-export const GENIE_LINK_UNAVAILABLE_COPY = "This conversation can't be loaded right now.";
-export const GENIE_LINK_UNAVAILABLE_DETAIL = 'Nothing was changed. Try again in a moment.';
-
-function Header() {
-  return (
-    <div className="surface__hdr">
-      <Icon name="sparkle" size={14} className="icon-accent" />
-      <SurfaceTitle>Conversation</SurfaceTitle>
-    </div>
-  );
-}
+export const GENIE_LINK_UNAVAILABLE_COPY = "This conversation can't be loaded right now. Nothing was changed.";
 
 export default function GenieConversationLinkState({
   state,
@@ -50,36 +38,35 @@ export default function GenieConversationLinkState({
   onRetry,
   retrying,
 }: GenieConversationLinkStateProps) {
-  if (state === 'loading') {
-    return (
-      <div className="surface" aria-busy="true" data-genie-link="loading">
-        <Header />
-        <div className="surface__body stack-grid">
-          <span className="sr-only">Loading the conversation</span>
-          <Skeleton width="45%" />
-          <Skeleton width="90%" />
-          <Skeleton width="70%" />
-        </div>
-      </div>
-    );
-  }
-  const notFound = state === 'not-found';
+  const failed = state === 'unavailable';
   return (
-    <div className="surface" data-genie-link={state}>
-      <Header />
+    <div className="surface" aria-busy={state === 'loading' || undefined} data-genie-link={state}>
+      <div className="surface__hdr">
+        <Icon name="sparkle" size={14} className="icon-accent" />
+        <SurfaceTitle>Conversation</SurfaceTitle>
+      </div>
       <div className="surface__body stack-grid">
-        <p>{notFound ? GENIE_LINK_NOT_FOUND_COPY : GENIE_LINK_UNAVAILABLE_COPY}</p>
-        <p className="muted fs-12">{notFound ? GENIE_LINK_NOT_FOUND_DETAIL : GENIE_LINK_UNAVAILABLE_DETAIL}</p>
-        <div className="chip-row">
-          {!notFound && (
-            <Button type="button" variant="primary" onClick={onRetry} disabled={retrying} aria-busy={retrying || undefined}>
-              {retrying ? 'Retrying…' : 'Retry'}
-            </Button>
-          )}
-          <Button type="button" variant={notFound ? 'primary' : 'ghost'} onClick={onOpenAskGenie}>
-            Open Ask Genie
-          </Button>
-        </div>
+        {state === 'loading' ? (
+          <>
+            <span className="sr-only">Loading the conversation</span>
+            <Skeleton width="45%" />
+            <Skeleton width="85%" />
+          </>
+        ) : (
+          <>
+            <p>{failed ? GENIE_LINK_UNAVAILABLE_COPY : GENIE_LINK_NOT_FOUND_COPY}</p>
+            <div className="chip-row">
+              {failed && (
+                <Button type="button" variant="primary" onClick={onRetry} disabled={retrying}>
+                  {retrying ? 'Retrying…' : 'Retry'}
+                </Button>
+              )}
+              <Button type="button" variant={failed ? 'ghost' : 'primary'} onClick={onOpenAskGenie}>
+                Open Ask Genie
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

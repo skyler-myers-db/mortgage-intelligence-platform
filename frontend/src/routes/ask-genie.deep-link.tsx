@@ -1,5 +1,5 @@
 import { lazy, Suspense, useSyncExternalStore } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { queryOptions, useQuery } from '@tanstack/react-query';
 import { ApiError, api } from '../lib/api';
 import type { GenieTurn } from '../lib/genieConversationStore';
 import { getGenieTurnSnapshot, subscribeGenieTurn } from '../lib/genieInFlightTurn';
@@ -75,20 +75,25 @@ function isNotFound(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 404 || error.status === 403);
 }
 
-export function useGenieConversationLink(param: string | undefined): GenieConversationLink {
-  const valid = isGenieConversationId(param);
-  const query = useQuery({
-    queryKey: genieConversationQueryKey(valid ? param : ''),
-    queryFn: ({ signal }) => readGenieConversation(valid ? param : '', signal),
-    enabled: valid,
+/** The link's one read (module level, so the compiled hook stays small). */
+function genieConversationQuery(param: string | undefined) {
+  const id = isGenieConversationId(param) ? param : '';
+  return queryOptions({
+    queryKey: genieConversationQueryKey(id),
+    queryFn: ({ signal }) => readGenieConversation(id, signal),
+    enabled: id !== '',
     retry: false,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: false,
   });
+}
+
+export function useGenieConversationLink(param: string | undefined): GenieConversationLink {
+  const query = useQuery(genieConversationQuery(param));
   if (param === undefined) return NO_LINK;
-  if (!valid) return NOT_FOUND;
+  if (!isGenieConversationId(param)) return NOT_FOUND;
   if (query.data) return { kind: 'ok', conversation: query.data };
   if (!query.isError) return LOADING;
   if (isNotFound(query.error)) return NOT_FOUND;
