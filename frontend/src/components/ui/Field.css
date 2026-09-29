@@ -12,6 +12,26 @@
 }
 .field__control > .form-input { min-width: 0; }
 
+/* State styles for the control a Field wraps. Scoped to `.field`, so a
+   control gains them by adopting Field (the critic-04 rollout), never by
+   which chunk happened to load this sheet first; and kept out of the shell's
+   CSS (the initial-CSS raw gate). :read-only only for text entry, since a
+   <select> is :read-only by definition. :user-invalid waits for the user's
+   own edit, so a pristine field never shows red. */
+.field input.form-input:read-only,
+.field textarea.form-input:read-only {
+  background: var(--bg-1);
+  color: var(--text-2);
+  cursor: default;
+}
+.field .form-input:disabled {
+  background: var(--bg-3);
+  border-color: var(--line-2);
+  color: var(--text-2);
+  cursor: not-allowed;
+}
+.field .form-input:user-invalid { border-color: var(--status-danger-line-strong); }
+
 /* A unit beside the control ('$', '%'). `.field` raises the specificity past
    a route's `… span` label rule (campaign setup uppercases its labels). */
 .field .field__adornment {
