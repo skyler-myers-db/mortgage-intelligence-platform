@@ -1,4 +1,16 @@
-"""Source-readiness gate helpers for segment rollups."""
+"""Source-readiness gate helpers for segment rollups.
+
+The ``gold.source_readiness`` snapshot sits in a ``GoldAggregateCache``
+(audit ``delivery-06``): past its soft TTL it is served stale while one
+background refresh re-reads it, and a failed refresh keeps last-good
+(``stale_if_error``). The build no longer swallows a failure, so a failure is
+never stored: a COLD failure logs ``segment_source_readiness_unavailable``
+and gates nothing (every segment stays "connected") for that one call, and
+the next call reads again. Before this it was negative-cached for the TTL;
+with a missing table failing fast (one statement, no breaker failure) the
+realistic cold failure is one quick statement. The factory reads only the
+SQL client and never writes an audit row.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +19,8 @@ import logging
 from backend.schemas.lead import SegmentSummary
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.gold_cache import AggregateCache
 from backend.services.observability import emit
-from backend.services.resilience import TTLCache
 
 log = logging.getLogger("backend.services.repositories.databricks_repo")
 
@@ -48,43 +60,45 @@ def _three_state_status(status: str | None) -> str:
 
 def _source_statuses(
     client: DatabricksSqlClient,
-    cache: TTLCache,
+    cache: AggregateCache,
     cache_ttl_s: float,
 ) -> dict[str, str]:
     """Return cached gold.source_readiness snapshot for presentational gates."""
 
     def build() -> dict[str, str]:
-        try:
-            rows = client.execute(_SOURCE_STATUS_SQL) or []
-        except Exception as exc:  # noqa: BLE001 -- gating is presentational
-            emit(
-                log,
-                "segment_source_readiness_unavailable",
-                level=logging.WARNING,
-                dependency="warehouse",
-                outcome="degraded",
-                exc_type=type(exc).__name__,
-                exc_msg=str(exc)[:500],
-            )
-            return {}
+        rows = client.execute(_SOURCE_STATUS_SQL) or []
         return {
             str(r.get("source_name")): str(r.get("status") or "")
             for r in rows
             if r.get("source_name")
         }
 
-    return cache.get_or_set(
-        _SOURCE_STATUS_CACHE_KEY,
-        build,
-        ttl_s=cache_ttl_s,
-    )
+    try:
+        statuses: dict[str, str] = cache.get_or_set(
+            _SOURCE_STATUS_CACHE_KEY,
+            build,
+            ttl_s=cache_ttl_s,
+            stale_if_error=True,
+        )
+    except Exception as exc:  # noqa: BLE001 -- gating is presentational
+        emit(
+            log,
+            "segment_source_readiness_unavailable",
+            level=logging.WARNING,
+            dependency="warehouse",
+            outcome="degraded",
+            exc_type=type(exc).__name__,
+            exc_msg=str(exc)[:500],
+        )
+        return {}
+    return statuses
 
 
 def apply_source_gates(
     segments: list[SegmentSummary],
     *,
     client: DatabricksSqlClient,
-    cache: TTLCache,
+    cache: AggregateCache,
     cache_ttl_s: float,
 ) -> list[SegmentSummary]:
     """Apply source readiness labels without suppressing real counts."""

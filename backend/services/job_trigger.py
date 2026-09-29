@@ -300,8 +300,10 @@ def _trigger_lifecycle_sync_job(*, reason: str = "approval") -> JobRetrySubmissi
             return None
         # ``run_now`` is non-blocking -- returns a ``RunNowResponse`` with
         # a ``run_id`` once the workspace has accepted the request. We
-        # don't wait on completion; Admin Data operations is the operator
-        # repair path if a fire-and-forget trigger drops.
+        # never wait on completion here: ``lifecycle_run_watch`` notices
+        # the run finish when a later request reads the workflow counts,
+        # and bumps the workflow generation then. Admin Data operations is
+        # the operator repair path if a fire-and-forget trigger drops.
         try:
             run = workspace.jobs.run_now(job_id=job_id)
         except Exception as run_exc:  # noqa: BLE001 -- swallowed below
@@ -320,10 +322,13 @@ def _trigger_lifecycle_sync_job(*, reason: str = "approval") -> JobRetrySubmissi
             run_id=getattr(run, "run_id", None),
             reason=reason,
         )
-        return JobRetrySubmission(
-            job_id=job_id,
-            run_id=(int(run.run_id) if getattr(run, "run_id", None) is not None else None),
-        )
+        run_id = int(run.run_id) if getattr(run, "run_id", None) is not None else None
+        # delivery-06: move the workflow generation once a request observes
+        # this run finished (see ``lifecycle_run_watch``).
+        from backend.services import lifecycle_run_watch
+
+        lifecycle_run_watch.note_submitted(workspace, job_id=job_id, run_id=run_id)
+        return JobRetrySubmission(job_id=job_id, run_id=run_id)
     except Exception as exc:  # noqa: BLE001 -- must never raise to caller
         emit(
             _log,
@@ -368,3 +373,7 @@ def _reset_for_tests() -> None:
     global _cached_job_id, _cached_job_id_at
     _cached_job_id = None
     _cached_job_id_at = float("-inf")
+    # Also forget the runs (and their stub workspaces) earlier tests submitted.
+    from backend.services import lifecycle_run_watch
+
+    lifecycle_run_watch._reset_for_tests()

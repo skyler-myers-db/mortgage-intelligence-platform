@@ -9,8 +9,9 @@ is a definitive answer from a reachable warehouse. Pins:
 * the client raises ``DatabricksSqlPermissionError`` (a ``DatabricksSqlError``
   subclass, so every existing ``except`` still catches it) for the UC error
   class, SQLSTATE 42501, or a FAILED statement's PERMISSION_DENIED code, and a
-  plain ``DatabricksSqlError`` for anything else (an expired-token 403, a
-  missing table);
+  plain ``DatabricksSqlError`` for anything else (an expired-token 403); a
+  missing table is its own ``DatabricksSqlObjectMissingError``
+  (``test_resilience_object_missing.py``), never a permission error;
 * ``Resilient`` never retries it, records a breaker SUCCESS (repeated
   refusals never open the breaker; a half-open probe closes rather than
   stranding its slot) and raises ``DependencyDownError`` of kind
@@ -34,6 +35,7 @@ from backend.main import app
 from backend.services.databricks_sql import (
     DatabricksSqlClient,
     DatabricksSqlError,
+    DatabricksSqlObjectMissingError,
     DatabricksSqlPermissionError,
     _reset_sql_client_for_tests,
     _sql_error_class,
@@ -79,7 +81,11 @@ def _resilient(breaker: CircuitBreaker) -> Resilient[Any]:
         ("User does not have SELECT on Table 'mip.gold.x'. SQLSTATE: 42501", None, DatabricksSqlPermissionError),
         ("[INSUFFICIENT_PERMISSIONS] Insufficient privileges", "BAD_REQUEST", DatabricksSqlPermissionError),
         ("User is not authorized", "PERMISSION_DENIED", DatabricksSqlPermissionError),
-        ("[TABLE_OR_VIEW_NOT_FOUND] `mip`.`gold`.`x` cannot be found. SQLSTATE: 42P01", None, DatabricksSqlError),
+        (
+            "[TABLE_OR_VIEW_NOT_FOUND] `mip`.`gold`.`x` cannot be found. SQLSTATE: 42P01",
+            None,
+            DatabricksSqlObjectMissingError,
+        ),
         ('{"error_code":"403","message":"Invalid Token"}', None, DatabricksSqlError),
         ("Statement timed out while the warehouse started", "DEADLINE_EXCEEDED", DatabricksSqlError),
         ("SQLSTATE: 425010", None, DatabricksSqlError),
@@ -112,12 +118,19 @@ def test_client_keeps_other_failures_plain(monkeypatch: pytest.MonkeyPatch) -> N
     client = DatabricksSqlClient("https://workspace.example", "test-token", "warehouse-id", timeout_s=50)
 
     def fake_post(url: str, body: dict[str, Any]) -> dict[str, Any]:
-        return {"status": {"state": "FAILED", "error": {"message": "[TABLE_OR_VIEW_NOT_FOUND] x"}}}
+        return {
+            "status": {
+                "state": "FAILED",
+                "error": {"message": "[DIVIDE_BY_ZERO] Division by zero. SQLSTATE: 22012"},
+            }
+        }
 
     monkeypatch.setattr(client, "_post", fake_post)
     with pytest.raises(DatabricksSqlError) as raised:
         client.execute("SELECT 1")
     assert type(raised.value) is DatabricksSqlError
+    missing = _sql_error_class("[TABLE_OR_VIEW_NOT_FOUND] x")
+    assert not issubclass(missing, DatabricksSqlPermissionError)
 
 
 def test_with_retry_gives_up_on_a_definitive_subclass_of_a_retried_type() -> None:

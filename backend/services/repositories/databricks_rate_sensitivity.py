@@ -23,7 +23,13 @@ Projection rules (the endpoint's honesty contract):
   never zero-filled; no usable state means ``built=False``;
 * a missing lane table -- the grid or the note book (the deploy that
   introduces one promotes the App before the refresh job builds it) -- is
-  ``built=False``, never a 503 "warming".
+  ``built=False``, never a 503 "warming". The SQL client classifies the
+  warehouse's ``TABLE_OR_VIEW_NOT_FOUND`` / 42P01 as
+  ``DatabricksSqlObjectMissingError`` (its regex is the one owner of that
+  marker), so a not-built read costs ONE statement and no breaker failure. Any
+  other missing object (``borrower_360``, say) is a real failure and keeps its
+  503 (``retries_exhausted``, after the same single attempt); there is no mock
+  fallback.
 
 Cache posture matches the geography rollups: ``GoldAggregateCache`` with a 60 s
 soft TTL, single-flight and stale-if-error. A cold failure propagates so the
@@ -42,7 +48,7 @@ from backend.schemas.geo_rate_sensitivity import (
     RateSensitivityState,
     RateSensitivityThresholds,
 )
-from backend.services.databricks_sql import DatabricksSqlClient
+from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlObjectMissingError
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
 from backend.services.gold_cache import AggregateCache, GoldAggregateCache
@@ -62,7 +68,6 @@ _BORROWER_360 = qualify("gold", "borrower_360")
 _BOOK_SOURCE = f"{_BORROWER_360} + {qualify('silver', 'lien_current')}"
 _RULE_SOURCE = f"{qualify('gold', 'fn_rate_spread')} + {qualify('gold', 'fn_in_the_money')}"
 _CONTACTABLE_SOURCE = f"{_BORROWER_360} + {_NOTE_BOOK} (live eligibility predicate, per request)"
-_MISSING_TABLE_MARKER = "TABLE_OR_VIEW_NOT_FOUND"
 # The lane's own tables: either one missing is "not built yet".
 _LANE_TABLES = ("rate_sensitivity_rollup", "rate_sensitivity_book")
 
@@ -170,6 +175,7 @@ def _is_missing_table(exc: BaseException) -> bool:
 
     The resilient SQL client wraps the warehouse error in a
     ``DependencyDownError`` (``last_error``); the raw client raises it bare.
+    Either way the typed ``DatabricksSqlObjectMissingError`` is on the chain.
     Only the lane's own tables (the grid and the note book) missing is "not
     built": any other missing object is a real failure and keeps its 503.
     """
@@ -177,8 +183,9 @@ def _is_missing_table(exc: BaseException) -> bool:
     node: BaseException | None = exc
     while node is not None and id(node) not in seen:
         seen.add(id(node))
-        text = str(node)
-        if _MISSING_TABLE_MARKER in text and any(table in text for table in _LANE_TABLES):
+        if isinstance(node, DatabricksSqlObjectMissingError) and any(
+            table in str(node) for table in _LANE_TABLES
+        ):
             return True
         next_node = getattr(node, "last_error", None)
         node = next_node if isinstance(next_node, BaseException) else node.__cause__

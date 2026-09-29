@@ -84,10 +84,14 @@ class DatabricksSegmentRepository:
         *,
         cache: TTLCache | None = None,
         cache_ttl_s: float = 30.0,
+        gate_cache: AggregateCache | None = None,
     ) -> None:
         self._client = client
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = cache_ttl_s
+        # The source-readiness gates are served stale-while-revalidate
+        # (delivery-06); the segment list itself keeps hard expiry.
+        self._gate_cache: AggregateCache = gate_cache if gate_cache is not None else GoldAggregateCache()
 
     # SQL text lives in `databricks_geo_sql`; these aliases keep the
     # class-attribute access the tests pin (`_LIST_SQL`, `_LIST_FILTERED_SQL_TPL`).
@@ -198,7 +202,7 @@ class DatabricksSegmentRepository:
             return apply_source_gates(
                 segments,
                 client=self._client,
-                cache=self._cache,
+                cache=self._gate_cache,
                 cache_ttl_s=self._cache_ttl_s,
             )
 
