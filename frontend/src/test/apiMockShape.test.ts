@@ -44,20 +44,7 @@ const TARGET = 'src/lib/api';
  * bare factory; the owner converts it and the integrator retires the entry
  * (it then fails as stale). Never add a file: convert its factory.
  */
-const PENDING_PARTIAL_API_MOCKS: Readonly<Record<string, { owner: string; reason: string }>> = {
-  'src/components/mortgage/useLeadApproveReview.test.tsx': {
-    owner: 'w4-lead-queue',
-    reason: 'lead-queue owns this suite in W4b and converts its lib/api factory to the importOriginal spread',
-  },
-  'src/components/mortgage/useLeadSalesActions.test.tsx': {
-    owner: 'w4-lead-queue',
-    reason: 'lead-queue owns this suite in W4b and converts its lib/api factory to the importOriginal spread',
-  },
-  'src/components/mortgage/AssignmentLifecycleAdvance.test.tsx': {
-    owner: 'w4-lead-queue',
-    reason: 'lead-queue owns this suite in W4b (AssignmentLifecycleAdvance) and converts its lib/api factory',
-  },
-};
+const PENDING_PARTIAL_API_MOCKS: Readonly<Record<string, { owner: string; reason: string }>> = {};
 
 type Verdict = 'automock' | 'spread' | 'api-error' | 'bare';
 

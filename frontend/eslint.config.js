@@ -89,6 +89,13 @@ export const SET_STATE_IN_EFFECT_SCOPE = [
   "src/components/mortgage/GenieAnswerFeedback.tsx",
   "src/components/layout/GenieDock.tsx",
   "src/routes/ask-genie.deep-link.tsx",
+  // Wave 4b lead-queue: the modules it created (each proven at error, zero
+  // hits; the lane named none, so the integrator proved them at merge).
+  "src/components/mortgage/LeadBulkRunFallback.tsx",
+  "src/components/mortgage/LeadTable.rowCallbacks.ts",
+  "src/components/mortgage/LeadTableBody.tsx",
+  "src/components/mortgage/leadWriteFailureToast.ts",
+  "src/components/mortgage/useTableScrollClearance.ts",
 ];
 
 /** Fixture harness files may import TYPES from frontend/src, never runtime code. */
