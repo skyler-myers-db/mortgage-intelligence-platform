@@ -9,6 +9,8 @@ export interface LeadRowCallbacks {
   onReject: (borrowerId: string) => void;
   onOpenDisposition: (borrowerId: string) => void;
   onAssignmentUpdate: (borrowerId: string, update: Partial<LeadSummary>) => void;
+  /** Focus landed on a control in the row: it becomes the cursor row (no scroll, no announcement). */
+  onFocusRow: (borrowerId: string) => void;
 }
 
 /**
@@ -33,6 +35,7 @@ export function useStableRowCallbacks(latest: LeadRowCallbacks): LeadRowCallback
     onReject: (borrowerId) => latestRef.current.onReject(borrowerId),
     onOpenDisposition: (borrowerId) => latestRef.current.onOpenDisposition(borrowerId),
     onAssignmentUpdate: (borrowerId, update) => latestRef.current.onAssignmentUpdate(borrowerId, update),
+    onFocusRow: (borrowerId) => latestRef.current.onFocusRow(borrowerId),
   }));
   return stable;
 }

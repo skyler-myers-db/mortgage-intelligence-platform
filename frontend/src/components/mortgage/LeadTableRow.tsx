@@ -64,6 +64,11 @@ interface LeadTableRowProps {
   onReject: (borrowerId: string) => void;
   onOpenDisposition: (borrowerId: string) => void;
   onAssignmentUpdate: (borrowerId: string, update: Partial<LeadSummary>) => void;
+  /**
+   * Focus landed on a control in this row (Tab, a click): the row becomes
+   * the cursor row, so X / Enter / A act on the row the reader is on.
+   */
+  onFocusRow?: (borrowerId: string) => void;
 }
 
 function ignoreChange(): void {
@@ -109,6 +114,7 @@ export function LeadTableRow({
   onReject,
   onOpenDisposition,
   onAssignmentUpdate,
+  onFocusRow,
 }: LeadTableRowProps) {
   const stop = (e: ReactMouseEvent) => e.stopPropagation();
   const toggleRow = () => onToggleRow(lead, isOpen);
@@ -309,6 +315,7 @@ export function LeadTableRow({
         aria-current={isCursor ? 'true' : undefined}
         data-borrower-row={lead.borrower_id}
         onClick={toggleRow}
+        onFocus={onFocusRow ? () => onFocusRow(lead.borrower_id) : undefined}
       >
         {cellNodes}
       </tr>

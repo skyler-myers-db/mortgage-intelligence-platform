@@ -282,6 +282,9 @@ export function LeadTable({
       load: () => REVIEW_CHUNK.load().then(() => true, () => false),
     },
     campaignBindingKey,
+    // The Lead Queue keeps the expanded row in `?row=` (a POP that leaves it
+    // naming an open review's row does not abandon the review).
+    urlRowId: searchParams.get('row'),
     onCampaignBindingChange: () => {
       sampleDraftsRef.current = new Map();
       setSamplesShown(false);
@@ -357,6 +360,7 @@ export function LeadTable({
     onReject: flow.openReject,
     onOpenDisposition: sales.openDisposition,
     onAssignmentUpdate: sales.applyLeadUpdate,
+    onFocusRow: flow.focusRow,
   });
   // An Approve waiting on the review chunk (nothing drafted yet), or a
   // review whose chunk is still rendering in.

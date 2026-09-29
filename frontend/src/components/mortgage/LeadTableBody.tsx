@@ -158,7 +158,7 @@ export function LeadTableBody({
       {virtualized && topSpacerHeight > 0 && (
         <tbody aria-hidden="true">
           <tr aria-hidden="true" className="lead-table__virtual-spacer">
-            <td colSpan={columnCount} style={{ height: topSpacerHeight }} />
+            <td aria-hidden="true" colSpan={columnCount} style={{ height: topSpacerHeight }} />
           </tr>
         </tbody>
       )}
@@ -211,6 +211,7 @@ export function LeadTableBody({
               onReject={rowCallbacks.onReject}
               onOpenDisposition={rowCallbacks.onOpenDisposition}
               onAssignmentUpdate={rowCallbacks.onAssignmentUpdate}
+              onFocusRow={rowCallbacks.onFocusRow}
             />
           </tbody>
         );
@@ -218,7 +219,7 @@ export function LeadTableBody({
       {virtualized && bottomSpacerHeight > 0 && (
         <tbody aria-hidden="true">
           <tr aria-hidden="true" className="lead-table__virtual-spacer">
-            <td colSpan={columnCount} style={{ height: bottomSpacerHeight }} />
+            <td aria-hidden="true" colSpan={columnCount} style={{ height: bottomSpacerHeight }} />
           </tr>
         </tbody>
       )}

@@ -56,6 +56,13 @@ export interface UseLeadTableKeyboardFlowInput {
   campaignBindingKey: string;
   /** The binding identity changed: drop anything drafted under the old one. */
   onCampaignBindingChange: () => void;
+  /**
+   * The row the URL names (`?row=`), when the table's parent keeps it there.
+   * A Back / Forward that leaves it naming an open inline review's row does
+   * not abandon that review, even if `expanded` is momentarily null (a
+   * placeholder page without the row, w3-queue-place #11d).
+   */
+  urlRowId?: string | null;
 }
 
 /** Focus an element once it is rendered (a virtualized row may need a frame or two). */
@@ -124,6 +131,7 @@ export function useLeadTableKeyboardFlow({
   reviewChunk,
   campaignBindingKey,
   onCampaignBindingChange,
+  urlRowId = null,
 }: UseLeadTableKeyboardFlowInput) {
   'use no memo';
 
@@ -149,6 +157,13 @@ export function useLeadTableKeyboardFlow({
     statusOf: (lead) => effectiveStatus(lead) ?? 'pending',
     isPending,
     initialCursorId,
+    // The cursor left the row whose Approve is waiting on the review chunk
+    // (J / K, a click or a focus on another row, an Approve elsewhere): that
+    // Approve is dropped at once, not by an effect after the render (#9).
+    onMove: (borrowerId) => {
+      const pending = pendingApproveRef.current;
+      if (pending !== null && borrowerId !== pending) dropPendingApprove();
+    },
   });
   const [toast, setToast] = useState<LeadDecisionToastState | null>(null);
   const [refocusTable, setRefocusTable] = useState(false);
@@ -252,6 +267,9 @@ export function useLeadTableKeyboardFlow({
     requestedExpandedRef.current = expanded;
     if (ours || navigationType !== 'POP') return;
     if (!current || current.mode !== 'inline' || current.borrowerId !== previous) return;
+    // The URL still names the review's row: only `expanded` lagged (a
+    // placeholder page without the row). The review stays.
+    if (urlRowId === current.borrowerId) return;
     review.cancel();
     const active = document.activeElement;
     if (active === null || active === document.body) tableWrapRef.current?.focus({ preventScroll: true });
@@ -341,12 +359,6 @@ export function useLeadTableKeyboardFlow({
     });
   }
 
-  // The cursor left the row whose Approve is waiting on the review chunk
-  // (J / K, a click on another row): that Approve is dropped (#9).
-  useEffect(() => {
-    const pending = pendingApproveRef.current;
-    if (pending !== null && cursor.cursorId !== pending) dropPendingApprove();
-  });
   const openReviewRef = useRef<(borrowerId: string) => void>(() => undefined);
   useEffect(() => {
     openReviewRef.current = openReview;
@@ -367,6 +379,15 @@ export function useLeadTableKeyboardFlow({
     }
     cursor.setCursorId(lead.borrower_id);
     setExpandedRow(isOpen ? null : lead.borrower_id);
+  }
+
+  /**
+   * Focus landed on a control in a row (Tab, a click): that row becomes the
+   * cursor row, so X, Enter and A act on the row the reader is on (w3
+   * correction 14). No scroll and no announcement: the focus already moved.
+   */
+  function focusRow(borrowerId: string) {
+    if (cursor.cursorId !== borrowerId) cursor.setCursorId(borrowerId);
   }
 
   function viewReceipt(borrowerId: string) {
@@ -547,6 +568,7 @@ export function useLeadTableKeyboardFlow({
     openReview,
     cancelReview,
     toggleRow,
+    focusRow,
     viewReceipt,
     bulkApproveFromToolbar,
     rejectReasonRef,

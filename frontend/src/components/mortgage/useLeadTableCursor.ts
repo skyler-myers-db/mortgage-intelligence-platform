@@ -38,6 +38,13 @@ interface UseLeadTableCursorInput {
    * Read once; it moves nothing and fetches nothing.
    */
   initialCursorId?: string | null;
+  /**
+   * Called synchronously before every cursor move, with the row it moves
+   * to (J / K, a click, a focus, an advance): the flow drops an Approve
+   * waiting on the review chunk when the cursor leaves its row, without an
+   * effect (w3-queue-place #11a).
+   */
+  onMove?: (borrowerId: string) => void;
 }
 
 function findRow(scope: HTMLElement | null, borrowerId: string): HTMLElement | null {
@@ -52,6 +59,7 @@ export function useLeadTableCursor({
   statusOf,
   isPending,
   initialCursorId = null,
+  onMove,
 }: UseLeadTableCursorInput) {
   // Budget trade (audit runtime-03 / runtime-04, the wave-4b lane's cut 4):
   // the bailout this hook had is fixed, so it compiles cleanly without this
@@ -61,7 +69,12 @@ export function useLeadTableCursor({
   // Delete this line once the shell compiles.
   'use no memo';
 
-  const [cursorId, setCursorId] = useState<string | null>(initialCursorId);
+  const [cursorId, setCursorState] = useState<string | null>(initialCursorId);
+  /** Every move goes through here, so the flow hears it synchronously. */
+  function setCursorId(borrowerId: string) {
+    onMove?.(borrowerId);
+    setCursorState(borrowerId);
+  }
   const [announcement, setAnnouncement] = useState('');
   // A decision to advance from, resolved after the render that carries the
   // decided row's new state (so "next pending" reads fresh approvals).

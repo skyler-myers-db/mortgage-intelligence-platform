@@ -15,7 +15,7 @@
  * own place helpers, exactly as lead-queue.tsx wires it.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createMemoryRouter, useSearchParams } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
@@ -115,14 +115,23 @@ function lead(borrowerId: string): LeadSummary {
 
 const LEADS = IDS.map(lead);
 
+/**
+ * While true, the harness hands LeadTable no expanded row even though `?row=`
+ * names one: the Lead Queue does that for a moment while a keepPreviousData
+ * placeholder page (the previous filters' rows) is on screen (#11d).
+ */
+const placeholder = { active: false, rerender: (): void => undefined };
+
 /** lead-queue.tsx's place wiring: the row lives in `?row=`; expand and collapse replace. */
 function PlaceQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [, setTick] = useState(0);
+  placeholder.rerender = () => setTick((tick) => tick + 1);
   const place = parseLeadTablePlace(searchParams);
   return (
     <LeadTable
       leads={LEADS}
-      expandedId={place.row}
+      expandedId={placeholder.active ? null : place.row}
       onExpandedChange={(borrowerId) => setSearchParams(
         searchParamsWithLeadTablePlace(searchParams, { row: borrowerId }),
         { replace: true },
@@ -148,6 +157,7 @@ describe('LeadTable: Back / Forward away from an open inline review', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    placeholder.active = false;
   });
 
   /**
@@ -271,5 +281,47 @@ describe('LeadTable: Back / Forward away from an open inline review', () => {
     expect(review(), 'a settled review closed itself').toBeNull();
     expect(approve).toHaveBeenCalledTimes(1);
     expect(draftOutreach).toHaveBeenCalledTimes(1);
+  }, 30_000);
+
+  // #11d: a POP whose URL still names the open review's row, while the
+  // table's `expanded` is null for a moment (a placeholder page), is not a
+  // move away from that row: the review stays.
+  it('keeps the review when a POP leaves ?row= on its row and only a placeholder nulls the expanded row', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createMemoryRouter([{ path: '/lead-queue', element: <PlaceQueue /> }], {
+      initialEntries: [`/lead-queue?row=${ROW_B}`, `/lead-queue?approval_status=pending&row=${ROW_B}`],
+      initialIndex: 1,
+    });
+    act(() => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>,
+      );
+    });
+    expect(expandedRow(), 'precondition: ?row=B is restored').toBe(ROW_B);
+    // The restored row starts as the cursor row: A opens its INLINE review.
+    region().focus();
+    press('a');
+    await waitForReview('ready');
+    expect(container.querySelector('.tbl__expand')?.contains(review()), 'precondition: inline in row B').toBe(true);
+    expect(draftOutreach).toHaveBeenCalledTimes(1);
+
+    placeholder.active = true;
+    await go(router, -1);
+    expect(router.state.historyAction).toBe('POP');
+    expect(router.state.location.search, 'the URL still names the review\'s row').toBe(`?row=${ROW_B}`);
+    expect(expandedRow(), 'precondition: the placeholder nulled the expanded row').toBeNull();
+
+    placeholder.active = false;
+    await act(async () => {
+      placeholder.rerender();
+    });
+    await flush();
+
+    expect(expandedRow()).toBe(ROW_B);
+    expect(review(), 'the review was not abandoned').not.toBeNull();
+    expect(approve).not.toHaveBeenCalled();
+    expect(draftOutreach, 'and nothing drafted again').toHaveBeenCalledTimes(1);
   }, 30_000);
 });
