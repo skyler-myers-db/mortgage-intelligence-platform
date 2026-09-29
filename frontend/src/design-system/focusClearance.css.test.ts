@@ -11,9 +11,10 @@ import { featureStylesheets } from '../test/featureCss';
  * The Lead Queue lane's CSS pins (wave 4b; never components.test.ts):
  *
  *   - Focus Not Obscured (audit a11y-v2, WCAG 2.2 SC 2.4.11, technique
- *     C43): `.tbl-wrap` clears its sticky thead, the Lead Queue scroller
- *     clears the pinned Approval column, and `.main` clears the sticky route
- *     nav inside the same 40rem condition that docks it. Rendered proof: the
+ *     C43): the Lead Queue scroller clears its sticky thead and the pinned
+ *     Approval column (scroll-padding), and what `.main` holds outside the
+ *     nav clears the sticky route nav (scroll-margin) inside the same 40rem
+ *     condition that docks it. Rendered proof: the
  *     focus-obscured walk in tests/e2e/fixture/lead-queue.fixture.spec.ts.
  *   - The row-expand motion (audit motion-08 slice 1, queue part): one
  *     chevron that rotates, an opacity-only fade in, both on --dur-fast /
@@ -64,15 +65,18 @@ describe('focus clearance (a11y-v2)', () => {
     expect(block(components(), '.tbl-wrap')).not.toMatch(/scroll-padding|--tbl-/);
   });
 
-  it('.main clears the sticky route nav only inside the 40rem condition that docks it', () => {
+  it('everything in .main outside the nav clears the sticky route nav, only inside the 40rem condition that docks it', () => {
     const css = components();
-    const media = /@media\s*\(min-height:\s*40rem\)\s*\{\s*\.main:has\(\.route-nav\)\s*\{([^}]*)\}\s*\}/.exec(css);
-    expect(media, 'the .main rule sits inside @media (min-height: 40rem)').not.toBeNull();
-    expect(media![1]).toMatch(/--route-nav-block-size:\s*calc\(var\(--sp-3\)\s*\*\s*2\s*\+\s*var\(--sp-8\)\s*\+\s*1px\);/);
-    expect(media![1]).toMatch(new RegExp(String.raw`scroll-padding-block-start:\s*calc\(\s*var\(--route-nav-block-size\)\s*${RING}\s*\);`));
+    const media = /@media\s*\(min-height:\s*40rem\)\s*\{\s*\.main:has\(\.route-nav\) :not\(\.route-nav, \.route-nav \*, \.tbl-wrap \*\)\s*\{([^}]*)\}\s*\}/.exec(css);
+    expect(media, 'the rule sits inside @media (min-height: 40rem)').not.toBeNull();
+    expect(media![1]).toMatch(new RegExp(
+      String.raw`scroll-margin-block-start:\s*calc\(\s*var\(--route-nav-block-size,\s*calc\(var\(--sp-3\)\s*\*\s*2\s*\+\s*var\(--sp-8\)\s*\+\s*1px\)\)\s*${RING}\s*\);`,
+    ));
     // The sticky nav is docked by the same condition (01-app-shell.css).
     expect(css).toMatch(/@media\s*\(min-height:\s*40rem\)\s*\{\s*\.route-nav\s*\{[^}]*position:\s*sticky;/);
-    // Nowhere else does a rule give `.main:has(.route-nav)` scroll-padding.
+    // Never scroll-padding on `.main` for the nav: it shrank the view for the
+    // nav's own links, so a click on one scrolled `.main` to its top first.
+    expect(css).not.toMatch(/\.main:has\(\.route-nav\)\s*\{[^}]*scroll-padding/);
     expect(css.match(/\.main:has\(\.route-nav\)/g)).toHaveLength(1);
   });
 

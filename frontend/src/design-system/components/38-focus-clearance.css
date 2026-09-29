@@ -5,21 +5,32 @@
    sticky at the top of `.main`, the app scroller, whenever there is the
    vertical room for it (01-app-shell.css, the same 40rem condition). A
    control that takes focus from above the view (Shift+Tab up a page) was
-   scrolled only to the scroller's top edge, behind the nav. `.main` keeps
-   the nav's block size, plus room for the focus ring, as scroll-padding at
-   that end, so focus scrolling stops below it.
-   The fallback is the one-line nav: its --sp-3 padding at each end, a
-   --sp-8 link and the 1px bottom border (exact at 1440x900 with the Console
-   closed). The Lead Queue table measures the real size
-   (useTableScrollClearance writes --route-nav-block-size on `.main`); other
-   routes use this value. /ask-genie's own rule (routes/ask-genie.css,
-   higher specificity) still wins there: it also clears the docked composer.
+   scrolled only to the scroller's top edge, behind the nav. Everything in
+   `.main` outside the nav keeps the nav's block size, plus room for the
+   focus ring, as scroll-margin at its start, so focus scrolling stops
+   below the nav.
+
+   Scroll-margin on what is outside the nav, not scroll-padding on `.main`
+   (declared departure from the lane brief, which asked for scroll-padding;
+   the same technique routes/offer-orchestrator.action-bar.css uses for its
+   docked bar): scroll-padding also shrank the view for the nav's own links,
+   which sit inside that padding by construction, so a click or a Tab on a
+   nav link scrolled `.main` to its top first. The Back-restore on the next
+   entry then saved 0 (continuity and motion-nav specs caught it).
+
+   `.tbl-wrap` contents are left out: a table scroller clears its own sticky
+   header (LeadTable.css); a margin here would add the nav's height inside
+   it too. /ask-genie's composer clearance (routes/ask-genie.css) is its own
+   scroll-padding rule. The fallback is the one-line nav: its --sp-3 padding
+   at each end, a --sp-8 link and the 1px bottom border (exact at 1440x900
+   with the Console closed); the Lead Queue measures the real size
+   (useTableScrollClearance writes --route-nav-block-size on `.main`).
    ============================================================ */
 @media (min-height: 40rem) {
-  .main:has(.route-nav) {
-    --route-nav-block-size: calc(var(--sp-3) * 2 + var(--sp-8) + 1px);
-    scroll-padding-block-start: calc(
-      var(--route-nav-block-size) + var(--focus-ring-width) + var(--focus-ring-offset)
+  .main:has(.route-nav) :not(.route-nav, .route-nav *, .tbl-wrap *) {
+    scroll-margin-block-start: calc(
+      var(--route-nav-block-size, calc(var(--sp-3) * 2 + var(--sp-8) + 1px))
+      + var(--focus-ring-width) + var(--focus-ring-offset)
     );
   }
 }
