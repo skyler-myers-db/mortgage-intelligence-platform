@@ -74,8 +74,6 @@ export function useLeadApproveReview({
   isDecisionInFlight,
   onApproved,
 }: UseLeadApproveReviewInput) {
-  'use no memo';
-
   const [review, setReviewState] = useState<LeadApproveReviewState | null>(null);
   // Synchronous mirror: two A presses in one frame must not both draft.
   const reviewRef = useRef<LeadApproveReviewState | null>(null);
@@ -134,6 +132,21 @@ export function useLeadApproveReview({
     return 'opened';
   }
 
+  /**
+   * Abandon the review. Refused while the approval is on the wire. Declared
+   * before its callers: the compiler does not memoize a hoisted function
+   * reference (runtime-03).
+   */
+  function cancel(): boolean {
+    const current = reviewRef.current;
+    if (!current) return true;
+    if (current.phase === 'submitting') return false;
+    draftAbortRef.current?.abort();
+    draftAbortRef.current = null;
+    setReview(null);
+    return true;
+  }
+
   /** "Generate draft again" after a failed draft: a new explicit intent. */
   function retryDraft() {
     const current = reviewRef.current;
@@ -184,17 +197,6 @@ export function useLeadApproveReview({
         ? 'Not approved yet: another decision for this borrower is still being recorded. Wait for it to finish, then check the row.'
         : 'Not approved. The generated draft stays on record; confirm again or cancel.',
     });
-  }
-
-  /** Abandon the review. Refused while the approval is on the wire. */
-  function cancel(): boolean {
-    const current = reviewRef.current;
-    if (!current) return true;
-    if (current.phase === 'submitting') return false;
-    draftAbortRef.current?.abort();
-    draftAbortRef.current = null;
-    setReview(null);
-    return true;
   }
 
   /**

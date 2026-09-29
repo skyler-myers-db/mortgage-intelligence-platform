@@ -13,7 +13,7 @@
  * window of rows in the DOM: a cursor row outside it is brought in with the
  * virtualizer's `scrollToIndex`, then scrolled fully into view once rendered.
  */
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useEffectEvent, useState, type RefObject } from 'react';
 import type { LeadSummary } from '../../types';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 
@@ -53,8 +53,6 @@ export function useLeadTableCursor({
   isPending,
   initialCursorId = null,
 }: UseLeadTableCursorInput) {
-  'use no memo';
-
   const [cursorId, setCursorId] = useState<string | null>(initialCursorId);
   const [announcement, setAnnouncement] = useState('');
   // A decision to advance from, resolved after the render that carries the
@@ -123,19 +121,23 @@ export function useLeadTableCursor({
     setAdvanceFrom(decidedId);
   }
 
-  // Runs after the render that carries the decision (its approval state and
-  // the request land in one batch), so this render's closures are fresh.
-  useEffect(() => {
-    if (advanceFrom === null) return;
-    const from = sortedLeads.findIndex((lead) => lead.borrower_id === advanceFrom);
+  // The advance reads this render's rows and approvals (an Effect Event), but
+  // only a new request re-runs it: it is keyed on the one-shot request.
+  const advanceToNextPending = useEffectEvent((decidedId: string) => {
+    const from = sortedLeads.findIndex((lead) => lead.borrower_id === decidedId);
     const order = from < 0
       ? sortedLeads
       : [...sortedLeads.slice(from + 1), ...sortedLeads.slice(0, from)];
-    const next = order.find((lead) => lead.borrower_id !== advanceFrom && isPending(lead));
+    const next = order.find((lead) => lead.borrower_id !== decidedId && isPending(lead));
+    if (next) moveTo(next.borrower_id);
+  });
+  // Runs after the render that carries the decision (its approval state and
+  // the request land in one batch), so the rows it reads are fresh.
+  useEffect(() => {
+    if (advanceFrom === null) return;
     // A one-shot request, consumed after the decision's render.
     setAdvanceFrom(null);
-    if (next) moveTo(next.borrower_id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the one-shot request only
+    advanceToNextPending(advanceFrom);
   }, [advanceFrom]);
 
   return {

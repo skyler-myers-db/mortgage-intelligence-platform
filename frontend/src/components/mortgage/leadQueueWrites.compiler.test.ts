@@ -34,6 +34,16 @@ const TARGETS = [
   ['ApprovalBanner.tsx', 'ApprovalBanner'],
   ['useLeadApprovalActions.ts', 'useLeadApprovalActions'],
   ['useLeadSalesActions.ts', 'useLeadSalesActions'],
+  // Audit runtime-03 / runtime-04 slice 3(c): the LeadTable family's
+  // bailouts are fixed in code (an Effect Event for the one-shot cursor
+  // advance and the bulk samples, a layout-effect ref sync for the hotkeys,
+  // cancel declared before its callers, the export's try/finally moved into
+  // a plain async helper).
+  ['useLeadTableCursor.ts', 'useLeadTableCursor'],
+  ['useLeadTableHotkeys.ts', 'useLeadTableHotkeys'],
+  ['useLeadApproveReview.ts', 'useLeadApproveReview'],
+  ['useLeadCsvExport.ts', 'useLeadCsvExport'],
+  ['LeadBulkApproveReview.tsx', 'LeadBulkApproveReview'],
 ] as const;
 
 const repoPath = (file: string) => `frontend/src/components/mortgage/${file}`;
