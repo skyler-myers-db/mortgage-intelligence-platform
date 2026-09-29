@@ -73,7 +73,6 @@
   position: absolute;
   inset: 0 auto 0 0;
   width: var(--bar-pct, 0%);
-  min-width: var(--sp-1);
   border-radius: inherit;
   background: linear-gradient(90deg, var(--seg-itm), var(--accent-data));
 }

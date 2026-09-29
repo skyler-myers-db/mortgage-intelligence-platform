@@ -106,6 +106,13 @@ export function ScopeChip({ children, title }: { children: ReactNode; title?: st
   );
 }
 
+/**
+ * A non-zero bar shorter than this share of the largest draws at it, so it
+ * stays visible; a zero draws no fill (dataviz-03, 2026-09-21 audit). The
+ * scale stays linear, and Bars says "not to scale" whenever it floors one.
+ */
+export const BAR_FLOOR_PCT = 2;
+
 export function Bars<T>({
   rows,
   value,
@@ -121,7 +128,8 @@ export function Bars<T>({
 }) {
   const max = Math.max(1, ...rows.map(value));
   if (rows.length === 0) return <div className="analytics-empty">No rows returned.</div>;
-  return (
+  const barPct = (rowValue: number) => (rowValue > 0 ? Math.max(BAR_FLOOR_PCT, pct(rowValue, max)) : 0);
+  const bars = (
     <div className="analytics-bars">
       {rows.map((row) => {
         const rowValue = value(row);
@@ -131,7 +139,7 @@ export function Bars<T>({
             <span className="analytics-bars__track" aria-hidden="true">
               <span
                 className="analytics-bars__fill"
-                style={{ '--bar-pct': `${pct(rowValue, max)}%` } as CSSProperties}
+                style={{ '--bar-pct': `${barPct(rowValue)}%` } as CSSProperties}
               />
             </span>
             <span className="analytics-bars__value num">{formatCompact(rowValue)}</span>
@@ -151,6 +159,15 @@ export function Bars<T>({
       })}
     </div>
   );
+  // Floored: some non-zero bar is drawn longer than its linear share.
+  return rows.some((row) => barPct(value(row)) > pct(value(row), max)) ? (
+    <>
+      {bars}
+      <p className="analytics-panel-note" data-testid="bars-scale-note">
+        Not to scale: bars under {BAR_FLOOR_PCT}% of the largest are drawn at a minimum length. The printed values are exact.
+      </p>
+    </>
+  ) : bars;
 }
 
 export function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[]; leadParams?: LenderFilterParams }) {
@@ -181,6 +198,12 @@ export function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[];
  * NESTED_FUNNEL_STAGE_PAIRS in analytics.lib.ts. Small stages draw at a
  * minimum visible thickness on the unchanged linear scale, and the chart
  * says "not to scale" whenever it does that.
+ *
+ * Scale (dataviz-03, integrator decision, wave 4b): the LINEAR scale is kept
+ * on purpose. Equal-height stage columns on a disclosed sqrt/log share scale
+ * await the owner (report section 10, item 10), and the visual-08 verifier
+ * holds that a sqrt funnel misstates the proportions it draws. The Pipeline
+ * Metrics Bars keep the same linear scale with their own not-to-scale floor.
  */
 export function FunnelSankey({
   stages,

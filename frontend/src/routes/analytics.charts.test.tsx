@@ -1,9 +1,46 @@
 /** @vitest-environment happy-dom */
 
 import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import type { UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
-import { LoadState } from './analytics.charts';
+import { designCss } from '../test/designCss';
+import { BAR_FLOOR_PCT, Bars, LoadState } from './analytics.charts';
+
+/** Rendered `--bar-pct` of each bar fill, and the not-to-scale note, in the DOM Bars produces. */
+function renderBars(values: number[]): { pcts: string[]; note: string | null } {
+  const host = document.createElement('div');
+  host.innerHTML = renderToStaticMarkup(
+    <MemoryRouter>
+      <Bars rows={values} value={(v) => v} label={(v) => `row ${v}`} href={(v) => `/lead-queue?v=${v}`} />
+    </MemoryRouter>,
+  );
+  return {
+    pcts: [...host.querySelectorAll<HTMLElement>('.analytics-bars__fill')].map((fill) => fill.style.getPropertyValue('--bar-pct')),
+    note: host.querySelector('[data-testid="bars-scale-note"]')?.textContent ?? null,
+  };
+}
+
+describe('Bars scale (dataviz-03)', () => {
+  it('floors a tiny non-zero bar at BAR_FLOOR_PCT and says the bars are not to scale', () => {
+    const { pcts, note } = renderBars([5_160_000, 4_350, 23, 0]);
+    expect(pcts).toEqual(['100%', `${BAR_FLOOR_PCT}%`, `${BAR_FLOOR_PCT}%`, '0%']);
+    expect(note).toBe(
+      `Not to scale: bars under ${BAR_FLOOR_PCT}% of the largest are drawn at a minimum length. The printed values are exact.`,
+    );
+  });
+
+  it('draws every bar at its linear share, zero as no fill, and adds no note when none is floored', () => {
+    const { pcts, note } = renderBars([400, 100, 0]);
+    expect(pcts).toEqual(['100%', '25%', '0%']);
+    expect(note).toBeNull();
+  });
+
+  it('keeps no CSS minimum width that would floor a bar behind the note', () => {
+    const fill = /\.analytics-bars__fill\s*\{([^}]*)\}/.exec(designCss())?.[1] ?? '';
+    expect(fill).not.toMatch(/min-(?:width|inline-size)/);
+  });
+});
 
 function query(overrides: Partial<UseWarmingUpRetryResult<{ value: number }>> = {}) {
   return {
