@@ -18,7 +18,8 @@
  *      same walk does find a covered stop. With `.main` at its natural
  *      end (1440x900, no spacer) the rows run up under the route nav: a
  *      Shift+Tab walk up them (/lead-queue and /segment-intelligence) and
- *      K's cursor row stop below it, and not with the table's block margin
+ *      K's cursor row stop below it, as does the expanded row's Approve
+ *      focused from behind the nav; none do with the table's block margin
  *      zeroed. A control focused from behind the sticky route nav
  *      (/glossary) stops below it, and not with the scroll-margin zeroed;
  *      /ask-genie's Ask tab clears the nav once (its own padding), its
@@ -304,15 +305,13 @@ async function rowBehindHeader(page: Page, index: number): Promise<string> {
 const WALK_START_DEPTH = 250;
 
 /**
- * `.main` scrolled to its natural end (no spacer: at 1440x900 the page
- * scrolls by itself) and the table scroller to its middle, so the rows the
- * table shows run up under the sticky route nav, where the browser counts a
- * control as in view. Returns the row checkbox a walk up the rows starts
- * from, exactly WALK_START_DEPTH below `.main`'s scrollport top: the table
- * scroller is nudged (less than a row) to put one there, so each row's
- * place against the nav is the same on every run. Where the table ends
- * above that depth with `.main` at its end (/segment-intelligence, whose
- * page runs on below the table), `.main` backs off just enough to show it.
+ * `.main` at its natural end (no spacer) and the table scroller at its
+ * middle, so the rows run up under the sticky route nav, where the browser
+ * counts a control as in view. Returns the row checkbox a walk up starts
+ * from, exactly WALK_START_DEPTH below `.main`'s scrollport top (the table is
+ * nudged less than a row to put one there, so every run is the same). Where
+ * the table ends above that depth (/segment-intelligence), `.main` backs off
+ * just enough to show it.
  */
 async function tableUpUnderRouteNav(page: Page): Promise<Locator> {
   const placed = await page.locator('.main').evaluate((main, depth) => {
@@ -348,14 +347,6 @@ async function tableUpUnderRouteNav(page: Page): Promise<Locator> {
   expect(Math.abs(placed.startOffset), 'precondition: the start sits at that depth').toBeLessThanOrEqual(1);
   expect(placed.startInView, 'precondition: the start is in full view').toBe(true);
   return page.getByTestId(placed.start);
-}
-
-/** The cursor row's top edge below the route nav's bottom edge (negative: under it). */
-async function cursorGapBelowRouteNav(page: Page): Promise<{ id: string; gap: number }> {
-  return page.locator('table.tbl tr.is-cursor').evaluate((row) => ({
-    id: row.getAttribute('data-borrower-row') ?? '',
-    gap: row.getBoundingClientRect().top - (document.querySelector('.route-nav')?.getBoundingClientRect().bottom ?? 0),
-  }));
 }
 
 /** Scroll the table sideways so `target` sits fully under the pinned Approval column. */
@@ -502,18 +493,18 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
   }
 
   /** K from the walk's start, `presses` times: the cursor row's gap below the nav after each move. */
-  async function cursorWalkUp(page: Page, presses: number): Promise<Array<{ id: string; gap: number }>> {
+  async function cursorWalkUp(page: Page, presses: number): Promise<Array<{ id: string | null; gap: number }>> {
     await (await tableUpUnderRouteNav(page)).focus();
-    const gaps: Array<{ id: string; gap: number }> = [];
-    let previous = (await cursorGapBelowRouteNav(page)).id;
-    expect(previous, 'precondition: the focus put the cursor on the start row').not.toBe('');
+    const cursor = page.locator('table.tbl tr.is-cursor');
+    const gaps: Array<{ id: string | null; gap: number }> = [];
+    let previous = await cursor.getAttribute('data-borrower-row');
+    expect(previous, 'precondition: the focus put the cursor on the start row').toBeTruthy();
     for (let index = 0; index < presses; index += 1) {
       await page.keyboard.press('k');
-      await expect.poll(async () => (await cursorGapBelowRouteNav(page)).id, 'K moved the cursor').not.toBe(previous);
+      await expect(cursor, 'K moved the cursor').not.toHaveAttribute('data-borrower-row', previous ?? '');
       await settleFrames(page);
-      const stop = await cursorGapBelowRouteNav(page);
-      gaps.push(stop);
-      previous = stop.id;
+      previous = await cursor.getAttribute('data-borrower-row');
+      gaps.push({ id: previous, gap: await gapBelowRouteNav(cursor) });
     }
     return gaps;
   }
@@ -600,6 +591,19 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
     await target.focus();
     expect(await gapBelowRouteNav(target), 'a stop under the nav').toBeLessThan(0);
   });
+
+  for (const zeroed of [false, true]) {
+    test(`${zeroed ? 'non-vacuity, block margin zeroed: ' : ''}the expanded row's Approve focused from behind the route nav ${zeroed ? 'stays there' : 'stops below it'}`, async ({ app, page }) => {
+      await app.gotoRoute('/lead-queue');
+      if (zeroed) await page.addStyleTag({ content: ZERO_TABLE_BLOCK_MARGIN });
+      await expand(page, ELIGIBLE);
+      const approve = banner(page, ELIGIBLE).getByRole('button', { name: 'Approve outreach' });
+      await behindRouteNav(page, approve);
+      await approve.focus();
+      if (zeroed) expect(await gapBelowRouteNav(approve), 'a stop under the nav').toBeLessThan(0);
+      else expect(await gapBelowRouteNav(approve), 'the focused control sits below the nav').toBeGreaterThanOrEqual(-0.5);
+    });
+  }
 
   test('/ask-genie clears the nav once: its own .main padding, with no second margin on top', async ({ app, page }) => {
     await app.gotoRoute('/ask-genie');
