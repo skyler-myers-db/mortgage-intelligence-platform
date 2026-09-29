@@ -14,27 +14,44 @@
  * (lead-queue and segment-intelligence), and a new dynamic import of
  * lib/describeApiError itself split the transport out of the entry chunk
  * (+0.36 KiB br of initial JS, measured; DescribedError.tsx records the same
- * trap). If that chunk cannot load (offline, a stale deploy), the toast keeps
- * the message the table showed before, which for an offline write is the
- * same 'You are offline. Reconnect, then try again.'
+ * trap). If that chunk cannot load (a stale deploy), the toast keeps the
+ * message the table showed before.
+ *
+ * A client-side failure (offline, unreachable, an ended session, an
+ * unreadable response) never fetches the chunk: offline the fetch would
+ * fail too, and for these the ApiError's message already IS describeApiError's
+ * body (both are lib/apiFailure's CLIENT_FAILURE_MESSAGES, e.g. 'You are
+ * offline. Reconnect, then try again.').
  *
  * Toast text is actor-scoped and shown only to the signed-in person; it is
  * never telemetry (lib/toast).
  */
-import { ApiError } from '../../lib/apiTransport';
+import { ApiError, clientFailureReason } from '../../lib/apiTransport';
 import { toast } from '../../lib/toast';
+
+/**
+ * describeApiError's body for `error`, from AsyncFailure's lazy chunk; null
+ * when the chunk resolved to nothing (a vite:preloadError handler). Awaited
+ * inside a function on purpose: a `.then` chained straight onto `import()` is
+ * moved INSIDE Vite's preload wrapper by the bundler, so a stylesheet
+ * dependency that fails to load rejected the outer promise unhandled and
+ * the toast never showed (measured on the build, offline).
+ */
+async function failureSentence(error: ApiError, subject: string): Promise<string | null> {
+  const module: typeof import('../ui/AsyncFailure') | undefined = await import('../ui/AsyncFailure');
+  return module ? module.failureSentence(error, subject) : null;
+}
 
 /** A write that failed on the wire: describeApiError's body for an ApiError. */
 export function toastWriteFailure(title: string, error: unknown, subject: string): void {
   const fallback = error instanceof Error && error.message ? error.message : null;
-  if (!(error instanceof ApiError)) {
+  if (!(error instanceof ApiError) || clientFailureReason(error) !== null) {
     toast.error(title, { detail: fallback });
     return;
   }
-  // A vite:preloadError handler may resolve a failed chunk to undefined.
-  void (import('../ui/AsyncFailure') as Promise<typeof import('../ui/AsyncFailure') | undefined>).then(
-    (module) => {
-      toast.error(title, { detail: (module && module.failureSentence(error, subject)) || fallback });
+  failureSentence(error, subject).then(
+    (sentence) => {
+      toast.error(title, { detail: sentence || fallback });
     },
     () => {
       toast.error(title, { detail: fallback });
