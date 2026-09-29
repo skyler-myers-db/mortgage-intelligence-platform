@@ -14,6 +14,13 @@
  * The focusable plot is a named group, not role="img": its tooltip layer is
  * aria-hidden, and the summary, the table and the live region carry the
  * values. No heading element: the section around the frame owns the title.
+ *
+ * Who each path serves: a screen reader in browse mode (NVDA, JAWS) keeps
+ * the arrow keys for itself, so the plot's arrow-key cursor and its live
+ * readout mainly serve sighted keyboard users. The summary and the table
+ * view are the screen-reader path to the same values. Whether the plot
+ * should take a widget role that passes arrows through is a wave-5
+ * question, not settled here.
  */
 import { useId, useState, type ReactNode } from 'react';
 import type { ChartCursorPlotProps } from './useChartCursor';
