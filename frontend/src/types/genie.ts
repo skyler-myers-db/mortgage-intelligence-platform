@@ -30,6 +30,13 @@ export interface GenieAnswerSection {
 
 export interface GenieAnswer {
   answer: string;
+  /**
+   * The question the answer is for, as the server recorded it. Required on
+   * the wire (backend `GenieMessageResponse.required`, audit 2026-09-21
+   * `quality-04` item 0); a client-made bubble sets it too: a failed turn
+   * carries its own question, a governed action result ''.
+   */
+  question: string;
   source?: string;
   trusted_assets?: string[];
   /** Deep-research answers: verified executive summary, rendered first. */

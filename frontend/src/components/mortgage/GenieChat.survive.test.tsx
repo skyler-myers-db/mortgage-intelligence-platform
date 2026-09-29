@@ -14,6 +14,7 @@
  */
 
 import { act, useRef } from 'react';
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +24,7 @@ import { clearGenieTurns } from '../../lib/genieConversationStore';
 import { __resetGenieTurnStoreForTests } from '../../lib/genieInFlightTurn';
 import { getGenieTurnStatus } from '../../lib/genieTurnStatus';
 import { __resetGenieAnnouncerForTests } from './useGenieAnnouncer';
+import { createMipQueryClient } from '../../lib/queryClient';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 
@@ -69,6 +71,14 @@ import { GenieChat } from './GenieChat';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+/** GenieChat reads `/api/genie/start` through the shared query (runtime-06):
+ *  one client per test, retries off. */
+function testQueryClient(): QueryClient {
+  const client = createMipQueryClient();
+  client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } });
+  return client;
+}
+
 const START: GenieStartResult = {
   conversation_id: null,
   trusted_assets: ['mip.gold.borrower_360'],
@@ -97,6 +107,7 @@ const TERMINAL: GenieLiveProgress = {
 function answer(overrides: Partial<GenieAnswer> = {}): GenieAnswer {
   return {
     answer: 'There are 124,946 borrowers in the money.',
+    question: 'How many borrowers are in the money?',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-live',
@@ -158,6 +169,7 @@ function DrawerLayer({ open, onClose }: { open: boolean; onClose: () => void }) 
 describe('floating Genie survivability', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let queryClient: QueryClient;
   let drawerOpen = false;
   // The topbar's Genie toggle (the launcher rendered at every width).
   let topbarToggle = true;
@@ -172,6 +184,7 @@ describe('floating Genie survivability', () => {
     drawerOpen = false;
     topbarToggle = true;
     installLocalStorage();
+    queryClient = testQueryClient();
     clearGenieTurns();
     mocks.genieStart.mockResolvedValue(START);
     mocks.genieFeedback.mockResolvedValue({ accepted: true });
@@ -200,6 +213,7 @@ describe('floating Genie survivability', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    queryClient.clear();
     // The turn lives in a module-level store that outlives the panel.
     __resetGenieTurnStoreForTests();
     __resetGenieAnnouncerForTests();
@@ -209,6 +223,7 @@ describe('floating Genie survivability', () => {
   function render() {
     act(() => {
       root.render(
+        <QueryClientProvider client={queryClient}>
         <MemoryRouter>
           <button type="button" id="page-control">Page control</button>
           {topbarToggle && (
@@ -218,7 +233,8 @@ describe('floating Genie survivability', () => {
           )}
           <GenieChat />
           <DrawerLayer open={drawerOpen} onClose={closeDrawer} />
-        </MemoryRouter>,
+        </MemoryRouter>
+        </QueryClientProvider>,
       );
     });
   }
@@ -640,6 +656,33 @@ describe('floating Genie survivability', () => {
     await waitUntil(() => announcer().textContent === 'Answer ready');
     // The settled answer mounts no second, pre-populated status region.
     expect(dialog().querySelectorAll('[role="status"]')).toHaveLength(0);
+  });
+
+  it('says the metric with "Answer ready", and never on a withheld turn (a11y-06, Genie residual #5)', async () => {
+    render();
+    const settle = async (turn: Awaited<ReturnType<typeof startLiveTurn>>, response: GenieAnswer) => {
+      const completes = mocks.genieComplete.mock.calls.length;
+      await act(async () => {
+        turn.progress.resolve(TERMINAL);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await waitUntil(() => mocks.genieComplete.mock.calls.length === completes + 1);
+      await act(async () => {
+        turn.complete.resolve(response);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    };
+
+    await settle(await startLiveTurn('How many borrowers are in the money?'), answer({ metric_value: ' 1,284\n  borrowers ' }));
+    // The metric tile's text, whitespace collapsed.
+    await waitUntil(() => announcer().textContent === 'Answer ready: 1,284 borrowers');
+
+    await settle(
+      await startLiveTurn('Which zyrplax borrowers are eligible?'),
+      answer({ source: 'refused', metric_value: '1,284', message_id: 'msg-refused' }),
+    );
+    await waitUntil(() => announcer().textContent === 'Genie did not answer this question. The reason is shown in the thread.');
+    expect(announcer().textContent).not.toContain('1,284');
   });
 
   it('scrolls a landed answer to its START instead of jumping to the end (motion-v2)', async () => {

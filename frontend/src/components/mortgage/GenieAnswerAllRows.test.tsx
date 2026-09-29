@@ -113,6 +113,38 @@ describe('Show all rows and columns (genie-06 slice 2)', () => {
     expect(el.querySelectorAll('tbody tr[aria-rowindex]').length).toBeLessThan(120);
   });
 
+  it('keeps the focused row mounted when it scrolls out of the window, so focus stays on its link', async () => {
+    const long = Array.from({ length: 300 }, (_, i) => ({ ...WIDE_ROWS[i % WIDE_ROWS.length], county_name: `County ${i + 1}` }));
+    render(long);
+    await act(async () => showAll()!.click());
+    await waitFor(() => region() !== null);
+    const el = region()!;
+    const mounted = () => Array.from(el.querySelectorAll('tbody tr[aria-rowindex]'));
+    const windowSize = mounted().length;
+    const link = mounted()[1].querySelector<HTMLAnchorElement>('a')!;
+    expect(link).not.toBeNull();
+    act(() => link.focus());
+    expect(document.activeElement).toBe(link);
+
+    act(() => {
+      el.scrollTop = 200 * 28;
+      el.dispatchEvent(new Event('scroll'));
+    });
+
+    expect(document.activeElement).toBe(link);
+    expect(link.isConnected).toBe(true);
+    const rows = mounted();
+    expect(rows).toHaveLength(windowSize + 1);
+    // The retained row keeps its true position; the window moved on.
+    expect(rows[0].getAttribute('aria-rowindex')).toBe('3');
+    expect(rows[1].getAttribute('aria-rowindex')).not.toBe('4');
+    expect(el.querySelector('table')!.getAttribute('aria-rowcount')).toBe('301');
+
+    // Focus leaves the rows: the retained row is released.
+    act(() => link.blur());
+    expect(mounted()).toHaveLength(windowSize);
+  });
+
   it('Show fewer brings the compact table back', async () => {
     render(WIDE_ROWS);
     await act(async () => showAll()!.click());

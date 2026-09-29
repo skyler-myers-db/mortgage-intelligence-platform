@@ -73,6 +73,7 @@ function progress(terminal: boolean): GenieLiveProgress {
 
 const ANSWER_FIELDS = {
   answer: 'Illinois leads with 3,080 candidates.',
+  question: 'Which states have the most prime refi candidates?',
   source: 'genie',
   trusted_assets: ['mip.gold.borrower_360'],
   conversation_id: 'conv-1',
@@ -334,7 +335,7 @@ describe('the identity boundary', () => {
     await advance();
 
     expect(getGenieTurns()).toEqual([
-      { question: QUESTION, response: { answer: 'Genie session reset: forbidden', source: 'degraded', trusted_assets: [] } },
+      { question: QUESTION, response: { answer: 'Genie session reset: forbidden', question: QUESTION, source: 'degraded', trusted_assets: [] } },
     ]);
   });
 });

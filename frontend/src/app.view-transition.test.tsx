@@ -247,4 +247,35 @@ describe('App route View Transition boundary', () => {
     expect(container.querySelector('.route-transition--fallback')).toBeNull();
     expect(markers().map((node) => node.getAttribute('data-route-path'))).toEqual(['/ask-genie']);
   });
+
+  it('keeps ONE boundary and the same route node across Genie conversation links (audit shell-03)', async () => {
+    stubReducedMotion(false);
+    // Runs after the fallback test above, which needs the chunk unresolved.
+    await act(async () => {
+      chunks.genie.resolve();
+      await chunks.genie.promise;
+    });
+    await renderAt('/ask-genie');
+    const painted = container.querySelector('[data-testid="route-ok"]');
+    expect(painted?.textContent).toBe('genie');
+    const mounted = recorder.mounts;
+    const boundaries = instances().size;
+
+    for (const path of [
+      '/ask-genie/0123456789abcdef0123456789abcdef',
+      '/ask-genie/01234567-89ab-cdef-0123-456789abcdef',
+      '/ask-genie/not-an-id',
+      '/ask-genie',
+    ]) {
+      await go(path);
+      expect(recorder.mounts, `${path} mounts no new boundary`).toBe(mounted);
+      expect(instances().size, `${path} keeps the boundary`).toBe(boundaries);
+      expect(container.querySelector('[data-testid="route-ok"]'), `${path} keeps the route mounted`).toBe(painted);
+      // The harness contract: the marker names the raw pathname.
+      expect(markers().map((node) => node.getAttribute('data-route-path'))).toEqual([path]);
+    }
+
+    await go('/glossary');
+    expect(recorder.mounts, 'leaving the page still re-keys').toBe(mounted + 1);
+  });
 });

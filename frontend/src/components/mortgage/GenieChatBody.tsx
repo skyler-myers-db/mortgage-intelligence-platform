@@ -73,6 +73,12 @@ function answerReask(payload: GenieAnswerShape): 'retry' | 'regenerate' | null {
   return warningLabelForSource(payload.source) === null ? 'regenerate' : null;
 }
 
+/** A question bubble's id in the panel, by turn index: a collapsed turn's
+ *  toggle is described by it (the route uses `genie-route-q-<n>`). */
+function panelQuestionId(turnIndex: number): string {
+  return `genie-panel-q-${turnIndex}`;
+}
+
 // Transcript keys follow the response OBJECT, as useGenieTurnCollapse does,
 // never the index: the 20-turn cap evicts from the head and shifts every
 // index, which would hand a bubble's own state (Show all, closed sections)
@@ -141,7 +147,7 @@ export function GenieChatBody({
       const answered = msgs[i + 1];
       transcript.push(
         <Fragment key={answered?.who === 'ai' ? `q-${turnKey(answered.payload)}` : `q-at-${i}`}>
-          <div className="genie__msg genie__msg--user">{m.text}</div>
+          <div id={panelQuestionId(turnIndex)} className="genie__msg genie__msg--user">{m.text}</div>
           <GenieTurnActions placement="question" question={m.text} onEdit={onEdit} />
         </Fragment>,
       );
@@ -181,6 +187,7 @@ export function GenieChatBody({
               payload={m.payload}
               expanded={presentation === 'expanded'}
               onToggle={() => collapse.toggle(m.payload)}
+              questionId={question === undefined ? null : panelQuestionId(turnIndex - 1)}
             >
               {fullAnswer}
             </GenieCollapsedTurn>

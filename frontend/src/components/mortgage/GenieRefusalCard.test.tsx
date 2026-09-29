@@ -40,6 +40,7 @@ const HASH = 'a'.repeat(64);
 function refused(reason: GenieRefusalReason, overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   return {
     answer: 'I cannot select or rank borrowers on that criterion.',
+    question: QUESTION,
     source: 'refused',
     trusted_assets: [],
     conversation_id: '',
@@ -92,7 +93,7 @@ describe('GenieRefusalCard inside GenieAnswer', () => {
   it('renders no card on a trusted answer', () => {
     act(() => root.render(
       <GenieAnswer
-        payload={{ answer: '124,946 borrowers.', source: 'genie', trusted_assets: ['mip.gold.borrower_360'] }}
+        payload={{ answer: '124,946 borrowers.', question: QUESTION, source: 'genie', trusted_assets: ['mip.gold.borrower_360'] }}
         question={QUESTION}
         onFollowUp={() => {}}
       />,

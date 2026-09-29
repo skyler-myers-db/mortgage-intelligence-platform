@@ -3,12 +3,14 @@
  */
 
 import { act } from 'react';
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api';
 import { __resetGenieTurnStoreForTests } from '../../lib/genieInFlightTurn';
 import { __resetGenieAnnouncerForTests } from './useGenieAnnouncer';
+import { createMipQueryClient } from '../../lib/queryClient';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 
 const mocks = vi.hoisted(() => ({
@@ -87,6 +89,7 @@ const START: GenieStartResult = {
 function answer(overrides: Partial<GenieAnswer> = {}): GenieAnswer {
   return {
     answer: 'The governed opportunity result is ready.',
+    question: 'Show current opportunity volume',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-current',
@@ -125,15 +128,25 @@ function setViewport(width: number, height: number) {
   });
 }
 
+/** GenieChat reads `/api/genie/start` through the shared query (runtime-06):
+ *  one client per test, retries off. */
+function testQueryClient(): QueryClient {
+  const client = createMipQueryClient();
+  client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } });
+  return client;
+}
+
 describe('floating Genie conversation continuity', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let queryClient: QueryClient;
 
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     installLocalStorage();
     setViewport(1_440, 900);
     armInlineSubmitDelegate();
+    queryClient = testQueryClient();
     mocks.genieStart.mockResolvedValue(START);
     mocks.genieFeedback.mockResolvedValue({ accepted: true });
     container = document.createElement('div');
@@ -144,6 +157,7 @@ describe('floating Genie conversation continuity', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    queryClient.clear();
     // The turn lives in a module-level store that outlives the panel.
     __resetGenieTurnStoreForTests();
     __resetGenieAnnouncerForTests();
@@ -155,9 +169,11 @@ describe('floating Genie conversation continuity', () => {
         // `/ask-genie` is the one route whose empty state keeps the SERVER
         // starters (`START.sample_questions`); every other route shows the
         // curated per-route set (audit 2026-09-21 `genie-04`, phase 1).
-        <MemoryRouter initialEntries={['/ask-genie']}>
-          <GenieChat />
-        </MemoryRouter>,
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/ask-genie']}>
+            <GenieChat />
+          </MemoryRouter>
+        </QueryClientProvider>,
       );
     });
   }

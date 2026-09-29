@@ -33,6 +33,12 @@ const BORROWER_ID_RE = /\/B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}(?=\/|$)/g;
 const CLIP_ID_RE = /\/CL-[A-Za-z0-9][A-Za-z0-9_-]{1,126}(?=\/|$)/g;
 const NUMERIC_ID_RE = /\/\d{5,}(?=\/|$)/g;
 const UUID_RE = /\/[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}(?=\/|$)/g;
+/** A bare 32-hex segment elsewhere (the backend refuses a raw one anywhere). */
+const HEX32_RE = /\/[0-9a-fA-F]{32}(?=\/|$)/g;
+/** The Ask Genie conversation deep link (audit 2026-09-21 shell-03): ANY
+ *  segment is templated, a malformed id included, since it can hold typed
+ *  text. The backend refuses an untemplated `/ask-genie/<x>`. */
+const ASK_GENIE_CONVERSATION_RE = /^\/ask-genie\/.+$/;
 const MAX_BATCH = 20;
 const FLUSH_DELAY_MS = 2000;
 
@@ -41,11 +47,13 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function sanitizeRumRoute(pathname: string): string {
   const pathOnly = pathname.split(/[?#]/, 1)[0] || '/';
+  if (ASK_GENIE_CONVERSATION_RE.test(pathOnly)) return '/ask-genie/:conversation_id';
   return pathOnly
     .replace(BORROWER_ID_RE, '/:borrower_id')
     .replace(CLIP_ID_RE, '/:clip_id')
     .replace(NUMERIC_ID_RE, '/:numeric_id')
     .replace(UUID_RE, '/:uuid')
+    .replace(HEX32_RE, '/:hex_id')
     .slice(0, 160);
 }
 

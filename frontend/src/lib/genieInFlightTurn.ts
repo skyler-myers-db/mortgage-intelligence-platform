@@ -330,7 +330,7 @@ function landExchange(
   const outcome = genieTurnOutcome(response);
   notifySettled({ surface, question, response, outcome, persistedConversationId });
   appendGenieTurn(question, response);
-  update({ inFlight: null, ...announcing(genieOutcomeAnnouncement(outcome)) });
+  update({ inFlight: null, ...announcing(genieOutcomeAnnouncement(outcome, response)) });
 }
 
 function settleTurn(gen: number, response: GenieAnswerShape): void {
@@ -392,7 +392,7 @@ function failTurn(gen: number, err: unknown, deferred = false): void {
   landExchange(
     inFlight.surface,
     turn.question,
-    { answer: failureAnswer(err), source: 'degraded', trusted_assets: [] },
+    { answer: failureAnswer(err), question: turn.question, source: 'degraded', trusted_assets: [] },
     null,
   );
 }
@@ -629,8 +629,8 @@ export function stopGenieTurn(): string | null {
 
 /**
  * Resume a turn a reload interrupted. Runs once per page, from the first
- * Genie surface to mount (never at module evaluation: the chunk is
- * idle-preloaded without a surface).
+ * resuming surface: the shell (GenieDock, via lib/genieLauncherSignal, when a
+ * record exists), the panel or /ask-genie. Never at module evaluation.
  */
 export function resumeGenieTurnFromSession(): void {
   if (resumeChecked) return;

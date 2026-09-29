@@ -116,6 +116,8 @@ export interface OutreachDraftResult {
 
 export interface GenieResult {
   answer: string;
+  /** Required on the wire (backend `GenieMessageResponse.required`, `quality-04`). */
+  question: string;
   source?: string;
   trusted_assets?: string[];
   conversation_id?: string;

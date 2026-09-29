@@ -16,7 +16,8 @@ const genie = vi.fn();
 const navigate = vi.fn();
 const setDrawer = vi.fn();
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: {
     growthAgent: (...args: unknown[]) => growthAgent(...args),
     growthAgentCapabilities: (...args: unknown[]) => growthAgentCapabilities(...args),
@@ -39,9 +40,6 @@ vi.mock('../lib/api', () => ({
       question_hash: null,
       response: await genie(question, conversationId, signal),
     }),
-  },
-  ApiError: class ApiError extends Error {
-    status = 500;
   },
   isAbortError: () => false,
   isWarmingUpError: () => false,
@@ -82,6 +80,7 @@ const START: GenieStartResult = {
 function answer(followUpQuestions: string[] = []): GenieAnswer {
   return {
     answer: 'The governed opportunity result is ready.',
+    question: 'Show current opportunity volume',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-native-1',

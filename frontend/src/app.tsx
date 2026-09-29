@@ -22,7 +22,7 @@ import {
   preloadLikelyNextRoutes,
 } from './lib/routePreloaders';
 import { api } from './lib/api';
-import { ROUTE_IDS, ROUTES, type RouteId } from './lib/routeMeta';
+import { ROUTE_IDS, ROUTES, routeSurfacePath, type RouteId } from './lib/routeMeta';
 import type { SessionResponse } from './types';
 import './app.transitions.css';
 // The evidence hover card's sheet ships with the initial CSS (it was in
@@ -77,6 +77,7 @@ const ROUTE_ELEMENTS = {
   offerIndex: <OfferOrchestratorRoute />,
   offer: <OfferOrchestratorRoute />,
   askGenie: <AskGenieRoute />,
+  askGenieConversation: <AskGenieRoute />,
   admin: <AdminRouteGate />,
   legacyOutreach: <Navigate to={ROUTES.legacyOutreach.redirectTo} replace />,
   legacyOutreachDetail: <Navigate to={ROUTES.legacyOutreachDetail.redirectTo} replace />,
@@ -95,10 +96,13 @@ function prefersReducedMotionAtMount(): boolean {
 
 /**
  * RouteTransition — the painted route inside a `<ViewTransition>` keyed by
- * `pathname` (2026-09-21 audit stack-04 / motion-03 / runtime-10 / css-10 /
- * shell-10, phase 1). Scope is only the inner `<main>` content; AppShell,
- * Topbar, Rail, Console, and the floating Genie panel are not in the
- * boundary.
+ * the page's surface path (2026-09-21 audit stack-04 / motion-03 / runtime-10 /
+ * css-10 / shell-10, phase 1): the pathname, except that a conversation deep
+ * link keys as its index route (lib/routeMeta `routeSurfacePath`, audit
+ * shell-03), so /ask-genie <-> /ask-genie/<id> keeps ONE boundary and never
+ * remounts the route; `data-route-path` stays the raw pathname. Scope is
+ * only the inner `<main>` content; AppShell, Topbar, Rail, Console, and the
+ * floating Genie panel are not in the boundary.
  *
  * Nesting: RouteErrorBoundary > Suspense > keyed ViewTransition > div >
  * Routes. The Suspense sits ABOVE the key, so it is the same, already-
@@ -169,6 +173,7 @@ function prefersReducedMotionAtMount(): boolean {
  */
 function RouteTransition() {
   const { pathname } = useLocation();
+  const surfacePath = routeSurfacePath(pathname);
   const [reducedMotion] = useState(prefersReducedMotionAtMount);
   const pending = useRoutePending();
   const painted = (
@@ -191,10 +196,10 @@ function RouteTransition() {
         )}
       >
         {reducedMotion ? (
-          <Fragment key={pathname}>{painted}</Fragment>
+          <Fragment key={surfacePath}>{painted}</Fragment>
         ) : (
           <ViewTransition
-            key={pathname}
+            key={surfacePath}
             enter={ROUTE_ENTER_CLASS}
             exit={ROUTE_EXIT_CLASS}
             update="none"

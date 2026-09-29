@@ -18,6 +18,7 @@ const SQL = 'SELECT state, count(*) AS borrowers FROM mip.gold.borrower_360 GROU
 function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   return {
     answer: 'Texas leads with **900** in-the-money borrowers.\n- `TX`: 900\n- `CA`: 700',
+    question: 'Which states lead?',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     metric_value: '1,600 borrowers',

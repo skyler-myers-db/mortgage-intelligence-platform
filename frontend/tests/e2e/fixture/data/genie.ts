@@ -10,6 +10,7 @@
  * replace a live Genie turn in the running app (CLAUDE.md live-first rule).
  */
 import type {
+  GenieSessionDetail,
   GenieSessionSummary,
   GenieStartResult,
   GrowthAgentHomeResponse,
@@ -30,6 +31,24 @@ export const GENIE_CONVERSATION_ID = 'fixture-conversation-0001';
 export const GENIE_HISTORY_SESSIONS: GenieSessionSummary[] = [
   { conversation_id: 'fixture-conversation-0002', title: 'Equity sweep by state', last_activity_at: '2026-09-20T15:04:00Z', turn_count: 3 },
   { conversation_id: 'fixture-conversation-0003', title: 'Quiet thread', last_activity_at: null, turn_count: 1 },
+];
+
+/**
+ * Shape-valid conversation ids for the `/ask-genie/:conversationId` deep link
+ * (audit 2026-09-21 shell-03): a Genie conversation id is 32 hex or a UUID.
+ * The `fixture-conversation-*` ids above are NOT shape-valid, so a History
+ * load of one keeps the direct adopt and never enters the URL.
+ */
+export const GENIE_LINK_HEX_ID = '01f0a1b2c3d4e5f60718293a4b5c6d7e';
+export const GENIE_LINK_UUID_ID = '01f0a1b2-c3d4-4e5f-8071-8293a4b5c6d7';
+/** Shape-valid but not the actor's: the backend answers 404 (or 403). */
+export const GENIE_LINK_FOREIGN_ID = '9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b';
+export const GENIE_LINK_QUESTION = 'Which states lead on prime refi candidates?';
+export const GENIE_LINK_ANSWER = 'Illinois leads the current footprint on prime refi candidates.';
+
+/** History rows whose ids ARE shape-valid, for a spec that loads one into the URL. */
+export const GENIE_LINK_HISTORY_SESSIONS: GenieSessionSummary[] = [
+  { conversation_id: GENIE_LINK_HEX_ID, title: 'Prime refi by state', last_activity_at: '2026-09-20T15:04:00Z', turn_count: 1 },
 ];
 
 const TRUSTED_ASSETS = [
@@ -72,6 +91,28 @@ export const GROWTH_AGENT_HOME: GrowthAgentHomeResponse = {
   ],
 };
 
+/** `GET /api/genie/sessions/{id}`: one replayable, already-governed turn. */
+export function genieSessionDetail(conversationId: string): GenieSessionDetail {
+  return {
+    conversation_id: conversationId,
+    turns: [
+      {
+        question: GENIE_LINK_QUESTION,
+        response: {
+          question: GENIE_LINK_QUESTION,
+          answer: GENIE_LINK_ANSWER,
+          source: 'genie',
+          trusted_assets: TRUSTED_ASSETS,
+          conversation_id: conversationId,
+          message_id: 'fixture-message-link-0001',
+          genie_status: 'COMPLETED',
+          follow_up_questions: [],
+        },
+      },
+    ],
+  };
+}
+
 export const genieFixtures: FixtureEntry[] = [
   fixture('POST', '/api/genie/start', () =>
     json<GenieStartResult>({
@@ -96,5 +137,18 @@ export const genieFixtures: FixtureEntry[] = [
 export function contractSamples(): ContractSample[] {
   return [
     { source: 'GENIE_HISTORY_SESSIONS', method: 'GET', pattern: '/api/genie/sessions', body: { sessions: GENIE_HISTORY_SESSIONS } },
+    {
+      source: 'GENIE_LINK_HISTORY_SESSIONS',
+      method: 'GET',
+      pattern: '/api/genie/sessions',
+      body: { sessions: GENIE_LINK_HISTORY_SESSIONS },
+    },
+    {
+      source: 'genieSessionDetail(GENIE_LINK_HEX_ID)',
+      method: 'GET',
+      pattern: '/api/genie/sessions/:id',
+      path: `/api/genie/sessions/${GENIE_LINK_HEX_ID}`,
+      body: genieSessionDetail(GENIE_LINK_HEX_ID),
+    },
   ];
 }

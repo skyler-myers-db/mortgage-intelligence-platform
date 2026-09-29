@@ -123,10 +123,15 @@ export async function exportGenieAnswerCsv(
   if (request.rows.length === 0 || request.rows.length > GENIE_EXPORT_MAX_ROWS) {
     return { kind: 'refused', message: GENIE_EXPORT_NOT_RECORDED };
   }
-  const generatedAt = now().toISOString();
-  const csv = buildGenieAnswerCsv(request, generatedAt);
+  let generatedAt: string;
+  let csv: string;
   let receipt: GenieAnswerExportReceipt;
   try {
+    // Inside the try: a throw while building (a bad clock, a cell that
+    // cannot be written) is a refusal like any other, never a rejection
+    // that would strand the caller's "Recording export…" latch.
+    generatedAt = now().toISOString();
+    csv = buildGenieAnswerCsv(request, generatedAt);
     const [csvSha256, columnsSha256] = await Promise.all([
       hash(csv),
       hash(JSON.stringify(request.columns)),

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type UIEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type UIEvent } from 'react';
 import { Link } from 'react-router';
 import { formatCount } from '../../lib/formatters';
 import { genieCellHref, type GenieAnswerCohort } from '../../lib/genieCellLinks';
@@ -86,11 +86,89 @@ export default function GenieAnswerAllRows({
     setView((current) => (current.scrollTop === scrollTop ? current : { ...current, scrollTop }));
   };
 
+  // The row holding focus (a cell link), tracked from focusin / focusout on
+  // the body: it stays mounted when it scrolls out of the window, so the
+  // focused link is never unmounted under the reader (w3-genie-reading
+  // review; genie-06 item 3). Native listeners, not JSX onFocus / onBlur: a
+  // focus handler on the (non-interactive) tbody is a jsx-a11y hit, and the
+  // tbody only observes focus that its links take.
+  const bodyRef = useRef<HTMLTableSectionElement | null>(null);
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return undefined;
+    const onFocusIn = (event: FocusEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const rowIndex = Number(target?.closest('tr')?.getAttribute('aria-rowindex'));
+      setFocusedIndex(Number.isInteger(rowIndex) && rowIndex >= 2 ? rowIndex - 2 : null);
+    };
+    const onFocusOut = (event: FocusEvent) => {
+      const next = event.relatedTarget;
+      if (!(next instanceof Node) || !body.contains(next)) setFocusedIndex(null);
+    };
+    body.addEventListener('focusin', onFocusIn);
+    body.addEventListener('focusout', onFocusOut);
+    return () => {
+      body.removeEventListener('focusin', onFocusIn);
+      body.removeEventListener('focusout', onFocusOut);
+    };
+  }, []);
+
   const inView = Math.ceil(view.viewHeight / view.rowHeight);
   const start = Math.max(0, Math.min(rows.length, Math.floor(view.scrollTop / view.rowHeight) - OVERSCAN_ROWS));
   const end = Math.min(rows.length, start + inView + OVERSCAN_ROWS * 2);
-  const padTop = start * view.rowHeight;
-  const padBottom = (rows.length - end) * view.rowHeight;
+  const retained =
+    focusedIndex !== null && focusedIndex < rows.length && (focusedIndex < start || focusedIndex >= end)
+      ? focusedIndex
+      : null;
+
+  const renderRow = (index: number) => (
+    <tr key={index} aria-rowindex={index + 2}>
+      {columns.map((c) => {
+        const v = rows[index][c];
+        const isNum = typeof v === 'number' && !isIdentifierColumn(c);
+        const href = genieCellHref(c, v, cellCohort, rows[index]);
+        return (
+          <td key={c} className={isNum ? 'num' : undefined}>
+            {href ? (
+              <Link className="mono" to={href}>
+                {formatCell(c, v)}
+              </Link>
+            ) : (
+              formatCell(c, v)
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
+  const spacer = (key: string, rowCount: number) =>
+    rowCount > 0 ? (
+      <tr key={key} className="genie-answer__all-rows-spacer" aria-hidden="true">
+        <td colSpan={columns.length} style={{ blockSize: rowCount * view.rowHeight }} />
+      </tr>
+    ) : null;
+  const windowRows = Array.from({ length: end - start }, (_, offset) => renderRow(start + offset));
+  // ONE keyed list, so the retained row keeps its DOM node (and focus) as it
+  // moves between the window and its own slot; the spacers split around it.
+  const bodyRows =
+    retained === null
+      ? [spacer('pad-top', start), ...windowRows, spacer('pad-bottom', rows.length - end)]
+      : retained < start
+        ? [
+            spacer('pad-top', retained),
+            renderRow(retained),
+            spacer('gap', start - retained - 1),
+            ...windowRows,
+            spacer('pad-bottom', rows.length - end),
+          ]
+        : [
+            spacer('pad-top', start),
+            ...windowRows,
+            spacer('gap', retained - end),
+            renderRow(retained),
+            spacer('pad-bottom', rows.length - retained - 1),
+          ];
 
   return (
     <>
@@ -113,40 +191,8 @@ export default function GenieAnswerAllRows({
               ))}
             </tr>
           </thead>
-          <tbody>
-            {padTop > 0 && (
-              <tr className="genie-answer__all-rows-spacer" aria-hidden="true">
-                <td colSpan={columns.length} style={{ blockSize: padTop }} />
-              </tr>
-            )}
-            {rows.slice(start, end).map((row, offset) => {
-              const index = start + offset;
-              return (
-                <tr key={index} aria-rowindex={index + 2}>
-                  {columns.map((c) => {
-                    const v = row[c];
-                    const isNum = typeof v === 'number' && !isIdentifierColumn(c);
-                    const href = genieCellHref(c, v, cellCohort, row);
-                    return (
-                      <td key={c} className={isNum ? 'num' : undefined}>
-                        {href ? (
-                          <Link className="mono" to={href}>
-                            {formatCell(c, v)}
-                          </Link>
-                        ) : (
-                          formatCell(c, v)
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-            {padBottom > 0 && (
-              <tr className="genie-answer__all-rows-spacer" aria-hidden="true">
-                <td colSpan={columns.length} style={{ blockSize: padBottom }} />
-              </tr>
-            )}
+          <tbody ref={bodyRef}>
+            {bodyRows}
           </tbody>
         </table>
       </div>
