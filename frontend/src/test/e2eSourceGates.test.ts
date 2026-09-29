@@ -84,13 +84,7 @@ const PERMANENT_RAW_AXE: Readonly<Record<string, RawAxeExemption>> = {
  * integrator retires each entry when its owner's merge converts it (the entry
  * then fails as stale). Never add a file: migrate its scan.
  */
-const PENDING_AXE_MIGRATION: Readonly<Record<string, PendingAxeMigration>> = {
-  'fixture/genie-turn.fixture.spec.ts': {
-    count: 2,
-    owner: 'w4-genie-client',
-    reason: 'the (g) mid-turn and after-Stop scans; genie-client owns the spec this wave and migrates both',
-  },
-};
+const PENDING_AXE_MIGRATION: Readonly<Record<string, PendingAxeMigration>> = {};
 
 const AXE_SCAN = /\bnew\s+AxeBuilder\s*\(/g;
 const AXE_IMPORT = /['"]@axe-core\/playwright['"]/g;

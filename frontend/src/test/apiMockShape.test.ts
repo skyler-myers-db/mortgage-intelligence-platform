@@ -57,10 +57,6 @@ const PENDING_PARTIAL_API_MOCKS: Readonly<Record<string, { owner: string; reason
     owner: 'w4-lead-queue',
     reason: 'lead-queue owns this suite in W4b (AssignmentLifecycleAdvance) and converts its lib/api factory',
   },
-  'src/lib/routeMeta.test.tsx': {
-    owner: 'w4-genie-client',
-    reason: 'genie-client claims this suite in W4b for its askGenieConversation pins and converts the mock',
-  },
 };
 
 type Verdict = 'automock' | 'spread' | 'api-error' | 'bare';
