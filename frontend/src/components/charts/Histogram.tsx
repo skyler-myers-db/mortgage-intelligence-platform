@@ -51,12 +51,7 @@ export interface HistogramProps {
   formatRange: (start: number) => string;
 }
 
-/** A compiled shell over a plain render (see "Compiled shells" in CountChart.tsx). */
-export function Histogram(props: HistogramProps) {
-  return histogramChart(props);
-}
-
-function histogramChart({
+export function Histogram({
   title,
   summary,
   table,

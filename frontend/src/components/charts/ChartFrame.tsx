@@ -30,23 +30,13 @@ export interface ChartFrameProps {
   children: ReactNode;
 }
 
-/** A compiled shell over a plain render (see "Compiled shells" in CountChart.tsx). */
-export function ChartFrame(props: ChartFrameProps) {
+export function ChartFrame({ title, summary, table, notice = null, liveText = '', plotProps, children }: ChartFrameProps) {
   const summaryId = useId();
   const [asTable, setAsTable] = useState(false);
-  return chartFrame(props, summaryId, asTable, () => setAsTable((current) => !current));
-}
-
-function chartFrame(
-  { title, summary, table, notice = null, liveText = '', plotProps, children }: ChartFrameProps,
-  summaryId: string,
-  asTable: boolean,
-  toggle: () => void,
-) {
   return (
     <figure className="chart-frame">
       <figcaption id={summaryId} className="chart-frame__summary">{summary}</figcaption>
-      <button type="button" className="btn btn--sm chart-frame__toggle" onClick={toggle}>
+      <button type="button" className="btn btn--sm chart-frame__toggle" onClick={() => setAsTable((current) => !current)}>
         {asTable ? 'View as chart' : 'View as table'}
       </button>
       {asTable ? (

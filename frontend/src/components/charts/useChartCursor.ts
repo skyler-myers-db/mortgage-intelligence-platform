@@ -62,8 +62,9 @@ function stepIndex(key: string, current: number | null, count: number): number {
 
 /**
  * The cursor's handlers. The key handler reads the keyboard cursor through a
- * functional update, so the handlers depend only on the points and the hook
- * memoizes them as one unit (see "Compiled shells" in CountChart.tsx).
+ * functional update, so the handlers depend only on the points: the compiled
+ * hook memoizes them as one unit, and a cursor move hands the plot and the
+ * tooltip the same handler objects.
  */
 function cursorHandlers(
   count: number,

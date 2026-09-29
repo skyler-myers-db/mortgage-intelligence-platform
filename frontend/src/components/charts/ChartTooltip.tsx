@@ -28,12 +28,7 @@ export interface ChartTooltipProps {
   surfaceProps: ChartCursorSurfaceProps;
 }
 
-/** A compiled shell over a plain render (see "Compiled shells" in CountChart.tsx). */
-export function ChartTooltip(props: ChartTooltipProps) {
-  return chartTooltip(props);
-}
-
-function chartTooltip({ point, surfaceProps }: ChartTooltipProps) {
+export function ChartTooltip({ point, surfaceProps }: ChartTooltipProps) {
   const at = point ? ({ '--hover-x': `${point.x}%`, '--hover-y': `${point.y}%` } as CSSProperties) : undefined;
   return (
     <div className="analytics-chart__hover" aria-hidden="true" {...surfaceProps}>

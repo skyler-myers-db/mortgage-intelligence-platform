@@ -14,16 +14,13 @@
  * The axis chrome is the shared `.analytics-chart__*`, so the y-tick formats
  * other specs pin stay.
  *
- * Compiled shells (the analytics route budget, wave 4b). Each kit component
- * is a small compiled shell that holds its hooks and passes its props to a
- * plain render function, so the React Compiler memoizes the chart on those
- * inputs as one unit. A kit chart re-renders whole on every cursor move
- * anyway: its caller hands it fresh points and marks, and the y scale is a
- * fresh closure. The per-element cache the compiler emitted for the frame,
- * the tooltip, the histogram and this chart kept only the caption and the
- * toggle between moves, and cost about 0.8 KiB br of the analytics route
- * closure (46.37 compiled per element, 45.61 as shells, on a macOS build).
- * The shells still compile: no 'use no memo', no allowlist entry.
+ * The chart compiles under the React Compiler as written. The cursor state
+ * lives here, so a pointer or key move re-renders this component, not its
+ * caller. Everything drawn with the y scale (the y labels, the gridlines and
+ * the caller's marks) is built before the cursor is read and depends only on
+ * the points, the marks and the svg class, so the compiler keeps it across
+ * cursor moves; the tooltip reads the point's precomputed row instead of the
+ * scale. A move re-renders the tooltip, the live text and the frame only.
  */
 import type { CSSProperties, ReactNode } from 'react';
 import { niceTicks } from '../../lib/chartTicks';
@@ -32,7 +29,7 @@ import { formatCompact, formatCount } from '../../lib/formatters';
 import { ChartFrame } from './ChartFrame';
 import { ChartTooltip } from './ChartTooltip';
 import { linearScale, tickEdgeClass, type Scale } from './scales';
-import { useChartCursor, type ChartCursor } from './useChartCursor';
+import { useChartCursor } from './useChartCursor';
 
 export interface CountChartPoint {
   /** Percent of the plot width. */
@@ -71,20 +68,55 @@ export interface CountChartProps {
   overlay?: ReactNode;
 }
 
-/** The compiled shell holds the cursor; the chart renders as one unit. */
-export function CountChart(props: CountChartProps) {
-  const cursor = useChartCursor(props.points.length, props.points.map((point) => point.x));
-  return countChart(props, cursor);
-}
-
-function countChart(
-  { title, summary, table, notice = null, points, xTicks, xLabel, yLabel, svgClassName, marks, overlay = null }: CountChartProps,
-  cursor: ChartCursor,
-) {
+export function CountChart({
+  title,
+  summary,
+  table,
+  notice = null,
+  points,
+  xTicks,
+  xLabel,
+  yLabel,
+  svgClassName,
+  marks,
+  overlay = null,
+}: CountChartProps) {
+  const cursor = useChartCursor(points.length, points.map((point) => point.x));
   const yTicks = niceTicks(0, Math.max(0, ...points.map((point) => point.count)), 5, { integer: true });
   const y = linearScale([0, yTicks[yTicks.length - 1]], PLOT_Y_RANGE);
-  const reading = (point: CountChartPoint) => `${formatCount(point.count)} ${yLabel.toLowerCase()}`;
-  const active = cursor.index === null ? null : points[cursor.index];
+  const pointY = points.map((point) => y(point.count));
+  const yAxis = (
+    <div className="analytics-chart__y-ticks" aria-hidden="true">
+      {[...yTicks].reverse().map((tick) => (
+        <span
+          key={tick}
+          className="analytics-chart__tick analytics-chart__tick--y"
+          style={{ '--tick-pos': `${y(tick)}%` } as CSSProperties}
+        >
+          {formatCompact(tick)}
+        </span>
+      ))}
+    </div>
+  );
+  const svg = (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className={svgClassName} aria-hidden="true">
+      {yTicks.map((tick) => (
+        <line
+          key={tick}
+          x1="0"
+          x2="100"
+          y1={fixedAttr(y(tick))}
+          y2={fixedAttr(y(tick))}
+          className="analytics-chart__grid"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+      {marks(y)}
+    </svg>
+  );
+  // The cursor is read only below this line (see the doc comment above).
+  const unit = yLabel.toLowerCase();
+  const at = cursor.index;
   const live = cursor.liveIndex === null ? null : points[cursor.liveIndex];
 
   return (
@@ -93,40 +125,22 @@ function countChart(
       summary={summary}
       table={table}
       notice={notice}
-      liveText={live ? `${live.label}: ${reading(live)}` : ''}
+      liveText={live ? `${live.label}: ${formatCount(live.count)} ${unit}` : ''}
       plotProps={cursor.plotProps}
     >
       <div className="analytics-chart">
         <div className="analytics-chart__plot">
-          <div className="analytics-chart__y-ticks" aria-hidden="true">
-            {[...yTicks].reverse().map((tick) => (
-              <span
-                key={tick}
-                className="analytics-chart__tick analytics-chart__tick--y"
-                style={{ '--tick-pos': `${y(tick)}%` } as CSSProperties}
-              >
-                {formatCompact(tick)}
-              </span>
-            ))}
-          </div>
+          {yAxis}
           <div className="analytics-chart__canvas">
-            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className={svgClassName} aria-hidden="true">
-              {yTicks.map((tick) => (
-                <line
-                  key={tick}
-                  x1="0"
-                  x2="100"
-                  y1={fixedAttr(y(tick))}
-                  y2={fixedAttr(y(tick))}
-                  className="analytics-chart__grid"
-                  vectorEffect="non-scaling-stroke"
-                />
-              ))}
-              {marks(y)}
-            </svg>
+            {svg}
             {overlay}
             <ChartTooltip
-              point={active ? { x: active.x, y: y(active.count), label: active.label, value: reading(active) } : null}
+              point={at === null ? null : {
+                x: points[at].x,
+                y: pointY[at],
+                label: points[at].label,
+                value: `${formatCount(points[at].count)} ${unit}`,
+              }}
               surfaceProps={cursor.surfaceProps}
             />
             <div className="analytics-chart__x-ticks" aria-hidden="true">
