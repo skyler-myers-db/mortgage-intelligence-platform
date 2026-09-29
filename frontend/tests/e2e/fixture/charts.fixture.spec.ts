@@ -328,6 +328,18 @@ test.describe('analytics charts: forced colors (a11y-10 / responsive-v3 / css-06
     expect(await chip('high').evaluate((el) => `${getComputedStyle(el).borderTopStyle} ${getComputedStyle(el).borderTopWidth}`)).toBe(`solid ${ringWidth}`);
     expect(await chip('med').evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe('dashed');
     expect(await bin('high').evaluate((el) => getComputedStyle(el).borderTopStyle)).not.toBe('solid');
+    // A scatter mark with no forced rule of its own (the cluster list's
+    // score dot, a probe here: the fixture overview opens no cluster) must
+    // not pick up the chip's band edge either.
+    const probe = await page.locator('#main-content .analytics-chart-panel--scatter').evaluate((panel) => {
+      const dot = document.createElement('span');
+      dot.className = 'analytics-scatter__cluster-score score--high';
+      panel.appendChild(dot);
+      const edge = getComputedStyle(dot).borderTopStyle;
+      dot.remove();
+      return edge;
+    });
+    expect(probe).toBe('none');
   });
 
   test('lead queue: a confidence bar on and off differ in fill and in edge style', async ({ app, page }) => {
