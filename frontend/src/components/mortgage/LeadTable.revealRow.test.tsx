@@ -152,6 +152,7 @@ describe('LeadTable reveals the row the URL names', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.restoreAllMocks();
   });
 
   function mount(initialEntry: string) {
@@ -209,6 +210,33 @@ describe('LeadTable reveals the row the URL names', () => {
     }, { timeout: 10_000 });
     expect(scrolledTo, 'a restored place is not overridden by a reveal').toEqual([]);
   }, 30_000);
+
+  it('an unmount before the reveal\'s frame cancels that frame: nothing scrolls afterwards', async () => {
+    const frames: number[] = [];
+    const cancelled: number[] = [];
+    const request = window.requestAnimationFrame.bind(window);
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      const id = request(callback);
+      frames.push(id);
+      return id;
+    });
+    const cancel = window.cancelAnimationFrame.bind(window);
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+      cancelled.push(id);
+      cancel(id);
+    });
+    mount(`/lead-queue?row=${IDS[140]}`);
+    expect(frames.length, 'precondition: the reveal waits for its frame').toBeGreaterThan(0);
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    });
+
+    expect(cancelled.some((id) => frames.includes(id)), 'the pending frame was cancelled').toBe(true);
+    expect(scrolledTo, 'no reveal ran after the unmount').toEqual([]);
+  });
 
   it('never on REPLACE: an expand or a collapse keeps the reader\'s place', async () => {
     const router = mount(`/lead-queue?row=${IDS[140]}`);

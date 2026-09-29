@@ -297,21 +297,27 @@ export function LeadTable({
   // The fresh-entry reveal (requested above), once the named row is loaded.
   const urlRow = searchParams.get('row');
   useEffect(() => {
-    if (revealRef.current === null) return;
+    if (revealRef.current === null) return undefined;
     // Bound to the row this entry names; the URL moving on (an expand, Back)
     // drops it, and a placeholder page (the row not settled yet) waits.
     if (revealRef.current === undefined) revealRef.current = urlRow;
     const target = revealRef.current;
     if (target === null || urlRow !== target) {
       revealRef.current = null;
-      return;
+      return undefined;
     }
-    if (expanded !== target || !rowIds.includes(target)) return;
-    revealRef.current = null;
+    if (expanded !== target || !rowIds.includes(target)) return undefined;
     // A frame later: on a first mount the virtualizer attaches to the
     // shell's scroller in LeadTableBody's layout re-render, after this effect.
+    // The request is spent in that frame; a render before it cancels the
+    // frame and checks again (the URL may have moved on), and so does an
+    // unmount, which leaves no callback behind.
     const { revealRow } = flow.cursor;
-    requestAnimationFrame(() => revealRow(target));
+    const frame = requestAnimationFrame(() => {
+      revealRef.current = null;
+      revealRow(target);
+    });
+    return () => cancelAnimationFrame(frame);
   });
   // Load the review chunk once the reader engages with rows (the draft is
   // requested only on Approve); the bulk review chunk once rows are selected.
