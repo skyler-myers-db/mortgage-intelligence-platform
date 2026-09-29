@@ -186,6 +186,16 @@ class BackpressureController:
             # budget and a Lakebase slot. A Stop pressed while the Genie budget
             # is spent must still land.
             return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, "lakebase")
+        if method.upper() == "GET" and (
+            path == "/api/genie/sessions" or path.startswith("/api/genie/sessions/")
+        ):
+            # Conversation History and its replay (audit 2026-09-21 shell-03,
+            # the /ask-genie/:conversationId deep link): the caller's own
+            # recorded turns, read from Lakebase only, never Genie. The default
+            # read bucket and a Lakebase slot, like the job poll above; inside
+            # the 30/min "genie" budget a reload of a shared link would spend
+            # the bucket that gates asks and hold a Genie slot per read.
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if path.startswith("/api/genie"):
             return RouteBudget("genie", settings.mip_rate_limit_genie_per_minute, "genie")
         if method.upper() == "POST" and path in self._READ_ONLY_POSTS:
