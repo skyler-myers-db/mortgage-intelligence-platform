@@ -71,6 +71,10 @@ export {
   warningLabelForSource,
 } from './GenieChat.helpers';
 
+// The shell (GenieDock) resumes a reloaded turn through this chunk before
+// the panel's first open (audit genie-02 item 2): see GenieDock.tsx.
+export { ensureGenieLauncherSignal, resumeGenieTurnFromSession } from '../../lib/genieLauncherSignal';
+
 /**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
  * bottom-right, reachable from every page. The API path enforces governed

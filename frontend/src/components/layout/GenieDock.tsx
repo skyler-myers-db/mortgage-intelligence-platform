@@ -32,14 +32,21 @@ function hasGenieTurnToResume(): boolean {
   }
 }
 
-/** Resume that turn from the shell and let the launcher signal follow it.
- *  Lazy: the signal (and the store it follows) load only for a record. A
- *  failed chunk leaves the resume to the panel's first open. */
+/**
+ * Resume that turn from the shell and let the launcher signal follow it.
+ * Lazy: the signal (and the store it follows) load only for a record, and
+ * through the chat's chunk, which the shell already lazy-loads and
+ * idle-preloads (AppShell): a dynamic import of lib/genieLauncherSignal
+ * itself would be one more entry reaching the in-flight store, and split the
+ * Genie answer family's shared chunk (measured +1.6 KiB br on /ask-genie).
+ * Importing the chunk mounts nothing and calls nothing. A failed chunk
+ * leaves the resume to the panel's first open.
+ */
 function resumeGenieTurnFromShell(): void {
-  import('../../lib/genieLauncherSignal')
-    .then((signal) => {
-      signal.ensureGenieLauncherSignal();
-      signal.resumeGenieTurnFromSession();
+  import('../mortgage/GenieChat')
+    .then((chat) => {
+      chat.ensureGenieLauncherSignal();
+      chat.resumeGenieTurnFromSession();
     })
     .catch(() => undefined);
 }

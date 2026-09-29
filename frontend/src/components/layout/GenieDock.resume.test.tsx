@@ -4,8 +4,9 @@
  * The shell resumes a Genie turn before the panel's first open (audit
  * 2026-09-21 `genie-02` item 2, Genie residual #2), at the rendered layer:
  * GenieDock reads the in-flight record key, loads the lazy launcher signal
- * only when there is one, resumes without mounting the chat, and its FAB and
- * sr-only description follow the signal until the chat mounts.
+ * (through the chat's chunk, which it never mounts) only when there is one,
+ * resumes, and its FAB and sr-only description follow the signal until the
+ * chat mounts.
  */
 import { act, useEffect, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -14,7 +15,9 @@ import { GENIE_IN_FLIGHT_TURN_KEY } from '../../lib/genieConversation';
 
 const signal = vi.hoisted(() => ({ imports: 0, ensure: vi.fn(), resume: vi.fn() }));
 
-vi.mock('../../lib/genieLauncherSignal', () => {
+// The chat MODULE, as the shell loads it for a resume: only the launcher
+// signal's re-exports; its GenieChat component is never rendered.
+vi.mock('../mortgage/GenieChat', () => {
   signal.imports += 1;
   return { ensureGenieLauncherSignal: signal.ensure, resumeGenieTurnFromSession: signal.resume };
 });
@@ -22,6 +25,10 @@ vi.mock('../../lib/genieLauncherSignal', () => {
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const chat = { mounts: 0 };
+
+/** Each test re-imports the dock's module graph (vi.resetModules): a budget
+ *  for a loaded CI runner, not the 5 s / 10 s defaults. */
+const MODULE_GRAPH_BUDGET_MS = 30_000;
 
 /** Stands in for the lazy GenieChat: the chat is what reads /api/genie/start. */
 function ChatProbe() {
@@ -49,6 +56,15 @@ async function settle(): Promise<void> {
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
 }
 
+/** A dynamic import resolves in a later task: wait for it, bounded. */
+async function waitFor(condition: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) throw new Error('waitFor timeout');
+    await settle();
+  }
+}
+
 describe('GenieDock resumes a turn before the first open', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -70,7 +86,7 @@ describe('GenieDock resumes a turn before the first open', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-  });
+  }, MODULE_GRAPH_BUDGET_MS);
 
   afterEach(() => {
     act(() => root.unmount());
@@ -96,12 +112,12 @@ describe('GenieDock resumes a turn before the first open', () => {
     expect(fab()!.className).toBe('genie__fab');
     expect(fab()!.hasAttribute('aria-describedby')).toBe(false);
     expect(description()?.textContent).toBe('');
-  });
+  }, MODULE_GRAPH_BUDGET_MS);
 
   it('with a record: one import, one resume, no chat; the FAB and its description follow the signal until the open', async () => {
     session.set(GENIE_IN_FLIGHT_TURN_KEY, JSON.stringify({ v: 2, phase: 'completing' }));
     render(false);
-    await settle();
+    await waitFor(() => signal.resume.mock.calls.length > 0);
     expect(signal.imports).toBe(1);
     expect(signal.ensure).toHaveBeenCalledTimes(1);
     expect(signal.resume).toHaveBeenCalledTimes(1);
@@ -128,5 +144,5 @@ describe('GenieDock resumes a turn before the first open', () => {
     expect(fab()).toBeNull();
     expect(description()).toBeNull();
     expect(signal.resume).toHaveBeenCalledTimes(1);
-  });
+  }, MODULE_GRAPH_BUDGET_MS);
 });
