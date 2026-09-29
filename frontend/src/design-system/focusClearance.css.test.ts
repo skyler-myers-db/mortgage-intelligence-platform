@@ -48,16 +48,20 @@ describe('focus clearance (a11y-v2)', () => {
     expect(imports[at37 + 1]).toBe('@import "./components/38-focus-clearance.css";');
   });
 
-  it('.tbl-wrap clears its sticky thead: the measured size, one row until measured, plus the ring', () => {
-    const wrap = block(components(), '.tbl-wrap');
+  it('the ranked-borrower scroller clears its sticky thead: the measured size, one row until measured, plus the ring', () => {
+    const wrap = block(leadTableCss(), '.tbl-wrap:has(> .lead-table__table)');
     expect(wrap).toMatch(/--tbl-head-block-size:\s*var\(--row-h\);/);
     expect(wrap).toMatch(new RegExp(String.raw`scroll-padding-block-start:\s*calc\(\s*var\(--tbl-head-block-size\)\s*${RING}\s*\);`));
   });
 
-  it('the Lead Queue scroller clears the pinned Approval column at its inline end', () => {
+  it('the ranked-borrower scroller clears the pinned Approval column at its inline end', () => {
     const pin = block(leadTableCss(), '.tbl-wrap:has(> .lead-table__table)');
     expect(pin).toMatch(/--tbl-pin-inline-size:\s*0px;/);
     expect(pin).toMatch(new RegExp(String.raw`scroll-padding-inline-end:\s*calc\(\s*var\(--tbl-pin-inline-size\)\s*${RING}\s*\);`));
+  });
+
+  it('keeps the shell stylesheet\'s `.tbl-wrap` as it was (the clearance ships in the lazy sheet)', () => {
+    expect(block(components(), '.tbl-wrap')).not.toMatch(/scroll-padding|--tbl-/);
   });
 
   it('.main clears the sticky route nav only inside the 40rem condition that docks it', () => {

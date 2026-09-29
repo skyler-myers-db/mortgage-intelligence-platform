@@ -1,6 +1,6 @@
 import { useLayoutEffect, type RefObject } from 'react';
 
-/** The sticky thead's block size, on `.tbl-wrap` (03-score-and-table.css). */
+/** The sticky thead's block size, on `.tbl-wrap` (LeadTable.css). */
 export const TABLE_HEAD_BLOCK_VAR = '--tbl-head-block-size';
 /** The pinned Approval column's inline size, on `.tbl-wrap` (LeadTable.css). */
 export const TABLE_PIN_INLINE_VAR = '--tbl-pin-inline-size';

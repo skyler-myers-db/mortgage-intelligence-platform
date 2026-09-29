@@ -3,8 +3,8 @@
  *
  * useTableScrollClearance (audit a11y-v2): measures the sticky thead, the
  * pinned Approval header and the sticky route nav, and writes them as the
- * custom properties the scroll-padding rules read (03-score-and-table.css,
- * LeadTable.css, 38-focus-clearance.css). A resize is written in the next
+ * custom properties the scroll-padding rules read (LeadTable.css,
+ * 38-focus-clearance.css). A resize is written in the next
  * animation frame, never inside the ResizeObserver callback; all three are
  * removed on unmount. The rendered proof (no focus stop under the chrome) is
  * the focus-obscured walk in lead-queue.fixture.spec.ts.
