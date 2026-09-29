@@ -15,7 +15,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import { act, useEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 
@@ -113,8 +113,17 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
   let root: Root;
   let client: QueryClient;
 
-  beforeEach(() => {
+  beforeAll(async () => {
+    // Loaded once up front, so a failure toast's wording (which arrives with
+    // this chunk, leadWriteFailureToast) settles within a task.
+    await import('../ui/AsyncFailure');
+  }, 30_000);
+
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // A failure toast's wording loads asynchronously (leadWriteFailureToast):
+    // let the previous test's settle before this one starts clean.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     clearToasts();
     window.sessionStorage.clear();
     client = new QueryClient();

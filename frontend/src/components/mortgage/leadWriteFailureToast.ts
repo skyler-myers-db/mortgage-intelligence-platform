@@ -8,10 +8,13 @@
  * keeps a failure until it is dismissed and moves into the topmost dialog.
  *
  * The detail of a failed request is describeApiError's buyer-safe body
- * (never the transport message). describeApiError is loaded on the failure
- * only: a static import would add its chunk to both routes that render the
- * table (lead-queue and segment-intelligence) for a path most sessions never
- * take. If that chunk cannot load (offline, a stale deploy), the toast keeps
+ * (never the transport message). The vocabulary is loaded on the failure
+ * only, through AsyncFailure's existing lazy chunk (failureSentence): a
+ * static import would add it to both routes that render the table
+ * (lead-queue and segment-intelligence), and a new dynamic import of
+ * lib/describeApiError itself split the transport out of the entry chunk
+ * (+0.36 KiB br of initial JS, measured; DescribedError.tsx records the same
+ * trap). If that chunk cannot load (offline, a stale deploy), the toast keeps
  * the message the table showed before, which for an offline write is the
  * same 'You are offline. Reconnect, then try again.'
  *
@@ -28,9 +31,10 @@ export function toastWriteFailure(title: string, error: unknown, subject: string
     toast.error(title, { detail: fallback });
     return;
   }
-  void import('../../lib/describeApiError').then(
-    ({ describeApiError }) => {
-      toast.error(title, { detail: describeApiError(error, { subject }).body || fallback });
+  // A vite:preloadError handler may resolve a failed chunk to undefined.
+  void (import('../ui/AsyncFailure') as Promise<typeof import('../ui/AsyncFailure') | undefined>).then(
+    (module) => {
+      toast.error(title, { detail: (module && module.failureSentence(error, subject)) || fallback });
     },
     () => {
       toast.error(title, { detail: fallback });
