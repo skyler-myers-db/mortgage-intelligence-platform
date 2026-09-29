@@ -12,7 +12,7 @@
  * `positions` are the points' x in percent (0-100) of the surface the
  * pointer handlers are attached to (the tooltip layer, which spans the plot).
  */
-import { useState, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react';
+import { useState, type Dispatch, type FocusEvent, type KeyboardEvent, type PointerEvent, type SetStateAction } from 'react';
 
 export interface ChartCursorPlotProps {
   tabIndex: 0;
@@ -47,38 +47,63 @@ export function nearestIndex(positions: readonly number[], pct: number): number 
   return nearest;
 }
 
+/** The keyboard cursor, and whether a keyboard move (not focus) put it there. */
+type KeyCursor = { index: number; moved: boolean } | null;
+
+const CURSOR_KEYS: ReadonlySet<string> = new Set(['ArrowLeft', 'ArrowRight', 'Home', 'End']);
+
+/** The index a cursor key moves to from `current` (null: no keyboard cursor yet). */
+function stepIndex(key: string, current: number | null, count: number): number {
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  if (current === null) return 0;
+  return key === 'ArrowLeft' ? Math.max(0, current - 1) : Math.min(count - 1, current + 1);
+}
+
+/**
+ * The cursor's handlers. The key handler reads the keyboard cursor through a
+ * functional update, so the handlers depend only on the points and the hook
+ * memoizes them as one unit (see "Compiled shells" in CountChart.tsx).
+ */
+function cursorHandlers(
+  count: number,
+  positions: readonly number[],
+  setHover: Dispatch<SetStateAction<number | null>>,
+  setKey: Dispatch<SetStateAction<KeyCursor>>,
+): Pick<ChartCursor, 'surfaceProps' | 'plotProps'> {
+  return {
+    surfaceProps: {
+      onPointerMove: (event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (count > 0 && rect.width > 0) setHover(nearestIndex(positions, ((event.clientX - rect.left) / rect.width) * 100));
+      },
+      onPointerLeave: () => setHover(null),
+    },
+    plotProps: {
+      tabIndex: 0,
+      onKeyDown: (event) => {
+        const { key } = event;
+        if (count <= 0 || !CURSOR_KEYS.has(key)) return;
+        event.preventDefault();
+        setKey((current) => ({ index: stepIndex(key, clampIndex(current?.index ?? null, count), count), moved: true }));
+      },
+      // The plot holds no focusable descendant, so its focus and blur are its own.
+      onFocus: () => {
+        if (count > 0) setKey((current) => current ?? { index: 0, moved: false });
+      },
+      onBlur: () => setKey(null),
+    },
+  };
+}
+
 export function useChartCursor(count: number, positions: readonly number[]): ChartCursor {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  // The keyboard cursor, and whether a keyboard move (not focus) put it there.
-  const [key, setKey] = useState<{ index: number; moved: boolean } | null>(null);
-
-  const onPointerMove = (event: PointerEvent<HTMLElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (count > 0 && rect.width > 0) setHoverIndex(nearestIndex(positions, ((event.clientX - rect.left) / rect.width) * 100));
-  };
-
-  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    const current = clampIndex(key?.index ?? null, count);
-    let next: number;
-    if (event.key === 'ArrowRight') next = current === null ? 0 : Math.min(count - 1, current + 1);
-    else if (event.key === 'ArrowLeft') next = current === null ? 0 : Math.max(0, current - 1);
-    else if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = count - 1;
-    else return;
-    if (count <= 0) return;
-    event.preventDefault();
-    setKey({ index: next, moved: true });
-  };
-
-  // The plot holds no focusable descendant, so its focus and blur are its own.
-  const onFocus = () => {
-    if (count > 0) setKey((current) => current ?? { index: 0, moved: false });
-  };
-
+  const [key, setKey] = useState<KeyCursor>(null);
+  const { surfaceProps, plotProps } = cursorHandlers(count, positions, setHoverIndex, setKey);
   return {
     index: clampIndex(hoverIndex ?? key?.index ?? null, count),
     liveIndex: key?.moved ? clampIndex(key.index, count) : null,
-    surfaceProps: { onPointerMove, onPointerLeave: () => setHoverIndex(null) },
-    plotProps: { tabIndex: 0, onKeyDown, onFocus, onBlur: () => setKey(null) },
+    surfaceProps,
+    plotProps,
   };
 }
