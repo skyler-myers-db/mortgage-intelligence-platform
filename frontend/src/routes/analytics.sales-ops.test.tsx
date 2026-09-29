@@ -50,7 +50,8 @@ vi.mock('../components/FootprintProvider', () => ({
   }),
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: apiMocks,
 }));
 

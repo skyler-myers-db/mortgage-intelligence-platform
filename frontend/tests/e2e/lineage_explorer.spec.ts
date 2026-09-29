@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { openEvidenceDrawer } from './helpers';
 
 /**
  * S5 — Lineage explorer acceptance spec.
@@ -205,7 +206,7 @@ test.describe('Lineage explorer — KPI to Catalog Explorer deep link', () => {
     await expect(kpiCard).toBeVisible({ timeout: 10_000 });
     await kpiCard.locator('.evidence-chip').first().click();
 
-    const drawer = page.locator('.drawer.is-open');
+    const drawer = openEvidenceDrawer(page);
     await expect(drawer).toBeVisible();
 
     // Click 2: the Lineage tab.
@@ -260,7 +261,7 @@ test.describe('Lineage explorer — KPI to Catalog Explorer deep link', () => {
     await expect(kpiCard).toBeVisible({ timeout: 10_000 });
     await kpiCard.locator('.evidence-chip').first().click();
 
-    const drawer = page.locator('.drawer.is-open');
+    const drawer = openEvidenceDrawer(page);
     await expect(drawer).toBeVisible();
     await drawer.getByRole('tab', { name: 'Lineage' }).click();
     await expect(drawer).toContainText('Lineage not mapped');

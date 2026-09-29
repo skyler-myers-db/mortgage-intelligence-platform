@@ -27,7 +27,8 @@ vi.mock('../AppContext', () => ({
 }));
 
 const borrowerSearch = vi.fn();
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: { borrowerSearch: (...a: unknown[]) => borrowerSearch(...a) },
 }));
 

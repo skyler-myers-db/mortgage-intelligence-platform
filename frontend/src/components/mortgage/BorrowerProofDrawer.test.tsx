@@ -17,7 +17,8 @@ const apiMocks = vi.hoisted(() => ({
   borrowerProof: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     borrowerProof: apiMocks.borrowerProof,
   },

@@ -21,8 +21,9 @@
  * Only the API (and, for B, C and D, one hashed chunk) is faked; the
  * scenarios live in data/errorTelemetry.ts.
  */
-import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
+import type { FixtureTheme } from './app';
+import { expectAxeClean } from './axe';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import {
   crashTheEvidenceDrawer,
@@ -37,7 +38,6 @@ import type { Hygiene } from './hygiene';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 const HOME_H1 = 'Who should we contact, why now, and with what offer?';
 const GLOSSARY_H1 = 'Mortgage intelligence glossary';
 
@@ -56,9 +56,9 @@ function navLink(page: Page, name: string): Locator {
   return page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name, exact: true });
 }
 
-async function axeViolations(page: Page, selector: string): Promise<string[]> {
-  const results = await new AxeBuilder({ page }).include(selector).withTags(WCAG_TAGS).analyze();
-  return results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(' ; ')}`);
+/** The shared axe gate (fixture/axe.ts), scoped to the one error frame a scenario opened. */
+async function expectFrameAxeClean(page: Page, state: string, include: string, theme: FixtureTheme): Promise<void> {
+  await expectAxeClean(page, { key: { route: 'error-telemetry', state }, theme, known: {}, include });
 }
 
 /** Horizontal overflow of an element: scrollWidth beyond clientWidth. */
@@ -110,7 +110,7 @@ test.describe('A. evidence drawer render throw', () => {
       expect(await horizontalOverflow(surface), 'no horizontal overflow in the surface').toBeLessThanOrEqual(0);
       const border = await borderAgainstToken(surface);
       expect(border.rendered, `border is --status-danger-line-strong (${theme})`).toBe(border.token);
-      expect(await axeViolations(page, '.drawer'), `WCAG A/AA inside the drawer frame (${theme})`).toEqual([]);
+      await expectFrameAxeClean(page, 'drawer-render-throw', 'dialog.drawer:not(.proof-drawer)', theme);
 
       // Close hides the frame and returns focus to the chip that opened it.
       await drawer.getByRole('button', { name: 'Close drawer' }).click();
@@ -163,7 +163,7 @@ test.describe('B/C. a panel chunk that will not load', () => {
     // The frame reuses the chat's header but cannot be dragged: no grab cursor.
     await expect(panel.locator('.genie__hdr')).toHaveCSS('cursor', 'default');
     expect(await horizontalOverflow(surface)).toBeLessThanOrEqual(0);
-    expect(await axeViolations(page, '.genie'), 'WCAG A/AA inside the Genie frame').toEqual([]);
+    await expectFrameAxeClean(page, 'genie-chunk', '.genie', 'light');
     await expect(page.locator('#main-content h1')).toHaveText(HOME_H1);
 
     await panel.getByRole('button', { name: 'Close Genie' }).click();
@@ -190,7 +190,7 @@ test.describe('B/C. a panel chunk that will not load', () => {
     await expect(surface.getByRole('button')).toHaveText(['Reload']);
     expect(await horizontalOverflow(consolePanel), 'the surface fits the 300px Console').toBeLessThanOrEqual(0);
     expect(await horizontalOverflow(surface)).toBeLessThanOrEqual(0);
-    expect(await axeViolations(page, '#workspace-console'), 'WCAG A/AA inside the Console frame').toEqual([]);
+    await expectFrameAxeClean(page, 'console-chunk', '#workspace-console', 'light');
     await expect(page.locator('#main-content h1')).toHaveText(HOME_H1);
 
     await consolePanel.getByRole('button', { name: 'Close console' }).click();

@@ -138,6 +138,14 @@ describe('formatting ban wiring', { timeout: ESLINT_BUDGET_MS }, () => {
       expect(await banSeverity(file), file).toBe(0);
     }
   });
+
+  // responsive-04 (wave 4): the palette's selection verbs moved onto
+  // formatCount, which retired the last allowlist entry. The list stays an
+  // (empty) object and the override block is guarded, so lint still loads.
+  it('has no allowlisted file left, and the palette verbs are gated again', async () => {
+    expect(config.FORMATTING_ALLOWLIST).toEqual({});
+    expect(await banSeverity('src/components/command/commandActions.ts')).toBe(2);
+  });
 });
 
 describe('formatting ban selectors', { timeout: ESLINT_BUDGET_MS }, () => {
