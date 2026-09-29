@@ -4,7 +4,7 @@ import { ApiError, api } from '../lib/api';
 import type { GenieTurn } from '../lib/genieConversationStore';
 import { getGenieTurnSnapshot, subscribeGenieTurn } from '../lib/genieInFlightTurn';
 import { queryKeys } from '../lib/queryKeys';
-import type { GenieConversationLinkStateProps } from './ask-genie.deep-link-state';
+import type { GenieConversationLinkStateProps } from '../components/mortgage/GenieConversationLinkState';
 
 /**
  * `/ask-genie/:conversationId` — a shareable, actor-scoped link to one Genie
@@ -31,7 +31,8 @@ import type { GenieConversationLinkStateProps } from './ask-genie.deep-link-stat
  * error mapper).
  *
  * The loading / not-found / unavailable UI is a lazy chunk, requested only
- * while a conversation param is present (ask-genie.deep-link-state.tsx).
+ * while a conversation param is present
+ * (components/mortgage/GenieConversationLinkState.tsx).
  */
 
 export const GENIE_CONVERSATION_ID_RE = /^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
@@ -117,7 +118,7 @@ export function useInFlightGenieConversation(): string | null {
   return useSyncExternalStore(subscribeGenieTurn, inFlightConversation, () => NO_GENIE_TURN);
 }
 
-const GenieConversationLinkState = lazy(() => import('./ask-genie.deep-link-state'));
+const GenieConversationLinkState = lazy(() => import('../components/mortgage/GenieConversationLinkState'));
 
 /** The link's non-ok states, from the lazy chunk; a busy empty surface meanwhile. */
 export function GenieConversationLinkPlaceholder(props: GenieConversationLinkStateProps) {

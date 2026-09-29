@@ -57,7 +57,7 @@ import {
 } from '../lib/genieInFlightTurn';
 import AskGenie from './ask-genie';
 import { GENIE_CONVERSATION_ID_RE, genieConversationQueryKey } from './ask-genie.deep-link';
-import { GENIE_LINK_NOT_FOUND_COPY, GENIE_LINK_UNAVAILABLE_COPY } from './ask-genie.deep-link-state';
+import { GENIE_LINK_NOT_FOUND_COPY, GENIE_LINK_UNAVAILABLE_COPY } from '../components/mortgage/GenieConversationLinkState';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

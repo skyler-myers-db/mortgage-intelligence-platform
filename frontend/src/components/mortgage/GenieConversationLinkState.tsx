@@ -1,11 +1,13 @@
-import { Icon } from '../components/Icon';
-import { Button, SurfaceTitle } from '../components/Primitives';
-import { Skeleton } from '../components/ui/Skeleton';
+import { Icon } from '../Icon';
+import { Button, SurfaceTitle } from '../Primitives';
+import { Skeleton } from '../ui/Skeleton';
 
 /**
  * The conversation deep link's non-ok states (audit 2026-09-21 `shell-03`
  * remainder; routes/ask-genie.deep-link.tsx owns the grammar and the read).
- * A lazy chunk, loaded only while `/ask-genie/:conversationId` is open.
+ * A lazy chunk, loaded only while `/ask-genie/:conversationId` is open. It
+ * lives outside src/routes/ on purpose: it is a component chunk, not a
+ * route module with a budget of its own.
  *
  * It stands in for the conversation surface, so no thread and no composer
  * ever show under an unverified id, and nothing here writes storage or starts
