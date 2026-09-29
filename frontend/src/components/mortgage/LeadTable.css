@@ -108,10 +108,19 @@
 
 /* The expanded row's approval banner (audit tables-01) sits under the
    Primary offer card, as the prototype places it (design_files/Module 0
-   Prototype.html:1981-1986). Declared departure: the prototype's `.approval`
-   is one no-wrap row; in the preview's third column (~380px with the Console
-   open) its actions wrap under the copy instead of squeezing it. */
+   Prototype.html:1981-1986). Declared departure from the prototype's
+   `.approval` (design_files/Module 0 Prototype.html:634-651), one row of
+   icon, copy and actions: the preview column that holds it is ~390px wide
+   (Console closed, three columns) to ~490px (Console open, two), and there
+   `.approval__body { flex: 1; min-width: 0 }` let the copy shrink to one
+   word per line beside the buttons (a 343px-tall banner). Here the actions
+   take a line of their own under the copy, at the end edge, and the copy
+   keeps the width beside the icon, its title on one line. */
 .tbl__expand-inner--lead .approval { flex-wrap: wrap; }
+.tbl__expand-inner--lead .approval__actions {
+  flex-basis: 100%;
+  justify-content: flex-end;
+}
 
 /* Expanded row: the workflow strip that took the row's timestamps,
    lifecycle-advance control and Log button. Pinned to the scrollport's

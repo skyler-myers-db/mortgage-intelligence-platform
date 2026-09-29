@@ -76,6 +76,39 @@ async function isTopmostAtCentre(target: Locator): Promise<boolean> {
   });
 }
 
+interface BannerLayout {
+  /** The copy column's share of the banner's width. */
+  copyShare: number;
+  /** The title's height in lines of its own line-height. */
+  titleLines: number;
+  /** The actions start below the copy column (their own line). */
+  actionsUnderCopy: boolean;
+}
+
+async function bannerLayout(gate: Locator): Promise<BannerLayout> {
+  return gate.locator('.approval').evaluate((approval) => {
+    const box = (selector: string) => approval.querySelector(selector)?.getBoundingClientRect() ?? new DOMRect();
+    const title = approval.querySelector('.approval__title');
+    const style = title ? getComputedStyle(title) : null;
+    const lineHeight = !style ? 0 : style.lineHeight === 'normal'
+      ? Number.parseFloat(style.fontSize) * 1.2
+      : Number.parseFloat(style.lineHeight);
+    const body = box('.approval__body');
+    return {
+      copyShare: body.width / approval.getBoundingClientRect().width,
+      titleLines: lineHeight > 0 ? box('.approval__title').height / lineHeight : Number.POSITIVE_INFINITY,
+      actionsUnderCopy: box('.approval__actions').top >= body.bottom - 1,
+    };
+  });
+}
+
+/**
+ * Linux Chromium sets Geist wider than macOS (segments-cards'
+ * LINUX_TEXT_EMULATION): off Linux the title is widened by about that much,
+ * so its one-line fit holds on the CI renderer too.
+ */
+const LINUX_TITLE_EMULATION = '.approval__title { letter-spacing: 0.5px; }';
+
 function registerApproveAndReceipt(mockApi: MockApi): void {
   mockApi.register<ApproveResult>('POST', '/api/outreach/approve', () => approveResult(APPROVE_AUDIT_ID));
   mockApi.register<DecisionReceipt>('GET', '/api/audit/receipt/:id', ({ params }) =>
@@ -151,6 +184,30 @@ test.describe('(a) the expanded row\'s approval banner', () => {
     await expect(approve).toBeInViewport({ ratio: 1 });
     expect(await isTopmostAtCentre(approve), 'Console open').toBe(true);
   });
+
+  // The preview's third column is ~390px (Console closed) to ~490px (Console
+  // open): the copy keeps its width beside the icon, with the title on one
+  // line, and the actions wrap under it (the declared departure in
+  // LeadTable.css), instead of the copy shrinking to a word per line.
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: the copy keeps its width and the actions wrap under it, Console closed and open`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TITLE_EMULATION });
+      await expand(page, ELIGIBLE);
+      const gate = banner(page, ELIGIBLE);
+      await expect(gate.locator('.approval')).toBeVisible();
+      for (const consoleState of ['closed', 'open'] as const) {
+        if (consoleState === 'open') await app.openConsole();
+        const measure = () => bannerLayout(gate);
+        await expect.poll(async () => (await measure()).copyShare, { message: `Console ${consoleState}: the copy keeps half the banner` })
+          .toBeGreaterThanOrEqual(0.5);
+        await expect.poll(async () => (await measure()).titleLines, { message: `Console ${consoleState}: the title fits one line` })
+          .toBeLessThanOrEqual(1.5);
+        expect((await measure()).actionsUnderCopy, `Console ${consoleState}: the actions wrap under the copy`).toBe(true);
+      }
+    });
+  }
 });
 
 interface FocusStop {

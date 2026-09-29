@@ -138,6 +138,7 @@ vi.mock('./useLeadTableFillHeight', () => ({
 }));
 
 import { LeadTable } from './LeadTable';
+import { LEAD_EXPANDED_PREVIEW_ESTIMATE_PX } from './LeadTable.constants';
 
 const IDS = ['B-RENDERCOST001', 'B-RENDERCOST002', 'B-RENDERCOST003', 'B-RENDERCOST004'];
 
@@ -269,12 +270,12 @@ describe('LeadTable render cost (runtime-04)', () => {
   it('estimates 44px comfortable and 36px compact rows, plus the expanded preview', () => {
     render(<Harness sort={null} expandedId={IDS[1]} />);
     expect(lastOptions().estimateSize(0)).toBe(44);
-    expect(lastOptions().estimateSize(1)).toBe(44 + 745);
+    expect(lastOptions().estimateSize(1)).toBe(44 + LEAD_EXPANDED_PREVIEW_ESTIMATE_PX);
 
     app.density = 'compact';
     act(() => setTick?.(1));
     expect(lastOptions().estimateSize(0)).toBe(36);
-    expect(lastOptions().estimateSize(1)).toBe(36 + 745);
+    expect(lastOptions().estimateSize(1)).toBe(36 + LEAD_EXPANDED_PREVIEW_ESTIMATE_PX);
   });
 
   it('sorts once per rows and sort: a re-render with neither changed calls sortValue again zero times', () => {

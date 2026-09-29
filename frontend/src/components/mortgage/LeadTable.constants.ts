@@ -23,14 +23,16 @@ export function leadRowEstimatePx(density: Density | null | undefined): number {
 }
 /**
  * Borrower 360 preview plus the workflow strip that took the row's timestamps
- * and actions. Re-measured 2026-09-29 at 1440x900 with the approval banner
- * under the Primary offer card (tables-01), the outcome picker and the
- * compliance-source line: 745px for a row that can still be approved (the
- * common case in a pending queue; 765px with the Console open), 514px for a
- * decided one. The estimate starts at the common case; the virtualizer
- * measures the real row as it lands.
+ * and actions. Re-measured 2026-09-29 at 1440x900, Console closed, with the
+ * approval banner under the Primary offer card (tables-01; its actions on a
+ * line under the copy), the outcome picker and the compliance-source line:
+ * 551px for a row that can still be approved (the common case in a pending
+ * queue), 514px for a decided one. With the Console open the preview is two
+ * columns and the offer column wraps under them: 927px and 765px. The
+ * estimate starts at the common case; the virtualizer measures the real row
+ * as it lands.
  */
-export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 745;
+export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 551;
 /**
  * Rows rendered past each edge of the scrollport (audit runtime-04 slice 1):
  * 5 keeps a J / K step and a wheel notch inside rendered rows at 44px, and
