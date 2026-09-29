@@ -7,14 +7,12 @@
  * Console's single-key switch off. The `?` sheet lists it.
  */
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
+import { mount } from '../../test/render';
 import { listKeyBindings } from '../../lib/keymap';
 import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
@@ -40,23 +38,18 @@ vi.mock('./IdentityMenu', () => ({ IdentityMenu: () => null }));
 import { Topbar } from './Topbar';
 
 describe('Topbar / shortcut through the keymap', () => {
-  let container: HTMLDivElement;
-  let root: Root;
+  let container: HTMLElement;
   const strays: HTMLElement[] = [];
 
-  beforeEach(() => {
+  beforeEach(async () => {
     installLocalStorage();
     clearSingleKeyShortcutsPreference();
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
-    act(() => root.render(<MemoryRouter><Topbar /></MemoryRouter>));
+    ({ container } = await mount(<MemoryRouter><Topbar /></MemoryRouter>));
   });
 
+  // mount() unmounts the Topbar and removes its container after each test.
   afterEach(() => {
     strays.splice(0).forEach((el) => el.remove());
-    act(() => root.unmount());
-    container.remove();
   });
 
   const search = () => container.querySelector<HTMLInputElement>('input[aria-label="Search borrowers"]')!;

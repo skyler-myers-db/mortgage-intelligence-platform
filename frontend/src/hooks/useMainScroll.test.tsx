@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
 import { act, useEffect, useRef, type ReactNode } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mount as mountTree, type Mounted } from '../test/render';
 import {
   MAIN_SCROLL_STORAGE_KEY,
   readStoredOffsets,
@@ -11,8 +11,6 @@ import {
   scrollStorageKey,
   useMainScroll,
 } from './useMainScroll';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * useMainScroll — rendered-DOM contract for the persistent `.main` scroller.
@@ -65,8 +63,7 @@ const rects = new Map<string, { top: number; height: number }>();
 type Entry = string | { pathname: string; key?: string; hash?: string; search?: string };
 
 describe('useMainScroll', () => {
-  let container: HTMLDivElement;
-  let root: Root;
+  let view: Mounted | null = null;
   let contentHeight: number;
 
   beforeEach(() => {
@@ -79,20 +76,19 @@ describe('useMainScroll', () => {
       const box = rects.get(this.id) ?? rects.get(this.className) ?? { top: 0, height: 0 };
       return { ...box, bottom: box.top + box.height, left: 0, right: 0, width: 0, x: 0, y: box.top } as DOMRect;
     });
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
   });
 
   afterEach(() => {
-    act(() => root.unmount());
-    container.remove();
+    // Unmount (and let the hook's cleanup run) before storage is cleared;
+    // mount()'s own afterEach runs last and would be too late for that.
+    view?.unmount();
+    view = null;
     window.sessionStorage.clear();
     vi.restoreAllMocks();
   });
 
   function main(): HTMLElement {
-    return container.querySelector('main') as HTMLElement;
+    return view?.container.querySelector('main') as HTMLElement;
   }
 
   /** Give the scroller a geometry: 800px viewport over `contentHeight` of content. */
@@ -103,22 +99,20 @@ describe('useMainScroll', () => {
   }
 
   async function mount(initialEntries: Entry[], opts: { lazyTerm?: boolean } = {}): Promise<void> {
-    await act(async () => {
-      root.render(
-        <MemoryRouter initialEntries={initialEntries}>
-          <NavigateProbe />
-          <Shell>
-            <Routes>
-              <Route path="/home" element={<div>home</div>} />
-              <Route path="/analytics" element={<div>analytics</div>} />
-              <Route path="/lead-queue" element={<div>queue</div>} />
-              <Route path="/borrower-360/:id" element={<div>borrower</div>} />
-              <Route path="/glossary" element={<GlossaryPage lazyTerm={opts.lazyTerm ?? false} />} />
-            </Routes>
-          </Shell>
-        </MemoryRouter>,
-      );
-    });
+    view = await mountTree(
+      <MemoryRouter initialEntries={initialEntries}>
+        <NavigateProbe />
+        <Shell>
+          <Routes>
+            <Route path="/home" element={<div>home</div>} />
+            <Route path="/analytics" element={<div>analytics</div>} />
+            <Route path="/lead-queue" element={<div>queue</div>} />
+            <Route path="/borrower-360/:id" element={<div>borrower</div>} />
+            <Route path="/glossary" element={<GlossaryPage lazyTerm={opts.lazyTerm ?? false} />} />
+          </Routes>
+        </Shell>
+      </MemoryRouter>,
+    );
     stubGeometry();
   }
 
@@ -377,8 +371,7 @@ describe('useMainScroll', () => {
     expect(readStoredOffsets().get('entry-1')).toBe(640);
 
     // Reload: a fresh document, same history entry key, scroller back at 0.
-    act(() => root.unmount());
-    root = createRoot(container);
+    view?.unmount();
     await mount([{ pathname: '/lead-queue', key: 'entry-1' }]);
     // The restore was pending on geometry (stubbed after mount): grow the DOM.
     await act(async () => {

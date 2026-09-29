@@ -11,13 +11,11 @@
  */
 
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { escapeLayerCount } from '../../lib/escapeStack';
+import { mount } from '../../test/render';
 import type { LeadSummary } from '../../types';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const apiMocks = vi.hoisted(() => ({ borrowerSearch: vi.fn() }));
 
@@ -53,8 +51,7 @@ function LocationProbe() {
 }
 const pathname = (): string => document.getElementById('location-probe')?.textContent ?? '';
 
-let container: HTMLDivElement;
-let root: Root;
+let container: HTMLElement;
 
 const input = (): HTMLInputElement =>
   container.querySelector<HTMLInputElement>('input[aria-label="Search borrowers"]') as HTMLInputElement;
@@ -85,27 +82,18 @@ async function typeQuery(text: string): Promise<void> {
   });
 }
 
-beforeEach(() => {
+// mount() unmounts the Topbar and removes its container after each test.
+beforeEach(async () => {
   apiMocks.borrowerSearch.mockReset();
   apiMocks.borrowerSearch.mockResolvedValue(ROWS);
-  container = document.createElement('div');
-  document.body.appendChild(container);
-  root = createRoot(container);
-  act(() =>
-    root.render(
-      <MemoryRouter>
-        <Topbar />
-        <button type="button" id="elsewhere">Elsewhere</button>
-        <LocationProbe />
-      </MemoryRouter>,
-    ),
-  );
+  ({ container } = await mount(
+    <MemoryRouter>
+      <Topbar />
+      <button type="button" id="elsewhere">Elsewhere</button>
+      <LocationProbe />
+    </MemoryRouter>,
+  ));
   act(() => input().focus());
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  container.remove();
 });
 
 describe('Topbar borrower search — keyboard', () => {

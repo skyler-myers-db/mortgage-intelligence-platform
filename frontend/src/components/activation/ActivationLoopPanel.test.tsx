@@ -4,8 +4,8 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mount, type Mounted } from '../../test/render';
 import { ActivationLoopPanel, ActivationOperationsPanel } from './ActivationLoopPanel';
 import type { ActivationDestination, ActivationOutboxItem } from '../../types';
 
@@ -73,12 +73,10 @@ async function settle(): Promise<void> {
 }
 
 describe('ActivationLoopPanel', () => {
-  let root: Root;
+  let view: Mounted | null = null;
   let queryClient: QueryClient;
 
   beforeEach(() => {
-    document.body.innerHTML = '<div id="root"></div>';
-    root = createRoot(document.getElementById('root') as HTMLElement);
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: Infinity } },
     });
@@ -96,25 +94,25 @@ describe('ActivationLoopPanel', () => {
   });
 
   afterEach(() => {
-    act(() => root.unmount());
+    // Unmount before the cache is cleared; mount()'s own afterEach runs last
+    // and removes the container.
+    view?.unmount();
+    view = null;
     queryClient.clear();
-    document.body.innerHTML = '';
     vi.clearAllMocks();
   });
 
   async function render(approvalId: string | null = APPROVAL_ID): Promise<void> {
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <ActivationLoopPanel
-            borrowerId="B-48291"
-            offerCode="refi"
-            approvalId={approvalId}
-            approved
-          />
-        </QueryClientProvider>,
-      );
-    });
+    view = await mount(
+      <QueryClientProvider client={queryClient}>
+        <ActivationLoopPanel
+          borrowerId="B-48291"
+          offerCode="refi"
+          approvalId={approvalId}
+          approved
+        />
+      </QueryClientProvider>,
+    );
     await settle();
   }
 
@@ -242,13 +240,11 @@ describe('ActivationLoopPanel', () => {
   it('marks activation operations unavailable when the registry cannot be read', async () => {
     apiMocks.activationSummary.mockRejectedValue(new Error('registry down'));
 
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <ActivationOperationsPanel />
-        </QueryClientProvider>,
-      );
-    });
+    view = await mount(
+      <QueryClientProvider client={queryClient}>
+        <ActivationOperationsPanel />
+      </QueryClientProvider>,
+    );
     await settle();
 
     expect(document.body.textContent).toContain('Activation destinations');

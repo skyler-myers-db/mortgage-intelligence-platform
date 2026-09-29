@@ -8,13 +8,11 @@
  * elapsed timer instead of red "Degraded".
  */
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HealthPayload } from '../../lib/apiTypes';
+import { mount } from '../../test/render';
 import type { ConnectionStatus } from '../connectionState';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const shell: { health: HealthPayload | null; connection: ConnectionStatus; warehouseResumingSince: number | null } = {
   health: null,
@@ -98,20 +96,15 @@ describe('systemStatusViewModel', () => {
 });
 
 describe('the rendered topbar pill', () => {
-  let container: HTMLDivElement;
-  let root: Root;
+  let container: HTMLElement;
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-24T12:00:00Z'));
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
   });
 
+  // mount() unmounts the Topbar and removes its container after each test.
   afterEach(() => {
-    act(() => root.unmount());
-    container.remove();
     shell.health = null;
     shell.connection = 'online';
     shell.warehouseResumingSince = null;
@@ -119,12 +112,14 @@ describe('the rendered topbar pill', () => {
   });
 
   const pill = () => container.querySelector<HTMLElement>('[data-testid="system-status-pill"]')!;
-  const render = () => act(() => root.render(<MemoryRouter><Topbar /></MemoryRouter>));
+  const render = async () => {
+    ({ container } = await mount(<MemoryRouter><Topbar /></MemoryRouter>));
+  };
 
-  it('shows "Waking warehouse" with an amber dot and a ticker outside the label and aria text', () => {
+  it('shows "Waking warehouse" with an amber dot and a ticker outside the label and aria text', async () => {
     shell.health = payload('resuming');
     shell.warehouseResumingSince = Date.now();
-    render();
+    await render();
 
     expect(pill().querySelector('.topbar__pill-label')?.textContent).toBe('Waking warehouse');
     // "Waking" is what shows; the rest of the label stays in the text for
@@ -143,10 +138,10 @@ describe('the rendered topbar pill', () => {
     expect(ticker?.textContent).toBe('4s');
   });
 
-  it('never reads Live behind an ended session', () => {
+  it('never reads Live behind an ended session', async () => {
     shell.health = payload('up');
     shell.connection = 'session_expired';
-    render();
+    await render();
 
     expect(pill().textContent).toBe('Session ended');
     expect(pill().querySelector('.mono')).toBeNull();

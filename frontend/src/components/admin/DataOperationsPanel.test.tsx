@@ -4,8 +4,8 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mount, type Mounted } from '../../test/render';
 import { DataOperationsPanel } from './DataOperationsPanel';
 
 const apiMocks = vi.hoisted(() => ({
@@ -92,12 +92,10 @@ async function settle(): Promise<void> {
 }
 
 describe('DataOperationsPanel', () => {
-  let root: Root;
+  let view: Mounted | null = null;
   let queryClient: QueryClient;
 
   beforeEach(() => {
-    document.body.innerHTML = '<div id="root"></div>';
-    root = createRoot(document.getElementById('root') as HTMLElement);
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: Infinity } },
     });
@@ -115,9 +113,11 @@ describe('DataOperationsPanel', () => {
   });
 
   afterEach(() => {
-    act(() => root.unmount());
+    // Unmount before the cache is cleared; mount()'s own afterEach runs last
+    // and removes the container.
+    view?.unmount();
+    view = null;
     queryClient.clear();
-    document.body.innerHTML = '';
     vi.clearAllMocks();
   });
 
@@ -125,39 +125,37 @@ describe('DataOperationsPanel', () => {
     sourcesError?: boolean;
     sourcesLoading?: boolean;
   } = {}): Promise<void> {
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <DataOperationsPanel
-            sourcesError={options.sourcesError}
-            sourcesLoading={options.sourcesLoading}
-            sources={[
-              {
-                name: 'Cotality Public Records',
-                status: 'live',
-                rows: 100,
-                last_updated: new Date().toISOString(),
-                note: 'Delta Share',
-              },
-              {
-                name: 'MLS Listings',
-                status: 'roadmap',
-                rows: null,
-                last_updated: null,
-                note: 'Pending Cotality feed',
-              },
-              {
-                name: 'Demo outcomes',
-                status: 'demo_synthetic',
-                rows: 3,
-                last_updated: null,
-                note: 'Synthetic operational state',
-              },
-            ]}
-          />
-        </QueryClientProvider>,
-      );
-    });
+    view = await mount(
+      <QueryClientProvider client={queryClient}>
+        <DataOperationsPanel
+          sourcesError={options.sourcesError}
+          sourcesLoading={options.sourcesLoading}
+          sources={[
+            {
+              name: 'Cotality Public Records',
+              status: 'live',
+              rows: 100,
+              last_updated: new Date().toISOString(),
+              note: 'Delta Share',
+            },
+            {
+              name: 'MLS Listings',
+              status: 'roadmap',
+              rows: null,
+              last_updated: null,
+              note: 'Pending Cotality feed',
+            },
+            {
+              name: 'Demo outcomes',
+              status: 'demo_synthetic',
+              rows: 3,
+              last_updated: null,
+              note: 'Synthetic operational state',
+            },
+          ]}
+        />
+      </QueryClientProvider>,
+    );
     await settle();
   }
 

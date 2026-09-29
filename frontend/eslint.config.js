@@ -265,6 +265,12 @@ export default [
               message:
                 "Production code must not import from src/mocks — those fixtures are test-only. See CLAUDE.md 'Negative prompting': no mock fallback in the running app.",
             },
+            // Test helpers (mount(), installLocalStorage, the CSS readers)
+            // are test-only too (audit quality-06).
+            {
+              group: ["**/test/*"],
+              message: "Production code must not import from src/test: those helpers are test-only.",
+            },
           ],
         },
       ],
