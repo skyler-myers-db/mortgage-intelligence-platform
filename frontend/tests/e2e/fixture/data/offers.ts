@@ -22,16 +22,6 @@ function requestedBorrowerId(request: FixtureRequest): string {
   return typeof body?.borrower_id === 'string' ? body.borrower_id : PRIMARY_BORROWER.borrower_id;
 }
 
-/**
- * The offer contract's governed evidence id (`^ev-[0-9a-f]{3,61}$`,
- * backend/schemas/offer.py) for one of the borrower's fixture evidence ids
- * (`ev-001-a` -> `ev-001a`). Only the offer validates the shape, and nothing
- * renders these ids, so the borrower fixtures keep theirs.
- */
-function governedEvidenceId(evidenceId: string): string {
-  return evidenceId.replace(/^ev-(\d+)-([a-f])$/, 'ev-$1$2');
-}
-
 function requestedChannel(request: FixtureRequest): OutreachDraftResult['channel'] {
   const channel = (request.body as { channel?: unknown } | null)?.channel;
   return channel === 'sms' || channel === 'direct_mail' ? channel : 'email';
@@ -49,7 +39,7 @@ export const offerFixtures: FixtureEntry[] = [
       // An integer percentage on the wire (OfferRecommendation.confidence: int 0-100).
       confidence: 88,
       rationale: `Lien rate is ${borrower.rate_spread_bps} bps above par with ${borrower.why_panel.equity_pct}% equity.`,
-      evidence_ids: borrower.evidence_ids.map(governedEvidenceId),
+      evidence_ids: borrower.evidence_ids,
       sources: ['mip.gold.fn_next_best_offer', 'mip.gold.fn_in_the_money'],
       source_labels: [
         { name: 'mip.gold.fn_next_best_offer', display_label: 'Primary offer rules' },
