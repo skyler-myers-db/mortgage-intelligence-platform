@@ -118,7 +118,7 @@ export function RowPreview({
           className="tbl__expand-inner tbl__expand-inner--receipt"
           tabIndex={-1}
         >
-          {DecisionReceipt && (
+          {DecisionReceipt ? (
             <DecisionReceipt
               auditEventId={decisionReceipt.auditEventId}
               decision={decisionReceipt.decision}
@@ -129,6 +129,12 @@ export function RowPreview({
               headingLevel={3}
               score={{ opportunityScore: lead.opportunity_score, confidence: lead.confidence }}
             />
+          ) : receiptChunk.failed && (
+            // "View receipt" lands focus here: a chunk that failed to load
+            // says so instead of leaving an empty focus target (w3 #11f).
+            <p className="muted fs-12 flush" data-testid={`lead-receipt-failed-${lead.borrower_id}`}>
+              Receipt could not load; reload the page.
+            </p>
           )}
         </div>
       )}
