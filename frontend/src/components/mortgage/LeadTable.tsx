@@ -225,9 +225,10 @@ export function LeadTable({
   // rendered. Requested by useLeadTableScroll's fresh-entry seam (never on
   // REPLACE, never on a POP that restores a saved offset) and run below,
   // once the named row is among the rows on screen. Scroll only; no read.
-  const revealPendingRef = useRef(false);
+  // undefined: requested, not yet bound to the entry's `?row=`; null: none.
+  const revealRef = useRef<string | null | undefined>(null);
   const requestReveal = useCallback(() => {
-    revealPendingRef.current = true;
+    revealRef.current = undefined;
   }, []);
   useLeadTableScroll({
     enabled: restoreScroll,
@@ -294,15 +295,23 @@ export function LeadTable({
   const { review } = flow;
   const openReview = review.review;
   // The fresh-entry reveal (requested above), once the named row is loaded.
+  const urlRow = searchParams.get('row');
   useEffect(() => {
-    if (!revealPendingRef.current) return;
-    if (!expanded) {
-      revealPendingRef.current = false;
+    if (revealRef.current === null) return;
+    // Bound to the row this entry names; the URL moving on (an expand, Back)
+    // drops it, and a placeholder page (the row not settled yet) waits.
+    if (revealRef.current === undefined) revealRef.current = urlRow;
+    const target = revealRef.current;
+    if (target === null || urlRow !== target) {
+      revealRef.current = null;
       return;
     }
-    if (!rowIds.includes(expanded)) return;
-    revealPendingRef.current = false;
-    flow.cursor.revealRow(expanded);
+    if (expanded !== target || !rowIds.includes(target)) return;
+    revealRef.current = null;
+    // A frame later: on a first mount the virtualizer attaches to the
+    // shell's scroller in LeadTableBody's layout re-render, after this effect.
+    const { revealRow } = flow.cursor;
+    requestAnimationFrame(() => revealRow(target));
   });
   // Load the review chunk once the reader engages with rows (the draft is
   // requested only on Approve); the bulk review chunk once rows are selected.
