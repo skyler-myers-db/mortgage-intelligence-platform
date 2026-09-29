@@ -169,16 +169,9 @@ export interface KnownSurfaceOverflow {
  * it in the same change. Recorded from the first full scan (wave 2).
  */
 export const KNOWN_SURFACE_OVERFLOW: Readonly<Record<string, KnownSurfaceOverflow>> = {
-  // stack-06 (hand-rolled chart maths, no edge padding for axis labels): the
-  // last x tick of "Evidence Events Per Day" is centred on the chart's right
-  // edge (translateX(-50%)) and ends ~1.4px past the surface's padding box
-  // (scrollWidth 1319 > clientWidth 1318 at 1440x900).
-  'analytics-signals|default': {
-    finding: 'stack-06',
-    recorded: '2026-09-24',
-    themes: ['dark', 'light'],
-    nodes: 'section.surface:has(.analytics-chart__tick--x)',
-  },
+  // Empty. The last entry, 'analytics-signals|default' (stack-06: the last
+  // Evidence Events Per Day date label centred on the plot's right edge),
+  // retired with the edge-anchored x ticks (wave 4b, w4-charts).
 };
 
 /** Every state a spec passes to expectNoSurfaceOverflow (visual.fixture.spec.ts, smoke). */

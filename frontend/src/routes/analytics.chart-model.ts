@@ -10,6 +10,7 @@
 import { binIsPast, type HistogramBin } from '../components/charts/Histogram';
 import { formatCount, formatPercent } from '../lib/formatters';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../lib/opportunityScore';
+import { formatDate } from '../lib/time';
 import type { AnalyticsThresholds } from '../types/economicsScatter';
 
 /**
@@ -100,4 +101,25 @@ export function spreadSummary(model: HistogramModel, thresholds: Pick<AnalyticsT
   if (t === null) return `${base} ${thresholdNotice(thresholds)}`;
   if (t % SPREAD_BUCKET_BPS !== 0 || model.past === null) return base;
   return `${base} ${formatCount(model.past)} (${share(model.past, model.total)}) sit at or past the ${formatCount(t)} bps refi screen.`;
+}
+
+/** A full calendar date, "May 2, 2026": the summary and the table name the year the short axis labels drop. */
+export const evidenceDate = (date: string): string => formatDate(date, { withYear: true });
+
+/**
+ * Evidence per day: the total, the span and the busiest day (the first on a
+ * tie), all from the rows the chart plots. Null for no rows.
+ */
+export function evidenceSummary(rows: ReadonlyArray<{ event_date: string; event_count: number }>): string | null {
+  if (rows.length === 0) return null;
+  let total = 0;
+  let peak = rows[0];
+  for (const row of rows) {
+    total += row.event_count;
+    if (row.event_count > peak.event_count) peak = row;
+  }
+  const first = evidenceDate(rows[0].event_date);
+  if (rows.length === 1) return `${formatCount(total)} evidence events on ${first}.`;
+  const last = evidenceDate(rows[rows.length - 1].event_date);
+  return `${formatCount(total)} evidence events from ${first} to ${last}; the busiest day was ${evidenceDate(peak.event_date)} with ${formatCount(peak.event_count)}.`;
 }

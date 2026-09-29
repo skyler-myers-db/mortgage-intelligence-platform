@@ -8,6 +8,7 @@ import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../lib/opportunityScore';
 import {
   SCORE_BUCKET_WIDTH,
   SPREAD_BUCKET_BPS,
+  evidenceSummary,
   formatBinRange,
   histogramModel,
   scoreSummary,
@@ -84,5 +85,22 @@ describe('summaries', () => {
     expect(disagreeing).toContain('No single refi-screen threshold applies to this refresh.');
     expect(disagreeing).not.toContain('not built');
     expect(thresholdNotice({ min_spread_bps: 75, reason: null })).toBeNull();
+  });
+});
+
+describe('evidenceSummary', () => {
+  it('states the total, the span and the first busiest day from the plotted rows', () => {
+    const rows = [
+      { event_date: '2026-05-01', event_count: 40 },
+      { event_date: '2026-05-02', event_count: 1_250 },
+      { event_date: '2026-05-03', event_count: 1_250 },
+      { event_date: '2026-05-05', event_count: 300 },
+    ];
+    expect(evidenceSummary(rows)).toBe('2,840 evidence events from May 1, 2026 to May 5, 2026; the busiest day was May 2, 2026 with 1,250.');
+  });
+
+  it('reads one day as one date, and no rows as nothing to say', () => {
+    expect(evidenceSummary([{ event_date: '2026-05-03', event_count: 12 }])).toBe('12 evidence events on May 3, 2026.');
+    expect(evidenceSummary([])).toBeNull();
   });
 });

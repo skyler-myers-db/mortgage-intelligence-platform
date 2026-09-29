@@ -21,6 +21,7 @@ import {
 import { TOTALS } from './data/reference';
 import { json } from './mockApi';
 import { expect, test } from './test';
+import { expectNoSurfaceOverflow } from './visual';
 
 /** The chart's plot, by the section title that names it. */
 function plotNamed(page: Page, title: string): Locator {
@@ -44,10 +45,32 @@ async function tickCentre(figure: Locator, label: string): Promise<number> {
 }
 
 const CHART_TABS = [
-  { name: 'executive', path: '/analytics' },
-  { name: 'economics', path: '/analytics?view=economics' },
-  { name: 'signals', path: '/analytics?view=signals' },
+  { name: 'executive', route: 'analytics-executive', path: '/analytics' },
+  { name: 'economics', route: 'analytics-economics', path: '/analytics?view=economics' },
+  { name: 'signals', route: 'analytics-signals', path: '/analytics?view=signals' },
 ] as const;
+
+/**
+ * Linux Chromium draws Geist Mono ~6% wider than macOS (the segments-cards
+ * LINUX_TEXT_EMULATION pattern): off Linux the tick labels are widened past
+ * that, so a label that only fits at macOS widths fails here too.
+ */
+const LINUX_TEXT_EMULATION = '.analytics-chart__tick { letter-spacing: 0.5px; }';
+
+/** Tick labels whose box leaves their `.analytics-chart__plot` box (0.5px subpixel tolerance). */
+async function ticksOutsidePlot(page: Page): Promise<string[]> {
+  return page.locator('#main-content').evaluate((main) =>
+    [...main.querySelectorAll('.analytics-chart__plot')].flatMap((plot) => {
+      const box = plot.getBoundingClientRect();
+      const heading = plot.closest('section')?.querySelector('h2')?.textContent?.trim() ?? 'plot';
+      return [...plot.querySelectorAll('.analytics-chart__tick')].flatMap((tick) => {
+        const r = tick.getBoundingClientRect();
+        if (r.left >= box.left - 0.5 && r.right <= box.right + 0.5) return [];
+        return [`${heading} "${tick.textContent}" spans [${r.left.toFixed(1)}, ${r.right.toFixed(1)}] outside [${box.left.toFixed(1)}, ${box.right.toFixed(1)}]`];
+      });
+    }),
+  );
+}
 
 interface AxisReading {
   chart: string;
@@ -98,17 +121,73 @@ function oneTwoFiveProblems(reading: AxisReading): string[] {
 }
 
 test.describe('analytics charts: 1-2-5 axes', () => {
-  for (const tab of CHART_TABS) {
-    test(`${tab.name}: every numeric axis label is a 1-2-5 multiple`, async ({ app, page }) => {
-      await app.setTheme('dark');
-      await app.gotoRoute(tab.path);
-      await expect(page.locator('#main-content .analytics-chart__plot').first()).toBeVisible();
-      const readings = await axisReadings(page);
-      const numeric = readings.filter((reading) => reading.labels.some((label) => numericLabel(label) !== null));
-      expect(numeric.length, `${tab.name} draws numeric axes`).toBeGreaterThan(0);
-      expect(numeric.flatMap(oneTwoFiveProblems)).toEqual([]);
-    });
+  for (const theme of ['dark', 'light'] as const) {
+    for (const tab of CHART_TABS) {
+      test(`${tab.name} (${theme}): every numeric axis label is a 1-2-5 multiple inside its plot, and no surface overflows`, async ({ app, page }) => {
+        await app.setTheme(theme);
+        await app.gotoRoute(tab.path);
+        await expect(page.locator('#main-content .analytics-chart__plot').first()).toBeVisible();
+        if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TEXT_EMULATION });
+        const readings = await axisReadings(page);
+        const numeric = readings.filter((reading) => reading.labels.some((label) => numericLabel(label) !== null));
+        expect(numeric.length, `${tab.name} draws numeric axes`).toBeGreaterThan(0);
+        expect(numeric.flatMap(oneTwoFiveProblems)).toEqual([]);
+        // Every label, the date axis included: the last date ends at the
+        // plot's right edge instead of centring on it (stack-06).
+        expect(await ticksOutsidePlot(page)).toEqual([]);
+        await expectNoSurfaceOverflow(page, { route: tab.route, state: 'default', theme });
+      });
+    }
   }
+});
+
+test.describe('analytics charts: evidence per day', () => {
+  /** The fixture's seven days, summed across signals as buildDailyEvidenceTotals does. */
+  const DAYS = ['Jul 8', 'Jul 9', 'Jul 10', 'Jul 11', 'Jul 12', 'Jul 13', 'Jul 14'];
+  const dayTotal = (index: number) => 1840 + index * 120 + 1260 + index * 80 + 640 + index * 30;
+
+  test('signals: each date sits at its day offset, the first and last labels edge-anchored', async ({ app, page }) => {
+    await app.gotoRoute('/analytics?view=signals');
+    const figure = figureOf(page, 'Evidence Events Per Day');
+    const ticks = figure.locator('.analytics-chart__tick--x');
+    // categoricalTickIndexes(7) labels every other day, 0, 2, 4 and 6.
+    const labelled = [0, 2, 4, 6];
+    await expect(ticks).toHaveText(labelled.map((index) => DAYS[index]));
+    const positions = await ticks.evaluateAll((spans) => spans.map((span) => (span as HTMLElement).style.getPropertyValue('--tick-pos')));
+    expect(positions.map((pos) => Number.parseFloat(pos).toFixed(2))).toEqual(labelled.map((index) => ((index / 6) * 100).toFixed(2)));
+    await expect(ticks.first()).toHaveClass(/analytics-chart__tick--edge-start/);
+    await expect(ticks.last()).toHaveClass(/analytics-chart__tick--edge-end/);
+    const plot = await figure.locator('.analytics-chart__plot').boundingBox();
+    const last = await ticks.last().boundingBox();
+    if (!plot || !last) throw new Error('evidence chart not painted');
+    expect(last.x + last.width).toBeLessThanOrEqual(plot.x + plot.width + 0.5);
+  });
+
+  test('signals: Tab reaches the plot, the tip shows on focus, the arrows announce each day', async ({ app, page }) => {
+    await app.gotoRoute('/analytics?view=signals');
+    const figure = figureOf(page, 'Evidence Events Per Day');
+    const plot = plotNamed(page, 'Evidence Events Per Day');
+    await figure.getByRole('button', { name: 'View as table' }).focus();
+    await page.keyboard.press('Tab');
+    await expect(plot).toBeFocused();
+    await expect(figure.locator('.analytics-chart__tip')).toBeVisible();
+    await expect(figure.locator('.analytics-chart__tip-x')).toHaveText(DAYS[0]);
+    const live = figure.locator('[aria-live="polite"]');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await expect(live).toHaveText(`${DAYS[2]}: ${count(dayTotal(2))} events`);
+    await page.keyboard.press('End');
+    await expect(live).toHaveText(`${DAYS[6]}: ${count(dayTotal(6))} events`);
+    await expect(figure.locator('figcaption')).toContainText(`the busiest day was Jul 14, 2026 with ${count(dayTotal(6))}`);
+  });
+
+  test('signals: View as table lists the plotted days', async ({ app, page }) => {
+    await app.gotoRoute('/analytics?view=signals');
+    const figure = figureOf(page, 'Evidence Events Per Day');
+    await figure.locator('button.chart-frame__toggle').click();
+    const cells = await figure.locator('table.analytics-table tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent?.trim())));
+    expect(cells).toEqual(DAYS.map((day, index) => [`${day}, 2026`, count(dayTotal(index))]));
+  });
 });
 
 test.describe('analytics charts: governed histograms', () => {
