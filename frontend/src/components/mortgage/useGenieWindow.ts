@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -174,6 +173,7 @@ function saveGeniePosition(position: GeniePosition | null): void {
   }
 }
 
+
 interface UseGenieWindowOptions {
   open: boolean;
   /** The panel element: a gesture moves it directly, outside React. */
@@ -182,9 +182,17 @@ interface UseGenieWindowOptions {
   consoleOpen?: boolean;
 }
 
+/** The hook's latest render values, read by the gesture handlers. */
+interface GenieWindowLatest {
+  size: GenieSize;
+  effectiveSize: GenieSize;
+  position: GeniePosition | null;
+  rightInset: number;
+  consoleOpen: boolean;
+}
+
 /** One pointer gesture on the panel: where it started and where it is now. */
 interface GenieGesture {
-  kind: 'drag' | 'resize';
   handle: ResizeHandle | null;
   pointerX: number;
   pointerY: number;
@@ -203,6 +211,18 @@ interface GenieGesture {
   h: number;
 }
 
+/** The gesture in progress and its pending animation frame. */
+interface GestureRuntime {
+  gesture: GenieGesture | null;
+  frame: number | null;
+}
+
+/** What a finished gesture commits: once, to state and to storage. */
+interface GestureCommit {
+  size: GenieSize;
+  position: GeniePosition | null;
+}
+
 /**
  * One frame of a gesture, written straight onto the panel. The offset uses
  * the CSS `translate` property: it composes with the open/close `transform`
@@ -211,7 +231,7 @@ interface GenieGesture {
  * visibility, aria-hidden or the docked `right` offset.
  */
 function applyGestureFrame(panel: HTMLElement, gesture: GenieGesture): void {
-  if (gesture.kind === 'resize') {
+  if (gesture.handle) {
     panel.style.width = `${gesture.w}px`;
     panel.style.height = `${gesture.h}px`;
     panel.style.maxHeight = `${gesture.h}px`;
@@ -222,14 +242,148 @@ function applyGestureFrame(panel: HTMLElement, gesture: GenieGesture): void {
   else panel.style.setProperty('translate', `${dx}px ${dy}px`);
 }
 
-function releasePointer(event: PointerEvent<HTMLElement>): void {
+/** At most one frame per batch of pointermoves. */
+function scheduleGestureFrame(runtime: GestureRuntime, panelRef: RefObject<HTMLElement | null>): void {
+  if (runtime.frame !== null) return;
+  runtime.frame = requestAnimationFrame(() => {
+    runtime.frame = null;
+    const panel = panelRef.current;
+    if (panel && runtime.gesture) applyGestureFrame(panel, runtime.gesture);
+  });
+}
+
+function cancelGestureFrame(runtime: GestureRuntime): void {
+  if (runtime.frame === null) return;
+  cancelAnimationFrame(runtime.frame);
+  runtime.frame = null;
+}
+
+function beginGesture(
+  event: PointerEvent<HTMLElement>,
+  runtime: GestureRuntime,
+  latest: GenieWindowLatest,
+  handle: ResizeHandle | null,
+  start: GeniePosition,
+): void {
+  event.preventDefault();
+  event.currentTarget.setPointerCapture(event.pointerId);
+  const { w, h } = latest.effectiveSize;
+  runtime.gesture = {
+    handle,
+    pointerX: event.clientX,
+    pointerY: event.clientY,
+    startX: start.x,
+    startY: start.y,
+    startW: w,
+    startH: h,
+    undocked: latest.position !== null,
+    didMove: false,
+    x: start.x,
+    y: start.y,
+    w,
+    h,
+  };
+}
+
+/** A header drag starts from the panel's rendered box: a docked panel sits left of an open Console. */
+function beginDrag(event: PointerEvent<HTMLElement>, panel: HTMLElement | null, runtime: GestureRuntime, latest: GenieWindowLatest): void {
+  if (event.target !== event.currentTarget || !panel) return;
+  const box = panel.getBoundingClientRect();
+  beginGesture(event, runtime, latest, null, { x: box.left, y: box.top });
+}
+
+function beginResize(event: PointerEvent<HTMLElement>, handle: ResizeHandle, runtime: GestureRuntime, latest: GenieWindowLatest): void {
+  event.stopPropagation();
+  beginGesture(event, runtime, latest, handle, latest.position ?? { x: 0, y: 0 });
+}
+
+/** Store the pointer's clamped target and schedule its frame; never React state. */
+function moveGesture(
+  event: PointerEvent<HTMLElement>,
+  runtime: GestureRuntime,
+  latest: GenieWindowLatest,
+  panelRef: RefObject<HTMLElement | null>,
+): void {
+  const gesture = runtime.gesture;
+  if (!gesture) return;
+  const dx = event.clientX - gesture.pointerX;
+  const dy = event.clientY - gesture.pointerY;
+  let target: GeniePosition = { x: gesture.startX + dx, y: gesture.startY + dy };
+  if (gesture.handle) {
+    const signature = RESIZE_MATRIX[gesture.handle];
+    gesture.w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, gesture.startW + signature.wSign * dx));
+    gesture.h = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, gesture.startH + signature.hSign * dy));
+    target = {
+      x: gesture.startX - signature.xSign * (gesture.w - gesture.startW),
+      y: gesture.startY - signature.ySign * (gesture.h - gesture.startH),
+    };
+  } else if (Math.abs(dx) < 3 && Math.abs(dy) < 3 && !gesture.didMove) {
+    return;
+  }
+  gesture.didMove = true;
+  if (!gesture.handle || gesture.undocked) {
+    const clamped = clampGeniePosition(target, gesture.w, gesture.h, currentViewport(), latest.rightInset);
+    gesture.x = clamped.x;
+    gesture.y = clamped.y;
+  }
+  scheduleGestureFrame(runtime, panelRef);
+}
+
+/**
+ * pointerup / pointercancel: cancel the pending frame and write the last one
+ * now, so the DOM already shows what React commits next. Returns the commit,
+ * or null for a press that never moved.
+ */
+function endGesture(
+  event: PointerEvent<HTMLElement>,
+  runtime: GestureRuntime,
+  latest: GenieWindowLatest,
+  panel: HTMLElement | null,
+): GestureCommit | null {
+  const gesture = runtime.gesture;
+  if (!gesture) return null;
+  runtime.gesture = null;
   if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
     event.currentTarget.releasePointerCapture(event.pointerId);
   }
+  cancelGestureFrame(runtime);
+  if (!gesture.didMove) {
+    panel?.style.removeProperty('translate');
+    return null;
+  }
+  if (panel) applyGestureFrame(panel, gesture);
+  if (!gesture.handle) {
+    return {
+      size: latest.size,
+      position: snapGeniePosition({ x: gesture.x, y: gesture.y }, gesture.w, gesture.h, currentViewport(), latest.rightInset),
+    };
+  }
+  return { size: { w: gesture.w, h: gesture.h }, position: gesture.undocked ? { x: gesture.x, y: gesture.y } : null };
+}
+
+/** Arrow keys on the resize button: the next size, or null for another key. */
+function keyboardResize(event: KeyboardEvent<HTMLButtonElement>, size: GenieSize): GenieSize | null {
+  const step = event.shiftKey ? 96 : 24;
+  let widthDelta = 0;
+  let heightDelta = 0;
+  if (event.key === 'ArrowLeft') widthDelta = step;
+  else if (event.key === 'ArrowRight') widthDelta = -step;
+  else if (event.key === 'ArrowUp') heightDelta = step;
+  else if (event.key === 'ArrowDown') heightDelta = -step;
+  else return null;
+  event.preventDefault();
+  return {
+    w: Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, size.w + widthDelta)),
+    h: Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, size.h + heightDelta)),
+  };
 }
 
 function samePosition(a: GeniePosition, b: GeniePosition): boolean {
   return a.x === b.x && a.y === b.y;
+}
+
+function initialViewport(): GenieSize {
+  return currentViewport() ?? { w: DEFAULT_SIZE.w + VIEWPORT_GUTTER * 2, h: DEFAULT_SIZE.h + VIEWPORT_GUTTER * 2 };
 }
 
 /**
@@ -237,14 +391,15 @@ function samePosition(a: GeniePosition, b: GeniePosition): boolean {
  * runtime-v1, responsive-v1 item 2, runtime-03).
  *
  * A drag or a resize never re-renders the chat while the pointer moves: each
- * pointermove stores its clamped target in a ref and schedules at most one
+ * pointermove stores its clamped target and schedules at most one
  * requestAnimationFrame, which writes the panel's offset (drag) or its size
  * (resize) directly. The gesture is committed to React state and
  * localStorage ONCE, on pointerup / pointercancel, after its last frame is
  * written synchronously; a layout effect after that commit drops the offset,
  * so no frame shows both the offset and the new left / top, or neither.
- * Keyboard resize stays on state. A drag starts from the panel's rendered
- * box, so undocking with the Console open does not jump.
+ * Keyboard resize stays on state. The gesture logic is module-level and the
+ * handlers read the latest render through a ref, so the compiled hook stays
+ * small and its handlers never change identity.
  *
  * While the Console is open as a right-edge card the panel keeps clear of it
  * (`genieRightInset`): drags are clamped and snapped to the Console's left
@@ -252,33 +407,29 @@ function samePosition(a: GeniePosition, b: GeniePosition): boolean {
  * position the user chose is kept.
  */
 export function useGenieWindow({ open, panelRef, consoleOpen = false }: UseGenieWindowOptions) {
-  const [size, setSize] = useState<GenieSize>(() => loadGenieSize());
-  const [viewport, setViewport] = useState<GenieSize>(() => ({
-    w: typeof window === 'undefined'
-      ? DEFAULT_SIZE.w + VIEWPORT_GUTTER * 2
-      : window.innerWidth,
-    h: typeof window === 'undefined'
-      ? DEFAULT_SIZE.h + VIEWPORT_GUTTER * 2
-      : window.innerHeight,
-  }));
+  const [size, setSize] = useState<GenieSize>(loadGenieSize);
+  const [viewport, setViewport] = useState<GenieSize>(initialViewport);
   const effectiveSize = fitGenieSizeToViewport(size, viewport);
   const rightInset = genieRightInset(consoleOpen, viewport);
   const [position, setPosition] = useState<GeniePosition | null>(() => {
     const restored = loadGeniePosition();
-    return restored
-      ? clampGeniePosition(restored, effectiveSize.w, effectiveSize.h, viewport, rightInset)
-      : null;
+    return restored ? clampGeniePosition(restored, effectiveSize.w, effectiveSize.h, viewport, rightInset) : null;
   });
-  const gestureRef = useRef<GenieGesture | null>(null);
-  const frameRef = useRef<number | null>(null);
   /** Bumped by each committed gesture: its layout effect drops the offset. */
   const [committedGestures, setCommittedGestures] = useState(0);
+  const runtimeRef = useRef<GestureRuntime>({ gesture: null, frame: null });
+  const latestRef = useRef<GenieWindowLatest>({ size, effectiveSize, position, rightInset, consoleOpen });
+
+  useLayoutEffect(() => {
+    latestRef.current = { size, effectiveSize, position, rightInset, consoleOpen };
+  });
 
   useEffect(() => {
     function onResize() {
+      const { size: preferred, consoleOpen: open } = latestRef.current;
       const nextViewport = { w: window.innerWidth, h: window.innerHeight };
-      const nextSize = fitGenieSizeToViewport(size, nextViewport);
-      const nextInset = genieRightInset(consoleOpen, nextViewport);
+      const nextSize = fitGenieSizeToViewport(preferred, nextViewport);
+      const nextInset = genieRightInset(open, nextViewport);
       setViewport(nextViewport);
       setPosition((current) => (
         current ? clampGeniePosition(current, nextSize.w, nextSize.h, nextViewport, nextInset) : current
@@ -286,7 +437,7 @@ export function useGenieWindow({ open, panelRef, consoleOpen = false }: UseGenie
     }
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [consoleOpen, size]);
+  }, []);
 
   // Opening the panel, a new size, or the Console opening re-clamps an
   // undocked panel; nothing else moves a position the user chose.
@@ -300,201 +451,45 @@ export function useGenieWindow({ open, panelRef, consoleOpen = false }: UseGenie
   // After a gesture's commit the panel's left / top / size are React's
   // again: drop the gesture's offset before the browser paints.
   useLayoutEffect(() => {
-    if (committedGestures === 0) return;
-    panelRef.current?.style.removeProperty('translate');
+    if (committedGestures > 0) panelRef.current?.style.removeProperty('translate');
   }, [committedGestures, panelRef]);
 
-  useEffect(() => () => {
-    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    return () => cancelGestureFrame(runtime);
   }, []);
 
-  const scheduleFrame = useCallback(() => {
-    if (frameRef.current !== null) return;
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null;
-      const panel = panelRef.current;
-      const gesture = gestureRef.current;
-      if (panel && gesture) applyGestureFrame(panel, gesture);
-    });
-  }, [panelRef]);
-
-  const finishGesture = useCallback(
-    (event: PointerEvent<HTMLElement>) => {
-      const gesture = gestureRef.current;
-      if (!gesture) return;
-      gestureRef.current = null;
-      releasePointer(event);
-      if (frameRef.current !== null) {
-        cancelAnimationFrame(frameRef.current);
-        frameRef.current = null;
-      }
-      const panel = panelRef.current;
-      if (!gesture.didMove) {
-        panel?.style.removeProperty('translate');
-        return;
-      }
-      // The last frame, now: the DOM already shows what React commits next.
-      if (panel) applyGestureFrame(panel, gesture);
-      const nextSize = gesture.kind === 'resize' ? { w: gesture.w, h: gesture.h } : size;
-      const nextPosition = gesture.kind === 'drag'
-        ? snapGeniePosition({ x: gesture.x, y: gesture.y }, gesture.w, gesture.h, currentViewport(), rightInset)
-        : gesture.undocked
-          ? { x: gesture.x, y: gesture.y }
-          : null;
-      setSize(nextSize);
-      setPosition(nextPosition);
-      setCommittedGestures((count) => count + 1);
-      saveGenieSize(nextSize);
-      saveGeniePosition(nextPosition);
-    },
-    [panelRef, rightInset, size],
-  );
-
-  const onDragPointerDown = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
-      if (event.target !== event.currentTarget) return;
-      const panel = panelRef.current;
-      if (!panel) return;
-      event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      // The rendered box: a docked panel sits left of an open Console.
-      const box = panel.getBoundingClientRect();
-      gestureRef.current = {
-        kind: 'drag',
-        handle: null,
-        pointerX: event.clientX,
-        pointerY: event.clientY,
-        startX: box.left,
-        startY: box.top,
-        startW: effectiveSize.w,
-        startH: effectiveSize.h,
-        undocked: position !== null,
-        didMove: false,
-        x: box.left,
-        y: box.top,
-        w: effectiveSize.w,
-        h: effectiveSize.h,
-      };
-    },
-    [effectiveSize.h, effectiveSize.w, panelRef, position],
-  );
-
-  const onDragPointerMove = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
-      const gesture = gestureRef.current;
-      if (!gesture || gesture.kind !== 'drag') return;
-      const dx = event.clientX - gesture.pointerX;
-      const dy = event.clientY - gesture.pointerY;
-      if (Math.abs(dx) < 3 && Math.abs(dy) < 3 && !gesture.didMove) return;
-      gesture.didMove = true;
-      const target = clampGeniePosition(
-        { x: gesture.startX + dx, y: gesture.startY + dy },
-        gesture.w,
-        gesture.h,
-        currentViewport(),
-        rightInset,
-      );
-      gesture.x = target.x;
-      gesture.y = target.y;
-      scheduleFrame();
-    },
-    [rightInset, scheduleFrame],
-  );
-
-  const redock = useCallback(() => {
-    setPosition(null);
-    saveGeniePosition(null);
-  }, []);
-
-  const beginResize = useCallback(
-    (handle: ResizeHandle) => (event: PointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      const startX = position?.x ?? 0;
-      const startY = position?.y ?? 0;
-      gestureRef.current = {
-        kind: 'resize',
-        handle,
-        pointerX: event.clientX,
-        pointerY: event.clientY,
-        startX,
-        startY,
-        startW: effectiveSize.w,
-        startH: effectiveSize.h,
-        undocked: position !== null,
-        didMove: false,
-        x: startX,
-        y: startY,
-        w: effectiveSize.w,
-        h: effectiveSize.h,
-      };
-    },
-    [effectiveSize.h, effectiveSize.w, position],
-  );
-
-  const moveResize = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
-      const gesture = gestureRef.current;
-      if (!gesture || gesture.kind !== 'resize' || !gesture.handle) return;
-      const signature = RESIZE_MATRIX[gesture.handle];
-      const dx = event.clientX - gesture.pointerX;
-      const dy = event.clientY - gesture.pointerY;
-      const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, gesture.startW + signature.wSign * dx));
-      const height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, gesture.startH + signature.hSign * dy));
-      gesture.didMove = true;
-      gesture.w = width;
-      gesture.h = height;
-      if (gesture.undocked) {
-        const target = clampGeniePosition(
-          {
-            x: gesture.startX - signature.xSign * (width - gesture.startW),
-            y: gesture.startY - signature.ySign * (height - gesture.startH),
-          },
-          width,
-          height,
-          currentViewport(),
-          rightInset,
-        );
-        gesture.x = target.x;
-        gesture.y = target.y;
-      }
-      scheduleFrame();
-    },
-    [rightInset, scheduleFrame],
-  );
-
-  const onResizeKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>) => {
-      const step = event.shiftKey ? 96 : 24;
-      let widthDelta = 0;
-      let heightDelta = 0;
-      if (event.key === 'ArrowLeft') widthDelta = step;
-      else if (event.key === 'ArrowRight') widthDelta = -step;
-      else if (event.key === 'ArrowUp') heightDelta = step;
-      else if (event.key === 'ArrowDown') heightDelta = -step;
-      else return;
-      event.preventDefault();
-      const next = {
-        w: Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, size.w + widthDelta)),
-        h: Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, size.h + heightDelta)),
-      };
-      setSize(next);
-      saveGenieSize(next);
-    },
-    [size],
-  );
+  const finish = (event: PointerEvent<HTMLElement>) => {
+    const next = endGesture(event, runtimeRef.current, latestRef.current, panelRef.current);
+    if (!next) return;
+    setSize(next.size);
+    setPosition(next.position);
+    setCommittedGestures((count) => count + 1);
+    saveGenieSize(next.size);
+    saveGeniePosition(next.position);
+  };
 
   return {
     effectiveSize,
     position,
-    beginResize,
-    moveResize,
-    endResize: finishGesture,
-    onResizeKeyDown,
-    onDragPointerDown,
-    onDragPointerMove,
-    onDragPointerUp: finishGesture,
-    redock,
+    beginResize: (handle: ResizeHandle) => (event: PointerEvent<HTMLDivElement>) =>
+      beginResize(event, handle, runtimeRef.current, latestRef.current),
+    moveResize: (event: PointerEvent<HTMLDivElement>) => moveGesture(event, runtimeRef.current, latestRef.current, panelRef),
+    endResize: finish,
+    onResizeKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+      const next = keyboardResize(event, latestRef.current.size);
+      if (!next) return;
+      setSize(next);
+      saveGenieSize(next);
+    },
+    onDragPointerDown: (event: PointerEvent<HTMLDivElement>) =>
+      beginDrag(event, panelRef.current, runtimeRef.current, latestRef.current),
+    onDragPointerMove: (event: PointerEvent<HTMLDivElement>) =>
+      moveGesture(event, runtimeRef.current, latestRef.current, panelRef),
+    onDragPointerUp: finish,
+    redock: () => {
+      setPosition(null);
+      saveGeniePosition(null);
+    },
   };
 }
