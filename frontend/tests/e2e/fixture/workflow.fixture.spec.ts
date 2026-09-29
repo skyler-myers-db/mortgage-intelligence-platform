@@ -87,6 +87,21 @@ const reads = (mockApi: MockApi) => ({
   draft: callsTo(mockApi, 'POST', /^\/api(\/v1)?\/outreach\/draft$/),
 });
 
+/**
+ * Press a pager key that must NOT page, then watch a short window: a delayed
+ * router navigation (or the borrower read it would issue) must not show up,
+ * which a single URL check right after the key press could miss.
+ */
+async function pressWithoutStep(page: Page, mockApi: MockApi, key: string, id: string, reason: string): Promise<void> {
+  const readsBefore = borrowerReads(mockApi);
+  await page.keyboard.press(key);
+  for (let tick = 0; tick < 5; tick += 1) {
+    await page.waitForTimeout(100);
+    expect(page.url(), reason).toMatch(new RegExp(`/offer-orchestrator/${id}$`));
+    expect(borrowerReads(mockApi), `${reason}: no borrower read`).toEqual(readsBefore);
+  }
+}
+
 /** One audit id per approved borrower, so each receipt reads back its own row. */
 function auditIdFor(borrowerId: string): string {
   const index = BORROWERS.findIndex((borrower) => borrower.borrower_id === borrowerId);
@@ -163,8 +178,7 @@ test.describe('Offer queue pager and Next in queue (shell-04 / flow-09)', () => 
     const form = bar.getByRole('form', { name: 'Reject rationale' });
     await expect(form).toBeVisible();
     await page.locator(`${MAIN} h1`).focus();
-    await page.keyboard.press('j');
-    expect(page.url(), 'J with the rationale open stays put').toMatch(new RegExp(`/offer-orchestrator/${ids[1]}$`));
+    await pressWithoutStep(page, mockApi, 'j', ids[1], 'J with the rationale open stays put');
     const note = form.getByRole('textbox');
     await note.press('j');
     await expect(note).toHaveValue('j');
@@ -178,8 +192,7 @@ test.describe('Offer queue pager and Next in queue (shell-04 / flow-09)', () => 
     await expect.poll(() => gate.received).toBe(true);
     await expect(pager(page).getByRole('button', { name: 'Next' })).toBeDisabled();
     await page.locator(`${MAIN} h1`).focus();
-    await page.keyboard.press('j');
-    expect(page.url(), 'J while the approve is in flight stays put').toMatch(new RegExp(`/offer-orchestrator/${ids[1]}$`));
+    await pressWithoutStep(page, mockApi, 'j', ids[1], 'J while the approve is in flight stays put');
     gate.release();
     await expect(nextStep(page)).toBeVisible();
   });
