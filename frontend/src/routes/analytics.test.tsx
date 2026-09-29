@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
+import { DailyEvidenceLineChart } from './analytics.charts';
+import { EquitySpreadBinsView, EquitySpreadPointsView } from './analytics.equity-scatter';
 import {
-  DailyEvidenceLineChart,
-  EquitySpreadBinsView,
-  EquitySpreadPointsView,
+  MAX_SCATTER_POINTS,
   binCellRect,
   binDensityAlpha,
   binZoomViewport,
@@ -14,10 +14,10 @@ import {
   normalizeAnalyticsSegmentCodes,
   scatterPosition,
   segmentIntelligenceHref,
+  signalLabel,
   zoomScatterLayout,
-} from './analytics';
+} from './analytics.lib';
 import { ExecutiveProvenanceNote, ScoreDistribution } from './analytics.sections';
-import { MAX_SCATTER_POINTS, signalLabel } from './analytics.lib';
 import { TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import type {
   EquitySpreadOverview,
