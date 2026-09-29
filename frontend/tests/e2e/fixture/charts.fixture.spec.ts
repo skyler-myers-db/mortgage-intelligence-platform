@@ -143,6 +143,46 @@ test.describe('analytics charts: 1-2-5 axes', () => {
   }
 });
 
+/**
+ * Each y label's vertical centre minus its gridline's, top to bottom (px).
+ * Both lists sort by position, so the Nth label pairs with the Nth gridline.
+ */
+async function yLabelOffsets(figure: Locator): Promise<number[]> {
+  return figure.evaluate((fig) => {
+    const centre = (el: Element) => {
+      const box = el.getBoundingClientRect();
+      return box.top + box.height / 2;
+    };
+    const labels = [...fig.querySelectorAll('.analytics-chart__tick--y')].map(centre).sort((a, b) => a - b);
+    const grid = [...fig.querySelectorAll('line.analytics-chart__grid')].map(centre).sort((a, b) => a - b);
+    if (labels.length !== grid.length) throw new Error(`${labels.length} y labels for ${grid.length} gridlines`);
+    return labels.map((label, idx) => Math.round((label - grid[idx]) * 10) / 10);
+  });
+}
+
+/** The kit's value-axis charts and the tab each sits on. */
+const VALUE_AXIS_CHARTS = [
+  { title: 'Opportunity Score Distribution', path: '/analytics' },
+  { title: 'Rate Spread Distribution', path: '/analytics?view=economics' },
+  { title: 'Evidence Events Per Day', path: '/analytics?view=signals' },
+] as const;
+
+test.describe('analytics charts: y labels on their gridlines (dataviz-07)', () => {
+  for (const theme of ['dark', 'light'] as const) {
+    test(`${theme}: every y label of the score, spread and evidence charts sits within 1px of its gridline`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      for (const chart of VALUE_AXIS_CHARTS) {
+        await app.gotoRoute(chart.path);
+        const figure = figureOf(page, chart.title);
+        await expect(figure.locator('line.analytics-chart__grid').first()).toBeAttached();
+        const offsets = await yLabelOffsets(figure);
+        expect(offsets.length, `${chart.title} draws a y axis`).toBeGreaterThanOrEqual(3);
+        expect(offsets.filter((offset) => Math.abs(offset) > 1), `${chart.title} label - gridline offsets (px): ${offsets.join(', ')}`).toEqual([]);
+      }
+    });
+  }
+});
+
 test.describe('analytics charts: evidence per day', () => {
   /** The fixture's seven days, summed across signals as buildDailyEvidenceTotals does. */
   const DAYS = ['Jul 8', 'Jul 9', 'Jul 10', 'Jul 11', 'Jul 12', 'Jul 13', 'Jul 14'];
