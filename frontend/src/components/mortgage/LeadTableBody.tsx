@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, type ReactNode, type RefObject } from 'react';
+import { useCallback, useLayoutEffect, useReducer, type ReactNode, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { LeadSummary } from '../../types';
 import { LEAD_EXPANDED_PREVIEW_ESTIMATE_PX, LEAD_ROW_OVERSCAN } from './LeadTable.constants';
@@ -6,7 +6,7 @@ import type { LeadTableView } from './LeadTable.columns';
 import { isLeadApprovalEligible, isLeadSelectableForSalesOps, isTerminalApproval } from './LeadTable.logic';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { LeadTableRow } from './LeadTableRow';
-import { useLeadTableInitialOffset, useLeadTableScroll } from './useLeadTableScroll';
+import { useLeadTableInitialOffset, type LeadTableVirtualScroll } from './useLeadTableScroll';
 import type { OutreachDecision } from '../../lib/mutations/outreach';
 import type { LeadRowCallbacks } from './LeadTable.rowCallbacks';
 
@@ -33,6 +33,8 @@ export interface LeadTableBodyProps {
   tableWrapRef: RefObject<HTMLDivElement | null>;
   /** Published here: the keyboard flow reads it when it scrolls a row into the window. */
   scrollToIndexRef: RefObject<(index: number) => void>;
+  /** Published here while virtualized: the shell's useLeadTableScroll restores through it. */
+  virtualScrollRef: RefObject<LeadTableVirtualScroll | null>;
   approvals: Record<string, 'approved' | 'rejected'>;
   selectedIds: ReadonlySet<string>;
   pendingDecisions: ReadonlyMap<string, OutreachDecision>;
@@ -53,9 +55,12 @@ export interface LeadTableBodyProps {
 
 /**
  * LeadTableBody — the ranked-borrower table's `<tbody>` rows: the TanStack
- * virtualizer, the table scroller's per-entry place (useLeadTableScroll) and
- * the spacer rows around a virtual window (audit runtime-04 slice 3,
- * tables-05 step 1).
+ * virtualizer and the spacer rows around a virtual window (audit runtime-04
+ * slice 3, tables-05 step 1). The table scroller's per-entry place
+ * (useLeadTableScroll) stays in the shell, which owns the scroller: a
+ * layout effect here runs before the shell's `.tbl-wrap` ref is attached, so
+ * a restore run from here would find no scroller on the first commit. The
+ * shell restores through the virtualizer this body publishes.
  *
  * It is the ONE file of the table that stays 'use no memo': TanStack Virtual
  * returns an imperative instance whose methods read live scroll state, which
@@ -81,6 +86,7 @@ export function LeadTableBody({
   restoreScroll,
   tableWrapRef,
   scrollToIndexRef,
+  virtualScrollRef,
   approvals,
   selectedIds,
   pendingDecisions,
@@ -108,6 +114,14 @@ export function LeadTableBody({
   ), [rowEstimatePx, expandedRowIndex]);
   // Back to this entry: the virtualizer starts at the saved offset (runtime-08).
   const initialTableOffset = useLeadTableInitialOffset(restoreScroll);
+  // The scroller (`.tbl-wrap`) is the shell's element, whose ref is attached
+  // after this body's first layout effects: the virtualizer's first look at
+  // getScrollElement() finds null. One synchronous re-render before paint
+  // lets it attach, as it did when it lived in the shell.
+  const [, attachScroller] = useReducer((attached: boolean) => attached || true, false);
+  useLayoutEffect(() => {
+    attachScroller();
+  }, []);
   // TanStack Virtual returns imperative instance methods tied to the scroll
   // element. The hook stays local to this body and its methods are not passed
   // into memoized children, so React Compiler's library advisory is expected.
@@ -121,14 +135,11 @@ export function LeadTableBody({
     overscan: LEAD_ROW_OVERSCAN,
     initialOffset: initialTableOffset,
   });
-  useLeadTableScroll({
-    enabled: restoreScroll,
-    tableWrapRef,
-    virtualizer: virtualized ? rowVirtualizer : null,
-  });
-  // The keyboard flow scrolls a cursor row outside the window into it.
+  // The keyboard flow scrolls a cursor row outside the window into it; the
+  // shell's scroll restore reads the virtualizer while it is on.
   useLayoutEffect(() => {
     scrollToIndexRef.current = (index) => rowVirtualizer.scrollToIndex(index, { align: 'auto' });
+    virtualScrollRef.current = virtualized ? rowVirtualizer : null;
   });
   const virtualItems = virtualized ? rowVirtualizer.getVirtualItems() : [];
   const visibleRows = virtualized

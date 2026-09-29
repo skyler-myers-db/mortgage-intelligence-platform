@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../Icon';
@@ -28,6 +28,7 @@ import { useLeadApprovalActions, type CampaignBindingState } from './useLeadAppr
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
+import { useLeadTableScroll, type LeadTableVirtualScroll } from './useLeadTableScroll';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
 import { ariaKeyShortcuts } from '../../lib/keymap';
@@ -205,6 +206,30 @@ export function LeadTable({
   // LeadTableBody owns the virtualizer and publishes its scrollToIndex here;
   // the keyboard flow reads it when it moves the cursor out of the window.
   const scrollToIndexRef = useRef<(index: number) => void>(ignoreScrollToIndex);
+  // ...and the virtualizer itself while it is on, for the scroll restore
+  // below, which runs here because the shell owns the scroller (its ref is
+  // attached before the shell's layout effects, after the body's).
+  const virtualScrollRef = useRef<LeadTableVirtualScroll | null>(null);
+  const [virtualScroll] = useState<LeadTableVirtualScroll>(() => ({
+    scrollToOffset: (offset) => virtualScrollRef.current?.scrollToOffset(offset),
+    getTotalSize: () => virtualScrollRef.current?.getTotalSize() ?? 0,
+  }));
+  // Reveal the row the URL names (`?row=`) when the Lead Queue loads, or a
+  // PUSH lands on an entry naming it (audit tables-09 follow-up): the table
+  // scroller started at the top, and a virtualized row there was never
+  // rendered. Requested by useLeadTableScroll's fresh-entry seam (never on
+  // REPLACE, never on a POP that restores a saved offset) and run below,
+  // once the named row is among the rows on screen. Scroll only; no read.
+  const revealPendingRef = useRef(false);
+  const requestReveal = useCallback(() => {
+    revealPendingRef.current = true;
+  }, []);
+  useLeadTableScroll({
+    enabled: restoreScroll,
+    tableWrapRef,
+    virtualizer: shouldVirtualize ? virtualScroll : null,
+    onFreshEntry: requestReveal,
+  });
 
   const approval = useLeadApprovalActions({
     displayLeads,
@@ -260,6 +285,17 @@ export function LeadTable({
   });
   const { review } = flow;
   const openReview = review.review;
+  // The fresh-entry reveal (requested above), once the named row is loaded.
+  useEffect(() => {
+    if (!revealPendingRef.current) return;
+    if (!expanded) {
+      revealPendingRef.current = false;
+      return;
+    }
+    if (!rowIds.includes(expanded)) return;
+    revealPendingRef.current = false;
+    flow.cursor.revealRow(expanded);
+  });
   // Load the review chunk once the reader engages with rows (the draft is
   // requested only on Approve); the bulk review chunk once rows are selected.
   const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null);
@@ -563,6 +599,7 @@ export function LeadTable({
             restoreScroll={restoreScroll}
             tableWrapRef={tableWrapRef}
             scrollToIndexRef={scrollToIndexRef}
+            virtualScrollRef={virtualScrollRef}
             approvals={approvals}
             selectedIds={approval.selectedIds}
             pendingDecisions={approval.pendingDecisions}
