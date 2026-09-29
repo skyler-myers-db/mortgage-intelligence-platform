@@ -28,6 +28,7 @@ import { useLeadApprovalActions, type CampaignBindingState } from './useLeadAppr
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
+import { useTableScrollClearance } from './useTableScrollClearance';
 import { useLeadTableScroll, type LeadTableVirtualScroll } from './useLeadTableScroll';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
@@ -149,6 +150,9 @@ export function LeadTable({
   const campaignBindingKey = `${campaignId}\n${variantName}`;
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   useLeadTableFillHeight(tableWrapRef, fillHeight);
+  // Focus is never scrolled under the sticky thead, the pinned Approval
+  // column or the sticky route nav (a11y-v2).
+  useTableScrollClearance(tableWrapRef, view);
   const columns = leadTableColumns(view);
   const columnCount = leadTableColumnCount(view);
   // Sort and expanded row: owned by the parent when it passes the change

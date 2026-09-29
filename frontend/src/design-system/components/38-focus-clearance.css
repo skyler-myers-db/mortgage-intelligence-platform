@@ -1,0 +1,25 @@
+/* ============================================================
+   FOCUS CLEARANCE — the sticky route nav (audit a11y-v2)
+   ============================================================
+   Focus Not Obscured (WCAG 2.2 SC 2.4.11, technique C43). `.route-nav` is
+   sticky at the top of `.main`, the app scroller, whenever there is the
+   vertical room for it (01-app-shell.css, the same 40rem condition). A
+   control that takes focus from above the view (Shift+Tab up a page) was
+   scrolled only to the scroller's top edge, behind the nav. `.main` keeps
+   the nav's block size, plus room for the focus ring, as scroll-padding at
+   that end, so focus scrolling stops below it.
+   The fallback is the one-line nav: its --sp-3 padding at each end, a
+   --sp-8 link and the 1px bottom border (exact at 1440x900 with the Console
+   closed). The Lead Queue table measures the real size
+   (useTableScrollClearance writes --route-nav-block-size on `.main`); other
+   routes use this value. /ask-genie's own rule (routes/ask-genie.css,
+   higher specificity) still wins there: it also clears the docked composer.
+   ============================================================ */
+@media (min-height: 40rem) {
+  .main:has(.route-nav) {
+    --route-nav-block-size: calc(var(--sp-3) * 2 + var(--sp-8) + 1px);
+    scroll-padding-block-start: calc(
+      var(--route-nav-block-size) + var(--focus-ring-width) + var(--focus-ring-offset)
+    );
+  }
+}

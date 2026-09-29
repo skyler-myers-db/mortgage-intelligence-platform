@@ -130,6 +130,14 @@
   max-height: 520px;
   overflow: auto;
   position: relative;
+  /* Focus Not Obscured (audit a11y-v2; WCAG 2.2 SC 2.4.11, technique C43):
+     a control focused from outside the view stops below the sticky thead,
+     not under it. The thead's measured block size is written by
+     useTableScrollClearance; one row is the fallback. */
+  --tbl-head-block-size: var(--row-h);
+  scroll-padding-block-start: calc(
+    var(--tbl-head-block-size) + var(--focus-ring-width) + var(--focus-ring-offset)
+  );
 }
 .tbl-cell--select { padding-left: var(--sp-5); width: 32px; }
 .tbl-cell--narrow { width: 32px; }

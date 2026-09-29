@@ -164,9 +164,21 @@
     inset 0 1px 0 var(--line-2),
     inset 0 -1px 0 var(--line-2);
 }
-/* J / K scroll the cursor row clear of the sticky header. */
+/* Focus Not Obscured at the scroller's end edge (audit a11y-v2): Tab
+   across a row with the Console open (the table scrolls horizontally)
+   stops clear of the pinned Approval column, not under it. Its measured
+   inline size is written by useTableScrollClearance; 0px until then. The
+   block start (the sticky thead) is 03-score-and-table.css's `.tbl-wrap`. */
+.tbl-wrap:has(> .lead-table__table) {
+  --tbl-pin-inline-size: 0px;
+  scroll-padding-inline-end: calc(
+    var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)
+  );
+}
+/* J / K scroll the cursor row into view: the scroller's scroll-padding
+   (above) keeps it clear of the sticky header; the row adds a little air. */
 .lead-table__table tr[data-borrower-row] {
-  scroll-margin-block: calc(var(--row-h) + var(--sp-2)) var(--sp-2);
+  scroll-margin-block: var(--sp-2);
 }
 
 /* "Skip table": the shell's visually-hidden skip link, shown in place (not
