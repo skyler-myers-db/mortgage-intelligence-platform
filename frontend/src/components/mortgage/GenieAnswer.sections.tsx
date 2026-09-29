@@ -120,6 +120,7 @@ export function GenieRowsVisual({
           labelCol={chart.labelCol}
           valueCol={chart.valueCol}
           tableRowCount={rows.length}
+          tableExpanded={showAll}
         />
       )}
       {(plan.kind === 'bar' || plan.kind === 'funnel' || (!['strategy_board', 'borrower_list', 'map', 'line'].includes(plan.kind) && chart)) && chart && (
@@ -128,6 +129,7 @@ export function GenieRowsVisual({
           labelCol={chart.labelCol}
           valueCol={chart.valueCol}
           tableRowCount={rows.length}
+          tableExpanded={showAll}
         />
       )}
       {/* A single METRIC row is a set of headline facts, not a table —

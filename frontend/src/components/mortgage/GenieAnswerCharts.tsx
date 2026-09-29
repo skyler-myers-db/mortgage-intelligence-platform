@@ -35,12 +35,15 @@ export const MAX_LINE_POINTS = 24;
  *
  * `shown` bars/points out of `charted` chartable rows; `tableRows` is the row
  * count of the answer's table. Null when the chart shows every table row.
+ * `tableExpanded`: "Show all" put every row in the table below, so the
+ * caption stops counting the compact cap (genie-06 item 1).
  */
 export function chartTruncationCaption(
   shown: number,
   charted: number,
   tableRows: number,
   unit: 'rows' | 'points',
+  tableExpanded = false,
 ): string | null {
   const uncharted = Math.max(0, tableRows - charted);
   if (shown >= charted && uncharted === 0) return null;
@@ -50,7 +53,9 @@ export function chartTruncationCaption(
       : `Chart shows all ${charted} charted ${unit}`;
   const skipped =
     uncharted > 0 ? ` (${uncharted} row${uncharted === 1 ? ' has' : 's have'} no value to chart)` : '';
-  const table = `the table below shows ${Math.min(MAX_TABLE_ROWS, tableRows)} of ${tableRows} rows`;
+  const table = tableExpanded
+    ? `the table below shows all ${tableRows} rows`
+    : `the table below shows ${Math.min(MAX_TABLE_ROWS, tableRows)} of ${tableRows} rows`;
   return `${chart}${skipped}; ${table}.`;
 }
 
@@ -83,12 +88,15 @@ export function GenieBarChart({
   labelCol,
   valueCol,
   tableRowCount,
+  tableExpanded = false,
 }: {
   data: ChartRow[];
   labelCol: string;
   valueCol: string;
   /** Rows of the answer table below: the chart's own `data` can be shorter. */
   tableRowCount: number;
+  /** "Show all" is open: the table below holds every row. */
+  tableExpanded?: boolean;
 }) {
   const MAX_BARS = MAX_BAR_POINTS;
   const bars = data.slice(0, MAX_BARS);
@@ -158,7 +166,7 @@ export function GenieBarChart({
           );
         })}
       </svg>
-      <ChartCaption text={chartTruncationCaption(bars.length, data.length, tableRowCount, 'rows')} />
+      <ChartCaption text={chartTruncationCaption(bars.length, data.length, tableRowCount, 'rows', tableExpanded)} />
     </div>
   );
 }
@@ -168,12 +176,15 @@ export function GenieLineChart({
   labelCol,
   valueCol,
   tableRowCount,
+  tableExpanded = false,
 }: {
   data: ChartRow[];
   labelCol: string;
   valueCol: string;
   /** Rows of the answer table below: the chart's own `data` can be shorter. */
   tableRowCount: number;
+  /** "Show all" is open: the table below holds every row. */
+  tableExpanded?: boolean;
 }) {
   const points = data.slice(0, MAX_LINE_POINTS);
   const maxV = Math.max(1, ...points.map((p) => p.value));
@@ -203,7 +214,7 @@ export function GenieLineChart({
         {points[0] && <text x="0" y={height + 24} className="genie-line__axis">{points[0].label}</text>}
         {points[points.length - 1] && <text x={width} y={height + 24} textAnchor="end" className="genie-line__axis">{points[points.length - 1].label}</text>}
       </svg>
-      <ChartCaption text={chartTruncationCaption(points.length, data.length, tableRowCount, 'points')} />
+      <ChartCaption text={chartTruncationCaption(points.length, data.length, tableRowCount, 'points', tableExpanded)} />
     </div>
   );
 }

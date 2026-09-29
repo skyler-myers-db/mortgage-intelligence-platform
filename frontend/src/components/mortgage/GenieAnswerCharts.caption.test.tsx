@@ -69,6 +69,21 @@ describe('chart captions', () => {
     expect(chartTruncationCaption(6, 6, 6, 'rows')).toBeNull();
   });
 
+  it('says the table shows every row once "Show all" has expanded it', () => {
+    expect(chartTruncationCaption(MAX_BAR_POINTS, 30, 30, 'rows', true)).toBe(
+      `Chart shows the first ${MAX_BAR_POINTS} of 30 charted rows; the table below shows all 30 rows.`,
+    );
+    expect(chartTruncationCaption(MAX_BAR_POINTS, 28, 30, 'rows', true)).toBe(
+      `Chart shows the first ${MAX_BAR_POINTS} of 28 charted rows (2 rows have no value to chart); the table below shows all 30 rows.`,
+    );
+    // Expanding never invents a caption where the chart shows every row.
+    expect(chartTruncationCaption(6, 6, 6, 'rows', true)).toBeNull();
+    act(() => root.render(<GenieLineChart data={rows(40)} labelCol="week" valueCol="score" tableRowCount={40} tableExpanded />));
+    expect(caption()).toBe(`Chart shows the first ${MAX_LINE_POINTS} of 40 charted points; the table below shows all 40 rows.`);
+    act(() => root.render(<GenieBarChart data={rows(30)} labelCol="state" valueCol="borrowers" tableRowCount={30} tableExpanded />));
+    expect(caption()).toContain('the table below shows all 30 rows.');
+  });
+
   it('never claims a "top" the SQL order does not promise', () => {
     expect(chartTruncationCaption(MAX_BAR_POINTS, 30, 30, 'rows')).not.toContain('top');
   });
