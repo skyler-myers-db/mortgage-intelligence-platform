@@ -19,10 +19,11 @@ import {
   economicsBody,
 } from './data/analytics';
 import { TOTALS } from './data/reference';
+import { expectAxeClean } from './axe';
 import { json } from './mockApi';
-import { asComputedRgb } from './renderedColor';
+import { asComputedRgb, contrastRatio, parseRgb, renderedColors } from './renderedColor';
 import { expect, test } from './test';
-import { expectNoSurfaceOverflow } from './visual';
+import { expectNoAuditedReadSince, expectNoSurfaceOverflow, markNaturalLoad } from './visual';
 
 /** The chart's plot, by the section title that names it. */
 function plotNamed(page: Page, title: string): Locator {
@@ -368,6 +369,66 @@ test('analytics: the view tabs are content-sized, not a full-width tray (w3 moti
     };
   });
   expect(widths.own, `tray ${widths.own}px in a ${widths.content}px column`).toBeLessThan(widths.content - 1);
+});
+
+test.describe('analytics charts: data ink (dataviz-09 / visual-08 item 3)', () => {
+  /** WCAG contrast of an SVG mark's painted fill or stroke on the surface behind it. */
+  const inkContrast = async (mark: Locator, property: 'fill' | 'stroke') => {
+    await expect(mark).toBeAttached();
+    const ink = parseRgb(await mark.evaluate((el, prop) => getComputedStyle(el).getPropertyValue(prop), property));
+    return contrastRatio(ink, (await renderedColors(mark)).bg);
+  };
+
+  for (const accent of ['bright', 'red'] as const) {
+    test(`light + ${accent}: the past bins, the evidence line and the Sankey bars clear 3:1 on their surface`, async ({ app, page }) => {
+      await app.setTheme('light');
+      await app.setAccent(accent);
+      await app.gotoRoute('/analytics');
+      const past = figureOf(page, 'Opportunity Score Distribution').locator('rect.chart-hist__bar--past').first();
+      expect(await inkContrast(past, 'fill'), 'past-bin fill').toBeGreaterThanOrEqual(3);
+      expect(await inkContrast(page.locator('#main-content .funnel-sankey__bar').first(), 'fill'), 'Sankey bar').toBeGreaterThanOrEqual(3);
+      await app.gotoRoute('/analytics?view=signals');
+      const line = figureOf(page, 'Evidence Events Per Day').locator('polyline');
+      expect(await inkContrast(line, 'stroke'), 'evidence polyline').toBeGreaterThanOrEqual(3);
+    });
+  }
+});
+
+test.describe('analytics charts: axe and audited reads', () => {
+  for (const theme of ['dark', 'light'] as const) {
+    for (const tab of CHART_TABS) {
+      test(`${tab.name} (${theme}): the charts region is axe-clean with no recorded exceptions`, async ({ app, page }) => {
+        await app.setTheme(theme);
+        await app.gotoRoute(tab.path);
+        await expect(page.locator('#main-content figure.chart-frame').first()).toBeVisible();
+        await expectAxeClean(page, { key: { route: tab.route, state: 'charts' }, theme, known: {}, include: '#main-content' });
+      });
+    }
+  }
+
+  test('economics: hovering and focusing the scatter cells and the histogram opens no audited read', async ({ app, mockApi, page }) => {
+    await app.gotoRoute('/analytics?view=economics');
+    const cells = page.locator('#main-content .analytics-scatter__bin');
+    await expect(cells.first()).toBeVisible();
+    const naturalLoad = markNaturalLoad(mockApi);
+    for (let i = 0; i < 3; i += 1) await cells.nth(i).hover();
+    await cells.first().focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await plotNamed(page, 'Rate Spread Distribution').hover();
+    await plotNamed(page, 'Rate Spread Distribution').focus();
+    await page.keyboard.press('ArrowRight');
+    // Zoom into a cell: its borrower dots link to Borrower 360, and hovering
+    // or focusing one must never prefetch that audited read (VIEW_BORROWER).
+    await cells.first().click();
+    const markers = page.locator('#main-content [data-scatter-marker]');
+    await expect(markers.first()).toBeVisible();
+    // Dots overlap in the dense fixture window: hover wherever each one sits.
+    for (let i = 0; i < Math.min(3, await markers.count()); i += 1) await markers.nth(i).hover({ force: true });
+    await markers.first().focus();
+    await page.keyboard.press('ArrowRight');
+    expectNoAuditedReadSince(mockApi, naturalLoad, 'economics scatter + histogram hover/focus');
+  });
 });
 
 test('executive: each Pipeline Metrics bar shows exactly its share, sliding by translate, instant under reduced motion (motion-08)', async ({ app, page }) => {
