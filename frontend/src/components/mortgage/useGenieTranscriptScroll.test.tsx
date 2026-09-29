@@ -7,7 +7,7 @@
  * raised before a close used to survive the reopen, offering a jump to where
  * the panel had already scrolled.
  */
-import { act, useRef } from 'react';
+import { act, useEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useGenieTranscriptScroll, type GenieTranscriptScroll } from './useGenieTranscriptScroll';
@@ -20,7 +20,10 @@ function Transcript({ open, messages }: { open: boolean; messages: readonly stri
   const bodyRef = useRef<HTMLDivElement>(null);
   const lastAnswerRef = useRef<HTMLDivElement>(null);
   const current = useGenieTranscriptScroll({ open, bodyRef, lastAnswerRef, messages, pendingQuestion: null, busy: false });
-  scroll = current;
+  // Hand the hook's handle to the test after the commit (never during render).
+  useEffect(() => {
+    scroll = current;
+  });
   return (
     <div data-testid="body" ref={bodyRef}>
       {messages.map((text, index) => (
