@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { isAbortError } from '../../lib/api';
@@ -74,17 +74,14 @@ export function LeadBulkApproveReview({
   useEffect(() => {
     onSamplesChangeRef.current = onSamplesChange;
   }, [onSamplesChange]);
-  // The ready drafts go up when the ready set changes: readyKey is its
-  // identity, and the Effect Event reads that render's samples (runtime-03).
-  const publishReadySamples = useEffectEvent(() => {
+  useEffect(() => {
     const drafts = new Map<string, OutreachDraftResult>();
     for (const sample of liveSamples) {
       if (sample.status === 'ready' && sample.draft) drafts.set(sample.borrowerId, sample.draft);
     }
     onSamplesChangeRef.current(drafts);
-  });
-  useEffect(() => {
-    publishReadySamples();
+    // liveSamples is derived from readyKey's inputs; readyKey is the identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readyKey]);
   useEffect(() => () => {
     abortRef.current?.abort();

@@ -8,8 +8,8 @@
  * Audit critic-06: verb-first advance labels; the outcome is picked, then
  * confirmed ("Record <outcome> for <id>?"); Cancel and Escape close the
  * picker with zero writes and return focus to "Record outcome"; only
- * Record posts, once. The compact stepper marks the current stage with
- * aria-current="step" and never renders `.chip__label`.
+ * Record posts, once. (The compact stepper is this lane's budget cut 2:
+ * deferred.)
  */
 
 import { act } from 'react';
@@ -29,7 +29,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   api: apiMocks,
 }));
 
-import { AssignmentLifecycleAdvance, AssignmentLifecycleSteps } from './AssignmentLifecycleAdvance';
+import { AssignmentLifecycleAdvance } from './AssignmentLifecycleAdvance';
 
 const ASSIGNMENT_ID = '66666666-6666-4666-8666-666666666601';
 const BORROWER = 'B-48291';
@@ -196,33 +196,5 @@ describe('AssignmentLifecycleAdvance', () => {
   it('renders nothing once the lifecycle is terminal', async () => {
     await act(async () => render('outcome_recorded'));
     expect(document.querySelectorAll('button').length).toBe(0);
-  });
-});
-
-describe('AssignmentLifecycleSteps', () => {
-  beforeEach(() => {
-    document.body.innerHTML = '<div id="root"></div>';
-    root = createRoot(document.getElementById('root') as HTMLElement);
-  });
-
-  afterEach(() => {
-    act(() => root.unmount());
-    document.body.innerHTML = '';
-  });
-
-  it('lists the five stages in order and marks the current one with aria-current="step"', () => {
-    act(() => root.render(<AssignmentLifecycleSteps status="approved" />));
-    const steps = [...document.querySelectorAll('ol.lifecycle-steps > li')];
-    expect(steps.map((step) => step.textContent)).toEqual([
-      'Assigned', 'Contact drafted', 'Approved', 'Actioned', 'Outcome recorded',
-    ]);
-    expect(steps.filter((step) => step.getAttribute('aria-current') === 'step').map((step) => step.textContent))
-      .toEqual(['Approved']);
-    expect(steps.slice(0, 2).every((step) => step.classList.contains('lifecycle-steps__step--done'))).toBe(true);
-  });
-
-  it('never renders `.chip__label` (the stage chip stays the one specs read)', () => {
-    act(() => root.render(<AssignmentLifecycleSteps status="contact_drafted" />));
-    expect(document.querySelector('.chip__label')).toBeNull();
   });
 });

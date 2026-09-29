@@ -75,6 +75,14 @@ export function useLeadTableHotkeys(
   actions: LeadTableKeymapActions,
   scopeRef: RefObject<HTMLElement | null>,
 ): void {
+  // Budget trade (audit runtime-03 / runtime-04, the wave-4b lane's cut 4):
+  // the bailout this hook had is fixed, so it compiles cleanly without this
+  // line, but the LeadTable shell that calls it stays uncompiled (cut 5), so
+  // nothing reads its memoized values and the memo caches only cost bytes
+  // (the family compile measured +0.58 KiB br on the LeadTable chunk).
+  // Delete this line once the shell compiles.
+  'use no memo';
+
   const hotkeys = leadTableHotkeys(actions);
   const latestRef = useRef<readonly LeadTableHotkey[]>(hotkeys);
   useLayoutEffect(() => {

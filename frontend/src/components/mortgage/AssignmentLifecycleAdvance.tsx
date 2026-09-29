@@ -4,7 +4,6 @@ import { pushEscapeLayer } from '../../lib/escapeStack';
 import { Button } from '../Primitives';
 import { assignmentStatusLabel } from './LeadTable.logic';
 import type { AssignmentLifecycleStatus, AssignmentOutcome, LeadSummary } from '../../types';
-import './AssignmentLifecycleAdvance.css';
 
 /**
  * S6 lifecycle-advance control (the S2 deferred item): advances an active
@@ -28,11 +27,6 @@ const NEXT_STATUS: Partial<Record<AssignmentLifecycleStatus, AssignmentLifecycle
   approved: 'actioned',
   actioned: 'outcome_recorded',
 };
-
-/** The lifecycle in order, for the stepper. */
-const LIFECYCLE: readonly AssignmentLifecycleStatus[] = [
-  'assigned', 'contact_drafted', 'approved', 'actioned', 'outcome_recorded',
-];
 
 /** Verb-first labels for the one-step advance (critic-06). */
 const ADVANCE_LABEL: Partial<Record<AssignmentLifecycleStatus, string>> = {
@@ -96,6 +90,13 @@ export function AssignmentLifecycleAdvance({
   borrowerId: string;
   onAdvanced: (borrowerId: string, update: Partial<LeadSummary>) => void;
 }) {
+  // Budget trade (audit runtime-03, the wave-4b lane's budget cuts): its
+  // try/finally bailouts are fixed (the module helpers above), so it
+  // compiles cleanly without this line, which measured +0.35 KiB br on the
+  // LeadTable chunk for a control rendered once per expanded row. Delete it
+  // when the chunk has the room.
+  'use no memo';
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [picker, setPicker] = useState<Picker>(CLOSED);
@@ -220,30 +221,5 @@ export function AssignmentLifecycleAdvance({
         </span>
       )}
     </div>
-  );
-}
-
-/**
- * The assignment's lifecycle as a compact stepper (audit critic-06): the
- * five reviewed stages, the current one marked aria-current="step". Plain
- * list items, never `.chip__label`: the stage chip beside it stays the one
- * element specs and assistive tech read the stage from.
- */
-export function AssignmentLifecycleSteps({ status }: { status: AssignmentLifecycleStatus }) {
-  const current = LIFECYCLE.indexOf(status);
-  return (
-    <ol className="lifecycle-steps" aria-label="Assignment lifecycle" data-testid="assignment-lifecycle-steps">
-      {LIFECYCLE.map((step, index) => (
-        <li
-          key={step}
-          className={index < current
-            ? 'lifecycle-steps__step lifecycle-steps__step--done'
-            : index === current ? 'lifecycle-steps__step lifecycle-steps__step--current' : 'lifecycle-steps__step'}
-          aria-current={index === current ? 'step' : undefined}
-        >
-          {assignmentStatusLabel(step)}
-        </li>
-      ))}
-    </ol>
   );
 }
