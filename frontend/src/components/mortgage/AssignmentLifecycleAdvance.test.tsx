@@ -167,6 +167,31 @@ describe('AssignmentLifecycleAdvance', () => {
     expect(apiMocks.recordAssignmentOutcome).not.toHaveBeenCalled();
   });
 
+  it('Escape while Record is on the wire keeps the pending confirm row in view and writes nothing more', async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    apiMocks.recordAssignmentOutcome.mockReturnValue(new Promise((resolve) => {
+      finish = resolve;
+    }));
+    await openConfirm('Success');
+    await act(async () => buttonByText('Record')!.click());
+    expect(buttonByText('Recording…')?.disabled, 'the write is on the wire').toBe(true);
+
+    pressEscape();
+
+    expect(document.querySelector(`[data-testid="lifecycle-outcome-confirm-${BORROWER}"]`), 'still showing its pending state').not.toBeNull();
+    expect(buttonByText('Recording…')).toBeTruthy();
+    expect(apiMocks.recordAssignmentOutcome).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish({
+      assignment: { assignment_id: ASSIGNMENT_ID, status: 'outcome_recorded' },
+      outcome: 'success',
+      feedback_id: 'fb-2',
+    }));
+    await settle();
+    expect(onAdvanced).toHaveBeenCalledWith(BORROWER, { assignment_status: 'outcome_recorded' });
+    expect(apiMocks.recordAssignmentOutcome).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces a server 409 honestly instead of faking progress', async () => {
     apiMocks.updateAssignmentStatus.mockRejectedValue(
       new Error("illegal transition 'assigned' -> 'approved'; next stage is 'contact_drafted'"),

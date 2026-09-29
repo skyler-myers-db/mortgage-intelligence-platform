@@ -109,13 +109,16 @@ export function AssignmentLifecycleAdvance({
 
   // Escape closes the whole picker with no write (lib/escapeStack: the
   // topmost layer, so it never also closes a review or drawer below it).
+  // While Record is on the wire the key is taken and does nothing: closing
+  // then hid the pending "Recording…" while the POST still settled.
   useEffect(() => {
     if (!pickerOpen) return undefined;
     return pushEscapeLayer(() => {
+      if (busy) return;
       focusNextRef.current = 'opener';
       setPicker(CLOSED);
     });
-  }, [pickerOpen]);
+  }, [pickerOpen, busy]);
 
   useLayoutEffect(() => {
     const target = focusNextRef.current;
