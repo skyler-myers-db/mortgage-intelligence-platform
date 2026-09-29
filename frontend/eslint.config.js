@@ -65,6 +65,15 @@ export const SET_STATE_IN_EFFECT_SCOPE = [
   "src/components/mortgage/useLeadBulkRun.ts",
   "src/components/mortgage/useLeadTableScroll.ts",
   "src/components/mortgage/LeadTable.selection.ts",
+  // Wave 4a error-surfaces: the shared async-state surfaces and the queue's
+  // version poll, born without effect-driven state (each proven with
+  // `eslint --rule 'react-hooks/set-state-in-effect: error'`, zero hits).
+  "src/routes/lead-queue.freshness.tsx",
+  "src/components/ui/AsyncState.tsx",
+  "src/components/ui/EmptyState.tsx",
+  "src/components/ui/FetchedAt.tsx",
+  "src/components/ui/RetryClock.tsx",
+  "src/lib/queueVersion.ts",
 ];
 
 /** Fixture harness files may import TYPES from frontend/src, never runtime code. */
@@ -137,7 +146,7 @@ export default [
   // The files the query-layer migration has converted (wave 2, audit
   // stack-09): their writes run on useMutation and their reads on useQuery,
   // so a synchronous setState in an effect body is a regression here. The
-  // repo-wide flip (and the TODO above) stays with the wave-4 lint lane.
+  // repo-wide flip (and the TODO above) is wave-5 lint-depth work.
   // src/lib/setStateInEffectScope.test.ts pins exactly this scope.
   {
     files: SET_STATE_IN_EFFECT_SCOPE,
