@@ -108,11 +108,16 @@ test.describe('the shell resumes a turn before the first open (genie-02 item 2)'
     const polls = job.statusPolls;
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(main(page).locator('h1')).toBeVisible();
-    const naturalLoad = markNaturalLoad(mockApi);
 
     const toggle = app.genieToggle();
     const fab = page.locator('.genie__fab');
     await expect.poll(() => job.statusPolls, STAGE_WAIT).toBeGreaterThan(polls);
+    // The held status poll keeps app.settle() from ever going quiet, and the
+    // mock records a call when it is fulfilled, not when it starts. The route's
+    // natural load (its GET /api/leads included) ends once the held poll is
+    // the only request in flight and the API has been quiet for a moment.
+    await expect.poll(() => mockApi.inflight === 1 && mockApi.idleMs >= 300, STAGE_WAIT).toBe(true);
+    const naturalLoad = markNaturalLoad(mockApi);
     // The held poll has not answered: a resumed turn shows no ring yet.
     await expect(toggle).not.toHaveClass(/is-genie-running/);
     await expect(fab).not.toHaveClass(/is-genie-running/);
