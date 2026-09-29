@@ -151,8 +151,8 @@ export function LeadTable({
   const campaignBindingKey = `${campaignId}\n${variantName}`;
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   useLeadTableFillHeight(tableWrapRef, fillHeight);
-  // Focus is never scrolled under the sticky thead, the pinned Approval
-  // column or the sticky route nav (a11y-v2).
+  // Focus is never scrolled under the sticky thead or the pinned Approval
+  // column (a11y-v2; the sticky route nav is 38-focus-clearance.css's).
   useTableScrollClearance(tableWrapRef, view);
   const columns = leadTableColumns(view);
   const columnCount = leadTableColumnCount(view);

@@ -192,13 +192,6 @@
     var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)
   );
 }
-/* The route nav's block size, which useTableScrollClearance measures onto
-   `.main` on the pages this table renders on; 38-focus-clearance.css reads
-   it (with this same one-line fallback on every other route). Declared here,
-   in the lazy sheet, because the shell stylesheet's raw gate has no room. */
-.main:has(.lead-table__table) {
-  --route-nav-block-size: calc(var(--sp-3) * 2 + var(--sp-8) + 1px);
-}
 /* J / K scroll the cursor row into view: the scroller's scroll-padding
    (above) keeps it clear of the sticky header; the row adds a little air. */
 .lead-table__table tr[data-borrower-row] {

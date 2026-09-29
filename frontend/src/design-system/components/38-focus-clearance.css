@@ -18,19 +18,29 @@
    nav link scrolled `.main` to its top first. The Back-restore on the next
    entry then saved 0 (continuity and motion-nav specs caught it).
 
-   `.tbl-wrap` contents are left out: a table scroller clears its own sticky
-   header (LeadTable.css); a margin here would add the nav's height inside
-   it too. /ask-genie's composer clearance (routes/ask-genie.css) is its own
-   scroll-padding rule. The fallback is the one-line nav: its --sp-3 padding
-   at each end, a --sp-8 link and the 1px bottom border (exact at 1440x900
-   with the Console closed); the Lead Queue measures the real size
-   (useTableScrollClearance writes --route-nav-block-size on `.main`).
+   Left out:
+   - `.tbl-wrap` contents: a table scroller clears its own sticky header
+     (LeadTable.css); a margin here would add the nav's height inside it.
+   - /ask-genie while its Ask tab shows (a `.genie-composer` outside any
+     hidden tabpanel): routes/ask-genie.css already clears the nav there
+     with `.main` scroll-padding, and a margin as well put the nav in twice
+     (a control scrolled into view landed 65px below the nav, not 4px). Its
+     other tabs keep this rule.
+   The whole selector sits in :where(), so the rule carries no specificity
+   and a route's own scroll-margin (glossary.css, ask-genie.css
+   `.growth-agent-run`, `.genie__msg`) still wins.
+
+   The size is the one-line nav: its --sp-3 padding at each end, a --sp-8
+   link and the 1px bottom border; 57px, exact at 1440x900 on every route
+   with the Console closed and open (measured). A nav that wraps on a
+   narrow screen is under-cleared; measuring it needs RouteNav.tsx, initial
+   JS (wave 5, with the other routes). The shell stylesheet's raw and gzip
+   gates set how short this rule is.
    ============================================================ */
 @media (min-height: 40rem) {
-  .main:has(.route-nav) :not(.route-nav, .route-nav *, .tbl-wrap *) {
+  :where(.main:has(.route-nav):not(:has(.genie-composer:not([hidden] *))) :not(.route-nav *, .tbl-wrap *)) {
     scroll-margin-block-start: calc(
-      var(--route-nav-block-size, calc(var(--sp-3) * 2 + var(--sp-8) + 1px))
-      + var(--focus-ring-width) + var(--focus-ring-offset)
+      var(--sp-3) * 2 + var(--sp-8) + 1px + var(--focus-ring-width) + var(--focus-ring-offset)
     );
   }
 }

@@ -10,10 +10,15 @@
  *      or non-actionable rows; visible and disabled for a gated approver;
  *      its Approve is the topmost element at its centre with the Console
  *      closed and open.
+ *  (a) also: the banner's copy keeps its width beside the icon, title on one
+ *      line, and its actions wrap under it, Console closed and open.
  *  (b) The focus-obscured walk (a11y-v2): no focus stop's box is fully
  *      covered by the sticky thead, the pinned Approval column, the bulk
  *      bar or the sticky route nav; with the scroll-padding zeroed the same
- *      walk does find a covered stop; /ask-genie keeps its own padding.
+ *      walk does find a covered stop. A control focused from behind the
+ *      sticky route nav (/glossary) stops below it, and not with the
+ *      scroll-margin zeroed; /ask-genie's Ask tab clears the nav once (its
+ *      own padding), its Workflows tab through 38-focus-clearance.css.
  *  (d) The assignment outcome (critic-06): Escape and Cancel make no POST
  *      and hand focus back; Record needs its confirm row, then one POST; a
  *      409 keeps the stage and shows the error.
@@ -295,6 +300,45 @@ async function underPinnedColumn(page: Page, target: Locator): Promise<void> {
 }
 
 const ZERO_PADDING = '.tbl-wrap, .main { scroll-padding: 0px !important; }';
+/** 38-focus-clearance.css's mechanism: the nav's size as scroll-margin on what is outside it. */
+const ZERO_NAV_MARGIN = '.main * { scroll-margin-block-start: 0px !important; }';
+/** --focus-ring-width + --focus-ring-offset (tokens.css). */
+const FOCUS_RING_ROOM = 4;
+
+/** A tall block at the end of `.main`, so any control in it can scroll to the top. */
+async function addScrollRoom(page: Page): Promise<void> {
+  await page.locator('.main').evaluate((main) => {
+    const spacer = document.createElement('div');
+    spacer.style.blockSize = '3000px';
+    main.append(spacer);
+  });
+}
+
+/**
+ * Scroll `.main` so `target` sits entirely behind the sticky route nav. The
+ * browser counts a control there as in view, so without a clearance a focus
+ * leaves it hidden under the nav.
+ */
+async function behindRouteNav(page: Page, target: Locator): Promise<void> {
+  await addScrollRoom(page);
+  const covered = await target.evaluate((element) => {
+    const main = element.closest<HTMLElement>('.main');
+    const nav = main?.querySelector<HTMLElement>('.route-nav');
+    if (!main || !nav || getComputedStyle(nav).position !== 'sticky') throw new Error('no sticky route nav');
+    main.scrollTop += element.getBoundingClientRect().top - (nav.getBoundingClientRect().top + 2);
+    const box = element.getBoundingClientRect();
+    const band = nav.getBoundingClientRect();
+    return box.top >= band.top && box.bottom <= band.bottom;
+  });
+  expect(covered, 'precondition: the control sits behind the route nav').toBe(true);
+}
+
+/** The control's top edge below the route nav's bottom edge (negative: under it). */
+async function gapBelowRouteNav(target: Locator): Promise<number> {
+  return target.evaluate((element) => (
+    element.getBoundingClientRect().top - (document.querySelector('.route-nav')?.getBoundingClientRect().bottom ?? 0)
+  ));
+}
 
 test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
   test('Shift+Tab up the rows stops clear of the sticky header and the route nav, with a selection bar up', async ({ app, page }) => {
@@ -350,15 +394,51 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
     expect((await focusStop(page))?.covered, 'a stop under the pin').toContain('pinned column');
   });
 
-  test('/ask-genie keeps its own composer clearance on .main', async ({ app, page }) => {
+  test('a control focused from behind the sticky route nav stops below it (/glossary)', async ({ app, page }) => {
+    await app.gotoRoute('/glossary');
+    const target = page.locator('.main .proto-hero').getByRole('link', { name: 'Back to leads' });
+    await behindRouteNav(page, target);
+    await target.focus();
+    expect(await gapBelowRouteNav(target), 'the focused control sits below the nav').toBeGreaterThanOrEqual(-0.5);
+  });
+
+  test('non-vacuity: with the route-nav scroll-margin zeroed, that control stays behind the nav', async ({ app, page }) => {
+    await app.gotoRoute('/glossary');
+    await page.addStyleTag({ content: ZERO_NAV_MARGIN });
+    const target = page.locator('.main .proto-hero').getByRole('link', { name: 'Back to leads' });
+    await behindRouteNav(page, target);
+    await target.focus();
+    expect(await gapBelowRouteNav(target), 'a stop under the nav').toBeLessThan(0);
+  });
+
+  test('/ask-genie clears the nav once: its own .main padding, with no second margin on top', async ({ app, page }) => {
     await app.gotoRoute('/ask-genie');
-    const clearance = await page.evaluate(() => {
-      const main = document.querySelector<HTMLElement>('.main');
-      return main ? getComputedStyle(main).scrollPaddingBlockStart : null;
+    const panel = page.locator('section[role="tabpanel"]:not([hidden])');
+    await expect(panel.locator('.genie-composer'), 'precondition: the Ask tab (ask-genie.css) is showing').toBeVisible();
+    await addScrollRoom(page);
+    const target = panel.locator('button:not(.genie-composer *)').first();
+    const gap = await target.evaluate((element) => {
+      element.scrollIntoView({ block: 'start' });
+      return element.getBoundingClientRect().top - (document.querySelector('.route-nav')?.getBoundingClientRect().bottom ?? 0);
     });
-    const navBlock = await page.locator('.route-nav').evaluate((nav) => (nav as HTMLElement).offsetHeight);
-    // ask-genie.css: the measured route nav plus the focus ring (2px + 2px), not 38-focus-clearance's rule.
-    expect(Number.parseFloat(clearance ?? '0')).toBeCloseTo(navBlock + 4, 0);
+    // ask-genie.css pads `.main` by the measured nav plus the focus ring
+    // (2px + 2px); 38-focus-clearance's margin would put the nav in twice.
+    expect(gap, 'at or below the nav').toBeGreaterThanOrEqual(-0.5);
+    expect(gap, 'the focus ring\'s room, not a second nav height').toBeLessThanOrEqual(FOCUS_RING_ROOM + 1);
+  });
+
+  test('/ask-genie\'s Workflows tab keeps the route-nav clearance: only the Ask tab is left out', async ({ app, page }) => {
+    await app.gotoRoute('/ask-genie?tab=workflows');
+    const panel = page.locator('section[role="tabpanel"]:not([hidden])');
+    await expect(panel.getByRole('button').first(), 'precondition: the Workflows tab shows').toBeVisible();
+    await expect(panel.locator('.genie-composer')).toHaveCount(0);
+    await addScrollRoom(page);
+    const gap = await panel.getByRole('button').first().evaluate((element) => {
+      element.scrollIntoView({ block: 'start' });
+      return element.getBoundingClientRect().top - (document.querySelector('.route-nav')?.getBoundingClientRect().bottom ?? 0);
+    });
+    expect(gap, 'at or below the nav').toBeGreaterThanOrEqual(-0.5);
+    expect(gap, 'one clearance').toBeLessThanOrEqual(FOCUS_RING_ROOM + 1);
   });
 });
 

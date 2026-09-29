@@ -39,6 +39,10 @@ function block(css: string, selector: string): string {
 }
 
 const RING = String.raw`\+\s*var\(--focus-ring-width\)\s*\+\s*var\(--focus-ring-offset\)`;
+/** routes/ask-genie.css's condition for its own nav clearance: the Ask tab (with its docked composer) shows. */
+const ASK_TAB = String.raw`section\[role="tabpanel"\]:not\(\[hidden\]\) \.genie-composer`;
+/** The same condition, short (the shell sheet's gates): a composer outside any hidden tabpanel. */
+const ASK_TAB_SHORT = String.raw`\.genie-composer:not\(\[hidden\] \*\)`;
 
 describe('focus clearance (a11y-v2)', () => {
   it('imports 38-focus-clearance.css exactly once, right after 37', () => {
@@ -67,10 +71,15 @@ describe('focus clearance (a11y-v2)', () => {
 
   it('everything in .main outside the nav clears the sticky route nav, only inside the 40rem condition that docks it', () => {
     const css = components();
-    const media = /@media\s*\(min-height:\s*40rem\)\s*\{\s*\.main:has\(\.route-nav\) :not\(\.route-nav, \.route-nav \*, \.tbl-wrap \*\)\s*\{([^}]*)\}\s*\}/.exec(css);
+    // Zero specificity (:where), so a route's own scroll-margin still wins;
+    // never while /ask-genie's Ask tab clears the nav itself (below).
+    const media = new RegExp(String.raw`@media\s*\(min-height:\s*40rem\)\s*\{\s*`
+      + String.raw`:where\(\.main:has\(\.route-nav\):not\(:has\(${ASK_TAB_SHORT}\)\) :not\(\.route-nav \*, \.tbl-wrap \*\)\)`
+      + String.raw`\s*\{([^}]*)\}\s*\}`).exec(css);
     expect(media, 'the rule sits inside @media (min-height: 40rem)').not.toBeNull();
+    // The one-line nav (--sp-3 padding at each end, a --sp-8 link, the 1px border), plus the ring.
     expect(media![1]).toMatch(new RegExp(
-      String.raw`scroll-margin-block-start:\s*calc\(\s*var\(--route-nav-block-size,\s*calc\(var\(--sp-3\)\s*\*\s*2\s*\+\s*var\(--sp-8\)\s*\+\s*1px\)\)\s*${RING}\s*\);`,
+      String.raw`scroll-margin-block-start:\s*calc\(\s*var\(--sp-3\)\s*\*\s*2\s*\+\s*var\(--sp-8\)\s*\+\s*1px\s*${RING}\s*\);`,
     ));
     // The sticky nav is docked by the same condition (01-app-shell.css).
     expect(css).toMatch(/@media\s*\(min-height:\s*40rem\)\s*\{\s*\.route-nav\s*\{[^}]*position:\s*sticky;/);
@@ -80,9 +89,11 @@ describe('focus clearance (a11y-v2)', () => {
     expect(css.match(/\.main:has\(\.route-nav\)/g)).toHaveLength(1);
   });
 
-  it('leaves /ask-genie its own, more specific .main scroll-padding', () => {
+  // The rendered proofs that the two conditions agree (the Ask tab clears the
+  // nav once; the Workflows tab keeps this rule) are in lead-queue.fixture.spec.ts.
+  it('leaves /ask-genie to its own .main scroll-padding while its Ask tab shows', () => {
     const genie = featureStylesheets().find((entry) => entry.file === 'src/routes/ask-genie.css');
-    expect(genie?.css).toMatch(/\.main:has\(section\[role="tabpanel"\]:not\(\[hidden\]\) \.genie-composer\)\s*\{\s*scroll-padding-block-start/);
+    expect(genie?.css).toMatch(new RegExp(String.raw`\.main:has\(${ASK_TAB}\)\s*\{\s*scroll-padding-block-start`));
   });
 });
 

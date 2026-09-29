@@ -1,19 +1,19 @@
 /**
  * @vitest-environment happy-dom
  *
- * useTableScrollClearance (audit a11y-v2): measures the sticky thead, the
- * pinned Approval header and the sticky route nav, and writes them as the
- * custom properties the scroll-padding rules read (LeadTable.css,
- * 38-focus-clearance.css). A resize is written in the next
- * animation frame, never inside the ResizeObserver callback; all three are
- * removed on unmount. The rendered proof (no focus stop under the chrome) is
- * the focus-obscured walk in lead-queue.fixture.spec.ts.
+ * useTableScrollClearance (audit a11y-v2): measures the sticky thead and the
+ * pinned Approval header and writes them as the custom properties the
+ * scroll-padding rules in LeadTable.css read. A resize is written in the
+ * next animation frame, never inside the ResizeObserver callback; both are
+ * removed on unmount. The sticky route nav is 38-focus-clearance.css's (its
+ * one-line size, on every route): nothing here writes to `.main`. The
+ * rendered proof (no focus stop under the chrome) is the focus-obscured
+ * walk in lead-queue.fixture.spec.ts.
  */
 import { act, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ROUTE_NAV_BLOCK_VAR,
   TABLE_HEAD_BLOCK_VAR,
   TABLE_PIN_INLINE_VAR,
   useTableScrollClearance,
@@ -21,7 +21,7 @@ import {
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const sizes = { head: 44.4, pin: 156, nav: 57 };
+const sizes = { head: 44.4, pin: 156 };
 const observed: Element[] = [];
 let observerCallback: (() => void) | null = null;
 const frames: FrameRequestCallback[] = [];
@@ -66,7 +66,6 @@ describe('useTableScrollClearance', () => {
     observerCallback = null;
     sizes.head = 44.4;
     sizes.pin = 156;
-    sizes.nav = 57;
     vi.stubGlobal('ResizeObserver', FakeResizeObserver);
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
       frames.push(callback);
@@ -77,9 +76,6 @@ describe('useTableScrollClearance', () => {
       const height = this.tagName === 'THEAD' ? sizes.head : 0;
       const width = this.classList.contains('lead-table__approval-header') ? sizes.pin : 0;
       return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
-    });
-    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function height(this: HTMLElement) {
-      return this.classList.contains('route-nav') ? sizes.nav : 0;
     });
     document.body.innerHTML = '<main class="main"><nav class="route-nav"></nav><div id="root"></div></main>';
     main = document.querySelector<HTMLElement>('.main')!;
@@ -95,18 +91,18 @@ describe('useTableScrollClearance', () => {
 
   const wrap = () => document.querySelector<HTMLElement>('.tbl-wrap')!;
 
-  it('writes the thead, pin and route-nav sizes on mount (rounded up to whole pixels)', () => {
+  it('writes the thead and pin sizes on mount (rounded up to whole pixels), and nothing on .main', () => {
     act(() => root.render(<Table />));
     expect(wrap().style.getPropertyValue(TABLE_HEAD_BLOCK_VAR)).toBe('45px');
     expect(wrap().style.getPropertyValue(TABLE_PIN_INLINE_VAR)).toBe('156px');
-    expect(main.style.getPropertyValue(ROUTE_NAV_BLOCK_VAR)).toBe('57px');
-    expect(observed.map((element) => element.tagName.toLowerCase())).toEqual(['thead', 'th', 'nav']);
+    expect(observed.map((element) => element.tagName.toLowerCase())).toEqual(['thead', 'th']);
+    expect(main.getAttribute('style'), 'the route nav is 38-focus-clearance.css\'s').toBeNull();
   });
 
   it('writes a resize in the next animation frame, never inside the observer callback', () => {
     act(() => root.render(<Table />));
     sizes.head = 88;
-    sizes.nav = 90;
+    sizes.pin = 170;
     act(() => observerCallback?.());
     expect(wrap().style.getPropertyValue(TABLE_HEAD_BLOCK_VAR), 'unchanged inside the callback').toBe('45px');
     expect(frames).toHaveLength(1);
@@ -116,21 +112,14 @@ describe('useTableScrollClearance', () => {
     act(() => frames.shift()?.(0));
 
     expect(wrap().style.getPropertyValue(TABLE_HEAD_BLOCK_VAR)).toBe('88px');
-    expect(main.style.getPropertyValue(ROUTE_NAV_BLOCK_VAR)).toBe('90px');
+    expect(wrap().style.getPropertyValue(TABLE_PIN_INLINE_VAR)).toBe('170px');
   });
 
-  it('removes all three properties on unmount', () => {
+  it('removes both properties on unmount', () => {
     act(() => root.render(<Table />));
     const table = wrap();
     act(() => root.render(<div />));
     expect(table.style.getPropertyValue(TABLE_HEAD_BLOCK_VAR)).toBe('');
     expect(table.style.getPropertyValue(TABLE_PIN_INLINE_VAR)).toBe('');
-    expect(main.style.getPropertyValue(ROUTE_NAV_BLOCK_VAR)).toBe('');
-  });
-
-  it('writes nothing for a route nav that is not rendered (0 high)', () => {
-    sizes.nav = 0;
-    act(() => root.render(<Table />));
-    expect(main.style.getPropertyValue(ROUTE_NAV_BLOCK_VAR)).toBe('');
   });
 });
