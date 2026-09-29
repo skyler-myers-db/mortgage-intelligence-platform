@@ -49,45 +49,36 @@ export function nearestIndex(positions: readonly number[], pct: number): number 
 
 export function useChartCursor(count: number, positions: readonly number[]): ChartCursor {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const [keyIndex, setKeyIndex] = useState<number | null>(null);
-  const [liveIndex, setLiveIndex] = useState<number | null>(null);
+  // The keyboard cursor, and whether a keyboard move (not focus) put it there.
+  const [key, setKey] = useState<{ index: number; moved: boolean } | null>(null);
 
   const onPointerMove = (event: PointerEvent<HTMLElement>) => {
-    if (count <= 0 || positions.length === 0) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    if (rect.width === 0) return;
-    setHoverIndex(nearestIndex(positions, ((event.clientX - rect.left) / rect.width) * 100));
+    if (count > 0 && rect.width > 0) setHoverIndex(nearestIndex(positions, ((event.clientX - rect.left) / rect.width) * 100));
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (count <= 0) return;
-    const current = clampIndex(keyIndex, count);
+    const current = clampIndex(key?.index ?? null, count);
     let next: number;
     if (event.key === 'ArrowRight') next = current === null ? 0 : Math.min(count - 1, current + 1);
     else if (event.key === 'ArrowLeft') next = current === null ? 0 : Math.max(0, current - 1);
     else if (event.key === 'Home') next = 0;
     else if (event.key === 'End') next = count - 1;
     else return;
+    if (count <= 0) return;
     event.preventDefault();
-    setKeyIndex(next);
-    setLiveIndex(next);
+    setKey({ index: next, moved: true });
   };
 
-  const onFocus = (event: FocusEvent<HTMLElement>) => {
-    if (event.target !== event.currentTarget || count <= 0) return;
-    setKeyIndex((current) => current ?? 0);
-  };
-
-  const onBlur = (event: FocusEvent<HTMLElement>) => {
-    if (event.target !== event.currentTarget) return;
-    setKeyIndex(null);
-    setLiveIndex(null);
+  // The plot holds no focusable descendant, so its focus and blur are its own.
+  const onFocus = () => {
+    if (count > 0) setKey((current) => current ?? { index: 0, moved: false });
   };
 
   return {
-    index: clampIndex(hoverIndex ?? keyIndex, count),
-    liveIndex: clampIndex(liveIndex, count),
+    index: clampIndex(hoverIndex ?? key?.index ?? null, count),
+    liveIndex: key?.moved ? clampIndex(key.index, count) : null,
     surfaceProps: { onPointerMove, onPointerLeave: () => setHoverIndex(null) },
-    plotProps: { tabIndex: 0, onKeyDown, onFocus, onBlur },
+    plotProps: { tabIndex: 0, onKeyDown, onFocus, onBlur: () => setKey(null) },
   };
 }
