@@ -16,8 +16,9 @@ import { featureStylesheets } from '../test/featureCss';
  *     nav clears the sticky route nav (scroll-margin) inside the same 40rem
  *     condition that docks it. Rendered proof: the
  *     focus-obscured walk in tests/e2e/fixture/lead-queue.fixture.spec.ts.
- *     The in-place filter listboxes are left out of the nav's margin, and
- *     every :has() stays on `.main` itself (cost proof:
+ *     The pin's own controls cancel the inline-end padding, the in-place
+ *     filter listboxes are left out of the nav's margin, and every :has()
+ *     stays on `.main` itself (cost proof:
  *     focus-clearance-cost.fixture.spec.ts).
  *   - The row-expand motion (audit motion-08 slice 1, queue part): one
  *     chevron that rotates, an opacity-only fade in, both on --dur-fast /
@@ -42,6 +43,8 @@ function block(css: string, selector: string): string {
 }
 
 const RING = String.raw`\+\s*var\(--focus-ring-width\)\s*\+\s*var\(--focus-ring-offset\)`;
+/** The pinned column plus the ring, as LeadTable.css spells it. */
+const PIN_CLEAR = String.raw`var\(--tbl-pin-inline-size\)\s*${RING}`;
 
 function focusClearancePartial(): string {
   return stripComments(readFileSync(`${process.cwd()}/src/design-system/components/38-focus-clearance.css`, 'utf8') as string);
@@ -80,6 +83,13 @@ describe('focus clearance (a11y-v2)', () => {
     const pin = block(leadTableCss(), '.tbl-wrap:has(> .lead-table__table)');
     expect(pin).toMatch(/--tbl-pin-inline-size:\s*0px;/);
     expect(pin).toMatch(new RegExp(String.raw`scroll-padding-inline-end:\s*calc\(\s*var\(--tbl-pin-inline-size\)\s*${RING}\s*\);`));
+  });
+
+  it('moves the pin\'s own controls back by that padding, so a focus on one never scrolls the table sideways', () => {
+    const inPin = block(leadTableCss(), '.lead-table__table .tbl-cell--approval *');
+    expect(inPin).toMatch(new RegExp(
+      String.raw`scroll-margin-inline:\s*calc\(\s*${PIN_CLEAR}\s*\)\s*calc\(\s*-1\s*\*\s*\(\s*${PIN_CLEAR}\s*\)\s*\);`,
+    ));
   });
 
   it('keeps the shell stylesheet\'s `.tbl-wrap` as it was (the clearance ships in the lazy sheet)', () => {

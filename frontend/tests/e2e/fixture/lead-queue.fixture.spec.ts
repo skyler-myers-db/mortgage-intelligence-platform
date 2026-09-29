@@ -19,9 +19,10 @@
  *      sticky route nav (/glossary) stops below it, and not with the
  *      scroll-margin zeroed; /ask-genie's Ask tab clears the nav once (its
  *      own padding), its Workflows tab through 38-focus-clearance.css. A
- *      pointer pick in a scrolled STATE menu writes the option aimed at (the
- *      nav's margin stays out of the in-place listbox), with its non-vacuity
- *      twin.
+ *      focus on a pinned Approve / Reject leaves the table's scrollLeft where
+ *      it was (the pin's own controls are not "revealed"), and a pointer pick
+ *      in a scrolled STATE menu writes the option aimed at (the nav's margin
+ *      stays out of the in-place listbox); each with its non-vacuity twin.
  *      The clearance's style cost: focus-clearance-cost.fixture.spec.ts.
  *  (d) The assignment outcome (critic-06): Escape and Cancel make no POST
  *      and hand focus back; Record needs its confirm row, then one POST; a
@@ -350,8 +351,30 @@ async function gapBelowRouteNav(target: Locator): Promise<number> {
   ));
 }
 
+/** Zeroes the pinned controls' own scroll-margin (LeadTable.css), leaving the scroller's padding. */
+const ZERO_PIN_MARGIN = '.lead-table__table .tbl-cell--approval * { scroll-margin-inline: 0px !important; }';
 /** 38-focus-clearance.css's nav margin, put back on the in-place listbox's options. */
 const NAV_MARGIN_ON_MENU = '.filter-menu__item { scroll-margin-block-start: 61px !important; }';
+
+async function scrollLeftOf(page: Page): Promise<number> {
+  return tableWrap(page).evaluate((wrap) => wrap.scrollLeft);
+}
+
+/**
+ * Focus each pinned control of `borrowerId`'s row with the table scrolled to
+ * `start`, and return where scrollLeft ended up after each focus.
+ */
+async function scrollLeftAfterPinnedFocus(page: Page, borrowerId: string, start: number): Promise<number[]> {
+  const ends: number[] = [];
+  for (const control of [page.getByTestId(`lead-approve-${borrowerId}`), page.getByTestId(`lead-reject-${borrowerId}`)]) {
+    await tableWrap(page).evaluate((wrap, left) => { wrap.scrollLeft = left; }, start);
+    expect(Math.abs((await scrollLeftOf(page)) - start), 'precondition: the table sits at its start offset').toBeLessThanOrEqual(1);
+    await control.focus();
+    await expect(control).toBeFocused();
+    ends.push(await scrollLeftOf(page));
+  }
+  return ends;
+}
 
 /** Two animation frames: a React effect run by the last event has painted. */
 async function settleFrames(page: Page): Promise<void> {
@@ -493,6 +516,48 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
     });
     expect(gap, 'at or below the nav').toBeGreaterThanOrEqual(-0.5);
     expect(gap, 'one clearance').toBeLessThanOrEqual(FOCUS_RING_ROOM + 1);
+  });
+
+  test('a focus on a pinned Approve or Reject leaves the table\'s scrollLeft where it was, Console open', async ({ app, mockApi, page }) => {
+    registerQueueLayoutLeads(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await app.openConsole();
+    const overflow = await tableWrap(page).evaluate((wrap) => wrap.scrollWidth - wrap.clientWidth);
+    expect(overflow, 'precondition: the Console narrows the table into a horizontal scroll').toBeGreaterThan(40);
+
+    const middle = Math.round(overflow / 2);
+    for (const start of [0, middle]) {
+      for (const end of await scrollLeftAfterPinnedFocus(page, ELIGIBLE, start)) {
+        expect(Math.abs(end - start), `a pinned control focused at scrollLeft ${start} stays there`).toBeLessThanOrEqual(1);
+      }
+    }
+
+    // Shift+Tab from the next row's checkbox lands on this row's Reject, in the pin.
+    await tableWrap(page).evaluate((wrap) => { wrap.scrollLeft = 0; });
+    const order = await page.locator('tr[data-borrower-row]').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-borrower-row')));
+    const next = order[order.indexOf(ELIGIBLE) + 1];
+    expect(next, 'precondition: a row follows').toBeTruthy();
+    await page.getByTestId(`lead-select-${next}`).focus();
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.getByTestId(`lead-reject-${ELIGIBLE}`)).toBeFocused();
+    expect(await scrollLeftOf(page), 'the row\'s borrower id stays in view').toBeLessThanOrEqual(1);
+    const idInView = await page.getByRole('button', { name: `Toggle preview for lead ${ELIGIBLE}` }).evaluate((id) => {
+      const port = id.closest('.tbl-wrap')?.getBoundingClientRect();
+      return port ? id.getBoundingClientRect().left >= port.left - 1 : false;
+    });
+    expect(idInView, 'the row\'s borrower id is still inside the scrollport').toBe(true);
+  });
+
+  test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end', async ({ app, mockApi, page }) => {
+    registerQueueLayoutLeads(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await app.openConsole();
+    await page.addStyleTag({ content: ZERO_PIN_MARGIN });
+    const overflow = await tableWrap(page).evaluate((wrap) => wrap.scrollWidth - wrap.clientWidth);
+    expect(overflow).toBeGreaterThan(40);
+    for (const end of await scrollLeftAfterPinnedFocus(page, ELIGIBLE, 0)) {
+      expect(end, 'the scroller\'s inline-end padding "reveals" a control already in view').toBeGreaterThan(overflow - 2);
+    }
   });
 
   test('a pointer pick of the top visible option in a scrolled STATE menu writes that option', async ({ app, mockApi, page }) => {

@@ -192,6 +192,17 @@
     var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)
   );
 }
+/* ...except for what sits IN the pin. A pinned Approve / Reject is sticky
+   inside that inline-end padding by construction, so a focus on one (Tab,
+   Shift+Tab, the flow's focus hand-offs) scrolled the table to its far end
+   to "reveal" a control that was already in full view, and the row's
+   borrower id went out of view with it. Its scroll area is moved back by
+   the same amount (inline-start out, inline-end in), so it lies inside the
+   scroller's padded view and a focus leaves scrollLeft where it was. */
+.lead-table__table .tbl-cell--approval * {
+  scroll-margin-inline: calc(var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset))
+    calc(-1 * (var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)));
+}
 /* J / K scroll the cursor row into view: the scroller's scroll-padding
    (above) keeps it clear of the sticky header; the row adds a little air. */
 .lead-table__table tr[data-borrower-row] {
