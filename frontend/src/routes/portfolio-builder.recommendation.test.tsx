@@ -168,16 +168,24 @@ describe('PortfolioBuilder recommendation ownership', () => {
     }
   }
 
-  /** The server-authored copy under a campaign-setup label, as read-only text ('' while empty). */
-  function field(label: string): { value: string; editable: boolean } {
-    const match = [...container.querySelectorAll<HTMLElement>('.campaign-setup__field')]
+  function field(label: string): HTMLInputElement | HTMLTextAreaElement {
+    const match = [...container.querySelectorAll<HTMLLabelElement>('.campaign-setup__field')]
       .find((node) => node.firstElementChild?.textContent === label);
-    const text = match?.querySelector<HTMLElement>('dd');
-    if (!match || !text) throw new Error(`missing campaign copy: ${label}`);
-    return {
-      value: text.querySelector('.sr-only') ? '' : text.textContent ?? '',
-      editable: match.querySelector('input, textarea, [contenteditable]') !== null,
-    };
+    const input = match?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+    if (!input) throw new Error(`missing campaign field: ${label}`);
+    return input;
+  }
+
+  function setField(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
+    const prototype = input instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+    if (!setter) throw new Error('missing native value setter');
+    act(() => {
+      setter.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
   }
 
   function applyButton(): HTMLButtonElement | undefined {
@@ -232,8 +240,10 @@ describe('PortfolioBuilder recommendation ownership', () => {
     mount();
     await waitUntil(() => campaignRecommendation.mock.calls.length === 1);
 
-    // critic-04: the copy is text, so there is nothing to type into.
-    expect(field('Benefit-led subject')).toEqual({ value: '', editable: false });
+    const subject = field('Benefit-led subject');
+    expect(subject.readOnly).toBe(true);
+    setField(subject, 'Operator-owned subject');
+    expect(subject.value).toBe('');
 
     recommendation.resolve(RECOMMENDATION);
     await waitUntil(() => applyButton()?.disabled === false);
@@ -271,7 +281,8 @@ describe('PortfolioBuilder recommendation ownership', () => {
     act(() => applyButton()!.click());
     await waitUntil(() => field('Benefit-led subject').value === RECOMMENDATION.variants[0].subject);
 
-    expect(field('Benefit-led subject')).toEqual({ value: 'Recommended benefit subject', editable: false });
+    setField(field('Benefit-led subject'), 'Operator revised benefit subject');
+    expect(field('Benefit-led subject').value).toBe('Recommended benefit subject');
     await waitUntil(() => !saveButton().disabled);
     act(() => saveButton().click());
     const confirm = container.querySelector<HTMLButtonElement>(

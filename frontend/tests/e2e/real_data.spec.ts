@@ -1561,11 +1561,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       /No borrower identities, contact data, or outbound messages are included/i,
     );
     await campaign.getByRole('button', { name: 'Apply variants' }).click();
-    // critic-04: the reviewed copy is read-only text (FieldReadout), not an input.
-    await expect(page.getByLabel('Benefit-led subject')).not.toContainText('Not set');
-    await expect(page.getByLabel('Guidance-led subject')).not.toContainText('Not set');
-    await expect(page.getByLabel('Benefit-led message')).not.toContainText('Not set');
-    await expect(page.getByLabel('Guidance-led message')).not.toContainText('Not set');
+    await expect(page.getByLabel('Benefit-led subject')).not.toHaveValue('');
+    await expect(page.getByLabel('Guidance-led subject')).not.toHaveValue('');
+    await expect(page.getByLabel('Benefit-led message')).not.toHaveValue('');
+    await expect(page.getByLabel('Guidance-led message')).not.toHaveValue('');
 
     const leadQueue = page.getByRole('link', { name: /Open lead queue/i });
     await expect(leadQueue).toBeVisible({ timeout: 30_000 });

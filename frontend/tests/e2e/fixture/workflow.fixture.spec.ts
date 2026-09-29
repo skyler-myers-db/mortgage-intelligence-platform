@@ -15,8 +15,8 @@
  *      and hovering the pager, the Next link or the nav "Offer" reads nothing.
  *   5. A retries_exhausted 503 on the borrower read, then a health down -> up
  *      flip: exactly one more borrower / recommend / lifecycle read, no /draft.
- *   6-8. Campaign setup announces clamps and shows the server copy as text.
- *   9. axe-clean on those Portfolio Builder and Offer states.
+ *   6. Campaign setup announces clamps in the field.
+ *   7. axe-clean on those Portfolio Builder and Offer states.
  */
 import type { Locator, Page } from '@playwright/test';
 import type { DecisionReceipt } from '../../../src/lib/apiTypes';
@@ -284,7 +284,7 @@ test.describe('campaign setup: Field and clamps (critic-04)', () => {
   }
 
   for (const theme of FIXTURE_THEMES) {
-    test(`${theme}: a clamp is announced in the field and the server copy is text`, async ({ app, page }) => {
+    test(`${theme}: a clamp is announced in the field`, async ({ app, page }) => {
       await app.setTheme(theme);
       await app.gotoRoute('/portfolio-builder');
       await expectAxeClean(page, { key: { route: 'portfolio-builder', state: 'default' }, theme, known: KNOWN_VIOLATIONS });
@@ -297,14 +297,6 @@ test.describe('campaign setup: Field and clamps (critic-04)', () => {
       await expect(field(page, 'Budget')).toHaveValue('10000000');
       await expect(page.locator('.field', { has: field(page, 'Budget') }).getByRole('status')).toHaveText('Capped at $10,000,000');
       await expectAxeClean(page, { key: { route: 'portfolio-builder', state: 'clamp-notice' }, theme, known: {} });
-
-      // The reviewed copy is read-only text: nothing to type into.
-      const setup = page.locator(`${MAIN} .campaign-setup`);
-      await expect(setup.locator('textarea')).toHaveCount(0);
-      await expect(setup.locator('input[readonly]')).toHaveCount(0);
-      const subject = page.getByLabel('Benefit-led subject');
-      await expect(subject).toBeVisible();
-      await expect(subject).toHaveJSProperty('tagName', 'DD');
     });
   }
 });

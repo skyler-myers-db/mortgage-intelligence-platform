@@ -413,16 +413,14 @@ describe('PortfolioBuilder save-build flow', () => {
     mount();
     await waitUntil(() => !saveButton().disabled);
 
-    // critic-04: the copy is a readout, with no input or textarea to type in.
-    const setup = container.querySelector('.campaign-setup')!;
-    expect(setup.querySelectorAll('textarea, input[readonly]')).toHaveLength(0);
-    const subject = [...setup.querySelectorAll<HTMLElement>('dt')]
-      .find((node) => node.textContent === 'Benefit-led subject')?.nextElementSibling as HTMLElement | null;
-    expect(subject?.tagName).toBe('DD');
-    // Even text written straight into the DOM never reaches the payload:
-    // save sends the setup STATE only.
+    const subject = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Benefit-led subject"]',
+    );
+    expect(subject).not.toBeNull();
+    expect(subject!.readOnly).toBe(true);
     act(() => {
-      subject!.textContent = 'Review your mortgage options';
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(subject!, 'Review your mortgage options');
       subject!.dispatchEvent(new Event('input', { bubbles: true }));
     });
     act(() => saveButton().click());

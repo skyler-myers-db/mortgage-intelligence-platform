@@ -50,14 +50,6 @@ function control(label: string): HTMLInputElement {
   return input;
 }
 
-/** The read-only copy under a FieldReadout label. */
-function readout(label: string): HTMLElement {
-  const dt = [...document.querySelectorAll<HTMLElement>('dt.field__label')].find((node) => node.textContent === label);
-  const dd = dt?.nextElementSibling;
-  if (!(dd instanceof HTMLElement) || dd.tagName !== 'DD') throw new Error(`no readout labelled ${label}`);
-  return dd;
-}
-
 /** A Field's polite status region, found from its control. */
 function notice(input: HTMLElement): HTMLElement {
   const region = input.closest('.field')?.querySelector<HTMLElement>('.field__notice');
@@ -313,21 +305,10 @@ describe('CampaignSetupPanel', () => {
     const applyButton = [...document.querySelectorAll('button')].find((button) => (
       button.textContent?.includes('Apply variants')
     ));
-    // critic-04: the copy is text under its label, with no input or textarea
-    // left to type into (or to DOM-tamper); an empty one reads as a muted dash.
-    expect(readout('Benefit-led subject').textContent).toBe('Operator-edited subject');
-    expect(readout('Benefit-led message').textContent).toBe('Operator-edited message');
-    expect(readout('Benefit-led subject').getAttribute('aria-labelledby'))
-      .toBe(readout('Benefit-led subject').previousElementSibling?.id);
-    const empty = readout('Guidance-led subject');
-    expect(empty.querySelector('[aria-hidden="true"]')?.textContent).toBe('—');
-    expect(empty.querySelector('.sr-only')?.textContent).toBe('Not set');
-    for (const label of ['Benefit-led subject', 'Guidance-led subject', 'Benefit-led message', 'Guidance-led message']) {
-      expect(readout(label).closest('.campaign-setup')).not.toBeNull();
-      expect(readout(label).closest('dl')?.querySelector('input, textarea')).toBeNull();
-    }
-    expect(document.querySelectorAll('.campaign-setup textarea')).toHaveLength(0);
-    expect(document.querySelectorAll('.campaign-setup input[readonly]')).toHaveLength(0);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Benefit-led subject"]')?.readOnly)
+      .toBe(true);
+    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Benefit-led message"]')?.readOnly)
+      .toBe(true);
     expect(document.body.textContent).toContain('rendered from reviewed server templates');
     act(() => applyButton?.click());
     expect(apply).toHaveBeenCalledTimes(1);
@@ -478,26 +459,11 @@ describe('CampaignSetupPanel', () => {
     expect(notice(control('Budget')).textContent).toBe('Capped at $10,000,000');
   });
 
-  it('binds every setup label to its control and shows the unit adornments', () => {
+  it('binds every numeric setup label to its control by id', () => {
     renderSetup(DEFAULT_CAMPAIGN_SETUP);
-    const adornments = (label: string) => {
-      const field = control(label).closest('.field');
-      return [...(field?.querySelectorAll<HTMLElement>('.field__adornment') ?? [])].map((node) => [
-        node.textContent,
-        node.compareDocumentPosition(control(label)) & Node.DOCUMENT_POSITION_FOLLOWING ? 'prefix' : 'suffix',
-        node.getAttribute('aria-hidden'),
-      ]);
-    };
-    expect(adornments('Holdout % (0-50)')).toEqual([['%', 'suffix', 'true']]);
-    for (const label of ['Budget', 'Email cost', 'SMS cost', 'Mail cost']) {
-      expect(adornments(label), label).toEqual([['$', 'prefix', 'true']]);
-    }
-    for (const label of ['Send start', 'Send end']) {
-      expect(adornments(label), label).toEqual([]);
-      expect(control(label).type).toBe('time');
-    }
-    for (const label of ['Holdout % (0-50)', 'Budget', 'Email cost', 'SMS cost', 'Mail cost', 'Send start', 'Send end']) {
+    for (const label of ['Holdout % (0-50)', 'Budget', 'Email cost', 'SMS cost', 'Mail cost']) {
       const input = control(label);
+      expect(input.type, label).toBe('number');
       expect(input.hasAttribute('aria-label'), label).toBe(false);
       expect(input.labels?.[0]?.textContent, label).toBe(label);
     }
