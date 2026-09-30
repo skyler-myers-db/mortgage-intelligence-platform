@@ -67,23 +67,6 @@ export const KNOWN_VIOLATIONS: KnownViolations = {
   'home|default|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
   'lead-queue|default|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
   'borrower-360-detail|default|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
-  // New slug (no register id fits; wave 3/4): Portfolio Builder's message
-  // hypotheses wrap each <dt>/<dd> pair in `<div role="group" aria-label>`
-  // (portfolio-builder.campaign-setup.tsx). A role on the wrapper takes the
-  // pair out of the <dl>, so axe reports the list and its items. Surfaced by
-  // the first default-state scan of this route (wave 2).
-  'portfolio-builder|default|definition-list': {
-    finding: 'a11y-w2-hypothesis-dl',
-    recorded: '2026-09-24',
-    themes: ['dark', 'light'],
-    nodes: 'dl.campaign-recommendation__hypothesis-list',
-  },
-  'portfolio-builder|default|dlitem': {
-    finding: 'a11y-w2-hypothesis-dl',
-    recorded: '2026-09-24',
-    themes: ['dark', 'light'],
-    nodes: '.campaign-recommendation__hypothesis > dt, .campaign-recommendation__hypothesis > dd',
-  },
   // a11y-01 (the selected evidence tab painted the light accent at 1.75:1)
   // was retired 2026-09-23: the theme x accent token lane moved
   // `.drawer__tab.is-active` onto --accent-ink and the five

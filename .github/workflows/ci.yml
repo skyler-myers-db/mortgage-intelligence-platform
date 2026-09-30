@@ -434,7 +434,11 @@ jobs:
     # request, or an API call with no registered fixture.
     name: e2e (fixture harness, every route)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Wave 4b (2026-09-29): the suite grew to 948 tests and the single-worker
+    # perf step now also runs the Lead Queue interaction budget (a 500-row
+    # queue at 4x CPU). Measured on run 36639466070: setup 4 min, harness
+    # 17 min, then the job hit the old 20-minute cap inside the perf step.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -621,7 +625,7 @@ jobs:
           bandit -c .bandit -r backend tools jobs pipelines -x tests --severity-level high --confidence-level high -q
 
       - name: pip-audit (Python deps)
-        # One advisory is ignored here. It has its reachability and its
+        # Two advisories are ignored here. Each has its reachability and its
         # upstream status written at the call site and re-checked whenever
         # the list changes; an ignore without both is a bug.
         #
@@ -660,7 +664,30 @@ jobs:
         # (null on 2026-09-08; advisory last updated 2026-08-31). If it is
         # still null, re-confirm proofs 1 and 2 above and move this date
         # forward; if it is set, retire the ignore and bump the pin instead.
-        run: pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789
+        #
+        # GHSA-xpv3-w29h-x7cv (oauthlib, ignore added 2026-09-29, published the
+        # same day) is a timing attack on the PKCE code_verifier comparison in
+        # oauthlib's authorization SERVER: code_challenge_method_s256 / _plain
+        # in oauthlib/oauth2/rfc6749/grant_types/authorization_code.py, run by
+        # AuthorizationCodeGrant.validate_token_request.
+        #   1. Unreachable, twice over. Nothing in this repo imports oauthlib or
+        #      the package that pulls it in: over backend, jobs, tools and
+        #      pipelines, both `grep -rE "^\s*(import|from)
+        #      (oauthlib|databricks\.sql)"` and `grep -rE "^\s*from databricks
+        #      import (.*\b)?sql\b"` return nothing (the App's SQL goes
+        #      through the databricks-sdk Statements API). The only importer,
+        #      databricks-sql-connector's auth/oauth.py, uses the CLIENT side
+        #      (oauthlib.oauth2.WebApplicationClient, OAuth2Error) and never
+        #      runs a server grant validator.
+        #   2. The fix cannot be installed. The only patched release is oauthlib
+        #      4.0.0, and every databricks-sql-connector release through 4.6.0
+        #      (the latest) requires oauthlib>=3.1.0,<4.0.0.
+        # Remove this ignore when a databricks-sql-connector release admits
+        # oauthlib 4 (then move both pins), or when the connector leaves the
+        # lock.
+        # Review date: 2026-10-13. Re-check with
+        #   curl -s https://pypi.org/pypi/databricks-sql-connector/json | jq '.info.requires_dist'
+        run: pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789 --ignore-vuln GHSA-xpv3-w29h-x7cv
 
       - name: npm audit (frontend prod + dev deps)
         # `--audit-level=high` means only high/critical CVEs fail the

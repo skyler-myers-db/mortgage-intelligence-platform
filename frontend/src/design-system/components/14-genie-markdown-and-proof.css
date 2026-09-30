@@ -57,11 +57,11 @@
 }
 .genie-line__path {
   fill: none;
-  stroke: var(--accent);
+  stroke: var(--accent-data);
   stroke-width: 3;
 }
 .genie-line__dot {
-  fill: var(--accent);
+  fill: var(--accent-data);
   stroke: var(--bg-1);
   stroke-width: 2;
 }
@@ -86,14 +86,16 @@
 .genie-map__region.has-data {
   stroke: var(--line-3);
 }
+/* The governed map ramp (tokens.css --map-ramp-*, dataviz-09): the same
+   AA-tuned steps as the Segment Intelligence choropleth. */
 .genie-map__region.lvl-1,
-.genie-map__dot.lvl-1 { fill: color-mix(in oklab, var(--accent) 18%, var(--bg-3)); }
+.genie-map__dot.lvl-1 { fill: var(--map-ramp-1); }
 .genie-map__region.lvl-2,
-.genie-map__dot.lvl-2 { fill: color-mix(in oklab, var(--accent) 34%, var(--bg-3)); }
+.genie-map__dot.lvl-2 { fill: var(--map-ramp-2); }
 .genie-map__region.lvl-3,
-.genie-map__dot.lvl-3 { fill: color-mix(in oklab, var(--accent) 58%, var(--bg-3)); }
+.genie-map__dot.lvl-3 { fill: var(--map-ramp-3); }
 .genie-map__region.lvl-4,
-.genie-map__dot.lvl-4 { fill: var(--accent); }
+.genie-map__dot.lvl-4 { fill: var(--map-ramp-4); }
 .genie-map__legend {
   display: flex;
   flex-wrap: wrap;

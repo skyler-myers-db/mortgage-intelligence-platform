@@ -39,6 +39,8 @@ type GrowthAgentRunResponse = {
       segment_mode?: string;
       funnel_stage?: string;
       portfolio_criteria?: Record<string, unknown>;
+      source?: string;
+      states?: string[];
     };
   };
   source_assets: string[];

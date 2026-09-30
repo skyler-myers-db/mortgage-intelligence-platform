@@ -23,7 +23,8 @@ def test_native_analytics_routes_return_typed_app_payloads() -> None:
 
     economics = client.get("/api/v1/analytics/economics")
     assert economics.status_code == 200
-    assert set(economics.json()) == {"rate_spread_histogram", "equity_spread", "top_borrowers"}
+    assert set(economics.json()) == {"rate_spread_histogram", "equity_spread", "top_borrowers", "thresholds"}
+    assert economics.json()["thresholds"] == {"min_spread_bps": 75, "min_equity_pct": 15, "reason": None}
 
     economics_points = client.get("/api/v1/analytics/economics/points")
     assert economics_points.status_code == 200
@@ -205,6 +206,16 @@ class _AnalyticsSqlClient:
             }]
         if "AVG(e.confidence)" in statement:
             return [{"signal_type": "rate_spread", "source_product": "Voluntary Lien", "source_table": "mip.silver.lien_current", "event_count": 3, "mean_confidence": 0.9}]
+        if "AS min_spread_lo" in statement:
+            return [{
+                "row_count": 10,
+                "spread_rows": 10,
+                "min_spread_lo": 75,
+                "min_spread_hi": 75,
+                "equity_rows": 10,
+                "min_equity_lo": 15,
+                "min_equity_hi": 15,
+            }]
         if "GROUP BY TO_DATE(e.`timestamp`), e.signal_type" in statement:
             return [{"event_date": "2026-05-18", "signal_type": "rate_spread", "event_count": 3}]
         raise AssertionError(statement)
@@ -226,6 +237,7 @@ def test_analytics_repository_uses_governed_gold_and_semantic_sql() -> None:
     assert repo.economics_points().total_matching == 6
     assert repo.economics_points().truncated is True
     assert repo.economics().top_borrowers[0].borrower_id == "B-48291"
+    assert repo.economics().thresholds.model_dump() == {"min_spread_bps": 75, "min_equity_pct": 15, "reason": None}
     assert repo.segments().overview[0].segment_code == "itm"
     assert repo.segments().scope.code == "full_population_pre_suppression"
     assert "marketable-lead filters" in repo.segments().scope.description

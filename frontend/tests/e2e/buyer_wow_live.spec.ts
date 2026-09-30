@@ -190,8 +190,9 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
       .toBeGreaterThan(0);
 
     // D8 (re-audit #5): evidence hover-card attaches to Supporting-evidence
-    // chips too (110ms open delay — the audit's single 1s manual hover read as
-    // "no card"; this confirms coverage is uniform, not chip-family-specific).
+    // chips too. It opens after EvidenceHoverCard's SHOW_DELAY_MS, which the
+    // visibility wait below covers (the audit's single manual hover read as
+    // "no card"); this confirms coverage is uniform, not chip-family-specific.
     const evidenceChip = page.locator('.chip-row .evidence-chip').first();
     await expect(evidenceChip).toBeVisible({ timeout: 10_000 });
     await evidenceChip.scrollIntoViewIfNeeded();

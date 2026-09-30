@@ -80,23 +80,45 @@ class DatabricksSqlPermissionError(DatabricksSqlError):
     """
 
 
+class DatabricksSqlObjectMissingError(DatabricksSqlError):
+    """The warehouse answered that a table or view does not exist (SQLSTATE 42P01).
+
+    A definitive answer from a reachable warehouse: no retry can create the
+    table. A roll-forward that adds a gold table promotes the App before the
+    refresh job builds it, so this is the realistic first-deploy failure. A
+    subclass, so every ``except DatabricksSqlError`` still catches it; the
+    resilient client fails fast on it (see ``Resilient``'s ``object_missing_on``).
+    """
+
+
 # Unity Catalog's authorization refusal: its error class or its SQLSTATE.
 _UC_PERMISSION_DENIED_RE = re.compile(r"\bINSUFFICIENT_PERMISSIONS\b|\bSQLSTATE:?\s*42501\b")
+# A missing table or view: its error class or its SQLSTATE. A closed shape on
+# purpose: no SCHEMA_NOT_FOUND, UNRESOLVED_ROUTINE or "not found" prose until a
+# captured failing statement shows one.
+_UC_OBJECT_MISSING_RE = re.compile(r"\bTABLE_OR_VIEW_NOT_FOUND\b|\bSQLSTATE:?\s*42P01\b")
 
 
 def _sql_error_class(message: object, error_code: object = None) -> type[DatabricksSqlError]:
-    """``DatabricksSqlPermissionError`` for an authorization refusal, else the base.
+    """The typed ``DatabricksSqlError`` for a warehouse failure.
 
-    A refusal is the UC error class / SQLSTATE in the message, or a FAILED
-    statement's own ``PERMISSION_DENIED`` error code. The HTTP-level path
-    passes only the response body, so a 403 without those markers (an
-    expired or invalid token, which a re-minted token can fix) stays a
-    plain, retryable ``DatabricksSqlError``.
+    ``DatabricksSqlPermissionError`` for an authorization refusal: the UC error
+    class / SQLSTATE in the message, or a FAILED statement's own
+    ``PERMISSION_DENIED`` error code. The HTTP-level path passes only the
+    response body, so a 403 without those markers (an expired or invalid
+    token, which a re-minted token can fix) stays a plain, retryable
+    ``DatabricksSqlError``. A refusal wins when a message carries both.
+
+    ``DatabricksSqlObjectMissingError`` for a missing table or view, from the
+    message only (never from an error code alone). Anything else is the base.
     """
-    if _UC_PERMISSION_DENIED_RE.search(str(message or "")):
+    text = str(message or "")
+    if _UC_PERMISSION_DENIED_RE.search(text):
         return DatabricksSqlPermissionError
     if str(error_code or "").strip().upper() == "PERMISSION_DENIED":
         return DatabricksSqlPermissionError
+    if _UC_OBJECT_MISSING_RE.search(text):
+        return DatabricksSqlObjectMissingError
     return DatabricksSqlError
 
 
@@ -436,10 +458,12 @@ def get_sql_client() -> DatabricksSqlClient:
             backoff_max=2.0,
             # Retry any Databricks-side failure including URLError;
             # ``DependencyDownError`` is never wrapped (breaker-open
-            # already short-circuits). A permission refusal is the one
-            # definitive answer: fail fast, never retried, not "warming".
+            # already short-circuits). A permission refusal and a missing
+            # table are the definitive answers: fail fast, never retried,
+            # never counted against the breaker, not "warming".
             retry_on=(DatabricksSqlError, OSError),
             permission_denied_on=(DatabricksSqlPermissionError,),
+            object_missing_on=(DatabricksSqlObjectMissingError,),
         )
         _CLIENT = ResilientSqlClient(bare, resilient)
         return _CLIENT

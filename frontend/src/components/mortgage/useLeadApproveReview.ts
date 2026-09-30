@@ -74,6 +74,12 @@ export function useLeadApproveReview({
   isDecisionInFlight,
   onApproved,
 }: UseLeadApproveReviewInput) {
+  // Budget trade (audit runtime-03 / runtime-04, the wave-4b lane's cut 4):
+  // the bailout this hook had is fixed, so it compiles cleanly without this
+  // line, but the LeadTable shell that calls it stays uncompiled (cut 5), so
+  // nothing reads its memoized values and the memo caches only cost bytes
+  // (the family compile measured +0.58 KiB br on the LeadTable chunk).
+  // Delete this line once the shell compiles.
   'use no memo';
 
   const [review, setReviewState] = useState<LeadApproveReviewState | null>(null);
@@ -129,9 +135,24 @@ export function useLeadApproveReview({
     }
     // Never abandon a review whose approval is on the wire.
     if (current?.phase === 'submitting') return 'busy';
-    if (!canStartApproval()) return 'blocked';
+    if (!canStartApproval(borrowerId)) return 'blocked';
     startDraft(borrowerId, mode);
     return 'opened';
+  }
+
+  /**
+   * Abandon the review. Refused while the approval is on the wire. Declared
+   * before its callers: the compiler does not memoize a hoisted function
+   * reference (runtime-03).
+   */
+  function cancel(): boolean {
+    const current = reviewRef.current;
+    if (!current) return true;
+    if (current.phase === 'submitting') return false;
+    draftAbortRef.current?.abort();
+    draftAbortRef.current = null;
+    setReview(null);
+    return true;
   }
 
   /** "Generate draft again" after a failed draft: a new explicit intent. */
@@ -152,7 +173,7 @@ export function useLeadApproveReview({
       cancel();
       return;
     }
-    if (!canStartApproval()) return;
+    if (!canStartApproval(current.borrowerId)) return;
     startDraft(current.borrowerId, current.mode);
   }
 
@@ -184,17 +205,6 @@ export function useLeadApproveReview({
         ? 'Not approved yet: another decision for this borrower is still being recorded. Wait for it to finish, then check the row.'
         : 'Not approved. The generated draft stays on record; confirm again or cancel.',
     });
-  }
-
-  /** Abandon the review. Refused while the approval is on the wire. */
-  function cancel(): boolean {
-    const current = reviewRef.current;
-    if (!current) return true;
-    if (current.phase === 'submitting') return false;
-    draftAbortRef.current?.abort();
-    draftAbortRef.current = null;
-    setReview(null);
-    return true;
   }
 
   /**

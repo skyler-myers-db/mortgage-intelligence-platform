@@ -69,6 +69,7 @@ const TERMINAL_PROGRESS: GenieLiveProgress = {
 
 const ANSWER_FIELDS = {
   answer: 'Illinois leads with 3,080 candidates.',
+  question: 'Which states have the most prime refi candidates?',
   source: 'genie',
   trusted_assets: ['mip.gold.borrower_360'],
   conversation_id: 'conv-1',
@@ -213,7 +214,7 @@ describe('a reload whose cancelled request rejects before pagehide reaches the s
     await advance();
 
     expect(getGenieTurns()).toEqual([
-      { question: QUESTION, response: { answer: 'Genie session reset: Failed to fetch', source: 'degraded', trusted_assets: [] } },
+      { question: QUESTION, response: { answer: 'Genie session reset: Failed to fetch', question: QUESTION, source: 'degraded', trusted_assets: [] } },
     ]);
     expect(getGenieTurnSnapshot().inFlight).toBeNull();
     expect(storedRecord()).toBeNull();

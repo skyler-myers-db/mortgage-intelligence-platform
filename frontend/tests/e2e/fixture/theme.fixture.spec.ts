@@ -14,7 +14,7 @@
  *     preference (it used to mark the painted theme, so System read "Light");
  *  e. every theme x accent pair paints the shared token focus ring at 3:1,
  *     from the global :focus-visible rule and from a bespoke one, and passes
- *     axe color-contrast on / and /lead-queue;
+ *     the shared axe gate (fixture/axe.ts) on / and /lead-queue;
  *  f. every theme x accent pair prints the accent family monochrome, as
  *     print.css asks (the (0,2,0) theme x accent compounds used to outrank
  *     its remap: dark + navy printed accent-ink #66C5FF on white paper).
@@ -23,8 +23,8 @@
  * evidence-drawer tab, text-input focus) are proven in
  * contrastStates.fixture.spec.ts.
  */
-import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
+import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import {
   asComputedRgb,
   centerPixel,
@@ -42,17 +42,6 @@ const TRANSPARENT = 'rgba(0, 0, 0, 0)';
 /** CanvasText / Canvas under the light color-scheme tokens.css forces for print. */
 const PRINT_INK = 'rgb(0, 0, 0)';
 const PRINT_PAPER = 'rgb(255, 255, 255)';
-
-/**
- * The one pair that cannot reach AA without changing a prototype DARK value:
- * white CTA text on brand red #FF3621 (design_files/index.html:165), 3.6:1
- * (a11y-01). Mirrors DOCUMENTED_EXCEPTIONS in tokenContrast.test.ts; the
- * test fails if the exception stops being observed (stale) or if anything
- * else fails in that combo.
- */
-const DOCUMENTED_AXE_EXCEPTIONS: Record<string, RegExp> = {
-  'dark/red': /foreground color: #ffffff, background color: #ff3621/,
-};
 
 interface AttributeTrace {
   atDomContentLoaded: string | null;
@@ -140,17 +129,6 @@ async function expectTokenRing(page: Page, target: Locator, label: string): Prom
   const surface = await renderedColors(target.locator('xpath=..'));
   const ratio = contrastRatio(parseRgb(ring.outlineColor), surface.bg);
   expect(ratio, `${label}: ${ring.outlineColor} on rgb(${surface.bg.join(', ')}) = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
-}
-
-async function colorContrastViolations(page: Page): Promise<string[]> {
-  const results = await new AxeBuilder({ page })
-    .withRules(['color-contrast'])
-    // Decorative canvas background layer; same waiver as accessibility.spec.ts.
-    .exclude('canvas')
-    .analyze();
-  return results.violations.flatMap((violation) =>
-    violation.nodes.map((node) => `${violation.id} (${violation.impact}): ${node.target.join(' ')} — ${node.failureSummary?.split('\n')[1] ?? ''}`),
-  );
 }
 
 test('a stored light theme is painted before React mounts, even when the OS prefers dark', async ({ app, page }) => {
@@ -284,13 +262,13 @@ test('the Administration appearance section marks and edits the same preference 
 
 for (const theme of THEMES) {
   for (const accent of ACCENTS) {
-    test(`${theme} + ${accent}: visible token focus ring and no colour-contrast violations`, async ({ app, page }) => {
+    test(`${theme} + ${accent}: visible token focus ring and no axe violation beyond the ratchet`, async ({ app, page }) => {
       // Two settled route loads and two full-page axe passes: under a loaded
       // runner this exceeds the default 60 s budget (observed 1.4-1.7 min at
       // load average ~250). A slow budget, not a retry.
       test.slow();
       await app.setTheme(theme);
-      await seedStorage(page, 'mip.accent', accent);
+      await app.setAccent(accent);
       await app.gotoRoute('/');
       await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
 
@@ -303,21 +281,15 @@ for (const theme of THEMES) {
       await expectTokenRing(page, nav.getByRole('link', { name: 'Entrada home' }), 'rail brand (bespoke rule)');
       await expectTokenRing(page, nav.locator('a.rail__item').first(), 'rail module link (global rule)');
 
-      const exception = DOCUMENTED_AXE_EXCEPTIONS[`${theme}/${accent}`];
-      let excepted = 0;
-      for (const route of ['/', '/lead-queue']) {
-        if (route !== '/') await app.gotoRoute(route);
-        const violations = await colorContrastViolations(page);
-        const remaining = violations.filter((violation) => {
-          if (exception?.test(violation)) {
-            excepted += 1;
-            return false;
-          }
-          return true;
-        });
-        expect(remaining, `axe color-contrast on ${route}`).toEqual([]);
+      // The shared gate: WCAG A/AA at every impact against the canonical
+      // ratchet. Dark + red keeps a11y-01's `.btn--primary` contrast entry
+      // ('home|default' and 'lead-queue|default', white on brand red #FF3621,
+      // design_files/index.html:165); any other violation fails, and so does
+      // that entry once it stops reproducing (stale).
+      for (const [path, route] of [['/', 'home'], ['/lead-queue', 'lead-queue']] as const) {
+        if (path !== '/') await app.gotoRoute(path);
+        await expectAxeClean(page, { key: { route, state: 'default' }, theme, accent, known: KNOWN_VIOLATIONS });
       }
-      if (exception) expect(excepted, 'documented exception no longer observed: remove it').toBeGreaterThan(0);
     });
   }
 }
@@ -326,7 +298,7 @@ for (const theme of THEMES) {
   for (const accent of ACCENTS) {
     test(`${theme} + ${accent}: print paints the accent family monochrome`, async ({ app, page }) => {
       await app.setTheme(theme);
-      await seedStorage(page, 'mip.accent', accent);
+      await app.setAccent(accent);
       await app.gotoRoute('/');
       await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
       // Non-vacuity: on screen every pair's accent-ink is a hue, never the print ink.

@@ -29,7 +29,8 @@
  *    row; the old in-page routing chip is gone.
  *  - Entry uses @starting-style; reduced motion drops the transition.
  */
-import AxeBuilder from '@axe-core/playwright';
+import type { FixtureTheme } from './app';
+import { expectAxeClean } from './axe';
 import type { Locator, Page } from '@playwright/test';
 import type { DecisionReceipt, GenieSubmitResult } from '../../../src/lib/apiTypes';
 import { PRIMARY_BORROWER } from './data/borrowers';
@@ -93,13 +94,9 @@ function toastRegion(page: Page): Locator {
   return page.locator('section.toast-region[aria-label="Notifications"]');
 }
 
-/** WCAG 2.0/2.1/2.2 A + AA violations inside `selector` (the axe gate's tag set). */
-async function axeViolations(page: Page, selector: string): Promise<string[]> {
-  const results = await new AxeBuilder({ page })
-    .include(selector)
-    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-    .analyze();
-  return results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(' ; ')}`);
+/** The shared axe gate (fixture/axe.ts), scoped to the dialog or toast region a test opened. */
+async function expectRegionAxeClean(page: Page, state: string, include: string, theme: FixtureTheme): Promise<void> {
+  await expectAxeClean(page, { key: { route: 'feedback-guard', state }, theme, known: {}, include });
 }
 
 test.describe('unsaved-changes guard (states-05)', () => {
@@ -110,7 +107,7 @@ test.describe('unsaved-changes guard (states-05)', () => {
     let dialog = await expectBlockedOnPortfolio(page);
     // A native modal: the page behind it is inert and the dialog is on the top layer.
     expect(await dialog.evaluate((node) => node.matches(':modal'))).toBe(true);
-    expect(await axeViolations(page, 'dialog.unsaved-dialog'), 'WCAG A/AA inside the open dialog').toEqual([]);
+    await expectRegionAxeClean(page, 'unsaved-dialog', 'dialog.unsaved-dialog', 'light');
     await dialog.getByRole('button', { name: 'Stay' }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page).toHaveURL(/\/portfolio-builder$/);
@@ -134,7 +131,7 @@ test.describe('unsaved-changes guard (states-05)', () => {
       await dirtyPortfolio(app, page);
       await railHome(page).click();
       const dialog = await expectBlockedOnPortfolio(page);
-      expect(await axeViolations(page, 'dialog.unsaved-dialog'), `WCAG A/AA inside the dialog (${theme})`).toEqual([]);
+      await expectRegionAxeClean(page, 'unsaved-dialog', 'dialog.unsaved-dialog', theme);
       for (const part of ['.approval__title', '.approval__sub']) {
         const { fg, bg } = await renderedColors(dialog.locator(part));
         expect(contrastRatio(fg, bg), `${part} contrast in ${theme}`).toBeGreaterThanOrEqual(4.5);
@@ -308,7 +305,7 @@ test.describe('toast region (states-07 slice 1)', () => {
       await app.settle();
       await expect(toast).toHaveCount(1);
       expect(saved).toEqual(['Summit IL refi cohort']);
-      expect(await axeViolations(page, 'section.toast-region'), `WCAG A/AA in the toast region (${theme})`).toEqual([]);
+      await expectRegionAxeClean(page, 'save-toast', 'section.toast-region', theme);
 
       // Bottom-centre inside the 1440x900 viewport, painted above the page.
       const box = await toast.boundingBox();
@@ -385,7 +382,7 @@ test.describe('toast region (states-07 slice 1)', () => {
     await expect(share).toHaveText('Share this build');
     const { fg, bg } = await renderedColors(failure.locator('.toast__ico'));
     expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(3);
-    expect(await axeViolations(page, 'section.toast-region'), 'WCAG A/AA with a failure toast').toEqual([]);
+    await expectRegionAxeClean(page, 'failure-toast', 'section.toast-region', 'light');
   });
 
   test('dismissing a toast from the keyboard hands focus back to where it came from', async ({ app, page }) => {

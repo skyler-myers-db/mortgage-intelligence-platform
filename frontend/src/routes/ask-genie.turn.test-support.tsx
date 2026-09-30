@@ -99,6 +99,7 @@ export function progress(terminal: boolean, label = 'Running the governed query'
 export function answer(overrides: Partial<GenieAnswer> = {}): GenieAnswer {
   return {
     answer: 'Illinois leads with 3,080 candidates.',
+    question: 'Which states have the most prime refi candidates?',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-1',

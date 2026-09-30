@@ -11,12 +11,16 @@ sub-300-row gold table, ordered by week. It never touches
 contract test pins both), because the multi-million-row book is exactly
 the thing the gold table exists to keep off the request path.
 
-Cache posture matches the geography rollups: short-TTL, single-flight (a
-burst of Executive-tab loads shares one warehouse round-trip) and
-stale-if-error (an expired entry is served while the warehouse flaps). A
+Cache posture matches the geography rollups (audit ``delivery-06``): a
+``GoldAggregateCache`` with a 60 s soft TTL, served stale-while-revalidate
+up to the default hard cap (``settings.mip_gold_cache_max_stale_s``) while
+one background refresh re-reads the table, single-flight (a burst of
+Executive-tab loads shares one warehouse round-trip) and stale-if-error (a
+failed refresh keeps last-good). The factory reads only the SQL client, so a
+refresh outside any request is safe, and the read writes no audit row. A
 COLD cache with a failing warehouse propagates the failure so the router's
 resilience layer returns an honest 503 ``warming_up`` -- never an empty
-fabricated series.
+fabricated series. An injected ``TTLCache`` keeps plain hard expiry.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ from backend.schemas.analytics_rate_window import (
 )
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
-from backend.services.resilience import TTLCache
+from backend.services.gold_cache import AggregateCache, GoldAggregateCache
 
 SERIES_ID = "MORTGAGE30US"
 
@@ -125,11 +129,11 @@ class DatabricksRateWindowRepository:
         self,
         client: DatabricksSqlClient,
         *,
-        cache: TTLCache | None = None,
+        cache: AggregateCache | None = None,
         cache_ttl_s: float = 60.0,
     ) -> None:
         self._client = client
-        self._cache = cache if cache is not None else TTLCache()
+        self._cache: AggregateCache = cache if cache is not None else GoldAggregateCache()
         self._cache_ttl_s = cache_ttl_s
 
     def rate_window(self) -> RateWindowResponse:

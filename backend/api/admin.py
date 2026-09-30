@@ -496,9 +496,13 @@ def post_operation_run(
 
     try:
         if payload.job_key == "lifecycle_sync":
+            from backend.services.gold_cache import bump_workflow_generation
             from backend.services.lifecycle_sync import sync_lifecycle_state_via_warehouse
 
             result = sync_lifecycle_state_via_warehouse()
+            # delivery-06: the gold mirror just changed, so cached workflow
+            # counts re-read now, even if the audit write below then fails.
+            bump_workflow_generation()
             launch = JobLaunch(
                 key="lifecycle_sync",
                 label="Sync workflow state",

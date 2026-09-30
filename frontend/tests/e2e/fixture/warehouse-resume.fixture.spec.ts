@@ -18,7 +18,7 @@
  * clock (the harness otherwise freezes Date while timers run), so Date and
  * timers advance together.
  */
-import AxeBuilder from '@axe-core/playwright';
+import { expectAxeClean } from './axe';
 import type { Locator, Page } from '@playwright/test';
 import { EVERY_API_PATH, EVERY_API_PATH_BUT_HEALTH, PROXY_SESSION_EXPIRED } from './data/sessionRecovery';
 import { HEALTH_OK } from './data/shell';
@@ -28,7 +28,6 @@ import { asComputedRgb } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 const CLOCK_START = new Date('2026-09-24T14:00:00Z');
 /** HealthProvider's fast (3 s) and healthy (8 s) cadences. */
 const FAST_POLL_MS = 3_000;
@@ -152,8 +151,7 @@ test.describe('a warehouse resuming from auto-stop', () => {
       await expect.poll(() => tickerSeconds(page)).toBeGreaterThanOrEqual(100);
       await expectPillFits(page);
 
-      const axe = await new AxeBuilder({ page }).include('.topbar').withTags(WCAG_TAGS).analyze();
-      expect(axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+      await expectAxeClean(page, { key: { route: 'warehouse-resume', state: 'resuming-pill' }, theme, known: {}, include: '.topbar' });
     });
 
     test(`flips to Live one fast poll after the resume ends, never through a banner (${theme})`, async ({ app, page, mockApi }) => {

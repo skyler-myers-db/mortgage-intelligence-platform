@@ -52,6 +52,11 @@ interface LeadTableRowProps {
   shortcutsLive?: boolean;
   /** The approve review, when it is open inline for this (expanded) row. */
   reviewSlot?: ReactNode;
+  /**
+   * An approve review is open or opening for this row (any mode): its
+   * preview's approval banner stands down, so two gates never stack.
+   */
+  reviewActive?: boolean;
   onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
   /** `range`: Shift was held (audit tables-07): select from the anchor to this row. */
   onToggleSelect: (borrowerId: string, range: boolean) => void;
@@ -59,6 +64,11 @@ interface LeadTableRowProps {
   onReject: (borrowerId: string) => void;
   onOpenDisposition: (borrowerId: string) => void;
   onAssignmentUpdate: (borrowerId: string, update: Partial<LeadSummary>) => void;
+  /**
+   * Focus landed on a control in this row (Tab, a click): the row becomes
+   * the cursor row, so X / Enter / A act on the row the reader is on.
+   */
+  onFocusRow?: (borrowerId: string) => void;
 }
 
 function ignoreChange(): void {
@@ -97,12 +107,14 @@ export function LeadTableRow({
   isCursor = false,
   shortcutsLive = true,
   reviewSlot = null,
+  reviewActive = false,
   onToggleRow,
   onToggleSelect,
   onApprove,
   onReject,
   onOpenDisposition,
   onAssignmentUpdate,
+  onFocusRow,
 }: LeadTableRowProps) {
   const stop = (e: ReactMouseEvent) => e.stopPropagation();
   const toggleRow = () => onToggleRow(lead, isOpen);
@@ -139,14 +151,16 @@ export function LeadTableRow({
             event.stopPropagation();
             onToggleSelect(lead.borrower_id, event.shiftKey);
           }}
-          aria-keyshortcuts={rowKeys ? 'X' : undefined}
+          // X toggles the row, Shift+X selects the range to it (tables-07).
+          aria-keyshortcuts={rowKeys ? 'X Shift+X' : undefined}
           data-testid={`lead-select-${lead.borrower_id}`}
         />
       </td>
     ),
     expand: () => (
       <td>
-        <Icon name={isOpen ? 'down' : 'chevright'} size={14} className="muted" />
+        {/* One chevron that turns (motion-08), not an icon swap. */}
+        <Icon name="chevright" size={14} className="muted lead-table__chevron" />
       </td>
     ),
     borrower: () => (
@@ -288,6 +302,11 @@ export function LeadTableRow({
     ),
   };
 
+  // Built apart from the <tr> so the compiler keys the cells on their own
+  // inputs: an expand above this row shifts its aria-rowindex, and that
+  // must not re-render every cell (runtime-04 slice 3).
+  const cellNodes = columns.map((column) => <Fragment key={column.key}>{cells[column.key]()}</Fragment>);
+
   return (
     <Fragment>
       <tr
@@ -296,14 +315,28 @@ export function LeadTableRow({
         aria-current={isCursor ? 'true' : undefined}
         data-borrower-row={lead.borrower_id}
         onClick={toggleRow}
+        onFocus={onFocusRow ? () => onFocusRow(lead.borrower_id) : undefined}
       >
-        {columns.map((column) => <Fragment key={column.key}>{cells[column.key]()}</Fragment>)}
+        {cellNodes}
       </tr>
       {isOpen && (
         <tr className="tbl__expand" aria-rowindex={resolvedAriaRowIndex + 1}>
           <td colSpan={columns.length}>
             {reviewSlot}
-            <RowPreview lead={lead} approval={approval} decisionReceipt={decisionReceipt} />
+            <RowPreview
+              lead={lead}
+              approval={approval}
+              decisionReceipt={decisionReceipt}
+              approvalGate={isApprovalEligible && !approval && !decisionReceipt && !reviewActive
+                ? {
+                    approverGate,
+                    blocked: approvalActionsDisabled,
+                    submitting: decisionPending,
+                    onApprove,
+                    onReject,
+                  }
+                : null}
+            />
             <LeadRowWorkflowPanel
               lead={lead}
               salesBusy={salesBusy}

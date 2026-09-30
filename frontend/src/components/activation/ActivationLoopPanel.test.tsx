@@ -4,8 +4,8 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mount, type Mounted } from '../../test/render';
 import { ActivationLoopPanel, ActivationOperationsPanel } from './ActivationLoopPanel';
 import type { ActivationDestination, ActivationOutboxItem } from '../../types';
 
@@ -73,12 +73,10 @@ async function settle(): Promise<void> {
 }
 
 describe('ActivationLoopPanel', () => {
-  let root: Root;
+  let view: Mounted | null = null;
   let queryClient: QueryClient;
 
   beforeEach(() => {
-    document.body.innerHTML = '<div id="root"></div>';
-    root = createRoot(document.getElementById('root') as HTMLElement);
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: Infinity } },
     });
@@ -96,31 +94,32 @@ describe('ActivationLoopPanel', () => {
   });
 
   afterEach(() => {
-    act(() => root.unmount());
+    // Unmount before the cache is cleared; mount()'s own afterEach runs last
+    // and removes the container.
+    view?.unmount();
+    view = null;
     queryClient.clear();
-    document.body.innerHTML = '';
     vi.clearAllMocks();
   });
 
   async function render(approvalId: string | null = APPROVAL_ID): Promise<void> {
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <ActivationLoopPanel
-            borrowerId="B-48291"
-            offerCode="refi"
-            approvalId={approvalId}
-            approved
-          />
-        </QueryClientProvider>,
-      );
-    });
+    view = await mount(
+      <QueryClientProvider client={queryClient}>
+        <ActivationLoopPanel
+          borrowerId="B-48291"
+          offerCode="refi"
+          approvalId={approvalId}
+          approved
+        />
+      </QueryClientProvider>,
+    );
     await settle();
   }
 
   function stageButton(): HTMLButtonElement {
     const button = Array.from(document.querySelectorAll('button')).find((candidate) =>
       candidate.textContent?.includes('Stage')
+      || candidate.textContent?.includes('Staging')
       || candidate.textContent?.includes('Staged')
       || candidate.textContent?.includes('Retry')
     );
@@ -186,16 +185,66 @@ describe('ActivationLoopPanel', () => {
     }));
   });
 
+  // runtime-03 pins: staging stays pessimistic around the helper that holds
+  // the try/catch. A rejection shows its message and re-enables Stage; a
+  // staged result shows at once, and the button stays 'Staging' (disabled)
+  // until the activation queries are invalidated.
+  it('a rejected stage shows its message and re-enables Stage', async () => {
+    apiMocks.stageActivation.mockRejectedValue(new Error('Destination refused the handoff'));
+    await render();
+
+    await act(async () => {
+      stageButton().click();
+    });
+    await settle();
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe('Destination refused the handoff');
+    const button = stageButton();
+    expect(button.textContent).toContain('Stage');
+    expect(button.disabled).toBe(false);
+  });
+
+  it("reads 'Staging' until the activation queries settle, with the staged result already shown", async () => {
+    apiMocks.stageActivation.mockResolvedValue({
+      staged: true,
+      activation: outboxItem({ activation_id: '66666666-6666-4666-8666-666666666666', status: 'failed' }),
+      audit_event_id: '55555555-5555-4555-8555-555555555555',
+    });
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockImplementation(() => held);
+    await render();
+
+    await act(async () => {
+      stageButton().click();
+    });
+    await settle();
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['mip', 'activation'] });
+    expect(document.body.textContent).toContain('66666666-6666-4666-8666-666666666666');
+    expect(stageButton().textContent).toContain('Staging');
+    expect(stageButton().disabled).toBe(true);
+
+    await act(async () => {
+      release();
+      await held;
+    });
+    await settle();
+
+    expect(stageButton().textContent).toContain('Retry');
+    expect(stageButton().disabled).toBe(false);
+  });
+
   it('marks activation operations unavailable when the registry cannot be read', async () => {
     apiMocks.activationSummary.mockRejectedValue(new Error('registry down'));
 
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <ActivationOperationsPanel />
-        </QueryClientProvider>,
-      );
-    });
+    view = await mount(
+      <QueryClientProvider client={queryClient}>
+        <ActivationOperationsPanel />
+      </QueryClientProvider>,
+    );
     await settle();
 
     expect(document.body.textContent).toContain('Activation destinations');

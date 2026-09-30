@@ -136,7 +136,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "boto3==1.43.50",
         "uvicorn==0.47.0",
         "databricks-sql-connector==4.4.0",
-        "pyjwt==2.13.0",
+        "pyjwt==2.14.0",
         "gitpython==3.1.62",
         "cryptography==50.0.1",
         "mlflow==3.16.0",

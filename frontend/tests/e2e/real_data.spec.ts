@@ -40,6 +40,7 @@ import {
   archiveLiveCampaign,
   reconcileGenieCampaignAction,
 } from '../../src/lib/liveCampaignProof';
+import { EVIDENCE_DRAWER, openEvidenceDrawer } from './helpers';
 
 // Gate: skip everything unless E2E_LIVE=1 is set by the nightly workflow.
 const LIVE = process.env.E2E_LIVE === '1';
@@ -640,7 +641,7 @@ async function assertSourceDrawer(
     timeout: 10_000,
   });
   await chip.click();
-  const drawer = page.locator('.drawer.is-open').first();
+  const drawer = openEvidenceDrawer(page);
   await expect(drawer).toBeVisible({ timeout: 3_000 });
   await expect(drawer.locator('.drawer__subtitle')).toHaveText(drawerTitle);
   await drawer.getByRole('button', { name: /Close drawer/i }).click();
@@ -964,10 +965,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const target = leads[0].borrower_id;
     await gotoApp(page, `/borrower-360/${target}`);
 
-    // Evidence drawer lives as `.drawer` per the prototype BEM. The evidence
-    // list renders rows with a `.trig` / trigger-timeline class; we accept
-    // either entry point as "evidence is visible".
-    const evidenceRows = page.locator('.trig, .drawer .evidence-row, .evidence-chip');
+    // The evidence drawer is a native `dialog.drawer` per the prototype BEM.
+    // The evidence list renders rows with a `.trig` / trigger-timeline class;
+    // we accept any entry point as "evidence is visible".
+    const evidenceRows = page.locator(`.trig, ${EVIDENCE_DRAWER} .evidence-row, .evidence-chip`);
     await expect
       .poll(() => evidenceRows.count(), { timeout: 15_000 })
       .toBeGreaterThanOrEqual(2);
@@ -995,7 +996,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       const chip = kpiRow.locator('.evidence-chip').filter({ hasText: chipLabel }).first();
       await expect(chip, `home KPI chip ${String(chipLabel)}`).toBeVisible({ timeout: 10_000 });
       await chip.click();
-      const drawer = page.locator('.drawer.is-open').first();
+      const drawer = openEvidenceDrawer(page);
       await expect(drawer).toBeVisible({ timeout: 3_000 });
       await expect(drawer.locator('.drawer__subtitle')).toHaveText(drawerSubtitle);
       await expect(
@@ -1099,7 +1100,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const sourceChip = aiMessage.locator('.sources .evidence-chip').first();
     await expect(sourceChip).toBeVisible({ timeout: 10_000 });
     await sourceChip.click();
-    const drawer = page.locator('.drawer.is-open').first();
+    const drawer = openEvidenceDrawer(page);
     await expect(drawer).toBeVisible({ timeout: 3_000 });
     await expect(drawer.locator('.drawer__subtitle')).toHaveText(
       /Marketable population|Ranked lead population|Lead score model|Borrower 360 feature set|Lead-generation metric view|Borrower opportunity metric view/,
@@ -1783,7 +1784,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       const chip = preview.getByRole('button', { name: chipLabel });
       await expect(chip).toBeVisible();
       await chip.click();
-      const drawer = page.locator('.drawer.is-open').first();
+      const drawer = openEvidenceDrawer(page);
       await expect(drawer).toBeVisible({ timeout: 3_000 });
       await expect(drawer.locator('.drawer__subtitle')).toHaveText(drawerTitle);
       await drawer.getByRole('button', { name: /Close drawer/i }).click();
@@ -2134,7 +2135,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(proofSourceChip).toBeVisible();
     await proofSourceChip.click();
     await expect(proofDrawer).toBeHidden({ timeout: 3_000 });
-    const sourceDrawer = page.locator('.drawer.is-open').first();
+    const sourceDrawer = openEvidenceDrawer(page);
     await expect(sourceDrawer).toBeVisible({ timeout: 3_000 });
     await expect(sourceDrawer.locator('.drawer__subtitle')).toHaveText(
       /Marketable population|Ranked lead population|Segment population|Lead score model|Borrower 360 feature set|Evidence stream|Lead-generation metric view|Segment performance metric view|Borrower opportunity metric view/,

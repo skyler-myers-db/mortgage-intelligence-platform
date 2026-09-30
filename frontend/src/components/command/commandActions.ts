@@ -1,4 +1,5 @@
 import type { IconName } from '../Icon';
+import { formatCount } from '../../lib/formatters';
 import { NAVIGATION_ROUTE_IDS, ROUTES, type NavigationRouteId } from '../../lib/routeMeta';
 import type { CommandSelectionContext, CommandVerb } from './commandSelection';
 
@@ -103,7 +104,7 @@ export function commandVerbActions(selection: CommandSelectionContext | null): C
   if (selection.canApprove && selection.approveCount > 0) {
     verbs.push({
       id: 'verb-approve-selected',
-      label: `Approve ${selection.approveCount.toLocaleString()} selected…`,
+      label: `Approve ${formatCount(selection.approveCount)} selected…`,
       hint: selection.approveCount === 1 ? 'Opens the approval review' : 'Opens the approval rationale gate',
       icon: 'check',
       group: 'Selection',
@@ -114,7 +115,7 @@ export function commandVerbActions(selection: CommandSelectionContext | null): C
   if (selection.canAssign) {
     verbs.push({
       id: 'verb-assign-selected',
-      label: `Assign ${selection.selectedCount.toLocaleString()} selected…`,
+      label: `Assign ${formatCount(selection.selectedCount)} selected…`,
       hint: 'Choose a loan officer',
       icon: 'user',
       group: 'Selection',

@@ -2,12 +2,14 @@
  * LeadTableBulkActions — the sticky `.bulk-actions` toolbar under the ranked
  * borrower table (selection label, shared approval rationale, assignee
  * select, assign / distribute / approve controls) and the `.bulk-actions`
- * result toast. Presentation only: every decision stays in
- * useLeadApprovalActions / useLeadSalesActions. Extracted from LeadTable.tsx
+ * result toast. Every decision stays in useLeadApprovalActions /
+ * useLeadSalesActions; the one state here is the gate's shared rationale
+ * (audit runtime-04 slice 2), so typing it re-renders this toolbar, never
+ * the table. It is cleared once a run settles. Extracted from LeadTable.tsx
  * (file-size gate, plan item 2); markup and class names are unchanged.
  */
 
-import type { ReactNode, RefObject } from 'react';
+import { useState, type ReactNode, type RefObject } from 'react';
 import type { SalesTeamMember } from '../../types';
 import { Button } from '../Primitives';
 import type { BulkToast } from './useLeadApprovalActions';
@@ -19,8 +21,6 @@ interface LeadTableBulkActionsProps {
   selectedApprovalEligibleCount: number;
   bulkApproving: boolean;
   bulkRationaleOpen: boolean;
-  bulkRationale: string;
-  onBulkRationaleChange: (value: string) => void;
   campaignBindingBlocked: boolean;
   /** Non-null = the actor may not approve; the text is the accessible reason. */
   approverGate?: string | null;
@@ -30,7 +30,8 @@ interface LeadTableBulkActionsProps {
   onSelectedAssigneeChange: (email: string) => void;
   onAssign: (mode: 'selected-lo' | 'round-robin') => void;
   onClearSelection: () => void;
-  onBulkApprove: () => void;
+  /** Approve with the gate's shared rationale; resolves true once a run settled. */
+  onBulkApprove: (rationale: string) => Promise<boolean>;
   bulkApproveBtnRef: RefObject<HTMLButtonElement | null>;
   /** The shared-rationale field (Shift+A and the Cmd-K verb focus it). */
   bulkRationaleRef?: RefObject<HTMLInputElement | null>;
@@ -53,8 +54,6 @@ export function LeadTableBulkActions({
   selectedApprovalEligibleCount,
   bulkApproving,
   bulkRationaleOpen,
-  bulkRationale,
-  onBulkRationaleChange,
   campaignBindingBlocked,
   approverGate = null,
   salesTeam,
@@ -73,8 +72,14 @@ export function LeadTableBulkActions({
   runKind = null,
   runStatus = null,
 }: LeadTableBulkActionsProps) {
+  const [bulkRationale, setBulkRationale] = useState('');
   const gateOpen = selectionCount > 1 && bulkRationaleOpen;
   const running = runKind !== null;
+  const approve = () => {
+    void onBulkApprove(bulkRationale).then((settled) => {
+      if (settled) setBulkRationale('');
+    });
+  };
   return (
     <div
       role="toolbar"
@@ -96,7 +101,7 @@ export function LeadTableBulkActions({
           <input
             ref={bulkRationaleRef}
             value={bulkRationale}
-            onChange={(e) => onBulkRationaleChange(e.target.value)}
+            onChange={(e) => setBulkRationale(e.target.value)}
             maxLength={500}
             placeholder="Example: Q3 retention sweep, all reviewed against current rules."
           />
@@ -157,7 +162,7 @@ export function LeadTableBulkActions({
           variant="primary"
           size="sm"
           icon={bulkApproving ? undefined : 'check'}
-          onClick={onBulkApprove}
+          onClick={approve}
           disabled={
             approverGate !== null || campaignBindingBlocked || bulkApproving
             || selectedApprovalEligibleCount === 0

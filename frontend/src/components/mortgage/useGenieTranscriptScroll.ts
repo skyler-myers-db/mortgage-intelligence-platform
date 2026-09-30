@@ -52,8 +52,8 @@ function answerTopInView(body: HTMLElement, answer: HTMLElement): boolean {
  *     into view, once (on the next open if it landed while closed);
  *   - reading further up: nothing moves. A landed answer raises `newAnswer`
  *     instead, which the panel shows as a "New answer" button; it clears when
- *     the button is used or when the reader scrolls the answer's top into
- *     view.
+ *     the button is used, when the reader scrolls the answer's top into
+ *     view, or when the panel is closed and opened again (opening follows).
  * Smooth scrolling is used only for an answer landing in an open panel, and
  * never under `prefers-reduced-motion`. The /ask-genie route does not use
  * this hook: its reveal key holds when an answer lands (visual-07).
@@ -94,7 +94,12 @@ export function useGenieTranscriptScroll({
     const body = bodyRef.current;
     // Closed panel: leave the pending anchor armed for the next open.
     if (!body || !open) return;
-    if (opening) followingRef.current = true;
+    if (opening) {
+      followingRef.current = true;
+      // Opening follows the transcript, so a "New answer" raised before the
+      // close is stale: the jump it offers is where the panel now scrolls.
+      if (newAnswerRef.current) setNewAnswer(false);
+    }
     const answer = lastAnswerRef.current;
     if (anchorPendingRef.current && answer && typeof answer.scrollIntoView === 'function') {
       anchorPendingRef.current = false;

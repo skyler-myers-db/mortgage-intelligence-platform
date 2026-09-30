@@ -20,7 +20,10 @@ const apiMocks = vi.hoisted(() => ({
   workspace: vi.fn(),
 }));
 
-vi.mock('../lib/api', () => ({ api: apiMocks }));
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
+  api: apiMocks,
+}));
 
 vi.mock('../lib/configOptionsQuery', () => {
   const STABLE = { data: { lender_name: 'Summit Mortgage', rum_enabled: false } };

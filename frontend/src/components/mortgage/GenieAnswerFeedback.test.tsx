@@ -16,7 +16,10 @@ vi.mock('../../lib/api', async () => {
 });
 
 import { GenieAnswerFeedback } from './GenieAnswerFeedback';
+import { GenieCollapsedTurn } from './GenieCollapsedTurn';
 import { ApiError } from '../../lib/api';
+import { clearGenieAnswerMemory } from '../../lib/genieAnswerMemory';
+import type { GenieAnswer as GenieAnswerShape } from '../../types';
 
 function upBtn(container: HTMLElement) {
   return container.querySelector<HTMLButtonElement>('[data-testid="genie-feedback-up"]');
@@ -31,6 +34,8 @@ describe('GenieAnswerFeedback', () => {
 
   beforeEach(() => {
     genieFeedback.mockReset();
+    // The vote memory is module state that outlives a component (genie-08).
+    clearGenieAnswerMemory();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -299,5 +304,95 @@ describe('GenieAnswerFeedback', () => {
 
     expect(container.querySelector('.genie-feedback--done')).toBeNull();
     expect(upBtn(container)).not.toBeNull();
+  });
+
+  describe('the vote outlives the component (genie-08 item 3)', () => {
+    const PAYLOAD = { answer: 'Illinois leads.', question: 'Which state leads?', source: 'genie' } as GenieAnswerShape;
+
+    /** An earlier turn's answer, as both Genie surfaces collapse it. */
+    function renderTurn(expanded: boolean) {
+      act(() =>
+        root.render(
+          <GenieCollapsedTurn payload={PAYLOAD} expanded={expanded} onToggle={() => undefined}>
+            <GenieAnswerFeedback conversationId="c1" messageId="m1" />
+          </GenieCollapsedTurn>,
+        ),
+      );
+    }
+
+    /** A boundary or a return to the page mounts a fresh component. */
+    function remount() {
+      act(() => root.unmount());
+      root = createRoot(container);
+      act(() => root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />));
+    }
+
+    it('vote, collapse, expand: the vote is never offered again, and one POST was sent', async () => {
+      genieFeedback.mockResolvedValue({ accepted: true, audit_event_id: 'evt-1' });
+      renderTurn(true);
+      await act(async () => {
+        upBtn(container)!.click();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain('Feedback recorded');
+
+      renderTurn(false);
+      expect(container.querySelector('.genie-feedback')).toBeNull();
+      renderTurn(true);
+      expect(upBtn(container)).toBeNull();
+      expect(downBtn(container)).toBeNull();
+      expect(container.querySelector('.genie-feedback--done')?.textContent).toContain('Feedback recorded');
+      expect(genieFeedback).toHaveBeenCalledTimes(1);
+    });
+
+    it('a vote in flight across a remount: one POST, the new mount holds the buttons, then shows it recorded', async () => {
+      let resolveVote: (value: unknown) => void = () => undefined;
+      genieFeedback.mockImplementation(() => new Promise((resolve) => {
+        resolveVote = resolve;
+      }));
+      act(() => root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />));
+      await act(async () => {
+        upBtn(container)!.click();
+        await Promise.resolve();
+      });
+
+      remount();
+      expect(upBtn(container)!.disabled).toBe(true);
+      expect(downBtn(container)!.disabled).toBe(true);
+      await act(async () => {
+        downBtn(container)!.click();
+        await Promise.resolve();
+      });
+      expect(genieFeedback).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveVote({ accepted: true });
+        await Promise.resolve();
+      });
+      expect(container.querySelector('.genie-feedback--done')?.textContent).toContain('Feedback recorded');
+      expect(genieFeedback).toHaveBeenCalledTimes(1);
+    });
+
+    it('a failed vote retried after a remount sends the same request id', async () => {
+      genieFeedback
+        .mockRejectedValueOnce(new ApiError('Service Unavailable', { path: '/api/genie/feedback', status: 503 }))
+        .mockResolvedValueOnce({ accepted: true, audit_event_id: 'evt-1' });
+      act(() => root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />));
+      await act(async () => {
+        upBtn(container)!.click();
+        await Promise.resolve();
+      });
+      expect(container.querySelector('.genie-feedback__error')).not.toBeNull();
+      const firstRequestId = genieFeedback.mock.calls[0][0].request_id;
+
+      remount();
+      await act(async () => {
+        upBtn(container)!.click();
+        await Promise.resolve();
+      });
+      expect(genieFeedback).toHaveBeenCalledTimes(2);
+      expect(genieFeedback.mock.calls[1][0].request_id).toBe(firstRequestId);
+      expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
+    });
   });
 });

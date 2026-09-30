@@ -157,6 +157,20 @@ class Resilient(Generic[T]):
     breaker for every caller, and recording nothing would strand a
     half-open probe slot), and it surfaces as ``DependencyDownError`` of
     kind ``permission_denied`` (``retryable`` False). The call still fails.
+
+    ``object_missing_on`` names the dependency's "that object does not exist"
+    answers (a gold table a roll-forward promoted the App ahead of). Also a
+    definitive answer from a reachable dependency: it is never retried (one
+    attempt, no backoff sleeps) and counts as a breaker SUCCESS, for the same
+    two reasons (five of them in a row would otherwise open the breaker for
+    every warehouse-backed route against a healthy warehouse, and one landing
+    as the half-open probe would re-open it). It surfaces as
+    ``DependencyDownError`` of kind ``retries_exhausted`` (``retryable`` True
+    on the wire): the stop-and-surface kind Genie already uses for its
+    definitive failures, which the client neither re-sends nor shows as
+    warming. No new wire kind: the client owns that vocabulary. A caller that
+    knows the object is legitimately not built yet (the Rate Lever's own
+    tables) finds the typed error on ``last_error``.
     """
 
     def __init__(
@@ -169,6 +183,7 @@ class Resilient(Generic[T]):
         backoff_max: float = 2.0,
         retry_on: tuple[type[BaseException], ...] = (Exception,),
         permission_denied_on: tuple[type[BaseException], ...] = (),
+        object_missing_on: tuple[type[BaseException], ...] = (),
     ) -> None:
         self._breaker = breaker
         self._name = dependency_name
@@ -177,6 +192,7 @@ class Resilient(Generic[T]):
         self._backoff_max = backoff_max
         self._retry_on = retry_on
         self._permission_denied_on = permission_denied_on
+        self._object_missing_on = object_missing_on
 
     @property
     def breaker(self) -> CircuitBreaker:
@@ -206,7 +222,7 @@ class Resilient(Generic[T]):
                     backoff_base=self._backoff_base,
                     backoff_max=self._backoff_max,
                     retry_on=self._retry_on,
-                    give_up_on=self._permission_denied_on,
+                    give_up_on=self._permission_denied_on + self._object_missing_on,
                 )
         except BaseException as exc:
             if isinstance(exc, self._permission_denied_on):
@@ -216,6 +232,14 @@ class Resilient(Generic[T]):
                     reason=f"{type(exc).__name__}: {exc}",
                     last_error=exc,
                     kind=DependencyDownError.KIND_PERMISSION_DENIED,
+                ) from exc
+            if isinstance(exc, self._object_missing_on):
+                self._breaker.record_success()
+                raise DependencyDownError(
+                    self._name,
+                    reason=f"{type(exc).__name__}: {exc}",
+                    last_error=exc,
+                    kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
                 ) from exc
             self._breaker.record_failure()
             if isinstance(exc, DependencyDownError):

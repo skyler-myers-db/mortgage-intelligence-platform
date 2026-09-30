@@ -25,7 +25,8 @@
  * copy, the disclosure, and the SMS bubble with its carrier segment count
  * (GSM-7 and UCS-2); axe finds nothing in either frame.
  */
-import AxeBuilder from '@axe-core/playwright';
+import type { FixtureTheme } from './app';
+import { expectAxeClean } from './axe';
 import type { Locator, Page } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import {
@@ -41,7 +42,6 @@ import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
 const ROUTE = `/offer-orchestrator/${PRIMARY_BORROWER.borrower_id}`;
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 interface Box {
   left: number;
@@ -513,9 +513,9 @@ async function frameHeader(frame: Locator): Promise<Array<[string, string]>> {
   );
 }
 
-async function axeViolations(page: Page, selector: string): Promise<string[]> {
-  const results = await new AxeBuilder({ page }).include(selector).withTags(WCAG_TAGS).analyze();
-  return results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(', ')}`);
+/** The shared axe gate (fixture/axe.ts), scoped to the certified copy preview. */
+async function expectCertifiedCopyAxeClean(page: Page, state: string, theme: FixtureTheme): Promise<void> {
+  await expectAxeClean(page, { key: { route: 'offer-orchestrator', state }, theme, known: {}, include: '[data-testid="certified-copy"]' });
 }
 
 test.describe('certified copy preview (critic-02)', () => {
@@ -562,7 +562,7 @@ test.describe('certified copy preview (critic-02)', () => {
       await expect(frame.locator('footer')).toHaveText(/Disclosure fixture-2026-07 · IL/);
       await expect(page.getByText('Governed outreach · exact audited copy')).toBeVisible();
       await expect(frame.locator('input, textarea, [contenteditable="true"]')).toHaveCount(0);
-      expect(await axeViolations(page, '[data-testid="certified-copy"]')).toEqual([]);
+      await expectCertifiedCopyAxeClean(page, 'certified-email', theme);
     });
 
     test(`${theme}: SMS renders as a bubble with its carrier segment count`, async ({ app, mockApi, page }) => {
@@ -583,7 +583,7 @@ test.describe('certified copy preview (critic-02)', () => {
       const bubbleBox = await boxOf(bubble);
       expect(thread.right - bubbleBox.right).toBeLessThan(bubbleBox.left - thread.left);
       await expect(frame.getByTestId('sms-segments')).toHaveText(`1 segment · ${GSM_SMS_BODY.length} of 160 characters · GSM-7`);
-      expect(await axeViolations(page, '[data-testid="certified-copy"]')).toEqual([]);
+      await expectCertifiedCopyAxeClean(page, 'certified-sms', theme);
     });
   }
 

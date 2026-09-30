@@ -56,7 +56,8 @@ vi.mock('../components/mortgage/HomeAnswerWho', () => ({
   HomeAnswerWho: () => <div data-testid="home-answer-who" />,
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: { portfolioPreview: vi.fn() },
 }));
 

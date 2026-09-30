@@ -58,8 +58,13 @@ export interface RouteDefinition {
    * Detail routes whose `:id` param is a masked borrower id. The id is added
    * to the title only when it matches `MASKED_BORROWER_ID_RE`, so arbitrary
    * URL text never reaches the tab title or the live region.
+   *
+   * 'conversation': a param that selects what an index route shows
+   * (`/ask-genie/:conversationId`). The id never reaches the title, the crumb
+   * or the announcer, and `routeSurfacePath` maps it to its index path, so a
+   * conversation switch is not a page change.
    */
-  detail?: 'borrower';
+  detail?: 'borrower' | 'conversation';
   /** The lazy module that renders the route. Absent on a redirect. */
   chunk?: RouteChunk;
   /** Legacy path: redirects to this registered pattern. */
@@ -89,6 +94,16 @@ export const ROUTES = {
     pattern: '/offer-orchestrator/:id', name: 'Offer Orchestrator', navLabel: 'Offer', icon: 'bolt', detail: 'borrower', chunk: 'offer',
   },
   askGenie: { pattern: '/ask-genie', name: 'Ask Genie', navLabel: 'Ask Genie', icon: 'sparkle', chunk: 'askGenie' },
+  // A shareable link to one of the actor's own conversations (audit shell-03);
+  // not a navigation destination of its own.
+  askGenieConversation: {
+    pattern: '/ask-genie/:conversationId',
+    name: 'Ask Genie',
+    navLabel: 'Ask Genie',
+    icon: 'sparkle',
+    detail: 'conversation',
+    chunk: 'askGenie',
+  },
   admin: { pattern: '/admin-config', name: 'Admin', navLabel: 'Admin', icon: 'settings', chunk: 'admin' },
   // Legacy outreach paths redirect to the Lead Queue (outreach drafting lives
   // inside the Offer Orchestrator). Naming them after their destination keeps
@@ -194,6 +209,17 @@ export function routePageLabel(pathname: string): string {
   const { name } = resolveRouteMeta(pathname);
   const id = maskedBorrowerIdFor(pathname);
   return id ? `${name} · ${id}` : name;
+}
+
+/**
+ * The page a pathname shows: the index path of a 'conversation' detail route
+ * (`/ask-genie/<id>` is the `/ask-genie` page), otherwise the pathname itself.
+ * The route transition keys on it and the route announcer compares it, so
+ * switching conversations neither remounts the route nor announces a page.
+ */
+export function routeSurfacePath(pathname: string): string {
+  const { meta } = resolveRoute(pathname);
+  return meta.detail === 'conversation' ? indexPathOf(meta.pattern) : pathname;
 }
 
 /** `<Page> · Mortgage Intelligence Platform`. */

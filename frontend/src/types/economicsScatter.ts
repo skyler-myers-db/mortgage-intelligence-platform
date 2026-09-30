@@ -47,6 +47,19 @@ export interface EquitySpreadOverview {
   refreshed_at?: string | null;
 }
 
+/**
+ * The refi screen this refresh applied (backend AnalyticsThresholds,
+ * dataviz-06): the values every scored row agrees on, else null with the
+ * reason. The spread histogram's rule and the scatter guides draw from here,
+ * never from a frontend constant.
+ */
+export interface AnalyticsThresholds {
+  min_spread_bps: number | null;
+  min_equity_pct: number | null;
+  /** Why a value is null: every row NULL, or rows disagree. Null when both are present. */
+  reason: 'not_built' | 'not_uniform' | null;
+}
+
 export interface EquitySpreadPointsResponse {
   points: EquitySpreadPoint[];
   total_matching: number;

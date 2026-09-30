@@ -124,6 +124,10 @@ const DATA_MARKS = [
   '.map-label',
   '.topbar__pill .dot.dot',
   '.seg-card__facet-bar',
+  '.chart-hist__bar',
+  '.chart-hist__rule',
+  '.analytics-scatter__bin',
+  '.analytics-scatter__dot--band',
 ];
 
 describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
@@ -232,8 +236,45 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
 
   it('keeps the score band as a border style, since score chips carry text', () => {
     const style = (selector: string) => declarations.find((d) => d.selector === selector && d.property === 'border-style')?.value;
-    expect([style('.score--high'), style('.score--med'), style('.score--low')]).toEqual(['solid', 'dashed', 'dotted']);
+    expect([style('.score.score--high'), style('.score.score--med'), style('.score.score--low')]).toEqual(['solid', 'dashed', 'dotted']);
     expect(declarations.some((d) => d.selector.includes('.score') && d.property === 'forced-color-adjust')).toBe(false);
+  });
+
+  it('scopes the chip band rules to the chip, so a scatter mark carrying .score--* keeps its own cue', () => {
+    // An unscoped `.score--high` also hit the scatter's density cells, dots
+    // and cluster markers, which carry the band classes (css-hygiene review).
+    const bandSubjects = declarations
+      .flatMap((d) => selectorList(d.selector))
+      .filter((selector) => /\.score--(?:high|med|low)\b/.test(selector));
+    const unscoped = bandSubjects.filter(
+      (selector) => !/^\.score\.score--/.test(selector) && !/analytics-scatter__(?:bin|dot--band|cluster-marker)/.test(selector),
+    );
+    expect(unscoped, 'a band rule outside the chip and the scatter marks').toEqual([]);
+  });
+
+  it('gives each scatter band a distinct (fill, edge style, edge width) cue, and the cluster markers an explicit width', () => {
+    // The band fills read --scatter-score-*, which the forced block points at
+    // system colours; med and low add a distinct edge, high keeps none.
+    const panel = Object.fromEntries(
+      declarations.filter((d) => d.selector === '.analytics-chart-panel--scatter').map((d) => [d.property, d.value]),
+    );
+    expect(panel).toEqual({ '--scatter-score-high': 'CanvasText', '--scatter-score-med': 'Canvas', '--scatter-score-low': 'Canvas' });
+    const edge = (band: string) =>
+      declarations.find((d) => d.selector === `:is(.analytics-scatter__bin, .analytics-scatter__dot--band).score--${band}`)?.value;
+    expect([edge('high'), edge('med'), edge('low')]).toEqual([undefined, '2px solid CanvasText', '1px dashed CanvasText']);
+    const marker = declarations.filter((d) => d.selector.startsWith('.analytics-scatter__cluster-marker'));
+    expect(marker.map((d) => [d.selector, d.property, d.value])).toEqual([
+      ['.analytics-scatter__cluster-marker', 'border-width', '2px'],
+      ['.analytics-scatter__cluster-marker.score--med', 'border-style', 'dashed'],
+      ['.analytics-scatter__cluster-marker.score--low', 'border-style', 'dotted'],
+    ]);
+  });
+
+  it('draws a confidence bar on and off in different fills AND edge styles', () => {
+    const rule = (selector: string) =>
+      Object.fromEntries(declarations.filter((d) => d.selector === selector).map((d) => [d.property, d.value]));
+    expect(rule('.conf__bar')).toEqual({ 'forced-color-adjust': 'none', 'background-color': 'Canvas', border: '1px dashed GrayText' });
+    expect(rule('.conf__bar.conf__bar.on')).toEqual({ 'background-color': 'CanvasText', 'border-style': 'solid', 'border-color': 'CanvasText' });
   });
 
   it('routes every ring through the Highlight focus token', () => {

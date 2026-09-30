@@ -40,13 +40,19 @@
   }
   .switch.switch.on::after { background-color: HighlightText; }
 
-  /* Non-text data marks keep their encoding, edged in CanvasText. */
+  /* Non-text data marks keep their encoding, edged in a system colour. A
+     confidence bar's on / off state differs in fill AND edge style, so it
+     survives a palette where Canvas and CanvasText sit close. */
   .conf__bar {
     forced-color-adjust: none;
     background-color: Canvas;
-    border: 1px solid CanvasText;
+    border: 1px dashed GrayText;
   }
-  .conf__bar.conf__bar.on { background-color: CanvasText; }
+  .conf__bar.conf__bar.on {
+    background-color: CanvasText;
+    border-style: solid;
+    border-color: CanvasText;
+  }
   .map-region.map-region {
     forced-color-adjust: none;
     stroke: CanvasText;
@@ -64,10 +70,13 @@
     animation: none;
   }
 
-  /* Score chips carry text, so they are forced; the band becomes the edge. */
-  .score--high { border-style: solid; border-width: var(--focus-ring-width); }
-  .score--med { border-style: dashed; }
-  .score--low { border-style: dotted; }
+  /* Score chips carry text, so they are forced; the band becomes the edge.
+     Scoped to the chip: the analytics scatter's bins, dots and cluster
+     markers carry the band classes too and encode it themselves
+     (routes/analytics.scatter.css). */
+  .score.score--high { border-style: solid; border-width: var(--focus-ring-width); }
+  .score.score--med { border-style: dashed; }
+  .score.score--low { border-style: dotted; }
 }
 
 @media (prefers-reduced-transparency: reduce) {

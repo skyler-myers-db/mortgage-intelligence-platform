@@ -193,6 +193,35 @@ describe('ScoreAnatomyGate', () => {
     expect(proofSpy).toHaveBeenCalledTimes(2);
   });
 
+  // Wave-3 carryover #11e: a second Try again while the re-read is on the
+  // wire must not write a second VIEW_BORROWER_PROOF row. It cannot: the
+  // errored query has no data, so the re-read resets it to pending and the
+  // loading state replaces the button until the read settles.
+  it('Try again cannot be clicked twice into two audited reads: the loading state replaces it', async () => {
+    proofSpy.mockRejectedValueOnce(new Error('proof endpoint down'));
+    await render(A);
+    await click(toggle());
+    await vi.waitFor(() => expect(container.textContent).toContain(SCORE_SPINE_COPY.unavailableTitle), WAIT);
+    const retry = () => [...container.querySelectorAll('button')].find((button) => button.textContent === SCORE_SPINE_COPY.retry) ?? null;
+    let release: (() => void) | null = null;
+    proofSpy.mockImplementationOnce((id: string) => new Promise((resolve) => {
+      release = () => resolve(sampleProof({ borrower_id: id }));
+    }));
+
+    const first = retry();
+    await click(first);
+    expect(proofSpy).toHaveBeenCalledTimes(2);
+    expect(retry(), 'no Try again while the re-read is on the wire').toBeNull();
+    await click(first);
+    expect(proofSpy, 'a click on the detached button reads nothing').toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      release?.();
+    });
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="score-spine"]')).not.toBeNull(), WAIT);
+    expect(proofSpy).toHaveBeenCalledTimes(2);
+  });
+
   it('the margins variant reads the same way and renders the margins only', async () => {
     await render(A, 'margins');
     expect(toggle()?.textContent).toBe(SCORE_ANATOMY_COPY.marginsToggle);

@@ -18,9 +18,11 @@ method and path owns it (so ``/borrowers/search`` beats ``/borrowers/{id}``).
 A 2xx body must validate against that route's model in JSON mode, which runs
 the model validators (score-band canon, governed identifiers, name-shaped
 text, vocabularies). A non-2xx sample must still resolve to a route but is not
-validated against a model. Every body must also stay synthetic: masked
-borrower ids, ``.example`` email domains and the Summit Mortgage sample
-lender.
+validated against a model. A 2xx body may also carry no key its model does
+not declare (the w3-api-contract carryover): the model drops such a key, so
+the UI could be built on a field the real wire never sends. Every body must
+also stay synthetic: masked borrower ids, ``.example`` email domains and the
+Summit Mortgage sample lender.
 
 The exporter needs Node >= 22.18. Where Node is missing or older the module
 SKIPS, unless ``MIP_REQUIRE_FIXTURE_CONTRACT=1`` (set in CI's backend job),
@@ -63,6 +65,12 @@ SAMPLE_LENDER = "Summit Mortgage"
 # would change text asserted by a spec another lane owns and no equally valid
 # value keeps that text. Shape: {"finding", "owner", "recorded", "why"}.
 KNOWN_DRIFT: dict[str, dict[str, str]] = {}
+
+# 2xx samples that carry keys their model does not declare, keyed by exported
+# source. SHRINK-ONLY like KNOWN_DRIFT: each entry must still reproduce
+# exactly its keys (test below). Shape: {"finding", "owner", "recorded",
+# "why", "keys"}, where "keys" is the extras' dotted paths, comma-joined.
+KNOWN_EXTRAS: dict[str, dict[str, str]] = {}
 
 
 class ContractError(LookupError):
@@ -142,6 +150,49 @@ def synthetic_problems(node: Any, where: str, key: str | None = None) -> list[st
     return problems
 
 
+def _extra_paths(body: Any, by_alias: Any, by_name: Any, path: str) -> list[str]:
+    """Keys in ``body`` that neither dump of the validated model carries.
+
+    A dict key present in either dump is declared (or allowed: a
+    ``dict[str, ...]`` field keeps every key, and so does ``extra="allow"``)
+    and is walked into; lists are zipped by index.
+    """
+    if isinstance(body, dict):
+        alias_map = by_alias if isinstance(by_alias, dict) else {}
+        name_map = by_name if isinstance(by_name, dict) else {}
+        extras: list[str] = []
+        for key, child in body.items():
+            where = f"{path}.{key}" if path else str(key)
+            if key not in alias_map and key not in name_map:
+                extras.append(where)
+                continue
+            extras.extend(_extra_paths(child, alias_map.get(key), name_map.get(key), where))
+        return extras
+    if isinstance(body, list):
+        alias_list = by_alias if isinstance(by_alias, list) else []
+        name_list = by_name if isinstance(by_name, list) else []
+        return [
+            extra
+            for index, child in enumerate(body)
+            for extra in _extra_paths(
+                child,
+                alias_list[index] if index < len(alias_list) else None,
+                name_list[index] if index < len(name_list) else None,
+                f"{path}[{index}]",
+            )
+        ]
+    return []
+
+
+def undeclared_keys(body: Any, model: Any) -> list[str]:
+    """Dotted paths of the ``body`` keys ``model`` does not declare (validates first)."""
+    adapter = _adapter(model)
+    validated = adapter.validate_json(json.dumps(body))
+    by_alias = adapter.dump_python(validated, mode="json", by_alias=True)
+    by_name = adapter.dump_python(validated, mode="json", by_alias=False)
+    return _extra_paths(body, by_alias, by_name, "")
+
+
 def contract_problems(sample: dict[str, Any], routes: list[APIRoute] | None = None) -> list[str]:
     """Why ``sample`` breaks the contract; empty when it holds (or is non-2xx)."""
     method, path, status = sample["method"], sample["path"], int(sample["status"])
@@ -158,13 +209,21 @@ def contract_problems(sample: dict[str, Any], routes: list[APIRoute] | None = No
     except ContractError as exc:
         return [*problems, f"{where}: {exc}"]
     try:
-        _adapter(model).validate_json(json.dumps(sample["body"]))
+        extras = undeclared_keys(sample["body"], model)
     except ValidationError as exc:
         details = "; ".join(
             f"{'.'.join(str(part) for part in error['loc']) or '<root>'}: {error['msg']}"
             for error in exc.errors()[:6]
         )
         problems.append(f"{where}: fails {getattr(model, '__name__', model)}: {details}")
+        return problems
+    known = KNOWN_EXTRAS.get(sample["source"], {}).get("keys", "").split(",")
+    unknown = [extra for extra in extras if extra not in known]
+    if unknown:
+        problems.append(
+            f"{where}: {getattr(model, '__name__', model)} does not declare {', '.join(unknown)}"
+            " (the real response drops it)"
+        )
     return problems
 
 
@@ -243,6 +302,19 @@ def test_known_drift_is_shrink_only(samples: list[dict[str, Any]]) -> None:
         assert contract_problems(by_source[source]), f"KNOWN_DRIFT {source!r} no longer reproduces: remove it"
 
 
+def test_known_extras_is_shrink_only(samples: list[dict[str, Any]]) -> None:
+    by_source = {sample["source"]: sample for sample in samples}
+    for source, entry in KNOWN_EXTRAS.items():
+        assert {"finding", "owner", "recorded", "why", "keys"} <= entry.keys(), source
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry["recorded"]), source
+        assert source in by_source, f"KNOWN_EXTRAS names {source!r}, which the exporter no longer emits"
+        sample = by_source[source]
+        model = response_model_for(resolve_route(sample["method"], sample["path"]), int(sample["status"]))
+        assert undeclared_keys(sample["body"], model) == entry["keys"].split(","), (
+            f"KNOWN_EXTRAS {source!r} no longer reproduces exactly {entry['keys']!r}: shrink or remove it"
+        )
+
+
 # --- Non-vacuity: the validator rejects each kind of break -------------------
 
 
@@ -287,6 +359,29 @@ def test_the_validator_rejects_a_wrong_method() -> None:
 def test_the_validator_rejects_an_undeclared_2xx_status() -> None:
     sample = {**_valid_session_sample(), "status": 201}
     assert any("status 201 is not declared" in problem for problem in contract_problems(sample))
+
+
+def test_the_validator_rejects_a_top_level_undeclared_key() -> None:
+    sample = _valid_session_sample()
+    sample["body"]["app_env"] = "fixture"
+    assert contract_problems(sample) == [
+        "non-vacuity [GET /api/genie/sessions -> 200]: GenieSessionListResponse does not declare app_env"
+        " (the real response drops it)"
+    ]
+
+
+def test_the_validator_rejects_an_undeclared_key_inside_a_list_item() -> None:
+    sample = _valid_session_sample()
+    sample["body"]["sessions"][0]["pinned"] = True
+    assert any("does not declare sessions[0].pinned" in problem for problem in contract_problems(sample))
+
+
+def test_a_dict_field_accepts_arbitrary_keys() -> None:
+    # HealthResponse.dependencies is dict[str, str]: any dependency name is declared.
+    model = response_model_for(resolve_route("GET", "/api/health"), 200)
+    body = {"status": "ok", "mode": "live", "dependencies": {"warehouse": "up", "any_new_dependency": "up"}}
+    assert undeclared_keys(body, model) == []
+    assert undeclared_keys({**body, "app_env": "fixture"}, model) == ["app_env"]
 
 
 def test_the_validator_rejects_an_unmasked_borrower_id() -> None:

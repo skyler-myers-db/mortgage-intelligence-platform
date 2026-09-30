@@ -47,12 +47,10 @@ export const FORMATTING_BAN = [
 // SHRINK-ONLY: src/lib/formattingBan.test.ts fails when an entry no longer
 // reproduces a violation, so a file that is migrated leaves this list in the
 // same change. Never add an entry: migrate the call site. (The wave-1c
-// lane-owned exemption block was retired in wave 2: every file it covered
-// was migrated except the one below, which violated on the wave-1c merge.)
-export const FORMATTING_ALLOWLIST = {
-  "src/components/command/commandActions.ts":
-    "Cmd-K selection verb labels (approveCount / selectedCount); violated on the wave-1c merge and belongs to the wave-4 palette lane",
-};
+// lane-owned exemption block was retired in wave 2; the last entry,
+// commandActions.ts's selection verb labels, was migrated in wave 4.) Empty
+// now; the export stays because formattingBan.test.ts reads it.
+export const FORMATTING_ALLOWLIST = {};
 
 // Files where react-hooks/set-state-in-effect is already an error (see the
 // block after the main config). Grow it as files leave effect-driven state.
@@ -67,6 +65,37 @@ export const SET_STATE_IN_EFFECT_SCOPE = [
   "src/components/mortgage/useLeadBulkRun.ts",
   "src/components/mortgage/useLeadTableScroll.ts",
   "src/components/mortgage/LeadTable.selection.ts",
+  // Wave 4a error-surfaces: the shared async-state surfaces and the queue's
+  // version poll, born without effect-driven state (each proven with
+  // `eslint --rule 'react-hooks/set-state-in-effect: error'`, zero hits).
+  "src/routes/lead-queue.freshness.tsx",
+  "src/components/ui/AsyncState.tsx",
+  "src/components/ui/EmptyState.tsx",
+  "src/components/ui/FetchedAt.tsx",
+  "src/components/ui/RetryClock.tsx",
+  "src/lib/queueVersion.ts",
+  // Wave 4b workflow: Offer and Portfolio on the query layer, the queue pager
+  // and the Field primitive (each proven with the rule at error, zero hits).
+  "src/routes/offer-orchestrator.tsx",
+  "src/routes/offer-orchestrator.queries.ts",
+  "src/routes/offer-orchestrator.sales-team.ts",
+  "src/routes/portfolio-builder.tsx",
+  "src/routes/portfolio-builder.governance.tsx",
+  "src/routes/portfolio-builder.campaign-setup.tsx",
+  "src/components/mortgage/QueuePager.tsx",
+  "src/components/ui/Field.tsx",
+  // Wave 4b genie-client: the named set (GenieChat.tsx stays out: its open
+  // effect still sets state).
+  "src/components/mortgage/GenieAnswerFeedback.tsx",
+  "src/components/layout/GenieDock.tsx",
+  "src/routes/ask-genie.deep-link.tsx",
+  // Wave 4b lead-queue: the modules it created (each proven at error, zero
+  // hits; the lane named none, so the integrator proved them at merge).
+  "src/components/mortgage/LeadBulkRunFallback.tsx",
+  "src/components/mortgage/LeadTable.rowCallbacks.ts",
+  "src/components/mortgage/LeadTableBody.tsx",
+  "src/components/mortgage/leadWriteFailureToast.ts",
+  "src/components/mortgage/useTableScrollClearance.ts",
 ];
 
 /** Fixture harness files may import TYPES from frontend/src, never runtime code. */
@@ -139,7 +168,7 @@ export default [
   // The files the query-layer migration has converted (wave 2, audit
   // stack-09): their writes run on useMutation and their reads on useQuery,
   // so a synchronous setState in an effect body is a regression here. The
-  // repo-wide flip (and the TODO above) stays with the wave-4 lint lane.
+  // repo-wide flip (and the TODO above) is wave-5 lint-depth work.
   // src/lib/setStateInEffectScope.test.ts pins exactly this scope.
   {
     files: SET_STATE_IN_EFFECT_SCOPE,
@@ -152,7 +181,8 @@ export default [
   // it may import TYPES from src (so fixtures are checked against the app's
   // own response contracts) but never runtime code: the harness must drive
   // the built app from outside, not link against it. The legacy specs beside
-  // it are not linted yet; their known type errors are tracked separately.
+  // it get the same rules in the next block (and `npm run typecheck:e2e`),
+  // without the type-only import ban.
   {
     files: ["tests/e2e/fixture/**/*.ts"],
     languageOptions: {
@@ -169,6 +199,24 @@ export default [
           patterns: [FIXTURE_SRC_TYPE_ONLY],
         },
       ],
+    },
+  },
+  // The legacy Playwright specs and helpers directly under tests/e2e (audit
+  // stack-07 item 2 / quality-10 step 1): the same recommended rules as the
+  // fixture harness. The glob is non-recursive; fixture/ keeps its own
+  // blocks. No FIXTURE_SRC_TYPE_ONLY here: layout-stability.spec.ts imports
+  // src/mocks/fixtureData at runtime by design, and the contract exporter
+  // never loads a legacy spec.
+  {
+    files: ["tests/e2e/*.ts"],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: { ecmaVersion: "latest", sourceType: "module" },
+    },
+    plugins: { "@typescript-eslint": tsPlugin },
+    rules: {
+      ...tsPlugin.configs.recommended.rules,
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
   // The fixture data the contract exporter loads on bare Node (audit
@@ -248,6 +296,12 @@ export default [
               message:
                 "Production code must not import from src/mocks — those fixtures are test-only. See CLAUDE.md 'Negative prompting': no mock fallback in the running app.",
             },
+            // Test helpers (mount(), installLocalStorage, the CSS readers)
+            // are test-only too (audit quality-06).
+            {
+              group: ["**/test/*"],
+              message: "Production code must not import from src/test: those helpers are test-only.",
+            },
           ],
         },
       ],
@@ -268,10 +322,10 @@ export default [
       "no-restricted-syntax": ["error", ...FORMATTING_BAN],
     },
   },
-  {
-    files: Object.keys(FORMATTING_ALLOWLIST),
-    rules: {
-      "no-restricted-syntax": "off",
-    },
-  },
+  // An empty `files` array throws in @eslint/config-array ("Expected value
+  // to be a non-empty array") and would break ALL lint, so the override
+  // exists only while the allowlist has an entry.
+  ...(Object.keys(FORMATTING_ALLOWLIST).length
+    ? [{ files: Object.keys(FORMATTING_ALLOWLIST), rules: { "no-restricted-syntax": "off" } }]
+    : []),
 ];

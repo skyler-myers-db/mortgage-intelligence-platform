@@ -106,6 +106,22 @@
   margin-block-start: var(--sp-1);
 }
 
+/* The expanded row's approval banner (audit tables-01) sits under the
+   Primary offer card, as the prototype places it (design_files/Module 0
+   Prototype.html:1981-1986). Declared departure from the prototype's
+   `.approval` (design_files/Module 0 Prototype.html:634-651), one row of
+   icon, copy and actions: the preview column that holds it is ~390px wide
+   (Console closed, three columns) to ~490px (Console open, two), and there
+   `.approval__body { flex: 1; min-width: 0 }` let the copy shrink to one
+   word per line beside the buttons (a 343px-tall banner). Here the actions
+   take a line of their own under the copy, at the end edge, and the copy
+   keeps the width beside the icon, its title on one line. */
+.tbl__expand-inner--lead .approval { flex-wrap: wrap; }
+.tbl__expand-inner--lead .approval__actions {
+  flex-basis: 100%;
+  justify-content: flex-end;
+}
+
 /* Expanded row: the workflow strip that took the row's timestamps,
    lifecycle-advance control and Log button. Pinned to the scrollport's
    start edge like the preview above it. */
@@ -157,9 +173,108 @@
     inset 0 1px 0 var(--line-2),
     inset 0 -1px 0 var(--line-2);
 }
-/* J / K scroll the cursor row clear of the sticky header. */
+/* Focus Not Obscured (audit a11y-v2; WCAG 2.2 SC 2.4.11, technique C43):
+   what takes focus in the table (a row's controls, the J / K cursor row, the
+   expanded row and its inline review) stops clear of the sticky thead
+   (Shift+Tab up the rows), of the sticky route nav once `.main` has scrolled
+   the table up under it, and, with the Console open (the table scrolls
+   horizontally), of the pinned Approval column (Tab across a row). The
+   thead's measured size is written by useTableScrollClearance (one row
+   until then); the pin's is its column's declared width, 156px
+   (.lead-table__col-approval in 03-score-and-table.css; the table is
+   `table-layout: fixed`, and focusClearance.css.test.ts pins the two
+   equal), so nothing measures or writes it. Here, in the lazy LeadTable sheet, not on
+   03-score-and-table.css's `.tbl-wrap`: the shell stylesheet's raw and gzip
+   gates had no room for it, so tables other than the ranked-borrower table
+   keep the base.
+
+   Block start: scroll-margin on the focus targets, not scroll-padding on
+   the scroller (offer-orchestrator.action-bar.css does the same for its
+   docked bar). One margin serves both scrollers a row control is focused
+   through, the table's own and `.main`: the larger of the route nav's
+   clearance (--nav-clear, inherited from `.main`, 38-focus-clearance.css;
+   absent without a docked nav) and the thead's, each with the ring. A
+   scroll-padding on the table cleared the thead only, and 38 leaves the
+   table's contents out, so a row control up under the nav stayed there.
+
+   Inline end: scroll-padding on the scroller. A margin cannot do it here:
+   Chromium's focus() does not scroll sideways for a control any part of
+   whose box is in view, whatever its inline-end margin (measured), so a
+   control under the pin stayed there; only a padded view that the control
+   lies wholly outside of makes a focus reveal it. */
+/* The thead size is registered NON-inherited: its one consumer,
+   --tbl-focus-clear, is computed on this same element, and as an ordinary
+   (inherited) custom property each measured write re-styled every row of
+   the table. On the cold Lead Queue that write, with the pin's, cost ~340 ms
+   of TBT at 4x CPU (wave-4b integration, bisected;
+   focus-clearance-cost.fixture.spec.ts pins the re-styled count).
+   --tbl-focus-clear, which the rows DO inherit, is registered as a <length>
+   too: unregistered, its computed value is its unresolved text, which
+   changes with every thead write even when the clearance does not (the nav
+   usually wins the max()). Registered, it computes to a length, and rows
+   re-style only when that length changes. */
+@property --tbl-head-block-size {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --tbl-focus-clear {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+.tbl-wrap:has(> .lead-table__table) {
+  --tbl-head-block-size: var(--row-h);
+  --tbl-pin-inline-size: 156px;
+  --tbl-focus-clear: max(
+    var(--nav-clear, 0px),
+    calc(var(--tbl-head-block-size) + var(--focus-ring-width) + var(--focus-ring-offset))
+  );
+  scroll-padding-inline-end: calc(
+    var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)
+  );
+}
+.lead-table__table tr[data-borrower-row] *,
+.lead-table__table tr.tbl__expand,
+.lead-table__table tr.tbl__expand * {
+  scroll-margin-block-start: var(--tbl-focus-clear);
+}
+/* ...except for what sits IN the pin. A pinned Approve / Reject is sticky
+   inside that inline-end padding by construction, so a focus on one (Tab,
+   Shift+Tab, the flow's focus hand-offs) scrolled the table to its far end
+   to "reveal" a control that was already in full view, and the row's
+   borrower id went out of view with it. Its scroll area is moved back by
+   the same amount (inline-start out, inline-end in), so it lies inside the
+   scroller's padded view and a focus leaves scrollLeft where it was. */
+.lead-table__table .tbl-cell--approval * {
+  scroll-margin-inline: calc(var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset))
+    calc(-1 * (var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)));
+}
+/* J / K scroll the cursor row into view: the same clearance, plus a little
+   air at each end. */
 .lead-table__table tr[data-borrower-row] {
-  scroll-margin-block: calc(var(--row-h) + var(--sp-2)) var(--sp-2);
+  scroll-margin-block: calc(var(--tbl-focus-clear) + var(--sp-2)) var(--sp-2);
+}
+
+/* Row expand motion (audit motion-08 slice 1, queue part): the expand
+   column's one chevron turns a quarter on the expanded row (replacing the
+   right/down icon swap), and the expanded preview fades in. Opacity only,
+   never height: the virtualizer measures the row as it lands. */
+.lead-table__chevron {
+  transition: rotate var(--dur-fast) var(--ease);
+}
+.lead-table__table tr.is-expanded .lead-table__chevron {
+  rotate: 90deg;
+}
+.lead-table__table .tbl__expand-inner {
+  transition: opacity var(--dur-fast) var(--ease);
+}
+@starting-style {
+  .lead-table__table .tbl__expand-inner { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lead-table__chevron,
+  .lead-table__table .tbl__expand-inner { transition: none; }
 }
 
 /* "Skip table": the shell's visually-hidden skip link, shown in place (not

@@ -198,6 +198,24 @@ describe('GenieAnswer deep-research sections', () => {
     expect(body()?.hidden).toBe(false);
   });
 
+  it('says the table below shows every row once a section\'s Show all is open (genie-06 item 1)', () => {
+    const states = Array.from({ length: 30 }, (_, i) => ({ state: `S${String(i + 1).padStart(2, '0')}`, borrowers: 3000 - i * 10 }));
+    render(payload({
+      summary: 'Borrowers spread across thirty states.',
+      sections: [section({ table_rows: states, row_count: 30 })],
+    } as unknown as Partial<GenieAnswerShape>));
+    const caption = () => container.querySelector('.genie-chart__more')?.textContent ?? '';
+    expect(caption()).toContain('the table below shows 10 of 30 rows');
+    const showAll = container.querySelector<HTMLButtonElement>('button.genie-answer__show-all');
+    expect(showAll?.textContent).toBe('Show all 30 rows');
+    act(() => showAll?.click());
+    expect(showAll?.getAttribute('aria-expanded')).toBe('true');
+    expect(caption()).toMatch(/; the table below shows all 30 rows\.$/);
+    expect(caption()).not.toContain('10 of 30');
+    act(() => showAll?.click());
+    expect(caption()).toContain('the table below shows 10 of 30 rows');
+  });
+
   it('leaves a single-turn answer exactly as it was', () => {
     render(payload());
 

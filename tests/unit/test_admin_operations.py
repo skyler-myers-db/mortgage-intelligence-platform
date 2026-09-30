@@ -19,7 +19,10 @@ from backend.services.databricks_jobs import (
     ManagedJobStatus,
     get_job_operations,
 )
+from backend.services.databricks_sql import DatabricksSqlError
+from backend.services.gold_cache import workflow_generation
 from backend.services.lakebase import LakebaseError
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
 
@@ -419,6 +422,7 @@ def test_lifecycle_operation_uses_warehouse_sync(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(lifecycle_sync, "sync_lifecycle_state_via_warehouse", _fake_sync)
+    generation = workflow_generation()
     try:
         response = client.post(
             "/api/admin/operations/run",
@@ -437,6 +441,43 @@ def test_lifecycle_operation_uses_warehouse_sync(monkeypatch) -> None:
     assert body["run_id"] is None
     assert fake.run_calls == []
     assert calls == ["sync"]
+    # delivery-06: the mirror changed, so cached workflow counts re-read now.
+    assert workflow_generation() == generation + 1
+
+
+def test_a_failed_lifecycle_sync_moves_no_generation(monkeypatch) -> None:
+    from backend.services import lifecycle_sync
+
+    fake = _FakeOps()
+    _override_jobs(fake)
+
+    def _failing_sync() -> Any:
+        raise DatabricksSqlError("HTTP 503 from Databricks SQL API: busy")
+
+    monkeypatch.setattr(lifecycle_sync, "sync_lifecycle_state_via_warehouse", _failing_sync)
+    # A fresh audit trail: the success test above left a lifecycle cooldown.
+    prior_audit = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_audit_store] = lambda: InMemoryAuditStore()
+    generation = workflow_generation()
+    try:
+        response = client.post(
+            "/api/admin/operations/run",
+            json={
+                "job_key": "lifecycle_sync",
+                "confirm": True,
+                "request_id": "45454545-4545-4545-8545-454545454545",
+            },
+        )
+    finally:
+        _clear_jobs_override()
+        if prior_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = prior_audit
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"] == "warehouse is temporarily unavailable"
+    assert workflow_generation() == generation
 
 
 def test_run_operation_cooldown_prevents_repeat_expensive_trigger() -> None:

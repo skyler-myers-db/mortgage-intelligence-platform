@@ -23,7 +23,8 @@ const mocks = vi.hoisted(() => ({
   onLoad: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     genieSessions: mocks.genieSessions,
     genieSession: mocks.genieSession,

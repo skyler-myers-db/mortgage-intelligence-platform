@@ -51,10 +51,12 @@ aiohttp>=3.14.3
 # Security floor for PYSEC-2026-113. MLflow pulls pyarrow transitively and a
 # resolver backtrack dropped it to 21.0.0; hold the reviewed version.
 pyarrow>=24.0.0
-# Security floor for PYSEC-2026-175/PYSEC-2026-177/PYSEC-2026-178/PYSEC-2026-179.
-# databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
-# so pip-audit failures have a first-party dependency contract to resolve.
-pyjwt==2.13.0
+# Security floor for PYSEC-2026-175/PYSEC-2026-177/PYSEC-2026-178/PYSEC-2026-179
+# and GHSA-w6j9-cwv2-h6wq (2026-09-29: a malformed RSA JWK aborted parsing of
+# the whole JWK Set; fixed in 2.14.0). databricks-sql-connector depends on
+# PyJWT; keep the transitive pin explicit so pip-audit failures have a
+# first-party dependency contract to resolve.
+pyjwt==2.14.0
 # Security floor for PYSEC-2026-2253 through PYSEC-2026-2257. Matplotlib
 # depends on Pillow; keep the transitive fix explicit so lock refreshes cannot
 # silently reintroduce the vulnerable image decoder.

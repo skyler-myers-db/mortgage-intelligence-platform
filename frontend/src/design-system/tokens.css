@@ -332,9 +332,6 @@
      for WCAG AA on the light theme's tinted surfaces — same rationale as
      the dark-theme --text-3 note above (2026-06-11 audit P2-15). */
   --text-3: #34536B;
-  /* DEFERRED (2026-09-21 audit a11y-01 sub-item): --text-4 is the disabled
-   * ink, but some metadata uses it and reads 2.3-2.9:1 in either theme.
-   * Moving those sites to --text-3 is a follow-up, not done here. */
   --text-4: #96ADBF;
 
   --chip-bg:   rgba(2,80,128,0.06);
@@ -755,3 +752,20 @@ input[type="checkbox"] {
   --score-part-relationship: #9A6A00;
   --score-part-evidence: #C4457A;
 }
+
+/* ---------- Data ink (wave 4, dataviz-09 / visual-08 item 3) ----------
+ * The colour of a single-series data mark: line strokes, the chart hover
+ * dot, histogram bars past a threshold, Sankey stage bars, the analytics
+ * bar fill's end stop, KPI sparklines and the Genie line and bar charts.
+ * Those marks painted --accent, which the default `bright` accent overrides
+ * to #66C5FF even on the light theme's white surface (1.91:1), and which
+ * dark + navy / dark + red paint at 1.9:1 / 4.4:1 on the dark cards. It
+ * aliases the AA-tuned --accent-ink, so it still follows [data-accent] and
+ * prints CanvasText through the ink's print reset above.
+ * DECLARED ACCESSIBILITY DEVIATION from design_files/index.html:34-38 and
+ * :164 (marks drawn in the raw accent): light pairs, dark + navy and
+ * dark + red paint the ink, not the accent. No categorical --chart-* layer:
+ * no multi-series chart exists, and decoupling data colour from the accent
+ * is an owner decision (report section 10, item 10).
+ */
+:root { --accent-data: var(--accent-ink); }

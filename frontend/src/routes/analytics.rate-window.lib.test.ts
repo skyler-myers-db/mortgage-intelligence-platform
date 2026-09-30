@@ -1,7 +1,8 @@
 /**
  * Pure-model pins for the "Why now" rate window (dataviz-08 / dataviz-06):
- * the 1-2-5 nice ticks, the spread arithmetic and sentence, the labelled
- * spread-screen line, and the shared-axis layout.
+ * the spread arithmetic and sentence, the labelled spread-screen line, and
+ * the shared-axis layout. Its 1-2-5 tick goldens moved to
+ * lib/chartTicks.test.ts with niceTicks.
  */
 import { describe, expect, it } from 'vitest';
 import type { RateWindowResponse } from '../types';
@@ -10,7 +11,6 @@ import {
   buildXTicks,
   formatMonthYear,
   itmY,
-  niceTicks,
   rateY,
   spreadBps,
   spreadSentence,
@@ -40,21 +40,6 @@ function response(overrides: Partial<RateWindowResponse> = {}): RateWindowRespon
     ...overrides,
   };
 }
-
-describe('niceTicks', () => {
-  it('rounds the bounds outward onto a 1-2-5 step', () => {
-    expect(niceTicks(6.0, 7.7, 5)).toEqual([6, 6.5, 7, 7.5, 8]);
-    expect(niceTicks(0, 1956, 5)).toEqual([0, 500, 1000, 1500, 2000]);
-    expect(niceTicks(0, 1956, 4)).toEqual([0, 1000, 2000]);
-    expect(niceTicks(6.2, 6.3, 5)).toEqual([6.2, 6.25, 6.3]);
-  });
-
-  it('never returns a single-point or NaN domain', () => {
-    expect(niceTicks(0, 0)).toEqual([0, 1]);
-    expect(niceTicks(6.3, 6.3).length).toBeGreaterThan(1);
-    expect(niceTicks(Number.NaN, 1)).toEqual([]);
-  });
-});
 
 describe('spread arithmetic', () => {
   it('states the basis points the market print sits below the book median', () => {

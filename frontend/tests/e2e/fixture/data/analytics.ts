@@ -12,6 +12,8 @@ import type {
   SegmentAnalyticsResponse,
   SignalAnalyticsResponse,
 } from '../../../../src/types';
+import type { AnalyticsThresholds } from '../../../../src/types/economicsScatter';
+import type { ContractSample } from '../contractSamples';
 import { fixture, json, type FixtureEntry } from '../mockApi';
 import { BORROWERS } from './borrowers';
 import { SNAPSHOT_AT, SNAPSHOT_DATE, STATES, TOTALS } from './reference';
@@ -27,12 +29,27 @@ const FUNNEL: ReadonlyArray<readonly [string, number, string]> = [
 ];
 
 /**
- * Score histogram. Buckets sum to TOTALS.addressable, and the 80+ buckets
- * (3,500) stay below the score-75+ headline (TOTALS.highOpportunity).
+ * Score histogram on the governed 5-point buckets (FLOOR(score / 5) * 5,
+ * databricks_analytics._SCORE_DISTRIBUTION_SQL). Buckets sum to
+ * TOTALS.addressable, and the buckets at 75 and above sum to the score-75+
+ * headline (TOTALS.highOpportunity), as the same filtered population does
+ * live. The 55 bucket is the unique mode.
  */
 export const SCORE_BUCKETS: ReadonlyArray<readonly [number, number]> = [
-  [30, 3133], [40, 9200], [50, 18800], [60, 27620], [70, 27300], [80, 2480], [90, 1020],
+  [20, 376], [25, 1090], [30, 2567], [35, 5149], [40, 8671], [45, 12283], [50, 14594], [55, 14600],
+  [60, 12283], [65, 8671], [70, 5149], [75, 2100], [80, 1200], [85, 520], [90, 220], [95, 80],
 ];
+
+/** Rate spread histogram on the governed 25 bps buckets; it sums to TOTALS.addressable. */
+export const SPREAD_BUCKETS: ReadonlyArray<readonly [number, number]> = [
+  [0, 21400], [25, 18900], [50, 14200], [75, 11800], [100, 9100], [125, 6300], [150, 4100], [175, 2400], [200, 1353],
+];
+
+/**
+ * The refi screen the fixture refresh applied: the fn_in_the_money defaults
+ * the rate window, admin rules and offers fixtures also carry (75 bps / 15%).
+ */
+export const ECONOMICS_THRESHOLDS: AnalyticsThresholds = { min_spread_bps: 75, min_equity_pct: 15, reason: null };
 
 /**
  * The canonical display band (backend scoring.score_band, mip.gold.fn_score_band,
@@ -57,6 +74,60 @@ const EQUITY_BINS: EquitySpreadBin[] = [10, 20, 30, 40, 50, 60, 70].flatMap((equ
     in_the_money_borrowers: spread >= 100 && equity >= 20 ? 180 + row * 40 : 0,
   })),
 );
+
+/** The economics tab payload; specs override the thresholds block through this. */
+export function economicsBody(thresholds: AnalyticsThresholds = ECONOMICS_THRESHOLDS): EconomicsAnalyticsResponse {
+  return {
+    rate_spread_histogram: SPREAD_BUCKETS.map(([bucket, count]) => ({ spread_bucket_bps: bucket, borrower_count: count })),
+    equity_spread: {
+      bins: EQUITY_BINS,
+      total_borrowers: TOTALS.addressable,
+      equity_bin_pct: 10,
+      spread_bin_bps: 50,
+      equity_domain_min: 0,
+      equity_domain_max: 80,
+      spread_domain_min: 0,
+      spread_domain_max: 250,
+      source_table: 'mip.gold.borrower_360',
+      refreshed_at: SNAPSHOT_AT,
+    },
+    top_borrowers: BORROWERS.slice(0, 10).map((borrower, index) => ({
+      borrower_id: borrower.borrower_id,
+      display_name: borrower.display_name,
+      state: borrower.state,
+      city: borrower.city,
+      opportunity_score: borrower.opportunity_score,
+      rate_spread_bps: borrower.rate_spread_bps,
+      equity_pct: borrower.why_panel.equity_pct,
+      recommended_offer: borrower.recommended_offer,
+      rank_overall: index + 1,
+    })),
+    thresholds,
+  };
+}
+
+/** The screen is not built in this refresh: every borrower_360 row carries NULL. */
+export const THRESHOLDS_NOT_BUILT: AnalyticsThresholds = { min_spread_bps: null, min_equity_pct: null, reason: 'not_built' };
+/** Rows disagree on the screen (MIN != MAX): no single governed value. */
+export const THRESHOLDS_NOT_UNIFORM: AnalyticsThresholds = { min_spread_bps: null, min_equity_pct: 15, reason: 'not_uniform' };
+
+/** The null-threshold economics bodies specs register, for the fixture contract exporter. */
+export function contractSamples(): ContractSample[] {
+  return (
+    [
+      ['THRESHOLDS_NOT_BUILT', THRESHOLDS_NOT_BUILT],
+      ['THRESHOLDS_NOT_UNIFORM', THRESHOLDS_NOT_UNIFORM],
+    ] as const
+  ).map(([name, thresholds]) => ({
+    source: `data/analytics.ts#economicsBody(${name})`,
+    method: 'GET',
+    pattern: '/api/analytics/economics',
+    path: '/api/analytics/economics',
+    query: '',
+    status: 200,
+    body: economicsBody(thresholds),
+  }));
+}
 
 export const analyticsFixtures: FixtureEntry[] = [
   fixture('GET', '/api/analytics/executive', () =>
@@ -111,37 +182,7 @@ export const analyticsFixtures: FixtureEntry[] = [
       })),
     }),
   ),
-  fixture('GET', '/api/analytics/economics', () =>
-    json<EconomicsAnalyticsResponse>({
-      rate_spread_histogram: [0, 25, 50, 75, 100, 125, 150, 175, 200].map((bucket, index) => ({
-        spread_bucket_bps: bucket,
-        borrower_count: [21400, 18900, 14200, 11800, 9100, 6300, 4100, 2400, 1353][index],
-      })),
-      equity_spread: {
-        bins: EQUITY_BINS,
-        total_borrowers: TOTALS.addressable,
-        equity_bin_pct: 10,
-        spread_bin_bps: 50,
-        equity_domain_min: 0,
-        equity_domain_max: 80,
-        spread_domain_min: 0,
-        spread_domain_max: 250,
-        source_table: 'mip.gold.borrower_360',
-        refreshed_at: SNAPSHOT_AT,
-      },
-      top_borrowers: BORROWERS.slice(0, 10).map((borrower, index) => ({
-        borrower_id: borrower.borrower_id,
-        display_name: borrower.display_name,
-        state: borrower.state,
-        city: borrower.city,
-        opportunity_score: borrower.opportunity_score,
-        rate_spread_bps: borrower.rate_spread_bps,
-        equity_pct: borrower.why_panel.equity_pct,
-        recommended_offer: borrower.recommended_offer,
-        rank_overall: index + 1,
-      })),
-    }),
-  ),
+  fixture('GET', '/api/analytics/economics', () => json<EconomicsAnalyticsResponse>(economicsBody())),
   fixture('GET', '/api/analytics/economics/points', ({ query }) => {
     const points = BORROWERS.map((borrower) => ({
       borrower_id: borrower.borrower_id,

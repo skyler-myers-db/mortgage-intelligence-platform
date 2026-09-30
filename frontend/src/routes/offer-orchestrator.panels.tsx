@@ -64,6 +64,8 @@ interface RejectRationalePanelProps {
   onRationaleChange: (rationale: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
+  /** Confirm reject waits while this open's snapshot read is in flight. */
+  submitDisabled?: boolean;
 }
 
 /**
@@ -79,6 +81,7 @@ export function RejectRationalePanel({
   onRationaleChange,
   onCancel,
   onSubmit,
+  submitDisabled = false,
 }: RejectRationalePanelProps) {
   const reasonRef = useRef<HTMLSelectElement>(null);
   const titleId = useId();
@@ -136,7 +139,7 @@ export function RejectRationalePanel({
             variant="primary"
             size="sm"
             icon="cross"
-            disabled={reasonCode === 'other_with_text' && rationale.trim().length === 0}
+            disabled={submitDisabled || (reasonCode === 'other_with_text' && rationale.trim().length === 0)}
           >
             Confirm reject
           </Button>

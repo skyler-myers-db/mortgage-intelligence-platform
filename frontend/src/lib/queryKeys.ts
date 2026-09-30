@@ -17,14 +17,33 @@ export const queryKeys = {
   borrowerProof: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? '', 'proof'] as const,
   borrowerLifecycle: (borrowerId: string | null | undefined) =>
     ['mip', 'borrower', borrowerId ?? '', 'lifecycle'] as const,
-  offerRecommendation: (borrowerId: string | null | undefined) =>
-    ['mip', 'offer', 'recommendation', borrowerId ?? ''] as const,
-  outreachDraft: (borrowerId: string | null | undefined, channel: string) =>
-    ['mip', 'outreach', 'draft', borrowerId ?? '', channel] as const,
+  /**
+   * The Offer Orchestrator's one composite read: borrower, recommendation and
+   * lifecycle for one open (routes/offer-orchestrator.queries.ts). Never under
+   * ['mip','borrower'], so it never shares the Borrower 360 dossier entry (the
+   * approval surface writes its own VIEW_BORROWER) and
+   * invalidateOperationalQueries never touches it.
+   */
+  offerSnapshot: (
+    borrowerId: string | null | undefined,
+    binding: { campaign_id: string; variant_name: string } | null,
+  ) => ['mip', 'offer', 'snapshot', borrowerId ?? '', binding?.campaign_id ?? '', binding?.variant_name ?? ''] as const,
+  /** The governed outreach draft; carries every input of the POST (runtime-02 rule). */
+  outreachDraft: (
+    borrowerId: string | null | undefined,
+    channel: string,
+    binding: { campaign_id: string; variant_name: string } | null,
+  ) => ['mip', 'outreach', 'draft', borrowerId ?? '', channel, binding?.campaign_id ?? '', binding?.variant_name ?? ''] as const,
   /** A county's ZIP rollups for one cohort (the Lead Queue's county scope chip). */
   geoCountyZipRollups: (countyFips: string, cohort: readonly unknown[]) =>
     ['mip', 'geo', 'county-zip-rollups', countyFips, ...cohort] as const,
   salesTeam: () => ['mip', 'sales', 'team'] as const,
+  /**
+   * The unfiltered /sales/team roster (Offer's optional assignment: active
+   * loan officers AND sales managers). Distinct from salesTeam(), under which
+   * Lead Queue and Sales ops cache a loan-officer-only list.
+   */
+  salesRoster: () => ['mip', 'sales', 'roster'] as const,
   salesOps: () => ['mip', 'sales', 'ops-snapshot'] as const,
   portfolioPreview: (criteria: readonly unknown[]) => ['mip', 'portfolio', 'preview', ...criteria] as const,
   campaigns: () => ['mip', 'campaigns'] as const,

@@ -24,6 +24,16 @@ import './AsyncState.css';
  * same chunk.
  */
 
+/**
+ * The same body sentence for a caller outside React (the Lead Queue's
+ * write-failure toast), from this already-lazy chunk: a new dynamic import of
+ * lib/describeApiError itself splits the transport out of the entry chunk
+ * (see DescribedError.tsx).
+ */
+export function failureSentence(error: unknown, subject: string): string {
+  return describeApiError(error, { subject }).body;
+}
+
 /** A failure's describeApiError body sentence, for DescribedErrorBody. */
 export function FailureBody({ error, subject }: { error: unknown; subject: string }) {
   return describeApiError(error, { subject }).body;

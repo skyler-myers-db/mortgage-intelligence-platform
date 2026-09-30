@@ -26,6 +26,8 @@ ManagedJobKey = Literal[
 ]
 
 ACTIVE_LIFECYCLE_STATES = {"PENDING", "QUEUED", "RUNNING", "BLOCKED", "TERMINATING"}
+# A run in one of these life-cycle states will not change again.
+TERMINAL_LIFECYCLE_STATES = frozenset({"TERMINATED", "SKIPPED", "INTERNAL_ERROR"})
 
 
 class JobOperationError(RuntimeError):
@@ -440,6 +442,11 @@ def _run_from_sdk(run: Any) -> ManagedJobRun:
     )
 
 
+def describe_run(run: Any) -> ManagedJobRun:
+    """The typed view of an SDK ``Run`` (``jobs.get_run`` / ``jobs.list_runs``)."""
+    return _run_from_sdk(run)
+
+
 def get_job_operations() -> DatabricksJobOperations:
     return DatabricksJobOperations()
 
@@ -452,5 +459,7 @@ __all__ = [
     "ManagedJobKey",
     "ManagedJobRun",
     "ManagedJobStatus",
+    "TERMINAL_LIFECYCLE_STATES",
+    "describe_run",
     "get_job_operations",
 ]

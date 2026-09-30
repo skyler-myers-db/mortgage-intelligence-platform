@@ -185,9 +185,12 @@ test('a pointer pick still selects and closes the filter menu', async ({ app, pa
 });
 
 /**
- * Every block in the Analytics tabpanel spans the page column edge to edge,
- * like the tablist above it (the panel is a plain wrapper; the
- * `.main__inner > .surface` rules it steps between must not have mattered).
+ * Every block in the Analytics tabpanel spans the page column edge to edge
+ * (the panel is a plain wrapper; the `.main__inner > .surface` rules it steps
+ * between must not have mattered). The column is the tablist's parent content
+ * box: since wave 4b the tablist is a content-sized tray like the
+ * prototype's (w3 motion-nav #131), so only its LEFT edge still marks the
+ * column, and the blocks are measured against the column itself.
  */
 async function expectPanelFlushWithTabs(page: Page): Promise<void> {
   const edges = await page.evaluate(() => {
@@ -197,16 +200,32 @@ async function expectPanelFlushWithTabs(page: Page): Promise<void> {
     };
     const tabs = document.querySelector('.analytics-tabs');
     const panel = document.querySelector('[role="tabpanel"]');
+    const column = tabs?.parentElement ?? null;
+    let content: { left: number; right: number } | null = null;
+    if (column) {
+      const rect = column.getBoundingClientRect();
+      const style = getComputedStyle(column);
+      // clientWidth spans the padding box, so the content box runs from the
+      // left border + padding to clientWidth minus the right padding.
+      const borderLeft = parseFloat(style.borderLeftWidth);
+      content = {
+        left: rect.left + borderLeft + parseFloat(style.paddingLeft),
+        right: rect.left + borderLeft + column.clientWidth - parseFloat(style.paddingRight),
+      };
+    }
     return {
       tabs: tabs ? box(tabs) : null,
+      column: content,
       blocks: [...(panel?.children ?? [])].map((node) => ({ name: node.className, ...box(node) })),
     };
   });
   expect(edges.tabs).not.toBeNull();
+  expect(edges.column).not.toBeNull();
   expect(edges.blocks.length).toBeGreaterThan(0);
+  expect(edges.tabs?.left, 'the tab tray starts at the column edge').toBeCloseTo(edges.column?.left ?? -1, 0);
   for (const block of edges.blocks) {
-    expect(block.left, `${block.name} left edge`).toBeCloseTo(edges.tabs?.left ?? -1, 0);
-    expect(block.right, `${block.name} right edge`).toBeCloseTo(edges.tabs?.right ?? -1, 0);
+    expect(block.left, `${block.name} left edge`).toBeCloseTo(edges.column?.left ?? -1, 0);
+    expect(block.right, `${block.name} right edge`).toBeCloseTo(edges.column?.right ?? -1, 0);
   }
 }
 

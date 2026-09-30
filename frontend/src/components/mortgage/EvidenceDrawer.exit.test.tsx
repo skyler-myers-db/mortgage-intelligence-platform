@@ -33,7 +33,10 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ drawer: appMocks.drawer, setDrawer: appMocks.setDrawer, canAccessAdmin: false }),
 }));
 
-vi.mock('../../lib/api', () => ({ api: {} }));
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  api: {},
+}));
 
 const FIRST: DrawerSource = {
   title: 'Lead population',

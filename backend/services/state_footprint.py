@@ -14,6 +14,17 @@ Consumers:
   state list.
 - Admin restart invalidates the cache (``invalidate()``), matching the
   manual-flush posture we use for ``LenderRefResolver``.
+- ``backend/schemas/_validators_tenant.py`` (the schema validators) and the
+  Genie footprint guards read ``state_codes()`` / ``using_fallback()``.
+
+Cache posture (audit ``delivery-06``): a ``GoldAggregateCache`` holding one
+snapshot (the rows AND their status, so a caller never mixes one refresh's
+rows with another's flag). Past 80% of the TTL (240 s) it is served stale
+while one background refresh re-reads UC; at the TTL (300 s) it is recomputed
+inline, so the guards and validators never see coverage older than before.
+There is no ``stale_if_error``: a degraded outcome is a VALUE, so a refresh
+that degrades REPLACES the live snapshot and ``using_fallback()`` flips on
+the next read.
 
 The generic fallback is not a license or data-coverage statement; it is only
 an outage posture. Normal product behavior comes from live gold geography
@@ -25,10 +36,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from threading import Lock
+from typing import TYPE_CHECKING
 
 from backend.schemas._validators_tenant import set_state_footprint_provider
 from backend.schemas.usps import US_STATE_NAME_BY_CODE
 from backend.services.observability import emit
+
+if TYPE_CHECKING:
+    from backend.services.gold_cache import GoldAggregateCache
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +76,12 @@ _FOOTPRINT_FALLBACK: tuple[tuple[str, str, int, bool], ...] = tuple(
 # 5-minute TTL per hole-finder #20 (300s). Admin restart invalidates; a
 # full live-edit flow is a later slice.
 _FOOTPRINT_TTL_S: float = 300.0
+# Served stale-while-revalidate after this share of the TTL; recomputed
+# inline at the TTL itself, so no reader sees older coverage than before.
+_FOOTPRINT_SOFT_TTL_FRACTION: float = 0.8
 _FOOTPRINT_CACHE_KEY: str = "mip.ref.state_footprint"
+# Statuses that are not a Cotality coverage contract.
+_DEGRADED_STATUSES = frozenset({"fallback", "metadata_only"})
 
 
 @dataclass(frozen=True)
@@ -74,13 +94,26 @@ class FootprintState:
     is_default_state: bool
 
 
+@dataclass(frozen=True)
+class _FootprintSnapshot:
+    """One load's rows and the status they were loaded under, cached together."""
+
+    rows: tuple[FootprintState, ...]
+    status: str
+
+    @property
+    def degraded(self) -> bool:
+        return self.status in _DEGRADED_STATUSES
+
+
 class StateFootprintResolver:
     """Resolve current geography coverage from ``mip.gold.county_rollup``.
 
     Behavior mirrors ``LenderRefResolver`` in
     ``backend.services.pii_redaction``:
 
-    1. Cached live gold coverage (TTL 300s) if refreshed coverage exists.
+    1. Cached live gold coverage (TTL 300s; stale-while-revalidate after
+       240 s) if refreshed coverage exists.
     2. UC metadata rows only as degraded metadata when gold coverage is empty
        or unavailable.
     3. Generic ``_FOOTPRINT_FALLBACK`` if both UC sources are down. One
@@ -94,10 +127,11 @@ class StateFootprintResolver:
         *,
         ttl_s: float = _FOOTPRINT_TTL_S,
         fallback: tuple[tuple[str, str, int, bool], ...] | None = None,
+        cache: GoldAggregateCache | None = None,
     ) -> None:
-        from backend.services.resilience import TTLCache
+        from backend.services.gold_cache import GoldAggregateCache
 
-        self._cache: TTLCache = TTLCache()
+        self._cache: GoldAggregateCache = cache if cache is not None else GoldAggregateCache()
         self._ttl_s = ttl_s
         self._fallback = fallback if fallback is not None else _FOOTPRINT_FALLBACK
         self._load_lock = Lock()
@@ -227,25 +261,41 @@ class StateFootprintResolver:
             return metadata_rows
         return None
 
-    def _footprint(self) -> list[FootprintState]:
-        cached = self._cache.get(_FOOTPRINT_CACHE_KEY)
-        if cached is not None:
-            return cached  # type: ignore[no-any-return]
+    def snapshot(self) -> _FootprintSnapshot:
+        """The cached rows and their status, read together."""
+        snapshot: _FootprintSnapshot = self._cache.get_or_set(
+            _FOOTPRINT_CACHE_KEY,
+            self._load_snapshot,
+            ttl_s=_FOOTPRINT_SOFT_TTL_FRACTION * self._ttl_s,
+            stale_if_error=False,
+            hard_ttl_s=self._ttl_s,
+        )
+        return snapshot
+
+    def _load_snapshot(self) -> _FootprintSnapshot:
+        """Load once (inline or as the background refresh) under the load lock.
+
+        ``_load_from_uc`` handles its own warehouse failures (it answers
+        ``None`` or metadata rows), so a degraded outcome comes back as a
+        snapshot VALUE that replaces the cached one.
+        """
         with self._load_lock:
-            cached = self._cache.get(_FOOTPRINT_CACHE_KEY)
-            if cached is not None:
-                return cached  # type: ignore[no-any-return]
+            self._source_status = "unknown"
             loaded = self._load_from_uc()
             if loaded is None:
-                loaded = [
+                rows = tuple(
                     FootprintState(code, name, order, default)
                     for code, name, order, default in self._fallback
-                ]
-                self._source_status = "fallback"
-            elif self._source_status == "unknown":
-                self._source_status = "live_coverage"
-            self._cache.set(_FOOTPRINT_CACHE_KEY, loaded, self._ttl_s)
-            return loaded
+                )
+                status = "fallback"
+            else:
+                rows = tuple(loaded)
+                status = "live_coverage" if self._source_status == "unknown" else self._source_status
+            self._source_status = status
+            return _FootprintSnapshot(rows=rows, status=status)
+
+    def _footprint(self) -> tuple[FootprintState, ...]:
+        return self.snapshot().rows
 
     def list(self) -> list[FootprintState]:
         """Return current coverage rows, sorted by ``display_order``."""
@@ -285,13 +335,13 @@ class StateFootprintResolver:
         receive a fabricated one. ``using_fallback()`` reports the same
         condition; this method just stops papering over it.
         """
-        rows = self._footprint()
-        for s in rows:
+        snapshot = self.snapshot()
+        for s in snapshot.rows:
             if s.is_default_state:
                 return s.state_code
-        if self._source_status == "fallback":
+        if snapshot.status == "fallback":
             return None
-        return rows[0].state_code
+        return snapshot.rows[0].state_code
 
     def using_fallback(self) -> bool:
         """Return TRUE when the active list is metadata only.
@@ -301,8 +351,7 @@ class StateFootprintResolver:
         Data-bearing decisions, especially Genie out-of-footprint guards,
         should treat this as unavailable scope rather than broadening answers.
         """
-        self._footprint()
-        return self._source_status in {"fallback", "metadata_only"}
+        return self.snapshot().degraded
 
     def invalidate(self) -> None:
         """Drop the cached footprint so the next call re-fetches from UC."""
@@ -336,9 +385,11 @@ def _reset_state_footprint_resolver_for_tests(
 
 
 def _schema_state_footprint_provider() -> tuple[tuple[tuple[str, str], ...], bool]:
-    resolver = get_state_footprint_resolver()
-    states = tuple((state.state_code, state.state_name) for state in resolver.list())
-    return states, resolver.using_fallback()
+    # ONE snapshot for both: a refresh landing between two reads could
+    # otherwise pair live rows with a fallback flag (or the reverse).
+    snapshot = get_state_footprint_resolver().snapshot()
+    states = tuple((state.state_code, state.state_name) for state in snapshot.rows)
+    return states, snapshot.degraded
 
 
 set_state_footprint_provider(_schema_state_footprint_provider)

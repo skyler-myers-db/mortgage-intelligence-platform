@@ -33,7 +33,8 @@ vi.mock('../components/AppContext', () => ({
   useApp: () => ({ lender: 'Summit Mortgage', setDrawer, showEvidence: true }),
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: { analyticsRateWindow: vi.fn() },
 }));
 

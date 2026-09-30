@@ -3,6 +3,8 @@
 'use no memo';
 
 import {
+  useEffect,
+  useEffectEvent,
   useId,
   useRef,
   useState,
@@ -14,6 +16,7 @@ import { Link } from 'react-router';
 import { EvidenceChip } from '../components/Primitives';
 import { api, type AnalyticsQueryOptions } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { pushEscapeLayer } from '../lib/escapeStack';
 import {
   SCORE_BAND_HIGH_MIN,
   SCORE_BAND_MED_MIN,
@@ -29,6 +32,7 @@ import type {
   EquitySpreadPointsResponse,
   EquitySpreadViewport,
 } from '../types';
+import { niceTicksWithin } from '../lib/chartTicks';
 import { formatCompact } from '../lib/formatters';
 import { LoadState } from './analytics.charts';
 import './analytics.scatter.css';
@@ -38,7 +42,6 @@ import {
   binDensityAlpha,
   binZoomViewport,
   formatAxisTick,
-  makeTicks,
   overviewScatterLayout,
   pct,
   scatterPosition,
@@ -267,8 +270,8 @@ export function EquitySpreadBinsView({
   return (
     <ScatterFrame
       layout={layout}
-      xTicks={makeTicks(overview.equity_domain_min, overview.equity_domain_max)}
-      yTicks={makeTicks(overview.spread_domain_min, overview.spread_domain_max)}
+      xTicks={niceTicksWithin(overview.equity_domain_min, overview.equity_domain_max, 5, { integer: true })}
+      yTicks={niceTicksWithin(overview.spread_domain_min, overview.spread_domain_max, 5, { integer: true })}
       scoreScope="overview"
       overlay={
         <div
@@ -353,8 +356,8 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
   return (
     <ScatterFrame
       layout={layout}
-      xTicks={makeTicks(payload.viewport.equity_min, payload.viewport.equity_max)}
-      yTicks={makeTicks(payload.viewport.spread_min, payload.viewport.spread_max)}
+      xTicks={niceTicksWithin(payload.viewport.equity_min, payload.viewport.equity_max, 5, { integer: true })}
+      yTicks={niceTicksWithin(payload.viewport.spread_min, payload.viewport.spread_max, 5, { integer: true })}
       scoreScope="borrower"
       overlay={
         <div
@@ -502,19 +505,33 @@ function ScatterPointCluster({
       ? 'analytics-scatter__cluster--align-end'
       : '';
   const vertical = position.yPct > 58 ? 'analytics-scatter__cluster--above' : '';
+  // An open cluster panel is an Escape layer (lib/escapeStack.ts, a11y-07):
+  // Escape closes it and returns focus to its marker, and a layer opened
+  // above it (a drawer, the palette) takes Escape first. The panel is
+  // non-modal, so, like the floating Genie panel, it DECLINES the key while
+  // focus is outside the cluster: an Escape typed in the Genie composer or a
+  // page field reaches that layer or the page, and focus stays where it is.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const dismiss = useEffectEvent(() => {
+    onOpenChange(false);
+    markerRef.current?.focus();
+  });
+  useEffect(() => {
+    if (!open) return;
+    return pushEscapeLayer(() => {
+      if (!rootRef.current?.contains(document.activeElement)) return false;
+      dismiss();
+      return undefined;
+    });
+  }, [open]);
   return (
     <div
+      ref={rootRef}
       className={`analytics-scatter__cluster ${alignment} ${vertical}`}
       style={{
         '--dot-x': `${position.xPct}%`,
         '--dot-y': `${position.yPct}%`,
       } as CSSProperties}
-      onKeyDown={(event) => {
-        if (event.key !== 'Escape' || !open) return;
-        event.preventDefault();
-        onOpenChange(false);
-        markerRef.current?.focus();
-      }}
     >
       <button
         ref={markerRef}

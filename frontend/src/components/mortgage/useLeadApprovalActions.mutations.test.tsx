@@ -15,7 +15,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import { act, useEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 
@@ -27,24 +27,13 @@ const apiMocks = vi.hoisted(() => ({
   reject: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => {
-  class ApiError extends Error {
-    readonly status: number | null;
-    readonly aborted: boolean;
-    constructor(message: string, opts: { path?: string; status?: number | null; aborted?: boolean } = {}) {
-      super(message);
-      this.status = opts.status ?? null;
-      this.aborted = opts.aborted ?? false;
-    }
-  }
-  return {
-    api: apiMocks,
-    ApiError,
-    isAbortError: (err: unknown) => err instanceof ApiError && err.aborted,
-  };
-});
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  api: apiMocks,
+}));
 
 import { ApiError } from '../../lib/api';
+import { clearToasts, getToasts } from '../../lib/toast';
 import { useLeadApprovalActions } from './useLeadApprovalActions';
 
 const IDS = Array.from({ length: 7 }, (_, index) => `B-AAAAAAAAAAAA${index + 1}`);
@@ -80,7 +69,6 @@ function draft(generationId: string): OutreachDraftResult {
 type Actions = ReturnType<typeof useLeadApprovalActions>;
 let actions: Actions | null = null;
 const setApproval = vi.fn();
-const setApprovalError = vi.fn();
 
 function Harness({ client }: { client: QueryClient }) {
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
@@ -95,7 +83,6 @@ function Harness({ client }: { client: QueryClient }) {
     campaignBindingBlocked: false,
     canApprove: true,
     tableWrapRef,
-    setApprovalError,
   });
   useEffect(() => {
     actions = current;
@@ -126,8 +113,18 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
   let root: Root;
   let client: QueryClient;
 
-  beforeEach(() => {
+  beforeAll(async () => {
+    // Loaded once up front, so a failure toast's wording (which arrives with
+    // this chunk, leadWriteFailureToast) settles within a task.
+    await import('../ui/AsyncFailure');
+  }, 30_000);
+
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // A failure toast's wording loads asynchronously (leadWriteFailureToast):
+    // let the previous test's settle before this one starts clean.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    clearToasts();
     window.sessionStorage.clear();
     client = new QueryClient();
     apiMocks.draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draft(`gen-${borrowerId}`)));
@@ -225,9 +222,8 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     });
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
     await act(async () => {
-      await actions!.bulkApprove();
+      await actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
 
     expect(maxInFlight).toBe(3);
@@ -255,10 +251,9 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
-    let run: Promise<void> = Promise.resolve();
+    let run: Promise<boolean> = Promise.resolve(false);
     await act(async () => {
-      run = actions!.bulkApprove();
+      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
     await flush();
     expect(apiMocks.approve).toHaveBeenCalledTimes(3);
@@ -286,17 +281,16 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       : Promise.resolve({ approved: true, audit_event_id: 'audit-bulk' })));
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
     await act(async () => {
-      await actions!.bulkApprove();
+      await actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
 
     expect(actions!.bulkRun.result?.failed).toEqual([
       { borrowerId: IDS[4], outcome: 'backend', message: 'Draft proof is stale.' },
     ]);
     expect([...actions!.selectedIds]).toEqual([IDS[4]]);
-    // Bulk rows report in the run's result, not the table's single alert.
-    expect(setApprovalError).not.toHaveBeenCalledWith(expect.stringContaining("Couldn't approve"));
+    // Bulk rows report in the run's result, never a single-row toast.
+    expect(getToasts()).toEqual([]);
   });
 
   it('certifies the evidence and offer each row had when the run started, not a refetch mid-run', async () => {
@@ -306,10 +300,9 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     }));
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
-    let run: Promise<void> = Promise.resolve();
+    let run: Promise<boolean> = Promise.resolve(false);
     await act(async () => {
-      run = actions!.bulkApprove();
+      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
     await flush();
     // A refetch lands mid-run with different evidence for a row not sent yet.
@@ -337,10 +330,9 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     }));
     mount();
     act(() => actions!.toggleSelectAll());
-    act(() => actions!.setBulkRationale('Q3 refinance push'));
-    let run: Promise<void> | null = null;
+    let run: Promise<boolean> | null = null;
     await act(async () => {
-      run = actions!.bulkApprove();
+      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
     });
     await flush();
     expect(apiMocks.approve).toHaveBeenCalledTimes(3);
@@ -395,6 +387,13 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       failed = await actions!.rejectLead(BORROWER, 'low_intent', 'No intent');
     });
     expect(failed).toBe(false);
+    // The single-row failure is an error toast with describeApiError's
+    // buyer-safe body, never the transport text (states-07 item 2).
+    await vi.waitFor(() => {
+      expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+        ['error', `Couldn't reject ${BORROWER}`, 'The server hit an unexpected error.'],
+      ]);
+    });
 
     let first: Promise<boolean> | null = null;
     let second: boolean | undefined;

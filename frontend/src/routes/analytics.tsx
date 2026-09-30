@@ -48,24 +48,6 @@ import { useRateWindowQuery } from './analytics.rate-window';
 import { SalesOpsSection } from './analytics.sales-ops';
 import { ApprovalFunnelSection } from './analytics.approval-funnel';
 
-// Re-export the symbols imported from './analytics' by analytics.test.tsx so the
-// decomposition keeps every existing import path stable.
-export {
-  binCellRect,
-  binDensityAlpha,
-  binZoomViewport,
-  buildDailyEvidenceTotals,
-  leadQueueHref,
-  leadQueueHrefForFunnelStage,
-  normalizeAnalyticsSegmentCodes,
-  overviewScatterLayout,
-  scatterPosition,
-  segmentIntelligenceHref,
-  zoomScatterLayout,
-} from './analytics.lib';
-export { DailyEvidenceLineChart, LineChart } from './analytics.charts';
-export { EquitySpreadBinsView, EquitySpreadPointsView, EquitySpreadScatter } from './analytics.equity-scatter';
-
 const TAB_IDS: readonly AnalyticsTab[] = TABS.map((item) => item.id);
 
 export default function AnalyticsRoute() {

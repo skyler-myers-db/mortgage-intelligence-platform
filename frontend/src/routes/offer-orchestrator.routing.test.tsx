@@ -69,7 +69,6 @@ vi.mock('../components/AppContext', () => ({
 vi.mock('../components/activation/ActivationLoopPanel', () => ({ ActivationLoopPanel: () => null }));
 
 import OfferOrchestrator from './offer-orchestrator';
-import { clearBorrowerCache } from './offer-orchestrator.cache';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
@@ -180,7 +179,6 @@ describe('OfferOrchestrator approval routing line', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearBorrowerCache();
     appState.approvals = {};
     apiMocks.borrower.mockImplementation(async (id: string) => borrower(id));
     apiMocks.recommendOffer.mockImplementation(async (id: string) => recommendation(id));
@@ -225,7 +223,6 @@ describe('OfferOrchestrator approval routing line', () => {
     act(() => root.unmount());
     queryClient.clear();
     container.remove();
-    clearBorrowerCache();
     navigate = null;
   });
 

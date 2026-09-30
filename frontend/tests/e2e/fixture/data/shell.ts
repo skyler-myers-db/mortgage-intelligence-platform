@@ -41,7 +41,6 @@ export const GEOGRAPHY_SCOPE: GeographyScope = {
 export const HEALTH_OK: HealthPayload = {
   status: 'ok',
   mode: 'live',
-  app_env: 'fixture',
   dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
   circuit_breakers: { warehouse: 'closed', lakebase: 'closed', genie: 'closed' },
   campaign_treatment_runtime: 'enabled',

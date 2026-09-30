@@ -138,7 +138,10 @@ export function useMainScroll(mainRef: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     const main = mainRef.current;
     if (!main) return undefined;
-    const offsets = (offsetsRef.current ??= readStoredOffsets());
+    // `== null` then assign, not a `??=` logical assignment, which React
+    // Compiler 1.0 cannot compile (runtime-03).
+    if (offsetsRef.current == null) offsetsRef.current = readStoredOffsets();
+    const offsets = offsetsRef.current;
     const capture = () => {
       const key = activeKeyRef.current;
       if (key === null || restoringRef.current) return;
@@ -174,7 +177,8 @@ export function useMainScroll(mainRef: RefObject<HTMLElement | null>): void {
   useLayoutEffect(() => {
     const main = mainRef.current;
     if (!main) return undefined;
-    const offsets = (offsetsRef.current ??= readStoredOffsets());
+    if (offsetsRef.current == null) offsetsRef.current = readStoredOffsets();
+    const offsets = offsetsRef.current;
     const previousPathname = previousPathnameRef.current;
     previousPathnameRef.current = pathname;
     activeKeyRef.current = storageKey;

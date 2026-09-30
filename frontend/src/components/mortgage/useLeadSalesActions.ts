@@ -2,24 +2,32 @@
  * useLeadSalesActions — the sales-operations half of the ranked-borrower
  * table: optimistic per-row overrides from assignment / lifecycle writes (and
  * therefore the merged `displayLeads` view every other consumer reads), assign
- * + round-robin distribution, and the call-disposition panel's form state.
- * Extracted from LeadTable.tsx (file-size gate, plan item 2).
+ * + round-robin distribution, and which row's call-disposition panel is open.
+ * The panel's fields and their pre-flight validation are the panel's own
+ * state (LeadDispositionPanel; audit runtime-04 slice 2), so typing a note
+ * never re-renders the table. Extracted from LeadTable.tsx (file-size gate,
+ * plan item 2).
  *
  * The writes run on the sales mutations (lib/mutations/sales, audit stack-09
  * / wow-power-5 step 1): networkMode 'always', one request_id per intent,
  * and an honest strategy ('manual' for one loan officer, 'round_robin' for
  * two or more; 'score_balanced' is never sent). Results and write failures
- * go to the shell toast region with the audit event id; pre-flight
- * validation stays in the table's alert.
+ * go to the shell toast region with the audit event id.
  */
 
 import { useRef, useState } from 'react';
 import { useIsMutating, type QueryClient } from '@tanstack/react-query';
-import type { CallDisposition, LeadSummary, SalesTeamMember } from '../../types';
+import type { LeadSummary, SalesTeamMember } from '../../types';
 import { intentFingerprint, useIntentRequestIds } from '../../lib/mutations/requestIds';
-import { salesMutationKeys, useAssignLeads, useLogDisposition } from '../../lib/mutations/sales';
+import {
+  salesMutationKeys,
+  useAssignLeads,
+  useLogDisposition,
+  type LogDispositionVariables,
+} from '../../lib/mutations/sales';
 import { toast } from '../../lib/toast';
 import { dispositionLabel } from './LeadTable.logic';
+import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
 /** One assignment row as returned by `assignLead` / `distributeLeads`. */
 export interface LeadAssignmentResult {
@@ -32,27 +40,28 @@ export interface LeadAssignmentResult {
   assignment_id?: string | null;
 }
 
+const ASSIGN_FAILED = "Couldn't assign the selected leads";
+
+/** What the disposition panel submits: the POST body, validated by the panel. */
+export type LeadDispositionPayload = LogDispositionVariables['payload'];
+
 export interface UseLeadSalesActionsInput {
   leads: LeadSummary[];
   salesTeam: SalesTeamMember[];
   queryClient: QueryClient;
-  /** Shared with the approval hook: the table renders one error alert. */
-  setApprovalError: (message: string | null) => void;
 }
 
 export function useLeadSalesActions({
   leads,
   salesTeam,
   queryClient,
-  setApprovalError,
 }: UseLeadSalesActionsInput) {
   const [selectedAssignee, setSelectedAssignee] = useState<string>('');
   const [salesOverrides, setSalesOverrides] = useState<Record<string, Partial<LeadSummary>>>({});
   const [pendingDisposition, setPendingDisposition] = useState<string | null>(null);
-  const [dispositionOutcome, setDispositionOutcome] = useState<CallDisposition['outcome']>('called_left_voicemail');
-  const [dispositionLo, setDispositionLo] = useState<string>('');
-  const [dispositionCallbackAt, setDispositionCallbackAt] = useState('');
-  const [dispositionNotes, setDispositionNotes] = useState('');
+  // The loan officer the panel opens with (the row's assignee, else the
+  // toolbar's); the panel owns every field after that.
+  const [dispositionInitialLo, setDispositionInitialLo] = useState('');
   const assignLeads = useAssignLeads(queryClient);
   const logDisposition = useLogDisposition(queryClient);
   const requestIds = useIntentRequestIds();
@@ -73,10 +82,7 @@ export function useLeadSalesActions({
   function openDisposition(borrowerId: string) {
     const lead = leadsById.get(borrowerId);
     setPendingDisposition(borrowerId);
-    setDispositionLo(lead?.assigned_to_email ?? effectiveAssignee);
-    setDispositionOutcome('called_left_voicemail');
-    setDispositionCallbackAt('');
-    setDispositionNotes('');
+    setDispositionInitialLo(lead?.assigned_to_email ?? effectiveAssignee);
   }
 
   function applyAssignmentOverrides(assignments: LeadAssignmentResult[]) {
@@ -140,11 +146,10 @@ export function useLeadSalesActions({
         ? [effectiveAssignee]
         : [];
     if (loEmails.length === 0) {
-      setApprovalError('No active loan officers are available for assignment.');
+      toastWriteRefusal(ASSIGN_FAILED, 'No active loan officers are available for assignment.');
       return Promise.resolve();
     }
     salesInFlightRef.current = true;
-    setApprovalError(null);
     const intent = intentFingerprint('assign', borrowerIds.join(','), loEmails.join(','));
     return latched(assignLeads.run({ borrowerIds, loEmails, requestId: requestIds.idFor(intent) }).then(
       (result) => {
@@ -155,30 +160,16 @@ export function useLeadSalesActions({
         onAssigned();
       },
       (err: unknown) => {
-        toast.error("Couldn't assign the selected leads", { detail: err instanceof Error ? err.message : null });
+        toastWriteFailure(ASSIGN_FAILED, err, 'the assignment');
       },
     ));
   }
 
-  function submitDisposition(): Promise<void> {
+  /** The open panel's Submit, with the payload the panel validated. */
+  function submitDisposition(payload: LeadDispositionPayload): Promise<void> {
     if (!pendingDisposition || salesWriteInFlight()) return Promise.resolve();
-    if (!dispositionLo) {
-      setApprovalError('Choose the loan officer who worked this lead.');
-      return Promise.resolve();
-    }
-    if (dispositionOutcome === 'callback_scheduled' && !dispositionCallbackAt) {
-      setApprovalError('Callback scheduled dispositions require a callback time.');
-      return Promise.resolve();
-    }
     salesInFlightRef.current = true;
-    setApprovalError(null);
     const borrowerId = pendingDisposition;
-    const payload = {
-      lo_email: dispositionLo,
-      outcome: dispositionOutcome,
-      callback_at: dispositionCallbackAt ? new Date(dispositionCallbackAt).toISOString() : null,
-      notes: dispositionNotes.trim() || null,
-    };
     const intent = intentFingerprint(
       'disposition', borrowerId, payload.lo_email, payload.outcome, payload.callback_at, payload.notes,
     );
@@ -217,15 +208,8 @@ export function useLeadSalesActions({
     salesBusy,
     pendingDisposition,
     setPendingDisposition,
+    dispositionInitialLo,
     openDisposition,
     submitDisposition,
-    dispositionOutcome,
-    setDispositionOutcome,
-    dispositionLo,
-    setDispositionLo,
-    dispositionCallbackAt,
-    setDispositionCallbackAt,
-    dispositionNotes,
-    setDispositionNotes,
   };
 }

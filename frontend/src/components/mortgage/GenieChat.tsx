@@ -8,9 +8,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
-import { api } from '../../lib/api';
+import { genieStartQueryOptions } from '../../lib/genieStartQuery';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Button } from '../Primitives';
@@ -47,6 +48,7 @@ import {
 } from '../../lib/genieInFlightTurn';
 import {
   GENIE_LAUNCHER_STATUS_ID,
+  claimGenieLauncherStatus,
   genieLauncherStateClass,
   genieLauncherStatusText,
   setGenieTurnStatus,
@@ -68,6 +70,10 @@ export {
   sourceAssetsFor,
   warningLabelForSource,
 } from './GenieChat.helpers';
+
+// The shell (GenieDock) resumes a reloaded turn through this chunk before
+// the panel's first open (audit genie-02 item 2): see GenieDock.tsx.
+export { ensureGenieLauncherSignal, resumeGenieTurnFromSession } from '../../lib/genieLauncherSignal';
 
 /**
  * Floating Genie chat panel — `.genie` BEM from the prototype. Fixed
@@ -103,10 +109,11 @@ export {
  */
 
 const COMPOSER_BUSY_HINT_ID = 'genie-composer-busy';
+const NO_STARTERS: string[] = [];
 const ACTION_REASON = 'A governed action is running. Ask unlocks when it finishes.';
 
 export function GenieChat() {
-  const { genieOpen, setGenieOpen, lender, refreshWorkspace } = useApp();
+  const { genieOpen, setGenieOpen, lender, refreshWorkspace, consoleOpen } = useApp();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   // The settled transcript and the in-flight turn are two external stores
@@ -134,36 +141,42 @@ export function GenieChat() {
   }, [genieOpen]);
 
   // The store owns the turn, so unmounting stops nothing; only the launcher
-  // signal this panel drives goes back to idle.
-  useEffect(() => () => setGenieTurnStatus('idle'), []);
+  // signal this panel drives goes back to idle. While mounted the panel
+  // holds the signal's claim, so the pre-open writer (lib/genieLauncherSignal)
+  // stays quiet.
+  useEffect(() => {
+    const release = claimGenieLauncherStatus();
+    return () => {
+      release();
+      setGenieTurnStatus('idle');
+    };
+  }, []);
   // A reload may have interrupted a turn: resume it, once per page.
   useEffect(() => {
     resumeGenieTurnFromSession();
   }, []);
 
-  const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const bodyRef = useRef<HTMLDivElement>(null);
   const suppressBootstrapConversationRef = useRef(false);
 
+  // The starters and a bootstrap conversation come from `/api/genie/start`,
+  // shared with /ask-genie through one query (audit `runtime-06`): opening
+  // the panel after the route read it sends nothing. The panel mounts on its
+  // first open, so a never-opened panel sends nothing either. A failed read
+  // leaves no starters; asking starts a fresh Genie conversation.
+  const genieStart = useQuery(genieStartQueryOptions());
+  const startData = genieStart.data;
+  const sampleQuestions = Array.isArray(startData?.sample_questions) ? startData.sample_questions : NO_STARTERS;
   useEffect(() => {
-    const controller = new AbortController();
-    api.genieStart(controller.signal)
-      .then((result) => {
-        setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
-        const startConversationId = result.conversation_id;
-        if (!startConversationId || suppressBootstrapConversationRef.current) return;
-        setConversationId((current) => {
-          if (current) return current;
-          writeGenieConversationId(startConversationId);
-          return startConversationId;
-        });
-      })
-      .catch(() => {
-        // Asking a question will start a fresh Databricks Genie conversation.
-      });
-    return () => controller.abort();
-  }, []);
+    const startConversationId = startData?.conversation_id;
+    if (!startConversationId || suppressBootstrapConversationRef.current) return;
+    setConversationId((current) => {
+      if (current) return current;
+      writeGenieConversationId(startConversationId);
+      return startConversationId;
+    });
+  }, [startData]);
 
   useEffect(() => {
     // The turn store aborts the turn and clears its notes and announcement on
@@ -187,6 +200,9 @@ export function GenieChat() {
     };
   }, []);
 
+  // The panel element: a drag or resize moves it directly (useGenieWindow,
+  // audit runtime-v1), and the dismissal hook reads it below.
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const {
     effectiveSize,
     position: pos,
@@ -198,7 +214,7 @@ export function GenieChat() {
     onDragPointerMove,
     onDragPointerUp,
     redock: onDragDoubleClick,
-  } = useGenieWindow({ open: genieOpen });
+  } = useGenieWindow({ open: genieOpen, panelRef, consoleOpen });
 
   // R5-12 (2026-04-23): dialog a11y. Mirrors the EvidenceDrawer pattern
   // — initial focus lands on the input, ESC closes, focus restores to
@@ -207,7 +223,6 @@ export function GenieChat() {
   // Tab: the floating panel is a non-modal dialog, and the rest of the
   // workspace stays interactive while it is open.
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
   const fabRef = useRef<HTMLButtonElement | null>(null);
   const lastAnswerRef = useRef<HTMLDivElement | null>(null);
   const closePanel = useCallback(() => setGenieOpen(false), [setGenieOpen]);
@@ -304,9 +319,10 @@ export function GenieChat() {
       : unseen
         ? 'ready'
         : 'idle';
+  const launcherOutcome = unseen ?? 'answered';
   useEffect(() => {
-    setGenieTurnStatus(launcherStatus);
-  }, [launcherStatus]);
+    setGenieTurnStatus(launcherStatus, launcherOutcome);
+  }, [launcherStatus, launcherOutcome]);
 
   /**
    * Start a turn. `startedAt` is the moment of the user's action and is read
@@ -408,7 +424,7 @@ export function GenieChat() {
     return runGenieActionRequest(action, payload, conversationId)
       .then((outcome) => {
         if (outcome.kind !== 'ok') {
-          landActionBubble({ answer: outcome.message, source: 'degraded', trusted_assets: [] }, outcome.message);
+          landActionBubble({ answer: outcome.message, question: '', source: 'degraded', trusted_assets: [] }, outcome.message);
           return;
         }
         if (action.action_type === 'save_borrowers') refreshWorkspace();
@@ -416,6 +432,8 @@ export function GenieChat() {
         landActionBubble(
           {
             answer: confirmed,
+            // A governed action result answers no question (its turn's is '').
+            question: '',
             source: GOVERNED_ACTION_SOURCE,
             trusted_assets: [],
             conversation_id: payload.conversation_id,
@@ -453,7 +471,7 @@ export function GenieChat() {
           polite announcer (audit `a11y-06`). The elapsed ticker is nowhere
           near it. */}
       <span id={GENIE_LAUNCHER_STATUS_ID} className="sr-only">
-        {genieLauncherStatusText(launcherStatus, unseen ?? 'answered')}
+        {genieLauncherStatusText(launcherStatus, launcherOutcome)}
       </span>
       <GenieAnnouncerRegion surface="panel" visible={genieOpen} />
       <button

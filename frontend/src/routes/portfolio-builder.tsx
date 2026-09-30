@@ -1,5 +1,5 @@
-import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { type ChangeEvent, useCallback, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 import { api } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
@@ -8,6 +8,7 @@ import type {
   CampaignListResponse,
   CampaignRecommendationResponse,
   CampaignSummary,
+  PortfolioCreateResponse,
   PortfolioPreview,
   CampaignPerformanceFunnelResponse,
 } from '../types';
@@ -24,6 +25,8 @@ import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { useFootprint } from '../components/FootprintProvider';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { queryKeys } from '../lib/queryKeys';
+import { campaignMutationKeys, useCreateCampaign } from '../lib/mutations/campaigns';
+import { intentFingerprint, useIntentRequestIds } from '../lib/mutations/requestIds';
 import { toast } from '../lib/toast';
 import { copyLink } from '../lib/copyLink';
 import { formatCount } from '../lib/formatters';
@@ -49,6 +52,7 @@ import {
   isDayZero,
   parseFiltersFromUrl,
   parseStateCodesFromUrl,
+  sanitizeFootprintStateCodes,
   type CampaignSetupState,
 } from './portfolio-builder.logic';
 import { campaignSetupsEqual, portfolioUnsavedMessage } from './portfolio-builder.unsaved';
@@ -310,20 +314,28 @@ export default function PortfolioBuilder() {
     });
   }, [buildDirty]);
 
-  const saveRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  // The governed save on the mutation layer (stack-09 item 2): pessimistic,
+  // one Idempotency-Key per intent. A reopened panel is a new intent (the
+  // session counter is part of the fingerprint), so it mints a new key, while
+  // "try again" after a failure resends the same one.
+  const queryClient = useQueryClient();
+  const createCampaign = useCreateCampaign(queryClient);
+  const saveRequestIds = useIntentRequestIds();
+  const [saveSession, setSaveSession] = useState(0);
   const onOpenSavePanel = useCallback(() => {
     if (buildDirty || buildInFlight || preview?.campaign_build_eligible !== true) return;
-    saveRequestRef.current = null;
+    setSaveSession((session) => session + 1);
     setSaveName(`Portfolio build ${formatDateTimeShort(new Date())}`);
     setSaveValidationError(null);
     setSaveFailed(false);
     setSavePanelOpen(true);
   }, [buildDirty, buildInFlight, preview?.campaign_build_eligible]);
 
-  const [saving, setSaving] = useState(false);
+  const saving = createCampaign.isPending;
   const onConfirmSave = useCallback(async () => {
     const name = saveName.trim();
-    if (!name || saving || buildInFlight) return;
+    // Synchronous latch: a create is already on the wire (a double submit).
+    if (!name || queryClient.isMutating({ mutationKey: campaignMutationKeys.create }) > 0 || buildInFlight) return;
     if (preview?.campaign_build_eligible !== true) {
       setSaveValidationError(
         `This build is not eligible for the governed ${formatCount(campaignBuildLimit)}-contact campaign limit. Refine the filters and run it again.`,
@@ -344,49 +356,42 @@ export default function PortfolioBuilder() {
     // the panel (and the name) until the save actually succeeds; on failure
     // the form stays open with the typed name and a "Save failed" hint so
     // the operator can retry without re-typing.
-    setSaving(true);
+    const criteria = buildPreviewCriteria(committedFilters, committedStateCodes);
+    const config = buildCampaignConfig(campaignSetup);
+    const intent = intentFingerprint('campaign-create', saveSession, JSON.stringify({ name, criteria, config }));
+    let created: PortfolioCreateResponse | undefined;
     try {
-      const criteria = buildPreviewCriteria(committedFilters, committedStateCodes);
-      const campaignConfig = buildCampaignConfig(campaignSetup);
-      const fingerprint = JSON.stringify({ name, criteria, campaignConfig });
-      if (saveRequestRef.current?.fingerprint !== fingerprint) {
-        saveRequestRef.current = {
-          fingerprint,
-          requestId: crypto.randomUUID(),
-        };
-      }
-      const created = await api.portfolioCreate(
-        name,
-        criteria,
-        { ...campaignConfig, request_id: saveRequestRef.current.requestId },
-      );
-      await refetchCampaigns();
-      saveRequestRef.current = null;
-      setSavedCampaignSetup(campaignSetup);
-      setSavePanelOpen(false);
-      toast.success('Build saved', { detail: name, auditEventId: created?.audit_event_id ?? null });
+      // Resolves after the saved-campaign list is re-read (the mutation's onSuccess).
+      created = await createCampaign.mutateAsync({ name, criteria, config, requestId: saveRequestIds.idFor(intent) });
     } catch {
       setSaveFailed(true);
-    } finally {
-      setSaving(false);
+      return;
     }
+    saveRequestIds.settle(intent);
+    setSavedCampaignSetup(campaignSetup);
+    setSavePanelOpen(false);
+    toast.success('Build saved', { detail: name, auditEventId: created?.audit_event_id ?? null });
   }, [
     campaignBuildLimit,
     campaignSetup,
     buildInFlight,
     committedFilters,
     committedStateCodes,
+    createCampaign,
     preview?.campaign_build_eligible,
-    refetchCampaigns,
+    queryClient,
     saveName,
-    saving,
+    saveRequestIds,
+    saveSession,
   ]);
 
   // When the URL changes (browser back/forward), reconcile local state
   // and refetch so the KPI grid reflects the navigation. We only
   // refetch if the URL-derived filters actually differ from local
   // state — otherwise setState from onRunBuild would cause an
-  // unnecessary second fetch.
+  // unnecessary second fetch. Both reconciliations below run in render
+  // ("store the previous input", no effect), keyed on exactly the inputs the
+  // effects they replaced were keyed on, in the same order.
   const urlFilters = useMemo(
     () => parseFiltersFromUrl(searchParams, defaultFilters, targetLenderOptions),
     [defaultFilters, searchParams, targetLenderOptions],
@@ -395,7 +400,9 @@ export default function PortfolioBuilder() {
     () => parseStateCodesFromUrl(searchParams, footprint.states),
     [footprint.states, searchParams],
   );
-  useEffect(() => {
+  const [reconciledUrl, setReconciledUrl] = useState({ filters: urlFilters, stateCodes: urlStateCodes });
+  if (reconciledUrl.filters !== urlFilters || reconciledUrl.stateCodes !== urlStateCodes) {
+    setReconciledUrl({ filters: urlFilters, stateCodes: urlStateCodes });
     const differs = URL_FILTER_KEYS.some((k) => urlFilters[k] !== filters[k]);
     const stateDiffers = urlStateCodes.join(',') !== stateCodes.join(',');
     if (differs || stateDiffers) {
@@ -404,27 +411,17 @@ export default function PortfolioBuilder() {
       setStateCodes(urlStateCodes);
       setCommittedStateCodes(urlStateCodes);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlFilters, urlStateCodes]);
-
-  useEffect(() => {
-    const allowed = new Set(footprint.states.map((state) => state.state_code));
-    const sanitize = (codes: string[]) => {
-      const next = codes.filter((code) => allowed.has(code));
-      const collapsed =
-        footprint.states.length > 0 && next.length === footprint.states.length ? [] : next;
-      // Identity-preserving no-op guard (re-audit #3, 2026-06-12): always
-      // returning a fresh array re-renders on every effect pass, which
-      // turns into an unbounded setState loop if a provider hands back
-      // unstable identities (a test mock did exactly that). Same values
-      // in -> same reference out.
-      return collapsed.length === codes.length && collapsed.every((c, i) => c === codes[i])
-        ? codes
-        : collapsed;
-    };
+  }
+  // A footprint change drops states outside it. The initial state already
+  // holds the parse of the same footprint, so the first pass is a no-op and
+  // starts from the mount's inputs.
+  const [sanitizedFor, setSanitizedFor] = useState({ states: footprint.states, geoOptionsKey });
+  if (sanitizedFor.states !== footprint.states || sanitizedFor.geoOptionsKey !== geoOptionsKey) {
+    setSanitizedFor({ states: footprint.states, geoOptionsKey });
+    const sanitize = (codes: string[]) => sanitizeFootprintStateCodes(codes, footprint.states);
     setStateCodes(sanitize);
     setCommittedStateCodes(sanitize);
-  }, [footprint.states, geoOptionsKey]);
+  }
 
   const leadQueueUrl = useMemo(() => {
     return buildLeadQueueUrlFromFilters(committedFilters, committedStateCodes, targetLenderOptions);

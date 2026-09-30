@@ -1,11 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
+import { DailyEvidenceLineChart } from './analytics.charts';
+import { EquitySpreadBinsView, EquitySpreadPointsView } from './analytics.equity-scatter';
 import {
-  DailyEvidenceLineChart,
-  EquitySpreadBinsView,
-  EquitySpreadPointsView,
-  LineChart,
+  MAX_SCATTER_POINTS,
   binCellRect,
   binDensityAlpha,
   binZoomViewport,
@@ -15,15 +14,16 @@ import {
   normalizeAnalyticsSegmentCodes,
   scatterPosition,
   segmentIntelligenceHref,
+  signalLabel,
   zoomScatterLayout,
-} from './analytics';
-import { ExecutiveProvenanceNote } from './analytics.sections';
-import { MAX_SCATTER_POINTS, signalLabel } from './analytics.lib';
+} from './analytics.lib';
+import { ExecutiveProvenanceNote, ScoreDistribution } from './analytics.sections';
 import { TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import type {
   EquitySpreadOverview,
   EquitySpreadPoint,
   EquitySpreadPointsResponse,
+  ExecutiveAnalyticsResponse,
   ExecutiveProvenance,
 } from '../types';
 
@@ -134,34 +134,27 @@ describe('analytics drilldown links', () => {
 });
 
 describe('analytics chart readability', () => {
-  it('renders numeric x and y tick labels for line charts', () => {
+  it('renders the score distribution as a histogram with numeric 1-2-5 ticks', () => {
     const html = renderToStaticMarkup(
-      <LineChart
-        rows={[
-          { score_bucket: 10, borrower_count: 100 },
-          { score_bucket: 20, borrower_count: 2_000 },
-        ]}
-        x={(row) => ('score_bucket' in row ? row.score_bucket : row.spread_bucket_bps)}
-        y={(row) => row.borrower_count}
-        xLabel="Opportunity score"
-        yLabel="Borrowers"
+      <ScoreDistribution
+        data={{
+          totals: { addressable_borrowers: 2_100, high_opportunity_borrowers: 0 },
+          score_distribution: [
+            { score_bucket: 10, borrower_count: 100 },
+            { score_bucket: 20, borrower_count: 2_000 },
+          ],
+        } as unknown as ExecutiveAnalyticsResponse}
       />,
     );
 
     expect(html).toContain('Opportunity score');
     expect(html).toContain('Borrowers');
-    expect(html).toContain('10');
-    expect(html).toContain('20');
     expect(html).toContain('2K');
-    expect(html).not.toContain('Borrowers scale');
     expect(html).toContain('analytics-chart__grid');
-    expect(html.match(/analytics-chart__tick--x/g)?.length ?? 0).toBeGreaterThanOrEqual(5);
-    expect(html.match(/analytics-chart__tick--y/g)?.length ?? 0).toBeGreaterThanOrEqual(5);
-
-    const points = html.match(/points="([^"]+)"/)?.[1] ?? '';
-    const ys = points.split(' ').map((point) => Number(point.split(',')[1]));
-    expect(ys.length).toBe(2);
-    expect(ys.every((value) => Number.isFinite(value) && value >= 0 && value <= 100)).toBe(true);
+    expect(html).not.toContain('<polyline');
+    expect(html.match(/class="chart-hist__bar/g)?.length ?? 0).toBe(2);
+    expect(html.match(/analytics-chart__tick--x/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    expect(html.match(/analytics-chart__tick--y/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 
   it('renders the scatter overview as density-bin cells, never borrower rows', () => {

@@ -20,7 +20,10 @@ const apiMocks = vi.hoisted(() => ({
   workspace: vi.fn(),
 }));
 
-vi.mock('../lib/api', () => ({ api: apiMocks }));
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
+  api: apiMocks,
+}));
 
 // A stable object per test (the provider reads it on every render); the
 // delivery-07 cases swap `data` before mounting.
