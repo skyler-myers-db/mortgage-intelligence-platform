@@ -28,7 +28,7 @@
   "frontend/src/design-system/components/32-feedback.css": 1,
   "frontend/src/design-system/components/37-topbar-status.css": 1,
   "frontend/src/design-system/components/38-focus-clearance.css": 1,
-  "frontend/src/design-system/tokens.css": 3,
+  "frontend/src/design-system/tokens.css": 1,
   "frontend/src/lib/shellSkeleton.ts": 1,
   "frontend/src/lib/themePreference.ts": 1,
   "frontend/src/lib/themeTransition.ts": 1,

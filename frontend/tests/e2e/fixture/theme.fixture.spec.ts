@@ -17,7 +17,9 @@
  *     the shared axe gate (fixture/axe.ts) on / and /lead-queue;
  *  f. every theme x accent pair prints the accent family monochrome, as
  *     print.css asks (the (0,2,0) theme x accent compounds used to outrank
- *     its remap: dark + navy printed accent-ink #66C5FF on white paper).
+ *     its remap: dark + navy printed accent-ink #66C5FF on white paper);
+ *  g. data ink is fixed per theme (D-dataviz-geo-c1): an accent switch
+ *     repaints the primary button but never a sparkline or the choropleth.
  *
  * States the axe loop never renders (warning copy, amber glyphs, the active
  * evidence-drawer tab, text-input focus) are proven in
@@ -25,6 +27,7 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
+import { mapAllClassesFixture } from './data/mapEncoding';
 import {
   asComputedRgb,
   centerPixel,
@@ -42,6 +45,8 @@ const TRANSPARENT = 'rgba(0, 0, 0, 0)';
 /** CanvasText / Canvas under the light color-scheme tokens.css forces for print. */
 const PRINT_INK = 'rgb(0, 0, 0)';
 const PRINT_PAPER = 'rgb(255, 255, 255)';
+/** The fixed data ink per theme (tokens.css --accent-data; D-dataviz-geo-c1). */
+const DATA_INK: Record<FixtureTheme, string> = { dark: '#66C5FF', light: '#014E80' };
 
 interface AttributeTrace {
   atDomContentLoaded: string | null;
@@ -307,17 +312,56 @@ for (const theme of THEMES) {
 
       await page.emulateMedia({ media: 'print' });
       const printed: Record<string, string> = {};
-      for (const token of ['--accent-ink', '--accent', '--chip-text', '--chip-bg']) {
+      for (const token of ['--accent-ink', '--accent-data', '--accent', '--chip-text', '--chip-bg']) {
         printed[token] = await asComputedRgb(page, `var(${token})`);
       }
       // --accent-ink colours every accent text site that survives print
       // (.text-accent, .proof-component__score, .audit__ico, .uc-asset-link).
       expect(printed).toEqual({
         '--accent-ink': PRINT_INK,
+        '--accent-data': PRINT_INK,
         '--accent': PRINT_INK,
         '--chip-text': PRINT_INK,
         '--chip-bg': PRINT_PAPER,
       });
     });
   }
+}
+
+for (const theme of THEMES) {
+  test(`${theme}: an accent switch repaints the primary button, never a sparkline or the choropleth`, async ({ app, mockApi, page }) => {
+    // The map-encoding rollup that paints every class, so a lvl-4 state exists.
+    mockApi.register(mapAllClassesFixture.method, mapAllClassesFixture.pattern, mapAllClassesFixture.handler);
+    await app.setTheme(theme);
+    await app.setAccent('red');
+    await app.gotoRoute('/');
+    const html = page.locator('html');
+    await expect(html).toHaveAttribute('data-accent', 'red');
+    const spark = page.locator('#main-content .kpi .spark__line[stroke="var(--accent-data)"]').first();
+    const region = page.locator('#main-content path.map-region.lvl-4').first();
+    const button = page.locator('#main-content .btn--primary').first();
+    await expect(spark, 'an up-trend KPI sparkline').toBeAttached();
+    await expect(region, 'a top-step state').toBeAttached();
+    await expect(button).toBeAttached();
+    const read = async () => {
+      for (const target of [spark, region, button]) await settleTransitions(target);
+      return {
+        stroke: await spark.evaluate((el) => getComputedStyle(el).stroke),
+        fill: await region.evaluate((el) => getComputedStyle(el).fill),
+        button: await button.evaluate((el) => getComputedStyle(el).backgroundColor),
+      };
+    };
+    const red = await read();
+    expect(red.stroke, 'the sparkline paints the fixed data ink').toBe(await asComputedRgb(page, DATA_INK[theme]));
+    const [r, g, b] = parseRgb(red.button);
+    expect(r - Math.max(g, b), `the primary button paints the red accent family: ${red.button}`).toBeGreaterThan(80);
+
+    const console_ = await app.openConsole();
+    await console_.getByRole('button', { name: 'Accent bright' }).click();
+    await expect(html).toHaveAttribute('data-accent', 'bright');
+    const bright = await read();
+    expect(bright.button, 'chrome follows the accent').not.toBe(red.button);
+    expect(bright.stroke, 'the sparkline ignores the accent').toBe(red.stroke);
+    expect(bright.fill, 'the choropleth ignores the accent').toBe(red.fill);
+  });
 }

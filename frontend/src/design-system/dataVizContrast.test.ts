@@ -1,9 +1,11 @@
 /**
- * Data-ink contract (2026-09-21 audit dataviz-09 / visual-08 item 3,
- * in-contract half). Single-series data marks paint --accent-data, an alias
- * of the AA-tuned --accent-ink, so they clear WCAG 1.4.11 (3:1 for graphics)
- * on the card surfaces in every theme x accent pair; the raw accent drew
- * 1.91:1 lines on white with the default `bright` accent.
+ * Data-ink contract (2026-09-21 audit dataviz-09 / visual-08; 2026-09-30
+ * ruling D-dataviz-geo-c1). Single-series data marks paint --accent-data,
+ * which is FIXED per theme (#66C5FF dark, #014E80 light) and never follows
+ * [data-accent]: the red accent painted data in the danger family and teal
+ * made it equal --seg-itm. It clears WCAG 1.4.11 (3:1 for graphics) on the
+ * card surfaces in every theme x accent pair; the raw accent drew 1.91:1
+ * lines on white with the default `bright` accent.
  *
  * Resolved over the real token cascade (no browser). The painted proof is
  * tests/e2e/fixture/charts.fixture.spec.ts.
@@ -25,6 +27,8 @@ const THEMES = ['dark', 'light'] as const;
 const ACCENTS = ['bright', 'navy', 'red', 'teal'] as const;
 const SURFACES = ['--bg-1', '--bg-2'] as const;
 const GRAPHIC_AA = 3;
+/** The fixed data ink per theme (the default accent's own values). */
+const DATA_INK = { dark: '#66C5FF', light: '#014E80' } as const;
 
 /** Selectors whose fill or stroke is a single-series data mark. */
 const DATA_MARK_SELECTORS = [
@@ -47,10 +51,15 @@ const TSX_DATA_MARK_FILES = [
 const BARE_ACCENT = /var\(\s*--accent\s*[,)]/;
 
 describe('--accent-data (dataviz-09, in contract)', () => {
-  it('aliases the AA-tuned accent ink, so it follows [data-accent]', () => {
-    const cascade = new TokenCascade(tokens, { theme: 'light', accent: 'bright' });
-    expect(cascade.raw('--accent-data')).toBe('var(--accent-ink)');
-  });
+  for (const theme of THEMES) {
+    for (const accent of ACCENTS) {
+      it(`${theme} + ${accent}: is the fixed ${DATA_INK[theme]} and never reads the accent`, () => {
+        const cascade = new TokenCascade(tokens, { theme, accent });
+        expect(hex(cascade.color('--accent-data'))).toBe(DATA_INK[theme]);
+        expect(cascade.raw('--accent-data') ?? '').not.toMatch(/--accent/);
+      });
+    }
+  }
 
   for (const theme of THEMES) {
     for (const accent of ACCENTS) {

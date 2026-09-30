@@ -78,6 +78,23 @@ describe('geography ramp tokens (dataviz-02 / responsive-05)', () => {
     expect(THEMES.length * ACCENTS.length).toBe(8);
   });
 
+  // D-dataviz-geo-c1: the ramp hue is the fixed per-theme data ink, so a
+  // Console accent switch never repaints the choropleth.
+  for (const theme of THEMES) {
+    it(`${theme}: every accent resolves an identical ramp (steps 0-4 and inks 0-4)`, () => {
+      const ramps = ACCENTS.map((accent) => {
+        const cascade = new TokenCascade(css, { theme, accent });
+        return [0, 1, 2, 3, 4].flatMap((n) => [
+          stepColor(cascade.resolve(`--map-ramp-${n}`)),
+          parseColor(cascade.resolve(`--map-ramp-ink-${n}`)),
+        ]);
+      });
+      for (let i = 1; i < ramps.length; i += 1) {
+        expect(ramps[i], `${ACCENTS[i]} vs ${ACCENTS[0]}`).toEqual(ramps[0]);
+      }
+    });
+  }
+
   for (const theme of THEMES) {
     for (const accent of ACCENTS) {
       it(`${theme} + ${accent}: steps stay >= 0.06 OKLab L apart, the top step is >= 3:1 off the base, every step's ink reads 4.5:1`, () => {
