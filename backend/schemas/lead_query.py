@@ -1,8 +1,8 @@
 """Query-parameter contract for ``GET /api/leads``.
 
-The Lead Queue accepts 35 query parameters -- geography drill-downs,
-Portfolio Builder replays, sales-workflow state, and the governed Genie
-cohort handoff. Declaring them inline left the router's signature ~290
+The Lead Queue accepts 39 query parameters -- geography drill-downs,
+Portfolio Builder replays, sales-workflow state, the governed Genie
+cohort handoff, and the public opportunity-score / rate-spread bounds. Declaring them inline left the router's signature ~290
 lines long, which buried the ten lines of logic underneath it.
 
 Each parameter is exported as an ``Annotated`` alias so the router reads
@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from fastapi import Depends, Query
+
+from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
 
 # Kept in sync with DatabricksLeadRepository.{DEFAULT_LIMIT, MAX_LIMIT}.
 # Module-level so the router's Query() annotation, backend.api.leads
@@ -356,6 +358,58 @@ FunnelStageParam = Annotated[
     ),
 ]
 
+# The public bounds reuse the reviewed ranges a governed Genie cohort floor
+# is validated against, so a URL can never ask for a threshold the cohort
+# vocabulary would refuse (score 0..100; spread is signed, -1000..5000).
+SCORE_BOUND_RANGE: tuple[int, int] = GENIE_NUMERIC_FILTER_BOUNDS["min_opportunity_score"]
+SPREAD_BOUND_RANGE: tuple[int, int] = GENIE_NUMERIC_FILTER_BOUNDS["min_rate_spread_bps"]
+
+MinOpportunityScoreParam = Annotated[
+    int | None,
+    Query(
+        alias="min_opportunity_score",
+        ge=SCORE_BOUND_RANGE[0],
+        le=SCORE_BOUND_RANGE[1],
+        description="Optional inclusive lower bound on the opportunity score.",
+    ),
+]
+
+MaxOpportunityScoreParam = Annotated[
+    int | None,
+    Query(
+        alias="max_opportunity_score",
+        ge=SCORE_BOUND_RANGE[0],
+        le=SCORE_BOUND_RANGE[1],
+        description="Optional inclusive upper bound on the opportunity score.",
+    ),
+]
+
+MinRateSpreadBpsParam = Annotated[
+    int | None,
+    Query(
+        alias="min_rate_spread_bps",
+        ge=SPREAD_BOUND_RANGE[0],
+        le=SPREAD_BOUND_RANGE[1],
+        description=(
+            "Optional inclusive lower bound on the signed rate spread in basis "
+            "points. Borrowers with no spread never match a spread bound."
+        ),
+    ),
+]
+
+MaxRateSpreadBpsParam = Annotated[
+    int | None,
+    Query(
+        alias="max_rate_spread_bps",
+        ge=SPREAD_BOUND_RANGE[0],
+        le=SPREAD_BOUND_RANGE[1],
+        description=(
+            "Optional inclusive upper bound on the signed rate spread in basis "
+            "points. Borrowers with no spread never match a spread bound."
+        ),
+    ),
+]
+
 LimitParam = Annotated[
     int,
     Query(
@@ -427,6 +481,24 @@ class LeadQueryParams:
     aged_days: int | None
     cohort_id: str | None
     funnel_stage: FunnelStageValue | None
+    min_opportunity_score: int | None = None
+    max_opportunity_score: int | None = None
+    min_rate_spread_bps: int | None = None
+    max_rate_spread_bps: int | None = None
+
+    def public_bounds(self) -> dict[str, int]:
+        """The score and spread bounds this request set, keyed by wire name."""
+
+        return {
+            key: value
+            for key, value in (
+                ("min_opportunity_score", self.min_opportunity_score),
+                ("max_opportunity_score", self.max_opportunity_score),
+                ("min_rate_spread_bps", self.min_rate_spread_bps),
+                ("max_rate_spread_bps", self.max_rate_spread_bps),
+            )
+            if value is not None
+        }
 
 
 def lead_query_params(
@@ -465,6 +537,10 @@ def lead_query_params(
     aged_days: AgedDaysParam = None,
     cohort_id: CohortIdParam = None,
     funnel_stage: FunnelStageParam = None,
+    min_opportunity_score: MinOpportunityScoreParam = None,
+    max_opportunity_score: MaxOpportunityScoreParam = None,
+    min_rate_spread_bps: MinRateSpreadBpsParam = None,
+    max_rate_spread_bps: MaxRateSpreadBpsParam = None,
 ) -> LeadQueryParams:
     """FastAPI dependency: the Lead Queue filter parameters, in wire order.
 
@@ -510,6 +586,10 @@ def lead_query_params(
         aged_days=aged_days,
         cohort_id=cohort_id,
         funnel_stage=funnel_stage,
+        min_opportunity_score=min_opportunity_score,
+        max_opportunity_score=max_opportunity_score,
+        min_rate_spread_bps=min_rate_spread_bps,
+        max_rate_spread_bps=max_rate_spread_bps,
     )
 
 

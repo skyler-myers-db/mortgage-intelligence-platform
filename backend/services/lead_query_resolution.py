@@ -15,7 +15,7 @@ payload the list writes from its result.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from fastapi import HTTPException, Request
 
@@ -23,6 +23,7 @@ from backend.schemas._validators_tenant import normalize_public_lender_ref
 from backend.schemas.common import validate_internal_staff_email
 from backend.schemas.genie_geo_filters import GENIE_CITY_FILTER_KEY
 from backend.schemas.lead import SEGMENT_CODE_VALUES, LeadSummary
+from backend.schemas.lead_facets import LeadFacetDimension
 from backend.schemas.lead_query import LeadQueryParams
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import resolve_actor
@@ -79,6 +80,35 @@ _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
 )
 
 
+# Fixed 422 copy for the public score / spread bounds. Never echoes a value.
+BOUNDS_WITH_COHORT_DETAIL = "A Genie cohort sets its own thresholds; remove the score or spread bounds"
+BOUNDS_WITH_HANDOFF_DETAIL = "Growth Agent handoff cannot contain score or spread bounds"
+_INVERTED_BOUND_DETAIL = {
+    "opportunity_score": "min_opportunity_score must not exceed max_opportunity_score",
+    "rate_spread_bps": "min_rate_spread_bps must not exceed max_rate_spread_bps",
+}
+
+
+def _check_public_bounds(bounds: dict[str, int], *, cohort_id: str | None, handoff: str | None) -> None:
+    """Refuse an inverted pair, and any bound beside a cohort or a handoff.
+
+    A persisted Genie cohort replays its own reviewed floors and a signed
+    Growth Agent handoff is bound to the filters it was issued for: a bound
+    beside either would narrow a governed population behind its proof, so it
+    fails visibly instead of being dropped.
+    """
+
+    for dimension, detail in _INVERTED_BOUND_DETAIL.items():
+        low = bounds.get(f"min_{dimension}")
+        high = bounds.get(f"max_{dimension}")
+        if low is not None and high is not None and low > high:
+            raise HTTPException(status_code=422, detail=detail)
+    if bounds and cohort_id:
+        raise HTTPException(status_code=422, detail=BOUNDS_WITH_COHORT_DETAIL)
+    if bounds and handoff:
+        raise HTTPException(status_code=422, detail=BOUNDS_WITH_HANDOFF_DETAIL)
+
+
 @dataclass(frozen=True)
 class ResolvedLeadQuery:
     """One authorized Lead Queue query, ready for the repository.
@@ -112,8 +142,12 @@ class ResolvedLeadQuery:
     cohort_id: str | None = None
     cohort_stated_count: int | None = None
     cohort_unreplayable: list[str] = field(default_factory=list)
+    # The EFFECTIVE floors (a cohort's, or the public bound) and the public
+    # ceilings, exactly as the repository applies them.
     min_opportunity_score: int | None = None
     min_rate_spread_bps: int | None = None
+    max_opportunity_score: int | None = None
+    max_rate_spread_bps: int | None = None
     funnel_stage: str | None = None
     approval_status: str = "any"
     outreach_status: str = "any"
@@ -203,6 +237,8 @@ def resolve_lead_query(
             status_code=422,
             detail="Growth Agent handoff cannot be combined with a persisted cohort",
         )
+    public_bounds = params.public_bounds()
+    _check_public_bounds(public_bounds, cohort_id=cohort_id, handoff=handoff)
     if not handoff and _requires_marketing_override_admin(
         marketing_eligibility=effective_marketing_eligibility,
         consent_status=consent_status,
@@ -378,6 +414,9 @@ def resolve_lead_query(
         repo_kwargs["min_opportunity_score"] = cohort_min_opportunity_score
     if cohort_min_rate_spread_bps is not None:
         repo_kwargs["min_rate_spread_bps"] = cohort_min_rate_spread_bps
+    # Public bounds never meet a cohort (refused above), so a public floor is
+    # the effective floor whenever it is set. Each is passed only when set.
+    repo_kwargs.update(public_bounds)
 
     if cohort_id and not cohort_has_replay_filter:
         raise HTTPException(
@@ -465,8 +504,10 @@ def resolve_lead_query(
         cohort_id=cohort_id,
         cohort_stated_count=cohort_stated_count,
         cohort_unreplayable=cohort_unreplayable,
-        min_opportunity_score=cohort_min_opportunity_score,
-        min_rate_spread_bps=cohort_min_rate_spread_bps,
+        min_opportunity_score=public_bounds.get("min_opportunity_score", cohort_min_opportunity_score),
+        min_rate_spread_bps=public_bounds.get("min_rate_spread_bps", cohort_min_rate_spread_bps),
+        max_opportunity_score=public_bounds.get("max_opportunity_score"),
+        max_rate_spread_bps=public_bounds.get("max_rate_spread_bps"),
         funnel_stage=funnel_stage,
         approval_status=approval_status,
         outreach_status=outreach_status,
@@ -474,6 +515,23 @@ def resolve_lead_query(
         aged_days=aged_days,
         portfolio_criteria=portfolio_criteria,
     )
+
+
+def without_facet_dimension(params: LeadQueryParams, dimension: LeadFacetDimension) -> LeadQueryParams:
+    """Drop the facet dimension's own filter, keep every other one.
+
+    A menu counts its options with every OTHER filter applied: counted with
+    its own filter, the STATE menu would show the chosen state and a zero
+    for every other one.
+    """
+
+    if dimension == "state":
+        return replace(params, state=None, states=None)
+    if dimension == "segment":
+        return replace(params, segment=None, segment_codes=None, segment_mode="any")
+    if dimension == "product":
+        return replace(params, product=None)
+    return replace(params, approval_status="any")
 
 
 def view_leads_audit_payload(
@@ -518,6 +576,10 @@ def view_leads_audit_payload(
         audit_payload["min_opportunity_score"] = resolved.min_opportunity_score
     if resolved.min_rate_spread_bps is not None:
         audit_payload["min_rate_spread_bps"] = resolved.min_rate_spread_bps
+    if resolved.max_opportunity_score is not None:
+        audit_payload["max_opportunity_score"] = resolved.max_opportunity_score
+    if resolved.max_rate_spread_bps is not None:
+        audit_payload["max_rate_spread_bps"] = resolved.max_rate_spread_bps
     if handoff_proof is not None:
         audit_payload.update(
             {

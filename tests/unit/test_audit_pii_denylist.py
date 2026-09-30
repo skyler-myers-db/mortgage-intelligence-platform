@@ -673,3 +673,23 @@ def test_historical_payload_shapes_all_pass_allowlist() -> None:
             "decision_inputs": DECISION_INPUTS,
         },
     )
+
+
+def test_view_leads_public_ceilings_are_allowlisted_and_range_checked() -> None:
+    """W5a tables-06: VIEW_LEADS records the public max_* bounds."""
+    store = InMemoryAuditStore()
+    store.write(
+        actor="a@b.com", action="view_leads_ranked",
+        entity_type="lead_queue", entity_id="_all",
+        payload_json={
+            "rendered_borrower_ids": ["B-1"],
+            "limit": 500,
+            "min_opportunity_score": 70,
+            "max_opportunity_score": 90,
+            "min_rate_spread_bps": -25,
+            "max_rate_spread_bps": 150,
+        },
+    )
+    for bad in ({"max_opportunity_score": 101}, {"max_rate_spread_bps": -1001}, {"max_rate_spread_bps": "B-1"}):
+        with pytest.raises(AuditMetadataValueViolation):
+            _assert_public_safe_values(bad)

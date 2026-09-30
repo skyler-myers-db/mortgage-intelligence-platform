@@ -14,9 +14,15 @@ import re
 from datetime import UTC
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 
 from backend.schemas.lead import LeadSummary
+from backend.schemas.lead_facets import (
+    LeadCountResponse,
+    LeadFacetBucket,
+    LeadFacetDimension,
+    LeadFacetsResponse,
+)
 from backend.schemas.lead_query import (
     DEFAULT_LEAD_LIMIT,
     MAX_LEAD_LIMIT,
@@ -28,6 +34,7 @@ from backend.services.lakebase import LakebaseError
 from backend.services.lead_query_resolution import (
     resolve_lead_query,
     view_leads_audit_payload,
+    without_facet_dimension,
 )
 from backend.services.observability import emit
 from backend.services.repositories import LeadRepository, get_lead_repository
@@ -35,6 +42,8 @@ from backend.services.repositories.databricks_lead_cohorts import (
     GrowthAgentHandoffStale,
     validate_growth_agent_handoff_identity,
 )
+from backend.services.repositories.factory import get_lead_facet_repository
+from backend.services.repositories.protocols import LeadFacetRepository
 from backend.services.sales_state import (
     SalesStateStore,
     get_sales_state_store,
@@ -53,6 +62,13 @@ __all__ = ["DEFAULT_LEAD_LIMIT", "MAX_LEAD_LIMIT", "router"]
 RepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
 SalesStateDep = Annotated[SalesStateStore, Depends(get_sales_state_store)]
+FacetRepoDep = Annotated[LeadFacetRepository, Depends(get_lead_facet_repository)]
+FacetDimensionParam = Annotated[
+    LeadFacetDimension,
+    Query(description="The filter menu to count: state, segment, product or approval."),
+]
+
+IDENTITY_PROOF_LIST_ONLY_DETAIL = "include_identity_proof applies to GET /leads only"
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
@@ -219,3 +235,56 @@ def list_leads(
         subject_segment=segment or (",".join(parsed_segments) if parsed_segments else None),
     )
     return leads
+
+
+@router.get("/leads/count", response_model=LeadCountResponse)
+def count_leads(
+    request: Request,
+    repo: RepoDep,
+    sales_state: SalesStateDep,
+    params: LeadQueryParamsDep,
+) -> LeadCountResponse:
+    """Audit-free total for the Lead Queue filters (wow-power-6, wow-power-2).
+
+    The same authorization preamble, filters, "Eligible only" default and
+    short-TTL repository cache as the ranked list's X-Total-Matching. No
+    borrower is shown, so no VIEW_LEADS row is written and the audit store is
+    never resolved. A Growth Agent handoff binds ranked rows, so it is never
+    read here.
+    """
+
+    if params.include_identity_proof:
+        raise HTTPException(status_code=422, detail=IDENTITY_PROOF_LIST_ONLY_DETAIL)
+    resolved = resolve_lead_query(request, sales_state, params, growth_handoff=None)
+    if resolved.assignment_empty:
+        return LeadCountResponse(total_matching=0)
+    return LeadCountResponse(total_matching=int(repo.count(**resolved.repository_args)))
+
+
+@router.get("/leads/facets", response_model=LeadFacetsResponse)
+def lead_facets(
+    request: Request,
+    facets: FacetRepoDep,
+    sales_state: SalesStateDep,
+    dimension: FacetDimensionParam,
+    params: LeadQueryParamsDep,
+) -> LeadFacetsResponse:
+    """Audit-free option counts for one Lead Queue filter menu (tables-06).
+
+    The dimension's own filter is dropped, every other filter resolves
+    exactly as the ranked list resolves it, and the buckets are closed
+    vocabularies. Fetched only when a user opens that menu.
+    """
+
+    if params.include_identity_proof:
+        raise HTTPException(status_code=422, detail=IDENTITY_PROOF_LIST_ONLY_DETAIL)
+    params = without_facet_dimension(params, dimension)
+    resolved = resolve_lead_query(request, sales_state, params, growth_handoff=None)
+    if resolved.assignment_empty:
+        return LeadFacetsResponse(dimension=dimension, total_matching=0, buckets=[])
+    counts = facets.facets(dimension, **resolved.repository_args)
+    return LeadFacetsResponse(
+        dimension=dimension,
+        total_matching=counts.total_matching,
+        buckets=[LeadFacetBucket(value=value, count=count) for value, count in counts.buckets],
+    )

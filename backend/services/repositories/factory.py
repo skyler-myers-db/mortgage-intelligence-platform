@@ -19,6 +19,7 @@ from backend.services.repositories.protocols import (
     BorrowerRepository,
     GenieAnswerRepository,
     GeoRepository,
+    LeadFacetRepository,
     LeadRepository,
     OfferRepository,
     OutreachRepository,
@@ -35,6 +36,7 @@ _PORTFOLIO_REPO: PortfolioRepository | None = None
 _ANALYTICS_REPO: AnalyticsRepository | None = None
 _SEGMENT_REPO: SegmentRepository | None = None
 _LEAD_REPO: LeadRepository | None = None
+_LEAD_FACET_REPO: LeadFacetRepository | None = None
 _BORROWER_REPO: BorrowerRepository | None = None
 _OFFER_REPO: OfferRepository | None = None
 _OUTREACH_REPO: OutreachRepository | None = None
@@ -136,6 +138,22 @@ def get_lead_repository() -> LeadRepository:
         if _LEAD_REPO is None:
             _LEAD_REPO = DatabricksLeadRepository(get_sql_client())
         return _LEAD_REPO
+
+
+def get_lead_facet_repository() -> LeadFacetRepository:
+    """Return the audit-free Lead Queue facet-count repository."""
+    global _LEAD_FACET_REPO
+    if _LEAD_FACET_REPO is not None:
+        return _LEAD_FACET_REPO
+    from backend.services.databricks_sql import get_sql_client
+    from backend.services.repositories.databricks_lead_facets import (
+        DatabricksLeadFacetRepository,
+    )
+
+    with _LOCK:
+        if _LEAD_FACET_REPO is None:
+            _LEAD_FACET_REPO = DatabricksLeadFacetRepository(get_sql_client())
+        return _LEAD_FACET_REPO
 
 
 def get_borrower_repository() -> BorrowerRepository:
@@ -280,7 +298,7 @@ def _reset_singletons_for_tests() -> None:
     global _PORTFOLIO_REPO, _ANALYTICS_REPO, _SEGMENT_REPO, _LEAD_REPO
     global _BORROWER_REPO
     global _OFFER_REPO, _OUTREACH_REPO, _GENIE_REPO, _GEO_REPO, _RATE_WINDOW_REPO
-    global _RATE_SENSITIVITY_REPO
+    global _RATE_SENSITIVITY_REPO, _LEAD_FACET_REPO
     with _LOCK:
         _PORTFOLIO_REPO = None
         _ANALYTICS_REPO = None
@@ -293,3 +311,4 @@ def _reset_singletons_for_tests() -> None:
         _GEO_REPO = None
         _RATE_WINDOW_REPO = None
         _RATE_SENSITIVITY_REPO = None
+        _LEAD_FACET_REPO = None

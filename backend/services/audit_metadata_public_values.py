@@ -73,6 +73,13 @@ from backend.services.audit_metadata_value_policy import (
 )
 from backend.services.pii_redaction import normalize_public_lender_ref
 
+# (ceiling key, the reviewed floor whose range it shares). GET /leads records
+# its public max_* bounds on VIEW_LEADS beside the min_* floors.
+_PUBLIC_CEILING_FLOOR_TWINS: tuple[tuple[str, str], ...] = (
+    ("max_opportunity_score", "min_opportunity_score"),
+    ("max_rate_spread_bps", "min_rate_spread_bps"),
+)
+
 
 def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     """Validate reviewed free-ish values that have their own public policy."""
@@ -320,6 +327,16 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                 raise AuditMetadataValueViolation(
                     field,
                     f"must be an integer {numeric_filter_range_text(numeric_field)}",
+                )
+    for ceiling_field, floor_twin in _PUBLIC_CEILING_FLOOR_TWINS:
+        # A public Lead Queue ceiling spans exactly its floor twin's range.
+        for field, ceiling in _metadata_values_for(metadata, {ceiling_field}):
+            if ceiling is None:
+                continue
+            if not is_reviewed_numeric_floor(floor_twin, ceiling):
+                raise AuditMetadataValueViolation(
+                    field,
+                    f"must be an integer {numeric_filter_range_text(floor_twin)}",
                 )
     for field, ttl_s in _metadata_values_for(metadata, {"ttl_s"}):
         if not isinstance(ttl_s, int) or isinstance(ttl_s, bool) or ttl_s < 0 or ttl_s > 300:

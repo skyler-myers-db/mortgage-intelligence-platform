@@ -219,6 +219,10 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # is where that vocabulary compiles it.)
         "min_opportunity_score",
         "min_rate_spread_bps",
+        # The public Lead Queue ceilings (GET /leads max_* bounds), validated
+        # against the range of their floor twin.
+        "max_opportunity_score",
+        "max_rate_spread_bps",
         # Verified Growth Agent -> Lead Queue handoff provenance. These values
         # come from a server-verified signed token, never from URL labels.
         "growth_agent_run_id",

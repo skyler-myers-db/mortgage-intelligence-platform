@@ -45,6 +45,7 @@ from backend.schemas.geo import (
 )
 from backend.schemas.geo_rate_sensitivity import RateSensitivityResponse
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
+from backend.schemas.lead_facets import LeadFacetCounts, LeadFacetDimension
 from backend.schemas.portfolio import (
     CampaignListResponse,
     CampaignStatusPatchRequest,
@@ -191,6 +192,8 @@ class LeadRepository(Protocol):
         aged_days: int | None = None,
         min_opportunity_score: int | None = None,
         min_rate_spread_bps: float | None = None,
+        max_opportunity_score: int | None = None,
+        max_rate_spread_bps: float | None = None,
     ) -> list[LeadSummary]:
         """Return up to ``limit`` ranked leads.
 
@@ -225,7 +228,9 @@ class LeadRepository(Protocol):
         answer's population instead of the broader unfiltered one. They read
         from ``borrower_360``, alongside the geo path. ``min_equity_pct``
         travels on ``portfolio_criteria`` because that vocabulary already
-        compiles an equity floor.
+        compiles an equity floor. The same two floors are also public Lead
+        Queue bounds, beside the inclusive ceilings ``max_opportunity_score``
+        / ``max_rate_spread_bps``; a NULL spread never matches a spread bound.
         """
         ...
 
@@ -252,6 +257,8 @@ class LeadRepository(Protocol):
         aged_days: int | None = None,
         min_opportunity_score: int | None = None,
         min_rate_spread_bps: float | None = None,
+        max_opportunity_score: int | None = None,
+        max_rate_spread_bps: float | None = None,
     ) -> int:
         """Return the total matching the same predicates as ``list``."""
         ...
@@ -267,6 +274,46 @@ class LeadRepository(Protocol):
         frequency_cap_days: int,
     ) -> bool:
         """Return immutable T0 treatment membership narrowed by live eligibility."""
+        ...
+
+
+class LeadFacetRepository(Protocol):
+    """Per-option counts for one Lead Queue filter dimension (audit tables-06).
+
+    Takes the same keyword filters as ``LeadRepository.count`` and reads the
+    same matched cohort, so a menu count never applies a different filter
+    than the queue. Audit-free by contract: it returns totals only.
+    """
+
+    def facets(
+        self,
+        dimension: LeadFacetDimension,
+        *,
+        segment: str | None,
+        portfolio_id: str | None,
+        state: str | None = None,
+        zip_code: str | None = None,
+        county_fips: str | None = None,
+        county_fipses: list[str] | None = None,
+        state_codes: list[str] | None = None,
+        zip_codes: list[str] | None = None,
+        city_states: list[str] | None = None,
+        borrower_ids: list[str] | None = None,
+        segment_codes: list[str] | None = None,
+        segment_mode: str = "any",
+        target_lender_ref: str | None = None,
+        cohort_id: str | None = None,
+        funnel_stage: str | None = None,
+        portfolio_criteria: PortfolioCriteria | None = None,
+        approval_status: str | None = None,
+        outreach_status: str | None = None,
+        aged_days: int | None = None,
+        min_opportunity_score: int | None = None,
+        min_rate_spread_bps: float | None = None,
+        max_opportunity_score: int | None = None,
+        max_rate_spread_bps: float | None = None,
+    ) -> LeadFacetCounts:
+        """Return the closed-vocabulary buckets for ``dimension``."""
         ...
 
 
