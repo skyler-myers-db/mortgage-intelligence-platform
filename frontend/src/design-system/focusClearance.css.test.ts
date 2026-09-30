@@ -110,9 +110,23 @@ describe('focus clearance (a11y-v2)', () => {
     expect(row).toMatch(/^\s*scroll-margin-block:\s*calc\(\s*var\(--tbl-focus-clear\)\s*\+\s*var\(--sp-2\)\s*\)\s+var\(--sp-2\);\s*$/);
   });
 
-  it('the ranked-borrower scroller clears the pinned Approval column at its inline end', () => {
+  it('the thead size is registered NON-inherited, so its measured write re-styles the scroller alone', () => {
+    const registration = block(leadTableCss(), '@property --tbl-head-block-size');
+    expect(registration).toMatch(/syntax:\s*'<length>';/);
+    expect(registration).toMatch(/inherits:\s*false;/);
+    expect(registration).toMatch(/initial-value:\s*0px;/);
+    // The clearance the rows inherit computes to a length, so a thead write
+    // that leaves it unchanged re-styles no row.
+    const clear = block(leadTableCss(), '@property --tbl-focus-clear');
+    expect(clear).toMatch(/syntax:\s*'<length>';/);
+    expect(clear).toMatch(/inherits:\s*true;/);
+  });
+
+  it('the ranked-borrower scroller clears the pinned Approval column at its inline end, by that column\'s declared width', () => {
     const pin = block(leadTableCss(), '.tbl-wrap:has(> .lead-table__table)');
-    expect(pin).toMatch(/--tbl-pin-inline-size:\s*0px;/);
+    const declared = /\.lead-table__col-approval\s*\{\s*width:\s*(\d+px);/.exec(stripComments(readFileSync(`${process.cwd()}/src/design-system/components/03-score-and-table.css`, 'utf8') as string))?.[1];
+    expect(declared, 'the Approval column declares its width (table-layout: fixed)').toBeTruthy();
+    expect(pin).toMatch(new RegExp(String.raw`--tbl-pin-inline-size:\s*${declared};`));
     expect(pin).toMatch(new RegExp(String.raw`scroll-padding-inline-end:\s*calc\(\s*${PIN_CLEAR}\s*\);`));
   });
 

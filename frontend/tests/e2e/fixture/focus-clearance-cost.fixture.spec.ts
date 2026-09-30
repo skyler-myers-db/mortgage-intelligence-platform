@@ -155,3 +155,42 @@ test('the route-nav clearance re-styles only what a scroll or an insertion chang
   expect(ancestorHas.scroll / without.scroll, `non-vacuity: the first shape's scroll blow-up (${counts})`).toBeGreaterThan(2);
   expect(ancestorHas.insert / without.insert, `non-vacuity: the first shape's insert blow-up (${counts})`).toBeGreaterThan(20);
 });
+
+/**
+ * The thead measurement's write (useTableScrollClearance) re-styles the
+ * scroller alone. --tbl-head-block-size is registered `inherits: false`
+ * (LeadTable.css): as an ordinary custom property, each write on `.tbl-wrap`
+ * re-styled every row of the table even when the clearance it feeds did not
+ * change. With the pin's write, that cost the cold Lead Queue ~340 ms of TBT
+ * at 4x CPU (wave-4b integration, bisected to the a11y-v2 commit). Counted
+ * elements, not time; the non-vacuity leg writes an ordinary (inherited)
+ * custom property to the same element and must re-style the table.
+ */
+test('the measured thead size re-styles only the scroller, while the clearance it feeds holds', async ({ app, browser, mockApi, page }) => {
+  registerVirtualQueue(mockApi);
+  await app.gotoRoute('/lead-queue');
+  await expect(page.locator('table.tbl tbody tr[data-borrower-row]').first()).toBeVisible();
+  const wrap = page.getByRole('region', { name: 'Ranked borrowers table scroll region' });
+  const settle = () => wrap.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await settle();
+  const focusClear = () => wrap.evaluate((element) => getComputedStyle(element).getPropertyValue('--tbl-focus-clear').trim());
+  const before = await focusClear();
+  const rows = await page.locator('table.tbl tbody tr[data-borrower-row]').count();
+  expect(rows, 'precondition: the virtual window rendered rows').toBeGreaterThan(5);
+
+  // A thead a few px shorter: its clearance stays under the nav's, so
+  // --tbl-focus-clear (the max of the two) does not change.
+  const write = (property: string) => restyledElements(browser, page, async () => {
+    await wrap.evaluate(async (element, name) => {
+      element.style.setProperty(name, '40px');
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    }, property);
+  });
+  const registered = await write('--tbl-head-block-size');
+  expect(await focusClear(), 'precondition: the clearance the rows read held').toBe(before);
+  const inherited = await write('--tbl-probe-inherited');
+
+  console.log(`[focus-clearance-cost] thead write re-styled ${registered}; an inherited property's write ${inherited} (${rows} rows)`);
+  expect(inherited, 'non-vacuity: an inherited custom property re-styles the table').toBeGreaterThan(rows * 5);
+  expect(registered, 'the measured thead size re-styles the scroller, not the table').toBeLessThanOrEqual(5);
+});

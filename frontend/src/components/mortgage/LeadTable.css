@@ -178,9 +178,12 @@
    expanded row and its inline review) stops clear of the sticky thead
    (Shift+Tab up the rows), of the sticky route nav once `.main` has scrolled
    the table up under it, and, with the Console open (the table scrolls
-   horizontally), of the pinned Approval column (Tab across a row). Their
-   measured sizes are written by useTableScrollClearance; one row and 0px
-   until then. Here, in the lazy LeadTable sheet, not on
+   horizontally), of the pinned Approval column (Tab across a row). The
+   thead's measured size is written by useTableScrollClearance (one row
+   until then); the pin's is its column's declared width, 156px
+   (.lead-table__col-approval in 03-score-and-table.css; the table is
+   `table-layout: fixed`, and focusClearance.css.test.ts pins the two
+   equal), so nothing measures or writes it. Here, in the lazy LeadTable sheet, not on
    03-score-and-table.css's `.tbl-wrap`: the shell stylesheet's raw and gzip
    gates had no room for it, so tables other than the ranked-borrower table
    keep the base.
@@ -199,9 +202,30 @@
    whose box is in view, whatever its inline-end margin (measured), so a
    control under the pin stayed there; only a padded view that the control
    lies wholly outside of makes a focus reveal it. */
+/* The thead size is registered NON-inherited: its one consumer,
+   --tbl-focus-clear, is computed on this same element, and as an ordinary
+   (inherited) custom property each measured write re-styled every row of
+   the table. On the cold Lead Queue that write, with the pin's, cost ~340 ms
+   of TBT at 4x CPU (wave-4b integration, bisected;
+   focus-clearance-cost.fixture.spec.ts pins the re-styled count).
+   --tbl-focus-clear, which the rows DO inherit, is registered as a <length>
+   too: unregistered, its computed value is its unresolved text, which
+   changes with every thead write even when the clearance does not (the nav
+   usually wins the max()). Registered, it computes to a length, and rows
+   re-style only when that length changes. */
+@property --tbl-head-block-size {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --tbl-focus-clear {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
 .tbl-wrap:has(> .lead-table__table) {
   --tbl-head-block-size: var(--row-h);
-  --tbl-pin-inline-size: 0px;
+  --tbl-pin-inline-size: 156px;
   --tbl-focus-clear: max(
     var(--nav-clear, 0px),
     calc(var(--tbl-head-block-size) + var(--focus-ring-width) + var(--focus-ring-offset))
