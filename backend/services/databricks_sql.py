@@ -81,11 +81,13 @@ class DatabricksSqlPermissionError(DatabricksSqlError):
 
 
 class DatabricksSqlObjectMissingError(DatabricksSqlError):
-    """The warehouse answered that a table or view does not exist (SQLSTATE 42P01).
+    """The warehouse answered that a table, view, schema or routine does not exist.
 
-    A definitive answer from a reachable warehouse: no retry can create the
-    table. A roll-forward that adds a gold table promotes the App before the
-    refresh job builds it, so this is the realistic first-deploy failure. A
+    ``TABLE_OR_VIEW_NOT_FOUND`` (SQLSTATE 42P01), ``SCHEMA_NOT_FOUND`` or
+    ``UNRESOLVED_ROUTINE``. A definitive answer from a reachable warehouse: no
+    retry can create the object. A roll-forward that adds a gold table
+    promotes the App before the refresh job builds it, so this is the
+    realistic first-deploy failure. A
     subclass, so every ``except DatabricksSqlError`` still catches it; the
     resilient client fails fast on it (see ``Resilient``'s ``object_missing_on``).
     """
@@ -93,10 +95,14 @@ class DatabricksSqlObjectMissingError(DatabricksSqlError):
 
 # Unity Catalog's authorization refusal: its error class or its SQLSTATE.
 _UC_PERMISSION_DENIED_RE = re.compile(r"\bINSUFFICIENT_PERMISSIONS\b|\bSQLSTATE:?\s*42501\b")
-# A missing table or view: its error class or its SQLSTATE. A closed shape on
-# purpose: no SCHEMA_NOT_FOUND, UNRESOLVED_ROUTINE or "not found" prose until a
-# captured failing statement shows one.
-_UC_OBJECT_MISSING_RE = re.compile(r"\bTABLE_OR_VIEW_NOT_FOUND\b|\bSQLSTATE:?\s*42P01\b")
+# A missing table or view (its error class or SQLSTATE 42P01), schema or
+# routine (their error classes ONLY). A closed shape on purpose: SQLSTATE 42704
+# and 42883 are shared with other error classes, and "not found" prose never
+# matches, so only these documented classes fail fast.
+_UC_OBJECT_MISSING_RE = re.compile(
+    r"\bTABLE_OR_VIEW_NOT_FOUND\b|\bSQLSTATE:?\s*42P01\b"
+    r"|\bSCHEMA_NOT_FOUND\b|\bUNRESOLVED_ROUTINE\b"
+)
 
 
 def _sql_error_class(message: object, error_code: object = None) -> type[DatabricksSqlError]:
@@ -109,8 +115,9 @@ def _sql_error_class(message: object, error_code: object = None) -> type[Databri
     token, which a re-minted token can fix) stays a plain, retryable
     ``DatabricksSqlError``. A refusal wins when a message carries both.
 
-    ``DatabricksSqlObjectMissingError`` for a missing table or view, from the
-    message only (never from an error code alone). Anything else is the base.
+    ``DatabricksSqlObjectMissingError`` for a missing table, view, schema or
+    routine, from the message only (never from an error code alone). Anything
+    else is the base.
     """
     text = str(message or "")
     if _UC_PERMISSION_DENIED_RE.search(text):
