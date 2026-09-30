@@ -43,6 +43,7 @@ from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
 from backend.services.gold_cache import AggregateCache, GoldAggregateCache, workflow_key
+from backend.services.repositories.analytics_thresholds import economics_thresholds
 from backend.services.repositories.databricks_economics_scatter import (
     economics_points as build_economics_points,
 )
@@ -735,6 +736,7 @@ class DatabricksAnalyticsRepository:
                         ],
                     )
                 ],
+                thresholds=economics_thresholds(self),
             )
 
         return self._cached(f"analytics.economics:{_filter_key(analytics_filters)}", build)

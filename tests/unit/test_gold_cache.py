@@ -393,6 +393,58 @@ def test_a_bump_disowns_the_background_refresh_of_a_swept_generation(
     assert economics.calls == 1, "the live preview key was never evicted by a dead generation"
 
 
+def test_workflow_key_runs_the_generation_observers_before_reading_it() -> None:
+    """The lifecycle run watch observes through here; a bump it makes lands in this key."""
+    seen: list[int] = []
+
+    def observer() -> None:
+        seen.append(workflow_generation())
+        bump_workflow_generation()
+
+    gold_cache.register_generation_observer(observer)
+    gold_cache.register_generation_observer(observer)  # idempotent
+    try:
+        before = workflow_generation()
+        key = workflow_key("observer.test.counts", "part")
+    finally:
+        gold_cache.unregister_generation_observer(observer)
+
+    assert seen == [before], "called once, before the generation was read"
+    assert key == f"observer.test.counts:{before + 1}:part"
+
+
+def test_an_observer_failure_is_logged_and_the_key_still_built(caplog: pytest.LogCaptureFixture) -> None:
+    def broken() -> None:
+        raise RuntimeError("jobs api at https://adb-1.example is down")
+
+    gold_cache.register_generation_observer(broken)
+    try:
+        with caplog.at_level("WARNING"):
+            key = workflow_key("observer.test.broken")
+    finally:
+        gold_cache.unregister_generation_observer(broken)
+
+    assert key == f"observer.test.broken:{workflow_generation()}"
+    [event] = [r for r in caplog.records if getattr(r, "mip_event", None) == "workflow_generation_observer_failed"]
+    assert event.mip_extras == {"exc_type": "RuntimeError"}  # type: ignore[attr-defined]
+    assert "adb-1" not in caplog.text
+
+
+def test_an_unregistered_observer_is_not_called() -> None:
+    calls: list[str] = []
+
+    def observer() -> None:
+        calls.append("x")
+
+    gold_cache.register_generation_observer(observer)
+    workflow_key("observer.test.unregister")
+    gold_cache.unregister_generation_observer(observer)
+    gold_cache.unregister_generation_observer(observer)  # a second unregister is a no-op
+    workflow_key("observer.test.unregister")
+
+    assert calls == ["x"]
+
+
 @pytest.fixture
 def released_gate() -> Iterator[threading.Event]:
     gate = threading.Event()

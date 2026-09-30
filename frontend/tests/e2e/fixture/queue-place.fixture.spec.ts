@@ -19,7 +19,8 @@
  *      no draft for them.  (g) a 500 is listed and stays selected.
  *  (i) A 401 mid-run stops the loop and the dialog says bulk_approval.
  *  (j) Selection pruning after a preset.
- *  (k) J from a focused checkbox moves the cursor; an Approve waiting on a
+ *  (k) Focusing a row checkbox makes that row the cursor row and J moves on
+ *      from it (wave 4b, correction 14); an Approve waiting on a
  *      delayed review chunk is dropped by J or Escape (no draft); an open
  *      inline review whose row was virtualized away is revealed by A.
  *  (l) axe on the presets row and the run's progress, light and dark.
@@ -331,10 +332,9 @@ test.describe('(f)-(j) bulk selection and honest runs', () => {
 });
 
 test.describe('(k) keyboard residuals (#9)', () => {
-  test('J from a focused row checkbox moves the cursor', async ({ app, page }) => {
+  test('focusing a row checkbox makes it the cursor row, and J moves on from it', async ({ app, page }) => {
     await app.gotoRoute('/lead-queue');
     await page.getByTestId(`lead-select-${LEADS[0].borrower_id}`).focus();
-    await page.keyboard.press('j');
     await expect(page.locator('table.tbl tr.is-cursor')).toHaveAttribute('data-borrower-row', LEADS[0].borrower_id);
     await page.keyboard.press('j');
     await expect(page.locator('table.tbl tr.is-cursor')).toHaveAttribute('data-borrower-row', LEADS[1].borrower_id);

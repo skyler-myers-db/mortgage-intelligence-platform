@@ -1,6 +1,7 @@
 /* ============================================================
-   QUEUE PAGER (audit 2026-09-21 shell-04). Ships with the lazy
-   Borrower 360 route chunk. New BEM block: the prototype is a single
+   QUEUE PAGER (audit 2026-09-21 shell-04, flow-09). Ships with the
+   lazy route chunks that page the queue (Borrower 360 and, since wave
+   4b, the Offer Orchestrator). New BEM block: the prototype is a single
    screen with no dossier route (design_files/Module 0 Prototype.html
    composes queue + preview side by side), so stepping through the
    queue from a dossier is additive; it composes the prototype `.btn`

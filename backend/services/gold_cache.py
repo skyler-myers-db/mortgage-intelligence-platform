@@ -77,7 +77,8 @@ class AggregateCache(Protocol):
 
 # ---------------------------------------------------------------------------
 # Workflow generation: the lifecycle-mirror counts ride a key that changes on
-# every approval-workflow write and every lifecycle-sync completion.
+# every approval-workflow write and every lifecycle-sync completion this
+# process performs or observes (see ``lifecycle_run_watch``).
 # ---------------------------------------------------------------------------
 
 _WORKFLOW_GENERATION = 0
@@ -94,6 +95,43 @@ def workflow_generation() -> int:
         return _WORKFLOW_GENERATION
 
 
+_GENERATION_OBSERVERS: list[Callable[[], None]] = []
+_GENERATION_OBSERVERS_LOCK = Lock()
+
+
+def register_generation_observer(fn: Callable[[], None]) -> None:
+    """Call ``fn`` each time a workflow key is built (idempotent).
+
+    An observer runs on the reading request's thread, before the generation
+    is read, so it must never block: ``lifecycle_run_watch.observe`` only
+    schedules a check of the job runs it is waiting on.
+    """
+    with _GENERATION_OBSERVERS_LOCK:
+        if fn not in _GENERATION_OBSERVERS:
+            _GENERATION_OBSERVERS.append(fn)
+
+
+def unregister_generation_observer(fn: Callable[[], None]) -> None:
+    with _GENERATION_OBSERVERS_LOCK:
+        if fn in _GENERATION_OBSERVERS:
+            _GENERATION_OBSERVERS.remove(fn)
+
+
+def _notify_generation_observers() -> None:
+    with _GENERATION_OBSERVERS_LOCK:
+        observers = tuple(_GENERATION_OBSERVERS)
+    for observer in observers:
+        try:
+            observer()
+        except Exception as exc:  # noqa: BLE001 -- a read never fails on an observer
+            emit(
+                log,
+                "workflow_generation_observer_failed",
+                level=logging.WARNING,
+                exc_type=type(exc).__name__,
+            )
+
+
 def workflow_key(family: str, *parts: str) -> str:
     """``{family}:{generation}[:{part}...]`` for a value that reads the mirror.
 
@@ -101,7 +139,12 @@ def workflow_key(family: str, *parts: str) -> str:
     each family from every live gold cache: a dead generation is never read
     again, and left in place it would age through the LRU pushing out live
     preview keys (one orphan per approval write).
+
+    The generation observers run first, outside the generation lock: a
+    reader of workflow counts is what lets the lifecycle run watch notice a
+    job-mode sync finished (it bumps from its own worker thread).
     """
+    _notify_generation_observers()
     with _WORKFLOW_GENERATION_LOCK:
         _WORKFLOW_FAMILIES.add(family)
         generation = _WORKFLOW_GENERATION
@@ -445,6 +488,8 @@ __all__ = [
     "GoldAggregateCache",
     "bump_workflow_generation",
     "get_or_set_capped",
+    "register_generation_observer",
+    "unregister_generation_observer",
     "workflow_generation",
     "workflow_key",
 ]

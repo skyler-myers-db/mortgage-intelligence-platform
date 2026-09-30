@@ -139,6 +139,12 @@ const BUSY_HINT_ID = 'ask-genie-busy';
  */
 export const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. prime refi candidates by state';
 
+/** A question bubble's id on the route, by turn index: a collapsed turn's
+ *  toggle is described by it (the floating panel uses `genie-panel-q-<n>`). */
+function routeQuestionId(index: number): string {
+  return `genie-route-q-${index}`;
+}
+
 function GenieThreadTurn({
   turn,
   onFollowUp,
@@ -147,6 +153,7 @@ function GenieThreadTurn({
   followUpDisabledReason,
   presentation,
   onToggleCollapse,
+  questionId,
   entering,
   onEntered,
 }: {
@@ -158,6 +165,8 @@ function GenieThreadTurn({
   /** An earlier turn this route never saw land shows its digest (genie-08). */
   presentation: GenieTurnPresentation;
   onToggleCollapse: () => void;
+  /** id of this turn's question bubble (null: the turn has none). */
+  questionId: string | null;
   /** A just-landed answer plays the one-shot entrance (motion-v2). */
   entering: boolean;
   onEntered: AnimationEventHandler<HTMLElement>;
@@ -219,6 +228,7 @@ function GenieThreadTurn({
             payload={turn.response}
             expanded={presentation === 'expanded'}
             onToggle={onToggleCollapse}
+            questionId={questionId}
           >
             {fullAnswer}
           </GenieCollapsedTurn>
@@ -310,13 +320,17 @@ export function AskGenieAnswerPanel({
     );
   };
   const canAsk = !inFlight && question.trim().length > 0;
-  const questionBubble = (turn: GenieTurn, anchor: boolean) => {
+  const questionBubble = (turn: GenieTurn, index: number, anchor: boolean) => {
     const source = turn.response.source ?? '';
     // Refusals and data gaps would only repeat themselves: Edit only.
     const reask = source === 'degraded' ? 'retry' : BLOCKED_SOURCES.has(source) ? null : 'regenerate';
     return (
       <>
-        <div ref={anchor ? latestAnchorRef : undefined} className="genie__msg genie__msg--user">
+        <div
+          id={routeQuestionId(index)}
+          ref={anchor ? latestAnchorRef : undefined}
+          className="genie__msg genie__msg--user"
+        >
           {turn.question}
         </div>
         <GenieTurnActions
@@ -353,7 +367,7 @@ export function AskGenieAnswerPanel({
     });
     threadNodes.push(
       <Fragment key={turnKey(turn, index)}>
-        {turn.question && questionBubble(turn, !inFlight && index === latestIndex)}
+        {turn.question && questionBubble(turn, index, !inFlight && index === latestIndex)}
         <GenieThreadTurn
           turn={turn}
           onFollowUp={onFollowUp}
@@ -362,6 +376,7 @@ export function AskGenieAnswerPanel({
           followUpDisabledReason={busyReason}
           presentation={collapse.presentation(turn.response)}
           onToggleCollapse={() => collapse.toggle(turn.response)}
+          questionId={turn.question ? routeQuestionId(index) : null}
           entering={entrance.entering(turn.response)}
           onEntered={entrance.onEntered(turn.response)}
         />

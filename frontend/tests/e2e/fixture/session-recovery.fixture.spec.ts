@@ -15,7 +15,7 @@
  * otherwise open the blocking dialog before the click). The multi-phase tests
  * (failure, then recovery) are marked slow: they chain two page states.
  */
-import AxeBuilder from '@axe-core/playwright';
+import { expectAxeClean } from './axe';
 import type { Locator, Page, Route } from '@playwright/test';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import {
@@ -29,7 +29,6 @@ import { WAREHOUSE_WARMING_UP, type ApiCall } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 /** Longer than three healthy health-poll intervals (8 s) and a full warming-retry budget. */
 const QUIET_WINDOW_MS = 30_000;
 /** HealthProvider's healthy cadence (8 s): one poll is due within this window. */
@@ -104,8 +103,7 @@ test.describe('an ended session (the proxy answers 401 {})', () => {
       for (const call of expired) perRequest.set(key(call), (perRequest.get(key(call)) ?? 0) + 1);
       expect([...perRequest.entries()].filter(([, count]) => count > 1), 'no request was retried').toEqual([]);
 
-      const axe = await new AxeBuilder({ page }).include('dialog.session-dialog').withTags(WCAG_TAGS).analyze();
-      expect(axe.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(', ')}`)).toEqual([]);
+      await expectAxeClean(page, { key: { route: 'session-recovery', state: 'session-dialog' }, theme, known: {}, include: 'dialog.session-dialog' });
     });
   }
 
@@ -333,8 +331,9 @@ test.describe('a change attempted offline', () => {
     await review.getByTestId('lead-approve-review-confirm').click();
     // A write that failed offline is never replayed on reconnect, so its
     // error must not borrow a read's "this will load" promise.
-    const error = page.locator('.table-error[role="alert"]');
-    await expect(error).toHaveText(`Couldn't approve ${id}: You are offline. Reconnect, then try again.`);
+    const error = page.locator('.toast[role="alert"]');
+    await expect(error.locator('.toast__title')).toHaveText(`Couldn't approve ${id}`);
+    await expect(error.locator('.toast__detail')).toHaveText('You are offline. Reconnect, then try again.');
     await expect(cell).not.toContainText('Approved');
     await expect(sessionDialog(page)).toHaveCount(0);
   });

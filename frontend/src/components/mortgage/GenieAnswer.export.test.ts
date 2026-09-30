@@ -183,6 +183,24 @@ describe('exportGenieAnswerCsv', () => {
     expect(harness.download).not.toHaveBeenCalled();
   });
 
+  it('a throw while building is a refusal with no POST, never a rejection', async () => {
+    const harness = deps(async () => RECEIPT);
+    const badClock = exportGenieAnswerCsv(request(), {
+      ...harness.deps,
+      now: () => new Date(Number.NaN),
+    });
+    await expect(badClock).resolves.toEqual({ kind: 'refused', message: GENIE_EXPORT_NOT_RECORDED });
+    const unwritable = {
+      toJSON() {
+        throw new Error('cell cannot be written');
+      },
+    };
+    const badCell = exportGenieAnswerCsv(request({ rows: [{ state: 'IL', detail: unwritable }], columns: ['state', 'detail'] }), harness.deps);
+    await expect(badCell).resolves.toEqual({ kind: 'refused', message: GENIE_EXPORT_NOT_RECORDED });
+    expect(harness.deps.post).not.toHaveBeenCalled();
+    expect(harness.download).not.toHaveBeenCalled();
+  });
+
   it('never declares when the browser cannot hash, and never over the row cap', async () => {
     const harness = deps(async () => RECEIPT);
     const noHash = await exportGenieAnswerCsv(request(), {

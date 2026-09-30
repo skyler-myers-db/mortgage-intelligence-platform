@@ -9,6 +9,7 @@
  */
 
 import { act } from 'react';
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +17,7 @@ import type { GenieLiveProgress, GenieSubmitResult } from '../../lib/api';
 import { appendGenieTurn, clearGenieTurns } from '../../lib/genieConversationStore';
 import { __resetGenieTurnStoreForTests } from '../../lib/genieInFlightTurn';
 import { __resetGenieAnnouncerForTests } from './useGenieAnnouncer';
+import { createMipQueryClient } from '../../lib/queryClient';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 
 const mocks = vi.hoisted(() => ({
@@ -81,6 +83,7 @@ const TERMINAL: GenieLiveProgress = {
 function answer(overrides: Partial<GenieAnswer> = {}): GenieAnswer {
   return {
     answer: 'There are 124,946 borrowers passing the screen.',
+    question: 'How many borrowers pass the screen?',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-live',
@@ -104,6 +107,25 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+/** GenieChat reads `/api/genie/start` through the shared query (runtime-06):
+ *  one client per test, retries off. */
+function testQueryClient(): QueryClient {
+  const client = createMipQueryClient();
+  client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } });
+  return client;
+}
+
+let queryClient: QueryClient;
+
+/** The panel under test, inside the per-test query client. */
+function ChatUnderTest() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <GenieChat />
+    </QueryClientProvider>
+  );
+}
+
 describe('floating Genie panel respects the reader (genie-08)', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -113,6 +135,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     scrollIntoView.mockReset();
     clearGenieTurns();
+    queryClient = testQueryClient();
     mocks.genieStart.mockResolvedValue(START);
     mocks.genieFeedback.mockResolvedValue({ accepted: true });
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
@@ -135,6 +158,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    queryClient.clear();
     __resetGenieTurnStoreForTests();
     __resetGenieAnnouncerForTests();
     clearGenieTurns();
@@ -154,7 +178,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     act(() => {
       root.render(
         <MemoryRouter>
-          <GenieChat />
+          <ChatUnderTest />
         </MemoryRouter>,
       );
     });
@@ -273,7 +297,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     act(() => {
       root.render(
         <MemoryRouter>
-          <GenieChat />
+          <ChatUnderTest />
         </MemoryRouter>,
       );
     });
@@ -291,6 +315,31 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     expect(bubbles[1].querySelector('.genie-answer')).not.toBeNull();
   });
 
+  it('describes every collapse toggle by its own question, expanded too (w3-genie-reading review)', () => {
+    appendGenieTurn('First question?', answer({ answer: 'First **answer**.', message_id: 'msg-1' }));
+    appendGenieTurn('Second question?', answer({ answer: 'Second answer.', message_id: 'msg-2' }));
+    appendGenieTurn('Third question?', answer({ answer: 'Third answer.', message_id: 'msg-3' }));
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <ChatUnderTest />
+        </MemoryRouter>,
+      );
+    });
+    const toggles = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button.genie-collapse__toggle'));
+    const description = (toggle: HTMLElement) =>
+      (toggle.getAttribute('aria-describedby') ?? '')
+        .split(' ')
+        .filter(Boolean)
+        .map((id) => document.getElementById(id)?.textContent ?? '')
+        .join(' ');
+    expect(toggles().map(description)).toEqual(['First question? First answer.', 'Second question? Second answer.']);
+
+    for (const toggle of toggles()) act(() => toggle.click());
+    expect(toggles().map((toggle) => toggle.textContent)).toEqual(['Collapse answer', 'Collapse answer']);
+    expect(toggles().map(description)).toEqual(['First question?', 'Second question?']);
+  });
+
   it('each bubble keeps its own Show all when the 20-turn cap evicts the head', async () => {
     const rows = (turn: number) => Array.from({ length: 12 }, (_, n) => ({ state: `T${turn}-${n}`, borrowers: n }));
     for (let n = 0; n < 20; n += 1) {
@@ -306,7 +355,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     act(() => {
       root.render(
         <MemoryRouter>
-          <GenieChat />
+          <ChatUnderTest />
         </MemoryRouter>,
       );
     });
@@ -368,7 +417,7 @@ describe('floating Genie panel respects the reader (genie-08)', () => {
     act(() => {
       root.render(
         <MemoryRouter>
-          <GenieChat />
+          <ChatUnderTest />
         </MemoryRouter>,
       );
     });

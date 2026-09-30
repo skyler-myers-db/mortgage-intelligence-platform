@@ -510,6 +510,102 @@ describe('PortfolioBuilder save-build flow', () => {
     ]);
   });
 
+  function typeSaveName(value: string) {
+    const nameInput = container.querySelector<HTMLInputElement>('[data-testid="portfolio-save-name"]')!;
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(nameInput, value);
+      nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  it('a double submit sends one create (the synchronous mutation latch)', async () => {
+    portfolioPreview.mockResolvedValue(PREVIEW);
+    const create = deferred<Record<string, unknown>>();
+    portfolioCreate.mockReturnValue(create.promise);
+    mount();
+    await waitUntil(() => !saveButton().disabled);
+    act(() => saveButton().click());
+    const form = container.querySelector<HTMLButtonElement>('[data-testid="portfolio-save-confirm"]')!.closest('form')!;
+    // Both submits land before React re-renders the disabled button.
+    act(() => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(portfolioCreate).toHaveBeenCalledTimes(1);
+    const confirm = container.querySelector<HTMLButtonElement>('[data-testid="portfolio-save-confirm"]')!;
+    expect(confirm.disabled).toBe(true);
+    expect(confirm.textContent).toContain('Saving…');
+    await act(async () => {
+      create.resolve({ campaign_id: 'c-latch', audit_event_id: 'audit-latch' });
+      await create.promise;
+    });
+    await waitUntil(() => container.querySelector('[data-testid="portfolio-save-name"]') === null);
+    expect(portfolioCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('mints a new idempotency key for a changed name and for a reopened panel', async () => {
+    portfolioPreview.mockResolvedValue(PREVIEW);
+    portfolioCreate
+      .mockRejectedValueOnce(new Error('Lakebase unavailable'))
+      .mockRejectedValueOnce(new Error('Lakebase unavailable'))
+      .mockResolvedValueOnce({ campaign_id: 'c-renamed' });
+    mount();
+    await waitUntil(() => !saveButton().disabled);
+    const confirm = () => container.querySelector<HTMLButtonElement>('[data-testid="portfolio-save-confirm"]')!;
+    const alertShown = () => container.querySelector('[role="alert"]') !== null;
+    act(() => saveButton().click());
+    typeSaveName('Same name');
+    act(() => confirm().click());
+    await waitUntil(alertShown);
+    const firstId = portfolioCreate.mock.calls[0][2].request_id;
+    // Cancel and reopen: the identical payload in a new panel session is a
+    // new request (the panel open always started a new intent).
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="portfolio-save-cancel"]')!.click());
+    act(() => saveButton().click());
+    typeSaveName('Same name');
+    act(() => confirm().click());
+    await waitUntil(() => portfolioCreate.mock.calls.length === 2 && alertShown());
+    const reopenedId = portfolioCreate.mock.calls[1][2].request_id;
+    expect(reopenedId).not.toBe(firstId);
+    // A changed intent in the same panel is a new request too.
+    typeSaveName('Second name');
+    act(() => confirm().click());
+    await waitUntil(() => container.querySelector('[data-testid="portfolio-save-name"]') === null);
+    const renamedId = portfolioCreate.mock.calls[2][2].request_id;
+    expect(new Set([firstId, reopenedId, renamedId]).size).toBe(3);
+    for (const id of [firstId, reopenedId, renamedId]) expect(typeof id).toBe('string');
+  });
+
+  it('a double click on Archive sends one campaign transition', async () => {
+    portfolioPreview.mockResolvedValue(PREVIEW);
+    const campaignId = '44444444-4444-4444-8444-444444444444';
+    campaigns.mockResolvedValue({
+      campaigns: [{
+        campaign_id: campaignId,
+        name: 'Quarantined campaign',
+        owner_email: 'growth@summit.example',
+        status: 'draft',
+        actionable: false,
+        actionability_issue: 'treatment_unbound',
+        treatment_state: 'legacy_unbound',
+        criteria: {},
+      }],
+    });
+    campaignStatus.mockReturnValue(deferred<Record<string, unknown>>().promise);
+    mount();
+    await waitUntil(() => container.querySelector(`[data-testid="archive-campaign-${campaignId}"]`) !== null);
+    const button = container.querySelector<HTMLButtonElement>(`[data-testid="archive-campaign-${campaignId}"]`)!;
+    act(() => {
+      button.click();
+      button.click();
+    });
+    await waitUntil(() => button.disabled);
+    expect(campaignStatus).toHaveBeenCalledTimes(1);
+    expect(button.textContent).toContain('Archiving…');
+  });
+
   it('launches a saved Supervisor campaign with its selected variant and provenance', async () => {
     portfolioPreview.mockResolvedValue(PREVIEW);
     const campaignId = '11111111-1111-4111-8111-111111111111';

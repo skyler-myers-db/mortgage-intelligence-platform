@@ -19,6 +19,10 @@
  *   - REPLACE (expand / collapse mints a new entry key) carries the current
  *     offset to the new key, so a later Back still restores it.
  *   - PUSH (a sort, a filter, a preset) starts at the top.
+ *   - A PUSH, and a first load with nothing saved, are "fresh" entries:
+ *     `onFreshEntry` runs, so the table can reveal a row the URL names
+ *     (`?row=`, audit tables-09 follow-up). Never on REPLACE (an expand or a
+ *     collapse) and never on a POP that restores a saved offset.
  *   - Reader intent (wheel, touch, pointer, any key incl. J / K) cancels a
  *     restore that is still waiting; the cursor's scrollToIndex then wins.
  *
@@ -52,6 +56,8 @@ export interface UseLeadTableScrollInput {
   tableWrapRef: RefObject<HTMLDivElement | null>;
   /** The virtualizer while the table is virtualized, else null. */
   virtualizer: LeadTableVirtualScroll | null;
+  /** A PUSH, or a first load with nothing saved: the entry has no place of its own. */
+  onFreshEntry?: () => void;
 }
 
 function readTableOffsets(): Map<string, number> {
@@ -79,7 +85,7 @@ export function useLeadTableInitialOffset(enabled: boolean): number {
   return initialOffset;
 }
 
-export function useLeadTableScroll({ enabled, tableWrapRef, virtualizer }: UseLeadTableScrollInput): void {
+export function useLeadTableScroll({ enabled, tableWrapRef, virtualizer, onFreshEntry }: UseLeadTableScrollInput): void {
   const location = useLocation();
   const navigationType = useNavigationType();
   const storageKey = scrollStorageKey(location);
@@ -90,11 +96,14 @@ export function useLeadTableScroll({ enabled, tableWrapRef, virtualizer }: UseLe
   const restoringRef = useRef(false);
   const cancelPendingRef = useRef<(() => void) | null>(null);
   const virtualizerRef = useRef<LeadTableVirtualScroll | null>(null);
+  const onFreshEntryRef = useRef(onFreshEntry);
 
-  // The latest virtualizer, for the restore attempts below (declared first,
-  // so it is current when the restore effect runs in the same commit).
+  // The latest virtualizer and fresh-entry callback, for the restore effect
+  // below (declared first, so they are current when it runs in the same
+  // commit).
   useLayoutEffect(() => {
     virtualizerRef.current = virtualizer;
+    onFreshEntryRef.current = onFreshEntry;
   });
 
   // Record the live offset against the current entry: on scroll, and at the
@@ -186,10 +195,12 @@ export function useLeadTableScroll({ enabled, tableWrapRef, virtualizer }: UseLe
       virtualizerRef.current?.scrollToOffset(0);
       wrap.scrollTop = 0;
       settle();
+      onFreshEntryRef.current?.();
     } else {
       // REPLACE (expand / collapse) or a first load with nothing saved: keep
       // the offset, now under this entry's key.
       settle();
+      if (navigationType === 'POP') onFreshEntryRef.current?.();
     }
 
     return () => {

@@ -187,7 +187,12 @@ const budgets = {
   // banners + shaped skeleton sweep, 32-feedback toast region + guard
   // dialog; each must style a surface that can appear before any lazy chunk).
   // Measured: 158.85 / gzip 27.20; ~5% headroom.
-  initialCssBytes: 167 * KiB, // actual 159.25 (2026-09-24, manifest CSS closure; 158.81 before the variable fonts, 158.56 before the bold fallback faces)
+  // Re-baselined 2026-09-29 at the wave-4b integration: raw 166.75 -> 167.26
+  // and gzip 28.91 -> 29.09 left both over their gates. The shell CSS grew
+  // with w4-workflow's Field primitive and its QueuePager (+0.04 br),
+  // w4-lead-queue's focus-clearance partial (+0.06) and w4-charts'
+  // --accent-data token and forced-colors data marks (+0.05). ~5% headroom.
+  initialCssBytes: 176 * KiB, // actual 167.26 (wave-4b integration; 159.25 on 2026-09-24)
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
@@ -202,7 +207,8 @@ const budgets = {
   // ship with their lazy chunks instead, and the dead `.admin-filter-input`
   // rules were removed, before this bump. Measured: CSS 155.76 / gzip 26.55;
   // ~5% headroom per policy.
-  initialCssGzipBytes: 29 * KiB, // actual 27.30 (2026-09-24; 27.25 before the bold fallback faces)
+  // wave-4b integration: 28.91 -> 29.09 (see initialCssBytes). ~5% headroom.
+  initialCssGzipBytes: 31 * KiB, // actual 29.09 (wave-4b integration; 27.30 on 2026-09-24)
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads
@@ -285,8 +291,28 @@ const budgets = {
   // FetchedAt, RetryClock and the error vocabulary shipped per route chunk),
   // growth-agent-trust +1.33, genie-server +0.63, the Home re-point -0.09.
   // Initial JS 146.80 -> 144.09 br. ~5% headroom restored for wave 4b.
-  totalJsBytes: 1733 * KiB, // actual 1650.24 (91 chunks, wave-4a integration)
-  totalJsGzipBytes: 589 * KiB, // actual 560.08 (wave-4a integration)
+  // Re-baselined 2026-09-29 at the wave-4b integration, again attributed by
+  // building every first-parent merge step of ux/wave-4b (br KiB, total JS
+  // 484.31 -> 501.92):
+  //  - w4-workflow +7.93: React Compiler memo code for the newly compiled
+  //    Offer Orchestrator and Portfolio Builder routes (runtime-03, about
+  //    +4.4), the shared outreach/requestIds mutation chunks moved out of
+  //    LeadTable, and the QueuePager chunk. Its fix round cut the draft
+  //    restore and the Field adornments (cuts 1-2).
+  //  - w4-genie-client +4.43: the conversation deep link, pre-open turn
+  //    survival and per-response answer memory.
+  //  - w4-delivery-warehouse 0 (backend only).
+  //  - w4-test-infra-pr2 +0.05.
+  //  - w4-lead-queue +1.92: LeadTableBody, the approval banner, compliance
+  //    text, toasts and focus clearance, after its cuts 2-5.
+  //  - w4-charts +3.28: the compiled ChartFrame kit, 1-2-5 axes and the
+  //    histograms with governed thresholds, after its cuts (a)-(b).
+  // The planned W4b caps summed to 11.4; the batch took 17.61. Lanes that
+  // could not cut never-cut items asked for this re-baseline in their
+  // reports. Initial JS 144.03 -> 144.53 br. Totals: 1701.66 raw /
+  // 581.56 gzip / 501.92 br across 95 chunks. ~5% headroom.
+  totalJsBytes: 1787 * KiB, // actual 1701.66 (wave-4b integration)
+  totalJsGzipBytes: 611 * KiB, // actual 581.56 (wave-4b integration)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -305,8 +331,14 @@ const budgets = {
   // 119.36 -> 127.27 raw / 38.37 -> 41.07 gzip / 33.08 -> 35.32 br with the
   // w3-queue-place lane (sort, focused row and scroll in the URL, honest
   // bulk-run progress, range selection); +2.19 br of it is that lane's.
-  maxLazyJsBytes: 134 * KiB, // actual 127.27 (LeadTable, wave-3 integration)
-  maxLazyJsGzipBytes: 44 * KiB, // actual 41.07 (LeadTable, wave-3 integration)
+  // Re-baselined 2026-09-29 at the wave-4b integration. The LeadTable chunk
+  // (built as FetchedAt-*.js since wave 4a) went 128.41 -> 131.07 raw /
+  // 41.43 -> 42.33 gzip / 35.68 -> 36.33 br. w4-workflow moved the mutation
+  // runtime out (-1.37 br), and w4-lead-queue added LeadTableBody, the
+  // approval banner, compliance text and write-failure toasts (+1.98 br).
+  // ~5% headroom.
+  maxLazyJsBytes: 138 * KiB, // actual 131.07 (LeadTable chunk, wave-4b integration)
+  maxLazyJsGzipBytes: 45 * KiB, // actual 42.33 (LeadTable chunk, wave-4b integration)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -334,9 +366,11 @@ const budgets = {
   // swap is not a synthesized bold): +0.69 raw / +0.05 gzip / +0.07 br, which
   // left it 4.3%. Measured: 22.96 br; +~5% rounded up to a whole KiB.
   initialJsBrBytes: 152 * KiB, // actual 143.92 (5 chunks; 142.81 before the vendor split)
-  initialCssBrBytes: 25 * KiB, // actual 22.96 (22.89 before the bold fallback faces; 22.82 with the static @fontsource CSS)
-  totalJsBrBytes: 509 * KiB, // actual 484.23 (91 chunks, wave-4a integration; see totalJsBytes)
-  maxLazyJsBrBytes: 38 * KiB, // actual 35.32 (LeadTable, wave-3 integration)
+  // wave-4b integration: 24.17 -> 24.32 br (see initialCssBytes), which left
+  // 2.7%. Re-baselined to ~5%.
+  initialCssBrBytes: 26 * KiB, // actual 24.32 (wave-4b integration; 22.96 on 2026-09-24)
+  totalJsBrBytes: 528 * KiB, // actual 501.92 (95 chunks, wave-4b integration; see totalJsBytes)
+  maxLazyJsBrBytes: 39 * KiB, // actual 36.33 (LeadTable chunk, wave-4b integration; see maxLazyJsBytes)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
@@ -351,7 +385,11 @@ const budgets = {
     // wave-4a: 33.75 -> 34.63 (error-surfaces +0.84: AsyncState/describeApiError).
     'src/routes/admin-config.tsx': 37 * KiB, // actual 34.63
     // wave-4a: 42.32 -> 43.24 (error-surfaces +0.95).
-    'src/routes/analytics.tsx': 46 * KiB, // actual 43.24
+    // wave-4b: 43.30 -> 46.71 (w4-charts +3.42: the compiled ChartFrame kit,
+    // histograms with governed thresholds, Evidence per day on the kit; its
+    // cuts (a)-(b) applied; the per-tab lazy step needs a routes entry and
+    // +1.1-1.2 total, recorded for wave 5).
+    'src/routes/analytics.tsx': 50 * KiB, // actual 46.71
     // wave-2 integration: 50.03 -> 53.12, the w2-genie-turn lane's in-flight
     // turn store, route Stop and single announcer. ~5% headroom.
     // wave-3 integration: 53.01 -> 59.82, w3-genie-reading +5.13 (markdown
@@ -359,7 +397,9 @@ const budgets = {
     // w3-motion-nav +0.53. ~5% headroom.
     // wave-4a: 60.02 -> 61.87 (growth-agent-trust +1.33 plan execute,
     // genie-server +0.57 cancel).
-    'src/routes/ask-genie.tsx': 65 * KiB, // actual 61.87
+    // wave-4b: 61.89 -> 64.07 (w4-genie-client +2.03: deep link state,
+    // pre-open turn survival, answer memory; w4-charts +0.15), 1.4% left.
+    'src/routes/ask-genie.tsx': 68 * KiB, // actual 64.07
     'src/routes/asset.tsx': 8 * KiB, // actual 7.08
     // wave-4a: 36.x -> 37.44 (delivery-boot +0.4, error-surfaces +0.37).
     'src/routes/borrower-360.tsx': 40 * KiB, // actual 37.44
@@ -376,20 +416,32 @@ const budgets = {
     // proof out (-4.23), w3-queue-place added place + bulk progress (+4.22).
     // wave-4a: 67.13 -> 69.44 (error-surfaces +1.90 FetchedAt, EmptyState,
     // queue version; overlays +0.22).
-    'src/routes/lead-queue.tsx': 73 * KiB, // actual 69.44
+    // wave-4b: 69.55 -> 72.71 (w4-lead-queue +2.27, w4-workflow +0.78
+    // shared mutation chunks), 0.4% left.
+    'src/routes/lead-queue.tsx': 77 * KiB, // actual 72.71
     // w4 pre-cut: 3.93 (wave 3) -> 4.00 on the CI build (see glossary above).
     'src/routes/not-found.tsx': 5 * KiB, // actual 4.00 (CI build)
     // wave-3 integration: ratcheted DOWN, 34.29 -> 31.29 (w3-score-anatomy
     // moved the proof surfaces into lazy chunks). ~5% headroom.
     // wave-4a: 31.40 -> 31.77 (error-surfaces +0.37).
-    'src/routes/offer-orchestrator.tsx': 34 * KiB, // actual 31.77
-    'src/routes/portfolio-builder.tsx': 34 * KiB, // actual 31.76
+    // wave-4b: 31.75 -> 38.47 (w4-workflow +6.71: compiler memo code for
+    // the newly compiled route about +1.9, the shared mutation chunks
+    // +1.2, the QueuePager chunk +1.25, the query-layer reads and writes;
+    // test-infra-pr2's ActivationLoopPanel move was dropped). The
+    // queue-context-only QueuePager load is a wave-5 lever.
+    'src/routes/offer-orchestrator.tsx': 41 * KiB, // actual 38.47
+    // wave-4b: 32.88 -> 37.48 (w4-workflow +4.61: compiler memo code for
+    // the newly compiled route about +2.6, campaign mutations, the Field
+    // primitive on the numeric editors).
+    'src/routes/portfolio-builder.tsx': 40 * KiB, // actual 37.48
     // wave-3 integration: 82.46 -> 83.57 (w3-rate-lever map facts +1.95,
     // w3-queue-place +2.39, w3-score-anatomy -4.24), 0.5% left: restored
     // to ~5% headroom.
     // wave-4a: 83.43 -> 86.37 (error-surfaces +2.59 FetchedAt/EmptyState on
     // Segments, overlays +0.29).
-    'src/routes/segment-intelligence.tsx': 91 * KiB, // actual 86.37
+    // wave-4b: 86.39 -> 89.57 (w4-lead-queue +2.21 via the shared LeadTable
+    // chunk, w4-workflow +0.89 shared mutation chunks), 1.6% left.
+    'src/routes/segment-intelligence.tsx': 95 * KiB, // actual 89.57
   },
 };
 

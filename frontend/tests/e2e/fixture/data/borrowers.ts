@@ -41,9 +41,9 @@ const OFFER_PROFILES: readonly OfferProfile[] = [
 function evidenceFor(index: number, spreadBps: number, equity: number): EvidenceEvent[] {
   const suffix = String(index + 1).padStart(3, '0');
   return [
-    { evidence_id: `ev-${suffix}-a`, source_product: 'Voluntary Lien', source_table: 'cotality.liens.voluntary_lien', signal_type: 'rate_spread', signal_value: `+${spreadBps} bps`, display_text: `Current lien rate is ${spreadBps} bps above par.`, confidence: 0.92, timestamp: '2026-07-12T06:12:00Z' },
-    { evidence_id: `ev-${suffix}-b`, source_product: 'AVM', source_table: 'cotality.avm.current', signal_type: 'equity', signal_value: `$${Math.round(equity / 1000)}K`, display_text: 'Estimated equity is above the home-equity threshold.', confidence: 0.88, timestamp: '2026-07-10T06:12:00Z' },
-    { evidence_id: `ev-${suffix}-c`, source_product: 'Mortgage Market Analytics', source_table: 'cotality.mma.refi_activity', signal_type: 'market_trend', signal_value: '+28% QoQ', display_text: 'Local refinance activity is up 28% quarter over quarter.', confidence: 0.84, timestamp: '2026-07-02T06:12:00Z' },
+    { evidence_id: `ev-${suffix}a`, source_product: 'Voluntary Lien', source_table: 'cotality.liens.voluntary_lien', signal_type: 'rate_spread', signal_value: `+${spreadBps} bps`, display_text: `Current lien rate is ${spreadBps} bps above par.`, confidence: 0.92, timestamp: '2026-07-12T06:12:00Z' },
+    { evidence_id: `ev-${suffix}b`, source_product: 'AVM', source_table: 'cotality.avm.current', signal_type: 'equity', signal_value: `$${Math.round(equity / 1000)}K`, display_text: 'Estimated equity is above the home-equity threshold.', confidence: 0.88, timestamp: '2026-07-10T06:12:00Z' },
+    { evidence_id: `ev-${suffix}c`, source_product: 'Mortgage Market Analytics', source_table: 'cotality.mma.refi_activity', signal_type: 'market_trend', signal_value: '+28% QoQ', display_text: 'Local refinance activity is up 28% quarter over quarter.', confidence: 0.84, timestamp: '2026-07-02T06:12:00Z' },
   ];
 }
 

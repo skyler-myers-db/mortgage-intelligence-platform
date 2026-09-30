@@ -288,6 +288,7 @@ test.describe('Genie refusal card', () => {
           conversation_id: 'fixture-conversation-0001',
           message_id: 'fixture-message-0001',
           answer: 'There are 124,946 borrowers in the money.',
+          question,
           source: 'trusted_sql',
           trusted_assets: ['mip.gold.borrower_360'],
           question_hash: refusalReportHash(question).slice(0, 16),

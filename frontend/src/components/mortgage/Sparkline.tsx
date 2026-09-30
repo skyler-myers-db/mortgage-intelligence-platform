@@ -57,7 +57,7 @@ export function Sparkline({ points, width = 64, height = 20, direction, drawIn =
 
   const dir = direction ?? (points[points.length - 1] > points[0] ? 'up' : points[points.length - 1] < points[0] ? 'down' : 'flat');
   const stroke =
-    dir === 'down' ? 'var(--signal-danger)' : dir === 'flat' ? 'var(--text-3)' : 'var(--accent)';
+    dir === 'down' ? 'var(--signal-danger)' : dir === 'flat' ? 'var(--text-3)' : 'var(--accent-data)';
 
   const gradientId = `spark-fill-${reactId.replace(/:/g, '')}-${dir}`;
 

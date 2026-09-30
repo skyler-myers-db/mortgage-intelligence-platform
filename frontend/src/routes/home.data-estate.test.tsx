@@ -35,7 +35,8 @@ vi.mock('../components/mortgage/PinnedInsights', () => ({
   PinnedInsights: () => <div data-testid="pinned-insights" />,
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: { portfolioPreview: vi.fn() },
 }));
 

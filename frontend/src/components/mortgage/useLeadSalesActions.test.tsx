@@ -9,7 +9,10 @@
  * assign / distribute send 'manual' for one loan officer and 'round_robin'
  * for two or more, never 'score_balanced'; results reach the shell toast
  * region with the write's audit event id, and a failed write raises an
- * error toast instead of the table alert.
+ * error toast instead of the table alert. The disposition panel owns its
+ * fields and their validation (audit runtime-04 slice 2,
+ * LeadTableDecisionPanels.test.tsx); the hook sends exactly the payload the
+ * panel built.
  */
 
 import { QueryClient } from '@tanstack/react-query';
@@ -27,7 +30,10 @@ const apiMocks = vi.hoisted(() => ({
   logDisposition: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => ({ api: apiMocks }));
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  api: apiMocks,
+}));
 
 import { useLeadSalesActions } from './useLeadSalesActions';
 
@@ -39,6 +45,7 @@ const TEAM: SalesTeamMember[] = [
 ];
 const IDS = ['B-AAAAAAAAAAAA1', 'B-AAAAAAAAAAAA2'];
 const LEADS = IDS.map((borrower_id) => ({ borrower_id, approval_status: 'approved' }) as unknown as LeadSummary);
+const VOICEMAIL = { lo_email: LO_A, outcome: 'called_left_voicemail', callback_at: null, notes: null } as const;
 
 function assignment(borrowerId: string, email: string) {
   return {
@@ -53,10 +60,9 @@ function assignment(borrowerId: string, email: string) {
 
 type Sales = ReturnType<typeof useLeadSalesActions>;
 let sales: Sales | null = null;
-const setApprovalError = vi.fn();
 
 function Harness({ client, team }: { client: QueryClient; team: SalesTeamMember[] }) {
-  const current = useLeadSalesActions({ leads: LEADS, salesTeam: team, queryClient: client, setApprovalError });
+  const current = useLeadSalesActions({ leads: LEADS, salesTeam: team, queryClient: client });
   useEffect(() => {
     sales = current;
   });
@@ -105,13 +111,13 @@ describe('useLeadSalesActions on the sales mutations', () => {
     }));
     mount();
     act(() => sales!.openDisposition(IDS[0]));
-    expect(sales!.dispositionLo).toBe(LO_A);
+    expect(sales!.dispositionInitialLo).toBe(LO_A);
 
     let first: Promise<void> | null = null;
     await act(async () => {
       // Two clicks in one frame: both read the same render.
-      first = sales!.submitDisposition();
-      void sales!.submitDisposition();
+      first = sales!.submitDisposition(VOICEMAIL);
+      void sales!.submitDisposition(VOICEMAIL);
     });
     expect(apiMocks.logDisposition).toHaveBeenCalledTimes(1);
 
@@ -162,6 +168,19 @@ describe('useLeadSalesActions on the sales mutations', () => {
     expect(sent).not.toContain('score_balanced');
   });
 
+  it('with no active loan officer, an assign sends nothing and says so in an error toast', async () => {
+    mount([]);
+    const onAssigned = vi.fn();
+    await act(async () => {
+      await sales!.assignSelected('round-robin', IDS, onAssigned);
+    });
+    expect(apiMocks.distributeLeads).not.toHaveBeenCalled();
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['error', "Couldn't assign the selected leads", 'No active loan officers are available for assignment.'],
+    ]);
+    expect(onAssigned).not.toHaveBeenCalled();
+  });
+
   it('raises an error toast for a failed assignment, not the table alert', async () => {
     apiMocks.distributeLeads.mockRejectedValue(new Error('assigned_to is outside the actor scope'));
     mount();
@@ -172,20 +191,26 @@ describe('useLeadSalesActions on the sales mutations', () => {
     expect(getToasts()).toEqual([
       expect.objectContaining({ tone: 'error', title: "Couldn't assign the selected leads", detail: 'assigned_to is outside the actor scope' }),
     ]);
-    expect(setApprovalError).not.toHaveBeenCalledWith(expect.stringContaining('outside the actor scope'));
     expect(onAssigned).not.toHaveBeenCalled();
   });
 
-  it('keeps pre-flight validation in the table alert and sends nothing', async () => {
-    mount();
-    act(() => sales!.openDisposition(IDS[0]));
-    act(() => sales!.setDispositionOutcome('callback_scheduled'));
-    await act(async () => {
-      await sales!.submitDisposition();
+  it('sends exactly the payload the panel built, and nothing with no panel open', async () => {
+    apiMocks.logDisposition.mockResolvedValue({
+      disposition: { disposition_id: 'd-2', borrower_id: IDS[1], lo_email: LO_B, outcome: 'callback_scheduled', occurred_at: '2026-07-14T15:00:00Z', callback_at: '2026-07-15T14:00:00.000Z' },
+      audit_event_id: 'audit-disp-2',
     });
-    expect(setApprovalError).toHaveBeenCalledWith('Callback scheduled dispositions require a callback time.');
+    mount();
+    await act(async () => {
+      await sales!.submitDisposition(VOICEMAIL);
+    });
     expect(apiMocks.logDisposition).not.toHaveBeenCalled();
-    expect(getToasts()).toEqual([]);
+
+    act(() => sales!.openDisposition(IDS[1]));
+    const payload = { lo_email: LO_B, outcome: 'callback_scheduled', callback_at: '2026-07-15T14:00:00.000Z', notes: 'Asked for Friday.' } as const;
+    await act(async () => {
+      await sales!.submitDisposition(payload);
+    });
+    expect(apiMocks.logDisposition).toHaveBeenCalledWith(IDS[1], payload, undefined, expect.any(String));
   });
 
   it('shows the first loan officer as the assignee until one is picked', () => {

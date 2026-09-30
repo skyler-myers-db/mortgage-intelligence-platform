@@ -5,11 +5,8 @@
 import {
   useId,
   useMemo,
-  useRef,
-  useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -17,22 +14,19 @@ import { Icon } from '../components/Icon';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
+import { CountChart } from '../components/charts/CountChart';
+import { utcDayScale } from '../components/charts/scales';
 import { fixedAttr } from '../lib/fixedPrecision';
-import { formatCompact, formatCount, formatNumber } from '../lib/formatters';
-import type {
-  FunnelStage,
-  RateSpreadBucket,
-  ScoreBucket,
-} from '../types';
+import { formatCompact, formatCount } from '../lib/formatters';
+import type { FunnelStage } from '../types';
+import { evidenceDate, evidenceSummary, type HistogramModel, type HistogramModelBin } from './analytics.chart-model';
 import {
   buildFunnelSankeyModel,
   categoricalTickIndexes,
   funnelStageDisplayLabel,
-  formatAxisTick,
   formatConversionPct,
   formatShortDate,
   leadQueueHrefForFunnelStage,
-  makeTicks,
   pct,
   type DailyEvidenceTotal,
   type LenderFilterParams,
@@ -108,6 +102,13 @@ export function ScopeChip({ children, title }: { children: ReactNode; title?: st
   );
 }
 
+/**
+ * A non-zero bar shorter than this share of the largest draws at it, so it
+ * stays visible; a zero draws no fill (dataviz-03, 2026-09-21 audit). The
+ * scale stays linear, and Bars says "not to scale" whenever it floors one.
+ */
+export const BAR_FLOOR_PCT = 2;
+
 export function Bars<T>({
   rows,
   value,
@@ -123,7 +124,8 @@ export function Bars<T>({
 }) {
   const max = Math.max(1, ...rows.map(value));
   if (rows.length === 0) return <div className="analytics-empty">No rows returned.</div>;
-  return (
+  const barPct = (rowValue: number) => (rowValue > 0 ? Math.max(BAR_FLOOR_PCT, pct(rowValue, max)) : 0);
+  const bars = (
     <div className="analytics-bars">
       {rows.map((row) => {
         const rowValue = value(row);
@@ -133,7 +135,7 @@ export function Bars<T>({
             <span className="analytics-bars__track" aria-hidden="true">
               <span
                 className="analytics-bars__fill"
-                style={{ '--bar-pct': `${pct(rowValue, max)}%` } as CSSProperties}
+                style={{ '--bar-pct': `${barPct(rowValue)}%` } as CSSProperties}
               />
             </span>
             <span className="analytics-bars__value num">{formatCompact(rowValue)}</span>
@@ -153,6 +155,15 @@ export function Bars<T>({
       })}
     </div>
   );
+  // Floored: some non-zero bar is drawn longer than its linear share.
+  return rows.some((row) => barPct(value(row)) > pct(value(row), max)) ? (
+    <>
+      {bars}
+      <p className="analytics-panel-note" data-testid="bars-scale-note">
+        Not to scale: bars under {BAR_FLOOR_PCT}% of the largest are drawn at a minimum length. The printed values are exact.
+      </p>
+    </>
+  ) : bars;
 }
 
 export function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[]; leadParams?: LenderFilterParams }) {
@@ -183,6 +194,12 @@ export function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[];
  * NESTED_FUNNEL_STAGE_PAIRS in analytics.lib.ts. Small stages draw at a
  * minimum visible thickness on the unchanged linear scale, and the chart
  * says "not to scale" whenever it does that.
+ *
+ * Scale (dataviz-03, integrator decision, wave 4b): the LINEAR scale is kept
+ * on purpose. Equal-height stage columns on a disclosed sqrt/log share scale
+ * await the owner (report section 10, item 10), and the visual-08 verifier
+ * holds that a sqrt funnel misstates the proportions it draws. The Pipeline
+ * Metrics Bars keep the same linear scale with their own not-to-scale floor.
  */
 export function FunnelSankey({
   stages,
@@ -231,7 +248,7 @@ export function FunnelSankey({
     >
       <defs>
         <linearGradient id={`fs-${gradientId}`} x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.5" />
+          <stop offset="0%" stopColor="var(--accent-data)" stopOpacity="0.5" />
           <stop offset="100%" stopColor="var(--seg-itm)" stopOpacity="0.28" />
         </linearGradient>
       </defs>
@@ -317,237 +334,78 @@ export function FunnelSankey({
   );
 }
 
-export function LineChart({
-  rows,
-  x,
-  y,
-  xLabel,
-  yLabel,
-  xUnit,
-}: {
-  rows: Array<ScoreBucket | RateSpreadBucket>;
-  x: (row: ScoreBucket | RateSpreadBucket) => number;
-  y: (row: ScoreBucket | RateSpreadBucket) => number;
-  xLabel: string;
-  yLabel: string;
-  /** Unit appended to the x value in the hover readout, e.g. "bps" →
-   *  "125 bps". Omitted for unitless axes (opportunity score). */
-  xUnit?: string;
-}) {
-  const clipId = useId();
-  // Nearest-point hover readout. Index into `plotted` (never the raw row
-  // array) so the crosshair always lands on a coordinate the chart actually
-  // drew. null = pointer is not over the plot.
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const hoverLayerRef = useRef<HTMLDivElement | null>(null);
-  const chart = useMemo(() => {
-    if (rows.length === 0) return null;
-    const xs = rows.map(x);
-    const ys = rows.map(y);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const maxY = Math.max(1, ...ys);
-    const plotY = (value: number) => 92 - (Math.max(0, Math.min(1, value / maxY)) * 84);
-    const plotted = rows.map((row) => {
-      const xValue = x(row);
-      const yValue = y(row);
-      return {
-        xValue,
-        yValue,
-        px: maxX === minX ? 50 : ((xValue - minX) / (maxX - minX)) * 100,
-        py: plotY(yValue),
-      };
-    });
-    return {
-      minX,
-      maxX,
-      maxY,
-      plotted,
-      points: plotted.map((p) => `${fixedAttr(p.px)},${fixedAttr(p.py)}`).join(' '),
-      xTicks: makeTicks(minX, maxX),
-      yTicks: makeTicks(0, maxY),
-      plotY,
-    };
-  }, [rows, x, y]);
-
-  // Pointer -> nearest plotted point. Measured off the live bounding rect so
-  // the mapping stays correct at any container width (the SVG is
-  // `preserveAspectRatio="none"`, so the 0-100 viewBox maps linearly onto
-  // whatever width the responsive layout hands us).
-  const onHoverMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const plotted = chart?.plotted;
-    if (!plotted || plotted.length === 0) return;
-    const rect = (hoverLayerRef.current ?? event.currentTarget).getBoundingClientRect();
-    if (rect.width === 0) return;
-    const ratio = ((event.clientX - rect.left) / rect.width) * 100;
-    let nearest = 0;
-    for (let i = 1; i < plotted.length; i += 1) {
-      if (Math.abs(plotted[i].px - ratio) < Math.abs(plotted[nearest].px - ratio)) nearest = i;
-    }
-    setHoverIndex(nearest);
-  };
-
-  if (!chart) return <div className="analytics-empty">No distribution returned.</div>;
-  const hovered = hoverIndex === null ? null : chart.plotted[hoverIndex] ?? null;
+/**
+ * Evidence events per day on the chart kit (dataviz-v2, stack-06, dataviz-10).
+ * Each day sits at its UTC-day offset along [first, last], never at its index,
+ * so a day the rows skip keeps its width instead of compressing the axis. The
+ * kit's CountChart gives the 1-2-5 count axis, the edge-anchored first and
+ * last date labels, the hover and keyboard readout, and the frame with the
+ * summary and the date/events table.
+ */
+export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] }) {
+  const ordered = [...rows].sort((a, b) => a.event_date.localeCompare(b.event_date));
+  const summary = evidenceSummary(ordered);
+  if (summary === null) return <div className="analytics-empty">No daily evidence returned.</div>;
+  const x = utcDayScale(ordered[0].event_date, ordered[ordered.length - 1].event_date);
+  const points = ordered.map((row) => ({ x: x(row.event_date), count: row.event_count, label: formatShortDate(row.event_date) }));
   return (
-    <div className="analytics-chart" role="img" aria-label={`${yLabel} by ${xLabel}`}>
-      <div className="analytics-chart__plot">
-        <div className="analytics-chart__y-ticks" aria-hidden="true">
-          {[...chart.yTicks].reverse().map((tick) => (
-            <span
-              key={tick}
-              className="analytics-chart__tick analytics-chart__tick--y"
-              style={{ '--tick-pos': `${chart.plotY(tick)}%` } as CSSProperties}
-            >
-              {formatAxisTick(tick, true)}
-            </span>
-          ))}
-        </div>
-        <div className="analytics-chart__canvas">
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-line-chart">
-            <defs>
-              <clipPath id={clipId}>
-                <rect x="0" y="0" width="100" height="100" />
-              </clipPath>
-            </defs>
-            {chart.yTicks.map((tick) => (
-              <line
-                key={`y-${tick}`}
-                x1="0"
-                x2="100"
-                y1={chart.plotY(tick)}
-                y2={chart.plotY(tick)}
-                className="analytics-chart__grid"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-            <polyline points={chart.points} clipPath={`url(#${clipId})`} vectorEffect="non-scaling-stroke" />
-          </svg>
-          {/* Hover readout. Entirely `aria-hidden` + non-focusable: the
-              chart already exposes its meaning through the parent
-              `role="img"` + aria-label and the tick text, so this layer adds
-              a pointer affordance without adding a keyboard/AT trap. */}
-          <div
-            ref={hoverLayerRef}
-            className="analytics-chart__hover"
-            aria-hidden="true"
-            onPointerMove={onHoverMove}
-            onPointerLeave={() => setHoverIndex(null)}
-          >
-            {hovered && (
-              <>
-                <span
-                  className="analytics-chart__crosshair"
-                  style={{ '--hover-x': `${hovered.px}%` } as CSSProperties}
-                />
-                <span
-                  className="analytics-chart__hover-dot"
-                  style={{ '--hover-x': `${hovered.px}%`, '--hover-y': `${hovered.py}%` } as CSSProperties}
-                />
-                <span
-                  className={`analytics-chart__tip${hovered.px > 60 ? ' analytics-chart__tip--flip' : ''}`}
-                  style={{ '--hover-x': `${hovered.px}%`, '--hover-y': `${hovered.py}%` } as CSSProperties}
-                >
-                  <span className="analytics-chart__tip-x">
-                    {formatAxisTick(hovered.xValue)}{xUnit ? ` ${xUnit}` : ''}
-                  </span>
-                  <span className="analytics-chart__tip-y">
-                    {formatNumber(hovered.yValue)} {yLabel.toLowerCase()}
-                  </span>
-                </span>
-              </>
-            )}
-          </div>
-          <div className="analytics-chart__x-ticks" aria-hidden="true">
-            {chart.xTicks.map((tick) => (
-              <span
-                key={tick}
-                className="analytics-chart__tick analytics-chart__tick--x"
-                style={{ '--tick-pos': `${pct(tick - chart.minX, chart.maxX - chart.minX)}%` } as CSSProperties}
-              >
-                {formatAxisTick(tick)}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="analytics-chart__axis analytics-chart__axis--x">{xLabel}</div>
-      <div className="analytics-chart__axis analytics-chart__axis--y">{yLabel}</div>
-    </div>
+    <CountChart
+      title="Evidence Events Per Day"
+      summary={summary}
+      table={
+        <DataTable<DailyEvidenceTotal>
+          rows={ordered}
+          getKey={(row) => row.event_date}
+          columns={[
+            { key: 'date', label: 'Date', render: (row) => evidenceDate(row.event_date) },
+            { key: 'events', label: 'Events', render: (row) => formatCount(row.event_count) },
+          ]}
+        />
+      }
+      points={points}
+      xTicks={categoricalTickIndexes(points.length).map((idx) => points[idx])}
+      xLabel="Event date"
+      yLabel="Events"
+      svgClassName="analytics-line-chart"
+      marks={(y) => (
+        <polyline
+          points={points.map((point) => `${fixedAttr(point.x)},${fixedAttr(y(point.count))}`).join(' ')}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+    />
   );
 }
 
-export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] }) {
-  const clipId = useId();
-  const chart = useMemo(() => {
-    if (rows.length === 0) return null;
-    const maxY = Math.max(1, ...rows.map((row) => row.event_count));
-    const plotY = (value: number) => 92 - (Math.max(0, Math.min(1, value / maxY)) * 84);
-    const points = rows.map((row, idx) => {
-      const px = rows.length === 1 ? 50 : (idx / (rows.length - 1)) * 100;
-      const py = plotY(row.event_count);
-      return `${fixedAttr(px)},${fixedAttr(py)}`;
-    }).join(' ');
-    return {
-      maxY,
-      points,
-      yTicks: makeTicks(0, maxY),
-      xTicks: categoricalTickIndexes(rows.length),
-      plotY,
-    };
-  }, [rows]);
-
-  if (!chart) return <div className="analytics-empty">No daily evidence returned.</div>;
+/**
+ * The table twin of a histogram (dataviz-10): the same bins the chart plots,
+ * with the threshold partition as a column: Yes from the threshold's bin edge
+ * up, Partly for a bin the threshold falls inside. `pastLabel` null: there is
+ * no threshold, so there is no column.
+ */
+export function HistogramTable({
+  model,
+  rangeLabel,
+  pastLabel,
+  formatRange,
+}: {
+  model: HistogramModel;
+  rangeLabel: string;
+  pastLabel: string | null;
+  formatRange: (start: number) => string;
+}) {
   return (
-    <div className="analytics-chart" role="img" aria-label="Evidence events by date">
-      <div className="analytics-chart__plot">
-        <div className="analytics-chart__y-ticks" aria-hidden="true">
-          {[...chart.yTicks].reverse().map((tick) => (
-            <span
-              key={tick}
-              className="analytics-chart__tick analytics-chart__tick--y"
-              style={{ '--tick-pos': `${chart.plotY(tick)}%` } as CSSProperties}
-            >
-              {formatAxisTick(tick, true)}
-            </span>
-          ))}
-        </div>
-        <div className="analytics-chart__canvas">
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-line-chart">
-            <defs>
-              <clipPath id={clipId}>
-                <rect x="0" y="0" width="100" height="100" />
-              </clipPath>
-            </defs>
-            {chart.yTicks.map((tick) => (
-              <line
-                key={`y-${tick}`}
-                x1="0"
-                x2="100"
-                y1={chart.plotY(tick)}
-                y2={chart.plotY(tick)}
-                className="analytics-chart__grid"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-            <polyline points={chart.points} clipPath={`url(#${clipId})`} vectorEffect="non-scaling-stroke" />
-          </svg>
-          <div className="analytics-chart__x-ticks" aria-hidden="true">
-            {chart.xTicks.map((idx) => (
-              <span
-                key={rows[idx].event_date}
-                className="analytics-chart__tick analytics-chart__tick--x"
-                style={{ '--tick-pos': `${rows.length === 1 ? 50 : (idx / (rows.length - 1)) * 100}%` } as CSSProperties}
-              >
-                {formatShortDate(rows[idx].event_date)}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="analytics-chart__axis analytics-chart__axis--x">Event date</div>
-      <div className="analytics-chart__axis analytics-chart__axis--y">Events</div>
-    </div>
+    <DataTable<HistogramModelBin>
+      rows={model.bins}
+      getKey={(bin) => String(bin.start)}
+      columns={[
+        { key: 'range', label: rangeLabel, render: (bin) => formatRange(bin.start) },
+        { key: 'borrowers', label: 'Borrowers', render: (bin) => formatCount(bin.count) },
+        ...(pastLabel === null
+          ? []
+          : [{ key: 'past', label: pastLabel, render: (bin: HistogramModelBin) => (bin.past ? 'Yes' : bin.straddles ? 'Partly' : 'No') }]),
+      ]}
+    />
   );
 }
 

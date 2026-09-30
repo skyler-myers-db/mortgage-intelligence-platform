@@ -11,17 +11,18 @@
  */
 
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { escapeLayerCount } from '../../lib/escapeStack';
+import { mount } from '../../test/render';
 import type { LeadSummary } from '../../types';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const apiMocks = vi.hoisted(() => ({ borrowerSearch: vi.fn() }));
 
-vi.mock('../../lib/api', () => ({ api: { borrowerSearch: apiMocks.borrowerSearch } }));
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  api: { borrowerSearch: apiMocks.borrowerSearch },
+}));
 vi.mock('../AppContext', () => ({
   useApp: () => ({
     lender: 'Summit Mortgage',
@@ -50,8 +51,7 @@ function LocationProbe() {
 }
 const pathname = (): string => document.getElementById('location-probe')?.textContent ?? '';
 
-let container: HTMLDivElement;
-let root: Root;
+let container: HTMLElement;
 
 const input = (): HTMLInputElement =>
   container.querySelector<HTMLInputElement>('input[aria-label="Search borrowers"]') as HTMLInputElement;
@@ -82,27 +82,18 @@ async function typeQuery(text: string): Promise<void> {
   });
 }
 
-beforeEach(() => {
+// mount() unmounts the Topbar and removes its container after each test.
+beforeEach(async () => {
   apiMocks.borrowerSearch.mockReset();
   apiMocks.borrowerSearch.mockResolvedValue(ROWS);
-  container = document.createElement('div');
-  document.body.appendChild(container);
-  root = createRoot(container);
-  act(() =>
-    root.render(
-      <MemoryRouter>
-        <Topbar />
-        <button type="button" id="elsewhere">Elsewhere</button>
-        <LocationProbe />
-      </MemoryRouter>,
-    ),
-  );
+  ({ container } = await mount(
+    <MemoryRouter>
+      <Topbar />
+      <button type="button" id="elsewhere">Elsewhere</button>
+      <LocationProbe />
+    </MemoryRouter>,
+  ));
   act(() => input().focus());
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  container.remove();
 });
 
 describe('Topbar borrower search — keyboard', () => {
@@ -170,6 +161,44 @@ describe('Topbar borrower search — keyboard', () => {
     expect(listbox()).toBeNull();
     expect(input().getAttribute('aria-expanded')).toBe('false');
     expect(escapeLayerCount()).toBe(0);
+  });
+
+  // runtime-03 pins: the submit path (Enter with nothing highlighted, or the
+  // form's own submit) runs its own search. A rejected search reads as the
+  // error status and never navigates; a found exact id wins over the first row.
+  async function submitQuery(text: string): Promise<void> {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setter?.call(input(), text);
+      input().dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // Submit before the 180 ms debounce, so only the submit path searches.
+    await act(async () => {
+      container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+  }
+
+  it('a submit whose search rejects shows the error status and does not navigate', async () => {
+    apiMocks.borrowerSearch.mockReset();
+    apiMocks.borrowerSearch.mockRejectedValue(new Error('warehouse down'));
+    await submitQuery('Chic');
+
+    // The submit path calls the search with the query alone (the debounced
+    // effect also passes its abort signal), and it has not fired yet.
+    expect(apiMocks.borrowerSearch.mock.calls).toEqual([['Chic']]);
+    const status = container.querySelector('.topbar__search-status--error');
+    expect(status?.textContent).toBe('Search is temporarily unavailable.');
+    expect(pathname()).toBe('/');
+    expect(input().value).toBe('Chic');
+  });
+
+  it('a submit that finds the typed id opens that borrower, not the first row', async () => {
+    await submitQuery('b-0000000000002');
+
+    expect(apiMocks.borrowerSearch.mock.calls).toEqual([['b-0000000000002']]);
+    expect(pathname()).toBe('/borrower-360/B-0000000000002');
+    expect(input().value).toBe('');
   });
 
   it('closes when focus leaves the search', async () => {

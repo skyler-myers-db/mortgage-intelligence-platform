@@ -3,7 +3,7 @@
  * wave-2 query-layer migration converted (audit stack-09), proven against
  * the real frontend/eslint.config.js the same way formattingBan.test.ts is.
  *
- * The rule stays 'off' repo-wide (its TODO belongs to the wave-4 lint lane),
+ * The rule stays 'off' repo-wide (its TODO is wave-5 lint-depth work),
  * so this pins both sides: the converted files are gated, and an unconverted
  * file is not, which is what catches a premature global flip.
  */
@@ -35,6 +35,32 @@ const CONVERTED = [
   'src/components/mortgage/useLeadBulkRun.ts',
   'src/components/mortgage/useLeadTableScroll.ts',
   'src/components/mortgage/LeadTable.selection.ts',
+  // Wave 4a error-surfaces.
+  'src/routes/lead-queue.freshness.tsx',
+  'src/components/ui/AsyncState.tsx',
+  'src/components/ui/EmptyState.tsx',
+  'src/components/ui/FetchedAt.tsx',
+  'src/components/ui/RetryClock.tsx',
+  'src/lib/queueVersion.ts',
+  // Wave 4b workflow.
+  'src/routes/offer-orchestrator.tsx',
+  'src/routes/offer-orchestrator.queries.ts',
+  'src/routes/offer-orchestrator.sales-team.ts',
+  'src/routes/portfolio-builder.tsx',
+  'src/routes/portfolio-builder.governance.tsx',
+  'src/routes/portfolio-builder.campaign-setup.tsx',
+  'src/components/mortgage/QueuePager.tsx',
+  'src/components/ui/Field.tsx',
+  // Wave 4b genie-client.
+  'src/components/mortgage/GenieAnswerFeedback.tsx',
+  'src/components/layout/GenieDock.tsx',
+  'src/routes/ask-genie.deep-link.tsx',
+  // Wave 4b lead-queue.
+  'src/components/mortgage/LeadBulkRunFallback.tsx',
+  'src/components/mortgage/LeadTable.rowCallbacks.ts',
+  'src/components/mortgage/LeadTableBody.tsx',
+  'src/components/mortgage/leadWriteFailureToast.ts',
+  'src/components/mortgage/useTableScrollClearance.ts',
 ];
 
 const NOT_YET_CONVERTED = [

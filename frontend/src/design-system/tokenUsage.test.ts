@@ -104,7 +104,7 @@ describe('every referenced custom property resolves (css-04 / motion-04)', () =>
   /** Set on an element's inline style from TSX, and only there. */
   const TSX_SET = [
     '--bin-alpha', '--bin-h', '--bin-w', '--bin-x', '--bin-y',
-    '--dot-x', '--dot-y', '--facet-share', '--hover-x', '--hover-y', '--tick-pos',
+    '--dot-x', '--dot-y', '--facet-share', '--hover-x', '--hover-y', '--rule-x', '--tick-pos',
   ];
   /** Read with a fallback on purpose: TSX sets them on some elements only. */
   const TSX_SET_WITH_FALLBACK = [

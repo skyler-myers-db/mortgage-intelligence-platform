@@ -3,18 +3,23 @@
 The preview economics are served stale-while-revalidate for up to a day, so
 the lifecycle-mirror counts (approved, in outreach) are overlaid per request
 from their own entry keyed by the workflow generation. Every approval write
-(``clear_sales_state_cache``) and every lifecycle-sync completion moves the
-generation, so the counts re-read at once while the economics stay cached.
+(``clear_sales_state_cache``), every warehouse-mode lifecycle-sync completion
+and every job-mode run a request observes finished moves the generation, so
+the counts re-read at once while the economics stay cached.
 """
 from __future__ import annotations
 
+import sys
+import types
+from collections.abc import Iterator
 from concurrent.futures import Executor, Future
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from backend.schemas.portfolio import PortfolioCriteria, PortfolioPreviewRequest
-from backend.services import job_trigger
+from backend.services import job_trigger, lifecycle_run_watch
 from backend.services.gold_cache import GoldAggregateCache
 from backend.services.lifecycle_sync import LifecycleSyncResult
 from backend.services.repositories.databricks_analytics import DatabricksAnalyticsRepository
@@ -151,6 +156,82 @@ def test_a_completed_lifecycle_sync_rereads_the_counts(
     assert repo.preview(None).in_outreach_count == 5
     assert warehouse.count(COUNTS_SQL) == 2
     assert warehouse.count(PREVIEW_SQL) == 1
+
+
+class _DeferredExecutor(Executor):
+    """Holds submitted work until the test runs it (the watch's worker thread)."""
+
+    def __init__(self) -> None:
+        self.parked: list[Any] = []
+
+    def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Future[Any]:
+        self.parked.append(lambda: fn(*args, **kwargs))
+        return Future()
+
+    def run_all(self) -> None:
+        parked, self.parked = self.parked, []
+        for job in parked:
+            job()
+
+
+class _LifecycleJob:
+    """The job-mode Jobs API: ``run_now`` answers a run id, ``get_run`` its state."""
+
+    def __init__(self) -> None:
+        self.life_cycle_state = "RUNNING"
+        self.get_run_calls = 0
+
+    def run_now(self, job_id: int) -> Any:
+        return SimpleNamespace(run_id=4242)
+
+    def get_run(self, run_id: int) -> Any:
+        self.get_run_calls += 1
+        state = SimpleNamespace(life_cycle_state=self.life_cycle_state, result_state="SUCCESS")
+        return SimpleNamespace(run_id=run_id, state=state)
+
+
+@pytest.fixture
+def job_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_LifecycleJob, list[float], _DeferredExecutor]]:
+    jobs = _LifecycleJob()
+    sdk = types.ModuleType("databricks.sdk")
+    sdk.WorkspaceClient = lambda: SimpleNamespace(jobs=jobs)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk)
+    monkeypatch.setenv("MIP_LIFECYCLE_SYNC_MODE", "job")
+    monkeypatch.setenv("MIP_LIFECYCLE_SYNC_JOB_ID", "42")
+    clock = [0.0]
+    watch = _DeferredExecutor()
+    job_trigger._reset_for_tests()
+    lifecycle_run_watch._reset_for_tests(now=lambda: clock[0], executor=watch)
+    try:
+        yield jobs, clock, watch
+    finally:
+        job_trigger._reset_for_tests()
+
+
+def test_a_job_mode_sync_rereads_the_counts_once_a_request_sees_it_finish(
+    repo: DatabricksPortfolioRepository,
+    warehouse: _Warehouse,
+    job_mode: tuple[_LifecycleJob, list[float], _DeferredExecutor],
+) -> None:
+    jobs, clock, watch = job_mode
+    assert repo.preview(None).in_outreach_count == 2
+
+    job_trigger.trigger_lifecycle_sync(reason="test")  # run_now only; the job runs later
+    warehouse.in_outreach = 5
+    assert repo.preview(None).in_outreach_count == 2, "the run has not finished"
+    watch.run_all()  # the check a read scheduled: RUNNING
+    assert repo.preview(None).in_outreach_count == 2
+    assert jobs.get_run_calls == 1, "one check per run per 15 s"
+
+    clock[0] = 15.0
+    jobs.life_cycle_state = "TERMINATED"
+    assert repo.preview(None).in_outreach_count == 2, "this read only schedules the check"
+    watch.run_all()  # TERMINATED: the generation moves
+
+    assert repo.preview(None).in_outreach_count == 5
+    assert warehouse.count(COUNTS_SQL) == 2
+    assert warehouse.count(PREVIEW_SQL) == 1
+    assert jobs.get_run_calls == 2
 
 
 def test_approval_writes_leave_no_dead_count_keys_to_evict_other_previews(warehouse: _Warehouse) -> None:

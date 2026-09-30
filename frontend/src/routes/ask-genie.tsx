@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router';
-import { api } from '../lib/api';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import type {
   GenieActionSuggestion,
   GenieAnswer as GenieAnswerShape,
@@ -31,8 +30,18 @@ import {
   startGenieTurn,
   subscribeGenieTurnSettled,
 } from '../lib/genieInFlightTurn';
-import { queryKeys } from '../lib/queryKeys';
+import { ensureGenieLauncherSignal } from '../lib/genieLauncherSignal';
+import { genieStartQueryOptions } from '../lib/genieStartQuery';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
+import {
+  GenieConversationLinkPlaceholder,
+  NO_GENIE_TURN,
+  genieConversationQueryKey,
+  isGenieConversationId,
+  useGenieConversationLink,
+  useInFlightGenieConversation,
+  type GenieConversationLinkOk,
+} from './ask-genie.deep-link';
 import { GrowthAgentMonitorsPanel } from './ask-genie.growth-agent-monitors';
 import { GrowthAgentPanel } from './ask-genie.growth-agent-panel';
 import { useGrowthAgentWorkspace } from './ask-genie.growth-agent-state';
@@ -73,25 +82,48 @@ export {
  * page, outside every tabpanel: a hidden tabpanel is not spoken, and a turn
  * can land while the Workflows tab shows. It speaks only while the floating
  * panel is closed (useGenieAnnouncer picks one speaker).
+ *
+ * `/ask-genie/:conversationId` (audit `shell-03`, ask-genie.deep-link.tsx)
+ * renders this same page: until the link's conversation is verified as the
+ * actor's own, the Ask tab shows its loading / not-found / unavailable state
+ * in place of the thread and the composer, and nothing is written. History
+ * load puts a shape-valid id in the URL; a reset (actor change, New thread, a
+ * fail-closed 403) takes it out. A settled turn never rewrites the URL.
  */
+/** Adopt a conversation into the shared thread: its turns, and its id for
+ *  follow-ups. The route's own id state is set by the caller. */
+function adoptGenieConversation(conversation: GenieConversationLinkOk): void {
+  setGenieTurns(conversation.turns);
+  clearGenieTurnNotes();
+  writeGenieConversationId(conversation.conversationId);
+}
+
 export default function AskGenie() {
   const navigate = useNavigate();
   const [tab, selectTab] = useAskGenieTab();
   const { refreshWorkspace, setDrawer } = useApp();
+  const queryClient = useQueryClient();
   const questionRef = useRef<HTMLTextAreaElement>(null);
-  const suppressBootstrapConversationRef = useRef(false);
+  // A conversation deep link (audit shell-03): a shape-valid URL id wins over
+  // the stored id, so the genieStart bootstrap never overrides it.
+  const { conversationId: conversationParam } = useParams<{ conversationId?: string }>();
+  const { search, hash } = useLocation();
+  const link = useGenieConversationLink(conversationParam);
+  const busyConversation = useInFlightGenieConversation();
+  const suppressBootstrapConversationRef = useRef(conversationParam !== undefined);
+  /** The linked conversation last adopted into the thread. */
+  const hydratedIdRef = useRef<string | null>(null);
+  /** The URL as last rendered, for the reset listener. */
+  const urlRef = useRef({ conversationParam, search });
+  const focusComposerRef = useRef(false);
   const [question, setQuestion] = useState('');
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [activeAssetPath, setActiveAssetPath] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const growthAgent = useGrowthAgentWorkspace();
 
-  const genieStartQuery = useQuery({
-    queryKey: queryKeys.genieStart(),
-    queryFn: ({ signal }) => api.genieStart(signal),
-    staleTime: 5 * 60_000,
-    refetchOnWindowFocus: false,
-  });
+  // Shared with the floating panel (lib/genieStartQuery, audit `runtime-06`).
+  const genieStartQuery = useQuery(genieStartQueryOptions());
 
   useEffect(() => {
     const result = genieStartQuery.data;
@@ -108,10 +140,38 @@ export default function AskGenie() {
   const trustedAssets = trustedAssetsForCatalog(genieStartQuery.data?.trusted_assets);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
 
-  // A reload may have interrupted a turn: resume it, once per page.
+  // The launchers ring for a turn asked here even before the floating panel
+  // first mounts (Genie residual #2), and a reload may have interrupted a
+  // turn: resume it, once per page.
   useEffect(() => {
+    ensureGenieLauncherSignal();
     resumeGenieTurnFromSession();
   }, []);
+
+  // The linked conversation, once verified, is adopted after the URL commit
+  // (a layout effect, so the previous thread is never painted under the new
+  // URL; the shell's scroll reset runs next and the passive latest-exchange
+  // reveal after it). A turn in flight in ANOTHER conversation holds it: the
+  // current thread and its Stop stay, and it opens once that turn has landed.
+  const linked = link.kind === 'ok' ? link.conversation : null;
+  const held = linked !== null && busyConversation !== NO_GENIE_TURN && busyConversation !== linked.conversationId;
+  useLayoutEffect(() => {
+    urlRef.current = { conversationParam, search };
+    if (conversationParam === undefined) hydratedIdRef.current = null;
+    if (!linked || held || hydratedIdRef.current === linked.conversationId) return;
+    hydratedIdRef.current = linked.conversationId;
+    suppressBootstrapConversationRef.current = true;
+    adoptGenieConversation(linked);
+    setConversationId(linked.conversationId);
+  }, [conversationParam, search, linked, held]);
+
+  // Leaving the link (Open Ask Genie on a not-found link) hands focus to the
+  // composer that replaces the button.
+  useEffect(() => {
+    if (link.kind !== 'none' || !focusComposerRef.current) return;
+    focusComposerRef.current = false;
+    questionRef.current?.focus();
+  }, [link.kind]);
 
   // A turn settled, from either surface: follow the conversation the store
   // persisted. A turn asked HERE also clears the composer, but only while it
@@ -131,6 +191,13 @@ export default function AskGenie() {
     // the route holds. The prior actor's questions must not linger.
     const onActorBoundaryReset = () => {
       suppressBootstrapConversationRef.current = true;
+      hydratedIdRef.current = null;
+      // Actor change, New thread on either surface, a fail-closed 403: the
+      // URL stops naming the conversation.
+      const url = urlRef.current;
+      if (url.conversationParam !== undefined) {
+        navigate({ pathname: '/ask-genie', search: url.search }, { replace: true });
+      }
       setConversationId(null);
       setQuestion('');
       setActiveAssetPath(null);
@@ -141,7 +208,7 @@ export default function AskGenie() {
     return () => {
       window.removeEventListener(GENIE_CONVERSATION_RESET_EVENT, onActorBoundaryReset);
     };
-  }, []);
+  }, [navigate]);
 
   /**
    * Start a turn. `startedAt` is read (`Date.now()`) at the event site: the
@@ -186,17 +253,37 @@ export default function AskGenie() {
    * render through the identical <GenieAnswer> path. The conversation id is
    * adopted too, so a follow-up continues that Databricks thread rather than
    * opening an orphan one. Mirrors GenieChat.loadSession.
+   *
+   * A shape-valid id goes into the URL (audit shell-03): the read primes the
+   * link's cache FIRST, then the URL is replaced, and the link adopts it from
+   * the cache after the URL commit, with no second request. Any other id
+   * (legacy fixture ids) is adopted directly and never enters the URL.
    */
   function loadSession(conversationIdToLoad: string, turns: GenieTurn[]) {
     if (getGenieTurnSnapshot().inFlight) return;
-    suppressBootstrapConversationRef.current = true;
-    setGenieTurns(turns);
-    clearGenieTurnNotes();
-    setConversationId(conversationIdToLoad);
+    const conversation = { conversationId: conversationIdToLoad, turns };
     setQuestion('');
     setActiveAssetPath(null);
     setActionStatus(null);
-    writeGenieConversationId(conversationIdToLoad);
+    const linkable = isGenieConversationId(conversationIdToLoad);
+    if (linkable) queryClient.setQueryData(genieConversationQueryKey(conversationIdToLoad), conversation);
+    if (linkable && conversationParam !== conversationIdToLoad) {
+      navigate({ pathname: `/ask-genie/${conversationIdToLoad}`, search, hash }, { replace: true });
+      return;
+    }
+    suppressBootstrapConversationRef.current = true;
+    hydratedIdRef.current = linkable ? conversationIdToLoad : null;
+    adoptGenieConversation(conversation);
+    setConversationId(conversationIdToLoad);
+    if (!linkable && conversationParam !== undefined) {
+      navigate({ pathname: '/ask-genie', search, hash }, { replace: true });
+    }
+  }
+
+  /** Leave a link that shows no conversation (not-found / unavailable). */
+  function openAskGenie() {
+    focusComposerRef.current = true;
+    navigate({ pathname: '/ask-genie', search }, { replace: true });
   }
 
   function scopeToTrustedAsset(asset: { label: string; path: string }) {
@@ -237,28 +324,42 @@ export default function AskGenie() {
         aria-labelledby={askGenieTabId('ask')}
         hidden={tab !== 'ask'}
       >
+        {held && (
+          <p className="muted fs-12" data-genie-link="held">
+            Opens after the current answer lands.
+          </p>
+        )}
         <div className="layoutA-grid">
-          <AskGenieAnswerPanel
-            questionRef={questionRef}
-            question={question}
-            onQuestionChange={(value) => {
-              setQuestion(value);
-              setActiveAssetPath(null);
-            }}
-            onAsk={(q) => ask(q, undefined, Date.now())}
-            onNewThread={newConversation}
-            onLoadSession={loadSession}
-            sampleQuestions={sampleQuestions}
-            onFollowUp={(q, followUpConversationId) => ask(q, followUpConversationId, Date.now())}
-            onAction={runAction}
-            onEditQuestion={(q) => {
-              setQuestion(q);
-              setActiveAssetPath(null);
-              questionRef.current?.focus();
-            }}
-            actionStatus={actionStatus}
-            sourceAssets={genieStartQuery.data?.trusted_assets ?? []}
-          />
+          {link.kind === 'loading' || link.kind === 'not-found' || link.kind === 'unavailable' ? (
+            <GenieConversationLinkPlaceholder
+              state={link.kind}
+              onOpenAskGenie={openAskGenie}
+              onRetry={link.kind === 'unavailable' ? link.retry : () => undefined}
+              retrying={link.kind === 'unavailable' && link.retrying}
+            />
+          ) : (
+            <AskGenieAnswerPanel
+              questionRef={questionRef}
+              question={question}
+              onQuestionChange={(value) => {
+                setQuestion(value);
+                setActiveAssetPath(null);
+              }}
+              onAsk={(q) => ask(q, undefined, Date.now())}
+              onNewThread={newConversation}
+              onLoadSession={loadSession}
+              sampleQuestions={sampleQuestions}
+              onFollowUp={(q, followUpConversationId) => ask(q, followUpConversationId, Date.now())}
+              onAction={runAction}
+              onEditQuestion={(q) => {
+                setQuestion(q);
+                setActiveAssetPath(null);
+                questionRef.current?.focus();
+              }}
+              actionStatus={actionStatus}
+              sourceAssets={genieStartQuery.data?.trusted_assets ?? []}
+            />
+          )}
 
           <div className="stack-grid">
             <div className="surface">

@@ -1,7 +1,7 @@
 import type { CampaignSummary, KpiTrend, PortfolioPreview } from '../types';
 import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { roundTo } from '../lib/fixedPrecision';
-import { signedPct } from '../lib/formatters';
+import { formatUsd, pct as percentLabel, signedPct } from '../lib/formatters';
 
 export type FilterGroup = {
   label: string;
@@ -94,30 +94,56 @@ export type CampaignSetupState = {
 
 export type CampaignNumericField = 'holdoutPct' | 'budget' | 'emailCost' | 'smsCost' | 'mailCost';
 
+// `step` is the precision normalizeCampaignNumericValue commits (two
+// decimals, which is also what the backend's holdout accepts). A coarser step
+// made the browser flag a value the app had just accepted as a step mismatch
+// (:user-invalid, and an "invalid entry" for assistive tech).
 export const CAMPAIGN_NUMERIC_BOUNDS: Record<CampaignNumericField, {
   min: number;
   max: number;
   fallback: number | null;
   step: number;
 }> = {
-  holdoutPct: { min: 0, max: 50, fallback: 10, step: 0.1 },
-  budget: { min: 0, max: 10_000_000, fallback: null, step: 1 },
+  holdoutPct: { min: 0, max: 50, fallback: 10, step: 0.01 },
+  budget: { min: 0, max: 10_000_000, fallback: null, step: 0.01 },
   emailCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
   smsCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
   mailCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
 };
 
+export interface CampaignNumericNormalization {
+  /** The value to commit. */
+  value: string;
+  /** The typed number was outside the field's range (critic-04: never silently). */
+  clamped: boolean;
+  /** The bound it was clamped to (the field's min or max), or null. */
+  bound: number | null;
+}
+
 export function normalizeCampaignNumericValue(
   field: CampaignNumericField,
   raw: string,
-): string {
+): CampaignNumericNormalization {
   const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
-  if (raw.trim() === '' && bounds.fallback === null) return '';
+  const unclamped = (value: string): CampaignNumericNormalization => ({ value, clamped: false, bound: null });
+  if (raw.trim() === '' && bounds.fallback === null) return unclamped('');
   const parsed = Number(raw);
   const value = Number.isFinite(parsed) ? parsed : bounds.fallback;
-  if (value === null) return '';
+  if (value === null) return unclamped('');
   const bounded = Math.min(bounds.max, Math.max(bounds.min, value));
-  return String(roundTo(bounded, 2));
+  const committed = String(roundTo(bounded, 2));
+  return bounded === value ? unclamped(committed) : { value: committed, clamped: true, bound: bounded };
+}
+
+/** The field's polite notice for a clamp ('Capped at 50%', 'Capped at $10,000,000'), else null. */
+export function campaignNumericNotice(
+  field: CampaignNumericField,
+  normalized: CampaignNumericNormalization,
+): string | null {
+  if (!normalized.clamped || normalized.bound === null) return null;
+  const bound = normalized.bound;
+  const shown = field === 'holdoutPct' ? percentLabel(bound, 0) : formatUsd(bound);
+  return bound === CAMPAIGN_NUMERIC_BOUNDS[field].max ? `Capped at ${shown}` : `Raised to ${shown}`;
 }
 
 export function buildDefaultCampaignSetup(
@@ -481,6 +507,24 @@ export function parseStateCodesFromUrl(
     out.push(code);
   }
   return out.length === states.length ? [] : out;
+}
+
+/**
+ * Keep only the codes inside the footprint; every footprint state selected
+ * collapses to [] (the "All N states" default). Identity-preserving no-op
+ * guard (re-audit #3, 2026-06-12): the same values in return the same
+ * reference, so a reconciliation that changes nothing never re-renders.
+ */
+export function sanitizeFootprintStateCodes(
+  codes: string[],
+  states: ReadonlyArray<FootprintState>,
+): string[] {
+  const allowed = new Set(states.map((state) => state.state_code));
+  const next = codes.filter((code) => allowed.has(code));
+  const collapsed = states.length > 0 && next.length === states.length ? [] : next;
+  return collapsed.length === codes.length && collapsed.every((code, i) => code === codes[i])
+    ? codes
+    : collapsed;
 }
 
 export function stateLabel(code: string, states: ReadonlyArray<FootprintState>): string {

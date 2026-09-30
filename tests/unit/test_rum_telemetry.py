@@ -258,3 +258,76 @@ def test_rum_endpoint_rejects_pii_in_navigation_type() -> None:
             },
         )
         assert response.status_code == 422
+
+
+# --- 2026-09-21 audit shell-03: the /ask-genie/:conversationId deep link ----
+
+
+def _route_change(route: str, details: dict[str, object] | None = None) -> dict[str, object]:
+    event: dict[str, object] = {"metric": "route_change", "value": 25, "rating": "good", "route": route}
+    if details is not None:
+        event["details"] = details
+    return {"events": [event]}
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        # A raw conversation id, dashless or dashed, and a malformed id (it can
+        # hold typed text) never reach telemetry in the deep link.
+        "/ask-genie/0123456789abcdef0123456789abcdef",
+        "/ask-genie/0123456789ABCDEF0123456789ABCDEF",
+        "/ask-genie/01234567-89ab-cdef-0123-456789abcdef",
+        "/ask-genie/not-an-id",
+        "/ask-genie/typed",
+        # A bare 32-hex token anywhere in a route.
+        "/audit/0123456789abcdef0123456789abcdef",
+    ],
+)
+def test_rum_rejects_an_untemplated_conversation_route_and_from_route(route: str) -> None:
+    client = TestClient(app, raise_server_exceptions=False)
+
+    as_route = client.post("/api/telemetry/rum", json=_route_change(route))
+    as_from_route = client.post(
+        "/api/telemetry/rum",
+        json=_route_change("/lead-queue", {"from_route": route}),
+    )
+
+    assert (as_route.status_code, as_from_route.status_code) == (422, 422)
+
+
+@pytest.mark.parametrize(
+    ("route", "details"),
+    [
+        ("/ask-genie/:conversation_id", {"from_route": "/x/0123456789abcdef0123456789abcdef"}),
+        ("/ask-genie/:conversation_id", {"dependency": "0123456789abcdef0123456789abcdef"}),
+        ("/audit/0123456789abcdef0123456789abcdef", {}),
+    ],
+)
+def test_rum_rejects_a_bare_hex_token_in_the_route_and_every_detail(
+    route: str, details: dict[str, object]
+) -> None:
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/api/telemetry/rum", json=_route_change(route, details))
+
+    assert response.status_code == 422
+    # The public-value scan is what refuses it, before any per-key rule.
+    assert "raw hex identifiers" in response.text
+
+
+def test_rum_accepts_the_templated_conversation_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = TestClient(app, raise_server_exceptions=False)
+    monkeypatch.setattr(telemetry_mod.settings, "mip_rum_enabled", True)
+
+    for payload in [
+        _route_change("/ask-genie/:conversation_id", {"from_route": "/ask-genie"}),
+        _route_change("/ask-genie", {"from_route": "/ask-genie/:conversation_id"}),
+        # A client error reports the registry pattern.
+        _route_change("/ask-genie/:conversationId"),
+        # A trailing slash holds no conversation segment.
+        _route_change("/ask-genie/"),
+    ]:
+        response = client.post("/api/telemetry/rum", json=payload)
+        assert response.status_code == 202, payload
+        assert response.json() == {"accepted": 1, "enabled": True}

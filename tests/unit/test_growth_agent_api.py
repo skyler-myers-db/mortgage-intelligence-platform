@@ -1751,6 +1751,7 @@ def test_prompt_agent_routes_to_source_sentinel_without_storing_raw_prompt() -> 
     )
     assert body["route"] == "/admin-config?panel=data-operations"
     assert body["criteria"]["states"] == []
+    assert body["criteria"]["lead_queue_filters"]["source"] == "trusted_sql"
     assert "states" not in body["criteria"]["lead_queue_filters"]
     assert body["broad_label"] == "Sources checked"
     assert body["actionable_label"] == "Live source feeds"

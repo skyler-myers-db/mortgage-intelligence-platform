@@ -1,6 +1,6 @@
 /**
  * useLeadApprovalActions — the human-approval half of the ranked-borrower
- * table: single-row approve/reject, the reject panel's form state, the
+ * table: single-row approve/reject, which row's reject panel is open, the
  * selection set feeding the bulk toolbar, the chunked bulk-approve loop with
  * its synchronous in-flight latches, the bulk toast lifecycle, and the
  * post-bulk focus restore. Extracted from LeadTable.tsx (file-size gate,
@@ -42,8 +42,12 @@ import { APPROVER_ROLE_REQUIRED } from './approverGate';
 import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
 import { useLeadBulkRun, type BulkRowReport, type BulkRunResult } from './useLeadBulkRun';
 import { pruneTo, rangeIds } from './LeadTable.selection';
+import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
 const BULK_TOAST_DISMISS_MS = 4000;
+
+/** The toast title's object when a gate refuses a selection, not one row. */
+const SELECTION_SUBJECT = 'the selected leads';
 
 /** Verification state of a `?campaign_id=&variant_name=` URL binding. */
 export type CampaignBindingState = 'absent' | 'invalid' | 'verified' | 'validating';
@@ -90,8 +94,6 @@ export interface UseLeadApprovalActionsInput {
   canApprove: boolean;
   /** The always-mounted table scroll region — the post-bulk focus fallback. */
   tableWrapRef: RefObject<HTMLDivElement | null>;
-  /** Shared with the sales-ops hook: the table renders one error alert. */
-  setApprovalError: (message: string | null) => void;
 }
 
 export function useLeadApprovalActions({
@@ -105,7 +107,6 @@ export function useLeadApprovalActions({
   campaignBindingBlocked,
   canApprove,
   tableWrapRef,
-  setApprovalError,
 }: UseLeadApprovalActionsInput) {
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -116,11 +117,11 @@ export function useLeadApprovalActions({
   // The shared-rationale field: Shift+A and the Cmd-K verb open the bulk
   // gate and land focus here (they never submit the bulk run themselves).
   const bulkRationaleRef = useRef<HTMLInputElement | null>(null);
+  // Which row's reject panel is open. The panel's reason and rationale, and
+  // the bulk gate's shared rationale, are the panels' own state (audit
+  // runtime-04 slice 2): a keystroke re-renders the panel, never the table.
   const [pendingReject, setPendingReject] = useState<string | null>(null);
-  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>('low_intent');
-  const [rejectRationale, setRejectRationale] = useState('');
   const [bulkRationaleOpen, setBulkRationaleOpen] = useState(false);
-  const [bulkRationale, setBulkRationale] = useState('');
   const approveMutation = useApproveLead(queryClient);
   const rejectMutation = useRejectLead(queryClient);
   // Which rows have an approve or reject on the wire, and which decision.
@@ -175,26 +176,26 @@ export function useLeadApprovalActions({
    * The approver-role and campaign-binding gate every decision passes,
    * checked BEFORE any draft call: `/outreach/draft` writes a
    * DRAFT_OUTREACH audit row and is not approver-gated. The approve
-   * review (flow-03) runs it before it drafts anything.
+   * review (flow-03) runs it before it drafts anything. A refusal is an
+   * error toast titled for what was refused (states-07 item 2); a bulk row
+   * refused mid-run reports in the run's result instead (`report` false).
    */
-  function passesDecisionGate(noun: 'approval' | 'rejection'): boolean {
-    if (!canApprove) {
-      setApprovalError(`${APPROVER_ROLE_REQUIRED}.`);
-      return false;
-    }
-    if (campaignBindingBlocked) {
-      setApprovalError(
-        campaignBindingState === 'validating'
+  function passesDecisionGate(noun: 'approval' | 'rejection', subject: string, report = true): boolean {
+    const refusal = !canApprove
+      ? `${APPROVER_ROLE_REQUIRED}.`
+      : campaignBindingBlocked
+        ? campaignBindingState === 'validating'
           ? `Campaign binding is still being validated. Wait before ${noun}.`
-          : `Campaign binding is invalid. Reopen the saved campaign before ${noun}.`,
-      );
-      return false;
-    }
-    return true;
+          : `Campaign binding is invalid. Reopen the saved campaign before ${noun}.`
+        : null;
+    if (refusal === null) return true;
+    if (report) toastWriteRefusal(`Couldn't ${noun === 'approval' ? 'approve' : 'reject'} ${subject}`, refusal);
+    return false;
   }
 
-  function canStartApproval(): boolean {
-    return passesDecisionGate('approval');
+  /** The gate for an approval of one row, or of the selection when no row is named. */
+  function canStartApproval(borrowerId?: string): boolean {
+    return passesDecisionGate('approval', borrowerId ?? SELECTION_SUBJECT);
   }
 
   /** The governed draft an approval certifies, under this table's campaign binding. */
@@ -215,7 +216,7 @@ export function useLeadApprovalActions({
 
   /** R, Reject or a reject panel's Submit on a row whose decision is on the wire. */
   function reportDecisionInFlight(borrowerId: string): void {
-    setApprovalError(`A decision for ${borrowerId} is already being recorded.`);
+    toastWriteRefusal(`Couldn't reject ${borrowerId}`, `A decision for ${borrowerId} is already being recorded.`);
   }
 
   /**
@@ -262,10 +263,9 @@ export function useLeadApprovalActions({
     reviewedDraft: OutreachDraftResult | null,
   ): Promise<BulkRowReport> {
     if (decisionInFlight(borrowerId)) return Promise.resolve({ outcome: 'duplicate', message: null });
-    if (!canStartApproval()) return Promise.resolve({ outcome: 'backend', message: null });
-    rowInFlightRef.current[borrowerId] = true;
     const inBulk = Boolean(extras.bulk_id);
-    if (!inBulk) setApprovalError(null);
+    if (!passesDecisionGate('approval', borrowerId, !inBulk)) return Promise.resolve({ outcome: 'backend', message: null });
+    rowInFlightRef.current[borrowerId] = true;
     const lead = leadsById.get(borrowerId);
     const snapshot = extras.snapshot ?? {
       evidenceIds: lead?.evidence_ids ?? [],
@@ -290,7 +290,7 @@ export function useLeadApprovalActions({
     }).then(
       (res): BulkRowReport => {
         if (!res.approved) {
-          if (!inBulk) setApprovalError(`Approve failed for ${borrowerId}: endpoint returned approved=false.`);
+          if (!inBulk) toastWriteRefusal(`Couldn't approve ${borrowerId}`, 'The endpoint returned approved=false.');
           return { outcome: 'backend', message: 'The endpoint returned approved=false.' };
         }
         requestIds.settle(intent);
@@ -303,9 +303,8 @@ export function useLeadApprovalActions({
         const failure = decisionFailure(err);
         if (failure === 'aborted') return { outcome: 'aborted', message: null };
         const message = err instanceof Error ? err.message : null;
-        if (!inBulk) {
-          setApprovalError(message ? `Couldn't approve ${borrowerId}: ${message}` : `Couldn't approve ${borrowerId}.`);
-        }
+        // A single row's failure is a toast; a bulk row reports in the run.
+        if (!inBulk) toastWriteFailure(`Couldn't approve ${borrowerId}`, err, 'the approval');
         // The session ended mid-click (on the draft step or the approve POST):
         // the session dialog must say this approval was NOT recorded.
         if (clientFailureReason(err) === 'session_expired') {
@@ -344,9 +343,8 @@ export function useLeadApprovalActions({
       reportDecisionInFlight(borrowerId);
       return Promise.resolve(false);
     }
-    if (!passesDecisionGate('rejection')) return Promise.resolve(false);
+    if (!passesDecisionGate('rejection', borrowerId)) return Promise.resolve(false);
     rowInFlightRef.current[borrowerId] = true;
-    setApprovalError(null);
     const lead = leadsById.get(borrowerId);
     const intent = intentFingerprint('reject', borrowerId, reasonCode, rationale);
     const rejected = rejectMutation.mutateAsync({
@@ -361,7 +359,7 @@ export function useLeadApprovalActions({
     }).then(
       (res) => {
         if (!res.rejected) {
-          setApprovalError(`Reject failed for ${borrowerId}: endpoint returned rejected=false.`);
+          toastWriteRefusal(`Couldn't reject ${borrowerId}`, 'The endpoint returned rejected=false.');
           return false;
         }
         requestIds.settle(intent);
@@ -372,11 +370,7 @@ export function useLeadApprovalActions({
       },
       (err: unknown) => {
         if (decisionFailure(err) === 'aborted') return false;
-        setApprovalError(
-          err instanceof Error
-            ? `Couldn't reject ${borrowerId}: ${err.message}`
-            : `Couldn't reject ${borrowerId}.`,
-        );
+        toastWriteFailure(`Couldn't reject ${borrowerId}`, err, 'the rejection');
         return false;
       },
     );
@@ -387,15 +381,17 @@ export function useLeadApprovalActions({
     return rejected;
   }
 
-  /** Resolves with the rejected borrower id once the write returned, else null. */
-  async function submitReject(): Promise<string | null> {
+  /**
+   * The open reject panel's Submit, with the panel's own reason and
+   * rationale. Resolves with the rejected borrower id once the write
+   * returned, else null (the panel stays open with what was typed).
+   */
+  async function submitReject(reasonCode: RejectReasonCode, rationale: string): Promise<string | null> {
     if (!pendingReject) return null;
     const borrowerId = pendingReject;
-    const rejected = await rejectLead(borrowerId, rejectReasonCode, rejectRationale.trim() || null);
+    const rejected = await rejectLead(borrowerId, reasonCode, rationale.trim() || null);
     if (!rejected) return null;
     setPendingReject(null);
-    setRejectRationale('');
-    setRejectReasonCode('low_intent');
     return borrowerId;
   }
 
@@ -532,21 +528,26 @@ export function useLeadApprovalActions({
    *   sample drafts": those rows are approved with exactly that copy, so
    *   what was shown is what the audit rows certify, and no second draft
    *   is generated for them.
+   * @param rationale the gate's shared rationale (the toolbar's own state).
+   * @returns true once a run settled: the toolbar then clears its rationale.
    */
-  async function bulkApprove(sampleDrafts?: ReadonlyMap<string, OutreachDraftResult>) {
+  async function bulkApprove(
+    sampleDrafts: ReadonlyMap<string, OutreachDraftResult> | undefined,
+    rationale: string,
+  ): Promise<boolean> {
     // R5-04: the run's synchronous latch, read before any await.
-    if (bulkRun.isRunning() || bulkApproving) return;
-    if (!passesDecisionGate('approval')) return;
+    if (bulkRun.isRunning() || bulkApproving) return false;
+    if (!canStartApproval()) return false;
     const drafts = sampleDrafts ?? new Map<string, OutreachDraftResult>();
     // Snapshot which ids to run: skip already-decided rows silently.
     const eligibleForApproval = new Set(approvalEligibleIds);
     const ids = [...selectedIds].filter((id) => eligibleForApproval.has(id));
-    if (ids.length === 0) return;
+    if (ids.length === 0) return false;
     const bulkId = ids.length > 1 ? _newBulkId() : null;
-    const sharedRationale = ids.length > 1 ? bulkRationale.trim() : '';
+    const sharedRationale = ids.length > 1 ? rationale.trim() : '';
     if (ids.length > 1 && sharedRationale.length === 0) {
       openBulkRationale();
-      return;
+      return false;
     }
     const snapshots = snapshotRows(ids);
     bulkRunIdsRef.current = new Set(ids);
@@ -563,10 +564,10 @@ export function useLeadApprovalActions({
     });
     bulkRunIdsRef.current = new Set();
     // null: unmount cut the run short (stashed, R5-21) or one was running.
-    if (!result) return;
+    if (!result) return false;
     setBulkRationaleOpen(false);
-    setBulkRationale('');
     settleRun(result);
+    return true;
   }
 
   // The bulkToast initializer read any partial run the previous mount left
@@ -611,10 +612,6 @@ export function useLeadApprovalActions({
     submitReject,
     pendingReject,
     setPendingReject,
-    rejectReasonCode,
-    setRejectReasonCode,
-    rejectRationale,
-    setRejectRationale,
     pendingDecisions,
     selectedIds,
     selectionCount,
@@ -636,8 +633,6 @@ export function useLeadApprovalActions({
     isBulkRunInFlight,
     bulkApproveBtnRef,
     bulkRationaleRef,
-    bulkRationale,
-    setBulkRationale,
     bulkRationaleOpen,
     bulkToast,
     setBulkToast,

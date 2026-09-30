@@ -13,15 +13,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DecisionReceipt as DecisionReceiptPayload } from '../lib/apiTypes';
+import type { QueueContext } from '../lib/queueContext';
 
 const apiMocks = vi.hoisted(() => ({ auditReceipt: vi.fn(), borrowerProof: vi.fn() }));
 
-vi.mock('../lib/api', () => {
-  class ApiError extends Error {
-    status: number | null = null;
-  }
-  return { api: apiMocks, ApiError };
-});
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
+  api: apiMocks,
+}));
 
 vi.mock('../components/AppContext', () => ({
   useApp: () => ({ canAccessAdmin: true, setDrawer: vi.fn(), showEvidence: true, showConfidence: true }),
@@ -127,6 +126,66 @@ describe('OfferDecisionOutcome', () => {
     await render({ effectiveApproval: 'rejected', routing: null });
     expect(document.activeElement).toBe(heading());
     expect(routing()).toBeNull();
+  });
+
+  it.each([
+    { decision: 'approved' as const, chip: 'Approved · governed internal queue' },
+    { decision: 'rejected' as const, chip: 'Rejected' },
+  ])('an empty audit id shows the plain $decision chip and reads nothing back', async ({ decision, chip }) => {
+    apiMocks.auditReceipt.mockResolvedValue(receipt(decision));
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <OfferDecisionOutcome {...BASE} effectiveApproval={decision} auditId="" routing={null} />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(container.querySelector('.surface .chip')?.textContent).toContain(chip);
+    expect(container.querySelector('[data-testid="decision-receipt"]')).toBeNull();
+    expect(container.querySelector('[data-testid="decision-receipt-pending"]')).toBeNull();
+    expect(apiMocks.auditReceipt).not.toHaveBeenCalled();
+  });
+
+  describe('Next in queue (shell-04 / flow-09)', () => {
+    const QUEUE: QueueContext = {
+      epoch: 'e1',
+      search: '?state=IL',
+      label: 'IL',
+      ids: ['B-0000000000001', 'B-0000000000002'],
+    };
+    const nextStep = () => container.querySelector('[data-testid="offer-next-in-queue"]');
+
+    it('after a decision made here, links the next ranked offer with the queue, and leaves focus on the receipt', async () => {
+      apiMocks.auditReceipt.mockResolvedValue(receipt('approved'));
+      await render({ queue: QUEUE, nextId: 'B-0000000000002' });
+      const link = nextStep()?.querySelector('a');
+      expect(link?.textContent).toBe('Next in queue: B-0000000000002');
+      expect(link?.getAttribute('href')).toBe('/offer-orchestrator/B-0000000000002');
+      expect(link?.className).toBe('btn btn--sm');
+      expect(document.activeElement).toBe(heading());
+    });
+
+    it('at the end of the queue, links back to the exact filtered queue', async () => {
+      apiMocks.auditReceipt.mockResolvedValue(receipt('rejected'));
+      await render({ effectiveApproval: 'rejected', routing: null, queue: QUEUE, nextId: null });
+      const link = nextStep()?.querySelector('a');
+      expect(link?.textContent).toBe('Back to lead queue');
+      expect(link?.getAttribute('href')).toBe('/lead-queue?state=IL');
+    });
+
+    it('never for a durable decision, and never without a queue', async () => {
+      apiMocks.auditReceipt.mockResolvedValue(receipt('approved'));
+      await render({ justDecided: false, routing: null, queue: QUEUE, nextId: 'B-0000000000002' });
+      expect(heading()).not.toBeNull();
+      expect(nextStep()).toBeNull();
+      await render({ queue: null, nextId: null });
+      expect(nextStep()).toBeNull();
+    });
   });
 
   it('a durable decision from an earlier session neither takes focus nor shows routing', async () => {

@@ -1,4 +1,5 @@
 import type { CallDisposition } from '../../types';
+import type { Density } from '../../lib/themePreference';
 import type { RejectReasonCode } from './LeadTable.types';
 
 /** Concurrency cap for the bulk-approve client-side loop. */
@@ -10,18 +11,34 @@ export const BULK_APPROVE_CONCURRENCY = 3;
  */
 export const MUTATION_BUDGET_PER_MINUTE = 120;
 /**
- * One-line rows at the comfortable `--row-h` token (44px; 36px compact; the
- * 1px row rule sits inside it, measured). The old 86px estimate described the
- * stacked-chip rows. Compact rows are shorter; measureElement corrects the
- * estimate on first paint, so the comfortable height is the safe default.
+ * One-line rows at the `--row-h` token: 44px comfortable, 36px compact (the
+ * 1px row rule sits inside it, measured). The old 86px estimate described
+ * the stacked-chip rows. measureElement corrects an estimate on first paint;
+ * one that follows the density (audit responsive-09 item 3) keeps the first
+ * virtual window and the scrollbar right before it does. An unknown density
+ * reads as comfortable, the taller and so the safer estimate.
  */
-export const LEAD_ROW_ESTIMATE_PX = 44;
+export function leadRowEstimatePx(density: Density | null | undefined): number {
+  return density === 'compact' ? 36 : 44;
+}
 /**
  * Borrower 360 preview plus the workflow strip that took the row's timestamps
- * and actions: measured at 514px at 1440x900, so the estimate starts there.
+ * and actions. Re-measured 2026-09-29 at 1440x900, Console closed, with the
+ * approval banner under the Primary offer card (tables-01; its actions on a
+ * line under the copy), the outcome picker and the compliance-source line:
+ * 551px for a row that can still be approved (the common case in a pending
+ * queue), 514px for a decided one. With the Console open the preview is two
+ * columns and the offer column wraps under them: 927px and 765px. The
+ * estimate starts at the common case; the virtualizer measures the real row
+ * as it lands.
  */
-export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 520;
-export const LEAD_ROW_OVERSCAN = 12;
+export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 551;
+/**
+ * Rows rendered past each edge of the scrollport (audit runtime-04 slice 1):
+ * 5 keeps a J / K step and a wheel notch inside rendered rows at 44px, and
+ * renders 14 fewer rows per window than the old 12.
+ */
+export const LEAD_ROW_OVERSCAN = 5;
 export const LEAD_VIRTUALIZATION_THRESHOLD = 120;
 
 export const REJECT_REASONS: { code: RejectReasonCode; label: string }[] = [

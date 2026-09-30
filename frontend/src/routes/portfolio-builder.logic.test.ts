@@ -5,6 +5,9 @@ import {
   buildDefaultCampaignSetup,
   buildCampaignConfig,
   normalizeCampaignNumericValue,
+  campaignNumericNotice,
+  CAMPAIGN_NUMERIC_BOUNDS,
+  type CampaignNumericField,
   buildLeadQueueUrlFromFilters,
   buildPreviewCriteria,
   buildSegmentIntelligenceUrlFromFilters,
@@ -116,16 +119,58 @@ describe('portfolio builder URL helpers', () => {
 
 describe('portfolio campaign config', () => {
   it('normalizes visible numeric controls to the same bounds used by saved config', () => {
-    expect(normalizeCampaignNumericValue('holdoutPct', '95')).toBe('50');
-    expect(normalizeCampaignNumericValue('holdoutPct', '-3')).toBe('0');
-    expect(normalizeCampaignNumericValue('holdoutPct', 'not-a-number')).toBe('10');
+    const value = (field: CampaignNumericField, raw: string) => normalizeCampaignNumericValue(field, raw).value;
+    expect(value('holdoutPct', '95')).toBe('50');
+    expect(value('holdoutPct', '-3')).toBe('0');
+    expect(value('holdoutPct', 'not-a-number')).toBe('10');
     for (const field of ['budget', 'emailCost', 'smsCost', 'mailCost'] as const) {
       const max = field === 'budget' ? 10_000_000 : 1_000;
-      expect(normalizeCampaignNumericValue(field, '')).toBe('');
-      expect(normalizeCampaignNumericValue(field, '-1')).toBe('0');
-      expect(normalizeCampaignNumericValue(field, String(max + 1))).toBe(String(max));
-      expect(normalizeCampaignNumericValue(field, 'not-a-number')).toBe('');
+      expect(value(field, '')).toBe('');
+      expect(value(field, '-1')).toBe('0');
+      expect(value(field, String(max + 1))).toBe(String(max));
+      expect(value(field, 'not-a-number')).toBe('');
     }
+  });
+
+  it('reports {value, clamped, bound} at every bound of every numeric field (critic-04)', () => {
+    for (const field of Object.keys(CAMPAIGN_NUMERIC_BOUNDS) as CampaignNumericField[]) {
+      const { min, max } = CAMPAIGN_NUMERIC_BOUNDS[field];
+      // Below, at and above each bound: only the outside values clamp.
+      expect(normalizeCampaignNumericValue(field, String(min - 1)), field).toEqual({ value: String(min), clamped: true, bound: min });
+      expect(normalizeCampaignNumericValue(field, String(min)), field).toEqual({ value: String(min), clamped: false, bound: null });
+      expect(normalizeCampaignNumericValue(field, String(max)), field).toEqual({ value: String(max), clamped: false, bound: null });
+      expect(normalizeCampaignNumericValue(field, String(max + 1)), field).toEqual({ value: String(max), clamped: true, bound: max });
+      expect(normalizeCampaignNumericValue(field, 'not-a-number').clamped, field).toBe(false);
+    }
+    // A fallback for an unreadable value is not a clamp.
+    expect(normalizeCampaignNumericValue('holdoutPct', 'not-a-number')).toEqual({ value: '10', clamped: false, bound: null });
+    expect(normalizeCampaignNumericValue('budget', '')).toEqual({ value: '', clamped: false, bound: null });
+  });
+
+  it('commits at the precision each control steps by, so an accepted value is never a step mismatch', () => {
+    for (const field of Object.keys(CAMPAIGN_NUMERIC_BOUNDS) as CampaignNumericField[]) {
+      const { step } = CAMPAIGN_NUMERIC_BOUNDS[field];
+      for (const raw of ['1250.50', '10.05', '12.5', '1.234', '0.01']) {
+        const committed = Number(normalizeCampaignNumericValue(field, raw).value);
+        const steps = committed / step;
+        expect(Math.abs(steps - Math.round(steps)), `${field} ${raw}`).toBeLessThan(1e-6);
+      }
+      // The step is not coarser than a commit either: a hundredth survives.
+      expect(normalizeCampaignNumericValue(field, '10.05').value, field).toBe('10.05');
+    }
+  });
+
+  it('words each clamp through lib/formatters, and says nothing for an in-range commit', () => {
+    const notice = (field: CampaignNumericField, raw: string) =>
+      campaignNumericNotice(field, normalizeCampaignNumericValue(field, raw));
+    expect(notice('holdoutPct', '80')).toBe('Capped at 50%');
+    expect(notice('holdoutPct', '-5')).toBe('Raised to 0%');
+    expect(notice('budget', '20000000')).toBe('Capped at $10,000,000');
+    expect(notice('emailCost', '5000')).toBe('Capped at $1,000');
+    expect(notice('smsCost', '1001')).toBe('Capped at $1,000');
+    expect(notice('mailCost', '-1')).toBe('Raised to $0');
+    expect(notice('holdoutPct', '25')).toBeNull();
+    expect(notice('budget', '')).toBeNull();
   });
 
   it('does not seed generic copy or invented channel costs before intelligence loads', () => {

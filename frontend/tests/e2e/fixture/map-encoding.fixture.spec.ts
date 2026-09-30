@@ -18,7 +18,7 @@
  *    rollup, a ZIP read still warming up) hands focus to the drilled level,
  *    never to <body>.
  */
-import AxeBuilder from '@axe-core/playwright';
+import { expectAxeClean } from './axe';
 import type { Locator, Page } from '@playwright/test';
 import type { GeoAssignmentOverlayResponse, HealthPayload } from '../../../src/lib/apiTypes';
 import type { FixtureTheme } from './app';
@@ -30,7 +30,6 @@ import { contrastRatio, type Rgb } from './renderedColor';
 import { expect, test } from './test';
 
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
-const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 /** OKLab lightness of an 8-bit sRGB colour (Björn Ottosson's matrices). */
 function oklabL([r, g, b]: Rgb): number {
@@ -325,8 +324,7 @@ test.describe('resilience (dataviz-04)', () => {
     await expect(page.locator('.map-wrap')).not.toContainText(/Borrowers in selection\s*0\b/);
     // No state is drawn, so the corner chip does not invite a click on one.
     await expect(page.locator('.map-corner-chips')).not.toContainText('click a state to drill');
-    const axe = await new AxeBuilder({ page }).include('.map-wrap').withTags(WCAG_TAGS).analyze();
-    expect(axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+    await expectAxeClean(page, { key: { route: 'map-encoding', state: 'warehouse-down' }, theme: 'light', known: {}, include: '.map-wrap' });
 
     // The warehouse comes back. Nothing is clicked.
     recover();
@@ -527,8 +525,9 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
         expect(card.y + card.height).toBeLessThanOrEqual(shape.y + 1);
       }).toPass();
 
-      const focusedMap = await new AxeBuilder({ page }).include('.map-wrap').include('.map-tip').withTags(WCAG_TAGS).analyze();
-      expect(focusedMap.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+      await expectAxeClean(page, { key: { route: 'map-encoding', state: 'state-focused' }, theme, known: {}, include: '.map-wrap' });
+      await expect(page.locator('.map-tip .map-tip__name')).toHaveText('Arkansas');
+      await expectAxeClean(page, { key: { route: 'map-encoding', state: 'state-focused-card' }, theme, known: {}, include: '.map-tip' });
 
       // Escape hides the card and stops there, so the same keypress never also
       // reaches a window listener (an open menu's); with no card it does.
@@ -569,8 +568,7 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       await page.keyboard.press('ArrowRight');
       await expect(page.getByRole('list', { name: 'ZIPs in Arizona' }).getByRole('button').nth(1)).toBeFocused();
 
-      const drilled = await new AxeBuilder({ page }).include('.map-wrap').withTags(WCAG_TAGS).analyze();
-      expect(drilled.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+      await expectAxeClean(page, { key: { route: 'map-encoding', state: 'state-drilled' }, theme, known: {}, include: '.map-wrap' });
     });
 
     test(`${theme}: View as table lists the map's numbers and its total equals the legend`, async ({ app, page }) => {
@@ -595,8 +593,7 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       await expect(table.locator('th[aria-sort]')).toHaveAttribute('aria-sort', 'ascending');
       await expect(rows.locator('th')).toHaveText([...sortedNames].reverse());
 
-      const scan = await new AxeBuilder({ page }).include('.map-wrap').withTags(WCAG_TAGS).analyze();
-      expect(scan.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+      await expectAxeClean(page, { key: { route: 'map-encoding', state: 'map-table' }, theme, known: {}, include: '.map-wrap' });
 
       // A state row drills like the map does. The row's button goes with the
       // drill, so focus moves to the ZIP table (named by its caption).

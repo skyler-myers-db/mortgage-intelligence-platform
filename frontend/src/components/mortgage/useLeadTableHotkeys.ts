@@ -6,7 +6,7 @@
  * and this hook owns only the table's scope rule.
  */
 
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import { hasOpenOverlay, registerKeyBinding } from '../../lib/keymap';
 import { leadTableHotkeys, type LeadTableKeymapActions } from './LeadTable.keymap';
 import { isEditableTarget } from './LeadTable.logic';
@@ -65,21 +65,29 @@ export interface LeadTableHotkey {
  * registered only for an approver), and that re-registers.
  *
  * @param actions this render's row actions (LeadTable.keymap builds the
- *   keys from them). Stored in a ref during render (not in an effect) so
- *   the first keypress after a render already sees them.
+ *   keys from them). Synced into a ref in a layout effect, which runs
+ *   after the commit and before the browser handles any keypress, so the
+ *   first keypress after a render already sees them (and the render stays
+ *   pure, so the hook compiles: runtime-03).
  * @param scopeRef the table scroll region the shortcuts are scoped to.
  */
 export function useLeadTableHotkeys(
   actions: LeadTableKeymapActions,
   scopeRef: RefObject<HTMLElement | null>,
 ): void {
+  // Budget trade (audit runtime-03 / runtime-04, the wave-4b lane's cut 4):
+  // the bailout this hook had is fixed, so it compiles cleanly without this
+  // line, but the LeadTable shell that calls it stays uncompiled (cut 5), so
+  // nothing reads its memoized values and the memo caches only cost bytes
+  // (the family compile measured +0.58 KiB br on the LeadTable chunk).
+  // Delete this line once the shell compiles.
   'use no memo';
 
   const hotkeys = leadTableHotkeys(actions);
   const latestRef = useRef<readonly LeadTableHotkey[]>(hotkeys);
-  // The write IS the pattern: see the doc comment above.
-  // eslint-disable-next-line react-hooks/refs
-  latestRef.current = hotkeys;
+  useLayoutEffect(() => {
+    latestRef.current = hotkeys;
+  });
   const signature = hotkeys.map((hotkey) => `${hotkey.id}=${hotkey.keys.join('+')}`).join('|');
   useEffect(() => {
     const offs = latestRef.current.map((hotkey) => registerKeyBinding({

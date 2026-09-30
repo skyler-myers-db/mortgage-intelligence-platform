@@ -103,6 +103,8 @@ describe('useRouteAnnouncer', () => {
               <Route path="/analytics" element={<Page title="Analytics" />} />
               <Route path="/borrower-360/:id" element={<Page title="Borrower" />} />
               <Route path="/glossary" element={<GlossaryPage />} />
+              <Route path="/ask-genie" element={<Page title="Ask Genie" />} />
+              <Route path="/ask-genie/:conversationId" element={<Page title="Ask Genie" />} />
               <Route path="/admin-config" element={<LazyPage />} />
               <Route path="*" element={<Page title="Page not found" />} />
             </Routes>
@@ -235,6 +237,36 @@ describe('useRouteAnnouncer', () => {
     expect(document.title).toBe('Analytics · Mortgage Intelligence Platform');
     expect(announcer().textContent).toBe('Analytics');
     expect(document.activeElement).toBe(genieInput);
+  });
+
+  it('switching Genie conversations neither announces nor moves focus, and never titles the id (audit shell-03)', async () => {
+    await mount('/lead-queue');
+    await go('/ask-genie');
+    expect(announcer().textContent).toBe('Ask Genie');
+    const button = container.querySelector('[data-testid="page-button"]') as HTMLElement;
+    button.focus();
+    announcer().textContent = '';
+
+    await go('/ask-genie/0123456789abcdef0123456789abcdef');
+    expect(announcer().textContent).toBe('');
+    expect(document.activeElement).toBe(button);
+    expect(document.title).toBe('Ask Genie · Mortgage Intelligence Platform');
+
+    await go('/ask-genie/01234567-89ab-cdef-0123-456789abcdef');
+    await go('/ask-genie');
+    expect(announcer().textContent).toBe('');
+    expect(document.activeElement).toBe(button);
+    expect(document.title).toBe('Ask Genie · Mortgage Intelligence Platform');
+  });
+
+  it('a conversation link opened from another page announces Ask Genie, never the id', async () => {
+    await mount('/lead-queue');
+
+    await go('/ask-genie/0123456789abcdef0123456789abcdef');
+
+    expect(announcer().textContent).toBe('Ask Genie');
+    expect(document.title).toBe('Ask Genie · Mortgage Intelligence Platform');
+    expect(document.activeElement).toBe(heading());
   });
 
   it('focuses a focusable #hash target instead of the heading', async () => {

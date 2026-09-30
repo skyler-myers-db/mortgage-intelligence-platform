@@ -43,6 +43,7 @@ import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 function answer(text: string, id: string, overrides: Partial<GenieAnswer> = {}): GenieAnswer {
   return {
     answer: text,
+    question: `Question for ${id}`,
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-1',
@@ -137,6 +138,25 @@ describe('AskGenieAnswerPanel reading (genie-08)', () => {
     act(() => toggle.click());
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(cards[0].querySelector('.genie-answer')).not.toBeNull();
+  });
+
+  it('describes every collapse toggle by its own question, expanded too (w3-genie-reading review)', () => {
+    setGenieTurns([
+      { question: 'Which states lead?', response: answer('Illinois leads.', 'm1') },
+      { question: 'And by county?', response: answer('Cook County leads.', 'm2') },
+      { question: 'And the trend?', response: answer('Rising for three months.', 'm3') },
+    ]);
+    render();
+    const toggles = () => Array.from(thread().querySelectorAll<HTMLButtonElement>('button.genie-collapse__toggle'));
+    const description = (toggle: HTMLElement) =>
+      (toggle.getAttribute('aria-describedby') ?? '')
+        .split(' ')
+        .filter(Boolean)
+        .map((id) => document.getElementById(id)?.textContent ?? '')
+        .join(' ');
+    expect(toggles().map(description)).toEqual(['Which states lead? Illinois leads.', 'And by county? Cook County leads.']);
+    for (const toggle of toggles()) act(() => toggle.click());
+    expect(toggles().map(description)).toEqual(['Which states lead?', 'And by county?']);
   });
 
   it('keeps the previous latest in full when a new answer lands on the route', () => {

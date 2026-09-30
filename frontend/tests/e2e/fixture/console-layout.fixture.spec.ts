@@ -242,7 +242,10 @@ test.describe('Console and Genie share the right edge without colliding', () => 
     const start = await boxOf(header);
     await page.mouse.move(start.left + 8, start.top + 8);
     await page.mouse.down();
-    await page.mouse.move(start.left - 300, start.top - 200, { steps: 6 });
+    // Clear of the Console's zone: a panel dragged INTO it is re-clamped when
+    // the Console opens (responsive-v1 item 2, genie-client.fixture.spec.ts
+    // (j)); a position that does not collide is the user's and is kept.
+    await page.mouse.move(start.left - 500, start.top - 200, { steps: 6 });
     await page.mouse.up();
     await expect(genie).toHaveClass(/is-undocked/);
     const dragged = await boxOf(genie);

@@ -231,3 +231,27 @@
   --scatter-score-med: var(--status-warning-ink);
   --scatter-score-low: var(--text-3);
 }
+
+/* Forced colours (a11y-10 / responsive-v3 / css-06): the density cells and
+   the zoom dots are non-text data marks, so each keeps a per-band cue in
+   system colours (high: CanvasText fill; med: Canvas fill, 2px solid edge;
+   low: Canvas fill, 1px dashed edge); the cells keep their --bin-alpha
+   density. Cluster markers carry their count, so they stay forced and edge
+   their band in an explicit width. */
+@media (forced-colors: active) {
+  .analytics-scatter__bin,
+  .analytics-scatter__dot--band {
+    forced-color-adjust: none;
+  }
+  /* The band fills above read these, so the marks paint system colours. */
+  .analytics-chart-panel--scatter {
+    --scatter-score-high: CanvasText;
+    --scatter-score-med: Canvas;
+    --scatter-score-low: Canvas;
+  }
+  :is(.analytics-scatter__bin, .analytics-scatter__dot--band).score--med { border: 2px solid CanvasText; }
+  :is(.analytics-scatter__bin, .analytics-scatter__dot--band).score--low { border: 1px dashed CanvasText; }
+  .analytics-scatter__cluster-marker { border-width: 2px; }
+  .analytics-scatter__cluster-marker.score--med { border-style: dashed; }
+  .analytics-scatter__cluster-marker.score--low { border-style: dotted; }
+}

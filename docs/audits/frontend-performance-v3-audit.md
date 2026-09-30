@@ -8,7 +8,7 @@
 
 ## Post-remediation status
 
-**Status:** LOW 1, LOW 2, and LOW 3 fixed and deployed. No open frontend-performance findings remain from this audit.
+**Status:** LOW 1, LOW 2, and LOW 3 fixed and deployed. No open frontend-performance findings remain from this audit. *(LOW 2 corrected 2026-09-29: see the addendum at the end. LeadTable was never memoized by React Compiler; it carried `'use no memo'` from 2026-05-18.)*
 
 **Fixes applied:**
 - Added `frontend/src/lib/configOptionsQuery.ts` with one `CONFIG_OPTIONS_STALE_MS = 60_000` policy and `useConfigOptionsQuery()` wrapper.
@@ -54,7 +54,7 @@ The frontend is **in excellent performance shape** after the v1 + multi-tenant t
 
 ✅ **LOW 1 — fixed.** `frontend/src/lib/configOptionsQuery.ts` now owns `CONFIG_OPTIONS_STALE_MS = 60_000` and the shared `useConfigOptionsQuery()` hook. All three callers use the same stale-time, retry, and query-key policy.
 
-✅ **LOW 2 — fixed for the redundant hot spot; remaining sites audited.** `LeadTable.tsx`, the largest component-specific cluster called out by the audit, now has zero `useMemo`, `useCallback`, or `memo()` calls. The remaining manual memoization sites were reviewed and are retained where React Compiler cannot replace their semantic role: hook dependency identity for query/retry keys, provider context values, geospatial bucketing/index maps, and pointer/resize event handlers. `npm --prefix frontend run lint` passes with React Compiler's recommended-latest rules enabled.
+✅ **LOW 2 — fixed for the redundant hot spot; remaining sites audited.** *(Corrected 2026-09-29, see the addendum: the removed cluster was not replaced by the compiler, because LeadTable opted out with `'use no memo'`.)* `LeadTable.tsx`, the largest component-specific cluster called out by the audit, now has zero `useMemo`, `useCallback`, or `memo()` calls. The remaining manual memoization sites were reviewed and are retained where React Compiler cannot replace their semantic role: hook dependency identity for query/retry keys, provider context values, geospatial bucketing/index maps, and pointer/resize event handlers. `npm --prefix frontend run lint` passes with React Compiler's recommended-latest rules enabled.
 
 ✅ **LOW 3 — fixed.** `LeadTable.tsx` now uses `@tanstack/react-virtual`'s `useVirtualizer()` with the existing row estimate and overscan constants. The old `computeLeadVirtualRange` helper, `LeadVirtualRange` type, and helper tests were removed. Live browser checks confirm the table keeps DOM rows bounded while preserving `aria-rowcount` and stable `aria-rowindex`.
 
@@ -230,7 +230,7 @@ Cross-browser invariants from that audit are still intact in this audit's worktr
 | ID | Severity | Action |
 |---|---|---|
 | LOW 1 | Low | **Closed.** Shared `useConfigOptionsQuery()` owns the query key, 60s stale-time, and no-retry policy. |
-| LOW 2 | Low | **Closed.** Redundant LeadTable memoization cluster removed; remaining manual memoization audited as semantic identity or expensive derived state, not compiler-replaceable clutter. |
+| LOW 2 | Low | **Closed.** Redundant LeadTable memoization cluster removed; remaining manual memoization audited as semantic identity or expensive derived state, not compiler-replaceable clutter. *(Corrected 2026-09-29: LeadTable was uncompiled throughout; see the addendum.)* |
 | LOW 3 | Low | **Closed.** LeadTable migrated to `@tanstack/react-virtual`; old hand-rolled virtual-range helper and type removed. |
 
 ---
@@ -278,7 +278,7 @@ Independent Cowork re-audit of the perf-v3 remediation. **Verdict: 0 P0, 0 P1, 0
 | `frontend/package.json:25` | `@tanstack/react-virtual: 3.13.24` exact pin | LOW 3 |
 | `frontend/package-lock.json:14, 952-954` | Pin resolved to npm registry tarball | LOW 3 |
 | `frontend/src/components/mortgage/LeadTable.tsx:3, 103-120` | `useVirtualizer({ count, getScrollElement, estimateSize, overscan })` replaces hand-rolled `scrollWindow` state + `computeLeadVirtualRange` | LOW 2 + LOW 3 |
-| `frontend/src/components/mortgage/LeadTable.tsx` (memoization audit) | **0** `useMemo`, `useCallback`, `memo()`, `React.memo` calls remaining (down from 21) | LOW 2 |
+| `frontend/src/components/mortgage/LeadTable.tsx` (memoization audit) | **0** `useMemo`, `useCallback`, `memo()`, `React.memo` calls remaining (down from 21) *(superseded 2026-09-29: targeted manual memoization is back, see the addendum)* | LOW 2 |
 | `frontend/src/components/mortgage/LeadTable.logic.ts` | Trimmed to 111 LOC (removed `computeLeadVirtualRange` helper) | LOW 3 |
 | `frontend/src/components/mortgage/LeadTable.types.ts` | Trimmed to 37 LOC (removed `LeadVirtualRange` type) | LOW 3 |
 | `frontend/src/components/mortgage/LeadTable.test.tsx` | Removed helper-level virtual-range unit tests; live e2e (`accessibility_procurement.spec.ts`) is now the contract | LOW 3 |
@@ -299,7 +299,7 @@ frontend/src/routes/lead-queue.tsx:338:  const configOptionsQuery = useConfigOpt
 
 Static grep for `queryKey: queryKeys.configOptions` returns **only** the one site inside `configOptionsQuery.ts:9` (the helper itself). No more divergent staleTime values. The team also added `configOptionsQuery.test.ts` to lock the policy at unit-test time — a sibling regression gate the original audit didn't ask for.
 
-**Resolved LOW 2 — Manual memoization in LeadTable.** Verified by `grep -cE "useMemo\(|useCallback\(|memo\(|React\.memo" frontend/src/components/mortgage/LeadTable.tsx` returning **0**. Down from 21 manual memoization sites in v1. The React 19 compiler now does all the memoization for `LeadTable`. Engineering re-audited the rest of the tree and retained manual memoization only where it stabilizes hook dependency identity, provider context values, geospatial bucketing, or pointer/resize event handlers — i.e., the cases where the compiler is conservative and the manual hint is still required.
+**Resolved LOW 2 — Manual memoization in LeadTable.** Verified by `grep -cE "useMemo\(|useCallback\(|memo\(|React\.memo" frontend/src/components/mortgage/LeadTable.tsx` returning **0**. Down from 21 manual memoization sites in v1. The React 19 compiler now does all the memoization for `LeadTable`. *(Incorrect, corrected 2026-09-29: the compiler did none of it; see the addendum.)* Engineering re-audited the rest of the tree and retained manual memoization only where it stabilizes hook dependency identity, provider context values, geospatial bucketing, or pointer/resize event handlers — i.e., the cases where the compiler is conservative and the manual hint is still required.
 
 **Resolved LOW 3 — `@tanstack/react-virtual` migration.** Verified:
 
@@ -399,3 +399,18 @@ Static gates that don't require Python 3.11+ for FastAPI import:
 The performance posture is **production-ready for commercial Module 0 deploy**, with all 22 prior audits' invariants intact. The new `45/45 cross-browser matrix` pass from the engineering signoff confirms the map experience the user emphasized throughout this engagement remains beautiful and bug-free across every supported browser + device profile.
 
 The independent reviewer-gate at the head of this document is met from this side.
+
+---
+
+## Addendum 2026-09-29 — LOW 2 corrected (wave 4b, lane w4-lead-queue; audit runtime-04)
+
+LOW 2 above (lines 11, 57, 233, 281 and 302 as first written) stated that React Compiler memoized `LeadTable` once its manual `useMemo` / `useCallback` cluster was removed. That was never true. `LeadTable` has carried a function-level `'use no memo'` directive since 2026-05-18 (ece907fb), and the compiler skips a function that opts out; its `useVirtualizer` call is also an incompatible library for the compiler. From 2026-05-18 until this lane the table shell re-sorted its rows, rebuilt every virtualizer measurement (an inline `getItemKey` is a virtual-core memo dependency) and re-rendered on every keystroke in its inline forms, with no memoization at all.
+
+What the 2026-09 LeadTable work changed (wave 4b, runtime-04 slices 1-3):
+
+- **Slice 1:** the sort runs once per (rows, sort) and the virtualizer's `getItemKey` / `estimateSize` have stable identities (manual `useMemo` / `useCallback`); overscan 12 → 5; the row estimate follows the density (36 / 44 px).
+- **Slice 2:** the reject, disposition and bulk-rationale form state lives in the forms, so a keystroke re-renders the form, never the table.
+- **Slice 3:** the virtualizer and the `<tbody>` rows moved into `LeadTableBody.tsx`, which keeps `'use no memo'` (the incompatible library). The row callbacks have one identity for the table's life (`useStableRowCallbacks`), and the compiled `LeadTableRow` keys its cells apart from the `<tr>`, so a row expand or an unrelated AppContext change re-renders no other row's cells.
+
+What compiles now, measured on the lane's own build: **the `LeadTable` shell still does not.** Compiling it (clean, 302 memo slots) cost +2.63 KiB br on the LeadTable chunk (35.81 → 38.44, over its 38 KiB gate), so it keeps `'use no memo'` as a documented budget trade with the targeted manual memoization above. `useLeadTableCursor`, `useLeadTableHotkeys`, `useLeadApproveReview` and `AssignmentLifecycleAdvance` had their bailouts fixed in code (an Effect Event, a layout-effect ref sync, a declaration order, module write helpers) and compile cleanly with the pragma removed, but carry `'use no memo'` as budget trades while their caller is uncompiled (`leadQueueWrites.compiler.test.ts` pins that nothing else stands in the way); `useLeadCsvExport` and `LeadBulkApproveReview` keep their original bailouts. The React Compiler allowlist (`tools/react_compiler_allowlist.json`) records each entry with its owner and measured cost. The render-cost claims are pinned at the rendered table by `LeadTable.renderCost.test.tsx`.
+

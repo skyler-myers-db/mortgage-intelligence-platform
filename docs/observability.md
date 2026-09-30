@@ -469,8 +469,9 @@ inside the 10-minute auto-stop by `tests/unit/test_keep_warm.py`.
 ## 8. Gold aggregate cache (stale-while-revalidate)
 
 Hot gold aggregates (the portfolio preview and day-zero probe, the geography
-rollups, the analytics tabs, the config options and footprint, the headline
-KPIs) sit behind `backend/services/gold_cache.py` (2026-09-21 audit
+rollups, the analytics tabs, the Executive rate window, the segment
+source-readiness gates, the config options and footprint, the headline KPIs)
+sit behind `backend/services/gold_cache.py` (2026-09-21 audit
 `delivery-06`). Past each site's soft TTL the last value is served at once and
 one background refresh runs on the two-worker `mip-gold-swr` pool; only a
 value older than `MIP_GOLD_CACHE_MAX_STALE_S` (default 86400) is recomputed
@@ -478,21 +479,50 @@ inline. A served-stale payload keeps its own `data_refreshed_at` /
 `snapshot_date`. DEBUG events `gold_cache_hit` / `gold_cache_stale` /
 `gold_cache_miss` and the WARNING `gold_cache_refresh_failed` carry the cache
 key and exception type only; the per-request outcome is the `cache` entry of
-`Server-Timing` (§6).
+`Server-Timing` (§6). A cold failure of the segment source-readiness read
+logs `segment_source_readiness_unavailable`, gates no card and is not cached.
+
+The state coverage footprint the Genie footprint guards and the schema
+validators read (`backend/services/state_footprint.py`) is the one site with
+tighter caps: it is served stale after 240 s and recomputed inline at 300 s,
+so no reader sees coverage older than the 300 s hard TTL it had before. It
+has no stale-if-error: a degraded load (metadata only, or the generic
+fallback) is a value that REPLACES the live snapshot, so `using_fallback()`
+flips on the next read, and a refresh whose load fails drops the snapshot so
+the next read reloads inline. Rows and the fallback flag are always read from
+one snapshot.
 
 Values that read the Lakebase lifecycle mirror (`gold.borrower_lifecycle_state`:
 the preview's approved / in-outreach counts, the executive funnel's Approved /
 Actioned stages, the segment approval and outreach rates) never ride the
 long-lived value: their keys carry a workflow generation that moves on every
-approve, reject, assignment and outcome write (`clear_sales_state_cache`) and
-when a warehouse-mode lifecycle sync completes. A sync that runs as the
-Databricks job (`MIP_LIFECYCLE_SYNC_MODE=job`, or the retry job submitted after
-a warehouse-mode failure) finishes outside the App and moves no generation, so
-there those values trail the mirror by at most one soft TTL (default 120 s preview,
-300 s analytics) plus one stale serve. Each move also sweeps the older
-generations of those keys out of every live gold cache (`workflow_key`), so
-a burst of approval writes leaves no dead entries to push live previews out of
-the bounded LRU.
+approve, reject, assignment and outcome write (`clear_sales_state_cache`), on
+the post-approval warehouse-mode lifecycle MERGE, on Admin Data operations'
+"Sync workflow state", and when a job-mode lifecycle run the App submitted is
+observed terminal. Each move also sweeps the older generations of those keys
+out of every live gold cache (`workflow_key`), so a burst of approval writes
+leaves no dead entries to push live previews out of the bounded LRU.
+
+A sync that runs as the Databricks job (`MIP_LIFECYCLE_SYNC_MODE=job`, or the
+recovery job submitted after a warehouse-mode failure) finishes outside the
+App. `backend/services/lifecycle_run_watch.py` remembers each run the App
+submitted (the newest 8) and checks it with `jobs.get_run` at most once per
+15 s per run, on a single-worker `mip-lifecycle-watch` thread, and only while
+requests read workflow counts: there is no timer, so with nobody reading
+there are no Jobs API calls. A terminal life-cycle state (`TERMINATED`,
+`SKIPPED`, `INTERNAL_ERROR`, whatever the result state) moves the generation
+and logs INFO `lifecycle_sync_completed` with `mode` job, `job_id`, `run_id`,
+`result_state` and `generation`. A run still queued or running after 1 h
+expires without a bump (WARNING `lifecycle_job_watch_expired`); a failed
+`get_run` keeps the run pending (WARNING `lifecycle_job_watch_error`,
+exception type only); a submit that returned no run id logs WARNING
+`lifecycle_job_unobservable`. Only the App process that submitted a run
+observes it: other App processes trail the mirror by at most one soft TTL
+(default 120 s preview, 300 s analytics) plus one stale serve, as they do for
+the approval-write bump, which is process-local too. Runs the App did not
+submit are NOT observed and trail the same way: the job's 04:00 schedule ships
+PAUSED, so a scheduled run happens only if an operator unpauses it, and a run
+started from the Jobs UI is not the App's either.
 
 During a sustained warehouse outage, sites built with `stale_if_error` keep
 serving their last good value (up to the `MIP_GOLD_CACHE_MAX_STALE_S` hard
@@ -501,6 +531,17 @@ cap), and every later stale read schedules one more background refresh per key
 makes each attempt fail fast). A repeated `gold_cache_refresh_failed` WARNING
 for the same key during an outage is that retry, not a new problem; it stops
 once the warehouse is back.
+
+A missing table or view is not an outage. The warehouse's
+`TABLE_OR_VIEW_NOT_FOUND` / SQLSTATE `42P01` (a roll-forward promotes the App
+before `mip_refresh_scores` builds a new gold table) is classified as
+`DatabricksSqlObjectMissingError`: it costs ONE attempt (no retries, no
+backoff sleeps), counts as a warehouse breaker success (repeats never open the
+breaker, and one landing as the half-open probe closes it), and answers 503
+`{retryable: true, reason: retries_exhausted}` with the constant detail after
+that single attempt. The `dependency_down_handled` WARNING shows
+`last_error_type=DatabricksSqlObjectMissingError`. The Rate Lever's own two
+tables answer 200 `built: false` instead.
 
 ## 9. Genie completion jobs
 

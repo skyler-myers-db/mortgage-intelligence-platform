@@ -3,7 +3,7 @@
  * proportions on a shared row grid (visual-04), and every Segments filter in
  * the URL (flow-09). Rendered-layer proof at 1440x900.
  */
-import AxeBuilder from '@axe-core/playwright';
+import { expectAxeClean } from './axe';
 import type { Locator, Page } from '@playwright/test';
 import type { SegmentSummary } from '../../../src/types';
 import type { AppDriver } from './app';
@@ -327,11 +327,7 @@ for (const theme of FIXTURE_THEMES) {
 
     test('the segment cards, facet share bars included, pass axe WCAG A/AA', async ({ app, page }) => {
       await app.gotoRoute(ROUTE);
-      const results = await new AxeBuilder({ page })
-        .include('.seg-grid')
-        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-        .analyze();
-      expect(results.violations.map((violation) => `${violation.id}: ${violation.nodes.map((node) => node.target.join(' ')).join(' ; ')}`)).toEqual([]);
+      await expectAxeClean(page, { key: { route: 'segment-intelligence', state: 'segment-cards' }, theme, known: {}, include: '.seg-grid' });
     });
   });
 }

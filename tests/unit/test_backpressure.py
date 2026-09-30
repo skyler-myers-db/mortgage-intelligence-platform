@@ -242,3 +242,45 @@ def test_an_adopted_slot_is_released_once_by_its_adopter_only() -> None:
     second, _ = controller.acquire_dependency("genie")
     assert (first, second) == (True, False)
     token.release()
+
+
+# --- 2026-09-21 audit shell-03: conversation History and its deep link -----
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/genie/sessions",
+        "/api/v1/genie/sessions",
+        "/api/genie/sessions/0123456789abcdef0123456789abcdef",
+        "/api/v1/genie/sessions/01234567-89ab-cdef-0123-456789abcdef",
+    ],
+)
+def test_genie_session_reads_are_lakebase_reads_outside_the_genie_budget(path: str) -> None:
+    # The /ask-genie/:conversationId deep link replays the caller's own turns
+    # from Lakebase: a reload of a shared link must not spend the bucket that
+    # gates asks, nor hold a Genie slot.
+    budget = BackpressureController().classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("lakebase-read", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/v1/genie/message/complete"),
+        ("POST", "/api/v1/genie/message/submit"),
+        ("POST", "/api/v1/genie/actions"),
+        ("POST", "/api/v1/genie/start"),
+        ("GET", "/api/v1/genie/start"),
+        ("GET", "/api/v1/genie/sessionsx"),
+        ("POST", "/api/v1/genie/sessions/0123456789abcdef0123456789abcdef"),
+    ],
+)
+def test_only_session_gets_leave_the_genie_budget(method: str, path: str) -> None:
+    budget = BackpressureController().classify(method, path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("genie", "genie")

@@ -71,8 +71,31 @@ export function genieTurnOutcome(payload: GenieAnswerShape): GenieTurnOutcome {
   return 'answered';
 }
 
-export function genieOutcomeAnnouncement(outcome: GenieTurnOutcome): string {
-  if (outcome === 'answered') return GENIE_ANSWER_READY;
+/** Longest metric the announcement speaks, its ellipsis included. */
+const ANNOUNCED_METRIC_MAX = 80;
+
+/** The metric tile's text as one short line, or '' when there is no tile. */
+function announcedMetric(value: GenieAnswerShape['metric_value']): string {
+  if (value === null || value === undefined) return '';
+  const text = String(value).replace(/\s+/g, ' ').trim();
+  return text.length > ANNOUNCED_METRIC_MAX ? `${text.slice(0, ANNOUNCED_METRIC_MAX - 1)}…` : text;
+}
+
+/**
+ * What the surface announcer says when a turn settles (audit `a11y-06`,
+ * Genie residual #5). An answered turn with a metric tile says the metric
+ * ("Answer ready: 1,284"), so the headline is heard without reading the
+ * bubble; a withheld, failed or governed-action outcome never carries it.
+ * Said through the announcer only: never logged, stored or sent.
+ */
+export function genieOutcomeAnnouncement(
+  outcome: GenieTurnOutcome,
+  response?: Pick<GenieAnswerShape, 'metric_value'>,
+): string {
+  if (outcome === 'answered') {
+    const metric = announcedMetric(response?.metric_value);
+    return metric ? `${GENIE_ANSWER_READY}: ${metric}` : GENIE_ANSWER_READY;
+  }
   if (outcome === 'withheld') return GENIE_WITHHELD_ANNOUNCEMENT;
   return GENIE_FAILED_ANNOUNCEMENT;
 }

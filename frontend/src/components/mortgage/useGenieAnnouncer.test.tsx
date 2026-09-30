@@ -58,6 +58,7 @@ function stage(stageKey: string, label: string, terminal = false): GenieLiveProg
 
 const ANSWER: GenieAnswer = {
   answer: 'Illinois leads.',
+  question: 'Which state leads?',
   source: 'genie',
   trusted_assets: ['mip.gold.borrower_360'],
   conversation_id: 'conv-1',
@@ -289,6 +290,19 @@ describe('useGenieAnnouncer', () => {
     await advance(1_000);
     watch.stop();
     expect(watch.inserted).toEqual(['panel:Waiting for Genie response', 'panel:Answer ready']);
+  });
+
+  it('a landed answer with a metric tile is said once, with its metric (Genie residual #5)', async () => {
+    mocks.genieSubmit.mockResolvedValue({ completed: true, response: { ...ANSWER, metric_value: '1,284' } });
+    render(false, false);
+    const watch = watchInsertions();
+    act(() => {
+      startGenieTurn({ question: 'Which states lead?', conversationId: null, surface: 'panel', startedAt: Date.now() });
+    });
+    await advance();
+    watch.stop();
+    expect(region('panel').textContent).toBe('Answer ready: 1,284');
+    expect(watch.inserted).toEqual(['panel:Waiting for Genie response', 'panel:Answer ready: 1,284']);
   });
 
   it('an announcement no surface was mounted to say is said once, by the next surface to take the floor', () => {

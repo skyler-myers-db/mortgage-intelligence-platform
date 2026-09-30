@@ -44,6 +44,7 @@ const IN_PROGRESS: GenieLiveProgress = {
 function answer(overrides: Partial<GenieResult> = {}): GenieResult {
   return {
     answer: 'Illinois leads with 3,080 in-the-money borrowers.',
+    question: 'Which states have the most in-the-money borrowers?',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'fixture-conversation-0001',

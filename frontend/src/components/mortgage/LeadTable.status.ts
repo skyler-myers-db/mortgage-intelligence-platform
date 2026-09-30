@@ -158,9 +158,24 @@ export interface LeadComplianceFlag {
   title: string;
 }
 
+/** The source a lead's contactability rests on (the synthetic seed when none is stamped). */
+function leadEligibilitySource(lead: LeadSummary): string {
+  return lead.eligibility_source ?? 'synthetic_seed';
+}
+
+/**
+ * The compliance source as visible text (audit critic-08): "DNC source: …"
+ * on a DNC row, "Eligibility source: …" on every other row, Eligible rows
+ * included. The expanded row shows it; the in-row chips' titles use it.
+ */
+export function leadEligibilitySourceText(lead: LeadSummary): string {
+  const source = leadEligibilitySource(lead);
+  return lead.dnc === true ? `DNC source: ${source}` : `Eligibility source: ${source}`;
+}
+
 export function leadComplianceFlags(lead: LeadSummary): LeadComplianceFlag[] {
   const flags: LeadComplianceFlag[] = [];
-  const source = lead.eligibility_source ?? 'synthetic_seed';
+  const source = leadEligibilitySource(lead);
   if (lead.has_unresolved_owner === true) {
     flags.push({
       key: 'owner_unresolved',
@@ -171,7 +186,7 @@ export function leadComplianceFlags(lead: LeadSummary): LeadComplianceFlag[] {
     });
   }
   if (lead.dnc === true) {
-    flags.push({ key: 'dnc', label: 'DNC', variant: 'danger', title: `DNC source: ${source}` });
+    flags.push({ key: 'dnc', label: 'DNC', variant: 'danger', title: leadEligibilitySourceText(lead) });
   }
   // Every non-DNC row that is not marketing-eligible reads "Suppressed" in
   // its visible text, including the unresolved-owner rows gold stamps
@@ -185,7 +200,7 @@ export function leadComplianceFlags(lead: LeadSummary): LeadComplianceFlag[] {
       variant: 'warning',
       title: lead.suppression_reason
         ? `Suppressed: ${lead.suppression_reason} (eligibility source: ${source})`
-        : `Eligibility source: ${source}`,
+        : leadEligibilitySourceText(lead),
     });
   }
   return flags;

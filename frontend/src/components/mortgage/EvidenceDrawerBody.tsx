@@ -338,7 +338,7 @@ export function EvidenceDrawerBody() {
                         <LineageManifestChip node={node} />
                         {node.note && <div className="lineage-node__meta">{node.note}</div>}
                       </div>
-                      {i < lineageFamily.nodes.length - 1 && <div className="lineage-arrow">↓</div>}
+                      {i < lineageFamily.nodes.length - 1 && <div className="lineage-arrow" aria-hidden="true">↓</div>}
                     </Fragment>
                   ))}
                   {lineageQuery.data && (

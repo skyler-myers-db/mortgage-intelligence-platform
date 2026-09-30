@@ -1,6 +1,6 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { useLocation } from 'react-router';
-import { documentTitleFor, routePageLabel } from '../lib/routeMeta';
+import { documentTitleFor, routePageLabel, routeSurfacePath } from '../lib/routeMeta';
 import { retryUntil } from './retryUntil';
 
 /**
@@ -21,6 +21,10 @@ import { retryUntil } from './retryUntil';
  *     `#hash` target when the link addressed one. Lazy routes may not have
  *     rendered yet, so the focus waits (bounded) and falls back to `<main>`.
  *   - A hash-only change moves focus to its target and announces nothing.
+ *   - Pages are compared by their surface path (lib/routeMeta
+ *     `routeSurfacePath`), so switching Genie conversations
+ *     (`/ask-genie` <-> `/ask-genie/<id>`, audit shell-03) is not a page
+ *     change: nothing is announced and focus stays where it is.
  *   - Focus is never pulled out of an open dialog (the floating Genie panel
  *     navigates the page behind it while the user keeps typing).
  *
@@ -52,7 +56,8 @@ export function useRouteAnnouncer(
   mainRef: RefObject<HTMLElement | null>,
   liveRegionRef: RefObject<HTMLElement | null>,
 ): void {
-  const { pathname, hash } = useLocation();
+  const { pathname: rawPathname, hash } = useLocation();
+  const pathname = routeSurfacePath(rawPathname);
   const title = documentTitleFor(pathname);
   const label = routePageLabel(pathname);
   const previousRef = useRef<{ pathname: string; hash: string } | null>(null);
