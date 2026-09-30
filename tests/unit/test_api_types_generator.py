@@ -458,13 +458,13 @@ def test_content_screen_allows_reserved_example_addresses() -> None:
 def test_screen_patterns_stay_in_parity_with_the_repo_literal_gates() -> None:
     """The copied patterns must not drift from the scans the file is subject to."""
 
-    assert gen.BAND_EDGE_PATTERN == _BAND_EDGE.pattern
+    assert _BAND_EDGE.pattern == gen.BAND_EDGE_PATTERN
     assert {int(n) for n in re.findall(r"\d+", gen.BAND_EDGE_PATTERN)} == {
         SCORE_BAND_HIGH_MIN,
         SCORE_BAND_MED_MIN,
     }
     expected_plus = _SCORE_PLUS_COPY.pattern.replace(r"(\d{2,3})", str(HIGH_OPPORTUNITY_THRESHOLD))
-    assert gen.PLUS_COPY_PATTERN == expected_plus
+    assert expected_plus == gen.PLUS_COPY_PATTERN
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +474,7 @@ def test_screen_patterns_stay_in_parity_with_the_repo_literal_gates() -> None:
 
 def test_non_2xx_schemas_are_never_emitted() -> None:
     """HTTPValidationError/ValidationError declare the input/ctx fields that the
-    422 handler strips (backend/main.py:684, request_validation_error_handler)
+    422 handler strips (backend/main.py:684, _request_validation_handler)
     so a 422 never reflects typed PII: they must never become a frontend type."""
 
     spec = _real()
@@ -524,7 +524,7 @@ def test_rendering_is_deterministic_and_key_order_independent() -> None:
 def test_real_baseline_renders_with_absent_roots_in_the_response_closure() -> None:
     spec = _real()
     text = gen.render(spec)
-    assert gen.ABSENT_KEY_ROOTS <= gen.response_closure(spec)
+    assert gen.response_closure(spec) >= gen.ABSENT_KEY_ROOTS
     health = _member(text, "ResponseSchemas", "HealthResponse")
     members = re.findall(r"^    (\w+)(\??): ", health, re.M)
     assert members, "non-vacuity: HealthResponse renders members"
@@ -536,10 +536,10 @@ def test_real_baseline_renders_with_absent_roots_in_the_response_closure() -> No
 def test_real_baseline_needs_every_reviewed_keyword(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(gen.ALLOWED_KEYWORDS) == 22
     assert gen.IGNORED_KEYWORDS < gen.ALLOWED_KEYWORDS
-    assert gen.ALLOWED_FORMATS == {"date-time", "date", "uuid"}
-    assert gen.PARAMETER_KEYS == {"in", "name", "required", "schema", "description"}
-    assert gen.REVIEWED_HEADER_PARAMS == {"Idempotency-Key"}
-    assert gen.ABSENT_KEY_ROOTS == {"HealthResponse"}
+    assert {"date-time", "date", "uuid"} == gen.ALLOWED_FORMATS
+    assert {"in", "name", "required", "schema", "description"} == gen.PARAMETER_KEYS
+    assert {"Idempotency-Key"} == gen.REVIEWED_HEADER_PARAMS
+    assert {"HealthResponse"} == gen.ABSENT_KEY_ROOTS
     monkeypatch.setattr(gen, "ALLOWED_KEYWORDS", gen.ALLOWED_KEYWORDS - {"anyOf"})
     with pytest.raises(UnsupportedSchema) as info:
         gen.render(_real())
