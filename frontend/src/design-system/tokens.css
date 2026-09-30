@@ -571,11 +571,13 @@ input[type="checkbox"] {
   accent-color: var(--accent);
 }
 
-/* ---------- Focus ---------- */
+/* ---------- Focus ----------
+ * Outlines follow the element's own radius; the prototype rule
+ * (design_files/index.html:214) also set border-radius, which mutated a
+ * square element's shape on focus (css-06; deviation:focus-ring-keeps-shape). */
 :focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
-  border-radius: var(--r-sm);
 }
 
 /* ---------- Scrollbar (subtle) ---------- */

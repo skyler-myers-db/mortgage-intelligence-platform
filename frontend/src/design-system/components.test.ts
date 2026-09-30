@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { findCssLiteralViolations } from '../../../tools/lint_css_literals.mjs';
 import { designCss } from '../test/designCss';
 import { featureStylesheets } from '../test/featureCss';
+import { topLevelRules } from '../test/tokenCascade';
 
 declare const process: { cwd(): string };
 
@@ -435,6 +436,20 @@ describe('layout containment contracts', () => {
    * allow-discrete display exit (additive to the prototype's hard cut).
    * Rendered proof: console-layout.fixture.spec.ts.
    */
+  /**
+   * css-06 item 4: the global ring no longer reshapes the focused element.
+   * The prototype rule (design_files/index.html:211-215) added
+   * `border-radius: var(--r-sm)`, so a square scroll region or table header
+   * button grew 4px corners on focus. Rendered proof:
+   * design-contract.fixture.spec.ts.
+   */
+  it('keeps the focused element\'s own shape: the global :focus-visible sets no border-radius', () => {
+    const globalRing = topLevelRules(tokensCss()).filter((rule) => rule.selector === ':focus-visible');
+    expect(globalRing).toHaveLength(1);
+    expect(globalRing[0].block).toMatch(/outline:\s*var\(--focus-ring-width\) solid var\(--focus-ring-color\);/);
+    expect(globalRing[0].block).not.toMatch(/radius/);
+  });
+
   it('lets the drawer, Genie panel and Console animate out before they hide', () => {
     const css = designCss();
     const tokens = tokensCss();
