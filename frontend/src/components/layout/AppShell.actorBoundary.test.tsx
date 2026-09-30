@@ -18,6 +18,23 @@ import { AppShell } from './AppShell';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
+ * The only removals of the seeded Genie in-flight record this suite may see
+ * are the identity boundary's. Since wave 4b, GenieDock also resumes a
+ * reload-interrupted turn from the shell, through a lazy import of the chat
+ * chunk, and that resume discards an unresumable record such as the legacy
+ * v:1 one seeded here. The import resolves whenever the module loads, which on
+ * a slow CI worker was inside a LATER test, deleting that test's freshly
+ * seeded record (run 36646256904, case viii). The resume has its own suite
+ * (GenieDock.resume.test.tsx); here its two entries are inert. The "clears"
+ * cases still need the boundary itself to remove the record.
+ */
+vi.mock('../mortgage/GenieChat', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../mortgage/GenieChat')>()),
+  ensureGenieLauncherSignal: vi.fn(),
+  resumeGenieTurnFromSession: vi.fn(),
+}));
+
+/**
  * Genie-turn residual #3 (the actor boundary across a reload), proven on the
  * REAL AppShell. The shell compared each /api/health `actor_cache_key` with
  * the previous one held in a ref, and treated the FIRST key after a reload as
