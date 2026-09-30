@@ -3,6 +3,7 @@
 **Audit date:** 2026-05-04 (re-verified and corrected after first pass)
 **Live app:** https://mip-app-2543889327043640.aws.databricksapps.com
 **Design contract:** `design_files/Module 0 Prototype.html` + `design_files/index.html` + the Anthropic-hosted bundle at `https://api.anthropic.com/v1/design/h/_6tpGknmP6lCNVTY21WIZA`
+**Declared deviations:** every ruled departure from `design_files/` is registered in [docs/prototype-deviations.md](prototype-deviations.md) (enforced by `tests/unit/test_prototype_deviations_register.py`).
 **Method:** Walked all 8 nav routes in Chrome, diffed live DOM/BEM against the prototype, exercised evidence drawer + Genie + lead-queue expand + map drill, hit `/api/health`, `/api/leads`, `/api/borrowers/{id}`, `/api/segments` directly to separate code bugs from upstream-dependency degradation, and re-read each implicated source file before claiming a gap.
 
 ---
