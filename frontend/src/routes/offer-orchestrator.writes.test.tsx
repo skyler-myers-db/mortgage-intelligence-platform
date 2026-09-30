@@ -18,6 +18,7 @@ import type { Borrower360, BorrowerLifecycle, OfferRecommendation, SalesTeamMemb
 import type { OutreachDraftResult } from '../lib/apiTypes';
 import { clearQueueContext, storeQueueContext } from '../lib/queueContext';
 import { isDecisionPending, outreachMutationKeys } from '../lib/mutations/outreach';
+import { queryKeys } from '../lib/queryKeys';
 
 const apiMocks = vi.hoisted(() => ({
   borrower: vi.fn(),
@@ -494,12 +495,17 @@ describe('Offer Orchestrator writes', () => {
   it('Approve and Confirm reject stay disabled while this open re-reads a hydrated snapshot', async () => {
     mount();
     await waitUntil(() => loaded());
+    const draftQuery = () => queryClient.getQueryCache().find({ queryKey: queryKeys.outreachDraft(ID, 'email', null), exact: true });
+    expect(draftQuery()).toBeDefined();
     // Leave and come back: the snapshot is hydrated from the cache while the
     // re-open's audited read is held open.
     await act(async () => {
       void navigate?.('/lead-queue');
     });
-    await waitUntil(() => container.querySelector('[data-testid="elsewhere"]') !== null);
+    // Wait until the page has let go of the draft (gcTime 0 drops it on the
+    // next timer tick). A re-open that lands before that tick is the same open
+    // (a StrictMode remount), so it reuses the draft and never sends a second POST.
+    await waitUntil(() => container.querySelector('[data-testid="elsewhere"]') !== null && draftQuery() === undefined);
     let release: (value: Borrower360) => void = () => undefined;
     apiMocks.borrower.mockImplementationOnce(() => new Promise<Borrower360>((resolve) => {
       release = resolve;
