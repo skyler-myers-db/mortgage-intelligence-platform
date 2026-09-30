@@ -22,6 +22,16 @@ from its completion. One that fails keeps last-good (``stale_if_error=True``,
 until the hard cap) or evicts the entry (``stale_if_error=False``), so the next
 caller recomputes inline and sees the failure, exactly as before.
 
+Staleness is visible (decision record e1): every factory call runs inside
+``cache_staleness.run_in_staleness_scope``. An entry records the wall time of
+its last successful read (``last_good_wall``), whether it was built from a
+retained read (``degraded``) and whether its latest background refresh failed
+(``refresh_failed``; only ``_store_locked`` clears it). Whenever this cache
+RETURNS such an entry, or serves last-good after an inline failure, it calls
+``report_stale(last_good_wall)``, which sets the ``X-Data-Last-Good-At``
+response header and propagates to any outer factory's scope. A plain stale
+serve in the soft window with no failure carries no marker.
+
 Refreshes run on a dedicated two-worker ``mip-gold-swr`` executor, never the
 three-worker ``mip-swr`` pool the health probes need, and are triggered only by
 a request: there is no timer, so an idle warehouse still auto-stops.
@@ -47,6 +57,7 @@ from threading import Event, Lock
 from typing import Any, Protocol
 
 from backend.config.settings import settings
+from backend.services.cache_staleness import report_stale, run_in_staleness_scope
 from backend.services.observability import emit
 from backend.services.server_timing import record_cache as _record_cache
 
@@ -204,6 +215,17 @@ class _Entry:
     value: Any
     soft_expiry: float
     hard_expiry: float
+    # Epoch seconds of the value's last successful read (or of the oldest
+    # retained read it was built from), for X-Data-Last-Good-At.
+    last_good_wall: float
+    # Built from a value served after a failed refresh (nested staleness).
+    degraded: bool = False
+    # The latest background refresh failed; reset only by _store_locked.
+    refresh_failed: bool = False
+
+    @property
+    def marked(self) -> bool:
+        return self.degraded or self.refresh_failed
 
 
 class GoldAggregateCache:
@@ -214,6 +236,7 @@ class GoldAggregateCache:
         max_entries: int = 256,
         now: Callable[[], float] = time.monotonic,
         executor: Executor | None = None,
+        wall: Callable[[], float] = time.time,
     ) -> None:
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
@@ -223,6 +246,7 @@ class GoldAggregateCache:
         self._refreshing: dict[str, object] = {}
         self._lock = Lock()
         self._now = now
+        self._wall = wall
         self._max_entries = max_entries
         self._executor_override = executor
         with _LIVE_CACHES_LOCK:
@@ -251,6 +275,7 @@ class GoldAggregateCache:
         schedule: object | None = None
         value: Any = None
         event: Event | None = None
+        served: _Entry | None = None
         with self._lock:
             entry = self._entries.get(key)
             now = self._now()
@@ -264,6 +289,7 @@ class GoldAggregateCache:
                         schedule = object()
                         self._refreshing[key] = schedule
                 value = entry.value
+                served = entry
             else:
                 outcome = "miss"
                 event = self._inflight.get(key)
@@ -276,6 +302,10 @@ class GoldAggregateCache:
             _record_cache(outcome)
             if schedule is not None:
                 self._submit_refresh(key, factory, schedule, ttl_s, hard_s, stale_if_error)
+            # Read after the submit: a synchronous executor has already
+            # recorded a failed refresh on this entry.
+            if served is not None and served.marked:
+                report_stale(served.last_good_wall)
             return value
         assert event is not None
         if not leader:
@@ -292,7 +322,7 @@ class GoldAggregateCache:
         stale_if_error: bool,
     ) -> Any:
         try:
-            value = factory()
+            value, degraded_since = run_in_staleness_scope(factory)
         except Exception:
             stale = self._stale_after_error(key, stale_if_error)
             if stale is not _NOTHING:
@@ -302,7 +332,9 @@ class GoldAggregateCache:
         else:
             with self._lock:
                 if self._inflight.get(key) is event:
-                    self._store_locked(key, value, ttl_s, hard_s)
+                    self._store_locked(key, value, ttl_s, hard_s, degraded_since)
+            if degraded_since is not None:
+                report_stale(min(self._wall(), degraded_since))
             self._emit("gold_cache_miss", key)
             _record_cache("miss")
             return value
@@ -328,6 +360,8 @@ class GoldAggregateCache:
                 fresh = entry is not None and self._now() < entry.hard_expiry
                 value = entry.value if entry is not None else None
             if fresh:
+                if entry is not None and entry.marked:
+                    report_stale(entry.last_good_wall)
                 self._emit("gold_cache_miss", key, reason="singleflight_follower")
                 _record_cache("miss")
                 return value
@@ -338,7 +372,7 @@ class GoldAggregateCache:
                 return stale
         # The leader timed out or failed: compute rather than return empty.
         try:
-            value = factory()
+            value, degraded_since = run_in_staleness_scope(factory)
         except Exception:
             stale = self._stale_after_error(key, stale_if_error)
             if stale is not _NOTHING:
@@ -346,7 +380,9 @@ class GoldAggregateCache:
             _record_cache("miss")
             raise
         with self._lock:
-            self._store_locked(key, value, ttl_s, hard_s)
+            self._store_locked(key, value, ttl_s, hard_s, degraded_since)
+        if degraded_since is not None:
+            report_stale(min(self._wall(), degraded_since))
         self._emit("gold_cache_miss", key, reason="singleflight_fallback")
         _record_cache("miss")
         return value
@@ -360,6 +396,9 @@ class GoldAggregateCache:
                 return _NOTHING
             self._entries.move_to_end(key)
             value = entry.value
+            last_good_wall = entry.last_good_wall
+        # Served after a failed read, even from a hard-expired entry.
+        report_stale(last_good_wall)
         self._emit("gold_cache_stale", key, reason="factory_error")
         _record_cache("stale")
         return value
@@ -375,14 +414,17 @@ class GoldAggregateCache:
     ) -> None:
         def _refresh() -> None:
             try:
-                value = factory()
+                value, degraded_since = run_in_staleness_scope(factory)
             except BaseException as exc:  # noqa: BLE001 -- a refresh never raises
                 with self._lock:
                     if self._refreshing.get(key) is not token:
                         return
                     del self._refreshing[key]
+                    retained = self._entries.get(key)
                     if not stale_if_error:
                         self._entries.pop(key, None)
+                    elif retained is not None:
+                        retained.refresh_failed = True
                 emit(
                     log,
                     "gold_cache_refresh_failed",
@@ -395,7 +437,7 @@ class GoldAggregateCache:
                 if self._refreshing.get(key) is not token:
                     return
                 del self._refreshing[key]
-                self._store_locked(key, value, ttl_s, hard_s)
+                self._store_locked(key, value, ttl_s, hard_s, degraded_since)
 
         try:
             self._executor().submit(_refresh)
@@ -405,9 +447,26 @@ class GoldAggregateCache:
                 if self._refreshing.get(key) is token:
                     del self._refreshing[key]
 
-    def _store_locked(self, key: str, value: Any, ttl_s: float, hard_s: float) -> None:
+    def _store_locked(
+        self,
+        key: str,
+        value: Any,
+        ttl_s: float,
+        hard_s: float,
+        degraded_since: float | None = None,
+    ) -> None:
+        """Store a fresh entry: the ONLY place ``refresh_failed`` resets."""
         now = self._now()
-        self._entries[key] = _Entry(value, now + ttl_s, now + hard_s)
+        wall = self._wall()
+        last_good = wall if degraded_since is None else min(wall, degraded_since)
+        self._entries[key] = _Entry(
+            value,
+            now + ttl_s,
+            now + hard_s,
+            last_good,
+            degraded=degraded_since is not None,
+            refresh_failed=False,
+        )
         self._entries.move_to_end(key)
         while len(self._entries) > self._max_entries:
             self._entries.popitem(last=False)
