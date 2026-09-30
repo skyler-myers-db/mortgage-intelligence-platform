@@ -403,6 +403,9 @@
  * losing the "active" accent affordance on the chip/border (which is
  * still drawn from --accent and --accent-soft). */
 :root { --accent-ink: var(--accent); }
+/* Solid CTA fill under --accent-contrast text (.btn--primary, .sr-skip-link);
+ * the accent itself everywhere but dark + red (a11y-01, below). */
+:root { --accent-fill: var(--accent); --accent-fill-hover: var(--accent-hover); }
 [data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }
 [data-theme="light"][data-accent="teal"]   { --accent-ink: #045D62; }
 [data-theme="light"][data-accent="red"]    { --accent-ink: #B42318; }
@@ -428,6 +431,11 @@
  * it while --accent itself stays verbatim. */
 [data-theme="dark"][data-accent="navy"]    { --accent-ink: #66C5FF; }
 [data-theme="dark"][data-accent="red"]     { --accent-ink: #FF5A47; }
+/* Dark + red CTA fill (a11y-01): white on #FF3621 read 3.62:1; #D92D1A reads
+ * 4.84:1 at rest (OKLCH hue 30.5 vs brand 30.3) and #C8281A 5.56:1 on hover.
+ * Hover goes darker: the prototype's #FF5A47 (design_files/index.html:164-166,
+ * :388-392) fails white at 3.09:1. Declared departure (deviation:cta-fill-dark-red). */
+[data-theme="dark"][data-accent="red"]     { --accent-fill: #D92D1A; --accent-fill-hover: #C8281A; }
 /* Print stays monochrome (print.css, "paper binders"). print.css remaps the
  * accent family at (0,1,0), which the (0,2,0) compounds above outrank, and it
  * never sets --accent-ink: without this reset dark + navy printed accent-ink
@@ -444,6 +452,8 @@
     --accent-hover: CanvasText;
     --accent-ink: CanvasText;
     --accent-data: CanvasText;
+    --accent-fill: CanvasText;
+    --accent-fill-hover: CanvasText;
     --accent-soft: Canvas;
     --accent-contrast: Canvas;
     --chip-bg: Canvas;

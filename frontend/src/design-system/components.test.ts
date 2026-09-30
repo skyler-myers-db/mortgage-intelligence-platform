@@ -523,7 +523,7 @@ describe('layout containment contracts', () => {
     // Table rows deepen instead: a transform would break their borders.
     expect(css).toMatch(/\.tbl tbody tr:active\s*\{\s*background:\s*var\(--bg-4\);/s);
     // Primary buttons also lose their halo while held.
-    expect(css).toMatch(/\.btn--primary:active:not\(\[disabled\]\)\s*\{[^}]*background:\s*var\(--accent-hover\);/s);
+    expect(css).toMatch(/\.btn--primary:active:not\(\[disabled\]\)\s*\{[^}]*background:\s*var\(--accent-fill-hover\);/s);
     expect((css.match(/:active/g) ?? []).length).toBeGreaterThanOrEqual(30);
   });
 

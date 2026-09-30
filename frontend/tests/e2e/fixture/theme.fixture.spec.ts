@@ -13,8 +13,10 @@
  *     the Administration appearance section marks and edits the same
  *     preference (it used to mark the painted theme, so System read "Light");
  *  e. every theme x accent pair paints the shared token focus ring at 3:1,
- *     from the global :focus-visible rule and from a bespoke one, and passes
- *     the shared axe gate (fixture/axe.ts) on / and /lead-queue;
+ *     from the global :focus-visible rule and from a bespoke one, the skip
+ *     link and the primary CTA (at rest and hovered) at 4.5:1 (a11y-01,
+ *     --accent-fill), and passes the shared axe gate (fixture/axe.ts) on /
+ *     and /lead-queue with no ratchet entry;
  *  f. every theme x accent pair prints the accent family monochrome, as
  *     print.css asks (the (0,2,0) theme x accent compounds used to outrank
  *     its remap: dark + navy printed accent-ink #66C5FF on white paper);
@@ -277,8 +279,27 @@ for (const theme of THEMES) {
       await app.gotoRoute('/');
       await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
 
-      // Keyboard first so a later script focus() keeps :focus-visible.
+      // Keyboard first so a later script focus() keeps :focus-visible. The
+      // first Tab lands on the skip link: text on --accent-fill at 4.5:1.
       await page.keyboard.press('Tab');
+      const skip = page.locator(':focus');
+      await expect(skip).toHaveClass(/\bsr-skip-link\b/);
+      await settleTransitions(skip);
+      const skipColors = await renderedColors(skip);
+      const skipRatio = contrastRatio(skipColors.fg, skipColors.bg);
+      expect(skipRatio, `skip link ${skipColors.color}: ${skipRatio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+
+      // The primary CTA, at rest and hovered (a11y-01: dark + red read 3.62:1).
+      const primary = page.locator('#main-content .btn--primary:not([disabled]):visible').first();
+      for (const state of ['rest', 'hover'] as const) {
+        if (state === 'hover') await primary.hover();
+        await settleTransitions(primary);
+        const colors = await renderedColors(primary);
+        const ratio = contrastRatio(colors.fg, colors.bg);
+        expect(ratio, `.btn--primary ${state}: ${colors.color} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+      }
+      await page.mouse.move(0, 0);
+
       const nav = page.getByRole('navigation', { name: 'Primary navigation' });
       // The brand link has a bespoke rule (.rail__brand:focus-visible); the
       // module links have none, so only the ONE global :focus-visible rule in
@@ -287,10 +308,8 @@ for (const theme of THEMES) {
       await expectTokenRing(page, nav.locator('a.rail__item').first(), 'rail module link (global rule)');
 
       // The shared gate: WCAG A/AA at every impact against the canonical
-      // ratchet. Dark + red keeps a11y-01's `.btn--primary` contrast entry
-      // ('home|default' and 'lead-queue|default', white on brand red #FF3621,
-      // design_files/index.html:165); any other violation fails, and so does
-      // that entry once it stops reproducing (stale).
+      // ratchet, which holds no entry for these scans since a11y-01's red CTA
+      // entries were retired by --accent-fill; any violation fails.
       for (const [path, route] of [['/', 'home'], ['/lead-queue', 'lead-queue']] as const) {
         if (path !== '/') await app.gotoRoute(path);
         await expectAxeClean(page, { key: { route, state: 'default' }, theme, accent, known: KNOWN_VIOLATIONS });
@@ -312,7 +331,7 @@ for (const theme of THEMES) {
 
       await page.emulateMedia({ media: 'print' });
       const printed: Record<string, string> = {};
-      for (const token of ['--accent-ink', '--accent-data', '--accent', '--chip-text', '--chip-bg']) {
+      for (const token of ['--accent-ink', '--accent-data', '--accent-fill', '--accent-fill-hover', '--accent', '--chip-text', '--chip-bg']) {
         printed[token] = await asComputedRgb(page, `var(${token})`);
       }
       // --accent-ink colours every accent text site that survives print
@@ -320,6 +339,8 @@ for (const theme of THEMES) {
       expect(printed).toEqual({
         '--accent-ink': PRINT_INK,
         '--accent-data': PRINT_INK,
+        '--accent-fill': PRINT_INK,
+        '--accent-fill-hover': PRINT_INK,
         '--accent': PRINT_INK,
         '--chip-text': PRINT_INK,
         '--chip-bg': PRINT_PAPER,
