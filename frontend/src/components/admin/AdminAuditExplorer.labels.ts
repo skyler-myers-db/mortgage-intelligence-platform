@@ -21,6 +21,7 @@ export const AUDIT_EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   ADMIN_OPERATION_REQUESTED: 'Admin job requested',
   ADMIN_OPERATION_RUN: 'Admin job started',
   APPROVE: 'Outreach approved',
+  AUDIT_EXPORT: 'Audit ledger exported',
   CALL_DISPOSITION: 'Call disposition recorded',
   CAMPAIGN_STATUS_UPDATE: 'Campaign status changed',
   DELETE_DRAFT: 'Outreach draft removed',

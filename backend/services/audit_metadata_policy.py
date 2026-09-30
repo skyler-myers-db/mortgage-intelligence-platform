@@ -196,6 +196,10 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "csv_sha256",
         "borrower_ids_sha256",
         "filter_fingerprint",
+        # AUDIT_EXPORT receipt (backend/api/audit.py export-receipt): the
+        # audit explorer's CSV. It reuses exported_row_count, csv_sha256 and
+        # filter_fingerprint above; the event ids are only hashed, not stored.
+        "event_ids_sha256",
         # GENIE_ANSWER_EXPORT receipt (backend/api/genie_feedback_routes.py):
         # the SHA-256 of the CSV's column keys. The receipt reuses
         # exported_row_count and csv_sha256 above and conversation_id,

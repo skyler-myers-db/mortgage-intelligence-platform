@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from backend.schemas.audit import AuditEvent
+from backend.services.audit_filter_sql import audit_filter_clauses
 from backend.services.audit_store import (
     _coerce_event_type,
     _validate_top_level_audit_columns,
@@ -319,35 +320,20 @@ class LakebaseAuditStore:
         if after_sequence is not None:
             clauses.append("audit_sequence < %(after_sequence)s")
             params["after_sequence"] = after_sequence
-        if actor:
-            clauses.append("actor_email = %(actor)s")
-            params["actor"] = actor
-        if entity_id:
-            clauses.append("entity_id = %(entity_id)s")
-            params["entity_id"] = entity_id
-        if borrower_id:
-            clauses.append(
-                "(entity_id = %(borrower_id)s OR metadata->>'borrower_id' = %(borrower_id)s)"
-            )
-            params["borrower_id"] = borrower_id
-        if subject_clip:
-            clauses.append("subject_clip = %(subject_clip)s")
-            params["subject_clip"] = mask_cotality_id("clip", subject_clip)
-        if event_type:
-            clauses.append("event_type = %(event_type)s")
-            params["event_type"] = event_type
-        if correlation_id:
-            clauses.append("correlation_id = %(correlation_id)s")
-            params["correlation_id"] = correlation_id
-        if action:
-            clauses.append("metadata->>'action' = %(action)s")
-            params["action"] = action
-        if since:
-            clauses.append("event_at >= %(since)s")
-            params["since"] = since
-        if until:
-            clauses.append("event_at <= %(until)s")
-            params["until"] = until
+        # The explorer's filters: the builder GET /audit/count shares.
+        filter_clauses, filter_params = audit_filter_clauses(
+            actor=actor,
+            action=action,
+            entity_id=entity_id,
+            borrower_id=borrower_id,
+            subject_clip=subject_clip,
+            event_type=event_type,
+            correlation_id=correlation_id,
+            since=since,
+            until=until,
+        )
+        clauses.extend(filter_clauses)
+        params.update(filter_params)
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = _SELECT_SQL_TEMPLATE.format(
             snapshot_expression=snapshot_expression,
