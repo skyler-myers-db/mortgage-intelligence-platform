@@ -5,8 +5,12 @@
  *  1. ONE axe entry point. Every scan goes through expectAxeClean
  *     (tests/e2e/fixture/axe.ts): one tag set (WCAG A/AA gating at every
  *     impact, best-practice advisory), one KNOWN_VIOLATIONS ratchet with a
- *     stale check. A private `new AxeBuilder(...)` or an '@axe-core/playwright'
- *     import anywhere else fails here with file:line, except:
+ *     stale check. A private `new AxeBuilder(...)`, an '@axe-core/playwright'
+ *     import, or the axe ENGINE reached directly (a runtime import, require,
+ *     import() or require.resolve of 'axe-core' or an 'axe-core/...' subpath;
+ *     an addScriptTag naming axe; `axe.run(`, `axe.source` or `window.axe`)
+ *     anywhere else fails here with file:line, except (a type-only
+ *     `import type ... from 'axe-core'` is not an engine use):
  *       - PERMANENT_RAW_AXE: safety-net's raw-engine probe, which must SEE
  *         violations on a planted page to prove the ratchet's pure functions;
  *       - PENDING_AXE_MIGRATION: shrink-only; files a same-batch lane owns and
@@ -88,11 +92,31 @@ const PENDING_AXE_MIGRATION: Readonly<Record<string, PendingAxeMigration>> = {};
 
 const AXE_SCAN = /\bnew\s+AxeBuilder\s*\(/g;
 const AXE_IMPORT = /['"]@axe-core\/playwright['"]/g;
+/** 'axe-core' or an 'axe-core/...' subpath as a module specifier (the quote rules out '@axe-core/...'). */
+const AXE_ENGINE_MODULE = /['"]axe-core(?:\/[^'"]*)?['"]/g;
+/** A type-only import or re-export of the engine: erased at runtime, so not an engine use. */
+const AXE_ENGINE_TYPE_ONLY = /\b(?:import|export)\s+type\b[^;]*?\bfrom\s*['"]axe-core(?:\/[^'"]*)?['"]/g;
+const AXE_ENGINE_SCRIPT_TAG = /\baddScriptTag\s*\([^)]*?\baxe/gi;
+const AXE_ENGINE_GLOBAL = /\baxe\.(?:run|source)\b|\bwindow\.axe\b/g;
 
 interface AxeSite {
   file: string;
   line: number;
-  kind: 'scan' | 'import';
+  kind: 'scan' | 'import' | 'engine';
+}
+
+/** Lines that reach the axe engine directly, one site per line. */
+function axeEngineLines(text: string): number[] {
+  const typeOnly = new Set<number>();
+  for (const match of text.matchAll(AXE_ENGINE_TYPE_ONLY)) typeOnly.add((match.index ?? 0) + match[0].length);
+  const lines = new Set<number>();
+  for (const match of text.matchAll(AXE_ENGINE_MODULE)) {
+    if (!typeOnly.has((match.index ?? 0) + match[0].length)) lines.add(lineOf(text, match.index ?? 0));
+  }
+  for (const pattern of [AXE_ENGINE_SCRIPT_TAG, AXE_ENGINE_GLOBAL]) {
+    for (const match of text.matchAll(pattern)) lines.add(lineOf(text, match.index ?? 0));
+  }
+  return [...lines];
 }
 
 function axeSites(files: readonly SourceFile[]): AxeSite[] {
@@ -101,16 +125,23 @@ function axeSites(files: readonly SourceFile[]): AxeSite[] {
     const found: AxeSite[] = [];
     for (const match of text.matchAll(AXE_SCAN)) found.push({ file: path, line: lineOf(text, match.index ?? 0), kind: 'scan' });
     for (const match of text.matchAll(AXE_IMPORT)) found.push({ file: path, line: lineOf(text, match.index ?? 0), kind: 'import' });
+    for (const line of axeEngineLines(text)) found.push({ file: path, line, kind: 'engine' });
     sites.push(...found.sort((a, b) => a.line - b.line));
   }
   return sites;
 }
 
+const AXE_SITE_LABEL: Readonly<Record<AxeSite['kind'], string>> = {
+  scan: 'new AxeBuilder',
+  import: "'@axe-core/playwright' import",
+  engine: 'axe-core engine',
+};
+
 /** Private scans outside the allowed files, as file:line (kind). */
 function privateAxeOffenders(sites: readonly AxeSite[]): string[] {
   return sites
     .filter((site) => site.file !== AXE_ENTRY && !(site.file in PERMANENT_RAW_AXE) && !(site.file in PENDING_AXE_MIGRATION))
-    .map((site) => `${site.file}:${site.line} (${site.kind === 'scan' ? 'new AxeBuilder' : "'@axe-core/playwright' import"}: use expectAxeClean from fixture/axe.ts)`);
+    .map((site) => `${site.file}:${site.line} (${AXE_SITE_LABEL[site.kind]}: use expectAxeClean from fixture/axe.ts)`);
 }
 
 /** Listed files whose scan count no longer matches their entry. */
@@ -146,6 +177,28 @@ describe('one axe entry point (a11y-05 item 1)', () => {
       "fixture/b.fixture.spec.ts:1 ('@axe-core/playwright' import: use expectAxeClean from fixture/axe.ts)",
       'fixture/c.fixture.spec.ts:1 (new AxeBuilder: use expectAxeClean from fixture/axe.ts)',
     ]);
+  });
+
+  it('recognises direct axe-core engine injection, and not a type-only import', () => {
+    const planted: SourceFile[] = [
+      { path: 'fixture/e.fixture.spec.ts', text: "await page.addScriptTag({ path: require.resolve('axe-core') });" },
+      { path: 'fixture/f.fixture.spec.ts', text: 'const r = await page.evaluate(() => window.axe.run());' },
+      { path: 'fixture/g.fixture.spec.ts', text: "import src from 'axe-core/axe.min.js?raw';\nawait page.addScriptTag({ content: src });" },
+      { path: 'fixture/h.fixture.spec.ts', text: "const engine = await import('axe-core');\nawait page.evaluate(engine.source);" },
+      { path: 'fixture/i.fixture.spec.ts', text: "import type { AxeResults } from 'axe-core';\nexport type { Result } from 'axe-core';" },
+      { path: 'fixture/j.fixture.spec.ts', text: "import AxeBuilder from '@axe-core/playwright';" },
+      { path: 'fixture/k.fixture.spec.ts', text: "const { run } = require('axe-core');\n// axe-core is the engine" },
+    ];
+    expect(privateAxeOffenders(axeSites(planted))).toEqual([
+      'fixture/e.fixture.spec.ts:1 (axe-core engine: use expectAxeClean from fixture/axe.ts)',
+      'fixture/f.fixture.spec.ts:1 (axe-core engine: use expectAxeClean from fixture/axe.ts)',
+      'fixture/g.fixture.spec.ts:1 (axe-core engine: use expectAxeClean from fixture/axe.ts)',
+      'fixture/h.fixture.spec.ts:1 (axe-core engine: use expectAxeClean from fixture/axe.ts)',
+      "fixture/j.fixture.spec.ts:1 ('@axe-core/playwright' import: use expectAxeClean from fixture/axe.ts)",
+      'fixture/k.fixture.spec.ts:1 (axe-core engine: use expectAxeClean from fixture/axe.ts)',
+    ]);
+    // The engine kind never counts toward an exemption's scan count.
+    expect(staleAxeEntries(axeSites(planted.slice(0, 1)), { 'fixture/e.fixture.spec.ts': { count: 0, reason: 'r' } })).toEqual([]);
   });
 
   it('no e2e file builds its own axe scan: use expectAxeClean', () => {
