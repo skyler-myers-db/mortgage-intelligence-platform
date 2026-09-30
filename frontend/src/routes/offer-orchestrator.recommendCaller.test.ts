@@ -18,6 +18,8 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const SRC_ROOT = decodeURIComponent(new URL('../', import.meta.url).pathname);
+// Reading ~450 sources is quick, but a loaded CI box can stall the file walk.
+const SCAN_BUDGET_MS = 60_000;
 const TOKEN = 'recommendOffer';
 const EXPECTED: Readonly<Record<string, number>> = {
   'lib/apiClients/leads.ts': 1,
@@ -49,7 +51,8 @@ function isProductionSource(rel: string): boolean {
 function callerCounts(files: Readonly<Record<string, string>>): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const [rel, source] of Object.entries(files)) {
-    if (!isProductionSource(rel)) continue;
+    // A file without the substring cannot hold the token: parse only the rest.
+    if (!isProductionSource(rel) || !source.includes(TOKEN)) continue;
     const count = tokenCount(source, TOKEN, rel.endsWith('.tsx'));
     if (count > 0) counts[rel] = count;
   }
@@ -69,7 +72,7 @@ describe('api.recommendOffer has one definition and one caller', () => {
     const files = productionSources();
     expect(Object.keys(files).length, 'non-vacuity: the walk sees frontend/src').toBeGreaterThan(100);
     expect(callerCounts(files)).toEqual(EXPECTED);
-  });
+  }, SCAN_BUDGET_MS);
 
   it('flags a planted second caller, a quoted key and a destructured binding, and ignores comments and tests', () => {
     const planted = {
