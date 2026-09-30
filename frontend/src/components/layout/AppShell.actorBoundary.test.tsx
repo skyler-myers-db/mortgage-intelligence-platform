@@ -19,20 +19,21 @@ import { AppShell } from './AppShell';
 
 /**
  * The only removals of the seeded Genie in-flight record this suite may see
- * are the identity boundary's. Since wave 4b, GenieDock also resumes a
- * reload-interrupted turn from the shell, through a lazy import of the chat
+ * are the identity boundary's. Since wave 4b, GenieDock resumes a
+ * reload-interrupted turn from the shell through a lazy import of the chat
  * chunk, and that resume discards an unresumable record such as the legacy
- * v:1 one seeded here. The import resolves whenever the module loads, which on
- * a slow CI worker was inside a LATER test, deleting that test's freshly
- * seeded record (run 36646256904, case viii). The resume has its own suite
- * (GenieDock.resume.test.tsx); here its two entries are inert. The "clears"
- * cases still need the boundary itself to remove the record.
+ * v:1 one seeded here. Mocking the chat module's two resume entries did not
+ * keep it out. Every mount issues that import. While the first one's async
+ * factory is still awaiting importOriginal(), Vitest routes each later import
+ * from the same module to the ORIGINAL chat module (its self-import bypass
+ * checks the importer's shared callstack). Drained, 10 of this file's 11
+ * imports settled with the real resume. Whichever test is running when the
+ * chat graph finishes loading loses its record: case viii on CI (runs
+ * 36646256904 and 36664857512). So the dock is out of this suite. It is the
+ * shell's only resume caller and has its own suite (GenieDock.resume.test.tsx).
+ * The "clears" cases still need the boundary itself to remove the record.
  */
-vi.mock('../mortgage/GenieChat', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../mortgage/GenieChat')>()),
-  ensureGenieLauncherSignal: vi.fn(),
-  resumeGenieTurnFromSession: vi.fn(),
-}));
+vi.mock('./GenieDock', () => ({ GenieDock: () => null }));
 
 /**
  * Genie-turn residual #3 (the actor boundary across a reload), proven on the
