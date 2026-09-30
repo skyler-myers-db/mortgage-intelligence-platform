@@ -9,6 +9,8 @@
  *    command palette, Genie panel) on Home, Lead Queue, Borrower 360, the
  *    Offer Orchestrator and Ask Genie; the filter menu and an expanded row on
  *    Lead Queue; the warehouse-down degraded state on Home;
+ *  - the non-bannered failed read (`read-failed`, quality-06) on Lead Queue
+ *    and Segment Intelligence;
  *  - the teal, navy and red accents on Home, Lead Queue and Borrower 360,
  *    default and evidence drawer, both themes (bright is everything above).
  *
@@ -26,8 +28,9 @@ import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 
 const OVERLAY_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail', 'offer-orchestrator-detail', 'ask-genie']);
 const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
-  'lead-queue': ['filter-menu', 'expanded-row'],
+  'lead-queue': ['filter-menu', 'expanded-row', 'read-failed'],
   home: ['degraded'],
+  'segment-intelligence': ['read-failed'],
 };
 const ACCENT_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail']);
 const SWEPT_ACCENTS: readonly AxeAccent[] = ['teal', 'navy', 'red'];
@@ -70,7 +73,7 @@ for (const { route, state, theme, accent } of SCANS) {
   test(`${route.name} · ${state} · ${theme}${accentLabel} has no WCAG A/AA violation beyond the recorded ratchet`, async ({ app, mockApi, page }) => {
     await app.setTheme(theme);
     if (accent !== 'bright') await app.setAccent(accent);
-    prepareState(mockApi, state);
+    prepareState(mockApi, state, route.name);
     await app.gotoRoute(route.path);
     const naturalLoad = markNaturalLoad(mockApi);
     await expect(page.locator('html')).toHaveAttribute('data-accent', accent);

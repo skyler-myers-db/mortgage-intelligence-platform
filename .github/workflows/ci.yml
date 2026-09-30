@@ -509,7 +509,7 @@ jobs:
 
   e2e-visual:
     # Pixel gate (audit visual-10, quality-02, responsive-v2):
-    # tests/e2e/fixture/visual.fixture.spec.ts compares ~96 toHaveScreenshot
+    # tests/e2e/fixture/visual.fixture.spec.ts compares ~100 toHaveScreenshot
     # baselines of the production build against the fixture API. Baselines
     # are amd64-Linux renders, so the job runs INSIDE the pinned Playwright
     # image (the same literal as the @playwright/test pin in
