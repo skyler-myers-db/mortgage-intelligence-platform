@@ -15,7 +15,9 @@
  *  - light, all 13: chroma >= 0.10, OKLCH L inside 0.43-0.77, and the hue
  *    family of the dark value (within 15 degrees);
  *  - dark keeps the four prototype core hexes (design_files/index.html:34-37)
- *    and re-steps only equity and retention.
+ *    and re-steps only equity and retention;
+ *  - where a hue is TEXT (the dark `.chip--segment` label, lifted 35% toward
+ *    --text-1), all 13 read >= 4.5:1 on the chip's 14% tint over --bg-1..3.
  */
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // test reads the prototype text under Vitest only.
@@ -23,8 +25,9 @@ import { readFileSync } from 'node:fs';
 // @ts-expect-error see node:fs note above.
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { deltaE, oklch, simulate, toOklab } from '../test/colorScience';
-import { TokenCascade, contrast, hex, readTokensCss, type Rgba } from '../test/tokenCascade';
+import { deltaE, oklch, simulate, stepColor, toOklab } from '../test/colorScience';
+import { designCss } from '../test/designCss';
+import { TokenCascade, contrast, hex, over, readTokensCss, type Rgba } from '../test/tokenCascade';
 
 declare const process: { cwd(): string };
 
@@ -109,6 +112,27 @@ describe('segment palette (dataviz-09, D-dataviz-geo-c2)', () => {
       });
     });
   }
+
+  it('dark segment chip text reads 4.5:1 on its tinted fill for every hue', () => {
+    const chip = /\.chip--segment\s*\{([^}]*)\}/.exec(designCss().replace(/\/\*[\s\S]*?\*\//g, ''))?.[1] ?? '';
+    const ink = /color:\s*color-mix\(in oklab, var\(--chip-hue, var\(--accent\)\) (\d+)%, var\(--text-1\)\);/.exec(chip);
+    const tint = /background:\s*color-mix\(in oklab, var\(--chip-hue, var\(--accent\)\) (\d+)%, transparent\);/.exec(chip);
+    expect(ink, '.chip--segment text lifts the hue toward --text-1').not.toBeNull();
+    expect(tint, '.chip--segment fill is a tint of the hue').not.toBeNull();
+    const dark = cascade('dark');
+    const text1 = hex(dark.color('--text-1'));
+    const failures: string[] = [];
+    for (const name of ALL) {
+      const hue = seg(dark, name);
+      const label = stepColor(`color-mix(in oklab, ${hex(hue)} ${ink![1]}%, ${text1})`);
+      for (const surface of ['--bg-1', '--bg-2', '--bg-3']) {
+        const fill = over({ ...hue, a: Number(tint![1]) / 100 }, dark.color(surface));
+        const ratio = contrast(label, fill);
+        if (ratio < 4.5) failures.push(`${name} label ${hex(label)} on ${surface} tint ${hex(fill)}: ${ratio.toFixed(2)}:1`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
 
   it('light hues keep chroma, the light band and the dark hue family', () => {
     const [light, dark] = [cascade('light'), cascade('dark')];
