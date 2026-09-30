@@ -99,7 +99,8 @@ export function LeadApproveReview({
   // Held-Enter guard (audit flow-03): an Enter already down when the draft
   // landed (auto-repeat, or a keydown stamped before 'ready') must not
   // approve copy the reader has not had a chance to read. A fresh press
-  // after the draft is on screen approves once.
+  // after the draft is on screen approves once. The keydown is read on
+  // Confirm (an interactive element), not on the form.
   const readyAtRef = useRef(Number.POSITIVE_INFINITY);
   useLayoutEffect(() => {
     readyAtRef.current = phase === 'ready' ? performance.now() : Number.POSITIVE_INFINITY;
@@ -114,10 +115,6 @@ export function LeadApproveReview({
       aria-busy={busy || undefined}
       data-testid="lead-approve-review"
       data-review-phase={phase}
-      onKeyDown={(event) => {
-        if (event.key !== 'Enter') return;
-        if (event.repeat || event.timeStamp <= readyAtRef.current) event.preventDefault();
-      }}
       onSubmit={(event) => {
         event.preventDefault();
         onConfirm();
@@ -217,6 +214,14 @@ export function LeadApproveReview({
           // turned disabled would drop keyboard focus to <body> mid-approval.
           aria-disabled={phase !== 'ready' || undefined}
           aria-keyshortcuts="Enter"
+          // The held-Enter guard: Confirm is where the draft landing puts
+          // focus, so an Enter held from before is refused here.
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return;
+            // The native stamp: React's synthetic one falls back to Date.now(),
+            // another clock than performance.now().
+            if (event.repeat || event.nativeEvent.timeStamp <= readyAtRef.current) event.preventDefault();
+          }}
           data-testid="lead-approve-review-confirm"
         >
           {phase === 'submitting' ? 'Approving…' : 'Confirm approval'}

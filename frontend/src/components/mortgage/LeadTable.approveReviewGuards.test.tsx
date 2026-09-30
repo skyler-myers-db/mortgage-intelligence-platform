@@ -556,16 +556,16 @@ describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOU
       press('Enter');
       press('a');
       await waitForReview('ready');
-      const form = review()!;
+      const confirm = confirmButton()!;
       const stale = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
-      Object.defineProperty(stale, 'timeStamp', { value: 0 });
+      Object.defineProperty(stale, 'timeStamp', { value: 1 });
       act(() => {
-        form.dispatchEvent(stale);
+        confirm.dispatchEvent(stale);
       });
       expect(stale.defaultPrevented).toBe(true);
       const fresh = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
       act(() => {
-        form.dispatchEvent(fresh);
+        confirm.dispatchEvent(fresh);
       });
       expect(fresh.defaultPrevented).toBe(false);
     });
