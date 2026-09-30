@@ -42,6 +42,8 @@ import {
   CONFIG_REL,
   enabledRules,
   evaluateBaseline,
+  expectedLintFiles,
+  fileCountProblems,
   findSuppressions,
   formatVerdict,
   parseOxlintOutput,
@@ -87,23 +89,70 @@ export function installedRules() {
     .sort();
 }
 
+/** How many files one oxlint run over `targets` lints (0 when it finds none). */
+function lintedCount(targets, { cwd, config }, extra = []) {
+  try {
+    return JSON.parse(oxlint(['-c', config, '--format', 'json', ...extra, ...targets], cwd)).number_of_files ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The expected files a run skipped (only called on a count mismatch):
+ * narrow by directory to where the counts part, then probe each direct file
+ * of such a directory with --ignore-pattern (a file already skipped does not
+ * lower the count). Best effort; the mismatch fails either way.
+ */
+function skippedFiles(expected, where) {
+  const skipped = [];
+  const visit = (dir) => {
+    const inTree = expected.filter((file) => dir === '.' || file.startsWith(`${dir}/`));
+    if (inTree.length === 0 || lintedCount([dir], where) === inTree.length) return;
+    const rest = inTree.map((file) => (dir === '.' ? file : file.slice(dir.length + 1)));
+    const subdirs = new Set(rest.filter((part) => part.includes('/')).map((part) => part.split('/')[0]));
+    for (const sub of subdirs) visit(dir === '.' ? sub : `${dir}/${sub}`);
+    const direct = inTree.filter((file) => path.posix.dirname(file) === dir);
+    const all = lintedCount([dir], where);
+    for (const file of direct) if (lintedCount([dir], where, ['--ignore-pattern', file]) === all) skipped.push(file);
+  };
+  visit('.');
+  return [...new Set(skipped)].sort();
+}
+
 /**
  * Lint `targets` (relative to `cwd`) with `config` and return the parsed,
  * fail-closed run: `{ diagnostics, fileCount, ruleCount, measured, lines }`,
- * with `measured` keyed by POSIX paths relative to `root`.
+ * with `measured` keyed by POSIX paths relative to `root`. With `expected`
+ * (the files, relative to `cwd`, the run must lint), a different
+ * number_of_files fails closed and names the skipped files.
  */
-export function runOxlint({ targets = ['src'], cwd = FRONTEND_DIR, config = CONFIG_PATH, root = REPO_ROOT } = {}) {
+export function runOxlint({ targets = ['src'], cwd = FRONTEND_DIR, config = CONFIG_PATH, root = REPO_ROOT, expected = null } = {}) {
   const parsedConfig = JSON.parse(readFileSync(config, 'utf8'));
   const problems = validateConfig(parsedConfig);
   if (problems.length > 0) throw new Error(`${config} drifted:\n  ${problems.join('\n  ')}`);
   const parsed = parseOxlintOutput(oxlint(['-c', config, '--format', 'json', ...targets], cwd), enabledRules(parsedConfig).length);
+  if (expected) {
+    const skipped = parsed.fileCount === expected.length ? [] : skippedFiles(expected, { cwd, config });
+    const counted = fileCountProblems(expected, parsed.fileCount, skipped);
+    if (counted.length > 0) throw new Error(counted.join('\n'));
+  }
   return { ...parsed, ...aggregate(parsed.diagnostics, { cwd, root }) };
 }
 
-function scanSuppressions() {
+/** The files under frontend/src the gate must lint, relative to frontend/. */
+export function scopeFiles() {
+  const dir = path.join(FRONTEND_DIR, 'src');
+  return expectedLintFiles(readdirSync(dir, { recursive: true }).map((file) => posix(path.join('src', String(file)))));
+}
+
+function scanSuppressions(a11yRules) {
   const dir = path.join(FRONTEND_DIR, 'src');
   const files = readdirSync(dir, { recursive: true }).map(String).filter((file) => SOURCE_FILE.test(file)).sort();
-  return findSuppressions(files.map((file) => ({ file: posix(path.join(SCOPE_REL, file)), text: readFileSync(path.join(dir, file), 'utf8') })));
+  return findSuppressions(
+    files.map((file) => ({ file: posix(path.join(SCOPE_REL, file)), text: readFileSync(path.join(dir, file), 'utf8') })),
+    a11yRules,
+  );
 }
 
 const USAGE = 'usage: oxlint_ratchet.mjs --check <baseline> | --ratchet <baseline> [--moved-from <old> --moved-to <new>]...'
@@ -138,8 +187,8 @@ function main() {
   const version = installedVersion();
   const drift = validateConfig(JSON.parse(readFileSync(CONFIG_PATH, 'utf8')), installedRules());
   if (drift.length > 0) throw new Error(`${CONFIG_REL} drifted from oxlint ${version}:\n  ${drift.join('\n  ')}`);
-  const run = runOxlint();
-  const suppressions = scanSuppressions();
+  const run = runOxlint({ expected: scopeFiles() });
+  const suppressions = scanSuppressions(enabledRules(JSON.parse(readFileSync(CONFIG_PATH, 'utf8'))));
   const totals = Object.entries(ruleTotals(run.measured)).map(([rule, count]) => `  ${String(count).padStart(4)}  ${rule}`);
   if (args.mode === 'write-baseline') {
     if (existsSync(args.baseline)) throw new Error(`${args.baseline} exists: --write-baseline only bootstraps (lower one with --ratchet)`);
