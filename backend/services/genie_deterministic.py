@@ -56,6 +56,7 @@ from backend.services.lakebase import LakebaseClient, LakebaseError
 from backend.services.observability import emit
 from backend.services.repositories import BorrowerRepository
 from backend.services.sales_state import SalesStateStore
+from backend.services.state_footprint import get_state_footprint_resolver
 
 _GENIE_BLOCK_LOG = logging.getLogger("backend.services.genie_deterministic")
 
@@ -638,7 +639,13 @@ def _deterministic_genie_response(
             event_type="RUN_GENIE",
         )
         return sales_ops_response
-    metadata_gap = prompt_guardrails.footprint_metadata_gap_match(payload.question)
+    # ONE footprint snapshot for both footprint guards (decision record e2): a
+    # refresh landing between two reads could pair a live flag with fallback
+    # codes and let a state question through both checks.
+    footprint_snapshot = get_state_footprint_resolver().snapshot()
+    metadata_gap = prompt_guardrails.footprint_metadata_gap_match(
+        payload.question, snapshot=footprint_snapshot
+    )
     if metadata_gap is not None:
         state_name, state_code = metadata_gap
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -688,7 +695,9 @@ def _deterministic_genie_response(
             table_rows=[],
         )
         return response
-    outside_footprint = prompt_guardrails.outside_footprint_match(payload.question)
+    outside_footprint = prompt_guardrails.outside_footprint_match(
+        payload.question, snapshot=footprint_snapshot
+    )
     if outside_footprint is not None:
         state_name, state_code, footprint_codes = outside_footprint
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]

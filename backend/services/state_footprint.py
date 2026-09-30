@@ -15,7 +15,8 @@ Consumers:
 - Admin restart invalidates the cache (``invalidate()``), matching the
   manual-flush posture we use for ``LenderRefResolver``.
 - ``backend/schemas/_validators_tenant.py`` (the schema validators) and the
-  Genie footprint guards read ``state_codes()`` / ``using_fallback()``.
+  Genie footprint guards read ONE ``snapshot()`` per decision, so the codes
+  and the degraded flag always come from the same load.
 
 Cache posture (audit ``delivery-06``): a ``GoldAggregateCache`` holding one
 snapshot (the rows AND their status, so a caller never mixes one refresh's
@@ -95,8 +96,15 @@ class FootprintState:
 
 
 @dataclass(frozen=True)
-class _FootprintSnapshot:
-    """One load's rows and the status they were loaded under, cached together."""
+class FootprintSnapshot:
+    """One load's rows and the status they were loaded under, cached together.
+
+    A decision that needs two footprint facts (the codes AND the degraded
+    flag, say) reads both from ONE snapshot: a background refresh landing
+    between two resolver reads could otherwise pair live rows with a
+    fallback flag, which is how a guard fails open (audit ``delivery-06``,
+    decision record e2).
+    """
 
     rows: tuple[FootprintState, ...]
     status: str
@@ -104,6 +112,51 @@ class _FootprintSnapshot:
     @property
     def degraded(self) -> bool:
         return self.status in _DEGRADED_STATUSES
+
+    def codes(self) -> list[str]:
+        """Return just the USPS codes, sorted by ``display_order``."""
+        return [s.state_code for s in self.rows]
+
+    def name_to_codes(self) -> dict[str, list[str]]:
+        """Return a lowercased ``state_name -> [state_code]`` map.
+
+        Used by the portfolio builder preview predicate to translate
+        frontend dropdown labels like "Florida" / "California" to the
+        2-char USPS codes emitted into the WHERE clause. Keys are
+        lowercased so the lookup is case-insensitive regardless of how
+        the UI cases the label. Each value is a single-element list so
+        callers can build SQL predicates without branching on shape.
+        """
+        return {s.state_name.lower(): [s.state_code] for s in self.rows}
+
+    def default_state_code(self) -> str | None:
+        """Return the USPS code of the row with ``is_default_state = TRUE``.
+
+        If no row is flagged default, fall through to the first row by
+        display order — but ONLY when the active list came from Unity
+        Catalog (live gold coverage or the ``ref.state_footprint`` metadata
+        table). The UI's broad default is still "All N states"; this is only
+        anchor metadata for APIs that require a single state.
+
+        Returns ``None`` on the generic outage fallback. That list is the
+        alphabetical 50-state dictionary, so "first by display order" meant
+        Alabama — a state with zero borrowers in the current share, named as
+        THE default purely because it sorts first (2026-08-07 platform audit).
+        There is no default state when there is no footprint, and callers
+        that require a single state must handle its absence rather than
+        receive a fabricated one. ``degraded`` reports the same condition;
+        this method just stops papering over it.
+        """
+        for s in self.rows:
+            if s.is_default_state:
+                return s.state_code
+        if self.status == "fallback":
+            return None
+        return self.rows[0].state_code
+
+
+# Pre-2026-09-30 private name, kept so existing imports keep resolving.
+_FootprintSnapshot = FootprintSnapshot
 
 
 class StateFootprintResolver:
@@ -261,9 +314,13 @@ class StateFootprintResolver:
             return metadata_rows
         return None
 
-    def snapshot(self) -> _FootprintSnapshot:
-        """The cached rows and their status, read together."""
-        snapshot: _FootprintSnapshot = self._cache.get_or_set(
+    def snapshot(self) -> FootprintSnapshot:
+        """The cached rows and their status, read together.
+
+        A decision that needs two footprint facts must take ONE snapshot and
+        read both from it; the wrappers below each take their own.
+        """
+        snapshot: FootprintSnapshot = self._cache.get_or_set(
             _FOOTPRINT_CACHE_KEY,
             self._load_snapshot,
             ttl_s=_FOOTPRINT_SOFT_TTL_FRACTION * self._ttl_s,
@@ -272,7 +329,7 @@ class StateFootprintResolver:
         )
         return snapshot
 
-    def _load_snapshot(self) -> _FootprintSnapshot:
+    def _load_snapshot(self) -> FootprintSnapshot:
         """Load once (inline or as the background refresh) under the load lock.
 
         ``_load_from_uc`` handles its own warehouse failures (it answers
@@ -292,64 +349,53 @@ class StateFootprintResolver:
                 rows = tuple(loaded)
                 status = "live_coverage" if self._source_status == "unknown" else self._source_status
             self._source_status = status
-            return _FootprintSnapshot(rows=rows, status=status)
+            return FootprintSnapshot(rows=rows, status=status)
 
-    def _footprint(self) -> tuple[FootprintState, ...]:
-        return self.snapshot().rows
+    # Single-read conveniences: each one takes its own snapshot(). A decision
+    # that needs two facts must take snapshot() and read both from it
+    # (tests/unit/test_footprint_single_read.py pins that).
 
     def list(self) -> list[FootprintState]:
-        """Return current coverage rows, sorted by ``display_order``."""
-        return list(self._footprint())
+        """Current coverage rows, sorted by ``display_order``.
+
+        Single-read convenience; a decision that needs two facts must take
+        snapshot().
+        """
+        return list(self.snapshot().rows)
 
     def state_codes(self) -> list[str]:
-        """Return just the USPS codes, sorted by ``display_order``."""
-        return [s.state_code for s in self._footprint()]
+        """``FootprintSnapshot.codes()`` of a fresh snapshot.
+
+        Single-read convenience; a decision that needs two facts must take
+        snapshot().
+        """
+        return self.snapshot().codes()
 
     def state_name_to_codes(self) -> dict[str, list[str]]:
-        """Return a lowercased ``state_name -> [state_code]`` map.
+        """``FootprintSnapshot.name_to_codes()`` of a fresh snapshot.
 
-        Used by the portfolio builder preview predicate to translate
-        frontend dropdown labels like "Florida" / "California" to the
-        2-char USPS codes emitted into the WHERE clause. Keys are
-        lowercased so the lookup is case-insensitive regardless of how
-        the UI cases the label. Each value is a single-element list so
-        callers can build SQL predicates without branching on shape.
+        Single-read convenience; a decision that needs two facts must take
+        snapshot().
         """
-        return {s.state_name.lower(): [s.state_code] for s in self._footprint()}
+        return self.snapshot().name_to_codes()
 
     def default_state_code(self) -> str | None:
-        """Return the USPS code of the row with ``is_default_state = TRUE``.
+        """``FootprintSnapshot.default_state_code()`` of a fresh snapshot.
 
-        If no row is flagged default, fall through to the first row by
-        display order — but ONLY when the active list came from Unity
-        Catalog (live gold coverage or the ``ref.state_footprint`` metadata
-        table). The UI's broad default is still "All N states"; this is only
-        anchor metadata for APIs that require a single state.
-
-        Returns ``None`` on the generic outage fallback. That list is the
-        alphabetical 50-state dictionary, so "first by display order" meant
-        Alabama — a state with zero borrowers in the current share, named as
-        THE default purely because it sorts first (2026-08-07 platform audit).
-        There is no default state when there is no footprint, and callers
-        that require a single state must handle its absence rather than
-        receive a fabricated one. ``using_fallback()`` reports the same
-        condition; this method just stops papering over it.
+        Single-read convenience; a decision that needs two facts must take
+        snapshot().
         """
-        snapshot = self.snapshot()
-        for s in snapshot.rows:
-            if s.is_default_state:
-                return s.state_code
-        if snapshot.status == "fallback":
-            return None
-        return snapshot.rows[0].state_code
+        return self.snapshot().default_state_code()
 
     def using_fallback(self) -> bool:
-        """Return TRUE when the active list is metadata only.
+        """TRUE when the active list is metadata only (``degraded``).
 
         Metadata is useful for rendering degraded geography chrome during a
         dependency outage, but it is not a Cotality coverage contract.
         Data-bearing decisions, especially Genie out-of-footprint guards,
         should treat this as unavailable scope rather than broadening answers.
+        Single-read convenience; a decision that needs two facts must take
+        snapshot().
         """
         return self.snapshot().degraded
 

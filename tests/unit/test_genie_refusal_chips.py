@@ -31,6 +31,7 @@ from backend.services.genie_prompt_guardrails import (
     source_gap_prompt_match,
 )
 from backend.services.genie_refusal_reason import GENIE_REFUSAL_REASONS
+from backend.services.state_footprint import FootprintSnapshot
 
 ROOT = Path(__file__).resolve().parents[2]
 CHIPS_PATH = ROOT / "frontend" / "src" / "components" / "mortgage" / "genieRefusalChips.json"
@@ -77,26 +78,22 @@ def test_every_chip_passes_the_real_prompt_guards(family: str, chip: str) -> Non
     assert GenieMessageRequest(question=chip).question == chip
 
 
-class _NoCoverageFootprint:
-    """A lender whose refreshed coverage holds no state at all (worst case)."""
-
-    def state_codes(self) -> list[str]:
-        return []
-
-    def using_fallback(self) -> bool:
-        return True
+# A lender whose refreshed coverage holds no state at all (worst case).
+_NO_COVERAGE_FOOTPRINT = FootprintSnapshot(rows=(), status="fallback")
 
 
 @pytest.mark.parametrize(("family", "chip"), _all_chips())
 def test_every_chip_is_answerable_under_any_coverage_footprint(
-    family: str, chip: str, monkeypatch: pytest.MonkeyPatch
+    family: str, chip: str
 ) -> None:
     # Coverage follows the current Cotality refresh, so a chip that named a
     # state could be refused as out-of-footprint (or footprint-unknown) for
-    # some lender. With an EMPTY footprint any state mention or geography
-    # hint trips these matchers, so passing here means no footprint can.
-    monkeypatch.setattr(
-        genie_prompt_guardrails, "get_state_footprint_resolver", lambda: _NoCoverageFootprint()
-    )
-    assert genie_prompt_guardrails.outside_footprint_match(chip) is None, family
-    assert genie_prompt_guardrails.footprint_metadata_gap_match(chip) is None, family
+    # some lender. With an EMPTY, degraded footprint any state mention or
+    # geography hint trips these matchers, so passing here means no footprint
+    # can.
+    snapshot = _NO_COVERAGE_FOOTPRINT
+    assert genie_prompt_guardrails.outside_footprint_match(chip, snapshot=snapshot) is None, family
+    assert (
+        genie_prompt_guardrails.footprint_metadata_gap_match(chip, snapshot=snapshot) is None
+    ), family
+    assert genie_prompt_guardrails.footprint_guard_match(chip, snapshot=snapshot) is None, family
