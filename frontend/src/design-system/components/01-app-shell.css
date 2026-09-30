@@ -488,7 +488,8 @@
   max-width: min(100%, 1920px);
   margin-inline: auto;
 }
-/* When the Console is docked open at top-right (fixed --console-w card),
+/* When the Console is docked open at top-right (fixed --console-w card;
+   deviation:console-gutter-snap),
    reserve a right gutter on .main so long rows do not slide under it. The
    Console is position:fixed, so we can't rely on flow; an explicit gutter is
    the fix. The gutter derives from --console-w (audit motion-01 follow-up:

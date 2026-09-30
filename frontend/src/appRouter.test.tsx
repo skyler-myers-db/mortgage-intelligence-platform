@@ -12,7 +12,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { RouterProvider, createMemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { appRouteObjects } from './appRouter';
+import { RethrowToRootBoundary, appRouteObjects } from './appRouter';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { rootErrorOptions } from './lib/clientErrorLog';
 
@@ -55,6 +55,26 @@ describe('appRouter', () => {
       );
     });
   }
+
+  /**
+   * 2026-09-30 ruling (docs/prototype-deviations.md, data-router-loaders;
+   * audit shell-05 / shell-v2 / stack-04): the data router stays a single
+   * catch-all with no loader, action or lazy route. A loader would re-run on
+   * every revalidation while borrower and lead reads write one VIEW_* audit
+   * row per deliberate open. Adding any route-object key is a ruling change:
+   * update the register row with it.
+   */
+  it('stays exactly one catch-all route object with no loader, action or lazy', () => {
+    const routes = appRouteObjects(<div />);
+    expect(routes).toHaveLength(1);
+    const [route] = routes;
+    expect(new Set(Object.keys(route))).toEqual(new Set(['path', 'element', 'ErrorBoundary']));
+    expect(route.path).toBe('*');
+    expect(route.ErrorBoundary).toBe(RethrowToRootBoundary);
+    for (const key of ['loader', 'action', 'lazy', 'children', 'shouldRevalidate', 'handle']) {
+      expect(route, key).not.toHaveProperty(key);
+    }
+  });
 
   it('hands every URL, with its query and hash, to the one catch-all element', async () => {
     await mount(<Where />, '/borrower-360/B-0TESTBORROWER?tab=offer#evidence');

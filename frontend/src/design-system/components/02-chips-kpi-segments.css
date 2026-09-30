@@ -106,10 +106,11 @@
   background: var(--text-3);
 }
 
-/* The evidence hover card (re-audit #4 Buyer-Wow #8) lives with its hook in
-   components/EvidenceHoverCard.css (lazy, with the chunk that renders it);
-   only its freshness-dot modifiers stay here, grouped with the chip and
-   legend dots below (audit motion-10 / css-10). */
+/* The evidence hover card (re-audit #4 Buyer-Wow #8) has its own sheet,
+   components/EvidenceHoverCard.css, which ships in the INITIAL CSS through
+   the app.tsx import (every route renders evidence chips), not lazily; only
+   its freshness-dot modifiers stay here, grouped with the chip and legend
+   dots below (audit motion-10 / css-10). */
 
 /* Freshness legend — tiny inline rail used inside the evidence drawer
    header so operators learn the vocabulary without a tooltip. */
