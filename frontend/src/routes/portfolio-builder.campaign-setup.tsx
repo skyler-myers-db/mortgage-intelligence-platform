@@ -110,7 +110,7 @@ export function CampaignSetupPanel({
               <Button
                 variant="ghost"
                 size="sm"
-                icon="sparkle"
+                icon="bolt"
                 onClick={() => {
                   onRegenerate();
                 }}
