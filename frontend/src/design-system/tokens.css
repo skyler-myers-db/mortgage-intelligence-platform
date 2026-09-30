@@ -131,15 +131,21 @@
      forbids `color: var(--signal-warning)`. Dark: the hue itself clears AA. */
   --signal-warning-ink: var(--signal-warning);
 
-  /* ---------- Segment palette (chips, map fills) ---------- */
+  /* ---------- Segment palette (chips, map fills) ----------
+   * DECLARED ACCESSIBILITY DEVIATION from design_files/index.html:33-39
+   * (deviation:segment-palette; dataviz-09): dark keeps four core prototype
+   * hexes and --entrada-teal itm, and re-steps equity and retention so the
+   * six core hues clear OKLab dE 15 (CVD 6) and equity stands off the data
+   * ink; light values are new (the prototype never drew segments on white).
+   * Dark hexes mirror the gold registry (gold_segment_population.sql meta
+   * VALUES; tests/unit/test_segment_palette_parity.py). */
   --seg-itm:        #5CE1E6;  /* Prime Refi Candidates — teal */
   --seg-listed:     #F59E0B;  /* Listed for Sale — amber */
   --seg-permit:     #A78BFA;  /* HELOC Intent — violet */
   --seg-investor:   #F472B6;  /* Investor / Multi-Property — rose */
-  --seg-equity:     #66C5FF;  /* Home Equity Candidate — bright blue */
-  --seg-retention:  #34D399;  /* Retention — green */
-  /* S1.3 overlay segments — hex values mirror the gold registry in
-     sql/transformations/gold_segment_population.sql (meta VALUES). */
+  --seg-equity:     #2985DF;  /* Home Equity Candidate — blue */
+  --seg-retention:  #3FD073;  /* Retention — green */
+  /* S1.3 overlay segments (the same registry). */
   --seg-second-lien:      #E879F9;  /* Second-Lien Consolidation — fuchsia */
   --seg-heloc-draw:       #FB923C;  /* HELOC Draw Ending — orange */
   --seg-equity-history:   #A3E635;  /* Home Equity History — lime */
@@ -373,6 +379,24 @@
     radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.08), transparent 60%),
     #F8FBFD;
   --map-region-fill: #E4EDF4;
+}
+
+/* Light segment palette (deviation:segment-palette; segmentPalette.test.ts):
+ * the core six clear dE 15 / CVD 6 and 3:1 on --bg-0..2; overlays keep hue. */
+[data-theme="light"] {
+  --seg-itm: #11998E;
+  --seg-listed: #B97330;
+  --seg-permit: #652EE6;
+  --seg-investor: #8B356E;
+  --seg-equity: #3E89F7;
+  --seg-retention: #1C6425;
+  --seg-second-lien: #B35DC1;
+  --seg-heloc-draw: #C76904;
+  --seg-equity-history: #669507;
+  --seg-refi-propensity: #6E77E9;
+  --seg-related-itm: #0B91C4;
+  --seg-payoff-loss: #D95155;
+  --seg-permit-activity: #8C6CE0;
 }
 
 /* ---------- Accent overrides applied at runtime ---------- */

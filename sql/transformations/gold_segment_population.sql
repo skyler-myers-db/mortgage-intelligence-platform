@@ -236,8 +236,8 @@ meta AS (
       ('listed',    'Listed for Sale',          'Current active or under-contract Cotality MLS listing tied to CLIP.', '#F59E0B'),
       ('permit',    'HELOC Intent',             'Cotality HELOC propensity >= 700 with equity context. Filed Building Permits remain pending until a true permit source lands.', '#A78BFA'),
       ('investor',  'Investor / Multi-Property','Owner Link shows 2+ properties or repeat behavior.',                                    '#F472B6'),
-      ('equity',    'Home Equity Candidate',    'Strong equity and no active second-position balance.',                                  '#66C5FF'),
-      ('retention', 'Retention Risk',           'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', '#34D399'),
+      ('equity',    'Home Equity Candidate',    'Strong equity and no active second-position balance.',                                  '#2985DF'),
+      ('retention', 'Retention Risk',           'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', '#3FD073'),
       -- S1.3 overlay segments. Membership predicates live in
       -- gold_borrower_360.sql (with_segments) and each column comment; the
       -- refi_propensity heuristic is published verbatim in

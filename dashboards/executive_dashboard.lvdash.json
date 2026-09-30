@@ -870,7 +870,7 @@
                     "mappings": [
                       {
                         "value": "Home Equity Candidate",
-                        "color": "#66C5FF"
+                        "color": "#2985DF"
                       },
                       {
                         "value": "In the Money",
@@ -890,7 +890,7 @@
                       },
                       {
                         "value": "Retention Risk",
-                        "color": "#34D399"
+                        "color": "#3FD073"
                       },
                       {
                         "value": "None / Unsegmented",
@@ -898,7 +898,7 @@
                       },
                       {
                         "value": "equity",
-                        "color": "#66C5FF"
+                        "color": "#2985DF"
                       },
                       {
                         "value": "itm",
@@ -918,7 +918,7 @@
                       },
                       {
                         "value": "retention",
-                        "color": "#34D399"
+                        "color": "#3FD073"
                       },
                       {
                         "value": "none",

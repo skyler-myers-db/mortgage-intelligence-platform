@@ -112,7 +112,10 @@ const SYSTEM_COLORS = new Set([
 ]);
 const COLOR_PROPERTY =
   /^(?:color|fill|stroke|box-shadow|background(?:-color)?|outline(?:-color)?|border(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?(?:-color)?)$/;
-const NON_COLOR_TOKEN = /^(?:none|solid|dashed|dotted|double|0|-?\d*\.?\d+(?:px|rem|em)|var\(--focus-ring-width\)|!important)$/;
+// `inset` and `calc(var(--sp-N) / N)`: the offer-mix slice gap (a box-shadow
+// on a data mark, HomeAnswerBand.css; D-dataviz-geo-c2).
+const NON_COLOR_TOKEN =
+  /^(?:none|solid|dashed|dotted|double|inset|0|-?\d*\.?\d+(?:px|rem|em)|var\(--focus-ring-width\)|calc\(var\(--sp-\d+\) \/ \d+\)|!important)$/;
 
 /** Non-text data marks allowed to opt out of forcing (brief item 8b, plus the switch knob). */
 const DATA_MARKS = [
@@ -128,6 +131,11 @@ const DATA_MARKS = [
   '.chart-hist__rule',
   '.analytics-scatter__bin',
   '.analytics-scatter__dot--band',
+  // The Home offer-mix bar and legend swatches (D-dataviz-geo-c2): segment
+  // hues on a Canvas track edged in CanvasText.
+  '.offer-mix',
+  '.offer-mix__seg',
+  '.offer-mix__swatch',
 ];
 
 describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {

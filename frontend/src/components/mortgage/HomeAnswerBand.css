@@ -226,10 +226,12 @@
   flex: 0 0 auto;
   block-size: 100%;
 }
-/* A hairline of the card surface between segments, drawn inside the
-   segment so the widths stay the exact shares. */
+/* A 2px gap of the card surface between segments, drawn inside the
+   segment so the widths stay the exact shares. It hides any slice under
+   about 0.6% at 1440x900; acceptable only because the legend prints every
+   offer with its percentage. */
 .offer-mix__seg + .offer-mix__seg {
-  box-shadow: inset 1px 0 0 var(--bg-2);
+  box-shadow: inset calc(var(--sp-1) / 2) 0 0 var(--bg-2);
 }
 .offer-mix__skeleton {
   display: block;
@@ -289,11 +291,15 @@
   font-size: var(--fs-11);
   color: var(--text-3);
 }
-/* Offer hues reuse the segment palette the offer grows out of. */
+/* Offer hues reuse the segment palette the offer grows out of. Refi + HELOC
+   is the refi and HELOC hues striped together (deviation:segment-palette):
+   a hue of its own sat within dE 15 of the re-stepped equity blue. */
 .offer-mix__seg[data-offer="refi"],
 .offer-mix__swatch[data-offer="refi"] { background: var(--seg-itm); }
 .offer-mix__seg[data-offer="refi_plus_heloc"],
-.offer-mix__swatch[data-offer="refi_plus_heloc"] { background: var(--seg-related-itm); }
+.offer-mix__swatch[data-offer="refi_plus_heloc"] {
+  background: repeating-linear-gradient(135deg, var(--seg-itm) 0 var(--sp-1), var(--seg-permit) var(--sp-1) calc(var(--sp-1) * 2));
+}
 .offer-mix__seg[data-offer="heloc"],
 .offer-mix__swatch[data-offer="heloc"] { background: var(--seg-permit); }
 .offer-mix__seg[data-offer="cash_out"],
@@ -312,5 +318,28 @@
   .home-answer__col + .home-answer__col {
     border-inline-start: 0;
     border-block-start: 1px solid var(--line-1);
+  }
+}
+
+/* Forced colours: the bar and its swatches are non-text data marks, so they
+   keep the segment hues (as SegmentCard.css does), on a Canvas track edged in
+   CanvasText; the gaps between slices and each swatch take a system colour
+   (deviation:segment-palette). Here, not in 33-contrast-modes.css: this sheet
+   loads later and wins ties. */
+@media (forced-colors: active) {
+  .offer-mix {
+    forced-color-adjust: none;
+    background: Canvas;
+    outline: 1px solid CanvasText;
+  }
+  .offer-mix__seg,
+  .offer-mix__swatch {
+    forced-color-adjust: none;
+  }
+  .offer-mix__seg + .offer-mix__seg {
+    box-shadow: inset calc(var(--sp-1) / 2) 0 0 Canvas;
+  }
+  .offer-mix__swatch {
+    outline: 1px solid CanvasText;
   }
 }
