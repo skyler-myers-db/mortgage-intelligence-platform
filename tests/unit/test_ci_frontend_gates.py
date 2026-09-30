@@ -90,6 +90,29 @@ def test_the_perf_calibration_is_uploaded_after_the_perf_step() -> None:
     }
 
 
+def test_the_budget_step_writes_the_per_chunk_json() -> None:
+    """Audit quality-08: the gating budget run also writes the per-chunk report."""
+    steps = _jobs()["frontend-tests"]["steps"]
+    budget = steps[_step_index(steps, "npm --prefix frontend run budget")]
+    assert budget["run"] == "npm --prefix frontend run budget -- --json ../frontend-budget.json"
+    assert "continue-on-error" not in budget and "if" not in budget
+
+
+def test_the_bundle_delta_job_is_informational_and_token_free() -> None:
+    """Audit quality-08: head vs merge-base in the step summary; the gates stay in frontend-tests."""
+    job = _jobs()["bundle-delta"]
+    assert job["if"] == "github.event_name == 'pull_request'"
+    assert job["steps"][0]["with"]["fetch-depth"] == 0
+    text = yaml.safe_dump(job)
+    assert "secrets." not in text and "GITHUB_TOKEN" not in text, "no token: fork PRs get the same summary"
+    runs = [str(step.get("run", "")) for step in job["steps"]]
+    assert any("git merge-base HEAD" in run and "git worktree add" in run for run in runs)
+    base = next(run for run in runs if "--dist ../bundle-base/frontend/dist" in run)
+    assert "--report-only" in base and "--build-meta ../bundle-base/frontend/build-meta" in base and "--json ../bundle-base.json" in base
+    assert any(run.startswith("node tools/check_frontend_budgets.mjs --report-only --base ../bundle-base.json") for run in runs)
+    assert all("continue-on-error" not in step for step in job["steps"])
+
+
 def _playwright_perf_spec() -> re.Pattern[str]:
     config = (FRONTEND / "playwright.config.ts").read_text(encoding="utf-8")
     literal = re.search(r"^(?:export )?const PERF_SPEC = /(.+)/;$", config, re.MULTILINE)

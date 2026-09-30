@@ -229,7 +229,50 @@ jobs:
           path: frontend/sourcemaps/**
           if-no-files-found: error
           retention-days: 30
-      - run: npm --prefix frontend run budget
+      - name: Frontend budget (gates, quality-08 targets, per-chunk JSON)
+        # Also appends the budget table to the job's step summary.
+        run: npm --prefix frontend run budget -- --json ../frontend-budget.json
+
+  bundle-delta:
+    # Audit quality-08: the budget table of this PR against its merge-base,
+    # in the step summary (dimension | actual | gate | target | base |
+    # delta). Informational: the gates stay in frontend-tests, so this job
+    # fails only on a tool error (the base build runs --report-only). No PR
+    # comment and no token, so a fork PR gets the same summary.
+    name: frontend bundle delta (vs merge-base)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build head
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+      - name: Build the merge-base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          base="$(git merge-base HEAD "origin/${BASE_REF}")"
+          git worktree add --detach ../bundle-base "$base"
+          npm --prefix ../bundle-base/frontend ci
+          npm --prefix ../bundle-base/frontend run build
+      - name: Measure the base with head's checker
+        run: >-
+          node tools/check_frontend_budgets.mjs --report-only
+          --dist ../bundle-base/frontend/dist --build-meta ../bundle-base/frontend/build-meta
+          --json ../bundle-base.json
+        env:
+          GITHUB_STEP_SUMMARY: /dev/null
+      - name: Head vs base (step summary)
+        run: node tools/check_frontend_budgets.mjs --report-only --base ../bundle-base.json
 
   bundle-syntax-check:
     # `databricks bundle validate` unavoidably performs a

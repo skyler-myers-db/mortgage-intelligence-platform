@@ -32,7 +32,7 @@ const nodeProcess = (globalThis as unknown as { process: { execPath: string; cwd
 const repoRoot = path.resolve(nodeProcess.cwd(), '..');
 
 const TOOLS = [
-  { script: 'check_frontend_budgets.mjs', siblings: ['build_manifest.mjs'], args: [] as string[] },
+  { script: 'check_frontend_budgets.mjs', siblings: ['build_manifest.mjs', 'frontend_budget_report.mjs'], args: [] as string[] },
   { script: 'postbuild_artifacts.mjs', siblings: ['build_manifest.mjs'], args: [] as string[] },
   {
     script: 'react_compiler_coverage.mjs',
