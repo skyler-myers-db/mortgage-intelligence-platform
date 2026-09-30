@@ -133,6 +133,9 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("DELETE", "/api/workspace/leads/{borrower_id}"): "tests/unit/test_workspace_api.py",
     ("PUT", "/api/workspace/leads/{borrower_id}"): "tests/unit/test_workspace_api.py",
     ("GET", "/api/workspace/queue-version"): "tests/unit/test_workspace_queue_version.py",
+    ("GET", "/api/workspace/saved-views"): "tests/unit/test_saved_views_api.py",
+    ("POST", "/api/workspace/saved-views"): "tests/unit/test_saved_views_api.py",
+    ("DELETE", "/api/workspace/saved-views/{view_id}"): "tests/unit/test_saved_views_api.py",
 }
 
 

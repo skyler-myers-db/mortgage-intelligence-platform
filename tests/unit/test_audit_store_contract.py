@@ -215,6 +215,10 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "delete_lead": ("store.delete_lead(",),
     "save_draft": ("store.save_draft(",),
     "delete_draft": ("store.delete_draft(",),
+    # Saved Lead Queue views: the SAVE_QUEUE_VIEW / DELETE_QUEUE_VIEW row is
+    # inserted by the same statement (tests/unit/test_saved_views_store.py).
+    "create_saved_view": ("store.create(",),
+    "delete_saved_view": ("store.delete(",),
     "stage_activation": ("store.stage_borrower(", "_assert_activation_eligible("),
 }
 

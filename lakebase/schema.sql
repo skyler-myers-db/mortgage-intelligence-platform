@@ -3768,3 +3768,40 @@ VALUES (
     'Genie completion-job cancel: cancel_requested_at and recorded_at (one commit point, never both), the submit-time deep flag, named widened status/stage CHECKs with cancelled, and the recorded-duration index'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Saved Lead Queue views -----------------------------------------------
+-- Audit 2026-09-21 tables-09 phase 2 / flow-08 slice 1: a person names the
+-- Lead Queue filters they rebuild every morning and reopens them in one
+-- click. One row per (actor, surface, case-folded name) while live; deletes
+-- are soft, so the app role has no DELETE grant and a deleted name can be
+-- reused. `params` holds only the server-canonicalized Copy-link grammar
+-- (never an assignee email, the open row, a Growth Agent proof or a campaign
+-- binding), so a view is a URL the actor could already share, not new data.
+-- Save and delete each write their SAVE_QUEUE_VIEW / DELETE_QUEUE_VIEW audit
+-- row in the same statement; the list read is audit-free.
+CREATE TABLE IF NOT EXISTS mip_app.saved_views (
+    view_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email TEXT NOT NULL,
+    surface     TEXT NOT NULL CHECK (surface IN ('lead_queue')),
+    name        TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 60 AND btrim(name) = name),
+    name_key    TEXT NOT NULL CHECK (length(name_key) BETWEEN 1 AND 60),
+    params      TEXT NOT NULL CHECK (length(params) BETWEEN 1 AND 2048),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at  TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_saved_views_actor_surface_name_live
+    ON mip_app.saved_views (actor_email, surface, name_key)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_saved_views_actor_surface_updated
+    ON mip_app.saved_views (actor_email, surface, updated_at DESC)
+    WHERE deleted_at IS NULL;
+COMMENT ON TABLE mip_app.saved_views IS
+    'Actor-owned named Lead Queue filter views: a canonical share-grammar query string only, no borrower data; soft-deleted, audited on save and delete.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_01_saved_views',
+    'Saved Lead Queue views: actor-owned, case-folded unique live names, canonical share-grammar params, soft delete; no DELETE grant'
+)
+ON CONFLICT (version) DO NOTHING;

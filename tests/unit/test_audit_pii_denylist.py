@@ -693,3 +693,16 @@ def test_view_leads_public_ceilings_are_allowlisted_and_range_checked() -> None:
     for bad in ({"max_opportunity_score": 101}, {"max_rate_spread_bps": -1001}, {"max_rate_spread_bps": "B-1"}):
         with pytest.raises(AuditMetadataValueViolation):
             _assert_public_safe_values(bad)
+
+
+def test_saved_view_metadata_is_an_id_and_a_fingerprint_only() -> None:
+    """W5a tables-09: SAVE/DELETE_QUEUE_VIEW never carry the name or params."""
+    view_id = "11111111-1111-4111-8111-111111111111"
+    _assert_allowlisted({"saved_view_id": view_id, "filter_fingerprint": "a" * 64})
+    _assert_public_safe_values({"saved_view_id": view_id, "filter_fingerprint": "a" * 64})
+    for bad in ("My CA recapture queue", "jane@example.com", "B-0123456789ABC", "state=IL"):
+        with pytest.raises(AuditMetadataValueViolation):
+            _assert_public_safe_values({"saved_view_id": bad})
+    for key in ("saved_view_name", "view_name", "params"):
+        with pytest.raises(AuditMetadataViolation):
+            _assert_allowlisted({key: "x"})

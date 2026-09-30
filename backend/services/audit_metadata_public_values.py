@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from backend.schemas.common import (
+    PUBLIC_UUID_PATTERN,
     contains_pii_marker,
     validate_internal_staff_email,
     validate_public_audit_identifier_or_none,
@@ -476,6 +477,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     ):
         if value is not None and re.fullmatch(r"[0-9a-f]{64}", str(value)) is None:
             raise AuditMetadataValueViolation(field, "must be a SHA-256 hex digest")
+    for field, value in _metadata_values_for(metadata, {"saved_view_id"}):
+        if value is not None and PUBLIC_UUID_PATTERN.fullmatch(str(value)) is None:
+            raise AuditMetadataValueViolation(field, "must be a server-issued saved view id")
     for field, value in _metadata_values_for(metadata, {"workflow_id"}):
         if value is not None and str(value) not in _GROWTH_AGENT_WORKFLOWS:
             raise AuditMetadataValueViolation(field, "must be a governed growth-agent workflow id")

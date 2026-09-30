@@ -196,6 +196,10 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "csv_sha256",
         "borrower_ids_sha256",
         "filter_fingerprint",
+        # SAVE_QUEUE_VIEW / DELETE_QUEUE_VIEW (backend/api/workspace.py): the
+        # server-issued view id only. The view's name and params never reach
+        # the ledger; filter_fingerprint (above) is their SHA-256.
+        "saved_view_id",
         # GENIE_ANSWER_EXPORT receipt (backend/api/genie_feedback_routes.py):
         # the SHA-256 of the CSV's column keys. The receipt reuses
         # exported_row_count and csv_sha256 above and conversation_id,
