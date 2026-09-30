@@ -55,12 +55,13 @@ for (const theme of FIXTURE_THEMES) {
       await expect(trigger).toHaveAttribute('aria-expanded', 'true');
       await expect(trigger).toHaveAttribute('aria-controls', (await listbox.getAttribute('id')) ?? 'missing');
       await expect(trigger, 'focus stays on the combobox').toBeFocused();
-      await expect(await activeDescendant(page, trigger)).toHaveText('All states');
+      // By name: an opened Lead Queue menu may add an aria-hidden option count (W5a).
+      await expect(await activeDescendant(page, trigger)).toHaveAccessibleName('All states');
 
       // Typeahead: "c" lands on CA, "o" within the buffer window refines to CO.
       await page.keyboard.type('co');
       const active = await activeDescendant(page, trigger);
-      await expect(active).toHaveText('CO');
+      await expect(active).toHaveAccessibleName('CO');
       await expect(active).toHaveAttribute('role', 'option');
       await expectFocusRing(page, active);
 
@@ -73,7 +74,7 @@ for (const theme of FIXTURE_THEMES) {
 
       await page.keyboard.press('ArrowDown');
       await expect(listbox).toBeVisible();
-      await expect(await activeDescendant(page, trigger)).toHaveText('CO');
+      await expect(await activeDescendant(page, trigger)).toHaveAccessibleName('CO');
       await page.keyboard.press('Escape');
       await expect(listbox).toHaveCount(0);
       await expect(trigger).toBeFocused();

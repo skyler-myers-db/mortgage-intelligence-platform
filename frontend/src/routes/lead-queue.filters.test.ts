@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  LEAD_BOUND_FILTER_KEYS,
+  LEAD_BOUND_LIMITS,
   approvalFilterDisplayValue,
+  buildLeadQueueExportFilters,
+  leadBoundsBlocked,
+  parseLeadBound,
   funnelStageDisplayValue,
   isNoOpPortfolioValue,
   LOAN_PRODUCT_FILTER_OPTIONS,
@@ -246,5 +251,70 @@ describe('Copy link share params (audit tables-09)', () => {
 
   it('is an empty query for the bare queue', () => {
     expect(leadQueueShareParams(new URLSearchParams(), {})).toEqual({ search: '', omitted: [] });
+  });
+});
+
+describe('public score and rate-spread bounds (audit tables-06, wow-stage-1)', () => {
+  const bounds = (query: string) => parsePortfolioCriteria(new URLSearchParams(query), []);
+
+  it('parses whole numbers inside each range into the portfolio criteria record', () => {
+    expect(LEAD_BOUND_FILTER_KEYS).toEqual([
+      'min_opportunity_score', 'max_opportunity_score', 'min_rate_spread_bps', 'max_rate_spread_bps',
+    ]);
+    expect(LEAD_BOUND_LIMITS).toEqual({ opportunity_score: { min: 0, max: 100 }, rate_spread_bps: { min: -1000, max: 5000 } });
+    expect(bounds('min_opportunity_score=70&max_opportunity_score=90&min_rate_spread_bps=-25&occupancy=Owner-occupied')).toEqual({
+      occupancy: 'Owner-occupied',
+      min_opportunity_score: '70',
+      max_opportunity_score: '90',
+      min_rate_spread_bps: '-25',
+    });
+  });
+
+  it('drops out-of-range, fractional and non-numeric values', () => {
+    expect(bounds('min_opportunity_score=101')).toBeUndefined();
+    expect(bounds('max_rate_spread_bps=-1001')).toBeUndefined();
+    expect(bounds('min_opportunity_score=70.5')).toBeUndefined();
+    expect(bounds('max_opportunity_score=high')).toBeUndefined();
+    expect(bounds('min_opportunity_score=%2070%20')).toEqual({ min_opportunity_score: '70' });
+  });
+
+  it('drops an inverted pair entirely and keeps the other dimension', () => {
+    expect(bounds('min_opportunity_score=91&max_opportunity_score=90&max_rate_spread_bps=100')).toEqual({
+      max_rate_spread_bps: '100',
+    });
+  });
+
+  it('sends no bound beside a Genie cohort or a Growth Agent proof', () => {
+    expect(bounds('min_opportunity_score=70&cohort_id=11111111-1111-1111-1111-111111111111')).toBeUndefined();
+    expect(bounds('max_rate_spread_bps=50&growth_handoff=signed')).toBeUndefined();
+    expect(bounds('max_rate_spread_bps=50&tool_result_hash=abc')).toBeUndefined();
+  });
+
+  it('reaches the export fingerprint and Copy link after the portfolio keys, as known params', () => {
+    const criteria = bounds('occupancy=Owner-occupied&max_opportunity_score=90&min_rate_spread_bps=-25');
+    expect(buildLeadQueueExportFilters({ stateFilter: 'IL', portfolioCriteria: criteria })).toBe(
+      'state=IL&occupancy=Owner-occupied&max_opportunity_score=90&min_rate_spread_bps=-25',
+    );
+    const raw = new URLSearchParams('state=IL&occupancy=Owner-occupied&max_opportunity_score=90&min_rate_spread_bps=-25');
+    const share = leadQueueShareParams(raw, { stateFilter: 'IL', portfolioCriteria: criteria });
+    expect(share).toEqual({
+      search: '?state=IL&occupancy=Owner-occupied&max_opportunity_score=90&min_rate_spread_bps=-25',
+      omitted: [],
+    });
+  });
+
+  it('never exports a bound beside a cohort, even from a hand-built criteria record', () => {
+    expect(buildLeadQueueExportFilters({
+      cohortId: '11111111-1111-1111-1111-111111111111',
+      portfolioCriteria: { min_opportunity_score: '70' },
+    })).toBe('cohort_id=11111111-1111-1111-1111-111111111111');
+  });
+
+  it('parseLeadBound and leadBoundsBlocked are the shared primitives', () => {
+    expect(parseLeadBound('min_rate_spread_bps', '-1000')).toBe(-1000);
+    expect(parseLeadBound('min_rate_spread_bps', '-1001')).toBeUndefined();
+    expect(parseLeadBound('max_opportunity_score', '')).toBeUndefined();
+    expect(leadBoundsBlocked(new URLSearchParams('cohort_id=%20'))).toBe(false);
+    expect(leadBoundsBlocked(new URLSearchParams('growth_agent_run_id=r'))).toBe(true);
   });
 });
