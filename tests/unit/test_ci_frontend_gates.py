@@ -254,5 +254,5 @@ def test_the_engine_projects_collect_exactly_their_specs() -> None:
         assert bool(firefox.search(path)) is in_firefox, spec
         assert bool(engine_only.search(path)) is ignored_in_chromium, spec
     # The shipped cross-engine specs are committed.
-    for spec in ("queue-clearance.cross-engine", "forced-colors.firefox"):
+    for spec in ("queue-clearance.cross-engine", "forced-colors.firefox", "genie-pagehide.cross-engine"):
         assert (FRONTEND / "tests" / "e2e" / "fixture" / f"{spec}.fixture.spec.ts").is_file(), spec
