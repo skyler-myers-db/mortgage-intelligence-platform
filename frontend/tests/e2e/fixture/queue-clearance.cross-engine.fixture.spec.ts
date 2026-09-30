@@ -1,0 +1,276 @@
+/**
+ * Focus Not Obscured (WCAG 2.4.11, a11y-v2) across engines: the Lead Queue
+ * clearance walks of lead-queue.fixture.spec.ts (b), ported to focus()-driven
+ * walks (fixture/focusWalk.ts) so they prove the same thing in WebKit, whose
+ * Tab skips buttons and checkboxes on macOS/Linux defaults (manual check
+ * 2026-09-30). Runs in fixture-chromium on every fixture run and in
+ * fixture-webkit in the e2e-cross-engine CI job (MIP_CROSS_ENGINE=1), at
+ * 1440x900. Every clearance test has its non-vacuity twin (the same walk with
+ * the clearance's CSS zeroed finds a covered stop).
+ *
+ * WebKit known defect (manual check 2026-09-30): element.focus() on a pinned
+ * (position: sticky, inline-end) Approve / Reject scrolls .tbl-wrap to its
+ * end (scrollLeft 0 -> 284 with the Console open), which the pinned
+ * controls' scroll-margin stops in Chromium. The fix belongs to
+ * w5-approval-core (useTableScrollClearance.ts); the invariance test carries
+ * a WebKit fixme naming it, which the integrator lifts at that lane's merge.
+ */
+import type { Locator, Page } from '@playwright/test';
+import { LEADS, PRIMARY_BORROWER } from './data/borrowers';
+import { DNC_LEAD, registerQueueLayoutLeads } from './data/queueLayout';
+import {
+  FOCUS_RING_ROOM,
+  ZERO_NAV_MARGIN,
+  ZERO_PIN_MARGIN,
+  ZERO_TABLE_BLOCK_MARGIN,
+  ZERO_TABLE_CLEARANCE,
+  addScrollRoom,
+  behindRouteNav,
+  focusStop,
+  focusWalk,
+  gapBelowRouteNav,
+  rowBehindHeader,
+  settleFrames,
+  tableUpUnderRouteNav,
+  tableWrap,
+  underPinnedColumn,
+} from './focusWalk';
+import { expect, test } from './test';
+
+const ELIGIBLE = PRIMARY_BORROWER.borrower_id;
+const PINNED_FOCUS_FIXME =
+  'w5-approval-core · manual-check-2026-09-30 WebKit pinned-focus scroll: focus() on a pinned Approve/Reject scrolls .tbl-wrap to its end (scrollLeft 0 -> 284)';
+
+async function expand(page: Page, borrowerId: string): Promise<void> {
+  const toggle = page.getByRole('button', { name: `Toggle preview for lead ${borrowerId}` });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
+
+async function focusAndSettle(page: Page, target: Locator): Promise<void> {
+  await target.focus();
+  await expect(target).toBeFocused();
+  await settleFrames(page);
+}
+
+/** K from the walk's start, `presses` times: the cursor row's gap below the nav after each move. */
+async function cursorWalkUp(page: Page, presses: number): Promise<number[]> {
+  await focusAndSettle(page, await tableUpUnderRouteNav(page));
+  const cursor = page.locator('table.tbl tr.is-cursor');
+  let previous = await cursor.getAttribute('data-borrower-row');
+  expect(previous, 'precondition: the focus put the cursor on the start row').toBeTruthy();
+  const gaps: number[] = [];
+  for (let index = 0; index < presses; index += 1) {
+    await page.keyboard.press('k');
+    await expect(cursor, 'K moved the cursor').not.toHaveAttribute('data-borrower-row', previous ?? '');
+    await settleFrames(page);
+    previous = await cursor.getAttribute('data-borrower-row');
+    gaps.push(await gapBelowRouteNav(cursor));
+  }
+  return gaps;
+}
+
+async function consoleOverflow(page: Page): Promise<number> {
+  return tableWrap(page).evaluate((wrap) => wrap.scrollWidth - wrap.clientWidth);
+}
+
+/**
+ * Focus each pinned control of `borrowerId`'s row with the table at `start`
+ * and return scrollLeft after the focus has settled (two frames).
+ */
+async function settledScrollLeftAfterPinnedFocus(page: Page, borrowerId: string, start: number): Promise<number[]> {
+  const ends: number[] = [];
+  for (const id of [`lead-approve-${borrowerId}`, `lead-reject-${borrowerId}`]) {
+    await tableWrap(page).evaluate((wrap, left) => { wrap.scrollLeft = left; }, start);
+    await focusAndSettle(page, page.getByTestId(id));
+    ends.push(await tableWrap(page).evaluate((wrap) => wrap.scrollLeft));
+  }
+  return ends;
+}
+
+/**
+ * Where each pinned control's focus sends scrollLeft, read where no restore
+ * can hide it (integrator correction C1): `sync` is read inside the same
+ * evaluate that calls focus() (Chromium reveals synchronously); `peak` is the
+ * largest scrollLeft a window capture-phase scroll listener sees in the next
+ * two frames (WebKit reveals at the next rendering update, so its sync read is
+ * always the start). A capture listener on window runs before any listener on
+ * the scroller itself, so a scroll-event or rAF restore cannot hide the peak.
+ */
+async function scrollLeftReachedByPinnedFocus(page: Page, borrowerId: string, start: number): Promise<Array<{ sync: number; peak: number }>> {
+  return tableWrap(page).evaluate(async (wrap, { id, left }) => {
+    const reached: Array<{ sync: number; peak: number }> = [];
+    for (const testId of [`lead-approve-${id}`, `lead-reject-${id}`]) {
+      (document.activeElement as HTMLElement | null)?.blur();
+      wrap.scrollLeft = left;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const control = wrap.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+      if (!control) throw new Error(`no ${testId}`);
+      let peak = wrap.scrollLeft;
+      const onScroll = (event: Event) => { if (event.target === wrap) peak = Math.max(peak, wrap.scrollLeft); };
+      window.addEventListener('scroll', onScroll, { capture: true });
+      control.focus();
+      const sync = wrap.scrollLeft;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      window.removeEventListener('scroll', onScroll, { capture: true });
+      reached.push({ sync, peak: Math.max(peak, sync) });
+    }
+    return reached;
+  }, { id: borrowerId, left: start });
+}
+
+test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
+  for (const route of ['/lead-queue', '/segment-intelligence'] as const) {
+    test(`${route}: with .main at its end, a reverse walk up the rows stops clear of the route nav`, async ({ app, page }) => {
+      await app.gotoRoute(route);
+      await focusAndSettle(page, await tableUpUnderRouteNav(page));
+      const stops = await focusWalk(page, 'reverse', 30);
+      expect(stops.length, 'non-vacuity: the walk moved focus').toBeGreaterThan(20);
+      expect(stops.filter((stop) => stop.covered.length > 0)).toEqual([]);
+    });
+
+    test(`${route} non-vacuity: with the table's block margin zeroed, the same walk stops under the route nav`, async ({ app, page }) => {
+      await app.gotoRoute(route);
+      await page.addStyleTag({ content: ZERO_TABLE_BLOCK_MARGIN });
+      await focusAndSettle(page, await tableUpUnderRouteNav(page));
+      const stops = await focusWalk(page, 'reverse', 30);
+      expect(stops.filter((stop) => stop.covered.includes('route nav')).length, 'a stop under the nav').toBeGreaterThan(0);
+    });
+  }
+
+  test('/lead-queue: with .main at its end, K brings the cursor row up clear of the route nav', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    expect((await cursorWalkUp(page, 8)).filter((gap) => gap < -0.5)).toEqual([]);
+  });
+
+  test('/lead-queue non-vacuity: with the table\'s block margin zeroed, K leaves a cursor row under the route nav', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    await page.addStyleTag({ content: ZERO_TABLE_BLOCK_MARGIN });
+    expect((await cursorWalkUp(page, 8)).filter((gap) => gap < -0.5).length, 'a cursor row under the nav').toBeGreaterThan(0);
+  });
+
+  test('a reverse walk up the rows stops clear of the sticky header, with a selection bar up', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    await page.getByTestId(`lead-select-${LEADS[0].borrower_id}`).check();
+    await page.getByTestId(`lead-select-${LEADS[2].borrower_id}`).check();
+    await expect(page.getByTestId('lead-bulk-actions')).toBeVisible();
+    const hidden = await rowBehindHeader(page, 5);
+    await focusAndSettle(page, page.getByTestId(`lead-select-${LEADS[6].borrower_id}`));
+
+    const stops = await focusWalk(page, 'reverse', 60);
+    expect(stops.length, 'non-vacuity: the walk moved focus').toBeGreaterThan(40);
+    expect(stops.filter((stop) => stop.covered.length > 0)).toEqual([]);
+
+    await rowBehindHeader(page, 5);
+    await focusAndSettle(page, page.getByTestId(`lead-select-${hidden}`));
+    expect((await focusStop(page))?.covered, 'a control behind the header scrolls clear of it').toEqual([]);
+  });
+
+  test('with the Console open, a walk across the eligible row reaches Approve / Reject, never under the pinned column', async ({ app, mockApi, page }) => {
+    registerQueueLayoutLeads(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await app.openConsole();
+    expect(await consoleOverflow(page), 'precondition: the Console narrows the table into a horizontal scroll').toBeGreaterThan(0);
+    await focusAndSettle(page, page.getByTestId(`lead-select-${ELIGIBLE}`));
+
+    const stops = await focusWalk(page, 'forward', 10);
+    expect(stops.some((stop) => stop.label === `Approve ${ELIGIBLE}`), 'the walk reached the Approval cell').toBe(true);
+    expect(stops.filter((stop) => stop.covered.length > 0)).toEqual([]);
+
+    // The Status cell's `+n`, the last control before the pin, parked under it.
+    const more = page.locator(`[data-testid="lead-status-${DNC_LEAD.borrower_id}"] .lead-table__more`);
+    await underPinnedColumn(more);
+    await focusAndSettle(page, more);
+    expect((await focusStop(page))?.covered, 'a control under the pin scrolls clear of it').toEqual([]);
+  });
+
+  test('non-vacuity: with the table\'s clearances zeroed, the same stops are covered', async ({ app, mockApi, page }) => {
+    registerQueueLayoutLeads(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await page.addStyleTag({ content: ZERO_TABLE_CLEARANCE });
+    const hidden = await rowBehindHeader(page, 5);
+    await focusAndSettle(page, page.getByTestId(`lead-select-${hidden}`));
+    expect((await focusStop(page))?.covered, 'a stop under the header').toContain('thead');
+
+    await app.openConsole();
+    const more = page.locator(`[data-testid="lead-status-${DNC_LEAD.borrower_id}"] .lead-table__more`);
+    await underPinnedColumn(more);
+    await focusAndSettle(page, more);
+    expect((await focusStop(page))?.covered, 'a stop under the pin').toContain('pinned column');
+  });
+
+  for (const zeroed of [false, true]) {
+    test(`${zeroed ? 'non-vacuity, nav margin zeroed: ' : ''}a /glossary control focused from behind the route nav ${zeroed ? 'stays there' : 'stops below it'}`, async ({ app, page }) => {
+      await app.gotoRoute('/glossary');
+      if (zeroed) await page.addStyleTag({ content: ZERO_NAV_MARGIN });
+      const target = page.locator('.main .proto-hero').getByRole('link', { name: 'Back to leads' });
+      await behindRouteNav(page, target);
+      await focusAndSettle(page, target);
+      if (zeroed) expect(await gapBelowRouteNav(target), 'a stop under the nav').toBeLessThan(0);
+      else expect(await gapBelowRouteNav(target), 'the focused control sits below the nav').toBeGreaterThanOrEqual(-0.5);
+    });
+
+    test(`${zeroed ? 'non-vacuity, block margin zeroed: ' : ''}the expanded row's Approve focused from behind the route nav ${zeroed ? 'stays there' : 'stops below it'}`, async ({ app, page }) => {
+      await app.gotoRoute('/lead-queue');
+      if (zeroed) await page.addStyleTag({ content: ZERO_TABLE_BLOCK_MARGIN });
+      await expand(page, ELIGIBLE);
+      const approve = page.getByTestId(`lead-row-approval-${ELIGIBLE}`).getByRole('button', { name: 'Approve outreach' });
+      await behindRouteNav(page, approve);
+      await focusAndSettle(page, approve);
+      if (zeroed) expect(await gapBelowRouteNav(approve), 'a stop under the nav').toBeLessThan(0);
+      else expect(await gapBelowRouteNav(approve), 'the focused control sits below the nav').toBeGreaterThanOrEqual(-0.5);
+    });
+  }
+
+  for (const tab of ['ask', 'workflows'] as const) {
+    test(`/ask-genie's ${tab} tab clears the nav once`, async ({ app, page }) => {
+      await app.gotoRoute(tab === 'ask' ? '/ask-genie' : '/ask-genie?tab=workflows');
+      const panel = page.locator('section[role="tabpanel"]:not([hidden])');
+      if (tab === 'ask') await expect(panel.locator('.genie-composer'), 'precondition: the Ask tab').toBeVisible();
+      else await expect(panel.locator('.genie-composer'), 'precondition: the Workflows tab').toHaveCount(0);
+      await addScrollRoom(page);
+      const target = tab === 'ask' ? panel.locator('button:not(.genie-composer *)').first() : panel.getByRole('button').first();
+      await target.evaluate((element) => element.scrollIntoView({ block: 'start' }));
+      const gap = await gapBelowRouteNav(target);
+      expect(gap, 'at or below the nav').toBeGreaterThanOrEqual(-0.5);
+      expect(gap, 'the focus ring\'s room, not a second nav height').toBeLessThanOrEqual(FOCUS_RING_ROOM + 1);
+    });
+  }
+
+  test('a focus on a pinned Approve or Reject leaves the table\'s scrollLeft where it was, Console open', async ({ app, browserName, mockApi, page }) => {
+    test.fixme(browserName === 'webkit', PINNED_FOCUS_FIXME);
+    registerQueueLayoutLeads(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await app.openConsole();
+    const overflow = await consoleOverflow(page);
+    expect(overflow, 'precondition: the Console narrows the table into a horizontal scroll').toBeGreaterThan(40);
+    for (const start of [0, Math.round(overflow / 2)]) {
+      for (const end of await settledScrollLeftAfterPinnedFocus(page, ELIGIBLE, start)) {
+        expect(Math.abs(end - start), `a pinned control focused at scrollLeft ${start} stays there`).toBeLessThanOrEqual(1);
+      }
+    }
+    // The tabbable before the next row's checkbox is this row's Reject, in the pin.
+    await tableWrap(page).evaluate((wrap) => { wrap.scrollLeft = 0; });
+    const order = await page.locator('tr[data-borrower-row]').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-borrower-row')));
+    const next = order[order.indexOf(ELIGIBLE) + 1];
+    expect(next, 'precondition: a row follows').toBeTruthy();
+    await focusAndSettle(page, page.getByTestId(`lead-select-${next}`));
+    const back = await focusWalk(page, 'reverse', 1);
+    expect(back.map((stop) => stop.label)).toEqual([`Reject ${ELIGIBLE}`]);
+    expect(await tableWrap(page).evaluate((wrap) => wrap.scrollLeft), 'the row\'s borrower id stays in view').toBeLessThanOrEqual(1);
+  });
+
+  test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end', async ({ app, browserName, mockApi, page }) => {
+    registerQueueLayoutLeads(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await app.openConsole();
+    await page.addStyleTag({ content: ZERO_PIN_MARGIN });
+    const overflow = await consoleOverflow(page);
+    expect(overflow).toBeGreaterThan(40);
+    for (const { sync, peak } of await scrollLeftReachedByPinnedFocus(page, ELIGIBLE, 0)) {
+      // Chromium: the synchronous read (C1); WebKit reveals a frame later, so its peak.
+      const reached = browserName === 'webkit' ? peak : sync;
+      expect(reached, 'the scroller\'s inline-end padding "reveals" a control already in view').toBeGreaterThan(overflow - 2);
+    }
+  });
+});

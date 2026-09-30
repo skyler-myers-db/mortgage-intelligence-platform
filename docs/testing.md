@@ -115,6 +115,7 @@ npm --prefix frontend run e2e:fixture:ci                     # CI posture: forbi
 | `E2E_FIXTURE_NESTED=1` | unset | Internal to `runner.fixture.spec.ts`, which spawns a nested run that collects only `fixture/nested/*.nested.ts` (tests that fail on purpose) and starts no web server. Never set it by hand. |
 | `MIP_VRT=1` | unset | Collects `visual.fixture.spec.ts` (every other fixture run ignores it) and writes artifacts to `test-results/vrt` and `playwright-report/vrt`. Only the `e2e-visual` CI job and `tools/update_visual_baselines.sh` set it; see "Visual regression". |
 | `MIP_VRT_IMAGE` | unset | The Playwright image the run is inside. The VRT refuses to capture unless it is `mcr.microsoft.com/playwright:v<installed @playwright/test>-noble` on linux/x64. |
+| `MIP_CROSS_ENGINE=1` | unset | Replaces fixture-chromium with the two cross-engine projects, `fixture-webkit` (`*.cross-engine.fixture.spec.ts` and `*.webkit.fixture.spec.ts`) and `fixture-firefox-forced` (`*.firefox.fixture.spec.ts` and `genie-pagehide.cross-engine`), and writes to `test-results/cross-engine` and `playwright-report/cross-engine`. Only the `e2e-cross-engine` CI job sets it; see "Cross-engine projects". A Playwright harness variable, not an app setting. |
 | `MIP_PERF=1` | unset | Collects the `PERF_SPEC` specs, `perf-budget.fixture.spec.ts` (bundle-08) and `interaction-budget.fixture.spec.ts` (runtime-09), and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf and interaction budgets" step of the `e2e-fixture` CI job sets it, with the file filters `perf-budget interaction-budget` (without them MIP_PERF=1 also collects every normal fixture spec). See "Perf budget". |
 
 Fixture pages run at 1440x900, `prefers-reduced-motion: reduce`, locale `en-US`, timezone `America/New_York`, with `Date` frozen at `2026-07-14T15:00:00Z` (`test.use({ fixtureNow: null })` restores the real clock). Rebuild after changing anything under `frontend/src`; the harness never rebuilds for you.
@@ -234,6 +235,26 @@ E2E_FIXTURE_PORT=<port> npm --prefix frontend run e2e:fixture -- aria-snapshots 
 ### Forced colors: automated in Chromium, manual in Firefox
 
 The fixture suite proves the forced-colors layer (`tokens.css` `@media (forced-colors: active)` and `design-system/components/33-contrast-modes.css`) in Chromium only: `css-hygiene.forced-ink.fixture.spec.ts` and `css-hygiene.modes.fixture.spec.ts` emulate `forcedColors: 'active'` and sample real pixels. Firefox implements forced colors itself, so before a release that touches those files, or any active, selected or focus state, a reviewer does one manual pass (audit a11y-10 item 4 / css-06 item 3). In Firefox Settings > General > Language and Appearance, under Contrast Control ("Colors" on older versions), set Override colors to **Always** (the `about:config` equivalent is `browser.display.document_color_use` = 2; on Windows a Contrast theme does the same), then reload the app in both themes. Check that: the focus ring on the topbar search, a rail link and a Lead Queue row control paints in the system Highlight; the active rail item, segmented button, filter chip, drawer tab, the command palette's active row and the filter menu's focused and selected option each show a Highlight fill with readable text and icons; confidence bars, the status-pill dot, the map regions, legend bars and ZIP tiles keep a visible CanvasText edge; and the score chips keep their solid, dashed and dotted borders. Record the date, Firefox version, OS and anything that failed in the pull request; a failure is filed as a finding and fixed in CSS, never waived.
+
+### Cross-engine projects
+
+The fixture harness runs in Chromium on every pull request; the `e2e-cross-engine` CI job ("e2e (fixture, WebKit + Firefox forced colors)", Linux, no secrets) adds WebKit and Firefox with `MIP_CROSS_ENGINE=1`, which makes `playwright.config.ts` build ONLY two projects, both at the fixture pins (1440x900, device scale 1, `en-US`, `America/New_York`, reduced motion):
+
+- `fixture-webkit` (`devices['Desktop Safari']`) collects `WEBKIT_SPEC`: every `*.cross-engine.fixture.spec.ts` and every `*.webkit.fixture.spec.ts`.
+- `fixture-firefox-forced` (`devices['Desktop Firefox']` with `firefoxUserPrefs {'browser.display.document_color_use': 2}`, Firefox's "Override colors: Always") collects `FIREFOX_FORCED_SPEC`: every `*.firefox.fixture.spec.ts` and `genie-pagehide.cross-engine.fixture.spec.ts`.
+
+The testMatch contract: a `*.cross-engine.fixture.spec.ts` runs in fixture-chromium on every normal run AND in fixture-webkit; `ENGINE_ONLY_SPEC` (`*.webkit` / `*.firefox`) is ignored by every run except the cross-engine one. A lane's WebKit-only proof (w5-approval-core's pinned-focus fix may land as one) is a new `*.webkit.fixture.spec.ts` and is collected by fixture-webkit once both lanes merge. `tests/unit/test_ci_frontend_gates.py` pins the job, that no other job sets `MIP_CROSS_ENGINE`, and which file names each regex collects.
+
+**Walks are focus()-driven.** WebKit's Tab skips buttons, links and checkboxes on macOS and Linux defaults (Safari's "Press Tab to highlight each item" is off), so a keyboard Tab walk proves nothing there. `fixture/focusWalk.ts` moves focus with `element.focus()` to the next or previous tabbable in DOM order (tabindex >= 0, not disabled, not inert, rendered and visible), waits two frames, and reports which sticky chrome (route nav, sticky header, pinned column, bulk bar) fully covers the focused box. A browser's focus scroll for `focus()` is the same "scroll into view if needed" a Tab performs. `queue-clearance.cross-engine.fixture.spec.ts` ports the Lead Queue clearance walks this way, each with its non-vacuity twin. Note that WebKit reveals a focused control at the next rendering update, not synchronously inside `focus()` as Chromium does: a twin that must see the reveal reads Chromium's scrollLeft synchronously and WebKit's peak through a window capture-phase scroll listener, so a restore added later cannot hide it.
+
+**A known engine defect is a `test.fixme`, never a silent skip.** Its description names the owning lane and the finding id, for example `test.fixme(browserName === 'webkit', 'w5-approval-core · manual-check-2026-09-30 WebKit pinned-focus scroll: ...')`. The fixme list is the record; the owner lifts its fixme in the change that fixes the defect.
+
+**Firefox on the dev host.** Playwright Firefox 155 does not start on the macOS 27 host ("Could not find profile folder"), so the Firefox project runs on CI's Linux runners, or locally inside the pinned `mcr.microsoft.com/playwright:v1.63.0-noble` container. WebKit runs locally:
+
+```bash
+npm --prefix frontend run build
+MIP_CROSS_ENGINE=1 E2E_FIXTURE_PORT=<port> npm --prefix frontend run e2e:fixture -- --project=fixture-webkit
+```
 
 ### Surface overflow and audited reads
 

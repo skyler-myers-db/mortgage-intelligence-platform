@@ -557,6 +557,48 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  e2e-cross-engine:
+    # Cross-engine fixture projects (manual check 2026-09-30, a11y-10 item 4,
+    # css-06 item 3). MIP_CROSS_ENGINE=1 makes playwright.config.ts run ONLY
+    # fixture-webkit (*.cross-engine / *.webkit specs: focus()-driven
+    # clearance walks, Genie pagehide) and fixture-firefox-forced (Firefox
+    # with forced colors: *.firefox specs and genie-pagehide), replacing the
+    # manual Firefox forced-colors pass. A known engine defect is a test.fixme
+    # naming its owner lane and finding id, never a silent skip. No secrets;
+    # every page is synthetic fixture data.
+    name: e2e (fixture, WebKit + Firefox forced colors)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm --prefix frontend ci
+      - name: Build production frontend
+        run: npm --prefix frontend run build
+      - name: Install WebKit and Firefox
+        working-directory: frontend
+        run: npx playwright install --with-deps webkit firefox
+      - name: Run the cross-engine projects
+        env:
+          MIP_CROSS_ENGINE: '1'
+          E2E_FIXTURE_WORKERS: '2'
+        run: npm --prefix frontend run e2e:fixture:ci
+      - name: Upload the cross-engine report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-cross-engine-report
+          path: |
+            frontend/playwright-report/cross-engine
+            frontend/test-results/cross-engine
+          if-no-files-found: ignore
+          retention-days: 7
+
   security-scan:
     # SAST + secret-scan gate. This job is credential-free like the rest
     # of ci.yml: no repo secrets, runs identically on fork PRs and

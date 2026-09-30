@@ -201,3 +201,58 @@ def test_the_parse_job_runs_the_whole_layout_stability_spec() -> None:
     assert f"E2E_LAYOUT_MOCK=1 npx playwright test {LAYOUT_STABILITY_SPEC} --workers=1" in lines
     assert "--grep" not in step["run"], "every layout-stability test runs, not a --grep subset"
     assert "if" not in step and "continue-on-error" not in step
+
+
+# --- Cross-engine projects (manual check 2026-09-30, a11y-10 item 4, css-06 item 3)
+
+
+def _playwright_regex(name: str) -> re.Pattern[str]:
+    config = (FRONTEND / "playwright.config.ts").read_text(encoding="utf-8")
+    literal = re.search(rf"^export const {name} = /(.+)/;$", config, re.MULTILINE)
+    assert literal, f"playwright.config.ts exports {name} as a regex literal"
+    return re.compile(literal.group(1))
+
+
+def test_the_cross_engine_job_installs_webkit_and_firefox_and_gates() -> None:
+    job = _jobs()["e2e-cross-engine"]
+    assert job["name"] == "e2e (fixture, WebKit + Firefox forced colors)"
+    assert job["runs-on"] == "ubuntu-latest"
+    assert "continue-on-error" not in job
+    steps = job["steps"]
+    install = steps[_step_index(steps, "npx playwright install --with-deps webkit firefox")]
+    assert install["working-directory"] == "frontend"
+    run = steps[_step_index(steps, "npm --prefix frontend run e2e:fixture:ci")]
+    assert run["env"]["MIP_CROSS_ENGINE"] == "1"
+    assert run["env"]["E2E_FIXTURE_WORKERS"] == "2"
+    assert all("continue-on-error" not in step for step in steps)
+    assert "secrets." not in yaml.safe_dump(job), "the cross-engine job is credential-free"
+
+
+def test_only_the_cross_engine_job_sets_mip_cross_engine() -> None:
+    for name, job in _jobs().items():
+        if name == "e2e-cross-engine":
+            continue
+        assert "MIP_CROSS_ENGINE" not in yaml.safe_dump(job), f"{name} must not set MIP_CROSS_ENGINE"
+
+
+def test_the_engine_projects_collect_exactly_their_specs() -> None:
+    webkit, firefox, engine_only = (
+        _playwright_regex(name) for name in ("WEBKIT_SPEC", "FIREFOX_FORCED_SPEC", "ENGINE_ONLY_SPEC")
+    )
+    fixture = "frontend/tests/e2e/fixture/"
+    cases = {
+        "queue-clearance.cross-engine.fixture.spec.ts": (True, False, False),
+        "genie-pagehide.cross-engine.fixture.spec.ts": (True, True, False),
+        "pinned-focus.webkit.fixture.spec.ts": (True, False, True),
+        "forced-colors.firefox.fixture.spec.ts": (False, True, True),
+        "lead-queue.fixture.spec.ts": (False, False, False),
+        "visual.fixture.spec.ts": (False, False, False),
+    }
+    for spec, (in_webkit, in_firefox, ignored_in_chromium) in cases.items():
+        path = fixture + spec
+        assert bool(webkit.search(path)) is in_webkit, spec
+        assert bool(firefox.search(path)) is in_firefox, spec
+        assert bool(engine_only.search(path)) is ignored_in_chromium, spec
+    # The shipped cross-engine specs are committed.
+    for spec in ("queue-clearance.cross-engine",):
+        assert (FRONTEND / "tests" / "e2e" / "fixture" / f"{spec}.fixture.spec.ts").is_file(), spec
