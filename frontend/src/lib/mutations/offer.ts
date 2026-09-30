@@ -45,6 +45,8 @@ export interface OfferApproveBody {
   follow_up_in_days: number | null;
   campaign_id: string | null;
   variant_name: string | null;
+  /** The approver reviewed this exact on-screen draft (the APPROVE row's review ledger). */
+  review_mode: 'individual';
 }
 
 export interface OfferRejectBody {

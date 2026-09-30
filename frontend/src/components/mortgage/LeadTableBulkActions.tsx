@@ -7,9 +7,16 @@
  * (audit runtime-04 slice 2), so typing it re-renders this toolbar, never
  * the table. It is cleared once a run settles. Extracted from LeadTable.tsx
  * (file-size gate, plan item 2); markup and class names are unchanged.
+ *
+ * Arming (audit flow-03 / states-06, D-approval-flow-a1;
+ * deviation:bulk-approve-arming): while the gate is open, Approve stays
+ * aria-disabled (never native `disabled`, which would drop focus) until the
+ * shared rationale is written and every offer in the run has a previewed
+ * sample. A status line says what is missing, and activating Approve then
+ * moves focus to the first missing piece instead of submitting.
  */
 
-import { useState, type ReactNode, type RefObject } from 'react';
+import { useId, useState, type ReactNode, type RefObject } from 'react';
 import type { SalesTeamMember } from '../../types';
 import { Button } from '../Primitives';
 import type { BulkToast } from './useLeadApprovalActions';
@@ -47,7 +54,13 @@ interface LeadTableBulkActionsProps {
   runKind?: BulkRunKind | null;
   /** The run's progress line (LeadBulkRunProgress, lazy), shown full width while it runs. */
   runStatus?: ReactNode;
+  /** Every offer in the run has a previewed sample (the gate's coverage). */
+  samplesCoverAllOffers?: boolean;
+  /** The lazy bulk chunk failed to load: bulk decisions fail closed. */
+  bulkChunkFailed?: boolean;
 }
+
+const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
 
 export function LeadTableBulkActions({
   selectionCount,
@@ -71,11 +84,36 @@ export function LeadTableBulkActions({
   shortcutsLive = true,
   runKind = null,
   runStatus = null,
+  samplesCoverAllOffers = false,
+  bulkChunkFailed = false,
 }: LeadTableBulkActionsProps) {
+  const armingId = useId();
   const [bulkRationale, setBulkRationale] = useState('');
   const gateOpen = selectionCount > 1 && bulkRationaleOpen;
   const running = runKind !== null;
-  const approve = () => {
+  const rationaleMissing = bulkRationale.trim().length === 0;
+  const armingCopy = !gateOpen
+    ? null
+    : rationaleMissing && !samplesCoverAllOffers
+      ? 'Write a shared rationale and preview one draft per offer before approving.'
+      : rationaleMissing
+        ? 'Write a shared rationale before approving.'
+        : !samplesCoverAllOffers
+          ? 'Preview one draft per offer before approving.'
+          : null;
+  // A failed bulk chunk leaves no gate to review in: bulk decisions fail closed.
+  const bulkBlocked = bulkChunkFailed && selectedApprovalEligibleCount > 1;
+  const approve = (event: { currentTarget: HTMLElement }) => {
+    if (bulkBlocked) return;
+    if (armingCopy !== null) {
+      // Unarmed: take the reader to the first missing piece; never submit.
+      const toolbar = event.currentTarget.closest('[data-testid="lead-bulk-actions"]');
+      const target = rationaleMissing
+        ? bulkRationaleRef?.current ?? null
+        : toolbar?.querySelector<HTMLElement>(PREVIEW_SAMPLES_SELECTOR) ?? null;
+      target?.focus();
+      return;
+    }
     void onBulkApprove(bulkRationale).then((settled) => {
       if (settled) setBulkRationale('');
     });
@@ -167,9 +205,11 @@ export function LeadTableBulkActions({
             approverGate !== null || campaignBindingBlocked || bulkApproving
             || selectedApprovalEligibleCount === 0
           }
+          aria-disabled={armingCopy !== null || bulkBlocked || undefined}
           aria-describedby={describedBy(
             approverGate !== null && APPROVER_ROLE_STATUS_ID,
             campaignBindingBlocked && 'campaign-binding-status',
+            armingCopy !== null && armingId,
           )}
           title={approverGate ?? undefined}
           data-testid="lead-bulk-approve"
@@ -179,6 +219,14 @@ export function LeadTableBulkActions({
           {bulkApproving ? 'Approving…' : `Approve ${selectedApprovalEligibleCount} eligible`}
         </Button>
       </div>
+      {armingCopy !== null && (
+        <span id={armingId} className="muted fs-12" data-testid="lead-bulk-arming">{armingCopy}</span>
+      )}
+      {bulkBlocked && (
+        <span role="alert" className="text-danger fs-12" data-testid="lead-bulk-chunk-failed">
+          The bulk review could not load, so nothing can be approved or rejected in bulk. Reload the page.
+        </span>
+      )}
       {gateOpen && gateReview}
       {running && runStatus}
     </div>

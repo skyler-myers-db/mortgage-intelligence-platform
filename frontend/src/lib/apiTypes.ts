@@ -74,6 +74,15 @@ export interface HealthPayload {
   } | null;
 }
 
+/**
+ * How the approver saw the copy an approval certifies (audit flow-03): on
+ * screen for this borrower (individual, triage), previewed as a bulk sample
+ * (bulk_sample), or approved under a bulk run's shared rationale without
+ * being shown (bulk_cohort). The server records 'undeclared' for a client
+ * that sends none; a client never sends that token.
+ */
+export type ReviewMode = 'individual' | 'triage' | 'bulk_sample' | 'bulk_cohort';
+
 export interface ApproveResult {
   approved: boolean;
   approval_id?: string | null;

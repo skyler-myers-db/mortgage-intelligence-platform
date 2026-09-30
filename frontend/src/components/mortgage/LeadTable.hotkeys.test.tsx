@@ -278,6 +278,14 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     const rationale = container.querySelector<HTMLInputElement>('.bulk-actions__rationale input');
     if (!rationale) throw new Error('bulk rationale gate not rendered');
     typeInto(rationale, 'Q3 retention sweep');
+    // Approve arms once every offer has a previewed sample (D-approval-flow-a1).
+    await vi.waitFor(async () => {
+      await flush();
+      expect(container.querySelector('[data-testid="lead-bulk-preview-samples"]')).not.toBeNull();
+    }, { timeout: 15_000 });
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-preview-samples"]')!.click());
+    await flush();
+    await flush();
 
     act(() => bulkApprove.click());
     await flush();

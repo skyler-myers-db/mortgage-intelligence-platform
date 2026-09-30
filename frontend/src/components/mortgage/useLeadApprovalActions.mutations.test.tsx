@@ -10,6 +10,12 @@
  * again" after a 500 replays the same request_id; the bulk loop keeps at
  * most 3 POSTs in flight and one per borrower; an unmount-aborted run is
  * stashed and flashed on the next mount; a double reject sends one POST.
+ *
+ * A run starts only once its gate previewed a sample of every offer in it
+ * (D-approval-flow-a1): the previewed rows are approved with that copy
+ * (review_mode 'bulk_sample'), the rest under the shared rationale
+ * ('bulk_cohort'), and an unsampled row whose drafted offer the gate never
+ * showed is refused before its approve POST (the in-run offer check).
  */
 
 import { QueryClient } from '@tanstack/react-query';
@@ -64,6 +70,11 @@ function draft(generationId: string): OutreachDraftResult {
     response_hash: 'a'.repeat(64),
     source_refreshed_at: '2026-07-13T12:00:00Z',
   } as OutreachDraftResult;
+}
+
+/** The gate's preview: one sample of the run's one offer (refi), on the LAST row. */
+function lastRowSample(): ReadonlyMap<string, OutreachDraftResult> {
+  return new Map([[IDS[6], draft('gen-sample')]]);
 }
 
 type Actions = ReturnType<typeof useLeadApprovalActions>;
@@ -223,15 +234,25 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     mount();
     act(() => actions!.toggleSelectAll());
     await act(async () => {
-      await actions!.bulkApprove(undefined, 'Q3 refinance push');
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
 
     expect(maxInFlight).toBe(3);
     const approvedIds = apiMocks.approve.mock.calls.map((call) => call[0] as string);
     expect([...approvedIds].sort()).toEqual([...IDS].sort());
-    const bodies = apiMocks.approve.mock.calls.map((call) => call[1] as { bulk_id: string; request_id: string });
+    const bodies = apiMocks.approve.mock.calls.map((call) => call[1] as {
+      bulk_id: string; request_id: string; review_mode: string; bulk_rationale: string; draft_generation_id: string;
+    });
     expect(new Set(bodies.map((body) => body.bulk_id)).size).toBe(1);
     expect(new Set(bodies.map((body) => body.request_id)).size).toBe(IDS.length);
+    expect(new Set(bodies.map((body) => body.bulk_rationale))).toEqual(new Set(['Q3 refinance push']));
+    // The previewed row certifies its sample; the others the shared rationale.
+    const modeById = new Map(apiMocks.approve.mock.calls.map((call) => [call[0] as string, (call[1] as { review_mode: string }).review_mode]));
+    expect(modeById.get(IDS[6])).toBe('bulk_sample');
+    expect(IDS.slice(0, 6).map((id) => modeById.get(id))).toEqual(Array(6).fill('bulk_cohort'));
+    expect(bodies.find((body) => body.review_mode === 'bulk_sample')?.draft_generation_id).toBe('gen-sample');
+    // Only the six unsampled rows drafted in the run.
+    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(6);
     // A finished run reports through the run's result; the static toast is
     // only the unmount stash (R5-21).
     expect(actions!.bulkRun.result).toMatchObject({ ok: 7, failed: [], skipped: [], notStarted: [], stopped: false });
@@ -253,7 +274,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     act(() => actions!.toggleSelectAll());
     let run: Promise<boolean> = Promise.resolve(false);
     await act(async () => {
-      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
+      run = actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
     await flush();
     expect(apiMocks.approve).toHaveBeenCalledTimes(3);
@@ -282,7 +303,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     mount();
     act(() => actions!.toggleSelectAll());
     await act(async () => {
-      await actions!.bulkApprove(undefined, 'Q3 refinance push');
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
 
     expect(actions!.bulkRun.result?.failed).toEqual([
@@ -302,7 +323,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     act(() => actions!.toggleSelectAll());
     let run: Promise<boolean> = Promise.resolve(false);
     await act(async () => {
-      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
+      run = actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
     await flush();
     // A refetch lands mid-run with different evidence for a row not sent yet.
@@ -332,7 +353,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     act(() => actions!.toggleSelectAll());
     let run: Promise<boolean> | null = null;
     await act(async () => {
-      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
+      run = actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
     await flush();
     expect(apiMocks.approve).toHaveBeenCalledTimes(3);
@@ -353,6 +374,65 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     // Aborted rows are audit-ambiguous: nothing is re-selected for a retry.
     expect(actions!.selectionCount).toBe(0);
     expect(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled')).toBeNull();
+  });
+
+  it('refuses a run whose samples miss an offer: the gate reopens, nothing is drafted or sent', async () => {
+    harnessLeads = LEADS.map((row) => (row.borrower_id === IDS[2]
+      ? { ...row, recommended_offer_code: 'heloc' } as LeadSummary
+      : row));
+    mount();
+    act(() => actions!.toggleSelectAll());
+    let started: boolean | undefined;
+    await act(async () => {
+      // The preview showed refi only; the selection also holds a HELOC row.
+      started = await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(started).toBe(false);
+    expect(actions!.bulkRationaleOpen).toBe(true);
+    expect(apiMocks.draftOutreach).not.toHaveBeenCalled();
+    expect(apiMocks.approve).not.toHaveBeenCalled();
+    expect(actions!.bulkRun.result).toBeNull();
+  });
+
+  it('runs once every offer has a sample, and each sampled row certifies its own sample', async () => {
+    harnessLeads = LEADS.map((row) => (row.borrower_id === IDS[2]
+      ? { ...row, recommended_offer_code: 'heloc' } as LeadSummary
+      : row));
+    mount();
+    act(() => actions!.toggleSelectAll());
+    const samples = new Map([
+      [IDS[6], draft('gen-sample-refi')],
+      [IDS[2], { ...draft('gen-sample-heloc'), offer_code: 'heloc' } as OutreachDraftResult],
+    ]);
+    await act(async () => {
+      await actions!.bulkApprove(samples, 'Q3 refinance push');
+    });
+
+    expect(apiMocks.approve).toHaveBeenCalledTimes(IDS.length);
+    const byId = new Map(apiMocks.approve.mock.calls.map((call) => [call[0] as string, call[1] as {
+      review_mode: string; draft_generation_id: string;
+    }]));
+    expect(byId.get(IDS[2])).toEqual(expect.objectContaining({ review_mode: 'bulk_sample', draft_generation_id: 'gen-sample-heloc' }));
+    expect(byId.get(IDS[6])).toEqual(expect.objectContaining({ review_mode: 'bulk_sample', draft_generation_id: 'gen-sample-refi' }));
+  });
+
+  it('refuses an unsampled row whose drafted offer the preview never showed; it stays selected', async () => {
+    apiMocks.draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(
+      borrowerId === IDS[3] ? { ...draft(`gen-${borrowerId}`), offer_code: 'cash_out' } : draft(`gen-${borrowerId}`),
+    ));
+    mount();
+    act(() => actions!.toggleSelectAll());
+    await act(async () => {
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(apiMocks.approve.mock.calls.map((call) => call[0])).not.toContain(IDS[3]);
+    expect(actions!.bulkRun.result?.failed).toEqual([
+      { borrowerId: IDS[3], outcome: 'backend', message: 'Offer changed since preview — review individually' },
+    ]);
+    expect([...actions!.selectedIds]).toEqual([IDS[3]]);
+    expect(getToasts()).toEqual([]);
   });
 
   it('clears a flashed run with nothing aborted after 4 s, and keeps an aborted one until it is resolved', () => {

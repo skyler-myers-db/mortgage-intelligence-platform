@@ -81,8 +81,13 @@ const BULK_REVIEW_CHUNK = lazyModule(() => import('./LeadBulkApproveReview'));
  * selection". Bulk approve loops `api.approve()` per selected lead in chunks
  * of 3 to keep one audit row per approval (matching the single-row flow),
  * behind a required shared rationale; the gate shows the count by offer and
- * drafts samples only on "Preview 3 sample drafts". Shift+A and the Cmd-K
- * verb open that same gate; one selected row opens its own review instead.
+ * drafts stratified samples (one per offer) only on "Preview k sample drafts
+ * (one per offer)", and Approve arms only once every offer in the run has
+ * one. Each APPROVE row records its review_mode: 'bulk_sample' for a row
+ * whose previewed copy is what it certifies, 'bulk_cohort' for a row
+ * approved under the shared rationale without its copy being shown. Shift+A
+ * and the Cmd-K verb open that same gate; one selected row opens its own
+ * review instead.
  */
 
 function ignoreScrollToIndex(): void {
@@ -258,6 +263,9 @@ export function LeadTable({
   const assigneeRef = useRef<HTMLSelectElement | null>(null);
   const sampleDraftsRef = useRef<ReadonlyMap<string, OutreachDraftResult>>(new Map());
   const [samplesShown, setSamplesShown] = useState(false);
+  // The gate's coverage: every offer in the run has a previewed sample. Set
+  // by the gate only when it changes (never per keystroke), it arms Approve.
+  const [samplesCoverAllOffers, setSamplesCoverAllOffers] = useState(false);
   const flow = useLeadTableKeyboardFlow({
     sortedLeads,
     leadsById,
@@ -286,6 +294,7 @@ export function LeadTable({
     onCampaignBindingChange: () => {
       sampleDraftsRef.current = new Map();
       setSamplesShown(false);
+      setSamplesCoverAllOffers(false);
     },
   });
   const { review } = flow;
@@ -623,6 +632,8 @@ export function LeadTable({
           shortcutsLive={singleKeysOn}
           samplesShown={samplesShown}
           runKind={bulkRun.progress?.kind ?? null}
+          samplesCoverAllOffers={samplesCoverAllOffers}
+          bulkChunkFailed={bulkChunk.failed && !bulkModule}
           runStatus={!bulkRun.progress
             ? null
             : BulkRunProgress
@@ -640,6 +651,7 @@ export function LeadTable({
                 sampleDraftsRef.current = drafts;
                 setSamplesShown(drafts.size > 0);
               }}
+              onCoverageChange={(coverage) => setSamplesCoverAllOffers(coverage.complete)}
             />
           ) : null}
         />

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type RefObject } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, type RefObject } from 'react';
 import type { DrawerSource } from '../AppContext';
 import { descriptorFor } from '../../lib/drawerSources';
 import { useModalDialog } from '../../hooks/useModalDialog';
@@ -96,6 +96,14 @@ export function LeadApproveReview({
     if (shouldTakeFocusRef.current && !shouldTakeFocusRef.current(borrowerId)) return;
     buttonRef.current?.focus();
   }, [phase, borrowerId, buttonRef]);
+  // Held-Enter guard (audit flow-03): an Enter already down when the draft
+  // landed (auto-repeat, or a keydown stamped before 'ready') must not
+  // approve copy the reader has not had a chance to read. A fresh press
+  // after the draft is on screen approves once.
+  const readyAtRef = useRef(Number.POSITIVE_INFINITY);
+  useLayoutEffect(() => {
+    readyAtRef.current = phase === 'ready' ? performance.now() : Number.POSITIVE_INFINITY;
+  }, [phase]);
   const busy = phase === 'drafting' || phase === 'submitting';
   const showCopy = (phase === 'ready' || phase === 'submitting') && draft !== null;
   return (
@@ -106,6 +114,10 @@ export function LeadApproveReview({
       aria-busy={busy || undefined}
       data-testid="lead-approve-review"
       data-review-phase={phase}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter') return;
+        if (event.repeat || event.timeStamp <= readyAtRef.current) event.preventDefault();
+      }}
       onSubmit={(event) => {
         event.preventDefault();
         onConfirm();

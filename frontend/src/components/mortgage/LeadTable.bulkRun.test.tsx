@@ -143,9 +143,22 @@ describe('LeadTable bulk run', () => {
     });
   }
 
+  /**
+   * Select all, open the gate, preview the samples (Approve arms only once
+   * every offer has one: these rows share one offer, so three samples), write
+   * the shared rationale and start the run. The three previewed rows are the
+   * first three, which the run sends first, without drafting them again.
+   */
   async function startApproveRun() {
     act(() => q<HTMLInputElement>('[data-testid="lead-select-all"]')!.click());
     act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-approve"]')!.click());
+    await vi.waitFor(async () => {
+      await flush(1);
+      expect(q('[data-testid="lead-bulk-preview-samples"]')).not.toBeNull();
+    }, { timeout: 15_000 });
+    act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-preview-samples"]')!.click());
+    await flush();
+    expect(draftOutreach).toHaveBeenCalledTimes(3);
     typeInto(q<HTMLInputElement>('.bulk-actions__rationale input')!, 'Q3 retention sweep');
     act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-approve"]')!.click());
     await flush();

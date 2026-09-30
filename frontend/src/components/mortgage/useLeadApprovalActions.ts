@@ -18,12 +18,13 @@ import type { QueryClient } from '@tanstack/react-query';
 import type { LeadSummary } from '../../types';
 import { clientFailureReason } from '../../lib/apiTransport';
 import { markUnrecordedWrite } from '../../lib/sessionStatus';
-import type { OutreachDraftResult } from '../../lib/apiTypes';
+import type { OutreachDraftResult, ReviewMode } from '../../lib/apiTypes';
 import { invalidateOperationalQueries } from '../../lib/queryKeys';
 import {
   decisionFailure,
   draftForApproval as draftGovernedCopy,
   isDecisionPending,
+  OfferNotPreviewedError,
   useApproveLead,
   usePendingDecisions,
   useRejectLead,
@@ -39,12 +40,20 @@ import {
 import type { RejectReasonCode } from './LeadTable.types';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { APPROVER_ROLE_REQUIRED } from './approverGate';
+import { bulkSampleCoverage, coveredOfferCodes } from './LeadBulkApproveReview.coverage';
 import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
 import { useLeadBulkRun, type BulkRowReport, type BulkRunResult } from './useLeadBulkRun';
 import { pruneTo, rangeIds } from './LeadTable.selection';
 import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
 const BULK_TOAST_DISMISS_MS = 4000;
+
+/** A single-row approval with no reviewed draft: refused before any draft or POST. */
+const REVIEWED_DRAFT_REQUIRED = 'Approval requires the reviewed draft.';
+/** A bulk row whose drafted offer the gate never previewed (OfferNotPreviewedError). */
+const OFFER_NOT_PREVIEWED = 'Offer changed since preview — review individually';
+/** The gate's Preview control: where a refused run sends focus. */
+const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
 
 /** The toast title's object when a gate refuses a selection, not one row. */
 const SELECTION_SUBJECT = 'the selected leads';
@@ -74,6 +83,10 @@ interface ApproveExtras {
   suppressInvalidation?: boolean;
   /** A bulk row: the evidence and offer read when the run started, never live mid-run. */
   snapshot?: DecisionSnapshot;
+  /** A single-row review's mode ('triage' from the Triage deck); default 'individual'. */
+  reviewMode?: Extract<ReviewMode, 'individual' | 'triage'>;
+  /** A bulk run: the offers its gate previewed (the in-run offer check). */
+  coveredOfferCodes?: ReadonlySet<string> | null;
 }
 
 export interface UseLeadApprovalActionsInput {
@@ -255,6 +268,11 @@ export function useLeadApprovalActions({
    * (session_expired told apart) and the server's reason. A bulk row reports
    * into the run's result, not the table's single alert, and certifies the
    * evidence and offer snapshotted when the run started.
+   *
+   * The review mode it records: a bulk row is 'bulk_sample' when its copy
+   * was previewed (a reviewedDraft), else 'bulk_cohort'; a single row is the
+   * review's own mode. A single row with no reviewed draft is refused here,
+   * before any draft or POST: nothing approves copy nobody was shown.
    */
   function approveWithReport(
     borrowerId: string,
@@ -265,6 +283,12 @@ export function useLeadApprovalActions({
     if (decisionInFlight(borrowerId)) return Promise.resolve({ outcome: 'duplicate', message: null });
     const inBulk = Boolean(extras.bulk_id);
     if (!passesDecisionGate('approval', borrowerId, !inBulk)) return Promise.resolve({ outcome: 'backend', message: null });
+    if (!inBulk && reviewedDraft === null) {
+      return Promise.resolve({ outcome: 'backend', message: REVIEWED_DRAFT_REQUIRED });
+    }
+    const reviewMode: ReviewMode = inBulk
+      ? (reviewedDraft ? 'bulk_sample' : 'bulk_cohort')
+      : (extras.reviewMode ?? 'individual');
     rowInFlightRef.current[borrowerId] = true;
     const lead = leadsById.get(borrowerId);
     const snapshot = extras.snapshot ?? {
@@ -285,6 +309,8 @@ export function useLeadApprovalActions({
       rationale: extras.rationale ?? null,
       bulkId: extras.bulk_id ?? null,
       bulkRationale: extras.bulk_rationale ?? null,
+      reviewMode,
+      coveredOfferCodes: extras.coveredOfferCodes ?? null,
       signal,
       suppressInvalidation: extras.suppressInvalidation,
     }).then(
@@ -302,6 +328,9 @@ export function useLeadApprovalActions({
       (err: unknown): BulkRowReport => {
         const failure = decisionFailure(err);
         if (failure === 'aborted') return { outcome: 'aborted', message: null };
+        // The drafted offer was never previewed: nothing was sent; the row
+        // stays selected for an individual review.
+        if (err instanceof OfferNotPreviewedError) return { outcome: 'backend', message: OFFER_NOT_PREVIEWED };
         const message = err instanceof Error ? err.message : null;
         // A single row's failure is a toast; a bulk row reports in the run.
         if (!inBulk) toastWriteFailure(`Couldn't approve ${borrowerId}`, err, 'the approval');
@@ -356,6 +385,7 @@ export function useLeadApprovalActions({
       campaignBinding,
       evidenceIds: lead?.evidence_ids ?? [],
       offerCode: lead?.recommended_offer_code ?? null,
+      bulkId: null,
     }).then(
       (res) => {
         if (!res.rejected) {
@@ -524,10 +554,17 @@ export function useLeadApprovalActions({
    * deliberately do NOT invent a server-side bulk endpoint: every approval
    * keeps its own governed draft proof and audit row.
    *
-   * @param sampleDrafts drafts the approver previewed through "Preview 3
-   *   sample drafts": those rows are approved with exactly that copy, so
-   *   what was shown is what the audit rows certify, and no second draft
-   *   is generated for them.
+   * A run is two or more rows (one row goes to its own review), always has
+   * a bulk id and a shared rationale, and starts only once every offer in
+   * it has a previewed sample: otherwise the gate reopens with focus on
+   * its Preview control and nothing is drafted or sent.
+   *
+   * @param sampleDrafts drafts the approver previewed through the gate's
+   *   "Preview ... sample drafts": those rows are approved with exactly that
+   *   copy (review_mode 'bulk_sample'), so what was shown is what their audit
+   *   rows certify; the rest are drafted in the run and approved under the
+   *   shared rationale (review_mode 'bulk_cohort'), and only for an offer the
+   *   samples showed.
    * @param rationale the gate's shared rationale (the toolbar's own state).
    * @returns true once a run settled: the toolbar then clears its rationale.
    */
@@ -537,18 +574,30 @@ export function useLeadApprovalActions({
   ): Promise<boolean> {
     // R5-04: the run's synchronous latch, read before any await.
     if (bulkRun.isRunning() || bulkApproving) return false;
-    if (!canStartApproval()) return false;
-    const drafts = sampleDrafts ?? new Map<string, OutreachDraftResult>();
     // Snapshot which ids to run: skip already-decided rows silently.
     const eligibleForApproval = new Set(approvalEligibleIds);
     const ids = [...selectedIds].filter((id) => eligibleForApproval.has(id));
-    if (ids.length === 0) return false;
-    const bulkId = ids.length > 1 ? _newBulkId() : null;
-    const sharedRationale = ids.length > 1 ? rationale.trim() : '';
-    if (ids.length > 1 && sharedRationale.length === 0) {
+    // One row is never a bulk run: it goes to its own review (the toolbar
+    // and the keymap route it there); nothing is drafted or sent here.
+    if (ids.length < 2) return false;
+    if (!canStartApproval()) return false;
+    const drafts = sampleDrafts ?? new Map<string, OutreachDraftResult>();
+    const sharedRationale = rationale.trim();
+    if (sharedRationale.length === 0) {
       openBulkRationale();
       return false;
     }
+    const runRows = ids.map((id) => leadsById.get(id) ?? { borrower_id: id });
+    if (!bulkSampleCoverage(runRows, drafts).complete) {
+      setBulkRationaleOpen(true);
+      requestAnimationFrame(() => {
+        const toolbar = bulkApproveBtnRef.current?.closest('[data-testid="lead-bulk-actions"]') ?? document;
+        toolbar.querySelector<HTMLElement>(PREVIEW_SAMPLES_SELECTOR)?.focus();
+      });
+      return false;
+    }
+    const bulkId = _newBulkId();
+    const covered = coveredOfferCodes(runRows, drafts);
     const snapshots = snapshotRows(ids);
     bulkRunIdsRef.current = new Set(ids);
     setBulkToast(null);
@@ -557,9 +606,10 @@ export function useLeadApprovalActions({
       rows: ids.map((borrowerId) => ({ borrowerId, posts: drafts.has(borrowerId) ? 1 : 2 })),
       decide: (borrowerId, signal) => approveWithReport(borrowerId, signal, {
         bulk_id: bulkId,
-        bulk_rationale: sharedRationale || null,
+        bulk_rationale: sharedRationale,
         suppressInvalidation: true,
         snapshot: snapshots.get(borrowerId),
+        coveredOfferCodes: covered,
       }, drafts.get(borrowerId) ?? null),
     });
     bulkRunIdsRef.current = new Set();

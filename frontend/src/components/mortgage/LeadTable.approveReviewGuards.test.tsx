@@ -13,8 +13,16 @@
  *  - Nothing drafts while a bulk run is on the wire.
  *  - The approver / campaign-binding gate runs BEFORE `/outreach/draft`
  *    (which writes a DRAFT_OUTREACH audit row): A under an invalid binding,
- *    Shift+A under an invalid binding, and "Preview 3 sample drafts" once
+ *    Shift+A under an invalid binding, and "Preview k sample drafts" once
  *    the binding stopped verifying all draft nothing and say why.
+ *  - Bulk arming (D-approval-flow-a1; deviation:bulk-approve-arming): with
+ *    the gate open, Approve stays aria-disabled until the shared rationale
+ *    is written and every offer has a previewed sample; activating it moves
+ *    focus to the first missing piece (the rationale, else Preview) and
+ *    sends nothing. A selection change that adds an uncovered offer offers
+ *    "Preview 1 more sample (<offer>)", which drafts that one row.
+ *  - Held Enter: an Enter already held down when the draft lands (repeat,
+ *    or stamped before 'ready') never approves; a fresh press approves once.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -273,6 +281,21 @@ describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOU
     expect(draftOutreach).toHaveBeenCalledTimes(1);
   }
 
+  const previewButton = () => container.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-preview-samples"]');
+
+  /** The gate is open: wait for its lazy review, press Preview, let `expected` drafts land. */
+  async function previewSamples(expected: number) {
+    await vi.waitFor(async () => {
+      await flush();
+      expect(previewButton()).not.toBeNull();
+    }, { timeout: 15_000 });
+    const before = draftOutreach.mock.calls.length;
+    act(() => previewButton()!.click());
+    await flush();
+    await flush();
+    expect(draftOutreach).toHaveBeenCalledTimes(before + expected);
+  }
+
   async function rejectThroughRowPanel(borrowerId: string) {
     act(() => container.querySelector<HTMLButtonElement>(`[data-testid="lead-reject-${borrowerId}"]`)!.click());
     const panel = container.querySelector<HTMLFormElement>('.decision-panel')!;
@@ -348,6 +371,7 @@ describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOU
       select([IDS[0], IDS[1]]);
       act(() => bulkApproveButton().click());
       expect(rationaleInput(), 'the shared rationale gate opened').not.toBeNull();
+      await previewSamples(2);
       typeRationale('Q3 sweep');
       act(() => bulkApproveButton().click());
       await flush();
@@ -375,6 +399,175 @@ describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOU
       expect(approvedIds.sort()).toEqual([IDS[0], IDS[1]]);
       expect(store.get()[IDS[0]]).toBe('approved');
       expect(review()).toBeNull();
+    });
+  });
+
+  describe('bulk arming (D-approval-flow-a1)', () => {
+    const arming = () => container.querySelector('[data-testid="lead-bulk-arming"]');
+
+    it('keeps Approve aria-disabled until the rationale and one sample per offer; each activation focuses what is missing', async () => {
+      mount();
+      select([IDS[0], IDS[1], IDS[2]]);
+      act(() => bulkApproveButton().click());
+      expect(rationaleInput(), 'the first click opens the gate').not.toBeNull();
+
+      expect(bulkApproveButton().getAttribute('aria-disabled')).toBe('true');
+      expect(bulkApproveButton().disabled, 'never native disabled').toBe(false);
+      expect(arming()?.textContent).toBe('Write a shared rationale and preview one draft per offer before approving.');
+      expect(bulkApproveButton().getAttribute('aria-describedby')).toContain(arming()!.id);
+
+      // Nothing written, nothing previewed: the rationale first.
+      bulkApproveButton().focus();
+      act(() => bulkApproveButton().click());
+      expect(document.activeElement).toBe(rationaleInput());
+
+      typeRationale('Q3 sweep');
+      await vi.waitFor(async () => {
+        await flush();
+        expect(previewButton()).not.toBeNull();
+      }, { timeout: 15_000 });
+      expect(arming()?.textContent).toBe('Preview one draft per offer before approving.');
+      act(() => bulkApproveButton().click());
+      expect(document.activeElement, 'then the Preview control').toBe(previewButton());
+      await flush();
+      expect(draftOutreach, 'an unarmed Approve drafts nothing').not.toHaveBeenCalled();
+      expect(approve).not.toHaveBeenCalled();
+
+      act(() => previewButton()!.click());
+      await flush();
+      await flush();
+      expect(arming(), 'armed: no status line').toBeNull();
+      expect(bulkApproveButton().getAttribute('aria-disabled')).toBeNull();
+      act(() => bulkApproveButton().click());
+      await flush();
+      await flush();
+      expect(approve).toHaveBeenCalledTimes(3);
+    });
+
+    it('a selection change that adds an uncovered offer disarms Approve; "Preview 1 more sample" drafts that one row', async () => {
+      const rows = [lead(IDS[0]), lead(IDS[1]), { ...lead(IDS[2]), recommended_offer_code: 'heloc', recommended_offer: 'HELOC' } as LeadSummary, lead(IDS[3])];
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const router = createMemoryRouter([
+        { path: '/lead-queue', element: <LeadTable leads={rows} /> },
+      ], { initialEntries: ['/lead-queue'] });
+      act(() => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <RouterProvider router={router} />
+          </QueryClientProvider>,
+        );
+      });
+      select([IDS[0], IDS[1]]);
+      act(() => bulkApproveButton().click());
+      typeRationale('Q3 sweep');
+      await previewSamples(2);
+      expect(previewButton(), 'covered: no preview left to offer').toBeNull();
+      expect(bulkApproveButton().getAttribute('aria-disabled')).toBeNull();
+
+      // The HELOC row joins the run: nothing drafts on the selection change.
+      select([IDS[2]]);
+      await flush();
+      expect(draftOutreach).toHaveBeenCalledTimes(2);
+      expect(bulkApproveButton().getAttribute('aria-disabled')).toBe('true');
+      expect(previewButton()?.textContent).toBe('Preview 1 more sample (Home-equity line review)');
+
+      act(() => previewButton()!.click());
+      await flush();
+      await flush();
+      expect(draftOutreach).toHaveBeenCalledTimes(3);
+      expect(draftOutreach).toHaveBeenLastCalledWith(IDS[2], 'email', expect.any(AbortSignal));
+      expect(bulkApproveButton().getAttribute('aria-disabled')).toBeNull();
+    });
+
+    it('a failed sample leaves its offer uncovered until it is retried', async () => {
+      mount();
+      let failSecond = true;
+      draftOutreach.mockImplementation((borrowerId: string) => (borrowerId === IDS[1] && failSecond
+        ? Promise.reject(new Error('The governed draft could not be generated.'))
+        : Promise.resolve(draftFor(borrowerId))));
+      select(IDS);
+      act(() => bulkApproveButton().click());
+      typeRationale('Q3 sweep');
+      // One offer, four rows: three stratified samples; the second fails.
+      await previewSamples(3);
+      expect(bulkApproveButton().getAttribute('aria-disabled'), 'two ready samples cover the offer').toBeNull();
+
+      // Deselect both ready samples' rows: only the failed sample is left.
+      select([IDS[0], IDS[2]]);
+      await flush();
+      expect(bulkApproveButton().getAttribute('aria-disabled'), 'the failed sample does not cover its offer').toBe('true');
+      expect(previewButton()?.textContent).toBe('Preview 1 more sample (Refinance review)');
+
+      failSecond = false;
+      await previewSamples(1);
+      expect(draftOutreach).toHaveBeenLastCalledWith(IDS[1], 'email', expect.any(AbortSignal));
+      expect(bulkApproveButton().getAttribute('aria-disabled'), 'retried: covered again').toBeNull();
+      expect(approve).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('held Enter (flow-03)', () => {
+    it('an Enter held down while the draft lands never approves; a fresh press approves once', async () => {
+      let releaseDraft: () => void = () => undefined;
+      draftOutreach.mockImplementation((borrowerId: string) => new Promise((resolve) => {
+        releaseDraft = () => resolve(draftFor(borrowerId));
+      }));
+      /**
+       * Enter on the focused Confirm. happy-dom has no key activation, so the
+       * browser's default action (activating the focused submit button) is
+       * played here, and only when the keydown was not default-prevented.
+       */
+      const enterOnConfirm = (init: KeyboardEventInit = {}) => {
+        const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...init });
+        act(() => {
+          confirmButton()!.dispatchEvent(event);
+        });
+        if (!event.defaultPrevented) act(() => confirmButton()!.click());
+        return event;
+      };
+      mount();
+      region().focus();
+      press('j');
+      press('Enter');
+      press('a');
+      await waitForReview('drafting');
+      expect(enterOnConfirm().defaultPrevented, 'held while drafting').toBe(true);
+      await flush();
+
+      await act(async () => {
+        releaseDraft();
+      });
+      await waitForReview('ready');
+      // The key is still down: the browser repeats it.
+      expect(enterOnConfirm({ repeat: true }).defaultPrevented, 'a repeat never approves').toBe(true);
+      await flush();
+      expect(approve).not.toHaveBeenCalled();
+
+      expect(enterOnConfirm().defaultPrevented, 'a fresh press after the draft landed').toBe(false);
+      await flush();
+      await flush();
+      expect(approve).toHaveBeenCalledTimes(1);
+    });
+
+    it('a keydown stamped before the draft was on screen is refused', async () => {
+      mount();
+      region().focus();
+      press('j');
+      press('Enter');
+      press('a');
+      await waitForReview('ready');
+      const form = review()!;
+      const stale = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+      Object.defineProperty(stale, 'timeStamp', { value: 0 });
+      act(() => {
+        form.dispatchEvent(stale);
+      });
+      expect(stale.defaultPrevented).toBe(true);
+      const fresh = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+      act(() => {
+        form.dispatchEvent(fresh);
+      });
+      expect(fresh.defaultPrevented).toBe(false);
     });
   });
 
@@ -413,7 +606,7 @@ describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOU
       expect(draftOutreach).not.toHaveBeenCalled();
     });
 
-    it('"Preview 3 sample drafts" drafts nothing once the campaign binding stops verifying under the open gate', async () => {
+    it('"Preview k sample drafts" drafts nothing once the campaign binding stops verifying under the open gate', async () => {
       const router = mount();
       select(IDS);
       act(() => bulkApproveButton().click());
