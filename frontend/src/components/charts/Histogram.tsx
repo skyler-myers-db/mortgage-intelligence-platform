@@ -42,8 +42,8 @@ type RuleLabelSide = 'start' | 'end';
  * Which side of its rule the label fits on. Right of the rule while its width
  * (plus the --sp-1 gap) fits the room there; otherwise the side with more
  * room. The label is measured, not guessed from the rule's position: at the
- * Console-open column the score rule sits at 68.75% and its "75+ · N
- * borrowers" label is wider than the 31% of plot to its right (and ~6% wider
+ * Console-open column the score rule sits at 68.75% and its HIGH_OPPORTUNITY_SCORE_LABEL
+ * count label is wider than the 31% of plot to its right (and ~6% wider
  * again in Linux Chromium's Geist Mono), which scrolled the surface sideways.
  */
 export function ruleLabelSide(ruleX: number, plotWidth: number, labelWidth: number, gap: number): RuleLabelSide {
