@@ -244,6 +244,13 @@ class OfferRecommendRequest(BaseModel):
 
 OutreachChannel = Literal["email", "sms", "direct_mail"]
 
+# How an approver saw the copy an approval certifies. 'undeclared' is
+# server-only (written for a client that sent no review_mode) and is never
+# accepted from a request body.
+ReviewMode = Literal["individual", "triage", "bulk_sample", "bulk_cohort"]
+_BULK_REVIEW_MODES: frozenset[str] = frozenset({"bulk_sample", "bulk_cohort"})
+_INDIVIDUAL_REVIEW_MODES: frozenset[str] = frozenset({"individual", "triage"})
+
 
 class OutreachDraft(BaseModel):
     generation_id: str = Field(min_length=1, max_length=64)
@@ -336,6 +343,13 @@ class OutreachApproveRequest(BaseModel):
     rationale: str | None = Field(default=None, max_length=500)
     bulk_id: str | None = Field(default=None, max_length=64)
     bulk_rationale: str | None = Field(default=None, max_length=500)
+    # How the approver saw the copy this approval certifies (audit flow-03 /
+    # states-06, D-approval-flow-a1): on screen for this borrower
+    # (individual, triage), previewed as a bulk sample (bulk_sample), or
+    # approved under a bulk run's shared rationale without being shown
+    # (bulk_cohort). Omitted by a client older than the review_mode ledger;
+    # the APPROVE row then records the server-only token 'undeclared'.
+    review_mode: ReviewMode | None = None
     # Governance approval boundary: the endpoint requires the final
     # approver-visible draft body to include the configured tenant
     # disclosure before writing the decision. The schema keeps this
@@ -437,6 +451,17 @@ class OutreachApproveRequest(BaseModel):
                 "draft_generation_id, draft_response_hash, and "
                 "draft_source_refreshed_at must be supplied together"
             )
+        # The rationale validator has already turned blank text into None.
+        if self.bulk_id is not None and self.bulk_rationale is None:
+            raise ValueError("bulk approvals require a shared rationale")
+        if self.review_mode in _BULK_REVIEW_MODES and self.bulk_id is None:
+            raise ValueError("bulk review modes require bulk_id")
+        if self.review_mode in _INDIVIDUAL_REVIEW_MODES and self.bulk_id is not None:
+            raise ValueError("individual review modes cannot carry bulk_id")
+        if self.review_mode is not None and not all(
+            isinstance(value, str) and value.strip() for value in proof
+        ):
+            raise ValueError("review_mode requires the generated draft proof")
         return self
 
 

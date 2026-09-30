@@ -1,8 +1,10 @@
 """Outreach API -- draft + approve.
 
 Slice 5 landmarks:
-* ``/draft`` emits a ``DRAFT_OUTREACH`` audit row so we can
-  reconstruct which drafts were shown to the approver.
+* ``/draft`` emits ``DRAFT_OUTREACH``: a draft was generated for this actor.
+  The APPROVE row's ``review_mode`` records whether that copy was on screen
+  (individual, triage, bulk_sample) or approved under a shared rationale
+  (bulk_cohort).
 * ``/approve`` emits an ``APPROVE`` audit row AND inserts a row into
   ``mip_app.approvals`` so the governance ledger has both the
   point-in-time verb and the decision record.
@@ -29,7 +31,9 @@ from backend.schemas.offer import (
     OutreachRejectResponse,
 )
 from backend.services.audit_decision_inputs import decision_inputs_from_borrower
+from backend.services.audit_metadata_validation import validate_free_text_metadata_value
 from backend.services.audit_store import (
+    AuditMetadataValueViolation,
     AuditMetadataViolation,
     AuditPIIError,
     AuditStore,
@@ -95,6 +99,28 @@ RepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
 LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
+
+
+def _text_policy_refusal(exc: AuditMetadataValueViolation) -> HTTPException:
+    """422 naming the refused field; the refused text is never echoed."""
+
+    return HTTPException(status_code=422, detail=f"{exc.field} failed the governed text policy")
+
+
+def _refuse_ungoverned_text(values: dict[str, str | None]) -> None:
+    """Refuse free text the audit ledger would refuse, BEFORE any read or write.
+
+    The verdict only: the caller keeps its own scrubbed value, so the decision
+    intent's bytes never change. The same check runs again at the write.
+    """
+
+    for key, value in values.items():
+        if value is None:
+            continue
+        try:
+            validate_free_text_metadata_value(key, value)
+        except AuditMetadataValueViolation as exc:
+            raise _text_policy_refusal(exc) from exc
 
 
 @router.post("/draft", response_model=OutreachDraft, responses=JSON_CONTENT_TYPE_RESPONSE)
@@ -228,6 +254,7 @@ def approve_outreach(
     safe_bulk_rationale = (
         scrub_free_text(payload.bulk_rationale) if payload.bulk_rationale else None
     )
+    _refuse_ungoverned_text({"rationale": safe_rationale, "bulk_rationale": safe_bulk_rationale})
     if payload.request_id:
         try:
             replay = _lookup_persisted_decision_replay(
@@ -326,7 +353,7 @@ def approve_outreach(
     )
     disclosure = _resolve_disclosure_or_http(lakebase, borrower=borrower, channel=payload.channel)
     try:
-        generated_draft, draft_edited = _verified_generated_draft(
+        verified_draft = _verified_generated_draft(
             lakebase,
             payload=payload,
             actor=actor,
@@ -339,6 +366,7 @@ def approve_outreach(
             status_code=503,
             detail=safe_dependency_detail("lakebase"),
         ) from exc
+    generated_draft, draft_edited = verified_draft.generated, verified_draft.draft_edited
     if generated_draft is None and payload.campaign_id is not None:
         raise HTTPException(
             status_code=409,
@@ -394,6 +422,11 @@ def approve_outreach(
             if draft_edited
             else generated_draft.generation_mode
         )
+        if verified_draft.draft_age_seconds is not None:
+            audit_payload["draft_age_seconds"] = verified_draft.draft_age_seconds
+    # Every APPROVE row says how the copy was reviewed; a client that sent no
+    # review_mode (older than this ledger) is recorded as 'undeclared'.
+    audit_payload["review_mode"] = payload.review_mode or "undeclared"
     audit_payload["rationale"] = approval_rationale
     if payload.bulk_id:
         audit_payload["bulk_id"] = payload.bulk_id
@@ -502,6 +535,8 @@ def approve_outreach(
                 },
             )
             created_new = True
+    except AuditMetadataValueViolation as exc:
+        raise _text_policy_refusal(exc) from exc
     except LakebaseError as exc:
         # No silent fallback. The UI surfaces 503 as a retry banner;
         # the operator's next move is to check Lakebase status.
@@ -566,6 +601,7 @@ def reject_outreach(
     # 2026-06-11 audit P2-5: optional approver allowlist, same as /approve.
     actor = require_approver(request)
     safe_rationale = _compose_reject_rationale(payload.rationale_code, payload.rationale)
+    _refuse_ungoverned_text({"rationale": safe_rationale})
     if payload.request_id:
         try:
             replay = _lookup_persisted_decision_replay(
@@ -751,6 +787,8 @@ def reject_outreach(
                 },
             )
             created_new = True
+    except AuditMetadataValueViolation as exc:
+        raise _text_policy_refusal(exc) from exc
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     response = OutreachRejectResponse.model_validate(response_data)

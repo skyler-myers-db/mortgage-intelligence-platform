@@ -13,7 +13,7 @@ from typing import Any
 
 from backend.schemas.audit import AuditEvent
 from backend.schemas.audit_receipt import DecisionOutcome, DecisionReceipt
-from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.common import validate_public_borrower_id, validate_public_opaque_id
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.scoring import NBO_PRODUCT_LABELS, offer_display_label
 
@@ -30,6 +30,9 @@ _DECISION_BY_EVENT_TYPE: dict[str, DecisionOutcome] = {
     "OUTREACH_HOLD": "held",
     "HOLD": "held",
 }
+# The review-mode tokens the APPROVE write records; anything else stored
+# under the key is not projected.
+_REVIEW_MODES = frozenset({"individual", "triage", "bulk_sample", "bulk_cohort", "undeclared"})
 _DECISION_BY_ACTION: dict[str, DecisionOutcome] = {
     "outreach.approve": "approved",
     "outreach.reject": "rejected",
@@ -115,6 +118,21 @@ def _public_borrower_id(value: Any) -> str | None:
         return None
 
 
+def _review_mode(value: Any) -> str | None:
+    text = _text(value)
+    return text if text in _REVIEW_MODES else None
+
+
+def _public_opaque_id(value: Any) -> str | None:
+    text = _text(value)
+    if text is None:
+        return None
+    try:
+        return validate_public_opaque_id(text)
+    except ValueError:
+        return None
+
+
 def build_decision_receipt(event: AuditEvent) -> DecisionReceipt | None:
     """Project a decision row onto the receipt allowlist; ``None`` otherwise."""
 
@@ -155,6 +173,8 @@ def build_decision_receipt(event: AuditEvent) -> DecisionReceipt | None:
         rationale_code=_text(metadata.get("rationale_code")),
         copy_generation_id=_text(metadata.get("draft_generation_id")),
         copy_hash=_text(metadata.get("draft_response_hash")),
+        review_mode=_review_mode(metadata.get("review_mode")),
+        bulk_id=_public_opaque_id(metadata.get("bulk_id")),
         approver=event.actor,
         request_id=_text(event.request_id),
         correlation_id=_text(event.correlation_id),

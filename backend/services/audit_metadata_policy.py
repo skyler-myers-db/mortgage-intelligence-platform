@@ -97,7 +97,8 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #     draft_generation_id, draft_response_hash, draft_source_refreshed_at,
 #     campaign_treatment_fingerprint,
 #     draft_edited, draft_attribution, rationale, bulk_id, bulk_rationale,
-#     decision_inputs
+#     decision_inputs, review_mode (every row; 'undeclared' for an older
+#     client), draft_age_seconds (when a draft proof was verified)
 #   backend/api/outreach.py::reject_outreach
 #     approval_id, offer_code, borrower_id, request_id, rationale, rationale_code
 #   backend/api/outreach.py::draft_outreach
@@ -152,6 +153,10 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "rationale_code",
         "bulk_id",
         "bulk_rationale",
+        # How the approver saw the certified copy (a closed token) and the
+        # draft's age in whole seconds at approval (audit flow-03).
+        "review_mode",
+        "draft_age_seconds",
         "reason",
         "variant_name",
         "generation_mode",

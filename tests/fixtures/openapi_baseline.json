@@ -4554,6 +4554,17 @@
             ],
             "title": "Borrower Id"
           },
+          "bulk_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bulk Id"
+          },
           "campaign_id": {
             "anyOf": [
               {
@@ -4683,6 +4694,17 @@
               }
             ],
             "title": "Request Id"
+          },
+          "review_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Mode"
           },
           "variant_name": {
             "anyOf": [
@@ -11228,6 +11250,23 @@
               }
             ],
             "title": "Request Id"
+          },
+          "review_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "individual",
+                  "triage",
+                  "bulk_sample",
+                  "bulk_cohort"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Mode"
           },
           "variant_name": {
             "anyOf": [
