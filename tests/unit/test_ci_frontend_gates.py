@@ -73,6 +73,23 @@ def test_the_perf_budget_step_is_unconditional() -> None:
     assert "continue-on-error" not in perf, "perf-budget is calibrated on the reference runner and gates"
 
 
+def test_the_perf_calibration_is_uploaded_after_the_perf_step() -> None:
+    """Audit runtime-09 / quality-08: every perf run's calibration JSON is an artifact."""
+    steps = _jobs()["e2e-fixture"]["steps"]
+    perf = _step_index(steps, PERF_STEP_RUN)
+    upload = next(i for i, step in enumerate(steps) if step.get("name") == "Upload the perf calibration")
+    assert upload == perf + 1, "the upload follows the perf step"
+    step = steps[upload]
+    assert step["if"] == "always()"
+    assert str(step["uses"]).startswith("actions/upload-artifact@")
+    assert step["with"] == {
+        "name": "perf-calibration-${{ github.run_id }}-${{ github.run_attempt }}",
+        "path": "frontend/test-results/perf/calibration/*.json",
+        "if-no-files-found": "warn",
+        "retention-days": 30,
+    }
+
+
 def _playwright_perf_spec() -> re.Pattern[str]:
     config = (FRONTEND / "playwright.config.ts").read_text(encoding="utf-8")
     literal = re.search(r"^(?:export )?const PERF_SPEC = /(.+)/;$", config, re.MULTILINE)

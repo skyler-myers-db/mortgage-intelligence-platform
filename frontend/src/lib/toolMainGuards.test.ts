@@ -39,6 +39,8 @@ const TOOLS = [
     siblings: ['react_compiler_allowlist.mjs'],
     args: ['--check', 'tools/react_compiler_allowlist.json'],
   },
+  // No input: the refusal exits non-zero (runtime-09 calibration tool).
+  { script: 'perf_ceilings.mjs', siblings: [] as string[], args: [] as string[] },
 ];
 
 const scratch: string[] = [];

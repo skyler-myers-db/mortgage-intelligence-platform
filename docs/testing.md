@@ -279,6 +279,17 @@ The file filters are required: `MIP_PERF=1` only stops ignoring `PERF_SPEC`, so 
 
 The contract for a `PERF_SPEC` spec: until its ceilings are calibrated from at least 3 reference-runner medians (median x 1.2, rounded up), it is **report-only**, logging its medians and asserting only functional invariants. `perf-budget` is calibrated on the reference runner (home LCP 2600 / TBT 600 ms, lead-queue LCP 2700 / TBT 1200 ms) and gates; `interaction-budget` starts report-only. A ceiling is ratcheted down, never raised to make a run green.
 
+**The null-ceiling contract (runtime-09, quality-08).** Each spec declares one ceiling per metric, and `null` means report-only: `INTERACTION_CEILINGS_MS` in `interaction-budget.fixture.spec.ts` (`j`, `expand`, `keystroke`, all null) and `CEILINGS` in `perf-budget.fixture.spec.ts` (LCP, TBT and CLS per route; Borrower 360 and every CLS are null). The report test gates every non-null median (`<= ceiling`) and logs `gating: ...` or `report-only`. CLS is the largest session window (1 s gap, 5 s cap) of layout-shift entries without recent input, over the same span as TBT.
+
+**Calibration.** Every perf run writes `test-results/perf/calibration/<name>.json` (`fixture/calibration.ts`: `{name, spec, medians, samples, run: {sha, runId, runAttempt, runnerOs, imageOs}}`, numbers and CI metadata only, never a borrower id or rendered text), and the `e2e-fixture` job uploads them, pass or fail, as `perf-calibration-<run id>-<attempt>` (30 days). To set or lower a ceiling, the integrator (never a lane) downloads three reference-runner runs of ONE sha and runs the tool, which prints the literal and the runs it cites and never edits a spec:
+
+```bash
+gh run download <run id> -n perf-calibration-<run id>-<attempt> -D /tmp/cal/<run id>   # three runs, one sha
+node tools/perf_ceilings.mjs /tmp/cal
+```
+
+It takes, per artifact and metric, the median of the per-run medians x 1.2, rounded up to 10 ms (interactions), 100 ms (LCP / TBT) or 0.01 (CLS), and refuses fewer than three distinct `(runId, runAttempt)` runs, a local input without a `runId` (`--allow-local` for a dry run only) and mixed shas (`--allow-mixed-sha`). Record the cited runs in the comment above the ceiling; ratchet down, never up.
+
 ### React Compiler coverage gate
 
 The production build compiles components with React Compiler 1.0, which silently ships a function unmemoized when it bails out (try/finally, a `throw` inside try/catch, a value block inside try/catch, a `'use no memo'` pragma). The `frontend-tests` CI job runs:
