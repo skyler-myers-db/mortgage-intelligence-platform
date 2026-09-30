@@ -109,9 +109,21 @@ async function scrollLeftReachedByPinnedFocus(page: Page, borrowerId: string, st
       let peak = wrap.scrollLeft;
       const onScroll = (event: Event) => { if (event.target === wrap) peak = Math.max(peak, wrap.scrollLeft); };
       window.addEventListener('scroll', onScroll, { capture: true });
+      // Sample every frame too, from a rAF chain queued BEFORE focus(): in each
+      // frame it runs ahead of any rAF a focus handler queues (a restore).
+      let frames = 0;
+      const sampled = new Promise<void>((resolve) => {
+        const sample = () => {
+          peak = Math.max(peak, wrap.scrollLeft);
+          frames += 1;
+          if (frames >= 6) resolve();
+          else requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
       control.focus();
       const sync = wrap.scrollLeft;
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await sampled;
       window.removeEventListener('scroll', onScroll, { capture: true });
       reached.push({ sync, peak: Math.max(peak, sync) });
     }
