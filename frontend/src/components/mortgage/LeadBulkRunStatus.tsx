@@ -2,6 +2,7 @@ import { formatCount } from '../../lib/formatters';
 import { Button } from '../Primitives';
 import {
   bulkRunSummary,
+  bulkRunVerb,
   formatMinutesLeft,
   type BulkRunIssue,
   type BulkRunProgress,
@@ -10,7 +11,8 @@ import {
 
 /**
  * A bulk run's progress and its per-row report (audit tables-07, states-08
- * bulk half). Shipped in the lazy bulk chunk (re-exported from
+ * bulk half), for an approve run or a reject run: every line names the
+ * run's kind. Shipped in the lazy bulk chunk (re-exported from
  * LeadBulkApproveReview.tsx); its CSS is in LeadBulkApproveReview.css.
  *
  * BEM extension of the app's `.bulk-actions` toolbar (it has no prototype
@@ -40,10 +42,11 @@ export function LeadBulkRunProgress({
   progress: BulkRunProgress;
   onStop: () => void;
 }) {
+  const verb = bulkRunVerb(progress.kind);
   return (
     <div className="bulk-actions__run" data-testid="lead-bulk-run">
       <span className="bulk-actions__label">
-        Approving{' '}
+        {verb}{' '}
         <span className="mono num" data-testid="lead-bulk-run-count">
           {formatCount(progress.settled)} of {formatCount(progress.total)}
         </span>
@@ -52,7 +55,7 @@ export function LeadBulkRunProgress({
         className="bulk-actions__progress"
         value={progress.settled}
         max={progress.total}
-        aria-label="Approving selected borrowers"
+        aria-label={`${verb} selected borrowers`}
       />
       {progress.minutesLeft !== null && (
         <span className="muted fs-12" data-testid="lead-bulk-run-eta">{formatMinutesLeft(progress.minutesLeft)}</span>
@@ -106,7 +109,7 @@ export function LeadBulkRunResult({
             {result.notStarted.length > 0 && (
               <li data-outcome="not_started">
                 {formatCount(result.notStarted.length)} not started: never sent and still selected. Run them again
-                as a new run with its own rationale.
+                as a new run with its own {result.kind === 'reject' ? 'reason and note' : 'rationale'}.
               </li>
             )}
           </ul>

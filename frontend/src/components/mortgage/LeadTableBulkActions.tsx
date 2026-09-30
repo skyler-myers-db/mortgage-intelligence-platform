@@ -20,7 +20,7 @@ import { useId, useState, type ReactNode, type RefObject } from 'react';
 import type { SalesTeamMember } from '../../types';
 import { Button } from '../Primitives';
 import type { BulkToast } from './useLeadApprovalActions';
-import type { BulkRunKind } from './useLeadBulkRun';
+import { bulkRunVerb, type BulkRunKind } from './useLeadBulkRun';
 import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 
 interface LeadTableBulkActionsProps {
@@ -58,6 +58,8 @@ interface LeadTableBulkActionsProps {
   samplesCoverAllOffers?: boolean;
   /** The lazy bulk chunk failed to load: bulk decisions fail closed. */
   bulkChunkFailed?: boolean;
+  /** Why the last run stopped at its first row ("Nothing else was sent: ..."). */
+  runNotice?: string | null;
 }
 
 const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
@@ -86,6 +88,7 @@ export function LeadTableBulkActions({
   runStatus = null,
   samplesCoverAllOffers = false,
   bulkChunkFailed = false,
+  runNotice = null,
 }: LeadTableBulkActionsProps) {
   const armingId = useId();
   const [bulkRationale, setBulkRationale] = useState('');
@@ -216,11 +219,16 @@ export function LeadTableBulkActions({
           aria-label={`Approve ${selectedApprovalEligibleCount} eligible leads`}
           aria-keyshortcuts={approverGate === null && shortcutsLive ? 'Shift+A' : undefined}
         >
-          {bulkApproving ? 'Approving…' : `Approve ${selectedApprovalEligibleCount} eligible`}
+          {bulkApproving && runKind === 'approve'
+            ? `${bulkRunVerb('approve')}…`
+            : `Approve ${selectedApprovalEligibleCount} eligible`}
         </Button>
       </div>
       {armingCopy !== null && (
         <span id={armingId} className="muted fs-12" data-testid="lead-bulk-arming">{armingCopy}</span>
+      )}
+      {runNotice && (
+        <span role="alert" className="text-danger fs-12" data-testid="lead-bulk-canary">{runNotice}</span>
       )}
       {bulkBlocked && (
         <span role="alert" className="text-danger fs-12" data-testid="lead-bulk-chunk-failed">
@@ -258,7 +266,7 @@ export function LeadTableBulkToast({ toast, onReviewRecentActivity }: LeadTableB
               : 'bulk-actions__toast--ok'
         }`}
       >
-        {toast.ok} approved
+        {toast.ok} {toast.kind === 'reject' ? 'rejected' : 'approved'}
         {toast.fail > 0 ? `, ${toast.fail} failed` : ''}
         {toast.network > 0
           ? ` (${toast.network} network dropped; retry)`

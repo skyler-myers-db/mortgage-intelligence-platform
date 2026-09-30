@@ -57,6 +57,10 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 }));
 
 import { LeadTable } from './LeadTable';
+import { LeadBulkRunProgressFallback, LeadBulkRunResultFallback } from './LeadBulkRunFallback';
+import { LeadBulkRunProgress, LeadBulkRunResult } from './LeadBulkRunStatus';
+import { LeadTableBulkToast } from './LeadTableBulkActions';
+import type { BulkRunResult } from './useLeadBulkRun';
 
 const IDS = Array.from({ length: 6 }, (_, index) => `B-CHUNKFALLBK0${index + 1}`);
 
@@ -162,4 +166,73 @@ describe('LeadTable bulk run when the bulk chunk failed to load', () => {
     expect(held).toEqual([]);
     expect(q('[data-testid="lead-bulk-run-fallback"]')).toBeNull();
   }, 30_000);
+});
+
+/**
+ * The run lines name the run's kind (tables-07): the fallback said
+ * "Approving" for every run, and a bulk Reject run would have read as one.
+ * Rendered directly: a run is only on the wire with the chunk loaded.
+ */
+describe('bulk run lines name the run kind', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  const rejectResult: BulkRunResult = {
+    kind: 'reject',
+    total: 3,
+    ok: 2,
+    failed: [],
+    skipped: [],
+    notStarted: ['B-CHUNKFALLBK03'],
+    stopped: true,
+    sessionEnded: false,
+    canary: null,
+  };
+
+  it('the static fallback says Rejecting and rejected for a reject run', () => {
+    act(() => root.render(
+      <>
+        <LeadBulkRunProgressFallback
+          progress={{ kind: 'reject', total: 3, settled: 1, stopRequested: false, minutesLeft: 1 }}
+          onStop={() => undefined}
+        />
+        <LeadBulkRunResultFallback result={rejectResult} onDismiss={() => undefined} />
+      </>,
+    ));
+    expect(container.querySelector('[data-testid="lead-bulk-run-fallback"]')?.textContent).toContain('Rejecting 1 of 3');
+    expect(container.querySelector('[data-testid="lead-bulk-result"]')?.textContent).toContain('2 of 3 rejected, 1 not started. Stopped.');
+  });
+
+  it('the lazy progress line and report say Rejecting and ask for a new reason and note', () => {
+    act(() => root.render(
+      <>
+        <LeadBulkRunProgress
+          progress={{ kind: 'reject', total: 3, settled: 1, stopRequested: false, minutesLeft: 1 }}
+          onStop={() => undefined}
+        />
+        <LeadBulkRunResult result={rejectResult} onDismiss={() => undefined} />
+      </>,
+    ));
+    expect(container.querySelector('.bulk-actions__run .bulk-actions__label')?.textContent).toBe('Rejecting 1 of 3');
+    expect(container.querySelector('progress')?.getAttribute('aria-label')).toBe('Rejecting selected borrowers');
+    expect(container.querySelector('[data-outcome="not_started"]')?.textContent).toContain('with its own reason and note');
+  });
+
+  it('the unmount flash says rejected for a cut-short reject run', () => {
+    act(() => root.render(
+      <LeadTableBulkToast toast={{ ok: 2, fail: 0, network: 0, aborted: 1, kind: 'reject' }} onReviewRecentActivity={() => undefined} />,
+    ));
+    expect(container.querySelector('[data-testid="lead-bulk-toast"]')?.textContent).toContain('2 rejected');
+  });
 });

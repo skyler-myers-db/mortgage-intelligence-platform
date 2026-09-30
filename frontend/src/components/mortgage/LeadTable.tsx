@@ -633,6 +633,7 @@ export function LeadTable({
           samplesShown={samplesShown}
           runKind={bulkRun.progress?.kind ?? null}
           samplesCoverAllOffers={samplesCoverAllOffers}
+          runNotice={approval.bulkRunNotice}
           bulkChunkFailed={bulkChunk.failed && !bulkModule}
           runStatus={!bulkRun.progress
             ? null

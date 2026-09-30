@@ -260,7 +260,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(actions!.selectionCount).toBe(0);
   });
 
-  it('Stop after this batch: exactly one batch is sent, nothing is aborted, the rest stay selected and undrafted', async () => {
+  it('Stop after this batch: the canary and one batch are sent, nothing is aborted, the rest stay selected and undrafted', async () => {
     const held: Array<() => void> = [];
     const signals: AbortSignal[] = [];
     apiMocks.approve.mockImplementation((_id: string, _body: unknown, signal?: AbortSignal) => {
@@ -277,8 +277,14 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       run = actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
     await flush();
-    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
-    expect(actions!.bulkRun.progress).toMatchObject({ total: 7, settled: 0 });
+    // The canary goes alone; the fan-out waits for its ok.
+    expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      held.splice(0).forEach((release) => release());
+    });
+    await flush();
+    expect(apiMocks.approve).toHaveBeenCalledTimes(4);
+    expect(actions!.bulkRun.progress).toMatchObject({ total: 7, settled: 1 });
 
     act(() => actions!.bulkRun.requestStop());
     await act(async () => {
@@ -287,11 +293,11 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     });
     await flush();
 
-    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
-    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(3);
+    expect(apiMocks.approve).toHaveBeenCalledTimes(4);
+    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(4);
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
-    expect(actions!.bulkRun.result?.notStarted).toEqual(IDS.slice(3));
-    expect([...actions!.selectedIds].sort()).toEqual(IDS.slice(3));
+    expect(actions!.bulkRun.result?.notStarted).toEqual(IDS.slice(4));
+    expect([...actions!.selectedIds].sort()).toEqual(IDS.slice(4));
     // One invalidation for the whole run, not one per row.
     expect(leadInvalidations(invalidate)).toBe(1);
   });
@@ -356,21 +362,21 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       run = actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
     await flush();
-    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
+    expect(apiMocks.approve, 'the canary').toHaveBeenCalledTimes(1);
 
     act(() => root.unmount());
     await act(async () => {
       await run;
     });
-    // The first chunk was cut mid-flight, the rest never started.
-    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
+    // The canary was cut mid-flight, the rest never started.
+    expect(apiMocks.approve).toHaveBeenCalledTimes(1);
     expect(JSON.parse(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled') ?? '{}'))
-      .toEqual(expect.objectContaining({ ok: 0, aborted: 7 }));
+      .toEqual(expect.objectContaining({ ok: 0, aborted: 7, kind: 'approve' }));
 
     actions = null;
     root = createRoot(container);
     mount();
-    expect(actions!.bulkToast).toEqual({ ok: 0, fail: 0, network: 0, aborted: 7 });
+    expect(actions!.bulkToast).toEqual({ ok: 0, fail: 0, network: 0, aborted: 7, kind: 'approve' });
     // Aborted rows are audit-ambiguous: nothing is re-selected for a retry.
     expect(actions!.selectionCount).toBe(0);
     expect(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled')).toBeNull();
@@ -435,12 +441,41 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(getToasts()).toEqual([]);
   });
 
+  it('a canary refusal sends nothing else, keeps every row selected and reopens the gate with the reason', async () => {
+    apiMocks.approve.mockRejectedValueOnce(
+      new ApiError('bulk_rationale failed the governed text policy', { path: '/api/outreach/approve', status: 422 }),
+    );
+    mount();
+    act(() => actions!.toggleSelectAll());
+    let settled: boolean | undefined;
+    await act(async () => {
+      settled = await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(settled, 'the toolbar keeps its rationale').toBe(false);
+    expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+    expect(actions!.bulkRun.result?.canary).toEqual({
+      borrowerId: IDS[0], message: 'bulk_rationale failed the governed text policy',
+    });
+    expect(actions!.bulkRationaleOpen).toBe(true);
+    expect(actions!.bulkRunNotice).toBe(
+      `Nothing else was sent: ${IDS[0]} was refused: bulk_rationale failed the governed text policy`,
+    );
+    expect([...actions!.selectedIds].sort()).toEqual([...IDS].sort());
+  });
+
+  it('flashes a cut-short reject run as rejected', () => {
+    window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 2, aborted: 1, kind: 'reject', ts: Date.now() }));
+    mount();
+    expect(actions!.bulkToast).toEqual({ ok: 2, fail: 0, network: 0, aborted: 1, kind: 'reject' });
+  });
+
   it('clears a flashed run with nothing aborted after 4 s, and keeps an aborted one until it is resolved', () => {
     vi.useFakeTimers();
     try {
       window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 3, aborted: 0, ts: Date.now() }));
       mount();
-      expect(actions!.bulkToast).toEqual({ ok: 3, fail: 0, network: 0, aborted: 0 });
+      expect(actions!.bulkToast).toEqual({ ok: 3, fail: 0, network: 0, aborted: 0, kind: 'approve' });
       act(() => vi.advanceTimersByTime(4000));
       expect(actions!.bulkToast, 'nothing is ambiguous: no dismiss control needed').toBeNull();
 
@@ -448,7 +483,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 1, aborted: 2, ts: Date.now() }));
       remount();
       act(() => vi.advanceTimersByTime(60_000));
-      expect(actions!.bulkToast).toEqual({ ok: 1, fail: 0, network: 0, aborted: 2 });
+      expect(actions!.bulkToast).toEqual({ ok: 1, fail: 0, network: 0, aborted: 2, kind: 'approve' });
     } finally {
       vi.useRealTimers();
     }

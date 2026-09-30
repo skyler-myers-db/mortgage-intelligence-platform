@@ -1,5 +1,5 @@
 /**
- * The partial result of a bulk approve cut short by unmount (R5-21).
+ * The partial result of a bulk run cut short by unmount (R5-21).
  *
  * Leaving the Lead Queue mid-run aborts the rest of the loop; the next mount
  * flashes "N landed, rest aborted" so the approver knows to check Recent
@@ -7,21 +7,28 @@
  * Kept out of the hook so no wall-clock read or storage access happens
  * during a render the React Compiler memoizes: the stash is written from the
  * bulk loop (a click, never render) and read once by a state initializer.
+ *
+ * The run's kind (approve or reject, tables-07) rides the same JSON value
+ * under the same key, so the flash says "approved" or "rejected"; a value
+ * written before bulk Reject existed reads as an approve run.
  */
 
 const STASH_KEY = 'mip.bulkApprove.lastCancelled';
 /** Older snapshots are probably from a much earlier session and are dropped. */
 const STALE_AFTER_MS = 10 * 60 * 1000;
 
+export type CancelledBulkKind = 'approve' | 'reject';
+
 export interface CancelledBulkApprove {
   ok: number;
   aborted: number;
+  kind: CancelledBulkKind;
 }
 
 /** Record a run the unmount aborted. Private mode or a full quota is ignored. */
-export function stashCancelledBulk(ok: number, aborted: number): void {
+export function stashCancelledBulk(ok: number, aborted: number, kind: CancelledBulkKind = 'approve'): void {
   try {
-    sessionStorage.setItem(STASH_KEY, JSON.stringify({ ok, aborted, ts: Date.now() }));
+    sessionStorage.setItem(STASH_KEY, JSON.stringify({ ok, aborted, kind, ts: Date.now() }));
   } catch {
     // private mode or quota: the flash is a courtesy, never a requirement
   }
@@ -32,12 +39,13 @@ export function readCancelledBulk(): CancelledBulkApprove | null {
   try {
     const raw = sessionStorage.getItem(STASH_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { ok?: number; aborted?: number; ts?: number } | null;
+    const parsed = JSON.parse(raw) as { ok?: number; aborted?: number; kind?: unknown; ts?: number } | null;
     if (!parsed) return null;
     if (parsed.ts && Date.now() - parsed.ts > STALE_AFTER_MS) return null;
     const ok = parsed.ok ?? 0;
     const aborted = parsed.aborted ?? 0;
-    return ok + aborted === 0 ? null : { ok, aborted };
+    const kind: CancelledBulkKind = parsed.kind === 'reject' ? 'reject' : 'approve';
+    return ok + aborted === 0 ? null : { ok, aborted, kind };
   } catch {
     return null;
   }

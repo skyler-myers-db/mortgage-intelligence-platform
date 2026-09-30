@@ -34,4 +34,14 @@ describe('session status: what the dialog says was not recorded', () => {
     markSessionExpired({ method: 'PUT', path: '/api/v1/workspace/leads/1' });
     expect(getSessionStatus().unrecorded).toBe('bulk_approval');
   });
+
+  it('a partly recorded bulk rejection outranks the single rejection its own POST reported', () => {
+    markSessionExpired({ method: 'POST', path: '/api/v1/outreach/reject' });
+    expect(getSessionStatus().unrecorded).toBe('rejection');
+    markUnrecordedWrite('bulk_rejection');
+    expect(getSessionStatus().unrecorded).toBe('bulk_rejection');
+    markUnrecordedWrite('approval');
+    markSessionExpired({ method: 'PUT', path: '/api/v1/workspace/leads/1' });
+    expect(getSessionStatus().unrecorded).toBe('bulk_rejection');
+  });
 });

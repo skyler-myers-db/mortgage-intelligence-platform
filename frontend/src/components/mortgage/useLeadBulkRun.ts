@@ -1,8 +1,8 @@
 /**
- * useLeadBulkRun — the Lead Queue's bulk approve loop, with honest
- * progress and a cooperative Stop (audit tables-07, states-08 bulk half,
- * follow-up #8). Extracted from useLeadApprovalActions.bulkApprove; every
- * invariant it kept is kept here or at its caller:
+ * useLeadBulkRun — the Lead Queue's bulk approve and bulk reject loop, with
+ * honest progress and a cooperative Stop (audit tables-07, states-08 bulk
+ * half, follow-up #8). Extracted from useLeadApprovalActions.bulkApprove;
+ * every invariant it kept is kept here or at its caller:
  *
  *   - R5-04: a synchronous in-flight latch (a ref flipped before any await),
  *     so two clicks in one frame never start two loops.
@@ -21,21 +21,30 @@
  * ended session stops the run the same way and marks the partly recorded
  * run for the session dialog.
  *
+ * Canary (D-approval-flow-a1 / -d): rows go one at a time until one comes
+ * back ok, and only then fan out BULK_APPROVE_CONCURRENCY at a time. A row
+ * that is refused, dropped or meets an ended session before the first ok
+ * stops the run there: nothing else is sent, the unsent rows are reported
+ * not started (and stay selected), and the result names that row
+ * (`canary`), so a run whose every row would fail (a stale proof, a refused
+ * rationale) costs one POST, not N. A duplicate before the first ok is
+ * skipped and the next row becomes the canary.
+ *
  * Progress is `settled` of `total` with an ETA: the slower of the mutation
  * budget floor (remaining POSTs / MUTATION_BUDGET_PER_MINUTE; an unsampled
- * approve costs two POSTs, the draft and the approve) and the pace observed
- * after the first chunk. A polite announcement says the start, each quarter,
- * a Stop and the result; the caller renders it in an always-mounted region.
+ * approve costs two POSTs, the draft and the approve; a reject costs one)
+ * and the pace observed after the first chunk. A polite announcement says
+ * the start, each quarter, a Stop and the result; the caller renders it in
+ * an always-mounted region. All copy names the run's kind.
  */
 import { useEffect, useRef, useState } from 'react';
 import { formatCount } from '../../lib/formatters';
 import { markUnrecordedWrite } from '../../lib/sessionStatus';
 import { BULK_APPROVE_CONCURRENCY, MUTATION_BUDGET_PER_MINUTE } from './LeadTable.constants';
-import { chunk } from './LeadTable.logic';
 import { stashCancelledBulk } from './bulkApproveStash';
 
-/** Bulk approve only in wave 3; bulk Reject (tables-07) is a wave-4 item. */
-export type BulkRunKind = 'approve';
+/** Bulk approve, and bulk Reject under one reason and a shared note (tables-07). */
+export type BulkRunKind = 'approve' | 'reject';
 export type BulkRowOutcome = 'ok' | 'backend' | 'network' | 'session_expired' | 'aborted' | 'duplicate';
 
 /** How one row's write ended; `message` is the server's reason for a refusal. */
@@ -72,6 +81,12 @@ export interface BulkRunIssue {
   message: string | null;
 }
 
+/** The row that was refused before any row came back ok (the run stopped there). */
+export interface BulkRunCanary {
+  borrowerId: string;
+  message: string | null;
+}
+
 export interface BulkRunResult {
   kind: BulkRunKind;
   total: number;
@@ -84,6 +99,18 @@ export interface BulkRunResult {
   notStarted: string[];
   stopped: boolean;
   sessionEnded: boolean;
+  /** Set when the first rows were refused before any came back ok: nothing else was sent. */
+  canary: BulkRunCanary | null;
+}
+
+const RUN_COPY: Record<BulkRunKind, { running: string; done: string }> = {
+  approve: { running: 'Approving', done: 'approved' },
+  reject: { running: 'Rejecting', done: 'rejected' },
+};
+
+/** 'Approving' / 'Rejecting': the run's verb, for its progress line and toolbar. */
+export function bulkRunVerb(kind: BulkRunKind): string {
+  return RUN_COPY[kind].running;
 }
 
 /** Minutes left: the slower of the budget floor and the observed pace. Null when nothing is left. */
@@ -105,12 +132,21 @@ export function formatMinutesLeft(minutes: number): string {
 
 /** The result in one sentence (the visible summary and the announcement). */
 export function bulkRunSummary(result: BulkRunResult): string {
-  const parts = [`${formatCount(result.ok)} of ${formatCount(result.total)} approved`];
+  const parts = [`${formatCount(result.ok)} of ${formatCount(result.total)} ${RUN_COPY[result.kind].done}`];
   if (result.failed.length > 0) parts.push(`${formatCount(result.failed.length)} failed`);
   if (result.skipped.length > 0) parts.push(`${formatCount(result.skipped.length)} skipped`);
   if (result.notStarted.length > 0) parts.push(`${formatCount(result.notStarted.length)} not started`);
-  const reason = result.sessionEnded ? ' The session ended.' : result.stopped ? ' Stopped.' : '';
+  const reason = result.sessionEnded
+    ? ' The session ended.'
+    : result.canary
+      ? ' Nothing else was sent.'
+      : result.stopped ? ' Stopped.' : '';
   return `${parts.join(', ')}.${reason}`;
+}
+
+/** The gate's line after a canary stop: which row was refused, and why. */
+export function bulkCanaryNotice(canary: BulkRunCanary): string {
+  return `Nothing else was sent: ${canary.borrowerId} was refused: ${canary.message ?? 'the request did not go through'}`;
 }
 
 const AUTO_DISMISS_MS = 4000;
@@ -157,10 +193,10 @@ export function useLeadBulkRun() {
       stopRequested: false,
       minutesLeft: bulkRunMinutesLeft(spec.rows, 0, 0),
     });
-    setAnnouncement(`Approving ${formatCount(total)} borrowers.`);
+    setAnnouncement(`${RUN_COPY[spec.kind].running} ${formatCount(total)} borrowers.`);
 
     const startedAt = Date.now();
-    const groups = chunk([...spec.rows], BULK_APPROVE_CONCURRENCY);
+    const queue = [...spec.rows];
     const failed: BulkRunIssue[] = [];
     const skipped: BulkRunIssue[] = [];
     const notStarted: string[] = [];
@@ -169,15 +205,19 @@ export function useLeadBulkRun() {
     let aborted = 0;
     let sessionEnded = false;
     let quarter = 1;
+    // Canary: one row at a time until one comes back ok.
+    let fannedOut = false;
+    let canary: BulkRunCanary | null = null;
 
-    for (let index = 0; index < groups.length; index += 1) {
-      const group = groups[index];
+    while (queue.length > 0) {
+      const group = queue.splice(0, fannedOut ? BULK_APPROVE_CONCURRENCY : 1);
       if (ctrl.signal.aborted) {
         aborted += group.length;
         continue;
       }
-      // Cooperative Stop and an ended session: checked before each chunk only.
-      if (stopRef.current || sessionEnded) {
+      // Cooperative Stop, an ended session and a canary refusal: checked
+      // before each chunk only.
+      if (stopRef.current || sessionEnded || canary) {
         notStarted.push(...group.map((row) => row.borrowerId));
         continue;
       }
@@ -200,9 +240,12 @@ export function useLeadBulkRun() {
         else if (report.outcome === 'duplicate') skipped.push({ borrowerId, outcome: 'duplicate', message: report.message });
         else failed.push({ borrowerId, outcome: report.outcome, message: report.message });
         if (report.outcome === 'session_expired') sessionEnded = true;
+        if (fannedOut || report.outcome === 'aborted' || report.outcome === 'duplicate') return;
+        if (report.outcome === 'ok') fannedOut = true;
+        else canary = { borrowerId, message: report.message };
       });
       if (!live()) continue;
-      const remaining = groups.slice(index + 1).flat();
+      const remaining = queue;
       const minutesLeft = bulkRunMinutesLeft(remaining, settled, Date.now() - startedAt);
       setProgress((current) => (current ? { ...current, settled, minutesLeft } : current));
       let crossed = 0;
@@ -210,7 +253,7 @@ export function useLeadBulkRun() {
         crossed = quarter;
         quarter += 1;
       }
-      if (crossed > 0 && remaining.length > 0 && !stopRef.current && !sessionEnded) {
+      if (crossed > 0 && remaining.length > 0 && !stopRef.current && !sessionEnded && !canary) {
         setAnnouncement(`${crossed * 25}% done: ${formatCount(settled)} of ${formatCount(total)}.`);
       }
     }
@@ -219,11 +262,11 @@ export function useLeadBulkRun() {
     abortRef.current = null;
     if (ctrl.signal.aborted) {
       // R5-21, unchanged: the next mount flashes what landed and what was cut.
-      stashCancelledBulk(ok, aborted);
+      stashCancelledBulk(ok, aborted, spec.kind);
       stopRef.current = false;
       return null;
     }
-    if (sessionEnded) markUnrecordedWrite('bulk_approval');
+    if (sessionEnded) markUnrecordedWrite(spec.kind === 'reject' ? 'bulk_rejection' : 'bulk_approval');
     const final: BulkRunResult = {
       kind: spec.kind,
       total,
@@ -234,6 +277,7 @@ export function useLeadBulkRun() {
       // Only a Stop that left rows unsent cut the run short.
       stopped: stopRef.current && notStarted.length > 0,
       sessionEnded,
+      canary,
     };
     stopRef.current = false;
     setProgress(null);

@@ -8,7 +8,10 @@
  * did not start and stays until dismissed. The live region is always
  * mounted. The toolbar (and with it the progress and the only Stop) stays
  * mounted while a run is on the wire, even when a filter change takes every
- * selected row off screen (brief item 5(e)).
+ * selected row off screen (brief item 5(e)). The first row goes alone (the
+ * canary) and the rest fan out three at a time once it came back ok; a
+ * canary refusal sends nothing else and the reopened gate says why
+ * (D-approval-flow-a1).
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -164,10 +167,17 @@ describe('LeadTable bulk run', () => {
     await flush();
   }
 
+  async function releaseHeld() {
+    await act(async () => {
+      held.splice(0).forEach((release) => release());
+    });
+    await flush();
+  }
+
   it('shows k of N, a determinate progress bar and Stop while the run is on the wire', async () => {
     await startApproveRun();
 
-    expect(approve).toHaveBeenCalledTimes(3);
+    expect(approve, 'the canary goes alone').toHaveBeenCalledTimes(1);
     expect(q('[data-testid="lead-bulk-approve"]')?.textContent).toBe('Approving…');
     expect(q('[data-testid="lead-bulk-run-count"]')?.textContent).toBe('0 of 9');
     const progress = q<HTMLProgressElement>('progress.bulk-actions__progress')!;
@@ -176,13 +186,28 @@ describe('LeadTable bulk run', () => {
     expect(q('[data-testid="lead-bulk-run-eta"]')?.textContent).toBe('about 1 min left');
     expect(q('[data-testid="lead-bulk-run-status"]')?.textContent).toBe('Approving 9 borrowers.');
 
-    await act(async () => {
-      held.splice(0).forEach((release) => release());
-    });
-    await flush();
-    expect(q('[data-testid="lead-bulk-run-count"]')?.textContent).toBe('3 of 9');
-    expect(q<HTMLProgressElement>('progress.bulk-actions__progress')!.value).toBe(3);
-    expect(approve).toHaveBeenCalledTimes(6);
+    await releaseHeld();
+    expect(q('[data-testid="lead-bulk-run-count"]')?.textContent).toBe('1 of 9');
+    expect(approve, 'fanned out once the canary came back ok').toHaveBeenCalledTimes(4);
+    await releaseHeld();
+    expect(q('[data-testid="lead-bulk-run-count"]')?.textContent).toBe('4 of 9');
+    expect(q<HTMLProgressElement>('progress.bulk-actions__progress')!.value).toBe(4);
+    expect(approve).toHaveBeenCalledTimes(7);
+  });
+
+  it('a canary refusal sends nothing else; the gate reopens and says which row was refused', async () => {
+    approve.mockImplementationOnce(() => Promise.reject(new Error('bulk_rationale failed the governed text policy')));
+    await startApproveRun();
+    await flush(5);
+
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(q('[data-testid="lead-bulk-canary"]')?.textContent).toBe(
+      `Nothing else was sent: ${IDS[0]} was refused: bulk_rationale failed the governed text policy`,
+    );
+    expect(q('.bulk-actions__rationale input'), 'the gate stays open').not.toBeNull();
+    expect(q<HTMLInputElement>('.bulk-actions__rationale input')!.value, 'with its rationale').toBe('Q3 retention sweep');
+    expect(q('.bulk-actions__label')?.textContent).toBe('9 leads selected');
+    expect(q('[data-testid="lead-bulk-result"]')?.textContent).toContain('0 of 9 approved, 1 failed, 8 not started. Nothing else was sent.');
   });
 
   it('Stop leaves the rest unsent and selected; the report lists them and stays until dismissed', async () => {
@@ -191,24 +216,23 @@ describe('LeadTable bulk run', () => {
     expect(q('[data-testid="lead-bulk-stop"]')?.textContent).toBe('Stopping after this batch…');
     expect(q('[data-testid="lead-bulk-stop"]')?.getAttribute('aria-disabled')).toBe('true');
 
-    await act(async () => {
-      held.splice(0).forEach((release) => release());
-    });
+    await releaseHeld();
     await flush(5);
 
-    expect(approve).toHaveBeenCalledTimes(3);
-    expect(draftOutreach).toHaveBeenCalledTimes(3);
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(draftOutreach, 'the three previews only').toHaveBeenCalledTimes(3);
     const result = q('[data-testid="lead-bulk-result"]');
-    expect(result?.textContent).toContain('3 of 9 approved, 6 not started. Stopped.');
-    expect(q('[data-testid="lead-bulk-issues"] [data-outcome="not_started"]')?.textContent).toContain('6 not started');
-    expect(q('.bulk-actions__label')?.textContent).toBe('6 leads selected');
+    expect(result?.textContent).toContain('1 of 9 approved, 8 not started. Stopped.');
+    expect(q('[data-testid="lead-bulk-issues"] [data-outcome="not_started"]')?.textContent).toContain('8 not started');
+    expect(q('.bulk-actions__label')?.textContent).toBe('8 leads selected');
     act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-result-dismiss"]')!.click());
     expect(q('[data-testid="lead-bulk-result"]')).toBeNull();
   });
 
   it('keeps the toolbar, its progress and Stop mounted when a filter change takes every selected row off screen mid-run', async () => {
     await startApproveRun();
-    expect(approve).toHaveBeenCalledTimes(3);
+    await releaseHeld();
+    expect(approve).toHaveBeenCalledTimes(4);
 
     // A preset or filter lands while chunk 1 is held: none of the selected
     // rows is on screen any more, so the visible selection is empty.
@@ -216,7 +240,7 @@ describe('LeadTable bulk run', () => {
     expect(q('[data-testid="lead-bulk-actions"]'), 'the toolbar stays while the run is on the wire').not.toBeNull();
     expect(q('.bulk-actions__label')?.textContent, 'nothing selected is on screen').toBe('0 leads selected');
     expect(q('[data-testid="lead-bulk-run"]')).not.toBeNull();
-    expect(q('[data-testid="lead-bulk-run-count"]')?.textContent).toBe('0 of 9');
+    expect(q('[data-testid="lead-bulk-run-count"]')?.textContent).toBe('1 of 9');
     const stop = q<HTMLButtonElement>('[data-testid="lead-bulk-stop"]');
     expect(stop, 'the only way out of the run is still on screen').not.toBeNull();
 
@@ -228,9 +252,10 @@ describe('LeadTable bulk run', () => {
     await flush(5);
 
     // Stop held: the batch on the wire finished, nothing else was sent.
-    expect(approve).toHaveBeenCalledTimes(3);
-    expect(draftOutreach).toHaveBeenCalledTimes(3);
-    expect(q('[data-testid="lead-bulk-result"]')?.textContent).toContain('3 of 9 approved, 6 not started. Stopped.');
+    expect(approve).toHaveBeenCalledTimes(4);
+    // The three previews, and the one unsampled row of the batch.
+    expect(draftOutreach).toHaveBeenCalledTimes(4);
+    expect(q('[data-testid="lead-bulk-result"]')?.textContent).toContain('4 of 9 approved, 5 not started. Stopped.');
     // The run is over and no selected row is on screen: now the toolbar goes.
     expect(q('[data-testid="lead-bulk-actions"]')).toBeNull();
   });

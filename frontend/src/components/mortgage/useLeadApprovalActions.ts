@@ -42,7 +42,7 @@ import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { APPROVER_ROLE_REQUIRED } from './approverGate';
 import { bulkSampleCoverage, coveredOfferCodes } from './LeadBulkApproveReview.coverage';
 import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
-import { useLeadBulkRun, type BulkRowReport, type BulkRunResult } from './useLeadBulkRun';
+import { bulkCanaryNotice, useLeadBulkRun, type BulkRowReport, type BulkRunResult } from './useLeadBulkRun';
 import { pruneTo, rangeIds } from './LeadTable.selection';
 import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
@@ -66,6 +66,8 @@ export interface BulkToast {
   fail: number;
   network: number;
   aborted: number;
+  /** The run the unmount cut short: its rows were approved or rejected. */
+  kind: 'approve' | 'reject';
 }
 
 export type LeadDecisionOutcome = 'ok' | 'network' | 'backend' | 'aborted' | 'duplicate';
@@ -168,8 +170,13 @@ export function useLeadApprovalActions({
   // through bulkRun.result instead.
   const [bulkToast, setBulkToast] = useState<BulkToast | null>(() => {
     const cancelled = readCancelledBulk();
-    return cancelled ? { ok: cancelled.ok, fail: 0, network: 0, aborted: cancelled.aborted } : null;
+    return cancelled
+      ? { ok: cancelled.ok, fail: 0, network: 0, aborted: cancelled.aborted, kind: cancelled.kind }
+      : null;
   });
+  // A run the canary stopped at its first row: the reopened gate says which
+  // row was refused and that nothing else was sent. Cleared by the next run.
+  const [bulkRunNotice, setBulkRunNotice] = useState<string | null>(null);
   // wow-stage-3: the audit row each row decision wrote, keyed by borrower.
   // The expanded row reads it back as a Decision receipt; the id comes from
   // the POST response and nothing else about the receipt is kept here.
@@ -463,6 +470,7 @@ export function useLeadApprovalActions({
 
   function clearSelection() {
     setSelectedIds(new Set());
+    setBulkRunNotice(null);
   }
 
   // Sales Manager selection is broader than approval eligibility: already
@@ -601,6 +609,7 @@ export function useLeadApprovalActions({
     const snapshots = snapshotRows(ids);
     bulkRunIdsRef.current = new Set(ids);
     setBulkToast(null);
+    setBulkRunNotice(null);
     const result = await bulkRun.start({
       kind: 'approve',
       rows: ids.map((borrowerId) => ({ borrowerId, posts: drafts.has(borrowerId) ? 1 : 2 })),
@@ -615,8 +624,15 @@ export function useLeadApprovalActions({
     bulkRunIdsRef.current = new Set();
     // null: unmount cut the run short (stashed, R5-21) or one was running.
     if (!result) return false;
-    setBulkRationaleOpen(false);
     settleRun(result);
+    if (result.canary) {
+      // The first row was refused: nothing else was sent. The gate stays
+      // open, with its rationale, and says which row and why.
+      setBulkRationaleOpen(true);
+      setBulkRunNotice(bulkCanaryNotice(result.canary));
+      return false;
+    }
+    setBulkRationaleOpen(false);
     return true;
   }
 
@@ -686,6 +702,7 @@ export function useLeadApprovalActions({
     bulkRationaleOpen,
     bulkToast,
     setBulkToast,
+    bulkRunNotice,
     decisionReceipts,
   };
 }
