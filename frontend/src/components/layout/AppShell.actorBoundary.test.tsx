@@ -11,6 +11,7 @@ import { GENIE_IN_FLIGHT_TURN_KEY } from '../../lib/genieConversation';
 import { GENIE_CONVERSATION_TURNS_KEY } from '../../lib/genieConversationStore';
 import { PINNED_INSIGHTS_KEY } from '../../lib/pinnedInsights';
 import { _resetSessionStatusForTests } from '../../lib/sessionStatus';
+import { ACTOR_A, ACTOR_B } from '../../test/actorKeys';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { useApp } from '../AppContext';
 import { AppShell } from './AppShell';
@@ -83,7 +84,7 @@ describe('AppShell actor boundary across a reload (Genie residual #3)', () => {
   beforeEach(() => {
     installLocalStorage();
     window.sessionStorage.clear();
-    actorKey = 'actor_b';
+    actorKey = ACTOR_B;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (new URL(url, 'http://localhost').pathname === '/api/v1/health') {
@@ -134,17 +135,17 @@ describe('AppShell actor boundary across a reload (Genie residual #3)', () => {
   }
 
   it('a reload that brings a DIFFERENT actor key clears the transcript, pins, in-flight record and last borrower', async () => {
-    seedPreviousActor('actor_a');
+    seedPreviousActor(ACTOR_A);
     await reload();
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY), 'the new actor key is remembered').toBe('actor_b');
+    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY), 'the new actor key is remembered').toBe(ACTOR_B);
     expect(survivingState()).toEqual([]);
   });
 
   it('a reload by the SAME actor keeps every piece of that state', async () => {
-    actorKey = 'actor_a';
-    seedPreviousActor('actor_a');
+    actorKey = ACTOR_A;
+    seedPreviousActor(ACTOR_A);
     await reload();
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe('actor_a');
+    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
     expect(survivingState()).toEqual([
       ...Object.keys(PREVIOUS_ACTOR_STATE.local),
       ...Object.keys(PREVIOUS_ACTOR_STATE.session),
@@ -154,7 +155,7 @@ describe('AppShell actor boundary across a reload (Genie residual #3)', () => {
   it('a first visit in the tab (no stored key) is not an actor change', async () => {
     seedPreviousActor(null);
     await reload();
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe('actor_b');
+    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_B);
     expect(survivingState()).toHaveLength(4);
   });
 });
@@ -213,7 +214,7 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     window.sessionStorage.clear();
     _resetSessionStatusForTests();
     healthCalls = 0;
-    healthAnswer = okFor('actor_a');
+    healthAnswer = okFor(ACTOR_A);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (new URL(url, 'http://localhost').pathname === '/api/v1/health') {
@@ -279,9 +280,9 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
   }
 
   async function midSession(): Promise<void> {
-    seedPreviousActor('actor_a');
+    seedPreviousActor(ACTOR_A);
     await mountShell();
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe('actor_a');
+    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
     expect(survivingState()).toEqual(everything());
     expect(lastBorrower()).toBe(LAST_BORROWER);
   }
@@ -294,10 +295,10 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     await nextProbe(dropped);
     expect(survivingState(), 'a dropped connection is not an actor change').toEqual(everything());
     expect(lastBorrower()).toBe(LAST_BORROWER);
-    await nextProbe(okFor('actor_a'));
+    await nextProbe(okFor(ACTOR_A));
     expect(survivingState()).toEqual(everything());
     expect(lastBorrower()).toBe(LAST_BORROWER);
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe('actor_a');
+    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
   });
 
   it('(ii) a, then a reachable anonymous {status, mode} body: clears', async () => {
@@ -309,14 +310,14 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
 
   it('(iii) a, then b: clears', async () => {
     await midSession();
-    await nextProbe(okFor('actor_b'));
+    await nextProbe(okFor(ACTOR_B));
     expect(survivingState()).toEqual([]);
     expect(lastBorrower()).toBe('');
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe('actor_b');
+    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_B);
   });
 
   it('(iv) a reload with stored a whose first probes fail, then a: keeps, and nothing clears in between', async () => {
-    seedPreviousActor('actor_a');
+    seedPreviousActor(ACTOR_A);
     healthAnswer = badGateway;
     await mountShell();
     expect(healthCalls).toBe(1);
@@ -325,20 +326,20 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     expect(survivingState(), 'second probe dropped').toEqual(everything());
     await nextProbe(badGateway);
     expect(survivingState(), 'third probe 502').toEqual(everything());
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe('actor_a');
-    await nextProbe(okFor('actor_a'));
+    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
+    await nextProbe(okFor(ACTOR_A));
     expect(survivingState()).toEqual(everything());
     expect(lastBorrower()).toBe(LAST_BORROWER);
   });
 
   it('(v) a reload with stored a, then b: clears', async () => {
-    seedPreviousActor('actor_a');
+    seedPreviousActor(ACTOR_A);
     healthAnswer = badGateway;
     await mountShell();
     expect(survivingState()).toEqual(everything());
-    await nextProbe(okFor('actor_b'));
+    await nextProbe(okFor(ACTOR_B));
     expect(survivingState()).toEqual([]);
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe('actor_b');
+    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_B);
   });
 
   it('(vi) a, then a 401: clears', async () => {
@@ -356,9 +357,17 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     expect(lastBorrower()).toBe('');
   });
 
+  it('(ix) a, then a reachable 200 {} that is not a real health body: keeps every key and the stamp', async () => {
+    await midSession();
+    await nextProbe(() => jsonResponse(200, {}));
+    expect(survivingState()).toEqual(everything());
+    expect(lastBorrower()).toBe(LAST_BORROWER);
+    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
+  });
+
   it('(viii) a custom fetcher that throws after a: keeps', async () => {
     const health = vi.spyOn(api, 'health');
-    health.mockImplementationOnce(async () => ({ status: 'ok', mode: 'live', actor_cache_key: 'actor_a' }));
+    health.mockImplementationOnce(async () => ({ status: 'ok', mode: 'live', actor_cache_key: ACTOR_A }));
     health.mockImplementation(async () => {
       throw new Error('custom fetcher failed');
     });

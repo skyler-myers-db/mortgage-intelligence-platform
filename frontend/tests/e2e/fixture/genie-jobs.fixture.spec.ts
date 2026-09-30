@@ -14,7 +14,7 @@ import type { HealthPayload } from '../../../src/lib/apiTypes';
 import { expectAxeClean } from './axe';
 import { GENIE_JOB_EXPIRED_HINT, GENIE_JOB_ID, registerGenieJob } from './data/genieJobs';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
-import { HEALTH_OK } from './data/shell';
+import { FIXTURE_ACTOR_A, FIXTURE_ACTOR_B, HEALTH_OK } from './data/shell';
 import { json } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -183,7 +183,7 @@ test.describe('reload and identity', () => {
   });
 
   test('(e) an actor change removes the record and stops the polls; a reload resumes nothing', async ({ app, page, mockApi }) => {
-    let actor = 'fixture-actor-a';
+    let actor = FIXTURE_ACTOR_A;
     mockApi.register('GET', '/api/health', () => json<HealthPayload>({ ...HEALTH_OK, actor_cache_key: actor }));
     const job = registerGenieJob(mockApi);
     await app.gotoRoute('/ask-genie');
@@ -191,7 +191,7 @@ test.describe('reload and identity', () => {
     await expect(cardLabel(page)).toHaveText('Queued for governed completion', STAGE_WAIT);
     expect(await inFlightRecord(page)).not.toBeNull();
 
-    actor = 'fixture-actor-b';
+    actor = FIXTURE_ACTOR_B;
     const healthCalls = () => mockApi.calls.filter((call) => /\/api(\/v1)?\/health$/.test(call.path)).length;
     const healthBefore = healthCalls();
     await page.clock.runFor(8_000);

@@ -26,7 +26,7 @@ import type { HealthPayload } from '../../../src/lib/apiTypes';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { LENDER_NAME } from './data/reference';
-import { CONFIG_OPTIONS, HEALTH_OK } from './data/shell';
+import { CONFIG_OPTIONS, FIXTURE_ACTOR_A, FIXTURE_ACTOR_B, HEALTH_OK } from './data/shell';
 import { json, type ApiCall } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -219,9 +219,9 @@ test.describe('identity boundary', () => {
     return page.evaluate((storageKey) => window.sessionStorage.getItem(storageKey), IN_FLIGHT_KEY);
   }
 
-  /** Ask on /ask-genie as actor `fixture-actor-a` until the turn is polling. */
+  /** Ask on /ask-genie as FIXTURE_ACTOR_A until the turn is polling. */
   async function turnInFlight(page: Page, app: { gotoRoute(path: string): Promise<void> }, mockApi: Parameters<typeof registerGenieTurn>[0]) {
-    const actor = { key: 'fixture-actor-a' };
+    const actor = { key: FIXTURE_ACTOR_A };
     mockApi.register('GET', '/api/health', () => json<HealthPayload>({ ...HEALTH_OK, actor_cache_key: actor.key }));
     const turn = registerGenieTurn(mockApi);
     await app.gotoRoute('/ask-genie');
@@ -266,7 +266,7 @@ test.describe('identity boundary', () => {
     await nextProbe(page, healthCalls, 3_000);
     await keeps(page, 'the first trusted key is the stored one');
 
-    actor.key = 'fixture-actor-b';
+    actor.key = FIXTURE_ACTOR_B;
     await page.reload({ waitUntil: 'domcontentloaded' });
     await app.settle();
     await expect.poll(() => inFlightRecord(page)).toBeNull();

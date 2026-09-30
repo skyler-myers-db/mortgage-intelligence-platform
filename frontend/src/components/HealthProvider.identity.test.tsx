@@ -7,6 +7,7 @@ import { onlineManager } from '@tanstack/react-query';
 import type { HealthPayload } from '../lib/api';
 import { markAuthFailedHealth, type ActorIdentity } from '../lib/healthTrust';
 import { _resetSessionStatusForTests } from '../lib/sessionStatus';
+import { ACTOR_A, ACTOR_B } from '../test/actorKeys';
 import { HealthProvider, useHealth } from './HealthProvider';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -83,25 +84,25 @@ describe('HealthProvider actorIdentity', () => {
   it('is null until the first trusted probe, and stays null through untrusted ones', async () => {
     await mount([async () => unreachable(), async () => {
       throw new Error('custom fetcher failed');
-    }, async () => payload('actor_a')]);
+    }, async () => payload(ACTOR_A)]);
     expect(latest()).toBeNull();
     await nextPoll();
     expect(latest(), 'a thrown probe is untrusted').toBeNull();
     await nextPoll();
-    expect(latest()).toEqual({ key: 'actor_a' });
+    expect(latest()).toEqual({ key: ACTOR_A });
   });
 
   it('an untrusted probe after a trusted one keeps the SAME object', async () => {
     const fetchHealth = await mount([
-      async () => payload('actor_a'),
+      async () => payload(ACTOR_A),
       async () => unreachable(),
       async () => {
         throw new TypeError('Failed to fetch');
       },
-      async () => payload('actor_a'),
+      async () => payload(ACTOR_A),
     ]);
     const first = latest();
-    expect(first).toEqual({ key: 'actor_a' });
+    expect(first).toEqual({ key: ACTOR_A });
     await nextPoll();
     await nextPoll();
     await nextPoll();
@@ -111,19 +112,19 @@ describe('HealthProvider actorIdentity', () => {
 
   it('a new key, a reachable null and an auth failure each replace it', async () => {
     await mount([
-      async () => payload('actor_a'),
-      async () => payload('actor_b'),
+      async () => payload(ACTOR_A),
+      async () => payload(ACTOR_B),
       async () => payload(undefined),
-      async () => payload('actor_b'),
+      async () => payload(ACTOR_B),
       async () => markAuthFailedHealth(unreachable()),
     ]);
-    expect(latest()).toEqual({ key: 'actor_a' });
+    expect(latest()).toEqual({ key: ACTOR_A });
     await nextPoll();
-    expect(latest()).toEqual({ key: 'actor_b' });
+    expect(latest()).toEqual({ key: ACTOR_B });
     await nextPoll();
     expect(latest(), 'the anonymous body is a trusted nobody').toEqual({ key: null });
     await nextPoll();
-    expect(latest()).toEqual({ key: 'actor_b' });
+    expect(latest()).toEqual({ key: ACTOR_B });
     await nextPoll();
     expect(latest(), 'a marked auth failure is a trusted nobody').toEqual({ key: null });
   });

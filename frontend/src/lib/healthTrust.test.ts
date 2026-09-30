@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import type { HealthPayload } from './apiTypes';
-import { healthActorObservation, markAuthFailedHealth } from './healthTrust';
+import {
+  ACTOR_CACHE_KEY_RE,
+  healthActorObservation,
+  isActorCacheKey,
+  markAuthFailedHealth,
+  sessionActorObservation,
+} from './healthTrust';
 import { _resetSessionStatusForTests } from './sessionStatus';
+import { ACTOR_A, ACTOR_B } from '../test/actorKeys';
 
 /**
  * Which health probes may say who the actor is (Genie residual #3). Driven
@@ -64,8 +71,8 @@ describe('health actor trust through api.health', () => {
   });
 
   it('a reachable probe is trusted, with its key', async () => {
-    stubFetch(() => json(200, { status: 'ok', mode: 'live', actor_cache_key: 'actor_a' }));
-    expect((await observe()).observation).toEqual({ trusted: true, key: 'actor_a' });
+    stubFetch(() => json(200, { status: 'ok', mode: 'live', actor_cache_key: ACTOR_A }));
+    expect((await observe()).observation).toEqual({ trusted: true, key: ACTOR_A });
   });
 
   it('the anonymous {status, mode} body is a trusted nobody', async () => {
@@ -142,5 +149,83 @@ describe('health actor trust through api.health', () => {
     const lookalike = JSON.parse(JSON.stringify(marked)) as HealthPayload;
     expect(healthActorObservation(marked)).toEqual({ trusted: true, key: null });
     expect(healthActorObservation(lookalike)).toEqual({ trusted: false });
+  });
+});
+
+/**
+ * Only a REAL health body is a trusted observation (D-identity-review-a1
+ * hardening item 1): mode 'live', status 'ok' or 'degraded', and a key that
+ * is absent, null or `actor_` + 16 lowercase hex. Anything else a reachable
+ * URL can answer (a proxy's JSON, `{}`, a malformed key) says nothing.
+ */
+describe('healthActorObservation trusts only a real health body', () => {
+  it('the test keys are well formed', () => {
+    expect(ACTOR_CACHE_KEY_RE.test(ACTOR_A)).toBe(true);
+    expect(isActorCacheKey(ACTOR_B)).toBe(true);
+    expect(isActorCacheKey('actor_a')).toBe(false);
+  });
+
+  it('{status: ok, mode: live} is a trusted nobody', () => {
+    expect(healthActorObservation({ status: 'ok', mode: 'live' })).toEqual({ trusted: true, key: null });
+  });
+
+  it('a degraded live body with a well-formed key is trusted', () => {
+    expect(healthActorObservation({ status: 'degraded', mode: 'live', actor_cache_key: ACTOR_A })).toEqual({
+      trusted: true,
+      key: ACTOR_A,
+    });
+  });
+
+  it('an explicit null key is a trusted nobody', () => {
+    expect(healthActorObservation({ status: 'ok', mode: 'live', actor_cache_key: null })).toEqual({
+      trusted: true,
+      key: null,
+    });
+  });
+
+  it.each([
+    ['{}', {}],
+    ['a status without mode', { status: 'ok' }],
+    ['an unknown status', { status: 'weird', mode: 'live' }],
+    ['a non-live mode', { status: 'ok', mode: 'unknown' }],
+    ['an email as the key', { status: 'ok', mode: 'live', actor_cache_key: 'bob@x' }],
+    ['an uppercase-hex key', { status: 'ok', mode: 'live', actor_cache_key: `actor_${'A'.repeat(16)}` }],
+    ['a short key', { status: 'ok', mode: 'live', actor_cache_key: 'actor_a' }],
+    ['a non-string key', { status: 'ok', mode: 'live', actor_cache_key: 42 }],
+  ])('%s is untrusted', (_label, payload) => {
+    expect(healthActorObservation(payload as unknown as HealthPayload)).toEqual({ trusted: false });
+  });
+});
+
+describe('sessionActorObservation seeds only from a real session body', () => {
+  const session = (extra: Record<string, unknown>) => ({ can_access_admin: false, can_approve: true, ...extra });
+
+  it('a well-formed key is trusted', () => {
+    expect(sessionActorObservation(session({ actor_cache_key: ACTOR_A }))).toEqual({ trusted: true, key: ACTOR_A });
+  });
+
+  it('an explicit null key is a trusted nobody', () => {
+    expect(sessionActorObservation(session({ actor_cache_key: null }))).toEqual({ trusted: true, key: null });
+  });
+
+  it.each([
+    ['null', null],
+    ['{}', {}],
+    ['a string', 'actor'],
+    ['an older backend without the field', session({})],
+    ['an undefined key', session({ actor_cache_key: undefined })],
+    ['a malformed key', session({ actor_cache_key: 'bob@x' })],
+    ['an uppercase key', session({ actor_cache_key: `actor_${'B'.repeat(16)}` })],
+    ['a missing capability flag', { can_access_admin: false, actor_cache_key: ACTOR_A }],
+    ['a non-boolean flag', { can_access_admin: 'no', can_approve: true, actor_cache_key: ACTOR_A }],
+  ])('%s seeds nothing', (_label, body) => {
+    expect(sessionActorObservation(body)).toEqual({ trusted: false });
+  });
+
+  it('an inherited key is not an own property', () => {
+    const body = Object.create({ actor_cache_key: ACTOR_A }) as Record<string, unknown>;
+    body.can_access_admin = false;
+    body.can_approve = false;
+    expect(sessionActorObservation(body)).toEqual({ trusted: false });
   });
 });

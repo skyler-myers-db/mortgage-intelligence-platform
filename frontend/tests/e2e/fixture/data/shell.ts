@@ -38,6 +38,15 @@ export const GEOGRAPHY_SCOPE: GeographyScope = {
   })),
 };
 
+/**
+ * Well-formed fixture actor keys (`actor_` + 16 lowercase hex): the shell
+ * trusts a health or session key only in that shape (src/lib/healthTrust).
+ * Literals, not imports: this directory may not import runtime src. Same
+ * values as src/test/actorKeys.ts ACTOR_A / ACTOR_B.
+ */
+export const FIXTURE_ACTOR_A = 'actor_aaaaaaaaaaaaaaaa';
+export const FIXTURE_ACTOR_B = 'actor_bbbbbbbbbbbbbbbb';
+
 export const HEALTH_OK: HealthPayload = {
   status: 'ok',
   mode: 'live',
