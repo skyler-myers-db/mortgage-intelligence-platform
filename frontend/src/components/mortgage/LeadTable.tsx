@@ -1,13 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router';
-import { Icon } from '../Icon';
-import { Button, SurfaceTitle } from '../Primitives';
+import { useSearchParams } from 'react-router';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
-import { auditEventHref } from '../../lib/auditLinks';
-import { formatCount } from '../../lib/formatters';
 import { queryKeys } from '../../lib/queryKeys';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import { planLeadCsvExport } from './LeadTable.csv';
@@ -18,12 +14,12 @@ import { sortValue, verifiedCampaignBinding } from './LeadTable.logic';
 import { LeadTableBody } from './LeadTableBody';
 import { useStableRowCallbacks } from './LeadTable.rowCallbacks';
 import { LeadTableHead } from './LeadTableHead';
-import { LeadTableViewControl } from './LeadTableViewControl';
+import { LeadTableHeader } from './LeadTableHeader';
+import { LeadTableFooter } from './LeadTableFooter';
 import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
 import { LeadBulkRunProgressFallback, LeadBulkRunResultFallback } from './LeadBulkRunFallback';
 import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
-import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyboardHint';
 import { LEAD_TABLE_KEYS } from './LeadTable.keymap';
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
 import { useLeadSalesActions } from './useLeadSalesActions';
@@ -413,7 +409,6 @@ export function LeadTable({
     ? 'selected'
     : csvExportCount === 1 ? 'lead' : 'leads';
   const { state: exportState, exportCsv: runExport } = useLeadCsvExport();
-  const exporting = exportState.status === 'pending';
   const exportBlockedReason = exportContext?.exportBlockedReason ?? null;
   function exportCsv() {
     if (csvExportCount === 0 || exportBlockedReason) return;
@@ -440,73 +435,21 @@ export function LeadTable({
     // components.css; the inline override was both unnecessary and the
     // proximate cause of the shift the user reported.
     <div className="surface">
-      <div className="surface__hdr surface__hdr--split">
-        <div className="surface__hdr-main">
-          <div className="surface__icon">
-            <Icon name="user" size={14} />
-          </div>
-          <div>
-            {/* The view's freshness sits beside the title, not in the action
-                row: there it squeezed the keyboard hint onto a second line
-                and pushed the 480px scroller past the fold at 1440x900. */}
-            {headerStatus ? (
-              <div className="inline-flex">
-                <SurfaceTitle>Ranked borrowers</SurfaceTitle>
-                {headerStatus}
-              </div>
-            ) : (
-              <SurfaceTitle>Ranked borrowers</SurfaceTitle>
-            )}
-            <div className="muted fs-12">
-              {/* Keycaps are `<kbd>` (prototype-parity P2); the header's
-                  "Keyboard shortcuts" button and `?` list every key. */}
-              <LeadTableKeyboardHint singleKeysOn={singleKeysOn} approverActive={approverGate === null} />
-              {approverGate === null && actorEmail && (
-                <> Approving as <span className="mono" data-testid="lead-approving-as">{actorEmail}</span>.</>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="lead-table__header-actions">
-          <LeadTableShortcutsButton singleKeysOn={singleKeysOn} />
-          {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
-          {exportState.status === 'done' && (
-            <span className="muted fs-12" data-testid="lead-export-receipt">
-              Exported {formatCount(exportState.rowCount)} {exportState.rowCount === 1 ? 'row' : 'rows'}
-              {' · audit '}
-              {canAccessAdmin ? (
-                <Link className="mono" to={auditEventHref(exportState.receipt.audit_event_id)}>
-                  {exportState.receipt.audit_event_id}
-                </Link>
-              ) : (
-                <span className="mono">{exportState.receipt.audit_event_id}</span>
-              )}
-            </span>
-          )}
-          <Button
-            size="sm"
-            icon={exporting ? undefined : 'export'}
-            onClick={exportCsv}
-            // Pending and blocked are aria-disabled, never native `disabled`:
-            // a focused button that turns disabled drops keyboard focus to
-            // <body>. useLeadCsvExport ignores the click in both states.
-            disabled={csvExportCount === 0}
-            aria-disabled={exporting || exportBlockedReason !== null || undefined}
-            aria-busy={exporting || undefined}
-            data-testid="lead-export"
-            aria-label={exporting
-              ? 'Recording the export in the audit ledger'
-              : `Export ${formatCount(csvExportCount)} ${csvExportNoun} as CSV`}
-            title={exportBlockedReason ?? (csvExportCount === 0 && csvExport.excluded > 0
-              ? 'Every row in scope is excluded by the marketing-eligibility gate'
-              : undefined)}
-          >
-            {exporting
-              ? 'Recording export…'
-              : `Export ${formatCount(csvExportCount)} ${csvExportNoun}`}
-          </Button>
-        </div>
-      </div>
+      <LeadTableHeader
+        headerStatus={headerStatus}
+        singleKeysOn={singleKeysOn}
+        approverActive={approverGate === null}
+        actorEmail={actorEmail}
+        view={view}
+        onViewChange={onViewChange}
+        exportState={exportState}
+        canAccessAdmin={canAccessAdmin}
+        csvExportCount={csvExportCount}
+        csvExportNoun={csvExportNoun}
+        csvExportExcluded={csvExport.excluded}
+        exportBlockedReason={exportBlockedReason}
+        onExport={exportCsv}
+      />
       <LeadTableStatusChips
         growthAgentVerification={growthAgentVerification}
         campaignBindingState={campaignBindingState}
@@ -713,34 +656,14 @@ export function LeadTable({
           }}
         />
       )}
-      <div className="surface__ft">
-        Showing {formatCount(leads.length)} ranked borrower{leads.length === 1 ? '' : 's'}
-        {totalMatching !== null && <>{' '}of {formatCount(totalMatching)} total matching filters</>}
-        {truncatedAt !== null && totalMatching !== null && totalMatching > leads.length && (
-          <span className="muted"> · capped at {formatCount(truncatedAt)}</span>
-        )}
-        {/* Audit tables-02: sorting reorders only the rows already loaded
-            (the server returns the top-ranked window) and nothing said so;
-            no header could reach toggleSort('rank') either. */}
-        {sortKey !== 'rank' && (
-          <>
-            <span data-testid="lead-sort-scope">
-              · sorted within the loaded {formatCount(sortedLeads.length)}
-              {totalMatching !== null && totalMatching > sortedLeads.length
-                ? `, not across all ${formatCount(totalMatching)} matching`
-                : ''}
-            </span>
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={() => toggleSort('rank')}
-              data-testid="lead-sort-reset"
-            >
-              Reset to rank
-            </button>
-          </>
-        )}
-      </div>
+      <LeadTableFooter
+        loadedCount={leads.length}
+        totalMatching={totalMatching}
+        truncatedAt={truncatedAt}
+        sortKey={sortKey}
+        sortedCount={sortedLeads.length}
+        onResetSort={() => toggleSort('rank')}
+      />
     </div>
   );
 }
