@@ -7,6 +7,7 @@ import {
   type Route,
 } from '@playwright/test';
 import { mockBorrowers, mockPortfolio, mockSegments } from '../../src/mocks/fixtureData';
+import type { ExecutiveAnalyticsResponse } from '../../src/types';
 
 const LIVE = process.env.E2E_LIVE === '1';
 const MOCK = process.env.E2E_LAYOUT_MOCK === '1';
@@ -58,6 +59,12 @@ type MovementBudget = {
 
 type RequestPredicate = (url: URL, request: Request) => boolean;
 
+// Typed against the response contract: #192 made `provenance` and each
+// stage's `source` required, and an untyped copy of the old shape crashed
+// the Analytics route into its error boundary before any anchor rendered.
+const POPULATION_SOURCE = 'mip.gold.borrower_360';
+const WORKFLOW_SOURCE = `${POPULATION_SOURCE} + mip.gold.borrower_lifecycle_state`;
+
 const EXECUTIVE_FIXTURE = {
   totals: {
     snapshot_date: '2026-07-14',
@@ -69,19 +76,26 @@ const EXECUTIVE_FIXTURE = {
     actioned_borrowers: 51,
   },
   stages: [
-    { stage: 'addressable', stage_order: 1, borrower_count: 1_000 },
-    { stage: 'in_the_money', stage_order: 2, borrower_count: 420 },
-    { stage: 'high_opportunity', stage_order: 3, borrower_count: 180 },
-    { stage: 'offer_recommended', stage_order: 4, borrower_count: 610 },
-    { stage: 'approved', stage_order: 5, borrower_count: 96 },
-    { stage: 'actioned', stage_order: 6, borrower_count: 51 },
+    { stage: 'addressable', stage_order: 1, borrower_count: 1_000, source: POPULATION_SOURCE },
+    { stage: 'in_the_money', stage_order: 2, borrower_count: 420, source: POPULATION_SOURCE },
+    { stage: 'high_opportunity', stage_order: 3, borrower_count: 180, source: POPULATION_SOURCE },
+    { stage: 'offer_recommended', stage_order: 4, borrower_count: 610, source: POPULATION_SOURCE },
+    { stage: 'approved', stage_order: 5, borrower_count: 96, source: WORKFLOW_SOURCE },
+    { stage: 'actioned', stage_order: 6, borrower_count: 51, source: WORKFLOW_SOURCE },
   ],
   score_distribution: [
     { score_bucket: 50, borrower_count: 120 },
     { score_bucket: 70, borrower_count: 260 },
     { score_bucket: 90, borrower_count: 80 },
   ],
-};
+  provenance: {
+    snapshot_date: '2026-07-14',
+    lifecycle_synced_at: '2026-07-14T12:00:00Z',
+    population_source: POPULATION_SOURCE,
+    workflow_source: WORKFLOW_SOURCE,
+    note: 'layout-stability mock',
+  },
+} satisfies ExecutiveAnalyticsResponse;
 
 function normalizedApiPath(rawUrl: string): string {
   return new URL(rawUrl).pathname.replace(/^\/api\/v\d+(?=\/)/, '/api');
@@ -552,14 +566,17 @@ test('Segment Intelligence keeps cards, Any/All controls, ranked list, and map a
     await expectObservedClsBelow(page, label);
   };
 
-  const refiCard = page.getByRole('button', { name: /Prime Refi Candidates/i });
+  // The select button's accessible name is 'Select <segment> segment — N borrowers'.
+  // The bare segment name also labels the card's Ask Genie button and any map
+  // state whose top segment it is, so anchor on the prefix.
+  const refiCard = page.getByRole('button', { name: /^Select Prime Refi Candidates segment\b/i });
   await exerciseTransition('select first segment card', async () => {
     await refiCard.press('Enter');
     await expect(refiCard).toHaveAttribute('aria-pressed', 'true');
   });
   expect(gate.urls().some((url) => url.includes('/api/leads') && url.includes('segment_codes=itm'))).toBe(true);
 
-  const equityCard = page.getByRole('button', { name: /Home Equity Candidate/i });
+  const equityCard = page.getByRole('button', { name: /^Select Home Equity Candidates? segment\b/i });
   await exerciseTransition('compose Any-selected card cohort', async () => {
     await equityCard.press('Enter');
     await expect(equityCard).toHaveAttribute('aria-pressed', 'true');

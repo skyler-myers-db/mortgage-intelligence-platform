@@ -20,6 +20,10 @@ an exact pin and a jsx-a11y-only config; the single-worker perf step also
 collects interaction-budget, and PERF_SPEC matches exactly the two budget
 specs.
 
+The parse job (``playwright-offline``) runs the whole route-fulfilled
+layout-stability spec: a ``--grep`` there ran one of its five tests and hid
+two broken ones, and the product layout shift behind one of them, for waves.
+
 The backend job's Node + ``MIP_REQUIRE_FIXTURE_CONTRACT`` wiring is pinned by
 tests/unit/test_e2e_fixture_contract.py beside the test it serves.
 """
@@ -37,6 +41,7 @@ FRONTEND = ROOT / "frontend"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PERF_SPEC = ROOT / "frontend" / "tests" / "e2e" / "fixture" / "perf-budget.fixture.spec.ts"
 BUILD_ARTIFACTS_TEST = "tests/unit/test_frontend_build_artifacts.py"
+LAYOUT_STABILITY_SPEC = "tests/e2e/layout-stability.spec.ts"
 
 
 def _jobs() -> dict[str, Any]:
@@ -184,3 +189,15 @@ def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:
 
     assert build < python < install < check
     assert steps[check]["env"]["MIP_REQUIRE_FRONTEND_DIST"] == "1"
+
+
+def test_the_parse_job_runs_the_whole_layout_stability_spec() -> None:
+    assert (FRONTEND / LAYOUT_STABILITY_SPEC).is_file()
+    steps = _jobs()["playwright-offline"]["steps"]
+    step = steps[_step_index(steps, LAYOUT_STABILITY_SPEC)]
+    lines = [line.strip() for line in step["run"].splitlines()]
+
+    assert step["working-directory"] == "frontend"
+    assert f"E2E_LAYOUT_MOCK=1 npx playwright test {LAYOUT_STABILITY_SPEC} --workers=1" in lines
+    assert "--grep" not in step["run"], "every layout-stability test runs, not a --grep subset"
+    assert "if" not in step and "continue-on-error" not in step
