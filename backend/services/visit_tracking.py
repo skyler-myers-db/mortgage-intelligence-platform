@@ -38,6 +38,7 @@ from starlette.responses import Response as StarletteResponse
 from starlette.types import ASGIApp
 
 from backend.config.settings import _running_under_pytest, settings
+from backend.services.actor_identity import forwarded_identity
 from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
@@ -74,17 +75,10 @@ def forwarded_actor(request: StarletteRequest) -> str | None:
     ``settings.default_actor`` -- a visit row attributed to a placeholder
     identity would poison the "since your last login" anchor for every
     unauthenticated probe. When ``trust_forwarded_headers`` is off the
-    headers are attacker-writable, so visits are not recorded at all.
+    headers are attacker-writable, so visits are not recorded at all (the
+    shared ``backend/services/actor_identity.forwarded_identity`` rule).
     """
-    if not settings.trust_forwarded_headers:
-        return None
-    email = request.headers.get("X-Forwarded-Email")
-    if email:
-        return email
-    user = request.headers.get("X-Forwarded-User")
-    if user:
-        return user
-    return None
+    return forwarded_identity(request)
 
 
 class VisitTracker:

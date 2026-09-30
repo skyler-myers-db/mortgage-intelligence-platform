@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
+from backend.services.actor_identity import forwarded_identity
 from backend.services.identity_display import display_name_for
 from backend.services.rbac import can_access_admin, can_access_approver
 
@@ -74,26 +75,6 @@ class SessionResponse(BaseModel):
     )
 
 
-def _forwarded_actor(request: Request) -> str | None:
-    """Return the caller's own forwarded identity, or None.
-
-    Same headers, same precedence as ``audit_store.resolve_actor`` (which the
-    RBAC gates use), minus its fallbacks: the UI prints this as "Approving as
-    ...", so a configured ``default_actor`` or the untrusted-edge marker must
-    never be presented as the signed-in person. Reading the headers directly
-    also keeps this read off the identity-fallback counter, which is a
-    regression signal for audited WRITES. The value is returned to its owner
-    only and is never logged.
-    """
-    if not settings.trust_forwarded_headers:
-        return None
-    return (
-        request.headers.get("X-Forwarded-Email")
-        or request.headers.get("X-Forwarded-User")
-        or None
-    )
-
-
 def role_labels_for(*, identity: str | None, admin: bool, approver: bool) -> list[str]:
     """Capability tiers as display labels, most privileged first."""
     labels: list[str] = []
@@ -112,7 +93,12 @@ def role_labels_for(*, identity: str | None, admin: bool, approver: bool) -> lis
 # docstring would become the OpenAPI operation description.)
 @router.get("", response_model=SessionResponse)
 async def get_session(request: Request) -> SessionResponse:
-    identity = _forwarded_actor(request)
+    # The shared resolver, minus resolve_actor's fallbacks: the UI prints this
+    # as "Approving as ...", so a configured default_actor or the
+    # untrusted-edge marker must never be presented as the signed-in person,
+    # and this read stays off the identity-fallback counter. Returned to its
+    # owner only; never logged.
+    identity = forwarded_identity(request)
     admin = can_access_admin(request)
     approver = can_access_approver(request)
     return SessionResponse(

@@ -25,6 +25,7 @@ from fastapi import Request
 from backend.config.settings import settings
 from backend.schemas.audit import AuditEvent as AuditEvent
 from backend.schemas.common import validate_public_audit_action
+from backend.services.actor_identity import forwarded_identity
 from backend.services.audit_metadata_policy import (
     _ALLOWED_RESULT_FILTER_KEYS as _ALLOWED_RESULT_FILTER_KEYS,
 )
@@ -168,12 +169,9 @@ def resolve_actor(request: Request | None) -> str:
     flag exists for unusual reverse-proxy deploys.
     """
     if request is not None and settings.trust_forwarded_headers:
-        email = request.headers.get("X-Forwarded-Email")
-        if email:
-            return email
-        user = request.headers.get("X-Forwarded-User")
-        if user:
-            return user
+        identity = forwarded_identity(request)
+        if identity:
+            return identity
     if request is not None and not settings.trust_forwarded_headers:
         # Trust disabled: don't even read the headers. Return the
         # untrusted-edge marker so audit attribution stays honest.
