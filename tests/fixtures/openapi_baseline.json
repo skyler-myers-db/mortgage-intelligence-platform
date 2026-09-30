@@ -14584,6 +14584,18 @@
       },
       "SessionResponse": {
         "properties": {
+          "actor_cache_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque per-actor browser-cache discriminator: the same keyed hash of the forwarded identity that the authenticated health body carries, so the browser can seed its actor-scoped storage gate before the first health probe. Not reversible to the identity and never sent to telemetry. Null exactly when actor_email is.",
+            "title": "Actor Cache Key"
+          },
           "actor_display_name": {
             "anyOf": [
               {

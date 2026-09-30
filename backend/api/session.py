@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
-from backend.services.actor_identity import forwarded_identity
+from backend.services.actor_identity import actor_cache_key, forwarded_identity
 from backend.services.identity_display import display_name_for
 from backend.services.rbac import can_access_admin, can_access_approver
 
@@ -73,6 +73,16 @@ class SessionResponse(BaseModel):
             "returns (audit delivery-07)."
         ),
     )
+    actor_cache_key: str | None = Field(
+        default=None,
+        description=(
+            "Opaque per-actor browser-cache discriminator: the same keyed hash "
+            "of the forwarded identity that the authenticated health body "
+            "carries, so the browser can seed its actor-scoped storage gate "
+            "before the first health probe. Not reversible to the identity "
+            "and never sent to telemetry. Null exactly when actor_email is."
+        ),
+    )
 
 
 def role_labels_for(*, identity: str | None, admin: bool, approver: bool) -> list[str]:
@@ -109,4 +119,5 @@ async def get_session(request: Request) -> SessionResponse:
         role_labels=role_labels_for(identity=identity, admin=admin, approver=approver),
         lender_name=settings.mip_lender_name,
         rum_enabled=settings.mip_rum_enabled,
+        actor_cache_key=actor_cache_key(identity) if identity else None,
     )

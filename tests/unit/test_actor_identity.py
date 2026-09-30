@@ -11,7 +11,9 @@ browser ``actor_cache_key`` derivation. These tests pin:
   (ii)  the secret precedence: current, then legacy, then the per-process
         secret, which is ONE per process;
   (iii) a parity table: every reader agrees with the shared helper for every
-        header set, trust on and off, each keeping its own fallback.
+        header set, trust on and off, each keeping its own fallback;
+  (iv)  health and session derive the same key for the same headers;
+  (v)   the session's actor_cache_key is null exactly when actor_email is.
 """
 
 from __future__ import annotations
@@ -156,9 +158,12 @@ def test_every_reader_agrees_with_the_shared_helper(
     else:
         assert body == {"status": body["status"], "mode": "live"}
 
-    # Session: the signed-in person is exactly the helper's value.
+    # Session: the signed-in person is exactly the helper's value, and its
+    # seed key is null exactly when that is (v).
     session = client.get("/api/v1/session", headers={**headers, "X-Forwarded-Groups": ""}).json()
     assert session["actor_email"] == expected
+    assert session["actor_cache_key"] == (actor_cache_key(expected) if expected else None)
+    assert (session["actor_cache_key"] is None) == (session["actor_email"] is None)
 
     # Visit tracking: never a fallback identity.
     assert visit_tracking.forwarded_actor(request) == expected
@@ -198,3 +203,25 @@ def test_admin_health_derives_the_same_key_for_its_admitted_actor(monkeypatch: p
     admin = client.get("/api/admin/health", headers=headers).json()
     runtime = client.get("/api/v1/health", headers=headers).json()
     assert admin["actor_cache_key"] == runtime["actor_cache_key"] == actor_cache_key("ops@example.com")
+
+
+# ------------------------------------------- (iv) health and session agree
+
+
+@pytest.mark.parametrize("configured", [True, False], ids=["configured-secret", "process-secret"])
+@pytest.mark.parametrize(
+    "headers",
+    [row[1] for row in HEADER_SETS if row[2]],
+    ids=[row[0] for row in HEADER_SETS if row[2]],
+)
+def test_health_and_session_derive_the_same_key(
+    monkeypatch: pytest.MonkeyPatch,
+    headers: dict[str, str],
+    configured: bool,
+) -> None:
+    if not configured:
+        monkeypatch.setattr(settings, "mip_genie_action_secret_current", None)
+    health = client.get("/api/v1/health", headers=headers).json()
+    session = client.get("/api/v1/session", headers={**headers, "X-Forwarded-Groups": ""}).json()
+    assert health["actor_cache_key"] == session["actor_cache_key"]
+    assert health["actor_cache_key"].startswith("actor_")
