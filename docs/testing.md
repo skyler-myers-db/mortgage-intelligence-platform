@@ -187,6 +187,20 @@ app.degrade(/^\/api\/analytics\//, { status: 500, body: { detail: 'boom' } });
 
 The browser's "Failed to load resource" line for a degraded call is allowed automatically; anything else the degraded UI logs still fails the test.
 
+### Owned storage in fixture specs
+
+The app's actor gate (`frontend/src/lib/actorScope.ts`, [docs/security/identity-boundary.md](security/identity-boundary.md)) removes private browser data it finds without an owner stamp, so a spec that seeds pins, a Genie transcript, a conversation id or an in-flight record before boot seeds it owned:
+
+```ts
+import { FIXTURE_NOBODY, seedOwnedStorage } from './ownedStorage';
+
+await seedOwnedStorage(page, FIXTURE_NOBODY, { session: { 'mip-genie-conversation-v1': JSON.stringify(turns) } });
+```
+
+`seedOwnedStorage(page, owner, {local, session})` writes both stamps (`mip.actorOwner`, `mip.actorCacheKey`) and the entries in one init script, once per tab. The default fixtures are the actor `~nobody` (`SESSION.actor_cache_key` is null and `HEALTH_OK` carries no key). A spec that needs a real actor, or changes it, serves `GET /api/v1/session` and `GET /api/v1/health` from one variable with `serveActor(mockApi, () => actor)` (`data/shell.ts`) and uses the well-formed `FIXTURE_ACTOR_A` / `FIXTURE_ACTOR_B` keys: the shell ignores a key that is not `actor_` plus 16 lowercase hex characters. A spec that writes storage after boot (the stamps then exist) needs neither.
+
+Every new browser-storage key registers in `ACTOR_SCOPE_REGISTRY` (`frontend/src/lib/actorScope.ts`), and only the files listed in `actorScope.registry.test.ts` may touch storage: that AST gate fails on an unregistered `mip` key, an unreviewed storage call, or a whole-area `.clear()`.
+
 ### Visual regression (pixel baselines)
 
 `fixture/visual.fixture.spec.ts` compares `toHaveScreenshot` baselines of the production build against the fixture API: every route in both themes, the nine `product: true` routes of `routes.ts` with the Console open, the shell states (evidence drawer, command palette, Genie panel, degraded, expanded row, empty queue), the second `.main` page of Home, Borrower 360 and the Offer detail, compact density, 1280x720, and teal / navy / red specimens of a KPI and the map legend. About 96 PNGs live in `fixture/visual.fixture.spec.ts-snapshots/`.
