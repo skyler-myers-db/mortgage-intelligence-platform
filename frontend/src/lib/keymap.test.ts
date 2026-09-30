@@ -7,7 +7,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../test/installLocalStorage';
-import { clearActorScopedBrowserState } from './actorScopedBrowserState';
+import { NOBODY, _resetActorScopeForTests, observeActor } from './actorScope';
+import { ACTOR_A, ACTOR_B } from '../test/actorKeys';
 import {
   ariaKeyShortcuts,
   chordKeycaps,
@@ -206,7 +207,8 @@ describe('registry dispatch', () => {
     expect(single).not.toHaveBeenCalled();
     expect(shifted).not.toHaveBeenCalled();
     expect(modifier).toHaveBeenCalledOnce();
-    expect(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY)).toBe('off');
+    // The per-actor map (lib/actorScope): this suite runs as an open gate for nobody.
+    expect(JSON.parse(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) ?? '{}')).toEqual({ [NOBODY]: 'off' });
 
     setSingleKeyShortcutsEnabled(true);
     press(document.body, { key: 'a' });
@@ -315,18 +317,23 @@ describe('single-key preference', () => {
     clearSingleKeyShortcutsPreference();
   });
 
-  it('defaults on, persists off, and an actor change resets it and notifies', () => {
+  it('defaults on, persists off per actor, and an actor change reads the new actor entry and notifies', () => {
+    _resetActorScopeForTests({ status: 'open', owner: ACTOR_A });
     expect(singleKeyShortcutsEnabled()).toBe(true);
     const seen = vi.fn();
     const unsubscribe = subscribeSingleKeyShortcuts(seen);
     setSingleKeyShortcutsEnabled(false);
     expect(singleKeyShortcutsEnabled()).toBe(false);
+    expect(JSON.parse(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) ?? '{}')).toEqual({ [ACTOR_A]: 'off' });
 
-    clearActorScopedBrowserState();
+    observeActor({ key: ACTOR_B });
 
-    expect(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY)).toBeNull();
+    // B has no entry: the default. A keeps its own, which applies again when A returns.
     expect(singleKeyShortcutsEnabled()).toBe(true);
-    expect(seen).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) ?? '{}')).toEqual({ [ACTOR_A]: 'off' });
+    // Once for the write, once per gate event of the change ('cleared', 'restamped').
+    expect(seen).toHaveBeenCalledTimes(3);
     unsubscribe();
+    _resetActorScopeForTests({ status: 'open', owner: NOBODY });
   });
 });

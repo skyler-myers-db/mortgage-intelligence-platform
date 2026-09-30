@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { onlineManager } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import type { HealthPayload } from '../lib/api';
 import { markAuthFailedHealth, type ActorIdentity } from '../lib/healthTrust';
 import { _resetSessionStatusForTests } from '../lib/sessionStatus';
@@ -127,5 +127,105 @@ describe('HealthProvider actorIdentity', () => {
     expect(latest()).toEqual({ key: ACTOR_B });
     await nextPoll();
     expect(latest(), 'a marked auth failure is a trusted nobody').toEqual({ key: null });
+  });
+});
+
+/**
+ * The session seed (D-identity-review-b part B): before the first trusted
+ * probe, the boot-primed /api/session body may name the actor, so the gate
+ * opens without waiting for the poll. Read from the query cache only: no
+ * observer, no fetch; health stays the only ongoing detector.
+ */
+describe('HealthProvider actorIdentity: the /api/session seed', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let queryClient: QueryClient;
+  let fetches: string[];
+
+  const SESSION_KEY = ['session', 'access'] as const;
+  const sessionBody = (key: unknown) => ({ can_access_admin: false, can_approve: true, actor_cache_key: key });
+
+  beforeEach(() => {
+    _resetSessionStatusForTests();
+    seen.length = 0;
+    fetches = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      fetches.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      return new Response('{}', { status: 404 });
+    }));
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+    queryClient.clear();
+    vi.unstubAllGlobals();
+    _resetSessionStatusForTests();
+  });
+
+  /** A probe that never answers: only the seed can set the identity. */
+  const heldProbe = () => new Promise<HealthPayload>(() => undefined);
+
+  async function mount(fetchHealth: () => Promise<HealthPayload> = heldProbe) {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <HealthProvider pollIntervalOkMs={1000} pollIntervalDegradedMs={1000} debounceUpMs={0} fetchHealth={fetchHealth}>
+            <IdentityProbe />
+          </HealthProvider>
+        </QueryClientProvider>,
+      );
+    });
+  }
+
+  const latest = () => seen[seen.length - 1];
+
+  it('a primed session seeds the identity before the first probe, with no observer and no session fetch', async () => {
+    queryClient.setQueryData(SESSION_KEY, sessionBody(ACTOR_A));
+    await mount();
+    expect(latest()).toEqual({ key: ACTOR_A });
+    expect(queryClient.getQueryCache().find({ queryKey: SESSION_KEY })?.getObserversCount()).toBe(0);
+    expect(fetches.filter((url) => url.includes('/session'))).toEqual([]);
+  });
+
+  it('a session that lands after mount seeds from its FIRST success only', async () => {
+    await mount();
+    expect(latest()).toBeNull();
+    await act(async () => {
+      queryClient.setQueryData(SESSION_KEY, sessionBody(null));
+    });
+    expect(latest(), 'a null key is a trusted nobody').toEqual({ key: null });
+    await act(async () => {
+      queryClient.setQueryData(SESSION_KEY, sessionBody(ACTOR_B));
+    });
+    expect(latest(), 'a later success never re-seeds').toEqual({ key: null });
+    expect(fetches).toEqual([]);
+  });
+
+  it('a malformed session body seeds nothing', async () => {
+    queryClient.setQueryData(SESSION_KEY, sessionBody('bob@x'));
+    await mount();
+    expect(latest()).toBeNull();
+  });
+
+  it('never overrides a trusted health observation', async () => {
+    let answer: (payload: HealthPayload) => void = () => undefined;
+    await mount(() => new Promise<HealthPayload>((resolve) => {
+      answer = resolve;
+    }));
+    await act(async () => {
+      answer(payload(ACTOR_B));
+    });
+    expect(latest()).toEqual({ key: ACTOR_B });
+    await act(async () => {
+      queryClient.setQueryData(SESSION_KEY, sessionBody(ACTOR_A));
+    });
+    expect(latest(), 'health spoke first').toEqual({ key: ACTOR_B });
   });
 });

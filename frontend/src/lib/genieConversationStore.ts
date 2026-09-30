@@ -1,4 +1,5 @@
 import type { GenieAnswer as GenieAnswerShape } from '../types';
+import { actorScopeStatus, readActorScoped, subscribeActorScope, updateActorScoped } from './actorScope';
 
 /**
  * Genie conversation transcript store.
@@ -31,6 +32,10 @@ import type { GenieAnswer as GenieAnswerShape } from '../types';
  *   - The persisted shape is deliberately `{question, response}[]` — the
  *     same shape `GET /api/genie/sessions/{id}` returns — so loading a past
  *     session and restoring local state go through one code path.
+ *   - The key is a PRIVATE_SESSION key of lib/actorScope: read and written
+ *     only through its gate (nothing before the actor is known, another
+ *     actor's transcript removed), every write an updater over the raw
+ *     stored list, and the cache dropped on every gate event.
  */
 
 export const GENIE_CONVERSATION_TURNS_KEY = 'mip-genie-conversation-v1';
@@ -62,33 +67,16 @@ function isTurn(value: unknown): value is GenieTurn {
   return typeof turn.question === 'string' && Boolean(turn.response) && typeof turn.response === 'object';
 }
 
-function hydrate(): GenieTurn[] {
-  if (typeof window === 'undefined') return EMPTY;
+function parseTurns(raw: string | null): GenieTurn[] {
+  if (!raw) return EMPTY;
   try {
-    const raw = window.sessionStorage.getItem(GENIE_CONVERSATION_TURNS_KEY);
-    if (!raw) return EMPTY;
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return EMPTY;
     const turns = parsed.filter(isTurn);
     return turns.length > 0 ? turns.slice(-MAX_STORED_TURNS) : EMPTY;
   } catch {
-    // Unparseable or storage-denied: start clean rather than throwing into
-    // the render path.
+    // Unparseable: start clean rather than throwing into the render path.
     return EMPTY;
-  }
-}
-
-function persist(turns: GenieTurn[]): void {
-  if (typeof window === 'undefined') return;
-  try {
-    if (turns.length === 0) {
-      window.sessionStorage.removeItem(GENIE_CONVERSATION_TURNS_KEY);
-      return;
-    }
-    window.sessionStorage.setItem(GENIE_CONVERSATION_TURNS_KEY, JSON.stringify(turns));
-  } catch {
-    // Quota exceeded / privacy mode. In-memory state still works for this
-    // mount; persistence is best-effort.
   }
 }
 
@@ -96,10 +84,39 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
+/** Drop the cache (re-read lazily) and tell the subscribers. */
+function invalidate(): void {
+  cache = null;
+  emit();
+}
+
+subscribeActorScope(invalidate);
+
+/**
+ * Every write is an updater over the stored list. While the gate is open the
+ * updater runs now, over the cache that mirrors the stored list, so each
+ * response keeps its object identity (useGenieTurnCollapse keys on it). While
+ * pending it is queued and replayed over the RAW stored list once the gate
+ * resolves; while closed it is dropped. Quota exceeded or privacy mode is the
+ * gate's concern (it keeps the value in memory).
+ */
+function write(next: (stored: GenieTurn[]) => GenieTurn[]): GenieTurn[] {
+  const mirror = actorScopeStatus() === 'open' ? getGenieTurns() : null;
+  const out: { turns: GenieTurn[] | null } = { turns: null };
+  updateActorScoped('session', GENIE_CONVERSATION_TURNS_KEY, (raw) => {
+    const turns = next(mirror ?? parseTurns(raw)).slice(-MAX_STORED_TURNS);
+    out.turns = turns.length > 0 ? turns : EMPTY;
+    return turns.length > 0 ? JSON.stringify(turns) : null;
+  });
+  cache = mirror === null ? null : out.turns;
+  emit();
+  return getGenieTurns();
+}
+
 /** Current turns. Stable reference between writes (safe for
  *  `useSyncExternalStore`). */
 export function getGenieTurns(): GenieTurn[] {
-  if (cache === null) cache = hydrate();
+  if (cache === null) cache = parseTurns(readActorScoped('session', GENIE_CONVERSATION_TURNS_KEY));
   return cache;
 }
 
@@ -117,24 +134,19 @@ export function subscribeGenieTurns(listener: () => void): () => void {
 
 /** Replace the whole transcript (restore-from-history, or a trimmed set). */
 export function setGenieTurns(turns: GenieTurn[]): GenieTurn[] {
-  const next = turns.slice(-MAX_STORED_TURNS);
-  cache = next.length > 0 ? next : EMPTY;
-  persist(cache);
-  emit();
-  return cache;
+  return write(() => turns);
 }
 
-/** Append one settled turn to the current transcript. Reads the live list at
- *  call time, so a turn another surface settled in the meantime is kept. */
+/** Append one settled turn to the current transcript. Extends the RAW stored
+ *  list at write time, so a turn another surface settled in the meantime is
+ *  kept. */
 export function appendGenieTurn(question: string, response: GenieAnswerShape): GenieTurn[] {
-  return setGenieTurns([...getGenieTurns(), { question, response }]);
+  return write((stored) => [...stored, { question, response }]);
 }
 
 /** Drop the transcript (New thread, actor boundary reset, 403). */
 export function clearGenieTurns(): void {
-  cache = EMPTY;
-  persist(EMPTY);
-  emit();
+  write(() => EMPTY);
 }
 
 /** Rendered-message adapter for the transcript (and for a loaded history

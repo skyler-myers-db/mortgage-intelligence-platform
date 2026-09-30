@@ -9,13 +9,15 @@
  * A, R, Shift+A, `/`, `?`). Modifier chords such as Cmd/Ctrl-K stay on.
  *
  * Persistence: the workspace API stores saved leads and drafts only, not
- * preferences, so the choice lives in browser storage under one key that
- * `clearActorScopedBrowserState` clears on an in-session actor change. One
- * operator's choice therefore never carries over to the next operator on a
- * shared machine. Storage can be unavailable (private mode): the in-memory
- * value still works for the session.
+ * preferences, so the choice lives in browser storage under one key: the
+ * ACTOR_PREFERENCE_LOCAL map of lib/actorScope ({actorKey | '~nobody':
+ * 'on' | 'off'}, eight entries at most). Each operator reads their own entry,
+ * so one operator's choice never carries over to the next on a shared
+ * machine, and returning to a machine keeps it. Storage can be unavailable
+ * (private mode): the gate keeps the value in memory for the document.
  */
 import { useSyncExternalStore } from 'react';
+import { readActorPreference, subscribeActorScope, writeActorPreference } from './actorScope';
 
 export const SINGLE_KEY_SHORTCUTS_STORAGE_KEY = 'mip.shortcuts.singleKey';
 
@@ -23,17 +25,18 @@ let cached: boolean | null = null;
 const subscribers = new Set<() => void>();
 
 function readStored(): boolean {
-  if (typeof window === 'undefined') return true;
-  try {
-    return window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) !== 'off';
-  } catch {
-    return true;
-  }
+  return readActorPreference(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) !== 'off';
 }
 
 function notify(): void {
   subscribers.forEach((callback) => callback());
 }
+
+// Every actor-gate event can change whose entry applies: re-read it.
+subscribeActorScope(() => {
+  cached = null;
+  notify();
+});
 
 /** Whether single-key (non-modifier) shortcuts are on. Default: on. */
 export function singleKeyShortcutsEnabled(): boolean {
@@ -41,24 +44,18 @@ export function singleKeyShortcutsEnabled(): boolean {
   return cached;
 }
 
+/** Set the current actor's entry (queued before the actor is known, dropped
+ *  while the gate is closed); the value shown is re-read from the map. */
 export function setSingleKeyShortcutsEnabled(enabled: boolean): void {
-  cached = enabled;
-  try {
-    window.localStorage.setItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY, enabled ? 'on' : 'off');
-  } catch {
-    // Storage unavailable: the in-memory value still applies this session.
-  }
+  writeActorPreference(SINGLE_KEY_SHORTCUTS_STORAGE_KEY, enabled ? 'on' : 'off');
+  cached = null;
   notify();
 }
 
-/** Actor change: forget the previous operator's choice (back to the default). */
+/** Drop the cached value so mounted shortcuts re-read the map (the map
+ *  itself is never cleared: each actor keeps their own entry). */
 export function clearSingleKeyShortcutsPreference(): void {
   cached = null;
-  try {
-    window.localStorage.removeItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY);
-  } catch {
-    // Storage unavailable: nothing persisted to remove.
-  }
   notify();
 }
 

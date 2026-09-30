@@ -5,10 +5,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACTOR_CACHE_KEY_STORAGE_KEY } from '../../lib/actorScopedBrowserState';
+import { ACTOR_SCOPE_REGISTRY, NOBODY, _resetActorScopeForTests, actorScopeStatus } from '../../lib/actorScope';
 import { api } from '../../lib/api';
 import { GENIE_IN_FLIGHT_TURN_KEY } from '../../lib/genieConversation';
-import { GENIE_CONVERSATION_TURNS_KEY } from '../../lib/genieConversationStore';
+import { GENIE_CONVERSATION_TURNS_KEY, getGenieTurns } from '../../lib/genieConversationStore';
+import { getGenieTurnSnapshot } from '../../lib/genieInFlightTurn';
 import { PINNED_INSIGHTS_KEY } from '../../lib/pinnedInsights';
 import { _resetSessionStatusForTests } from '../../lib/sessionStatus';
 import { ACTOR_A, ACTOR_B } from '../../test/actorKeys';
@@ -38,41 +39,62 @@ vi.mock('./GenieDock', () => ({ GenieDock: () => null }));
 
 /**
  * Genie-turn residual #3 (the actor boundary across a reload), proven on the
- * REAL AppShell. The shell compared each /api/health `actor_cache_key` with
- * the previous one held in a ref, and treated the FIRST key after a reload as
- * no change: an actor switch across a reload (a shared booth machine, a
- * re-login in the same tab) kept the previous actor's Genie transcript,
- * pinned insights, in-flight turn record and last borrower. The last key is
- * now kept in sessionStorage (it is already opaque and actor-scoped), and a
- * first key that differs from the stored one is an actor change.
+ * REAL AppShell over the actor gate (lib/actorScope, D-identity-review-b).
+ * Each storage area carries an owner stamp ('mip.actorOwner' in
+ * localStorage, 'mip.actorCacheKey' in this tab's sessionStorage), and the
+ * gate compares the first trusted key after a reload with them: another
+ * actor's pins, transcript and in-flight record are removed; the same actor
+ * keeps them; unowned data is never adopted. The legacy 'mip.lastBorrowerId'
+ * (in-memory AppContext state since 8a30eafa) is removed at the first
+ * resolution either way.
  *
- * The health probe is the only answered request; everything else 404s.
+ * The health probe is the only answered request; everything else 404s, so
+ * the /api/session seed never applies here (the new-tab suite covers it).
  */
+
+const { STAMPS } = ACTOR_SCOPE_REGISTRY;
+const LEGACY_LAST_BORROWER = 'mip.lastBorrowerId';
 
 const PREVIOUS_ACTOR_STATE = {
   local: {
-    'mip.lastBorrowerId': 'B-0OXOBYLW8MNCK',
-    [PINNED_INSIGHTS_KEY]: JSON.stringify([{ id: 'pin-1', title: 'Previous actor pin' }]),
+    [LEGACY_LAST_BORROWER]: 'B-0OXOBYLW8MNCK',
+    [PINNED_INSIGHTS_KEY]: JSON.stringify([{ id: 'pin-1', question: 'Previous actor pin', summary: 's' }]),
   },
   session: {
-    [GENIE_CONVERSATION_TURNS_KEY]: JSON.stringify({ v: 1, turns: [{ question: 'previous actor question' }] }),
+    [GENIE_CONVERSATION_TURNS_KEY]: JSON.stringify([
+      { question: 'previous actor question', response: { answer: 'previous actor answer', source: 'genie' } },
+    ]),
     [GENIE_IN_FLIGHT_TURN_KEY]: JSON.stringify({ v: 1, phase: 'polling' }),
   },
 };
 
-function seedPreviousActor(storedKey: string | null): void {
-  if (storedKey !== null) window.sessionStorage.setItem(ACTOR_CACHE_KEY_STORAGE_KEY, storedKey);
+/** Seed the previous actor's data, stamped `owner` in BOTH areas (null: unstamped). */
+function seedPreviousActor(owner: string | null): void {
+  if (owner !== null) {
+    window.localStorage.setItem(STAMPS.local, owner);
+    window.sessionStorage.setItem(STAMPS.session, owner);
+  }
   for (const [key, value] of Object.entries(PREVIOUS_ACTOR_STATE.local)) window.localStorage.setItem(key, value);
   for (const [key, value] of Object.entries(PREVIOUS_ACTOR_STATE.session)) window.sessionStorage.setItem(key, value);
 }
 
-/** The previous actor's keys still holding something (cleared pins persist as `[]`). */
+/** The previous actor's keys still holding something. */
 function survivingState(): string[] {
-  const holds = (value: string | null) => value !== null && value !== '[]';
   return [
-    ...Object.keys(PREVIOUS_ACTOR_STATE.local).filter((key) => holds(window.localStorage.getItem(key))),
-    ...Object.keys(PREVIOUS_ACTOR_STATE.session).filter((key) => holds(window.sessionStorage.getItem(key))),
+    ...Object.keys(PREVIOUS_ACTOR_STATE.local).filter((key) => window.localStorage.getItem(key) !== null),
+    ...Object.keys(PREVIOUS_ACTOR_STATE.session).filter((key) => window.sessionStorage.getItem(key) !== null),
   ];
+}
+
+/** Everything the gate keeps for the same actor: all but the legacy key. */
+const KEPT = [PINNED_INSIGHTS_KEY, GENIE_CONVERSATION_TURNS_KEY, GENIE_IN_FLIGHT_TURN_KEY];
+const stamps = () => [window.localStorage.getItem(STAMPS.local), window.sessionStorage.getItem(STAMPS.session)];
+
+/** A fresh document: the gate pending, both storages empty. */
+function freshDocument(): void {
+  _resetActorScopeForTests({ status: 'pending', owner: NOBODY });
+  installLocalStorage();
+  window.sessionStorage.clear();
 }
 
 describe('AppShell actor boundary across a reload (Genie residual #3)', () => {
@@ -82,8 +104,7 @@ describe('AppShell actor boundary across a reload (Genie residual #3)', () => {
   let actorKey: string | null;
 
   beforeEach(() => {
-    installLocalStorage();
-    window.sessionStorage.clear();
+    freshDocument();
     actorKey = ACTOR_B;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -111,6 +132,7 @@ describe('AppShell actor boundary across a reload (Genie residual #3)', () => {
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    _resetActorScopeForTests({ status: 'open', owner: NOBODY });
   });
 
   /** Mount the shell (a reload) and wait for its first health probe to land. */
@@ -127,7 +149,7 @@ describe('AppShell actor boundary across a reload (Genie residual #3)', () => {
       );
     });
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      if (window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY) === actorKey) break;
+      if (actorScopeStatus() !== 'pending' && window.sessionStorage.getItem(STAMPS.session) === actorKey) break;
       await act(async () => {
         await new Promise((resolve) => window.setTimeout(resolve, 10));
       });
@@ -137,26 +159,24 @@ describe('AppShell actor boundary across a reload (Genie residual #3)', () => {
   it('a reload that brings a DIFFERENT actor key clears the transcript, pins, in-flight record and last borrower', async () => {
     seedPreviousActor(ACTOR_A);
     await reload();
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY), 'the new actor key is remembered').toBe(ACTOR_B);
+    expect(stamps(), 'the new actor owns both areas').toEqual([ACTOR_B, ACTOR_B]);
     expect(survivingState()).toEqual([]);
   });
 
-  it('a reload by the SAME actor keeps every piece of that state', async () => {
+  it('a reload by the SAME actor keeps every piece of that state (the legacy key is retired)', async () => {
     actorKey = ACTOR_A;
     seedPreviousActor(ACTOR_A);
     await reload();
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
-    expect(survivingState()).toEqual([
-      ...Object.keys(PREVIOUS_ACTOR_STATE.local),
-      ...Object.keys(PREVIOUS_ACTOR_STATE.session),
-    ]);
+    expect(stamps()).toEqual([ACTOR_A, ACTOR_A]);
+    expect(survivingState()).toEqual(KEPT);
+    expect(getGenieTurns().map((turn) => turn.question)).toEqual(['previous actor question']);
   });
 
-  it('a first visit in the tab (no stored key) is not an actor change', async () => {
+  it('an unstamped tab (a first visit, or the upgrade) never adopts the data it finds', async () => {
     seedPreviousActor(null);
     await reload();
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_B);
-    expect(survivingState()).toHaveLength(4);
+    expect(stamps()).toEqual([ACTOR_B, ACTOR_B]);
+    expect(survivingState()).toEqual([]);
   });
 });
 
@@ -168,6 +188,11 @@ describe('AppShell actor boundary across a reload (Genie residual #3)', () => {
  * `actor_cache_key` as "the actor changed to nobody": a 502 or a dropped
  * connection wiped the transcript, pins, the in-flight record and the last
  * borrower. Only a TRUSTED observation (lib/healthTrust) may move the actor now.
+ *
+ * A trusted nobody after a real owner (an anonymous body, a 401, a 403) is row
+ * 5 of the gate: storage is kept byte for byte and the gate CLOSES, so the
+ * stores read nothing; the W5a bridge clears the shell's in-memory state
+ * (query cache, last borrower, the live Genie turn) on 'closed'.
  */
 type HealthAnswer = () => Response | Promise<Response>;
 
@@ -210,8 +235,7 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
 
   beforeEach(() => {
     vi.useFakeTimers();
-    installLocalStorage();
-    window.sessionStorage.clear();
+    freshDocument();
     _resetSessionStatusForTests();
     healthCalls = 0;
     healthAnswer = okFor(ACTOR_A);
@@ -238,13 +262,15 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    _resetActorScopeForTests({ status: 'open', owner: NOBODY });
   });
 
   const lastBorrower = () => container.querySelector('[data-last-borrower]')?.textContent ?? null;
-  const everything = () => [
-    ...Object.keys(PREVIOUS_ACTOR_STATE.local),
-    ...Object.keys(PREVIOUS_ACTOR_STATE.session),
-  ];
+  const storageBytes = () =>
+    JSON.stringify([
+      [...ACTOR_SCOPE_REGISTRY.PRIVATE_LOCAL, STAMPS.local].map((key) => window.localStorage.getItem(key)),
+      [...ACTOR_SCOPE_REGISTRY.PRIVATE_SESSION, STAMPS.session].map((key) => window.sessionStorage.getItem(key)),
+    ]);
 
   /** Mount the shell (a reload) and let its first probe land. */
   async function mountShell(): Promise<void> {
@@ -282,30 +308,51 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
   async function midSession(): Promise<void> {
     seedPreviousActor(ACTOR_A);
     await mountShell();
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
-    expect(survivingState()).toEqual(everything());
+    expect(stamps()).toEqual([ACTOR_A, ACTOR_A]);
+    expect(actorScopeStatus()).toBe('open');
+    expect(survivingState()).toEqual(KEPT);
+    expect(getGenieTurns()).toHaveLength(1);
     expect(lastBorrower()).toBe(LAST_BORROWER);
+  }
+
+  /** A trusted nobody after A: storage kept byte for byte, the gate closed,
+   *  the shell's in-memory actor state cleared by the W5a bridge. */
+  async function closesOn(answer: HealthAnswer): Promise<void> {
+    await midSession();
+    const before = storageBytes();
+    await nextProbe(answer);
+    expect(storageBytes(), 'storage byte-identical').toBe(before);
+    expect(stamps(), 'both stamps still name A').toEqual([ACTOR_A, ACTOR_A]);
+    expect(actorScopeStatus()).toBe('closed');
+    expect(lastBorrower(), 'the bridge cleared the last borrower').toBe('');
+    expect(getGenieTurns(), 'the stores read nothing while closed').toEqual([]);
+    expect(getGenieTurnSnapshot().inFlight).toBeNull();
   }
 
   it('(i) trusted a, then a 502 and a dropped connection, then a: keeps everything', async () => {
     await midSession();
     await nextProbe(badGateway);
-    expect(survivingState(), 'a 502 is not an actor change').toEqual(everything());
+    expect(survivingState(), 'a 502 is not an actor change').toEqual(KEPT);
     expect(lastBorrower()).toBe(LAST_BORROWER);
     await nextProbe(dropped);
-    expect(survivingState(), 'a dropped connection is not an actor change').toEqual(everything());
+    expect(survivingState(), 'a dropped connection is not an actor change').toEqual(KEPT);
     expect(lastBorrower()).toBe(LAST_BORROWER);
     await nextProbe(okFor(ACTOR_A));
-    expect(survivingState()).toEqual(everything());
+    expect(survivingState()).toEqual(KEPT);
     expect(lastBorrower()).toBe(LAST_BORROWER);
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
+    expect(stamps()).toEqual([ACTOR_A, ACTOR_A]);
+    expect(actorScopeStatus()).toBe('open');
   });
 
-  it('(ii) a, then a reachable anonymous {status, mode} body: clears', async () => {
-    await midSession();
-    await nextProbe(anonymous);
-    expect(survivingState()).toEqual([]);
-    expect(lastBorrower()).toBe('');
+  it('(ii) a, then a reachable anonymous {status, mode} body: closes, keeps storage, clears memory', async () => {
+    await closesOn(anonymous);
+  });
+
+  it('(ii-b) a, then nobody, then a again: the same actor reopens and sees its transcript', async () => {
+    await closesOn(anonymous);
+    await nextProbe(okFor(ACTOR_A));
+    expect(actorScopeStatus()).toBe('open');
+    expect(getGenieTurns().map((turn) => turn.question)).toEqual(['previous actor question']);
   });
 
   it('(iii) a, then b: clears', async () => {
@@ -313,7 +360,7 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     await nextProbe(okFor(ACTOR_B));
     expect(survivingState()).toEqual([]);
     expect(lastBorrower()).toBe('');
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_B);
+    expect(stamps()).toEqual([ACTOR_B, ACTOR_B]);
   });
 
   it('(iv) a reload with stored a whose first probes fail, then a: keeps, and nothing clears in between', async () => {
@@ -321,14 +368,17 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     healthAnswer = badGateway;
     await mountShell();
     expect(healthCalls).toBe(1);
-    expect(survivingState(), 'first probe 502').toEqual(everything());
+    expect(actorScopeStatus(), 'no trusted observation yet').toBe('pending');
+    expect(getGenieTurns(), 'nothing renders from storage while pending').toEqual([]);
+    expect(survivingState(), 'first probe 502').toHaveLength(4);
     await nextProbe(dropped);
-    expect(survivingState(), 'second probe dropped').toEqual(everything());
+    expect(survivingState(), 'second probe dropped').toHaveLength(4);
     await nextProbe(badGateway);
-    expect(survivingState(), 'third probe 502').toEqual(everything());
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
+    expect(survivingState(), 'third probe 502').toHaveLength(4);
+    expect(stamps()).toEqual([ACTOR_A, ACTOR_A]);
     await nextProbe(okFor(ACTOR_A));
-    expect(survivingState()).toEqual(everything());
+    expect(survivingState()).toEqual(KEPT);
+    expect(getGenieTurns()).toHaveLength(1);
     expect(lastBorrower()).toBe(LAST_BORROWER);
   });
 
@@ -336,33 +386,27 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     seedPreviousActor(ACTOR_A);
     healthAnswer = badGateway;
     await mountShell();
-    expect(survivingState()).toEqual(everything());
+    expect(survivingState()).toHaveLength(4);
     await nextProbe(okFor(ACTOR_B));
     expect(survivingState()).toEqual([]);
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_B);
+    expect(stamps()).toEqual([ACTOR_B, ACTOR_B]);
   });
 
-  it('(vi) a, then a 401: clears', async () => {
-    await midSession();
-    await nextProbe(unauthorized);
-    expect(survivingState()).toEqual([]);
-    expect(lastBorrower()).toBe('');
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBeNull();
+  it('(vi) a, then a 401: closes, keeps storage, clears memory', async () => {
+    await closesOn(unauthorized);
   });
 
-  it('(vii) a, then a 403: clears', async () => {
-    await midSession();
-    await nextProbe(forbidden);
-    expect(survivingState()).toEqual([]);
-    expect(lastBorrower()).toBe('');
+  it('(vii) a, then a 403: closes, keeps storage, clears memory', async () => {
+    await closesOn(forbidden);
   });
 
   it('(ix) a, then a reachable 200 {} that is not a real health body: keeps every key and the stamp', async () => {
     await midSession();
     await nextProbe(() => jsonResponse(200, {}));
-    expect(survivingState()).toEqual(everything());
+    expect(survivingState()).toEqual(KEPT);
     expect(lastBorrower()).toBe(LAST_BORROWER);
-    expect(window.sessionStorage.getItem(ACTOR_CACHE_KEY_STORAGE_KEY)).toBe(ACTOR_A);
+    expect(stamps()).toEqual([ACTOR_A, ACTOR_A]);
+    expect(actorScopeStatus()).toBe('open');
   });
 
   it('(viii) a custom fetcher that throws after a: keeps', async () => {
@@ -379,7 +423,7 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
       });
     }
     expect(health.mock.calls.length, 'two thrown probes ran').toBeGreaterThanOrEqual(3);
-    expect(survivingState()).toEqual(everything());
+    expect(survivingState()).toEqual(KEPT);
     expect(lastBorrower()).toBe(LAST_BORROWER);
   });
 });

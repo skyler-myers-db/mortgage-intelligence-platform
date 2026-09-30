@@ -1,14 +1,17 @@
 import { useSyncExternalStore } from 'react';
+import { readActorScoped, subscribeActorScope, updateActorScoped } from './actorScope';
 
 /**
  * Pinned insights (re-audit Buyer-Wow #9) — "pin to Home" closes the loop
  * from question → insight → standing artifact. A pin is a PERSONAL bookmark
- * of a Genie answer, kept client-side (actor-scoped localStorage, cleared on
- * actor change like the other browser state). It is deliberately NOT a
- * governed mutation: it changes no borrower data, sends no outreach, and
- * needs no audit row — so it stays booth-safe and backend-free. The Home
- * "Pinned insights" card and the answer's pin button share this external
- * store via useSyncExternalStore so they stay in sync within the SPA (no
+ * of a Genie answer, kept client-side in actor-scoped localStorage: a
+ * PRIVATE_LOCAL key of lib/actorScope, read and written only through its
+ * gate, so nothing renders before the actor is known and another actor's
+ * pins are removed, never adopted. It is deliberately NOT a governed
+ * mutation: it changes no borrower data, sends no outreach, and needs no
+ * audit row — so it stays booth-safe and backend-free. The Home "Pinned
+ * insights" card and the answer's pin button share this external store via
+ * useSyncExternalStore so they stay in sync within the SPA (no
  * cross-tab-only staleness).
  */
 
@@ -48,12 +51,10 @@ export function isTrustedGenieSource(source: string | null | undefined): boolean
   return s.length > 0 && !NON_PERSISTABLE_SOURCES.has(s);
 }
 
-function readStore(): PinnedInsight[] {
-  if (typeof window === 'undefined') return [];
+function parsePins(raw: string | null): PinnedInsight[] {
+  if (!raw) return [];
   try {
-    const raw = window.localStorage.getItem(PINNED_INSIGHTS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (p): p is PinnedInsight =>
@@ -64,26 +65,31 @@ function readStore(): PinnedInsight[] {
   }
 }
 
-// External store: a cached snapshot + subscriber set, so same-tab consumers
-// re-render on pin/unpin (localStorage 'storage' events only fire cross-tab).
-let cache: PinnedInsight[] = readStore();
+// External store: a lazily read snapshot + subscriber set, so same-tab
+// consumers re-render on pin/unpin (localStorage 'storage' events only fire
+// cross-tab). The snapshot is dropped on every write and every actor-gate
+// event, so hidden pins disappear and restored ones come back.
+let cache: PinnedInsight[] | null = null;
 const subscribers = new Set<() => void>();
 
-function emit(next: PinnedInsight[]) {
-  cache = next;
-  try {
-    window.localStorage.setItem(PINNED_INSIGHTS_KEY, JSON.stringify(next));
-  } catch {
-    // Storage may be unavailable (private mode); the in-memory cache still works.
-  }
+function invalidate(): void {
+  cache = null;
   subscribers.forEach((fn) => fn());
 }
 
+/** Every write is an updater over the raw stored list (see lib/actorScope). */
+function update(next: (pins: PinnedInsight[]) => PinnedInsight[] | null): void {
+  updateActorScoped('local', PINNED_INSIGHTS_KEY, (raw) => {
+    const pins = next(parsePins(raw));
+    return pins === null ? null : JSON.stringify(pins);
+  });
+  invalidate();
+}
+
+subscribeActorScope(invalidate);
+
 function onStorageEvent(e: StorageEvent) {
-  if (e.key === PINNED_INSIGHTS_KEY) {
-    cache = readStore();
-    subscribers.forEach((fn) => fn());
-  }
+  if (e.key === PINNED_INSIGHTS_KEY) invalidate();
 }
 
 function subscribe(cb: () => void): () => void {
@@ -100,20 +106,21 @@ function subscribe(cb: () => void): () => void {
 }
 
 function getSnapshot(): PinnedInsight[] {
+  if (cache === null) cache = parsePins(readActorScoped('local', PINNED_INSIGHTS_KEY));
   return cache;
 }
 
 export function pinInsight(insight: PinnedInsight): void {
-  emit([insight, ...cache.filter((p) => p.id !== insight.id)].slice(0, MAX_PINS));
+  update((pins) => [insight, ...pins.filter((p) => p.id !== insight.id)].slice(0, MAX_PINS));
 }
 
 export function unpinInsight(id: string): void {
-  emit(cache.filter((p) => p.id !== id));
+  update((pins) => pins.filter((p) => p.id !== id));
 }
 
-/** Used by the actor-change reset to clear personal pins. */
+/** Remove every pin (the actor gate removes the key itself on a change). */
 export function clearPinnedInsights(): void {
-  emit([]);
+  update(() => null);
 }
 
 export function usePinnedInsights() {
