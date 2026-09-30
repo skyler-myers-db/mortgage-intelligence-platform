@@ -177,13 +177,20 @@ function readTree(root: 'src' | 'public'): Source[] {
 
 const SOURCES: readonly Source[] = [...readTree('src'), ...readTree('public')];
 
+/** Parsed once per path and text: an injected scan reparses only its own file. */
+const parsed = new Map<string, { text: string; file: ts.SourceFile }>();
+
 function parse(source: Source): ts.SourceFile {
+  const hit = parsed.get(source.path);
+  if (hit && hit.text === source.text) return hit.file;
   const kind = source.path.endsWith('.tsx')
     ? ts.ScriptKind.TSX
     : source.path.endsWith('.ts')
       ? ts.ScriptKind.TS
       : ts.ScriptKind.JS;
-  return ts.createSourceFile(source.path, source.text, ts.ScriptTarget.Latest, true, kind);
+  const file = ts.createSourceFile(source.path, source.text, ts.ScriptTarget.Latest, true, kind);
+  parsed.set(source.path, { text: source.text, file });
+  return file;
 }
 
 function walk(node: ts.Node, visit: (node: ts.Node) => void): void {
@@ -303,7 +310,8 @@ interface ScanResult {
   storageFiles: Set<string>;
 }
 
-function scan(sources: readonly Source[]): ScanResult {
+/** Scan `sources` (every one resolves imports; `only`, when given, limits the walked files). */
+function scan(sources: readonly Source[], only?: ReadonlySet<string>): ScanResult {
   const files = sources.map(parse);
   const byPath = new Map(files.map((file) => [file.fileName, file]));
   const violations: string[] = [];
@@ -311,6 +319,7 @@ function scan(sources: readonly Source[]): ScanResult {
   const storageFiles = new Set<string>();
 
   for (const file of files) {
+    if (only && !only.has(file.fileName)) continue;
     const path = file.fileName;
     const listed = STORAGE_FILES.includes(path);
     const rows = INDIRECTION.filter((row) => row.file === path);
@@ -452,10 +461,12 @@ describe('the storage registry (lib/actorScope)', () => {
   });
 
   describe('(v) non-vacuity: injected sources each fail', () => {
+    // Only the injected file is walked (every file still resolves imports),
+    // so each case reparses one file rather than the whole tree.
     const withSource = (path: string, text: string) => {
       const others = SOURCES.filter((source) => source.path !== path);
       const base = sourceAt(path)?.text ?? '';
-      return scan([...others, { path, text: `${base}\n${text}\n` }]).violations;
+      return scan([...others, { path, text: `${base}\n${text}\n` }], new Set([path])).violations;
     };
 
     it("a literal 'mip.newThing'", () => {
