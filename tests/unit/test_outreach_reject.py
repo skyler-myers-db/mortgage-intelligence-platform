@@ -1541,3 +1541,293 @@ def test_generated_draft_fails_closed_when_durable_proof_cannot_be_written(
     assert response.status_code == 503
     assert response.json()["detail"] == "lakebase is temporarily unavailable"
     assert audit.list(limit=10) == []
+
+
+# -- D-approval-flow-d (audit tables-07): bulk Reject under one bulk_id ------------------
+
+BULK_REJECT_ID = "44444444-4444-4444-8444-444444444444"
+# Captured by running 0a30fca2 (git archive to scratch, python -P): a single
+# rejection's intent and derived fallback request id must stay byte-identical.
+GOLDEN_REJECT_INTENT = (
+    '{"action":"reject","actor":"approver.one@summit.example","borrower_id":"B-000000000A003",'
+    '"campaign_id":null,"campaign_owner_email":null,"campaign_treatment_fingerprint":null,'
+    '"channel":"email","evidence_ids":["ev-004"],"evidence_ids_supplied":true,'
+    '"offer_code":"refi","offer_code_supplied":false,"rationale":"do not call",'
+    '"rationale_code":"do_not_call","variant_name":null}'
+)
+GOLDEN_REJECT_FALLBACK = "auto-174e239f9af061c72deefa6837d315a9"
+GOLDEN_REJECT_NOTE_INTENT = (
+    '{"action":"reject","actor":"approver.one@summit.example","borrower_id":"B-000000000A004",'
+    '"campaign_id":null,"campaign_owner_email":null,"campaign_treatment_fingerprint":null,'
+    '"channel":"email","evidence_ids":["ev-005"],"evidence_ids_supplied":false,'
+    '"offer_code":"heloc","offer_code_supplied":false,'
+    '"rationale":"low intent: Borrower declined this reviewed option.",'
+    '"rationale_code":"low_intent","variant_name":null}'
+)
+GOLDEN_REJECT_NOTE_FALLBACK = "auto-bd06d4c9f3072c1918d47df3e013957f"
+
+
+def _bulk_reject_setup(override_deps, monkeypatch: pytest.MonkeyPatch):
+    audit = InMemoryAuditStore()
+    inserted: dict[str, dict[str, Any]] = {}
+
+    def _execute(sql: str, params: dict[str, Any]) -> None:
+        _record_non_atomic_approval(inserted, sql, params)
+
+    def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if "FROM mip_app.tenant_disclosures" in sql:
+            return _disclosure_row(params)
+        if "WHERE request_id" in sql:
+            rid = params.get("request_id")
+            if rid and rid in inserted:
+                return inserted[rid]
+        return None
+
+    fake_lakebase = MagicMock()
+    fake_lakebase.execute.side_effect = _execute
+    fake_lakebase.fetchone.side_effect = _fetchone
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="rejection": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+    return audit, fake_lakebase
+
+
+def _reject_rows(audit: InMemoryAuditStore) -> list[dict[str, Any]]:
+    return [
+        dict(event.payload_json or {})
+        for event in audit.list(limit=50)
+        if event.event_type == "OUTREACH_REJECT"
+    ]
+
+
+def _approval_inserts(fake_lakebase: MagicMock) -> list[Any]:
+    return [
+        call
+        for call in fake_lakebase.execute.call_args_list
+        if "INSERT INTO mip_app.approvals" in call.args[0]
+    ]
+
+
+def test_bulk_reject_records_its_bulk_id_and_decision_inputs(
+    override_deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit, fake_lakebase = _bulk_reject_setup(override_deps, monkeypatch)
+
+    response = TestClient(app).post(
+        "/api/outreach/reject",
+        json={
+            "borrower_id": "B-48291",
+            "rationale_code": "low_intent",
+            "rationale": "Q3 sweep: not a fit for this campaign.",
+            "bulk_id": BULK_REJECT_ID,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    (row,) = _reject_rows(audit)
+    assert row["bulk_id"] == BULK_REJECT_ID
+    assert row["decision_inputs"], "every reject records the borrower values it saw"
+    assert set(row["decision_inputs"]) <= set(DECISION_INPUT_KEYS)
+    (insert,) = _approval_inserts(fake_lakebase)
+    intent = json.loads(insert.args[1]["decision_intent"])
+    assert intent["bulk_id"] == BULK_REJECT_ID
+    assert "decision_inputs" not in intent
+
+
+def test_a_single_reject_records_decision_inputs_and_no_bulk_id(
+    override_deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit, fake_lakebase = _bulk_reject_setup(override_deps, monkeypatch)
+
+    response = TestClient(app).post(
+        "/api/outreach/reject",
+        json={"borrower_id": "B-48291", "rationale_code": "do_not_call"},
+    )
+
+    assert response.status_code == 200, response.text
+    (row,) = _reject_rows(audit)
+    assert "bulk_id" not in row
+    assert row["decision_inputs"]
+    (insert,) = _approval_inserts(fake_lakebase)
+    assert "bulk_id" not in json.loads(insert.args[1]["decision_intent"])
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ({"rationale_code": "low_intent"}, "bulk rejections require a shared note"),
+        (
+            {"rationale_code": "low_intent", "rationale": "   "},
+            "bulk rejections require a shared note",
+        ),
+        (
+            {"rationale_code": "do_not_call", "rationale": "Asked us to stop calling."},
+            "consent reasons cannot be applied in bulk",
+        ),
+        (
+            {"rationale_code": "opt_out", "rationale": "Opted out of the sweep."},
+            "consent reasons cannot be applied in bulk",
+        ),
+        (
+            {"rationale_code": "low_intent", "rationale": "Q3 sweep.", "bulk_id": "call me"},
+            "bulk_id",
+        ),
+    ],
+)
+def test_bulk_reject_refusals_answer_422_and_write_nothing(
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+    body: dict[str, Any],
+    message: str,
+) -> None:
+    audit, fake_lakebase = _bulk_reject_setup(override_deps, monkeypatch)
+
+    response = TestClient(app).post(
+        "/api/outreach/reject",
+        json={"borrower_id": "B-48291", "bulk_id": BULK_REJECT_ID, **body},
+    )
+
+    assert response.status_code == 422, response.text
+    assert message in response.text
+    assert _approval_inserts(fake_lakebase) == []
+    assert _reject_rows(audit) == []
+
+
+def test_a_refused_reject_note_answers_422_before_any_read_or_write(
+    override_deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit, fake_lakebase = _bulk_reject_setup(override_deps, monkeypatch)
+
+    response = TestClient(app).post(
+        "/api/outreach/reject",
+        json={
+            "borrower_id": "B-48291",
+            "rationale_code": "low_intent",
+            "rationale": "Focus on borrowers without disabilities.",
+            "bulk_id": BULK_REJECT_ID,
+            "request_id": "55555555-5555-4555-8555-555555555555",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "rationale failed the governed text policy"
+    assert "disabilities" not in response.text
+    fake_lakebase.fetchone.assert_not_called()
+    assert _approval_inserts(fake_lakebase) == []
+    assert _reject_rows(audit) == []
+
+
+def test_single_reject_intents_are_byte_identical_to_0a30fca2() -> None:
+    from backend.schemas.offer import OutreachRejectRequest
+    from backend.services.outreach_decision_commit import _derive_fallback_request_id
+    from backend.services.outreach_decision_intent import _reject_decision_intent
+
+    actor = "approver.one@summit.example"
+    consent = _reject_decision_intent(
+        OutreachRejectRequest(
+            borrower_id="B-000000000A003",
+            rationale_code="do_not_call",
+            evidence_ids=["ev-004"],
+        ),
+        actor=actor,
+        offer_code="refi",
+        evidence_ids=["ev-004"],
+        safe_rationale="do not call",
+        campaign_id=None,
+        variant_name=None,
+        campaign_owner_email=None,
+        campaign_treatment_fingerprint=None,
+    )
+    noted = _reject_decision_intent(
+        OutreachRejectRequest(
+            borrower_id="B-000000000A004",
+            rationale_code="low_intent",
+            rationale="Borrower declined this reviewed option.",
+        ),
+        actor=actor,
+        offer_code="heloc",
+        evidence_ids=["ev-005"],
+        safe_rationale="low intent: Borrower declined this reviewed option.",
+        campaign_id=None,
+        variant_name=None,
+        campaign_owner_email=None,
+        campaign_treatment_fingerprint=None,
+    )
+
+    assert consent == GOLDEN_REJECT_INTENT
+    assert noted == GOLDEN_REJECT_NOTE_INTENT
+    assert (
+        _derive_fallback_request_id(actor=actor, action="reject", decision_intent=consent)
+        == GOLDEN_REJECT_FALLBACK
+    )
+    assert (
+        _derive_fallback_request_id(actor=actor, action="reject", decision_intent=noted)
+        == GOLDEN_REJECT_NOTE_FALLBACK
+    )
+
+
+def test_bulk_reject_replay_matches_only_the_same_bulk_id(
+    override_deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit, fake_lakebase = _bulk_reject_setup(override_deps, monkeypatch)
+    client = TestClient(app)
+    body = {
+        "borrower_id": "B-48291",
+        "rationale_code": "low_intent",
+        "rationale": "Q3 sweep: not a fit for this campaign.",
+        "bulk_id": BULK_REJECT_ID,
+        "request_id": "66666666-6666-4666-8666-666666666666",
+    }
+
+    first = client.post("/api/outreach/reject", json=body)
+    again = client.post("/api/outreach/reject", json=body)
+    other_run = client.post(
+        "/api/outreach/reject",
+        json={**body, "bulk_id": "77777777-7777-4777-8777-777777777777"},
+    )
+    no_run = client.post(
+        "/api/outreach/reject",
+        json={k: v for k, v in body.items() if k != "bulk_id"},
+    )
+
+    assert first.status_code == 200, first.text
+    assert again.status_code == 200, again.text
+    assert again.json()["approval_id"] == first.json()["approval_id"]
+    assert other_run.status_code == 409, other_run.text
+    assert no_run.status_code == 409, no_run.text
+    assert len(_approval_inserts(fake_lakebase)) == 1
+    assert len(_reject_rows(audit)) == 1
+
+
+def test_single_reject_replay_still_matches_without_a_bulk_id(
+    override_deps, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit, fake_lakebase = _bulk_reject_setup(override_deps, monkeypatch)
+    client = TestClient(app)
+    body = {
+        "borrower_id": "B-48291",
+        "rationale_code": "do_not_call",
+        "request_id": "88888888-8888-4888-8888-888888888888",
+    }
+
+    first = client.post("/api/outreach/reject", json=body)
+    again = client.post("/api/outreach/reject", json=body)
+    with_run = client.post(
+        "/api/outreach/reject",
+        json={
+            **body,
+            "rationale_code": "low_intent",
+            "rationale": "Q3 sweep.",
+            "bulk_id": BULK_REJECT_ID,
+        },
+    )
+
+    assert first.status_code == 200, first.text
+    assert again.status_code == 200, again.text
+    assert again.json()["approval_id"] == first.json()["approval_id"]
+    assert with_run.status_code == 409, with_run.text
+    assert len(_approval_inserts(fake_lakebase)) == 1
+    assert len(_reject_rows(audit)) == 1

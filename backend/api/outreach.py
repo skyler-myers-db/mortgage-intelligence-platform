@@ -694,9 +694,13 @@ def reject_outreach(
         "variant_name": verified_variant_name,
         "campaign_treatment_fingerprint": treatment_fingerprint,
         "rationale_code": payload.rationale_code,
+        # The borrower values the rejection saw (as on APPROVE); not intent.
+        "decision_inputs": decision_inputs_from_borrower(borrower),
         **_marketing_audit_payload(borrower),
     }
     audit_payload["request_id"] = effective_request_id
+    if payload.bulk_id:
+        audit_payload["bulk_id"] = payload.bulk_id
     if safe_rationale:
         audit_payload["rationale"] = safe_rationale
     response_payload = {

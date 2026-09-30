@@ -66,8 +66,9 @@ def decision_evidence_assets(
     the recommendation the approver saw.
 
     This is the receipt's asset list for every decision row written today:
-    the outreach approve / reject writes store ``offer_code`` (approve also
-    ``decision_inputs``) but no ``evidence_assets`` key, so the list is
+    the outreach approve / reject writes store ``offer_code`` and
+    ``decision_inputs`` (reject rows since the review ledger; older reject
+    rows carry none) but no ``evidence_assets`` key, so the list is
     derived from those stored values, not read from a stored list. The UI
     labels it as the recorded offer branch's assets accordingly.
     """

@@ -479,3 +479,26 @@ def test_a_legacy_approve_reads_back_as_undeclared() -> None:
     assert receipt["review_mode"] == "undeclared"
     assert receipt["bulk_id"] is None
 
+
+def test_reject_receipts_derive_heloc_propensity_assets_from_decision_inputs(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    triggered = build_decision_receipt(
+        _decision_event(
+            "OUTREACH_REJECT",
+            "outreach.reject",
+            rationale_code="low_intent",
+            decision_inputs={"has_heloc_propensity_trigger": True},
+        )
+    )
+    assert triggered is not None
+    assert triggered.evidence_assets == decision_evidence_assets(
+        "heloc", has_heloc_propensity_trigger=True
+    )
+    assert triggered.evidence_assets != decision_evidence_assets("heloc")
+
+    rejected = _reject(ALICE_WRITE)
+    (row,) = audit_store.list(limit=10, event_id=rejected["audit_event_id"])
+    assert (row.payload_json or {}).get("decision_inputs"), (
+        "every OUTREACH_REJECT row now stores the decision inputs the receipt derives from"
+    )

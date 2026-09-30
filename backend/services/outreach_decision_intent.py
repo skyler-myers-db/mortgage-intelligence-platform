@@ -185,6 +185,10 @@ def _reject_decision_intent(
         "rationale_code": payload.rationale_code,
         "rationale": safe_rationale,
     }
+    # Only a bulk run's id enters the intent: a single rejection's intent
+    # (and its derived fallback request id) stays byte-identical.
+    if payload.bulk_id is not None:
+        intent["bulk_id"] = payload.bulk_id
     return _canonical_intent(intent)
 
 
@@ -317,6 +321,7 @@ def _reject_intent_matches_payload(
         "variant_name": payload.variant_name,
         "rationale_code": payload.rationale_code,
         "rationale": safe_rationale,
+        "bulk_id": payload.bulk_id,
     }
     treatment_fingerprint = intent.get("campaign_treatment_fingerprint")
     campaign_owner_email = intent.get("campaign_owner_email")

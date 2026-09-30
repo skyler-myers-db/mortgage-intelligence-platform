@@ -11578,6 +11578,18 @@
             "title": "Borrower Id",
             "type": "string"
           },
+          "bulk_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bulk Id"
+          },
           "campaign_id": {
             "anyOf": [
               {

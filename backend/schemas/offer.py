@@ -251,6 +251,10 @@ ReviewMode = Literal["individual", "triage", "bulk_sample", "bulk_cohort"]
 _BULK_REVIEW_MODES: frozenset[str] = frozenset({"bulk_sample", "bulk_cohort"})
 _INDIVIDUAL_REVIEW_MODES: frozenset[str] = frozenset({"individual", "triage"})
 
+# Rejection reasons that record a borrower's consent; one reviewer applies
+# them per borrower, never to a bulk selection under one shared note.
+_CONSENT_REJECT_CODES: frozenset[str] = frozenset({"do_not_call", "opt_out"})
+
 
 class OutreachDraft(BaseModel):
     generation_id: str = Field(min_length=1, max_length=64)
@@ -508,13 +512,17 @@ class OutreachRejectRequest(BaseModel):
     # R5-01 idempotency key -- see ``OutreachApproveRequest.request_id``.
     # Reject carries the same retry-safety contract as approve.
     request_id: str | None = Field(default=None, max_length=64)
+    # One bulk rejection run (audit tables-07, D-approval-flow-d): every row
+    # of the run carries the same opaque id, the same reason and the same
+    # required shared note, so the ledger can regroup the run.
+    bulk_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("borrower_id")
     @classmethod
     def _borrower_id_is_public_safe(cls, value: str) -> str:
         return validate_public_borrower_id(value)
 
-    @field_validator("request_id")
+    @field_validator("request_id", "bulk_id")
     @classmethod
     def _opaque_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:
@@ -550,6 +558,10 @@ class OutreachRejectRequest(BaseModel):
         validate_complete_campaign_binding(self.campaign_id, self.variant_name)
         if self.rationale_code == "other_with_text" and not (self.rationale or "").strip():
             raise ValueError("other_with_text requires a rationale")
+        if self.bulk_id is not None and self.rationale is None:
+            raise ValueError("bulk rejections require a shared note")
+        if self.bulk_id is not None and self.rationale_code in _CONSENT_REJECT_CODES:
+            raise ValueError("consent reasons cannot be applied in bulk")
         return self
 
 
