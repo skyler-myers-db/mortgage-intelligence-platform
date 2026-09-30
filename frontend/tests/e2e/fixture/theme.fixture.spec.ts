@@ -8,10 +8,12 @@
  *  b. `color-scheme` follows the theme, so a native checkbox in the Lead
  *     Queue paints dark in the dark theme (pixel-sampled, not just computed);
  *  c. <meta name="theme-color"> follows the theme;
- *  d. nothing stored + `prefers-color-scheme: light` boots light, and the
- *     Console's System option follows OS flips live, theme-color included;
- *     the Administration appearance section marks and edits the same
- *     preference (it used to mark the painted theme, so System read "Light");
+ *  d. nothing stored boots dark even under `prefers-color-scheme: light`
+ *     (the prototype default; 2026-09-30, report 12.4 #4), and so does an
+ *     unmarked stored 'system' an earlier build wrote on mount; a chosen
+ *     System follows OS flips live, theme-color included, and is stored with
+ *     its mip.themeChosen marker; the Administration appearance section
+ *     marks and edits the same preference as the Console;
  *  e. every theme x accent pair paints the shared token focus ring at 3:1,
  *     from the global :focus-visible rule and from a bespoke one, the skip
  *     link and the primary CTA (at rest and hovered) at 4.5:1 (a11y-01,
@@ -207,26 +209,26 @@ test('meta theme-color follows the painted theme and the page background token',
   expect(seen.dark).not.toBe(seen.light);
 });
 
-test('with nothing stored the app follows the OS, and the Console System option follows live flips', async ({ app, page }) => {
+test('with nothing stored the app boots dark even when the OS prefers light; a chosen System follows it live', async ({ app, page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
+  await traceRootAttribute(page, 'data-theme');
   await app.gotoRoute('/');
   const html = page.locator('html');
-  await expect(html, 'nothing stored + OS light boots light').toHaveAttribute('data-theme', 'light');
+  const trace = await page.evaluate(() => window.__mipAttrTrace?.['data-theme']);
+  expect(trace?.atDomContentLoaded, 'the first document is dark').toBe('dark');
+  expect(trace?.transitions, 'it never passes through light').not.toContain('light');
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  expect(await page.evaluate(() => [window.localStorage.getItem('mip.theme'), window.localStorage.getItem('mip.themeChosen')]), 'a first visit stores nothing').toEqual([null, null]);
 
   const console_ = await app.openConsole();
   const themeGroup = console_.getByRole('group', { name: 'Theme' });
-  await expect(themeGroup.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
-
-  await themeGroup.getByRole('button', { name: 'Dark' }).click();
-  await expect(html, 'an explicit choice pins the theme').toHaveAttribute('data-theme', 'dark');
-  await page.emulateMedia({ colorScheme: 'dark' });
-  await page.emulateMedia({ colorScheme: 'light' });
-  await expect(html, 'an explicit choice ignores OS flips').toHaveAttribute('data-theme', 'dark');
+  await expect(themeGroup.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
 
   await themeGroup.getByRole('button', { name: 'System' }).click();
-  await expect(html).toHaveAttribute('data-theme', 'light');
+  await expect(html, 'a chosen System follows the light OS').toHaveAttribute('data-theme', 'light');
   const lightChrome = await themeColorAndPageBackground(page);
   expect(lightChrome.meta, 'theme-color is the light page background').toBe(lightChrome.background);
+  expect(await page.evaluate(() => [window.localStorage.getItem('mip.theme'), window.localStorage.getItem('mip.themeChosen')])).toEqual(['system', 'true']);
 
   await page.emulateMedia({ colorScheme: 'dark' });
   await expect(html, 'System follows an OS flip without a reload').toHaveAttribute('data-theme', 'dark');
@@ -240,31 +242,43 @@ test('with nothing stored the app follows the OS, and the Console System option 
 
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(html).toHaveAttribute('data-theme', 'light');
-  expect(await page.evaluate(() => window.localStorage.getItem('mip.theme'))).toBe('system');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await app.settle();
+  await expect(html, 'the chosen System survives a reload under OS light').toHaveAttribute('data-theme', 'light');
+});
+
+test('an unmarked stored System (auto-written by an earlier build) boots dark under OS light', async ({ app, page }) => {
+  await seedStorage(page, 'mip.theme', 'system');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await traceRootAttribute(page, 'data-theme');
+  await app.gotoRoute('/');
+  const trace = await page.evaluate(() => window.__mipAttrTrace?.['data-theme']);
+  expect(trace?.atDomContentLoaded).toBe('dark');
+  expect(trace?.transitions).not.toContain('light');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
 test('the Administration appearance section marks and edits the same preference as the Console', async ({ app, page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await app.gotoRoute('/admin-config');
   const html = page.locator('html');
-  await expect(html, 'nothing stored + OS light paints light').toHaveAttribute('data-theme', 'light');
+  await expect(html, 'nothing stored + OS light paints dark').toHaveAttribute('data-theme', 'dark');
 
   const main = page.locator('#main-content');
   await main.getByRole('button', { name: /Workspace appearance/ }).click();
   const adminTheme = main.locator('.appearance-body').getByRole('group', { name: 'Theme' });
-  // The painted theme is Light, but what the user chose is System.
-  await expect(adminTheme.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(adminTheme.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(adminTheme.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(adminTheme.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'false');
+
+  await adminTheme.getByRole('button', { name: 'System' }).click();
+  await expect(html, 'a chosen System follows the light OS').toHaveAttribute('data-theme', 'light');
+  const consoleTheme = (await app.openConsole()).getByRole('group', { name: 'Theme' });
+  await expect(consoleTheme.getByRole('button', { name: 'System' }), 'the Console shows the same choice').toHaveAttribute('aria-pressed', 'true');
 
   await adminTheme.getByRole('button', { name: 'Dark' }).click();
   await expect(html).toHaveAttribute('data-theme', 'dark');
-  const consoleTheme = (await app.openConsole()).getByRole('group', { name: 'Theme' });
-  await expect(consoleTheme.getByRole('button', { name: 'Dark' }), 'the Console shows the same choice').toHaveAttribute('aria-pressed', 'true');
-
-  await adminTheme.getByRole('button', { name: 'System' }).click();
-  await expect(html, 'System follows the light OS again').toHaveAttribute('data-theme', 'light');
-  await expect(consoleTheme.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
-  expect(await page.evaluate(() => window.localStorage.getItem('mip.theme'))).toBe('system');
+  await expect(consoleTheme.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => [window.localStorage.getItem('mip.theme'), window.localStorage.getItem('mip.themeChosen')])).toEqual(['dark', 'true']);
 });
 
 for (const theme of THEMES) {

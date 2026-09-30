@@ -10,12 +10,16 @@
  * after mount for a presenter who left the Console open.
  *
  * It MIRRORS frontend/src/lib/themePreference.ts: same storage keys, same
- * accepted values, same fallbacks (garbage is ignored, nothing stored
- * follows prefers-color-scheme, dark when the platform cannot say).
- * frontend/src/lib/themeBoot.test.ts executes this file against that
- * module's constants, and index.html references it with a content-hash
- * query (?v=...) that the same test pins, so an edit here cannot ship
- * stale or drift from the React side.
+ * accepted values, same fallbacks. Nothing stored boots dark (the prototype
+ * default; 2026-09-30 ruling). A stored 'light' always applies; a stored
+ * 'dark' or 'system' only with the mip.themeChosen marker, and a stored
+ * 'bright' accent only with mip.accentChosen, because earlier builds wrote
+ * those values on mount without the user choosing them. A chosen System
+ * follows prefers-color-scheme, dark when the platform cannot say. Garbage
+ * is ignored. frontend/src/lib/themeBoot.test.ts executes this file against
+ * that module's constants, and index.html references it with a content-hash
+ * query (?v=...) that the same test pins, so an edit here cannot ship stale
+ * or drift from the React side.
  *
  * ES5 on purpose: it must run in whatever parses index.html first.
  */
@@ -25,6 +29,10 @@
   var ACCENT_KEY = 'mip.accent';
   var DENSITY_KEY = 'mip.density';
   var CONSOLE_KEY = 'mip.consoleOpen';
+  var THEME_CHOICE_KEY = 'mip.themeChosen';
+  var ACCENT_CHOICE_KEY = 'mip.accentChosen';
+  var DEFAULT_THEME = 'dark';
+  var DEFAULT_ACCENT = 'bright';
   var THEME_PREFERENCES = ['dark', 'light', 'system'];
   var ACCENTS = ['bright', 'teal', 'navy', 'red'];
   var DENSITIES = ['comfortable', 'compact'];
@@ -51,10 +59,15 @@
 
   try {
     var root = document.documentElement;
-    var preference = stored(THEME_KEY, THEME_PREFERENCES) || 'system';
+    var rawTheme = stored(THEME_KEY, THEME_PREFERENCES);
+    var preference = (rawTheme === 'light'
+      || (rawTheme !== null && stored(THEME_CHOICE_KEY, ['true']) === 'true')) ? rawTheme : DEFAULT_THEME;
     var theme = preference === 'system' ? (prefersDark() ? 'dark' : 'light') : preference;
+    var rawAccent = stored(ACCENT_KEY, ACCENTS);
+    var accent = (rawAccent !== null
+      && (rawAccent !== DEFAULT_ACCENT || stored(ACCENT_CHOICE_KEY, ['true']) === 'true')) ? rawAccent : DEFAULT_ACCENT;
     root.setAttribute('data-theme', theme);
-    root.setAttribute('data-accent', stored(ACCENT_KEY, ACCENTS) || 'bright');
+    root.setAttribute('data-accent', accent);
     root.setAttribute('data-density', stored(DENSITY_KEY, DENSITIES) || 'comfortable');
     /* AppContext persists 'true' | 'false' and reflects it as open | closed. */
     root.setAttribute('data-console', stored(CONSOLE_KEY, ['true']) === 'true' ? 'open' : 'closed');

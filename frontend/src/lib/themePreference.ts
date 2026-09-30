@@ -1,8 +1,9 @@
 /**
  * Theme / accent / density preference model.
  *
- * Single source of truth for the storage keys, the accepted values and the
- * "system" resolution that AppContext applies after mount. The pre-paint
+ * Single source of truth for the storage keys, the accepted values, the
+ * choice markers, the only writers (persist*; nothing is written on mount)
+ * and the "system" resolution that AppContext applies after mount. The pre-paint
  * bootstrap in `frontend/public/theme-boot.js` mirrors the same keys and
  * validation so the first painted document already carries the right
  * `data-theme` / `data-accent` / `data-density`; `themeBoot.test.ts` executes
@@ -26,6 +27,15 @@ export const DENSITY_STORAGE_KEY = 'mip.density';
  * React mounts.
  */
 export const CONSOLE_OPEN_STORAGE_KEY = 'mip.consoleOpen';
+/**
+ * Choice markers: 'true' once the user has picked a theme / accent through
+ * the UI. Only a marked 'dark' / 'system' theme and a marked 'bright' accent
+ * are honoured, because builds up to fa4c944f^ auto-wrote dark / bright /
+ * comfortable on mount and fa4c944f..0a30fca2 auto-wrote 'system'; no build
+ * ever auto-wrote 'light' or a non-bright accent, so those need no marker.
+ */
+export const THEME_CHOICE_KEY = 'mip.themeChosen';
+export const ACCENT_CHOICE_KEY = 'mip.accentChosen';
 
 export const THEMES: readonly Theme[] = ['dark', 'light'];
 export const THEME_PREFERENCES: readonly ThemePreference[] = ['dark', 'light', 'system'];
@@ -33,13 +43,14 @@ export const ACCENTS: readonly Accent[] = ['bright', 'teal', 'navy', 'red'];
 export const DENSITIES: readonly Density[] = ['comfortable', 'compact'];
 
 /**
- * Nothing stored means "follow the OS". The prototype Console is a two-state
- * Dark/Light control that defaults to dark (design_files/index.html:2); the
- * System option and OS-following default are an additive departure from
- * the 2026-09-21 audit (css-02 / responsive-03). When the platform cannot
- * report a preference the app still boots dark, as the prototype does.
+ * Nothing chosen boots dark, the prototype default (design_files/index.html:2;
+ * the 2026-09-30 ruling, report 12.4 #4, reverted the OS-following default).
+ * The System option is an additive departure from the two-state prototype
+ * control (css-02 / responsive-03; deviation:theme-system-option): an explicit
+ * opt-in that follows prefers-color-scheme live, and dark when the platform
+ * cannot report a preference.
  */
-export const DEFAULT_THEME_PREFERENCE: ThemePreference = 'system';
+export const DEFAULT_THEME_PREFERENCE: ThemePreference = 'dark';
 export const DEFAULT_ACCENT: Accent = 'bright';
 export const DEFAULT_DENSITY: Density = 'comfortable';
 
@@ -56,6 +67,58 @@ export function readStoredChoice<T extends string>(key: string, fallback: T, all
     // Storage can be unavailable (private mode, blocked site data).
   }
   return fallback;
+}
+
+function storedValue(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** The stored theme choice: 'light' always; 'dark' / 'system' only when marked (see THEME_CHOICE_KEY). */
+export function readThemePreference(fallback: ThemePreference): ThemePreference {
+  const raw = storedValue(THEME_STORAGE_KEY);
+  if (raw === 'light') return raw;
+  if ((raw === 'dark' || raw === 'system') && storedValue(THEME_CHOICE_KEY) === 'true') return raw;
+  return fallback;
+}
+
+/** The stored accent: any non-default accent; the default only when marked (see ACCENT_CHOICE_KEY). */
+export function readAccentPreference(fallback: Accent): Accent {
+  const raw = storedValue(ACCENT_STORAGE_KEY);
+  const accent = (ACCENTS as readonly string[]).includes(raw ?? '') ? (raw as Accent) : null;
+  if (accent === null) return fallback;
+  return accent !== DEFAULT_ACCENT || storedValue(ACCENT_CHOICE_KEY) === 'true' ? accent : fallback;
+}
+
+/** The one try/catch writer every persist* call shares; storage can be unavailable. */
+export function writeStoredChoice(key: string, value: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Private mode or blocked site data: the choice lasts this session only.
+  }
+}
+
+/** An explicit theme pick (dark, light or system), marked as chosen. */
+export function persistThemePreference(preference: ThemePreference): void {
+  writeStoredChoice(THEME_STORAGE_KEY, preference);
+  writeStoredChoice(THEME_CHOICE_KEY, 'true');
+}
+
+/** An explicit accent pick, marked as chosen. */
+export function persistAccent(accent: Accent): void {
+  writeStoredChoice(ACCENT_STORAGE_KEY, accent);
+  writeStoredChoice(ACCENT_CHOICE_KEY, 'true');
+}
+
+/** Density needs no marker: its default was never ambiguous. */
+export function persistDensity(density: Density): void {
+  writeStoredChoice(DENSITY_STORAGE_KEY, density);
 }
 
 export function systemPrefersDark(): boolean {

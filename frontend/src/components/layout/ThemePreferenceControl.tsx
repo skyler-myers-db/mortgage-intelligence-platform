@@ -1,7 +1,9 @@
 import { useApp, type ThemePreference } from '../AppContext';
 
 // Dark / Light are the prototype's two-state control (design_files/index.html:2);
-// System is the 2026-09-21 audit's additive OS-following option (css-02).
+// System is the 2026-09-21 audit's additive OS-following option (css-02), an
+// explicit opt-in since the 2026-09-30 ruling: nothing chosen boots Dark, and
+// a pick is stored with its mip.themeChosen marker (lib/themePreference).
 const THEME_OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string }> = [
   { value: 'dark', label: 'Dark' },
   { value: 'light', label: 'Light' },

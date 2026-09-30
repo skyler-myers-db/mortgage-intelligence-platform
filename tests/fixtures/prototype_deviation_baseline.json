@@ -30,7 +30,6 @@
   "frontend/src/design-system/components/38-focus-clearance.css": 1,
   "frontend/src/design-system/tokens.css": 1,
   "frontend/src/lib/shellSkeleton.ts": 1,
-  "frontend/src/lib/themePreference.ts": 1,
   "frontend/src/lib/themeTransition.ts": 1,
   "frontend/src/routes/lead-queue.css": 1,
   "frontend/src/routes/lead-queue.filterBar.tsx": 1,
