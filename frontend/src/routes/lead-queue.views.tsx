@@ -1,6 +1,13 @@
+import { useId, useRef, useState } from 'react';
 import { Link } from 'react-router';
+import { Icon } from '../components/Icon';
+import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { ASSIGNED_TO_ME } from './lead-queue.filters';
 import './lead-queue.css';
+import './lead-queue.filterTools.css';
+
+/** The Saved views panel: its own chunk, loaded on the first open only. */
+const SAVED_VIEWS = lazyModule(() => import('./lead-queue.savedViews'));
 
 /**
  * Queue presets (audit tables-09 phase 1): system views that are plain URL
@@ -93,6 +100,7 @@ export function LeadQueueViews({
           </Link>
         );
       })}
+      <LeadQueueSavedViewsControl searchParams={searchParams} />
       <button
         type="button"
         className="btn btn--ghost btn--sm lead-queue-views__copy"
@@ -101,6 +109,58 @@ export function LeadQueueViews({
       >
         Copy link
       </button>
+    </div>
+  );
+}
+
+/**
+ * The "Saved views" disclosure (audit tables-09 phase 2, flow-08 slice 1).
+ * deviation:lead-queue-saved-views: a `.filter` pill after the presets
+ * (design_files/index.html:822-838) opening a `.filter-menu`-styled panel.
+ * Mounting the queue reads nothing: the first open loads the panel chunk,
+ * and only the panel then reads the list. Escape and an outside click close
+ * it (inside the panel), and focus returns to this trigger.
+ */
+function LeadQueueSavedViewsControl({ searchParams }: { searchParams: URLSearchParams }) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const { module: panel, failed } = useLazyModule(SAVED_VIEWS, open);
+  const close = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+  return (
+    <div ref={rootRef} className="lead-queue-views__saved-root">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`filter lead-queue-views__saved${open ? ' is-active' : ''}`}
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        aria-label="Saved views"
+        onClick={() => setOpen((value) => !value)}
+        data-testid="lead-queue-saved-views"
+      >
+        <Icon name="pin" size={11} />
+        <span className="lead-queue-views__saved-long">Saved views</span>
+        <span className="lead-queue-views__saved-short">Views</span>
+      </button>
+      {open && (panel ? (
+        <panel.LeadQueueSavedViewsPanel
+          id={panelId}
+          searchParams={searchParams}
+          rootRef={rootRef}
+          onClose={close}
+        />
+      ) : (
+        <div id={panelId} className="filter-menu lead-queue-saved-views" role="group" aria-label="Saved views">
+          <p className="lead-queue-saved-views__status">
+            {failed ? 'Saved views unavailable' : 'Loading saved views…'}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }
