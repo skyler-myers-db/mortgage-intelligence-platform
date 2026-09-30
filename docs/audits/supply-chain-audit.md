@@ -31,16 +31,21 @@ this remediation pass.
   at the next dependency batch.
 - Backend `pip-audit`, 2026-09-29, over the `uv.lock` pins
   (`pip-audit -r uv.lock --no-deps --disable-pip --strict`): one known
-  vulnerability, GHSA-xpv3-w29h-x7cv (oauthlib 3.3.1). It has no installable
-  fix and is unreachable here (see the 2026-09-29 addendum below). CI runs
+  vulnerability from the default PyPI service, GHSA-xpv3-w29h-x7cv (oauthlib
+  3.3.1), and two from `-s osv`, which also lists GHSA-hj66-6f7g-4r5v
+  (oauthlib 3.3.1). Neither has an installable fix and both are unreachable
+  here (see the 2026-09-29 addendum and its follow-up below). CI runs
   `pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789
-  --ignore-vuln GHSA-xpv3-w29h-x7cv` and carries two ignores, each with its
-  proof at the ci.yml call site:
+  --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v` and
+  carries three ignores, each with its proof at the ci.yml call site:
   - GHSA-h7x2-h6g9-p789, the MLflow tracking-server SSRF: no patched release,
     unreachable here (see the 2026-09-08 addendum below). Review date
     2026-10-08.
   - GHSA-xpv3-w29h-x7cv, the oauthlib server-side PKCE timing attack. Review
     date 2026-10-13.
+  - GHSA-hj66-6f7g-4r5v, the oauthlib `RevocationEndpoint` JSONP callback
+    injection, ignored before the PyPI feed reports it. Review date
+    2026-10-13.
 - The prior restricted commercial-use map-data dependency was removed from
   `frontend/package.json`, `frontend/package-lock.json`, and production source.
 - State map rendering now uses `us-atlas@3.0.1` (`ISC`) plus the existing
@@ -70,7 +75,7 @@ npm --prefix frontend audit --audit-level=high      # the CI gate
 npm --prefix frontend audit --audit-level=moderate  # advisory local read; not a gate
 npm --prefix frontend run test -- USChoroplethMap
 npm --prefix frontend run build
-./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789 --ignore-vuln GHSA-xpv3-w29h-x7cv
+./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789 --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v
 ./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py
 ./.venv/bin/python -m pytest -q tests/unit/test_error_sanitizer.py tests/unit/test_health_endpoint.py
 ```
@@ -285,4 +290,36 @@ Why the oauthlib advisory is ignored rather than fixed:
   the client side (`WebApplicationClient`, `OAuth2Error`).
 - **When to remove it:** as soon as a connector release admits oauthlib 4, or
   the connector leaves the lock.
+
+### Follow-up, the same day: nine more PyJWT advisories and a second oauthlib advisory
+
+Ten more advisories against the two pins were published on 2026-09-29,
+after the bump above was written.
+
+| Advisory | Package | Action |
+|---|---|---|
+| GHSA-ffc3-869f-jxw9 (critical); GHSA-w2cx-738m-mc7w, GHSA-9v7f-9g4p-ffgj, GHSA-r6x4-923q-g947, GHSA-p4g4-x82p-q773, GHSA-9j54-fg26-wv3r (high); GHSA-2gx3-rcp4-g85q, GHSA-hxm8-2xgr-2p9m, GHSA-8wjv-2p76-3863 (medium) | `pyjwt` 2.13.0 | Already closed by the 2.14.0 pin. For each one, `gh api /advisories/<id>` reports `first_patched_version` 2.14.0, so none of these fixes is a range artifact. A pip-audit run on the pre-bump tree lists all ten PyJWT advisories; the same run on the bumped tree lists none. `requirements.in` now names all ten, so the pin's comment lists every advisory it closes. |
+| GHSA-hj66-6f7g-4r5v (medium, CVE-2026-49264): JSONP callback injection in `RevocationEndpoint` | `oauthlib` 3.3.1 | Ignored in CI with GHSA-xpv3-w29h-x7cv's review date, 2026-10-13. |
+
+Why the second oauthlib advisory is ignored, and why before pip-audit
+reports it:
+- **Same proof as GHSA-xpv3-w29h-x7cv.** The only patched release is
+  `oauthlib` 4.0.0, which no connector release admits. The vulnerable code is
+  oauthlib's server-side `RevocationEndpoint`
+  (`endpoints/revocation.py`), which writes `request.callback` into the
+  response body unescaped when `enable_jsonp` is set. No installed module
+  outside `oauthlib` names `RevocationEndpoint`, `AuthorizationCodeGrant` or
+  any oauthlib server class, and the repo imports neither `oauthlib` nor
+  `databricks.sql`.
+- **The feeds disagree.** On 2026-09-29 the PyPI vulnerability feed, which is
+  pip-audit's default service, listed only GHSA-xpv3-w29h-x7cv for oauthlib
+  3.3.1, while OSV listed both. With the other two ignores in place, CI's
+  command against OSV (`-s osv`) failed on GHSA-hj66-6f7g-4r5v alone. The
+  ignore keeps CI green once PyPI's feed catches up, for a finding whose proof
+  has not changed.
+- **Upstream unblock:** databricks/databricks-sql-python#964 ("Allow oauthlib
+  4.x", open, filed 2026-09-29) asks to lift the connector's
+  `oauthlib = "^3.1.0"` cap. The connector's main branch still carries that
+  cap. Once a release admits oauthlib 4, move both pins and retire both
+  ignores.
 
