@@ -27,7 +27,8 @@ BASELINE = ROOT / "tests" / "fixtures" / "openapi_baseline.json"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 REGEN_HINT = (
     "The committed OpenAPI baseline is stale. "
-    "Run `python tools/regen_openapi_baseline.py` and commit the result."
+    "Run `python tools/regen_openapi_baseline.py` and commit "
+    "tests/fixtures/openapi_baseline.json and frontend/src/types/api.gen.ts."
 )
 
 
