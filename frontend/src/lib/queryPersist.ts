@@ -175,10 +175,14 @@ export async function startQueryPersistence(queryClient: QueryClient, buster = q
       dehydrateOptions: { shouldDehydrateQuery: shouldPersistQuery, shouldDehydrateMutation: () => false },
     });
   };
-  queryClient.getQueryCache().subscribe((event) => {
-    if (event.type !== 'added' && event.type !== 'removed' && event.type !== 'updated') return;
+  const schedule = () => {
     timer ??= setTimeout(save, QUERY_CACHE_SAVE_THROTTLE_MS);
+  };
+  queryClient.getQueryCache().subscribe((event) => {
+    if (event.type === 'added' || event.type === 'removed' || event.type === 'updated') schedule();
   });
+  // Reads that settled before this lazy module loaded raised no event here.
+  schedule();
 }
 
 /** Test seam: allow another start in the same module instance. */

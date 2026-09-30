@@ -298,6 +298,15 @@ describe('saving', () => {
     expect(storedKeys()).toHaveLength(2);
   });
 
+  it('saves reads that settled before persistence started (the lazy chunk loads after the gate opens)', async () => {
+    const qc = client();
+    qc.setQueryData(queryKeys.homeSummary(), { total: 1 });
+    await persisting(qc);
+    expect(session.has(QUERY_CACHE_KEY)).toBe(false);
+    await saveNow();
+    expect(storedKeys()).toEqual([queryKeys.homeSummary()]);
+  });
+
   it('skips a snapshot over 256 KiB and removes the stale one', async () => {
     const qc = client();
     await persisting(qc);
