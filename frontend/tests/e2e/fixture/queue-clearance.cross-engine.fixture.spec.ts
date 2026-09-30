@@ -119,7 +119,100 @@ async function scrollLeftReachedByPinnedFocus(page: Page, borrowerId: string, st
   }, { id: borrowerId, left: start });
 }
 
+const HEADER_FIXME =
+  'w5-lead-triage-export · a11y-v2 residual · WebKit 26 has no scroll-state container queries: a sort / select-all control focused from under the route nav stays there';
+/** Zeroes the sticky header controls' clearance (LeadTable.css, scroll-state query). */
+const ZERO_HEADER_MARGIN = '.lead-table__table thead * { scroll-margin-block-start: 0px !important; }';
+
+/** The table at scrollTop `tableTop`, and `.main` scrolled so the sticky header row sits behind the route nav. */
+async function headerUnderRouteNav(page: Page, tableTop: number): Promise<void> {
+  await addScrollRoom(page);
+  const placed = await page.locator('.main').evaluate((main, top) => {
+    const nav = main.querySelector<HTMLElement>('.route-nav');
+    const wrap = main.querySelector<HTMLElement>('.tbl-wrap');
+    const head = wrap?.querySelector<HTMLElement>('thead th');
+    if (!nav || !wrap || !head) throw new Error('no route nav or table header');
+    wrap.scrollTop = top;
+    // The header row (56.5px at 1440x900) is about the nav's height (57px): align the tops.
+    main.scrollTop += Math.ceil(head.getBoundingClientRect().top - nav.getBoundingClientRect().top);
+    const box = head.getBoundingClientRect();
+    const band = nav.getBoundingClientRect();
+    return { covered: box.top >= band.top - 1 && box.bottom <= band.bottom + 1, wrapTop: wrap.scrollTop };
+  }, tableTop);
+  expect(placed.covered, 'precondition: the sticky header sits behind the route nav').toBe(true);
+  expect(Math.abs(placed.wrapTop - tableTop), 'precondition: the table sits at its offset').toBeLessThanOrEqual(1);
+}
+
+function headerControls(page: Page): Record<string, Locator> {
+  return {
+    'a sort control': page.locator('.lead-table__table thead th[aria-sort] button').first(),
+    'select-all': page.locator('.lead-table__table thead input[type="checkbox"]').first(),
+  };
+}
+
 test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
+  for (const zeroed of [false, true]) {
+    test(`${zeroed ? 'non-vacuity, header margin zeroed: ' : ''}with the table at its start, sort and select-all focused from under the route nav ${zeroed ? 'stay there' : 'stop below it'}`, async ({ app, browserName, page }) => {
+      if (!zeroed) test.fixme(browserName === 'webkit', HEADER_FIXME);
+      await app.gotoRoute('/lead-queue');
+      if (zeroed) await page.addStyleTag({ content: ZERO_HEADER_MARGIN });
+      for (const [name, control] of Object.entries(headerControls(page))) {
+        await headerUnderRouteNav(page, 0);
+        await focusAndSettle(page, control);
+        expect(await tableWrap(page).evaluate((wrap) => wrap.scrollTop), `${name}: the table does not move`).toBeLessThanOrEqual(1);
+        if (zeroed) expect(await gapBelowRouteNav(control), `${name}: a stop under the nav`).toBeLessThan(0);
+        else expect(await gapBelowRouteNav(control), `${name}: below the nav`).toBeGreaterThanOrEqual(-0.5);
+      }
+    });
+  }
+
+  for (const restored of [false, true]) {
+    test(`${restored ? 'non-vacuity, nav margin restored inside it: ' : ''}a control in view in the approval review dialog takes focus ${restored ? 'and the dialog over-scrolls' : 'without the dialog scrolling'}`, async ({ app, page }) => {
+      await app.gotoRoute('/lead-queue');
+      await page.getByTestId(`lead-approve-${ELIGIBLE}`).click();
+      const dialog = page.locator('dialog.lead-approve-dialog[open]');
+      await expect(dialog.getByTestId('lead-approve-review-confirm')).toBeEnabled();
+      // A 200px dialog with scroll room after its controls, scrolled so a control
+      // sits 4px below the dialog's top edge; the nav's margin (61px) would scroll it.
+      const style = `dialog.lead-approve-dialog { max-block-size: 200px !important; }${restored ? ' .main .lead-approve-dialog * { scroll-margin-block-start: var(--nav-clear) !important; }' : ''}`;
+      await page.addStyleTag({ content: style });
+      const moved = await dialog.evaluate(async (scroller) => {
+        const frames = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const room = document.createElement('div');
+        room.style.blockSize = '400px';
+        scroller.append(room);
+        const control = [...scroller.querySelectorAll<HTMLElement>('button:not(:disabled), textarea, input:not([type="hidden"]), select, a[href]')]
+          // Not the one the dialog focused on open: focus() on it would not move focus.
+          .filter((el) => el.getClientRects().length > 0 && el !== document.activeElement)
+          .at(-1);
+        if (!control) throw new Error('precondition: a control in the dialog');
+        scroller.scrollTop += control.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 4;
+        await frames();
+        const port = scroller.getBoundingClientRect();
+        const box = control.getBoundingClientRect();
+        const before = scroller.scrollTop;
+        control.focus();
+        await frames();
+        const delta = Math.abs(scroller.scrollTop - before);
+        room.remove();
+        return { inView: box.top >= port.top && box.bottom <= port.bottom && box.top - port.top < 20, delta, focused: document.activeElement === control };
+      });
+      expect(moved.inView, 'precondition: the control sits within 20px of the dialog\'s top, in full view').toBe(true);
+      expect(moved.focused).toBe(true);
+      if (restored) expect(moved.delta, 'the nav margin over-scrolls the dialog').toBeGreaterThan(40);
+      else expect(moved.delta, 'the dialog does not move').toBeLessThanOrEqual(1);
+    });
+  }
+
+  test('with the table scrolled, a header control focus leaves the table where it was (no "reveal" of a stuck header)', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    for (const [name, control] of Object.entries(headerControls(page))) {
+      await headerUnderRouteNav(page, 200);
+      await focusAndSettle(page, control);
+      expect(Math.abs((await tableWrap(page).evaluate((wrap) => wrap.scrollTop)) - 200), `${name}: scrollTop stays`).toBeLessThanOrEqual(1);
+    }
+  });
+
   for (const route of ['/lead-queue', '/segment-intelligence'] as const) {
     test(`${route}: with .main at its end, a reverse walk up the rows stops clear of the route nav`, async ({ app, page }) => {
       await app.gotoRoute(route);

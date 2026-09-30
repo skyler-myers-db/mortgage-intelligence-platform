@@ -148,7 +148,7 @@ describe('focus clearance (a11y-v2)', () => {
     // so a route's own scroll-margin still wins) reads it.
     const media = new RegExp(String.raw`@media\s*\(min-height:\s*40rem\)\s*\{\s*`
       + String.raw`\.main:has\(\.route-nav\):not\(:has\(${ASK_TAB_SHORT}\)\)\s*\{([^}]*)\}\s*`
-      + String.raw`:where\(\.main :not\(\.route-nav \*, \.tbl-wrap \*, \.filter-menu \*\)\)\s*\{([^}]*)\}`
+      + String.raw`:where\(\.main :not\(\.route-nav \*, \.tbl-wrap \*, \.filter-menu \*, \.lead-approve-dialog \*\)\)\s*\{([^}]*)\}`
       + String.raw`\s*\}`).exec(css);
     expect(media, 'both rules sit inside @media (min-height: 40rem)').not.toBeNull();
     // The one-line nav (--sp-3 padding at each end, a --sp-8 link, the 1px border), plus the ring.
@@ -177,6 +177,23 @@ describe('focus clearance (a11y-v2)', () => {
       expect(topLevel(selector), selector).toMatch(/^\.main(?::[a-z-]+)+$/);
     }
     expect(selectors.filter((selector) => /\s/.test(topLevel(selector))), 'the universal rule sits in :where()').toEqual([]);
+  });
+
+  it('leaves the top-layer approval review dialog, its own scroller, out of the nav\'s margin', () => {
+    // a11y-v2 residual: the nav is not over a top-layer dialog, so the margin
+    // only over-scrolled the dialog when a control already in its view took focus.
+    expect(focusClearancePartial()).toMatch(/:where\(\.main :not\([^)]*\.lead-approve-dialog \*[^)]*\)\)/);
+  });
+
+  it('gives the sticky header\'s controls the table clearance only while the table sits at its block start', () => {
+    const css = leadTableCss();
+    expect(css).toMatch(/\.tbl-wrap:has\(> \.lead-table__table\)\s*\{\s*container-type:\s*scroll-state;\s*\}/);
+    expect(css).toMatch(new RegExp(
+      String.raw`@container not scroll-state\(scrollable: top\)\s*\{\s*\.lead-table__table thead \*\s*\{\s*scroll-margin-block-start:\s*var\(--tbl-focus-clear\);\s*\}\s*\}`,
+    ));
+    // Never unconditional: a margin with the table scrolled moved it back to "reveal" the stuck header.
+    const outsideQueries = css.replace(/@container[^{]*\{[^{}]*\{[^}]*\}\s*\}/g, '');
+    expect(outsideQueries).not.toMatch(/(?:^|[}\n])\s*\.lead-table__table thead[^{]*\{[^}]*scroll-margin/);
   });
 
   it('leaves the in-place filter listboxes out of the nav\'s margin', () => {

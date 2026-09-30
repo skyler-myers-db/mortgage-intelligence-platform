@@ -255,6 +255,20 @@
 .lead-table__table tr[data-borrower-row] {
   scroll-margin-block: calc(var(--tbl-focus-clear) + var(--sp-2)) var(--sp-2);
 }
+/* The sticky header's sort and select-all controls (a11y-v2 residual,
+   WCAG 2.4.11). A margin on them while the table could still scroll up made
+   a focus move the table back to "reveal" a header already stuck in view
+   (45px) and still leave it under the route nav. So they take the clearance
+   only while the table sits at its block start (the keyboard path of
+   Shift+Tab from the first row): the table cannot move, and `.main` alone
+   scrolls the header clear of the nav. A scroll-state container is not a
+   size container, so the table's `cqw` units still resolve against `.main`.
+   An engine without scroll-state queries (WebKit 26) keeps the old
+   behaviour: no margin on the header. */
+.tbl-wrap:has(> .lead-table__table) { container-type: scroll-state; }
+@container not scroll-state(scrollable: top) {
+  .lead-table__table thead * { scroll-margin-block-start: var(--tbl-focus-clear); }
+}
 
 /* Row expand motion (audit motion-08 slice 1, queue part): the expand
    column's one chevron turns a quarter on the expanded row (replacing the

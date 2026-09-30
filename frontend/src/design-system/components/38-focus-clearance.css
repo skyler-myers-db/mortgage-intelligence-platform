@@ -34,12 +34,17 @@
      Its rows and expanded row carry their own instead, the larger of this
      clearance and the sticky thead's (LeadTable.css reads --nav-clear), so
      a row control up under the nav still stops below it. Its sticky
-     header's controls (sort, select-all) carry none: given a margin, a
-     focus on one with the table scrolled moved the table back to "reveal"
-     a header already stuck in view (45px) and still left it under the nav
-     (measured). So a header control that takes focus while `.main` has
-     scrolled the header up under the nav (Shift+Tab from the first row)
-     stays under it.
+     header's controls (sort, select-all) take that clearance only while
+     the table sits at its block start (LeadTable.css, a scroll-state
+     container query): given a margin with the table scrolled, a focus
+     moved the table back to "reveal" a header already stuck in view (45px)
+     and still left it under the nav (measured). Engines without
+     scroll-state queries (WebKit 26) leave a header control focused from
+     under the nav where it is.
+   - `.lead-approve-dialog` contents: the collapsed row's approval review,
+     a top-layer <dialog> that is its own scroller. The nav is not over it,
+     so the margin only over-scrolled that dialog when a control already in
+     its view took focus.
    - `.filter-menu` contents: FilterSelect / MultiFilterSelect render their
      listbox in place, a scroller of its own, and scroll the active option
      into view ({block:'nearest'}) as the pointer moves over it. The nav's
@@ -67,7 +72,7 @@
       var(--sp-3) * 2 + var(--sp-8) + 1px + var(--focus-ring-width) + var(--focus-ring-offset)
     );
   }
-  :where(.main :not(.route-nav *, .tbl-wrap *, .filter-menu *)) {
+  :where(.main :not(.route-nav *, .tbl-wrap *, .filter-menu *, .lead-approve-dialog *)) {
     scroll-margin-block-start: var(--nav-clear);
   }
 }
