@@ -265,6 +265,46 @@ test.describe('analytics charts: governed histograms', () => {
     await expect(figure.locator('figcaption')).toContainText(`${count(TOTALS.addressable)} borrowers scored`);
   });
 
+  /**
+   * The rule label hangs on the side of its rule that fits. With the Console
+   * open the score rule sits at 68.75% of a ~359px plot, and "75+ · 4,120
+   * borrowers" is wider than the room to its right (wider still in Linux
+   * Chromium's Geist Mono: the letter-spacing below emulates it off Linux).
+   * A fixed 70% flip left it on the right and scrolled the surface sideways.
+   */
+  const LINUX_RULE_LABEL = '.chart-hist__rule-label { letter-spacing: 0.5px; }';
+  const ruleLabelFit = (figure: Locator) =>
+    figure.locator('.chart-hist__rule-label').evaluate((label) => {
+      const plot = (label.parentElement as HTMLElement).getBoundingClientRect();
+      const box = label.getBoundingClientRect();
+      return { left: box.left - plot.left, right: plot.right - box.right };
+    });
+
+  test('executive, Console open: the 75+ rule label stays inside its plot at Linux text widths', async ({ app, page }) => {
+    await app.gotoRoute('/analytics');
+    await app.openConsole();
+    if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_RULE_LABEL });
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const figure = figureOf(page, 'Opportunity Score Distribution');
+    const fit = await ruleLabelFit(figure);
+    expect(fit.left, 'label clear of the plot start').toBeGreaterThanOrEqual(0);
+    expect(fit.right, 'label clear of the plot end').toBeGreaterThanOrEqual(0);
+    const section = figure.locator('xpath=ancestor::section[contains(@class,"surface")][1]');
+    const widths = await section.evaluate((node) => ({ scroll: node.scrollWidth, client: node.clientWidth }));
+    expect(widths.scroll, 'the score surface does not scroll sideways').toBeLessThanOrEqual(widths.client);
+  });
+
+  test('executive, Console open (non-vacuity): hung right of its rule, the same label would overflow the plot', async ({ app, page }) => {
+    await app.gotoRoute('/analytics');
+    await app.openConsole();
+    await page.addStyleTag({
+      content: `${process.platform !== 'linux' ? LINUX_RULE_LABEL : ''} .chart-hist__rule-label--end { transform: translateX(var(--sp-1)) !important; }`,
+    });
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const fit = await ruleLabelFit(figureOf(page, 'Opportunity Score Distribution'));
+    expect(fit.right, 'the geometry this pins: right of the rule does not fit').toBeLessThan(0);
+  });
+
   test('executive: when the bins at 75+ disagree with the totals, the label still prints the governed count', async ({ app, mockApi, page }) => {
     const base = analyticsFixtures.find((entry) => entry.method === 'GET' && entry.pattern === '/api/analytics/executive');
     if (!base) throw new Error('executive fixture missing');

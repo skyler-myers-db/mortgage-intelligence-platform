@@ -34,7 +34,7 @@ const KIT_DIR = 'frontend/src/components/charts/';
 /** Each kit component file, its component, and the pure helpers it may declare. */
 const KIT_FILES: ReadonlyArray<{ file: string; component: string; helpers: readonly string[] }> = [
   { file: 'CountChart.tsx', component: 'CountChart', helpers: [] },
-  { file: 'Histogram.tsx', component: 'Histogram', helpers: ['binIsPast'] },
+  { file: 'Histogram.tsx', component: 'Histogram', helpers: ['binIsPast', 'ruleLabelSide'] },
   { file: 'ChartFrame.tsx', component: 'ChartFrame', helpers: [] },
   { file: 'ChartTooltip.tsx', component: 'ChartTooltip', helpers: [] },
 ];

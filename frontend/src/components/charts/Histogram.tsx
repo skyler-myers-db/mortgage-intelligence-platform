@@ -16,7 +16,7 @@
  * The frame, the count axis, the tooltip and the keyboard cursor are the
  * kit's CountChart; a histogram adds only its bins, rule and x ticks.
  */
-import type { CSSProperties, ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { niceTicksWithin } from '../../lib/chartTicks';
 import { fixedAttr } from '../../lib/fixedPrecision';
 import { formatCount } from '../../lib/formatters';
@@ -33,8 +33,54 @@ export function binIsPast(start: number, threshold: number | null): boolean {
   return threshold !== null && start >= threshold;
 }
 
-/** A rule label past 70% of the plot hangs to the left of its rule. */
+/** Before the label is measured, a rule past 70% of the plot hangs it to the left. */
 const RULE_LABEL_FLIP_PCT = 70;
+
+type RuleLabelSide = 'start' | 'end';
+
+/**
+ * Which side of its rule the label fits on. Right of the rule while its width
+ * (plus the --sp-1 gap) fits the room there; otherwise the side with more
+ * room. The label is measured, not guessed from the rule's position: at the
+ * Console-open column the score rule sits at 68.75% and its "75+ · N
+ * borrowers" label is wider than the 31% of plot to its right (and ~6% wider
+ * again in Linux Chromium's Geist Mono), which scrolled the surface sideways.
+ */
+export function ruleLabelSide(ruleX: number, plotWidth: number, labelWidth: number, gap: number): RuleLabelSide {
+  const right = (plotWidth * (100 - ruleX)) / 100;
+  const left = (plotWidth * ruleX) / 100;
+  if (labelWidth + gap <= right) return 'start';
+  return left > right ? 'end' : 'start';
+}
+
+/** The threshold rule's label, placed on the side of the rule it fits. */
+function HistogramRuleLabel({ ruleX, children }: { ruleX: number; children: ReactNode }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [side, setSide] = useState<RuleLabelSide>(ruleX > RULE_LABEL_FLIP_PCT ? 'end' : 'start');
+  useLayoutEffect(() => {
+    const label = ref.current;
+    const plot = label?.parentElement;
+    if (!label || !plot) return undefined;
+    const place = () => {
+      const gap = parseFloat(getComputedStyle(label).getPropertyValue('--sp-1')) || 0;
+      setSide(ruleLabelSide(ruleX, plot.clientWidth, label.offsetWidth, gap));
+    };
+    place();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(place);
+    observer.observe(plot);
+    return () => observer.disconnect();
+  }, [ruleX, children]);
+  return (
+    <span
+      ref={ref}
+      className={`chart-hist__rule-label${side === 'end' ? ' chart-hist__rule-label--end' : ''}`}
+      style={{ '--rule-x': `${ruleX}%` } as CSSProperties}
+    >
+      {children}
+    </span>
+  );
+}
 
 export interface HistogramProps {
   title: string;
@@ -113,14 +159,7 @@ export function Histogram({
           )}
         </>
       )}
-      overlay={ruleX !== null && ruleLabel ? (
-        <span
-          className={`chart-hist__rule-label${ruleX > RULE_LABEL_FLIP_PCT ? ' chart-hist__rule-label--end' : ''}`}
-          style={{ '--rule-x': `${ruleX}%` } as CSSProperties}
-        >
-          {ruleLabel}
-        </span>
-      ) : null}
+      overlay={ruleX !== null && ruleLabel ? <HistogramRuleLabel ruleX={ruleX}>{ruleLabel}</HistogramRuleLabel> : null}
     />
   );
 }

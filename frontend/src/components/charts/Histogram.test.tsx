@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../../lib/opportunityScore';
 import type { ExecutiveAnalyticsResponse } from '../../types';
 import { ScoreDistribution } from '../../routes/analytics.sections';
-import { Histogram, binIsPast, type HistogramBin } from './Histogram';
+import { Histogram, binIsPast, ruleLabelSide, type HistogramBin } from './Histogram';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,6 +22,19 @@ const BINS: HistogramBin[] = [
   { start: 50, count: 12480 },
   { start: 75, count: 900 },
 ];
+
+describe('ruleLabelSide', () => {
+  it('keeps the label right of its rule while it fits there', () => {
+    expect(ruleLabelSide(40, 400, 150, 4)).toBe('start');
+  });
+  it('hangs it left when the right is too narrow and the left is wider (the Console-open score rule)', () => {
+    expect(ruleLabelSide(68.75, 359, 145, 4)).toBe('end');
+  });
+  it('takes the wider side when neither fits', () => {
+    expect(ruleLabelSide(45, 200, 150, 4)).toBe('start');
+    expect(ruleLabelSide(55, 200, 150, 4)).toBe('end');
+  });
+});
 
 describe('Histogram', () => {
   let container: HTMLDivElement;
