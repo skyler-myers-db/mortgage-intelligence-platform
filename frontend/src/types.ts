@@ -624,7 +624,9 @@ export type DataEstateStatus =
   | 'not_configured'
   | 'roadmap'
   | 'permission_denied'
-  | 'error';
+  | 'error'
+  /** gold.source_readiness has no row for this source (or is absent). */
+  | 'unavailable';
 
 export interface DataEstateAsset {
   name: string;

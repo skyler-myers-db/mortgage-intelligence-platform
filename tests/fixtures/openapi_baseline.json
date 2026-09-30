@@ -1732,7 +1732,8 @@
                   "not_configured",
                   "roadmap",
                   "permission_denied",
-                  "error"
+                  "error",
+                  "unavailable"
                 ],
                 "type": "string"
               },
@@ -4401,7 +4402,8 @@
               "not_configured",
               "roadmap",
               "permission_denied",
-              "error"
+              "error",
+              "unavailable"
             ],
             "title": "Status",
             "type": "string"
@@ -4456,7 +4458,8 @@
               "not_configured",
               "roadmap",
               "permission_denied",
-              "error"
+              "error",
+              "unavailable"
             ],
             "title": "Status",
             "type": "string"
@@ -15900,7 +15903,7 @@
     "/api/admin/sources": {
       "get": {
         "deprecated": true,
-        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. Preferred production path reads\n``mip.gold.source_readiness`` so the running app principal does not\nneed direct silver grants.",
+        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\" | \"unavailable\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. The rows come\nonly from ``mip.gold.source_readiness``, so the running app principal\nneeds no silver grants: a source the summary has no row for (or every\nnon-roadmap source when the summary is absent) reads ``unavailable``,\nand any other read failure answers 503.",
         "operationId": "get_api_admin_sources_get_sources",
         "responses": {
           "200": {
@@ -23895,7 +23898,7 @@
     },
     "/api/v1/admin/sources": {
       "get": {
-        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. Preferred production path reads\n``mip.gold.source_readiness`` so the running app principal does not\nneed direct silver grants.",
+        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\" | \"unavailable\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. The rows come\nonly from ``mip.gold.source_readiness``, so the running app principal\nneeds no silver grants: a source the summary has no row for (or every\nnon-roadmap source when the summary is absent) reads ``unavailable``,\nand any other read failure answers 503.",
         "operationId": "get_api_v1_admin_sources_get_sources",
         "responses": {
           "200": {

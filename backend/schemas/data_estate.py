@@ -15,6 +15,8 @@ DataEstateStatus = Literal[
     "roadmap",
     "permission_denied",
     "error",
+    # The gold readiness summary has no row for this source (or is absent).
+    "unavailable",
 ]
 
 

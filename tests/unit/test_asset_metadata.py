@@ -437,3 +437,54 @@ def test_raw_share_metadata_never_falls_back_to_an_unbounded_count() -> None:
         "SELECT COUNT(*) AS ROW_COUNT FROM" in statement.upper()
         for statement, _ in fake.calls
     )
+
+
+@pytest.mark.parametrize(
+    ("asset_key", "asset_path"),
+    [
+        ("lien_current", "mip.silver.lien_current"),
+        ("loan_applications", "mip.first_party.loan_applications"),
+        (
+            "entrada_eval_property_domain_v3",
+            "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        ),
+    ],
+    ids=["silver", "first_party", "provider"],
+)
+def test_etl_only_assets_issue_no_delta_detail_count_or_properties(
+    asset_key: str, asset_path: str
+) -> None:
+    """App SQL is gold-only: Delta detail, COUNT(*) and TBLPROPERTIES run only
+    for gold / ref / semantics assets; the rest keep information_schema metadata
+    and take freshness from gold.source_readiness."""
+    fake = _AssetSqlClient()
+
+    payload = AssetMetadataService(fake).get_asset(asset_key)
+
+    assert payload.asset_path == asset_path
+    statements = [statement.upper() for statement, _ in fake.calls]
+    assert not any(statement.startswith("DESCRIBE") for statement in statements)
+    # (system.access.table_lineage's own COUNT(*) AS event_count is metadata.)
+    assert not any("COUNT(*) AS ROW_COUNT" in statement for statement in statements)
+    assert not any(statement.startswith("SHOW TBLPROPERTIES") for statement in statements)
+    assert any("INFORMATION_SCHEMA.COLUMNS" in statement for statement in statements)
+    assert (
+        "Delta detail is read for gold and ref assets only; source freshness comes "
+        "from gold.source_readiness"
+    ) in payload.known_data_gaps
+    # Every statement names an app-readable schema or system metadata only.
+    for statement in statements:
+        assert ".SILVER." not in statement and ".FIRST_PARTY." not in statement, statement
+        assert "COTALITY_MORTGAGE_DATA" not in statement, statement
+
+
+def test_gold_assets_still_read_delta_detail() -> None:
+    fake = _AssetSqlClient()
+
+    payload = AssetMetadataService(fake).get_asset("lead_population")
+
+    statements = [statement.upper() for statement, _ in fake.calls]
+    assert any(statement.startswith("DESCRIBE DETAIL") for statement in statements)
+    assert "Delta detail is read for gold and ref assets only" not in " ".join(
+        payload.known_data_gaps
+    )
