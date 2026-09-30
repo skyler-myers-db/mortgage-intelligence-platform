@@ -22,11 +22,10 @@
  */
 import type { Page } from '@playwright/test';
 import type { ConfigOptions } from '../../../src/types';
-import type { HealthPayload } from '../../../src/lib/apiTypes';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { LENDER_NAME } from './data/reference';
-import { CONFIG_OPTIONS, FIXTURE_ACTOR_A, FIXTURE_ACTOR_B, HEALTH_OK } from './data/shell';
+import { CONFIG_OPTIONS, FIXTURE_ACTOR_A, FIXTURE_ACTOR_B, serveActor } from './data/shell';
 import { json, type ApiCall } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -222,7 +221,7 @@ test.describe('identity boundary', () => {
   /** Ask on /ask-genie as FIXTURE_ACTOR_A until the turn is polling. */
   async function turnInFlight(page: Page, app: { gotoRoute(path: string): Promise<void> }, mockApi: Parameters<typeof registerGenieTurn>[0]) {
     const actor = { key: FIXTURE_ACTOR_A };
-    mockApi.register('GET', '/api/health', () => json<HealthPayload>({ ...HEALTH_OK, actor_cache_key: actor.key }));
+    serveActor(mockApi, () => actor.key);
     const turn = registerGenieTurn(mockApi);
     await app.gotoRoute('/ask-genie');
     await page.locator('#main-content').getByRole('textbox', { name: 'Ask Genie — question' }).fill(GENIE_QUESTION);
@@ -273,11 +272,25 @@ test.describe('identity boundary', () => {
     await expect(thread(page).locator('.genie__msg--user')).toHaveCount(0);
   });
 
-  test('(8c) a 401 on the health poll clears the actor\'s state', async ({ app, page, mockApi }) => {
-    const { healthCalls } = await turnInFlight(page, app, mockApi);
-    app.degrade('/api/health', { status: 401, body: {} });
+  test('(8c) a 401 closes the actor gate: the turn leaves the screen, its record stays for the same actor only', async ({ app, page, mockApi }) => {
+    const { actor, healthCalls } = await turnInFlight(page, app, mockApi);
+    const lift = app.degrade('/api/health', { status: 401, body: {} });
     await nextProbe(page, healthCalls, 8_000);
+    // The W5a nobody bridge: the live turn and the thread are cleared from
+    // memory, but the gate is closed, so the record's removal is dropped.
+    await expect(thread(page).locator('.genie__msg--user')).toHaveCount(0);
+    expect(await inFlightRecord(page), 'kept for the same actor').not.toBeNull();
+
+    lift();
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await app.settle();
+    await keeps(page, 'the same actor reloads: the turn resumes');
+
+    actor.key = FIXTURE_ACTOR_B;
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await app.settle();
     await expect.poll(() => inFlightRecord(page)).toBeNull();
+    await expect(thread(page).locator('.genie__msg--user')).toHaveCount(0);
   });
 });
 

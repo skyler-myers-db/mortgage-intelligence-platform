@@ -10,11 +10,9 @@
  * so they count what the browser really sent. 1440x900, production build.
  */
 import type { Page } from '@playwright/test';
-import type { HealthPayload } from '../../../src/lib/apiTypes';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { GENIE_QUESTION, genieAnswerFixture, registerGenieTurn } from './data/genieTurn';
-import { FIXTURE_ACTOR_A, FIXTURE_ACTOR_B, HEALTH_OK } from './data/shell';
-import { json } from './mockApi';
+import { FIXTURE_ACTOR_A, FIXTURE_ACTOR_B, serveActor } from './data/shell';
 import { contrastRatio, renderedColors } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -138,7 +136,7 @@ test.describe('one turn that survives the route', () => {
 
   test('(d) an actor change mid-turn clears the record, stops polling, and a reload resumes nothing', async ({ app, page, mockApi }) => {
     let actor = FIXTURE_ACTOR_A;
-    mockApi.register('GET', '/api/health', () => json<HealthPayload>({ ...HEALTH_OK, actor_cache_key: actor }));
+    serveActor(mockApi, () => actor);
     const turn = registerGenieTurn(mockApi);
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);
