@@ -1,7 +1,6 @@
 import { useCallback, useDeferredValue, useLayoutEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
-import { buildCampaignPrefillSearch, makeCampaignPrefill } from '../../lib/campaignPrefill';
 import { useOptionalFootprint } from '../FootprintProvider';
 import {
   USCODE_TO_FIPS,
@@ -12,7 +11,7 @@ import {
   type Level,
   type UsaSvgMapLocation,
 } from './USChoroplethMap.utils';
-import { buildChoroplethScale, classify } from './USChoroplethMap.scale';
+import { buildChoroplethScale } from './USChoroplethMap.scale';
 import {
   EMPTY_MAP_SELECTION,
   sameMapSelection,
@@ -24,6 +23,8 @@ import { USChoroplethMapLegend } from './USChoroplethMapLegend';
 import { USChoroplethMapStates } from './USChoroplethMapStates';
 import { USChoroplethMapTable, type MapTableRow } from './USChoroplethMapTable';
 import { MapUnavailable } from './USChoroplethMapUnavailable';
+import { buildMapTableRows } from './USChoroplethMap.table';
+import { campaignPrefillPath as buildCampaignPath } from './USChoroplethMap.campaign';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { USChoroplethMapZipLevel } from './USChoroplethMapZipLevel';
 import { useChoroplethLiveFacts, type GeoRead } from './useChoroplethLiveFacts';
@@ -298,45 +299,12 @@ export function USChoroplethMap({
   // mode and, when the overlay is loaded, the state's lead / unattended
   // snapshot counts.
   const activeStateCode = current.state;
-  const campaignPrefillPath = useMemo(() => {
-    if (!activeStateCode || current.zip) return null;
-    let leadCount: number | null = null;
-    let unattendedCount: number | null = null;
-    if (overlayOn && overlayData) {
-      if (overlayData.level === 'zip') {
-        // ZIP grid on screen: the state snapshot is the sum of its ZIP
-        // units — the totals the overlay response already carries.
-        leadCount = overlayData.total_leads;
-        unattendedCount = overlayData.total_unattended;
-      } else {
-        const unit = overlayByUnit[activeStateCode.toLowerCase()];
-        leadCount = unit ? unit.lead_count : null;
-        unattendedCount = unit ? unit.unattended_count : null;
-      }
-    }
-    // Hoisted out of the `try`: React Compiler 1.0 cannot lower a value block
-    // (`??`, `?:`, `?.`) inside try/catch and silently bails out of the WHOLE
-    // component when it meets one. `node tools/react_compiler_coverage.mjs`
-    // reports it; keep the try body free of such expressions.
-    const segmentCodes = segmentFilter ?? [];
-    try {
-      const prefill = makeCampaignPrefill({
-        level: 'state',
-        state: activeStateCode,
-        countyFips: null,
-        countyName: null,
-        segmentCodes,
-        segmentMode: segmentFilterMode,
-        leadCount,
-        unattendedCount,
-      });
-      return `/portfolio-builder?${buildCampaignPrefillSearch(prefill).toString()}`;
-    } catch {
-      // A geography we can't encode coherently just hides the affordance
-      // rather than shipping a broken link.
-      return null;
-    }
-  }, [activeStateCode, current.zip, overlayOn, overlayData, overlayByUnit, segmentFilter, segmentFilterMode]);
+  const campaignPrefillPath = useMemo(
+    () => buildCampaignPath({
+      activeStateCode, current: { zip: current.zip }, overlayOn, overlayData, overlayByUnit, segmentFilter, segmentFilterMode,
+    }),
+    [activeStateCode, current.zip, overlayOn, overlayData, overlayByUnit, segmentFilter, segmentFilterMode],
+  );
 
   const activateState = useCallback(
     (location: UsaSvgMapLocation, hasFacts: boolean, moveFocus: boolean) => {
@@ -355,40 +323,12 @@ export function USChoroplethMap({
   );
 
   // Table rows for the level on screen: the numbers the map paints.
-  const tableRows = useMemo<MapTableRow[]>(() => {
-    const value = (count: number, unitKey: string) =>
-      shownScenario ? shownScenario.inTheMoneyById[unitKey] : overlayActive ? overlayByUnit[unitKey]?.unattended_count : count;
-    if (level === 'state') {
-      if (!stateFacts || !usaMap) return [];
-      return usaMap.locations
-        .filter((location) => stateFacts[location.id])
-        .map((location) => {
-          const rollup = stateFacts[location.id];
-          return {
-            id: location.id,
-            name: location.name,
-            count: rollup.addressable,
-            avgScore: rollup.avg_score,
-            topSegment: rollup.top_segment_code ? safeSegmentName(rollup.top_segment_code) ?? undefined : undefined,
-            contactable: rollup.contactable,
-            // The value the fill encodes when it is not borrowers (table column).
-            extra: shownScenario || overlayActive ? value(0, location.id) ?? null : undefined,
-            cls: classify(scale, value(rollup.addressable, location.id)),
-            // The row's button is gone after the drill, whatever pressed it.
-            onOpen: drillBehavior === 'filter' ? () => activateState(location, true, true) : undefined,
-          };
-        });
-    }
-    return Object.values(zipFacts ?? {}).map((rollup) => ({
-      id: rollup.zip,
-      name: rollup.zip,
-      count: rollup.addressable_borrowers ?? 0,
-      avgScore: rollup.avg_opportunity_score ?? null,
-      topSegment: rollup.top_segment_code ? safeSegmentName(rollup.top_segment_code) ?? undefined : undefined,
-      extra: overlayActive ? overlayByUnit[rollup.zip]?.unattended_count ?? null : undefined,
-      cls: classify(scale, value(rollup.addressable_borrowers ?? 0, rollup.zip)),
-    }));
-  }, [activateState, drillBehavior, level, overlayActive, overlayByUnit, scale, shownScenario, stateFacts, usaMap, zipFacts]);
+  const tableRows = useMemo<MapTableRow[]>(
+    () => buildMapTableRows({
+      shownScenario, overlayActive, overlayByUnit, level, stateFacts, usaMap, scale, drillBehavior, activateState, zipFacts,
+    }),
+    [activateState, drillBehavior, level, overlayActive, overlayByUnit, scale, shownScenario, stateFacts, usaMap, zipFacts],
+  );
 
   const renderStage = () => {
     if (!usaMap) {
