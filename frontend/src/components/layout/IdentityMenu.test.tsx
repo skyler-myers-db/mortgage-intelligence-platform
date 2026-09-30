@@ -28,6 +28,14 @@ vi.mock('../AppContext', () => ({
   useApp: () => appContext,
 }));
 
+const apiMocks = vi.hoisted(() => ({ session: vi.fn() }));
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
+  api: apiMocks,
+}));
+
+import { NAVIGATION_ROUTE_IDS, ROUTES } from '../../lib/routeMeta';
+import { Icon, type IconName } from '../Icon';
 import { IdentityMenu, OPEN_SHORTCUTS_EVENT, identityView } from './IdentityMenu';
 
 const SESSION: SessionResponse = {
@@ -42,9 +50,11 @@ describe('IdentityMenu', () => {
   let container: HTMLDivElement;
   let root: Root;
 
-  async function renderMenu(session: SessionResponse = SESSION) {
+  async function renderMenu(session: SessionResponse | 'loading' | 'error' = SESSION) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-    queryClient.setQueryData(['session', 'access'], session);
+    if (session === 'loading') apiMocks.session.mockReturnValue(new Promise(() => {}));
+    else if (session === 'error') apiMocks.session.mockRejectedValue(new Error('session probe failed'));
+    else queryClient.setQueryData(['session', 'access'], session);
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -102,6 +112,56 @@ describe('IdentityMenu', () => {
     expect(trigger().getAttribute('aria-expanded')).toBe('false');
     expect(trigger().getAttribute('aria-label')).toBe('Account menu, signed in as Jane Doe');
     expect(menu()).toBeNull();
+  });
+
+  /** The DOM markup of one glyph, rendered the way the trigger renders it. */
+  function glyphMarkup(name: IconName): string {
+    const scratch = document.createElement('div');
+    const scratchRoot = createRoot(scratch);
+    act(() => scratchRoot.render(<Icon name={name} size={15} />));
+    const html = scratch.innerHTML;
+    act(() => scratchRoot.unmount());
+    return html;
+  }
+  const triggerGlyph = () => trigger().querySelector('svg')?.outerHTML ?? null;
+  const avatar = () => trigger().querySelector('.identity-menu__avatar');
+
+  it('shows the actor initials once the session names a signed-in email (D-theme-nav-e)', async () => {
+    await renderMenu();
+    expect(avatar()?.textContent).toBe('JD');
+    expect(avatar()?.getAttribute('aria-hidden')).toBe('true');
+    expect(triggerGlyph()).toBeNull();
+    expect(trigger().getAttribute('aria-label')).toBe('Account menu, signed in as Jane Doe');
+  });
+
+  const NO_INITIALS: Array<[string, SessionResponse | 'loading' | 'error']> = [
+    ['loading', 'loading'],
+    ['error', 'error'],
+    ['ready without an email', { can_access_admin: false, can_approve: false, actor_email: null }],
+    ['ready with an application id', { can_access_admin: false, can_approve: false, actor_email: '4f3a9c1e-7b2d-4c1a', actor_display_name: 'Jane Doe' }],
+  ];
+  for (const [label, session] of NO_INITIALS) {
+    it(`shows the account glyph, never the borrower glyph, when ${label}`, async () => {
+      await renderMenu(session);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(avatar()).toBeNull();
+      expect(triggerGlyph()).toBe(glyphMarkup('account'));
+      expect(triggerGlyph()).not.toBe(glyphMarkup('user'));
+    });
+  }
+
+  it('never draws the borrower glyph or a navigation glyph in any state', async () => {
+    const forbidden = new Set([glyphMarkup('user'), ...NAVIGATION_ROUTE_IDS.map((id) => glyphMarkup(ROUTES[id].icon))]);
+    for (const session of [SESSION, ...NO_INITIALS.map(([, value]) => value)]) {
+      await renderMenu(session);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      const drawn = triggerGlyph();
+      expect(drawn === null || !forbidden.has(drawn), `trigger glyph for ${JSON.stringify(session)}`).toBe(true);
+    }
   });
 
   it('opens on ArrowDown with focus on the first item and shows identity and role chips', async () => {

@@ -6,6 +6,7 @@
  * DOM, geometry or computed style at 1440x900.
  */
 import type { Locator, Page } from '@playwright/test';
+import { expectAxeClean } from './axe';
 import { expect, test, type FixtureTheme } from './test';
 import { SIGNED_IN_APPROVER, sessionReply } from './data/shellWayfinding';
 
@@ -77,6 +78,55 @@ test.describe('identity menu (shell-06)', () => {
       await expect(trigger).toBeFocused();
     });
   }
+
+  for (const theme of THEMES) {
+    test(`${theme}: the trigger shows the actor's initials inside its 34px box, and passes axe (D-theme-nav-e)`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/');
+      const banner = page.getByRole('banner');
+      const trigger = banner.getByRole('button', { name: 'Account menu, signed in as Jane Doe' });
+      const avatar = trigger.locator('.identity-menu__avatar');
+      await expect(avatar).toHaveText('JD');
+      await expect(avatar).toHaveAttribute('aria-hidden', 'true');
+      await expect(trigger.locator('svg')).toHaveCount(0);
+      const [box, inner] = [await boxOf(trigger), await boxOf(avatar)];
+      expect(box.right - box.left, 'the trigger keeps the 34px icon-button box').toBeCloseTo(34, 0);
+      expect(box.bottom - box.top).toBeCloseTo(34, 0);
+      expect(inner.left >= box.left && inner.right <= box.right && inner.top >= box.top && inner.bottom <= box.bottom, 'the avatar sits inside the trigger').toBe(true);
+      // Still whole beside it: the tenant pill, and nothing over the search.
+      const clipped = await banner.locator('.topbar__pill-tenant').evaluate((el) => el.scrollWidth > el.clientWidth);
+      expect(clipped).toBe(false);
+      const search = await boxOf(banner.getByRole('search'));
+      expect(overlaps(box, search)).toBe(false);
+      await expectAxeClean(page, { key: { route: 'home', state: 'account-avatar' }, theme, known: {} });
+    });
+  }
+
+  test('forced colours keep the avatar a visible circle edged in CanvasText', async ({ app, page }) => {
+    await page.emulateMedia({ forcedColors: 'active' });
+    await app.gotoRoute('/');
+    const avatar = page.getByRole('banner').locator('.identity-menu__avatar');
+    await expect(avatar).toHaveText('JD');
+    const edge = await avatar.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { style: style.borderTopStyle, width: Number.parseFloat(style.borderTopWidth) };
+    });
+    expect(edge.style).toBe('solid');
+    expect(edge.width).toBeGreaterThanOrEqual(1);
+  });
+
+  test('an application-id session shows the account glyph, never initials or the borrower glyph', async ({ app, mockApi, page }) => {
+    mockApi.register('GET', '/api/session', () =>
+      sessionReply({ ...SIGNED_IN_APPROVER, actor_email: '4f3a9c1e-7b2d-4c1a-9e1f-0a1b2c3d4e5f', actor_display_name: null }),
+    );
+    await app.gotoRoute('/');
+    const trigger = page.getByRole('banner').getByTestId('identity-menu-trigger');
+    await expect(trigger.locator('svg')).toHaveCount(1);
+    await expect(trigger.locator('.identity-menu__avatar')).toHaveCount(0);
+    // The account glyph's outer ring (Icon.tsx `account`); the borrower's
+    // `user` glyph has no r=10 circle.
+    await expect(trigger.locator('svg circle[r="10"]')).toHaveCount(1);
+  });
 
   test('a theme picked in the menu repaints the app and the menu marks it', async ({ app, page }) => {
     await app.setTheme('dark');
