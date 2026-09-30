@@ -12,14 +12,18 @@ resolves an aliased ``Annotated`` identically to an inline one, so the
 generated OpenAPI surface is byte-identical; ``tests/fixtures/
 openapi_baseline.json`` pins that.
 
-Defaults stay in the router signature: they are part of the endpoint's
-behaviour, not of the parameter's type.
+Defaults live in ``lead_query_params``, the one dependency every Lead Queue
+read (the ranked list, and the audit-free count and facets) declares them
+through: they are part of the endpoint's behaviour, not of the parameter's
+type. ``LeadQueryParams`` is what that dependency returns, frozen, in the
+declaration order the OpenAPI surface lists.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
-from fastapi import Query
+from fastapi import Depends, Query
 
 # Kept in sync with DatabricksLeadRepository.{DEFAULT_LIMIT, MAX_LIMIT}.
 # Module-level so the router's Query() annotation, backend.api.leads
@@ -364,3 +368,156 @@ LimitParam = Annotated[
         ),
     ),
 ]
+
+ApprovalStatusValue = Literal["pending", "approved", "rejected", "hold", "any"]
+OutreachStatusValue = Literal["none", "queued", "actioned", "sent", "bounced", "replied", "any"]
+FunnelStageValue = Literal[
+    "addressable",
+    "in_the_money",
+    "high_opportunity",
+    "offer_recommended",
+    "approved",
+    "actioned",
+]
+
+
+@dataclass(frozen=True)
+class LeadQueryParams:
+    """Every Lead Queue filter a request carried, exactly as FastAPI parsed it.
+
+    Field order is the OpenAPI parameter order of ``GET /leads`` (pinned by
+    ``tests/unit/test_lead_query_resolution.py``); ``limit`` is not a filter
+    and stays its own dependency (``lead_limit``). Values are raw: resolving
+    them against the actor, a persisted cohort or a Growth Agent handoff is
+    the job of the Lead Queue resolution service.
+    """
+
+    segment: str | None
+    segment_codes: str | None
+    segment_mode: str
+    portfolio_id: str | None
+    state: str | None
+    zip_code: str | None
+    county: str | None
+    states: str | None
+    zips: str | None
+    counties: str | None
+    cities: str | None
+    borrower_ids: str | None
+    target_lender_ref: str | None
+    geography: str | None
+    occupancy: str | None
+    lien_status: str | None
+    lender_relationship: str | None
+    product: str | None
+    loan_product: str | None
+    origination_channel: str | None
+    min_equity_pct_label: str | None
+    min_equity_pct: float | None
+    owner_link: str | None
+    purchase_intent: str | None
+    marketing_eligibility: str
+    consent_status: str | None
+    recency: str | None
+    include_suppressed_for_analytics: bool
+    include_identity_proof: bool
+    approval_status: ApprovalStatusValue
+    outreach_status: OutreachStatusValue
+    assigned_to: str | None
+    aged_days: int | None
+    cohort_id: str | None
+    funnel_stage: FunnelStageValue | None
+
+
+def lead_query_params(
+    segment: str | None = None,
+    segment_codes: SegmentCodesParam = None,
+    segment_mode: SegmentModeParam = "any",
+    portfolio_id: str | None = None,
+    state: StateParam = None,
+    zip_code: ZipParam = None,
+    county: CountyParam = None,
+    states: StatesParam = None,
+    zips: ZipsParam = None,
+    counties: CountiesParam = None,
+    cities: CitiesParam = None,
+    borrower_ids: BorrowerIdsParam = None,
+    target_lender_ref: TargetLenderRefParam = None,
+    geography: GeographyParam = None,
+    occupancy: OccupancyParam = None,
+    lien_status: LienStatusParam = None,
+    lender_relationship: LenderRelationshipParam = None,
+    product: ProductParam = None,
+    loan_product: LoanProductParam = None,
+    origination_channel: OriginationChannelParam = None,
+    min_equity_pct_label: MinEquityPctLabelParam = None,
+    min_equity_pct: MinEquityPctParam = None,
+    owner_link: OwnerLinkParam = None,
+    purchase_intent: PurchaseIntentParam = None,
+    marketing_eligibility: MarketingEligibilityParam = "Eligible only",
+    consent_status: ConsentStatusParam = None,
+    recency: RecencyParam = None,
+    include_suppressed_for_analytics: IncludeSuppressedForAnalyticsParam = False,
+    include_identity_proof: IncludeIdentityProofParam = False,
+    approval_status: ApprovalStatusParam = "any",
+    outreach_status: OutreachStatusParam = "any",
+    assigned_to: AssignedToParam = None,
+    aged_days: AgedDaysParam = None,
+    cohort_id: CohortIdParam = None,
+    funnel_stage: FunnelStageParam = None,
+) -> LeadQueryParams:
+    """FastAPI dependency: the Lead Queue filter parameters, in wire order.
+
+    FastAPI flattens a dependency's parameters into the operation in
+    declaration order, so an endpoint that declares this and then
+    ``lead_limit`` lists exactly the parameters, aliases, defaults and bounds
+    the inline signature did: the committed OpenAPI baseline is unchanged.
+    """
+
+    return LeadQueryParams(
+        segment=segment,
+        segment_codes=segment_codes,
+        segment_mode=segment_mode,
+        portfolio_id=portfolio_id,
+        state=state,
+        zip_code=zip_code,
+        county=county,
+        states=states,
+        zips=zips,
+        counties=counties,
+        cities=cities,
+        borrower_ids=borrower_ids,
+        target_lender_ref=target_lender_ref,
+        geography=geography,
+        occupancy=occupancy,
+        lien_status=lien_status,
+        lender_relationship=lender_relationship,
+        product=product,
+        loan_product=loan_product,
+        origination_channel=origination_channel,
+        min_equity_pct_label=min_equity_pct_label,
+        min_equity_pct=min_equity_pct,
+        owner_link=owner_link,
+        purchase_intent=purchase_intent,
+        marketing_eligibility=marketing_eligibility,
+        consent_status=consent_status,
+        recency=recency,
+        include_suppressed_for_analytics=include_suppressed_for_analytics,
+        include_identity_proof=include_identity_proof,
+        approval_status=approval_status,
+        outreach_status=outreach_status,
+        assigned_to=assigned_to,
+        aged_days=aged_days,
+        cohort_id=cohort_id,
+        funnel_stage=funnel_stage,
+    )
+
+
+def lead_limit(limit: LimitParam = DEFAULT_LEAD_LIMIT) -> int:
+    """FastAPI dependency: the page size, declared after the filters."""
+
+    return limit
+
+
+LeadQueryParamsDep = Annotated[LeadQueryParams, Depends(lead_query_params)]
+LeadLimitDep = Annotated[int, Depends(lead_limit)]
