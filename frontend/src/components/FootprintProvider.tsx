@@ -209,7 +209,7 @@ export function useFootprint(): FootprintContextValue {
 /**
  * Optional variant that returns the generic fallback when rendered
  * outside a `<FootprintProvider>`. Used by components that may be
- * rendered standalone in Storybook / tests (e.g. USChoroplethMap) so
+ * rendered standalone in a unit test or fixture spec (e.g. USChoroplethMap) so
  * those paths don't require spinning up a provider tree.
  */
 export function useOptionalFootprint(): FootprintContextValue {
