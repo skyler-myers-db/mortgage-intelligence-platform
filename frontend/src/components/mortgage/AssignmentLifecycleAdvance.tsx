@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { api } from '../../lib/api';
+import { useQueryClient } from '@tanstack/react-query';
 import { pushEscapeLayer } from '../../lib/escapeStack';
+import { useAdvanceAssignment, useRecordAssignmentOutcome } from '../../lib/mutations/sales';
 import { Button } from '../Primitives';
 import { assignmentStatusLabel } from './LeadTable.logic';
 import type { AssignmentLifecycleStatus, AssignmentOutcome, LeadSummary } from '../../types';
@@ -19,6 +20,10 @@ import type { AssignmentLifecycleStatus, AssignmentOutcome, LeadSummary } from '
  * then confirm "Record <outcome> for <id>?". Cancel and Escape close the
  * picker with no write and hand focus back to "Record outcome"; only Record
  * posts (one POST, pessimistic: the stage moves once the server returned).
+ *
+ * Audit states-09: both writes run on keyed mutations (lib/mutations/sales,
+ * ['mip','sales','lifecycle'|'outcome']), so the Lead Queue's own-write
+ * store counts them and an own advance never raises "Queue updated".
  */
 
 const NEXT_STATUS: Partial<Record<AssignmentLifecycleStatus, AssignmentLifecycleStatus>> = {
@@ -46,28 +51,13 @@ type WriteResult =
   | { ok: false; message: string };
 
 /**
- * One lifecycle write, start to settle; resolves to its result and never
- * rejects. Module helpers, so the component has no try/finally (a React
- * Compiler 1.0 bailout, runtime-03).
+ * A refused write's result. 409 = the server refused an illegal or stale
+ * transition: keep the row honest and show the server's message rather than
+ * faking progress. Settled with .then(ok, err), so the component has no
+ * try/finally (a React Compiler 1.0 bailout, runtime-03).
  */
-async function advanceAssignment(assignmentId: string, next: AssignmentLifecycleStatus): Promise<WriteResult> {
-  try {
-    const result = await api.updateAssignmentStatus(assignmentId, next);
-    return { ok: true, status: result.assignment.status };
-  } catch (err) {
-    // 409 = the server refused an illegal/stale transition; keep the row
-    // honest and let the operator refresh rather than faking progress.
-    return { ok: false, message: err instanceof Error ? err.message : 'Transition refused' };
-  }
-}
-
-async function recordAssignmentOutcome(assignmentId: string, outcome: AssignmentOutcome): Promise<WriteResult> {
-  try {
-    const result = await api.recordAssignmentOutcome(assignmentId, outcome);
-    return { ok: true, status: result.assignment.status };
-  } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : 'Outcome refused' };
-  }
+function refused(fallback: string): (err: unknown) => WriteResult {
+  return (err) => ({ ok: false, message: err instanceof Error ? err.message : fallback });
 }
 
 /** The outcome picker: closed, choosing an outcome, or confirming one. */
@@ -97,6 +87,9 @@ export function AssignmentLifecycleAdvance({
   // when the chunk has the room.
   'use no memo';
 
+  const queryClient = useQueryClient();
+  const advanceMutation = useAdvanceAssignment(queryClient);
+  const outcomeMutation = useRecordAssignmentOutcome(queryClient);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [picker, setPicker] = useState<Picker>(CLOSED);
@@ -150,13 +143,19 @@ export function AssignmentLifecycleAdvance({
   const advance = () => {
     setBusy(true);
     setError(null);
-    void advanceAssignment(assignmentId, next).then(settle);
+    void advanceMutation.mutateAsync({ assignmentId, status: next }).then(
+      (result): WriteResult => ({ ok: true, status: result.assignment.status }),
+      refused('Transition refused'),
+    ).then(settle);
   };
 
   const record = (outcome: AssignmentOutcome) => {
     setBusy(true);
     setError(null);
-    void recordAssignmentOutcome(assignmentId, outcome).then(settle);
+    void outcomeMutation.mutateAsync({ assignmentId, outcome }).then(
+      (result): WriteResult => ({ ok: true, status: result.assignment.status }),
+      refused('Outcome refused'),
+    ).then(settle);
   };
 
   return (

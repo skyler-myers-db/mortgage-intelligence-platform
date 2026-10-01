@@ -144,6 +144,19 @@
   gap: var(--sp-1);
   min-inline-size: 0;
 }
+/* deviation:assignment-lifecycle-stepper: five prototype chips on one line. */
+.lead-row-workflow__steps {
+  flex-wrap: nowrap;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lead-row-workflow__steps .chip { font-size: var(--fs-11); }
+.lead-row-workflow__step--upcoming {
+  background: transparent;
+  color: var(--text-3);
+}
 
 /* Keyboard row cursor (audit tables-03): an active row on the native table,
    drawn with the focus-ring tokens (never a hue of its own) while focus is
@@ -263,12 +276,13 @@
    Shift+Tab from the first row): the table cannot move, and `.main` alone
    scrolls the header clear of the nav. A scroll-state container is not a
    size container, so the table's `cqw` units still resolve against `.main`.
-   An engine without scroll-state queries (WebKit 26) keeps the old
-   behaviour: no margin on the header. */
+   An engine without scroll-state queries (WebKit 26) gets the same rule
+   from useTableScrollClearance's `data-at-block-start` flag (a11y-v2). */
 .tbl-wrap:has(> .lead-table__table) { container-type: scroll-state; }
 @container not scroll-state(scrollable: top) {
   .lead-table__table thead * { scroll-margin-block-start: var(--tbl-focus-clear); }
 }
+.tbl-wrap[data-at-block-start] > .lead-table__table thead * { scroll-margin-block-start: var(--tbl-focus-clear); }
 
 /* Row expand motion (audit motion-08 slice 1, queue part): the expand
    column's one chevron turns a quarter on the expanded row (replacing the

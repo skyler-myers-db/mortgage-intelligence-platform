@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { LeadSummary } from '../../types';
 import { Button, Chip } from '../Primitives';
 import { AssignmentLifecycleAdvance } from './AssignmentLifecycleAdvance';
+import { lazyModule, useLazyModule } from './useLazyModule';
 import {
   assignmentStatusLabel,
   assignmentStatusVariant,
@@ -13,6 +14,10 @@ import {
   leadWorkflowStates,
   type LeadStatusEntry,
 } from './LeadTable.status';
+
+// The lifecycle stepper (critic-06 item d) is its own chunk, loaded when a
+// row with an assignment stage expands: code only, it reads nothing.
+const STEPS_CHUNK = lazyModule(() => import('./AssignmentLifecycleSteps'));
 
 /**
  * Workflow strip of the expanded lead row (audit tables-04). The one-line
@@ -48,6 +53,7 @@ export function LeadRowWorkflowPanel({
   const aging = byKey('aging');
   const lastTouch = byKey('last_touch');
   const stage = lead.assigned_to_email ? assignmentStatusLabel(lead.assignment_status) : '';
+  const steps = useLazyModule(STEPS_CHUNK, Boolean(lead.assignment_status)).module;
 
   return (
     <div className="tbl__expand-inner lead-row-workflow" data-testid={`lead-workflow-${lead.borrower_id}`}>
@@ -80,6 +86,8 @@ export function LeadRowWorkflowPanel({
               {stage}
             </Chip>
           )}
+          {/* deviation:assignment-lifecycle-stepper: every stage at a glance, terminal included. */}
+          {lead.assignment_status && steps?.lifecycleSteps(lead.assignment_status)}
           {lead.assigned_to_email && lead.assignment_status && lead.assignment_id && (
             <AssignmentLifecycleAdvance
               assignmentId={lead.assignment_id}

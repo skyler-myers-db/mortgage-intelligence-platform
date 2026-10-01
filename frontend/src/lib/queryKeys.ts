@@ -46,11 +46,11 @@ export const queryKeys = {
   /** A county's ZIP rollups for one cohort (the Lead Queue's county scope chip). */
   geoCountyZipRollups: (countyFips: string, cohort: readonly unknown[]) =>
     ['mip', 'geo', 'county-zip-rollups', countyFips, ...cohort] as const,
-  salesTeam: () => ['mip', 'sales', 'team'] as const,
   /**
-   * The unfiltered /sales/team roster (Offer's optional assignment: active
-   * loan officers AND sales managers). Distinct from salesTeam(), under which
-   * Lead Queue and Sales ops cache a loan-officer-only list.
+   * The unfiltered /sales/team roster: the one cache entry every reader
+   * shares (runtime-06, lib/salesRoster). Lead Queue and Sales ops narrow it
+   * to loan officers, Offer to active loan officers and sales managers, each
+   * through a `select`; never cache a filtered list under this key.
    */
   salesRoster: () => ['mip', 'sales', 'roster'] as const,
   salesOps: () => ['mip', 'sales', 'ops-snapshot'] as const,

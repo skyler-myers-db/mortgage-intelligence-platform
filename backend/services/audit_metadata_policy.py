@@ -199,6 +199,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # fingerprinted.
         "export_scope",
         "exported_row_count",
+        "matching_row_count",
         "csv_sha256",
         "borrower_ids_sha256",
         "filter_fingerprint",

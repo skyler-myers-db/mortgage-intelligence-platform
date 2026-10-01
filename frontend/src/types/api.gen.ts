@@ -1472,6 +1472,7 @@ export interface ResponseSchemas {
     csv_sha256: string;
     event_type: "LEAD_EXPORT";
     filter_fingerprint: string;
+    matching_row_count: number | null;
     recorded_at: string;
     row_count: number;
     scope: "selected" | "loaded";
@@ -2636,6 +2637,8 @@ export interface RequestSchemas {
     csv_sha256: string;
     /** The Lead Queue query parameters the exported rows were read with (the same string the CSV's `# filters=` metadata line carries). Only their fingerprint is written to the ledger. */
     filters?: { [key: string]: string };
+    /** How many borrowers matched the filters when the file was built (the CSV's `# matching_rows=` line). Absent when unknown; never below row_count. */
+    matching_row_count?: number | null;
     row_count: number;
     scope: "selected" | "loaded";
   };

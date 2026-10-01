@@ -6,7 +6,8 @@
  *  A. every FIXTURE_ROUTES entry, Console closed                      40
  *  B. the nine `product` routes with the Console open                 18
  *  C. shell states: Home evidence drawer, command palette, Genie
- *     panel and degraded; Lead Queue expanded row and empty           12
+ *     panel and degraded; Lead Queue expanded row, empty and the
+ *     Triage deck                                                     14
  *  D. the second `.main` page of Home, Borrower 360, Offer detail      6
  *  E. Lead Queue in compact density                                    2
  *  F. 1280x720: Home, Lead Queue, Borrower 360                         6
@@ -14,7 +15,7 @@
  *     teal / navy / red (bright is A-F)                               12
  *  H. read-failed: Lead Queue, Segments                                4
  *                                                                     --
- *                                                                    100
+ *                                                                    102
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -129,6 +130,7 @@ for (const theme of FIXTURE_THEMES) {
       { route: 'home', state: 'degraded' },
       { route: 'lead-queue', state: 'expanded-row' },
       { route: 'lead-queue', state: 'empty' },
+      { route: 'lead-queue', state: 'triage' },
       // H: the non-bannered failed read (quality-06), health OK.
       { route: 'lead-queue', state: 'read-failed' },
       { route: 'segment-intelligence', state: 'read-failed' },

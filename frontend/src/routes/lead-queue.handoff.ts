@@ -25,6 +25,7 @@ import {
   LEAD_TABLE_PLACE_PARAMS,
   LEAD_TABLE_VIEW_PARAM,
   parsePortfolioCriteria,
+  TRIAGE_MODE_PARAM,
 } from './lead-queue.filters';
 
 /** Portfolio Builder's URL filter keys (URL_FILTER_KEYS), in its order. */
@@ -118,8 +119,8 @@ const NOT_CARRIED_LABELS: Readonly<Record<string, string>> = {
 /** Portfolio filters the queue reads that Portfolio Builder has no control for. */
 const QUEUE_ONLY_PORTFOLIO_KEYS: ReadonlySet<string> = new Set(['loan_product', 'origination_channel']);
 
-/** Not filters: where the reader is in the table, and its column preset. */
-const NEVER_LISTED: ReadonlySet<string> = new Set([...LEAD_TABLE_PLACE_PARAMS, LEAD_TABLE_VIEW_PARAM]);
+/** Not filters: where the reader is in the table, its column preset and the Triage deck. */
+const NEVER_LISTED: ReadonlySet<string> = new Set([...LEAD_TABLE_PLACE_PARAMS, LEAD_TABLE_VIEW_PARAM, TRIAGE_MODE_PARAM]);
 
 function queueStates(searchParams: URLSearchParams): string[] {
   const raw = searchParams.get('states') ?? searchParams.get('state') ?? '';

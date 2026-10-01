@@ -57,6 +57,15 @@ export interface LeadApproveReviewProps {
    * or remounted does not. Default: the drafting -> ready transition only.
    */
   claimDraftLanding?: (borrowerId: string) => boolean;
+  /**
+   * "Review draft again" after a 409 (the Triage deck only, which tracks the
+   * 409 itself; the table passes neither, so its review is unchanged).
+   * Click-only: shown while `stale`.
+   */
+  onRedraft?: () => void;
+  stale?: boolean;
+  /** Names the draft copy as its own scroll region (the Triage deck's decision column). */
+  copyRegionLabel?: string;
 }
 
 export function LeadApproveReview({
@@ -69,6 +78,9 @@ export function LeadApproveReview({
   confirmRef,
   shouldTakeFocus,
   claimDraftLanding,
+  onRedraft,
+  stale = false,
+  copyRegionLabel,
 }: LeadApproveReviewProps) {
   const titleId = useId();
   const { borrowerId, phase, draft, error } = review;
@@ -154,7 +166,11 @@ export function LeadApproveReview({
           </div>
         )}
         {showCopy && draft && (
-          <div className="approval__copy">
+          <div
+            className="approval__copy"
+            role={copyRegionLabel ? 'region' : undefined}
+            aria-label={copyRegionLabel}
+          >
             <dl className="approval__fields">
               <div>
                 <dt className="field__label">Channel</dt>
@@ -192,6 +208,13 @@ export function LeadApproveReview({
         )}
         {error && phase === 'ready' && (
           <div className="status-callout status-callout--danger" role="alert">{error}</div>
+        )}
+        {onRedraft && stale && phase === 'ready' && (
+          <div className="chip-row">
+            <Button type="button" variant="ghost" size="sm" onClick={onRedraft} data-testid="lead-approve-review-redraft">
+              Review draft again
+            </Button>
+          </div>
         )}
       </div>
       <div className="approval__actions">

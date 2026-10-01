@@ -8,7 +8,7 @@
  *    route's natural load receives, so `prepareState` registers their
  *    fixture BEFORE navigation;
  *  - OVERLAY states (`evidence-drawer`, `command-palette`, `genie`,
- *    `filter-menu`, `expanded-row`) are opened after the natural load by
+ *    `filter-menu`, `expanded-row`, `triage`) are opened after the natural load by
  *    `enterState`, which never opens an audited read: the Borrower 360
  *    proof drawer is not among them, and visual.ts's audited-read guard
  *    checks every state after it is entered.
@@ -35,6 +35,7 @@ export type FixtureState =
   | (typeof OVERLAY_STATES)[number]
   | 'filter-menu'
   | 'expanded-row'
+  | 'triage'
   | 'degraded'
   | 'empty'
   | 'read-failed'
@@ -104,6 +105,12 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       break;
     case 'expanded-row':
       await app.expandFirstLeadRow();
+      break;
+    case 'triage':
+      // D-approval-flow-a2: the deck opens on its first card, drafting nothing.
+      await page.getByTestId('lead-triage-enter').click();
+      await expect(page.getByTestId('triage-deck')).toBeVisible();
+      await expect(page.locator('.triage__card .triage__name')).toBeFocused();
       break;
     case 'degraded':
       await expect(page.locator('.degraded-banner').first(), 'the warehouse-down banner is the degraded surface').toBeVisible();

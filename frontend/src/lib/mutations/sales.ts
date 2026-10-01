@@ -1,6 +1,9 @@
 /**
  * Sales-operations writes on the TanStack mutation layer (audit stack-09,
- * wow-power-5 step 1): assign, distribute and log a disposition.
+ * wow-power-5 step 1): assign, distribute, log a disposition, and advance an
+ * assignment's lifecycle or record its outcome (audit states-09: keyed, so
+ * the Lead Queue's own-write store sees them and never reads them as
+ * someone else's change).
  *
  * The distribution strategy is honest. The store allocates round-robin in
  * request order for every strategy (backend/services/sales_state_writes.py),
@@ -14,7 +17,14 @@
  * invalidateOperationalQueries (refetchType 'none'), no shared scope.
  */
 import { useMutation, type QueryClient } from '@tanstack/react-query';
-import type { CallDisposition, LeadAssignment } from '../../types';
+import type {
+  AssignmentLifecycleStatus,
+  AssignmentOutcome,
+  AssignmentOutcomeResponse,
+  CallDisposition,
+  LeadAssignment,
+  LoanOfficerAssignment,
+} from '../../types';
 import { api } from '../api';
 import type { DispositionResponse } from '../apiTypes';
 import type { SalesSendStrategy } from '../apiClients/sales';
@@ -25,6 +35,8 @@ export const salesMutationKeys = {
   assign: ['mip', 'sales', 'assign'] as const,
   distribute: ['mip', 'sales', 'distribute'] as const,
   disposition: ['mip', 'sales', 'disposition'] as const,
+  lifecycle: ['mip', 'sales', 'lifecycle'] as const,
+  outcome: ['mip', 'sales', 'outcome'] as const,
 };
 
 /** The strategy a distribution to these loan officers really runs. */
@@ -120,6 +132,52 @@ export function useLogDisposition(queryClient: QueryClient) {
       mutationKey: salesMutationKeys.disposition,
       mutationFn: ({ borrowerId, payload, requestId }) =>
         api.logDisposition(borrowerId, payload, undefined, requestId),
+      networkMode: 'always',
+      retry: false,
+      onSuccess: () => {
+        void invalidateOperationalQueries(queryClient);
+      },
+    },
+    queryClient,
+  );
+}
+
+export interface AdvanceAssignmentVariables {
+  assignmentId: string;
+  status: AssignmentLifecycleStatus;
+}
+
+export interface RecordAssignmentOutcomeVariables {
+  assignmentId: string;
+  outcome: AssignmentOutcome;
+}
+
+/** One legal lifecycle step; the server owns legality (an illegal or stale step 409s). */
+export function useAdvanceAssignment(queryClient: QueryClient) {
+  return useMutation<
+    { assignment: LoanOfficerAssignment; audit_event_id?: string | null },
+    Error,
+    AdvanceAssignmentVariables
+  >(
+    {
+      mutationKey: salesMutationKeys.lifecycle,
+      mutationFn: ({ assignmentId, status }) => api.updateAssignmentStatus(assignmentId, status),
+      networkMode: 'always',
+      retry: false,
+      onSuccess: () => {
+        void invalidateOperationalQueries(queryClient);
+      },
+    },
+    queryClient,
+  );
+}
+
+/** The terminal step: the recorded outcome, with its transactional audit row. */
+export function useRecordAssignmentOutcome(queryClient: QueryClient) {
+  return useMutation<AssignmentOutcomeResponse, Error, RecordAssignmentOutcomeVariables>(
+    {
+      mutationKey: salesMutationKeys.outcome,
+      mutationFn: ({ assignmentId, outcome }) => api.recordAssignmentOutcome(assignmentId, outcome),
       networkMode: 'always',
       retry: false,
       onSuccess: () => {

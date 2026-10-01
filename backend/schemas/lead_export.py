@@ -1,13 +1,17 @@
 """Wire contract for the audited Lead Queue CSV export receipt.
 
 The CSV bytes are produced in the browser from the ``/api/leads`` payload the
-operator already saw (no server-streamed export, an owner decision recorded in
-the audit register, tables-08). What the server owns is the LEDGER ENTRY: the
-client must obtain a ``LEAD_EXPORT`` receipt before the download starts, and
-the receipt carries what an auditor needs to tie a file on disk back to a
-decision -- the actor, the filter fingerprint, the exported row count, the
-SHA-256 of the file bytes and the SHA-256 of the borrower-id list, the latter
-recomputed server-side from the ids the client sends.
+operator already saw (a server-streamed export was declined on the merits
+(wave-5 ruling 2026-09-30): governance-real-data-review.md §2 per-borrower
+redistribution, Design System Principle 03, scale and egress of the approval
+bypass; tables-08). What the server owns is the LEDGER ENTRY: the client must
+obtain a ``LEAD_EXPORT`` receipt before the download starts, and the receipt
+carries what an auditor needs to tie a file on disk back to a decision -- the
+actor, the filter fingerprint, the exported row count, the SHA-256 of the
+file bytes and the SHA-256 of the borrower-id list, the latter recomputed
+server-side from the ids the client sends. A loaded-rows export also states
+how many borrowers matched the filters (``matching_row_count``), so the
+ledger says the file was partial (D-approval-flow-b).
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.lead_query import MAX_LEAD_LIMIT
@@ -80,6 +84,15 @@ class LeadExportReceiptRequest(BaseModel):
             "Only their fingerprint is written to the ledger."
         ),
     )
+    matching_row_count: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "How many borrowers matched the filters when the file was built "
+            "(the CSV's `# matching_rows=` line). Absent when unknown; never "
+            "below row_count."
+        ),
+    )
 
     @field_validator("csv_sha256")
     @classmethod
@@ -104,6 +117,13 @@ class LeadExportReceiptRequest(BaseModel):
     def _bounded_filters(cls, value: dict[str, str]) -> dict[str, str]:
         return validate_export_filters(value)
 
+    @model_validator(mode="after")
+    def _matching_covers_the_file(self) -> LeadExportReceiptRequest:
+        # A partial file can never claim fewer matching borrowers than it holds.
+        if self.matching_row_count is not None and self.matching_row_count < self.row_count:
+            raise ValueError("matching_row_count must not be below row_count")
+        return self
+
 
 class LeadExportReceipt(BaseModel):
     """The ledger entry the download waits for."""
@@ -117,3 +137,4 @@ class LeadExportReceipt(BaseModel):
     borrower_ids_sha256: str
     filter_fingerprint: str
     recorded_at: str
+    matching_row_count: int | None = None

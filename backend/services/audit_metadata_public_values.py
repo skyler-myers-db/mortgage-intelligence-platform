@@ -524,7 +524,7 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         ):
             raise AuditMetadataValueViolation(field, "must be a bounded whole number of seconds")
     _assert_approval_request_values(metadata)
-    for field, value in _metadata_values_for(metadata, {"exported_row_count"}):
+    for field, value in _metadata_values_for(metadata, {"exported_row_count", "matching_row_count"}):
         if value is None:
             continue
         try:

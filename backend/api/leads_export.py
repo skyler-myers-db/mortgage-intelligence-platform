@@ -13,9 +13,12 @@ middleware (``BackpressureController.classify``), so this write shares the
 120/min budget with approvals and assignments; ``tests/unit/
 test_leads_export_receipt.py`` pins that classification.
 
-Not here, by owner decision recorded in the register (tables-08 step 2): a
-server-streamed full-cohort export. The bytes stay client-side, drawn from
-the ``/api/leads`` payload the operator already saw.
+Not here (tables-08 step 2): a server-streamed full-cohort export, declined
+on the merits (wave-5 ruling 2026-09-30): governance-real-data-review.md §2
+per-borrower redistribution, Design System Principle 03, scale and egress of
+the approval bypass. There is no export stream; the bytes stay client-side,
+drawn from the ``/api/leads`` payload the operator already saw, and the
+receipt states the partial scope (matching_row_count).
 """
 
 from __future__ import annotations

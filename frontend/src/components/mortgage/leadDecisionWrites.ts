@@ -13,7 +13,7 @@
  * returned true), and a bulk row reports into its run instead of a toast.
  */
 import type { LeadSummary } from '../../types';
-import { clientFailureReason } from '../../lib/apiTransport';
+import { ApiError, clientFailureReason } from '../../lib/apiTransport';
 import { markUnrecordedWrite } from '../../lib/sessionStatus';
 import type { ApproveResult, OutreachDraftResult, RejectResult, ReviewMode } from '../../lib/apiTypes';
 import {
@@ -50,6 +50,12 @@ export interface ApproveExtras {
   reviewMode?: Extract<ReviewMode, 'individual' | 'triage'>;
   /** A bulk run: the offers its gate previewed (the in-run offer check). */
   coveredOfferCodes?: ReadonlySet<string> | null;
+  /**
+   * The approve POST answered 409 (the draft or the row went stale): told
+   * before the outcome resolves, so a review can offer "Review draft again"
+   * (the Triage deck). Never re-drafts by itself.
+   */
+  onConflict?: () => void;
 }
 
 /** One bulk rejection run's shared inputs, as each of its rows sends them (leadBulkRejectWrite). */
@@ -147,6 +153,7 @@ export function approveWithReport(
     (err: unknown): BulkRowReport => {
       const failure = decisionFailure(err);
       if (failure === 'aborted') return { outcome: 'aborted', message: null };
+      if (err instanceof ApiError && err.status === 409) extras.onConflict?.();
       // The drafted offer was never previewed: nothing was sent; the row
       // stays selected for an individual review.
       if (err instanceof OfferNotPreviewedError) return { outcome: 'backend', message: OFFER_NOT_PREVIEWED };

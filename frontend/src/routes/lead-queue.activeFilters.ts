@@ -6,6 +6,7 @@ import {
   LEAD_TABLE_PLACE_PARAMS,
   LEAD_TABLE_VIEW_PARAM,
   parseLeadBound,
+  TRIAGE_MODE_PARAM,
   type LeadBoundDimension,
 } from './lead-queue.filters';
 
@@ -144,10 +145,13 @@ export function searchParamsWithoutFilter(
 }
 
 /**
- * Display state, not filters: the column preset and the table place (sort,
- * direction, expanded row). They never enable Clear all and survive it.
+ * Display state, not filters: the column preset, the table place (sort,
+ * direction, expanded row) and the Triage deck mode. They never enable Clear
+ * all and survive it.
  */
-const DISPLAY_PARAMS: ReadonlySet<string> = new Set([LEAD_TABLE_VIEW_PARAM, ...LEAD_TABLE_PLACE_PARAMS]);
+const DISPLAY_PARAMS: ReadonlySet<string> = new Set([
+  LEAD_TABLE_VIEW_PARAM, ...LEAD_TABLE_PLACE_PARAMS, TRIAGE_MODE_PARAM,
+]);
 
 /** True when the URL carries anything but the column preset and the table place. */
 export function hasLeadQueueFilters(searchParams: URLSearchParams): boolean {

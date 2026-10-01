@@ -1,8 +1,10 @@
 """Wire contract for the audited Genie answer CSV export receipt.
 
 The CSV is built in the browser from rows the Genie answer already holds (at
-most 5,000; no server-streamed or full-cohort export, an owner decision in the
-2026-09-21 audit register, genie-06). What the server owns is the LEDGER
+most 5,000; a server-streamed or full-cohort export was declined on the merits
+(wave-5 ruling 2026-09-30): governance-real-data-review.md §2 per-borrower
+redistribution, Design System Principle 03, scale and egress of the approval
+bypass; genie-06). What the server owns is the LEDGER
 ENTRY: the browser asks for a ``GENIE_ANSWER_EXPORT`` receipt before the
 download starts and downloads nothing unless it arrives. The declaration
 carries identifiers, counts and two digests only; ``extra='forbid'`` keeps

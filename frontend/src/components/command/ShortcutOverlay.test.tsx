@@ -15,6 +15,7 @@ import { OPEN_SHORTCUTS_EVENT, openShortcutOverlay, registerKeyBinding } from '.
 import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { ShortcutOverlayHost } from './ShortcutOverlayHost';
 import { leadTableHotkeys } from '../mortgage/LeadTable.keymap';
+import { triageHotkeys } from '../mortgage/TriageDeck.keys';
 
 // The sheet is its own lazy chunk: transform it once up front, so the host's
 // dynamic import resolves in a few microtasks rather than racing a loaded
@@ -84,6 +85,38 @@ describe('ShortcutOverlay', () => {
     // The sheet's own `?` binding is listed with the rest.
     expect(panel.textContent).toContain('Show keyboard shortcuts');
     expect(panel.querySelector('[data-testid="shortcut-sheet-off"]')).toBeNull();
+  });
+
+  it('lists the Triage deck first; the suspended table registers nothing (D-approval-flow-a2)', async () => {
+    const tableKeys = leadTableHotkeys({
+      approverActive: true,
+      suspended: true,
+      move: vi.fn(),
+      toggleCursorRow: () => false,
+      toggleSelectCursorRow: vi.fn(),
+      extendSelectionToCursor: vi.fn(),
+      reviewCursorRow: vi.fn(),
+      rejectCursorRow: vi.fn(),
+      openBulkGate: vi.fn(),
+      openBulkRejectGate: vi.fn(),
+    });
+    expect(tableKeys).toEqual([]);
+    const deckKeys = triageHotkeys({ review: vi.fn(), reject: vi.fn(), skip: vi.fn(), back: vi.fn(), openOffer: vi.fn() });
+    expect(deckKeys.length, 'at most four sheet rows').toBeLessThanOrEqual(4);
+    // The fixture's table binding stands in for a page whose deck is open;
+    // drop it so only the deck and the global scope remain.
+    offs.shift()?.();
+    for (const hotkey of deckKeys) {
+      offs.push(registerKeyBinding({
+        id: hotkey.id, scope: 'triage', keys: hotkey.keys, description: hotkey.description, run: vi.fn(),
+      }));
+    }
+    act(() => openShortcutOverlay());
+    const panel = await waitForSheet();
+    const groups = [...panel.querySelectorAll('.cmdk__group-label')].map((label) => label.textContent);
+    expect(groups).toEqual(['Triage deck', 'Everywhere']);
+    const move = [...panel.querySelectorAll('.cmdk__row')].find((row) => row.textContent?.includes('Skip to the next borrower'));
+    expect([...(move?.querySelectorAll('kbd') ?? [])].map((kbd) => kbd.textContent)).toEqual(['J', '→', 'K', '←']);
   });
 
   it('lists Shift+A and Shift+R on one row, so the table group does not scroll (tables-07)', async () => {

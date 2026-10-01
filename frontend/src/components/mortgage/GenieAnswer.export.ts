@@ -27,8 +27,11 @@ export type { GenieAnswerExportBase, GenieRowsExportTarget } from './GenieAnswer
  * The audited Genie answer CSV (audit 2026-09-21 `genie-06`, slice 2).
  *
  * Order of operations is the contract:
- *   1. build the CSV text once, from the rows the answer ALREADY holds (no
- *      full-cohort or server-streamed export: an owner decision);
+ *   1. build the CSV text once, from the rows the answer ALREADY holds (a
+ *      full-cohort or server-streamed export was declined on the merits
+ *      (wave-5 ruling 2026-09-30): governance-real-data-review.md §2
+ *      per-borrower redistribution, Design System Principle 03, scale and
+ *      egress of the approval bypass);
  *   2. hash the text and the column keys in the browser;
  *   3. POST the declaration (ids, counts, digests; never question text) and
  *      WAIT for the GENIE_ANSWER_EXPORT receipt;

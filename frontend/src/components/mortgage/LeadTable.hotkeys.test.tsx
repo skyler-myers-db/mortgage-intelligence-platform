@@ -123,6 +123,7 @@ function lead(borrowerId: string): LeadSummary {
     rate_spread_bps: 120,
     opportunity_score: 88,
     confidence: 80,
+    recommended_offer_code: 'refi',
     recommended_offer: 'Refinance',
     why_now: 'test',
     evidence_ids: ['ev-1'],

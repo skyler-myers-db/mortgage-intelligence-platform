@@ -134,7 +134,6 @@ describe('what may persist: default deny', () => {
     ['growth agent', queryKeys.growthAgent()],
     ['growth agent capabilities', queryKeys.growthAgentCapabilities()],
     ['workspace', queryKeys.workspace()],
-    ['sales team', queryKeys.salesTeam()],
     ['sales roster', queryKeys.salesRoster()],
     ['sales ops', queryKeys.salesOps()],
     ['campaigns', queryKeys.campaigns()],
