@@ -183,7 +183,11 @@ test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
   }
 
   for (const restored of [false, true]) {
-    test(`${restored ? 'non-vacuity, nav margin restored inside it: ' : ''}a control in view in the approval review dialog takes focus ${restored ? 'and the dialog over-scrolls' : 'without the dialog scrolling'}`, async ({ app, page }) => {
+    test(`${restored ? 'non-vacuity, nav margin restored inside it: ' : ''}a control in view in the approval review dialog takes focus ${restored ? 'and the dialog over-scrolls' : 'without the dialog scrolling'}`, async ({ app, browserName, page }) => {
+      test.fixme(
+        browserName === 'webkit' && process.platform === 'linux',
+        'w5-shell-nav-followups (W5c, owns the a11y-v2 nested-scroller clearance) · CI Linux WebKit: the harness cannot place a control within 20px of the review dialog\'s top (the precondition message carries the dialog metrics); the clearance is proven in Chromium and macOS WebKit',
+      );
       await app.gotoRoute('/lead-queue');
       await page.getByTestId(`lead-approve-${ELIGIBLE}`).click();
       const dialog = page.locator('dialog.lead-approve-dialog[open]');
@@ -218,9 +222,10 @@ test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
         await frames();
         const delta = Math.abs(scroller.scrollTop - before);
         room.remove();
-        return { inView: box.top >= port.top && box.bottom <= port.bottom && box.top - port.top < 20, delta, focused: document.activeElement === control };
+        const metrics = `scrollTop ${before} of ${scroller.scrollHeight - scroller.clientHeight}; control ${(box.top - port.top).toFixed(1)}..${(box.bottom - port.top).toFixed(1)} in ${port.height.toFixed(1)}`;
+        return { inView: box.top >= port.top && box.bottom <= port.bottom && box.top - port.top < 20, delta, focused: document.activeElement === control, metrics };
       });
-      expect(moved.inView, 'precondition: the control sits within 20px of the dialog\'s top, in full view').toBe(true);
+      expect(moved.inView, `precondition: the control sits within 20px of the dialog's top, in full view (${moved.metrics})`).toBe(true);
       expect(moved.focused).toBe(true);
       if (restored) expect(moved.delta, 'the nav margin over-scrolls the dialog').toBeGreaterThan(40);
       else expect(moved.delta, 'the dialog does not move').toBeLessThanOrEqual(1);
@@ -376,6 +381,10 @@ test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
   });
 
   test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end', async ({ app, browserName, mockApi, page }) => {
+    test.skip(
+      browserName === 'webkit' && process.platform === 'linux',
+      'Linux WebKit never reveals a focused pinned control (the defect is macOS WebKit\'s; W5a CI reached 0), so this twin cannot be non-vacuous there; the invariance test above still runs in every engine',
+    );
     registerQueueLayoutLeads(mockApi);
     await app.gotoRoute('/lead-queue');
     await app.openConsole();
