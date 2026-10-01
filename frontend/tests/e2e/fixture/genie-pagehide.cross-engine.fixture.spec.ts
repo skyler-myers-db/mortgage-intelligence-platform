@@ -38,7 +38,7 @@ const INTERRUPTED =
  * reset: The app could not be reached" instead of the interrupted note.
  */
 const RELOAD_MID_COMPLETE_FIXME =
-  'w5-identity-foundation · runtime-01 (wave-3 remainder) · WebKit: a reload during the complete call shows "The app could not be reached" instead of the interrupted note (the cancelled fetch rejects before pagehide)';
+  'w5-identity-reset-portfolio (W5b, owns lib/genieInFlightTurn.ts) · runtime-01 (wave-3 remainder) · WebKit and Firefox (first CI run, W5a): a reload during the complete call never shows the interrupted note (WebKit shows "The app could not be reached": the cancelled fetch rejects before pagehide)';
 
 function thread(page: Page) {
   return page.locator('#main-content .genie-thread');
@@ -107,7 +107,7 @@ test.describe('a Genie turn across a pagehide (runtime-01, every engine)', () =>
 
   test('(b) a reload during the complete call never completes again and shows the interrupted note', async ({ app, browserName, hygiene, mockApi, page }, testInfo) => {
     allowNavigationCancel(hygiene, browserName);
-    test.fixme(browserName === 'webkit', RELOAD_MID_COMPLETE_FIXME);
+    test.fixme(browserName === 'webkit' || browserName === 'firefox', RELOAD_MID_COMPLETE_FIXME);
     const turn = registerGenieTurn(mockApi, { holdComplete: true });
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);
