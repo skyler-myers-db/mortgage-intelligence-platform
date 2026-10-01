@@ -78,8 +78,11 @@ interface GrowthAgentRunSlotProps {
 export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRunSlotProps) {
   const here = agent.runOrigin === origin;
   const composePlan = agent.composePlan;
+  const latestRun = agent.latestGrowthRun;
+  const { runSave } = agent;
   // Set by Compose again: the card that answers it takes focus once (critic-01).
   const [focusNextCard, setFocusNextCard] = useState(false);
+  const saveHere = latestRun !== null && runSave.runId === latestRun.run_id;
   return (
     <>
       {agent.activeRun?.origin === origin && (
@@ -90,11 +93,18 @@ export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRu
           {agent.growthAgentError}
         </div>
       )}
-      {here && agent.latestGrowthRun && (
+      {here && latestRun && (
         <GrowthAgentRunCard
-          run={agent.latestGrowthRun}
+          run={latestRun}
           onOpenRoute={onOpenRoute}
           renderSourceAssetChip={renderSourceAssetChip}
+          save={{
+            cadence: agent.agentCadence,
+            pending: saveHere && runSave.pending,
+            savedName: saveHere ? runSave.saved?.name ?? null : null,
+            errorMessage: saveHere ? runSave.errorMessage : null,
+            onSave: () => runSave.save(latestRun, agent.agentCadence),
+          }}
         />
       )}
       {origin === 'workflows' && composePlan && (

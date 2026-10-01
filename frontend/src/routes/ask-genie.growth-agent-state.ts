@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { RECENT_RUNS_LIMIT } from '../lib/apiClients/growthAgentRuns';
 import { queryKeys } from '../lib/queryKeys';
 import type {
   ComposedPlan,
@@ -17,6 +18,7 @@ import type {
 import { diffComposedPlans, planScopeChanged, type PlanDiff } from './ask-genie.compose-plan-diff';
 import { mergeExecutedPlan, useComposedPlanExecution } from './ask-genie.compose-plan-execute';
 import { parseGrowthAgentStateInput } from './ask-genie.growth-agent.helpers';
+import { useGrowthRunSave } from './ask-genie.growth-run-save';
 
 /**
  * Run one handler's request as a promise chain: `onValue` with the answer
@@ -90,7 +92,6 @@ export function useGrowthAgentWorkspace() {
     'Find prime refinance and listed-for-sale opportunities across current coverage.',
   );
   const [promptAgentPending, setPromptAgentPending] = useState(false);
-  const [promptAgentPendingAction, setPromptAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentPending, setGrowthAgentPending] = useState<GrowthAgentWorkflowId | null>(null);
   const [growthAgentPendingAction, setGrowthAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [monitorPending, setMonitorPending] = useState<string | null>(null);
@@ -110,9 +111,14 @@ export function useGrowthAgentWorkspace() {
   // (clearGrowthAgentFeedback leaves it), so a recompose is diffed against it.
   const [reviewedBaseline, setReviewedBaseline] = useState<{ plan: ComposedPlan; snapshot: GrowthAgentComposeSnapshot } | null>(null);
   const [planChanges, setPlanChanges] = useState<GrowthAgentPlanChanges | null>(null);
+  const queryClient = useQueryClient();
   const planExecution = useComposedPlanExecution({
     onExecuted: (result, request) => setComposePlan((current) => mergeExecutedPlan(current, result, request)),
   });
+
+  function invalidateRunHistory() {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.growthAgentRuns(RECENT_RUNS_LIMIT) });
+  }
 
   function beginRun(origin: GrowthAgentRunOrigin, label: string, kind: GrowthAgentRunKind = 'workflow') {
     setRunOrigin(origin);
@@ -145,6 +151,20 @@ export function useGrowthAgentWorkspace() {
     refetchOnWindowFocus: false,
   });
 
+  const runSave = useGrowthRunSave({
+    onSaved: (runId, monitor) => {
+      setLatestGrowthRun((current) => (current?.run_id === runId ? { ...current, monitor } : current));
+      void growthAgentQuery.refetch();
+      invalidateRunHistory();
+    },
+  });
+
+  /** A run landed: show it and let the run history read again when it is showing. */
+  function showRun(result: GrowthAgentRunResponse) {
+    setLatestGrowthRun(result);
+    invalidateRunHistory();
+  }
+
   function runGrowthAgentWorkflow(workflow: GrowthAgentWorkflow, saveMonitor: boolean): Promise<void> {
     setRunOrigin('workflows');
     const parsed = parseGrowthAgentStateInput(agentStateText);
@@ -167,7 +187,7 @@ export function useGrowthAgentWorkspace() {
         monitor_name: saveMonitor ? `${workflow.title}${stateSuffix}` : null,
       }),
       (result) => {
-        setLatestGrowthRun(result);
+        showRun(result);
         return saveMonitor ? growthAgentQuery.refetch() : undefined;
       },
       (err) => setGrowthAgentError(err instanceof Error ? err.message : 'Growth Agent workflow failed.'),
@@ -179,7 +199,12 @@ export function useGrowthAgentWorkspace() {
     );
   }
 
-  function runMortgageGrowthAgentPrompt(saveMonitor: boolean): Promise<void> {
+  /**
+   * Plan reviewed workflow: the model picks one reviewed workflow and the run
+   * is shown. It never saves (audit `genie-09` part 1): a watchlist is saved
+   * from the run card, from exactly the run shown, with no second plan.
+   */
+  function runMortgageGrowthAgentPrompt(): Promise<void> {
     setRunOrigin('workflows');
     const parsed = parseGrowthAgentStateInput(agentStateText);
     const prompt = agentPrompt.trim();
@@ -194,27 +219,21 @@ export function useGrowthAgentWorkspace() {
       return Promise.resolve();
     }
     setPromptAgentPending(true);
-    setPromptAgentPendingAction(saveMonitor ? 'save' : 'run');
-    beginRun('workflows', saveMonitor ? 'Saving your objective as a reviewed watchlist' : 'Planning a reviewed workflow for your objective');
+    beginRun('workflows', 'Planning a reviewed workflow for your objective');
     setLatestGrowthRun(null);
     setGrowthAgentError(null);
-    const stateSuffix = parsed.states.length > 0 ? ` - ${parsed.states.join(', ')}` : '';
     return settle(
       () => api.runMortgageGrowthAgent({
         prompt,
         states: parsed.states,
-        save_monitor: saveMonitor,
+        save_monitor: false,
         cadence: agentCadence,
-        monitor_name: saveMonitor ? `Mortgage Growth Agent${stateSuffix}` : null,
+        monitor_name: null,
       }),
-      (result) => {
-        setLatestGrowthRun(result);
-        return saveMonitor ? growthAgentQuery.refetch() : undefined;
-      },
+      showRun,
       (err) => setGrowthAgentError(err instanceof Error ? err.message : 'Mortgage Growth Agent failed.'),
       () => {
         setPromptAgentPending(false);
-        setPromptAgentPendingAction(null);
         setActiveRun(null);
       },
     );
@@ -323,7 +342,7 @@ export function useGrowthAgentWorkspace() {
           : null,
       }),
       (result) => {
-        setLatestGrowthRun(result);
+        showRun(result);
         return saveMonitor ? growthAgentQuery.refetch() : undefined;
       },
       (err) => setGrowthAgentError(err instanceof Error ? err.message : 'Custom Growth Agent workflow failed.'),
@@ -344,7 +363,7 @@ export function useGrowthAgentWorkspace() {
     return settle(
       () => api.rerunGrowthAgentMonitor(monitor.monitor_id, {}),
       (result) => {
-        setLatestGrowthRun(result);
+        showRun(result);
         return growthAgentQuery.refetch();
       },
       (err) => setGrowthAgentError(err instanceof Error ? err.message : 'Saved Growth Agent watchlist rerun failed.'),
@@ -386,6 +405,9 @@ export function useGrowthAgentWorkspace() {
   const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
   const workflows = growthAgentQuery.data?.workflows ?? growthAgentCapabilitiesQuery.data?.workflows ?? [];
   const monitors = growthAgentQuery.data?.monitors ?? growthAgentCapabilitiesQuery.data?.monitors ?? [];
+  const schedulerState = growthAgentQuery.data?.scheduler_state
+    ?? growthAgentCapabilitiesQuery.data?.scheduler_state
+    ?? 'unavailable';
   const agentBusy = growthAgentPending !== null || promptAgentPending || composePending !== null || planExecution.pending || monitorPending !== null || monitorDraftPending !== null;
 
   return {
@@ -396,7 +418,6 @@ export function useGrowthAgentWorkspace() {
     agentPrompt,
     setAgentPrompt,
     promptAgentPending,
-    promptAgentPendingAction,
     growthAgentPending,
     growthAgentPendingAction,
     monitorPending,
@@ -413,6 +434,8 @@ export function useGrowthAgentWorkspace() {
     composeSnapshot,
     planExecution,
     planChanges,
+    runSave,
+    schedulerState,
     runOrigin,
     activeRun,
     workflowsLoading: growthAgentQuery.isPending,

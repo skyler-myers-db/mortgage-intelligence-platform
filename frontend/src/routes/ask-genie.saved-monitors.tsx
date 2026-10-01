@@ -1,9 +1,23 @@
 import { Button, Chip } from '../components/Primitives';
 import type { GrowthAgentMonitor } from '../types';
+import type { GrowthAgentSchedulerState } from '../types/growthAgent';
 import { formatGrowthAgentCount } from './ask-genie.growth-run-card';
+
+/**
+ * deviation:growth-agent-scheduled-run-status: each row says whether scheduled
+ * runs are on, from the scheduler job's real state (audit 2026-09-21
+ * flow-08 slice 2), instead of a hard-coded paused string.
+ */
+export const SCHEDULED_RUN_STATUS: Record<GrowthAgentSchedulerState, string> = {
+  active: 'scheduled runs on',
+  paused: 'scheduled runs off',
+  unavailable: 'scheduled-run status unavailable',
+};
 
 interface SavedGrowthAgentMonitorsProps {
   monitors: GrowthAgentMonitor[];
+  /** A missing state means unavailable. */
+  schedulerState?: GrowthAgentSchedulerState;
   monitorPending: string | null;
   draftPending: string | null;
   actionsDisabled: boolean;
@@ -14,6 +28,7 @@ interface SavedGrowthAgentMonitorsProps {
 
 export function SavedGrowthAgentMonitors({
   monitors,
+  schedulerState = 'unavailable',
   monitorPending,
   draftPending,
   actionsDisabled,
@@ -39,7 +54,7 @@ export function SavedGrowthAgentMonitors({
                 <span>{monitor.name}</span>
                 <span>
                   {monitor.cadence === 'weekly' ? 'Weekly interval' : 'Daily interval'}
-                  {' · scheduler paused'}
+                  {` · ${SCHEDULED_RUN_STATUS[schedulerState]}`}
                 </span>
                 <Chip variant={inactive ? 'warning' : 'success'}>
                   {monitor.status === 'active'

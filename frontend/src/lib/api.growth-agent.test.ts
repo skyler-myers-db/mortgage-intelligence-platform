@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
+import { growthAgentRunsApi } from './apiClients/growthAgentRuns';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -241,5 +242,42 @@ describe('growth agent API client', () => {
     expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.channels).toEqual(['slack', 'teams']);
     expect(body.limit).toBe(5);
+  });
+});
+
+describe('growth agent run-ledger client (genie-09)', () => {
+  it('is its own lazy module, not spread into the initial api object', () => {
+    expect(api).not.toHaveProperty('growthAgentRuns');
+    expect(api).not.toHaveProperty('saveGrowthAgentRunWatchlist');
+  });
+
+  it('reads the caller\'s recent runs with a bounded limit and no body', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, []);
+    });
+
+    await growthAgentRunsApi.growthAgentRuns(10);
+
+    expect(calls[0].path).toBe('/api/v1/growth-agent/runs?limit=10');
+    expect(calls[0].init?.method).toBeUndefined();
+  });
+
+  it('saves exactly one run as a watchlist: encoded run id, the shown hash, a request id', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, { monitor_id: 'm-1', name: 'IL Refi Watch' });
+    });
+
+    await growthAgentRunsApi.saveGrowthAgentRunWatchlist('run/1', { tool_result_hash: 'a'.repeat(64), cadence: 'weekly' });
+
+    expect(calls[0].path).toBe('/api/v1/growth-agent/runs/run%2F1/monitors');
+    expect(calls[0].init?.method).toBe('POST');
+    expect(new Headers(calls[0].init?.headers).get('Content-Type')).toBe('application/json');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body).toEqual({ tool_result_hash: 'a'.repeat(64), cadence: 'weekly', request_id: body.request_id });
+    expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
   });
 });

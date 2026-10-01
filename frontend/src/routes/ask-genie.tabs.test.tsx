@@ -237,10 +237,8 @@ describe('/ask-genie page tabs', () => {
   // columns (e.g. 'borrower_360.in_the_money',
   // backend/services/growth_agent_workflows.py) and the fixture harness's
   // read 'Governed SQL'. Plain lender wording for them is a backend copy
-  // follow-up; this lint neither fixes nor vouches for it. Emptying the
-  // monitors also leaves out a saved monitor's row, whose hard-coded
-  // ' · scheduler paused' status belongs to audit `flow-08` (a capability
-  // check replaces it there), so this lint does not vouch for that row either.
+  // follow-up; this lint neither fixes nor vouches for it. A saved monitor's
+  // row is linted separately below, once per scheduled-run state (flow-08).
   //
   // One mount per case: the harness re-renders ONE root, and a MemoryRouter
   // keeps the location it first mounted with, so a second mount() inside one
@@ -278,4 +276,25 @@ describe('/ask-genie page tabs', () => {
       }
     },
   );
+
+  // flow-08 slice 2: the saved-monitor row and the interval hint say whether
+  // scheduled runs are on from the server's state, in lender words, and never
+  // the word 'scheduler'. A missing field reads as unavailable.
+  it.each([
+    ['active', 'Weekly interval · scheduled runs on', 'Saved watchlists refresh on the scheduled run and create review drafts only. Nothing is sent.'],
+    ['paused', 'Weekly interval · scheduled runs off', 'Scheduled runs are off. Saved watchlists refresh only when you run them.'],
+    ['unavailable', 'Weekly interval · scheduled-run status unavailable', 'Scheduled-run status could not be read. Run a saved watchlist to refresh it.'],
+    [undefined, 'Weekly interval · scheduled-run status unavailable', 'Scheduled-run status could not be read. Run a saved watchlist to refresh it.'],
+  ] as const)('a %s scheduler reads as its state on the monitor row and the interval hint', async (state, row, hint) => {
+    growthAgent.mockResolvedValue({ ...HOME, workflows: [], monitors: [MONITOR], ...(state ? { scheduler_state: state } : {}) });
+    mount('/ask-genie?tab=monitors');
+    await waitUntil(() => container.textContent?.includes('Mortgage Growth Agent - IL') ?? false);
+
+    const monitorRow = activePanel().querySelector('.growth-agent-monitor__main span:nth-child(2)');
+    expect(monitorRow?.textContent).toBe(row);
+    expect(activePanel().textContent).not.toMatch(/scheduler/i);
+    openTab('Workflows');
+    expect(activePanel().textContent).toContain(hint);
+    expect(activePanel().textContent).not.toMatch(/scheduler/i);
+  });
 });

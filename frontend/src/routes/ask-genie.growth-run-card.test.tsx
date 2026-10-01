@@ -6,7 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GrowthAgentRunResponse } from '../types';
-import { GrowthAgentRunCard } from './ask-genie.growth-run-card';
+import { GrowthAgentRunCard, type GrowthRunSaveControls } from './ask-genie.growth-run-card';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -129,17 +129,90 @@ describe('GrowthAgentRunCard', () => {
     container.remove();
   });
 
-  function renderRun(run: GrowthAgentRunResponse) {
+  function renderRun(run: GrowthAgentRunResponse, save?: GrowthRunSaveControls) {
     act(() => {
       root.render(
         <GrowthAgentRunCard
           run={run}
           onOpenRoute={onOpenRoute}
           renderSourceAssetChip={(asset) => <span key={asset}>{asset}</span>}
+          save={save}
         />,
       );
     });
   }
+
+  function saveControls(overrides: Partial<GrowthRunSaveControls> = {}): GrowthRunSaveControls {
+    return { cadence: 'daily', pending: false, savedName: null, errorMessage: null, onSave: vi.fn(), ...overrides };
+  }
+
+  function saveButton(): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((node) =>
+      /^(Save as watchlist|Saving…)$/.test(node.textContent ?? ''),
+    );
+  }
+
+  describe('Save as watchlist (genie-09 part 1)', () => {
+    it('offers a ghost Save that says exactly what it saves and that nothing runs or sends', () => {
+      const save = saveControls({ cadence: 'weekly' });
+      renderRun(RUN, save);
+      const button = saveButton();
+      expect(button?.classList.contains('btn--ghost')).toBe(true);
+      expect(document.getElementById(button?.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+        "Saves this run's reviewed workflow and filters as a watchlist with the Weekly review interval. Nothing runs again and nothing is sent.",
+      );
+      act(() => button?.click());
+      expect(save.onSave).toHaveBeenCalledTimes(1);
+    });
+
+    it('is pending without dropping focus, and ignores a second click', () => {
+      const save = saveControls({ pending: true });
+      renderRun(RUN, save);
+      const button = saveButton();
+      expect(button?.textContent).toBe('Saving…');
+      expect(button?.disabled).toBe(false);
+      expect(button?.getAttribute('aria-disabled')).toBe('true');
+      act(() => button?.click());
+      expect(save.onSave).not.toHaveBeenCalled();
+    });
+
+    it('announces the saved name and offers no second save', () => {
+      renderRun(RUN, saveControls({ savedName: 'Daily Refi Opportunity Brief - IL' }));
+      expect(saveButton()).toBeUndefined();
+      expect(container.querySelector('.growth-agent-run__save [role="status"]')?.textContent).toBe(
+        'Saved as watchlist “Daily Refi Opportunity Brief - IL”. Find it under Saved monitors.',
+      );
+    });
+
+    it('shows a refused save as an alert', () => {
+      renderRun(RUN, saveControls({ errorMessage: "This run can't be saved as shown. Run it again, then save." }));
+      expect(container.querySelector('.growth-agent-run__save [role="alert"]')?.textContent).toBe(
+        "This run can't be saved as shown. Run it again, then save.",
+      );
+    });
+
+    it('offers nothing for a run that already refreshed a watchlist', () => {
+      renderRun(
+        {
+          ...RUN,
+          monitor: {
+            monitor_id: 'm-1',
+            workflow_id: 'daily_refi_brief',
+            name: 'IL Refi Watch',
+            cadence: 'daily',
+            status: 'active',
+            criteria: RUN.criteria,
+            route: RUN.route,
+            actionable_total: RUN.actionable_total,
+            source_assets: RUN.source_assets,
+            last_run_id: RUN.run_id,
+          },
+        },
+        saveControls(),
+      );
+      expect(saveButton()).toBeUndefined();
+    });
+  });
 
   it('renders Agent Responses divergence as a visible review-required state', () => {
     renderRun(RUN);

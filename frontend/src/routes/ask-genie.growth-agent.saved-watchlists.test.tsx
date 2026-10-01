@@ -4,6 +4,7 @@
 
 import { act } from 'react';
 import { describe, expect, it } from 'vitest';
+import { ApiError } from '../lib/api';
 import type { GrowthAgentRunResponse } from '../types';
 import {
   HOME,
@@ -19,6 +20,7 @@ import {
   registerGrowthAgentRoutePanelHooks,
   rerunGrowthAgentMonitor,
   runMortgageGrowthAgent,
+  saveGrowthAgentRunWatchlist,
   setNativeValue,
   stateInput,
   waitUntil,
@@ -27,20 +29,14 @@ import {
 describe('AskGenie Growth Agent saved watchlists', () => {
   registerGrowthAgentRoutePanelHooks();
 
-  it('saves natural-language monitors with reviewed filters only', async () => {
+  it('saves exactly the run shown from its card: one plan, no second /agent/run', async () => {
     const savedMonitor = {
       monitor_id: '22222222-2222-4222-8222-222222222222',
       workflow_id: 'daily_refi_brief' as const,
-      name: 'Mortgage Growth Agent - IL',
+      name: 'Daily Refi Opportunity Brief - IL',
       cadence: 'weekly' as const,
       status: 'active' as const,
-      criteria: {
-        states: ['IL'],
-        lead_queue_filters: {
-          segment_codes: ['itm'],
-          segment_mode: 'any',
-        },
-      },
+      criteria: RUN.criteria,
       route: RUN.route,
       actionable_total: RUN.actionable_total,
       source_assets: RUN.source_assets,
@@ -49,10 +45,7 @@ describe('AskGenie Growth Agent saved watchlists', () => {
     growthAgent
       .mockResolvedValueOnce(HOME)
       .mockResolvedValueOnce({ ...HOME, monitors: [savedMonitor] });
-    runMortgageGrowthAgent.mockResolvedValueOnce({
-      ...RUN,
-      monitor: savedMonitor,
-    });
+    saveGrowthAgentRunWatchlist.mockResolvedValueOnce(savedMonitor);
     mount();
     await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
 
@@ -72,22 +65,61 @@ describe('AskGenie Growth Agent saved watchlists', () => {
     );
     if (!cadence) throw new Error('review cadence select not rendered');
     act(() => setNativeValue(cadence, 'weekly'));
-    act(() => button(/^Save reviewed watchlist$/).click());
+    act(() => button(/^Plan reviewed workflow$/).click());
 
     await waitUntil(() => runMortgageGrowthAgent.mock.calls.length === 1);
+    // Planning never saves: the watchlist comes from the run card, from exactly this run.
     expect(runMortgageGrowthAgent.mock.calls[0][0]).toEqual({
       prompt: 'Find refinance opportunities for branch follow-up.',
       states: ['IL'],
-      save_monitor: true,
+      save_monitor: false,
       cadence: 'weekly',
-      monitor_name: 'Mortgage Growth Agent - IL',
+      monitor_name: null,
     });
-    await waitUntil(() => container.textContent?.includes('Mortgage Growth Agent - IL') ?? false);
-    // The saved watchlist lives on the Saved monitors tab (audit visual-07).
+    await waitUntil(() => activePanel().querySelector('[aria-label="Latest Growth Agent run"]') !== null);
+    const save = button(/^Save as watchlist$/);
+    const hint = document.getElementById(save.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toBe(
+      "Saves this run's reviewed workflow and filters as a watchlist with the Weekly review interval. Nothing runs again and nothing is sent.",
+    );
+    act(() => save.click());
+
+    await waitUntil(() => saveGrowthAgentRunWatchlist.mock.calls.length === 1);
+    expect(saveGrowthAgentRunWatchlist.mock.calls[0].slice(0, 2)).toEqual([
+      RUN.run_id,
+      { tool_result_hash: RUN.tool_result_hash, cadence: 'weekly' },
+    ]);
+    await waitUntil(() => activePanel().querySelector('.growth-agent-run__save [role="status"]') !== null);
+    expect(activePanel().querySelector('.growth-agent-run__save [role="status"]')?.textContent).toBe(
+      'Saved as watchlist “Daily Refi Opportunity Brief - IL”. Find it under Saved monitors.',
+    );
+    expect(activePanel().textContent).not.toContain('Save as watchlist');
+    expect(runMortgageGrowthAgent).toHaveBeenCalledTimes(1);
+    await waitUntil(() => growthAgent.mock.calls.length >= 2);
     openTab('Saved monitors');
-    expect(activePanel().textContent).toContain('Mortgage Growth Agent - IL');
+    await waitUntil(() => activePanel().textContent?.includes('Daily Refi Opportunity Brief - IL') ?? false);
     expect(activePanel().textContent).toContain('Saved watchlists');
     expect(activePanel().textContent).toContain('5,394');
+  });
+
+  it('says a run that changed cannot be saved as shown, and keeps nothing', async () => {
+    saveGrowthAgentRunWatchlist.mockRejectedValueOnce(
+      new ApiError('This run changed or did not complete; run it again before saving.', {
+        path: `/api/growth-agent/runs/${RUN.run_id}/monitors`,
+        status: 409,
+      }),
+    );
+    mount();
+    await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
+    act(() => button(/^Plan reviewed workflow$/).click());
+    await waitUntil(() => activePanel().querySelector('[aria-label="Latest Growth Agent run"]') !== null);
+    act(() => button(/^Save as watchlist$/).click());
+    await waitUntil(() => activePanel().querySelector('.growth-agent-run__save [role="alert"]') !== null);
+    expect(activePanel().querySelector('.growth-agent-run__save [role="alert"]')?.textContent).toBe(
+      "This run can't be saved as shown. Run it again, then save.",
+    );
+    expect(growthAgent).toHaveBeenCalledTimes(1);
+    expect(runMortgageGrowthAgent).toHaveBeenCalledTimes(1);
   });
 
   it('re-runs saved watchlists without replaying raw prompt text', async () => {

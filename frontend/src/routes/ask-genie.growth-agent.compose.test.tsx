@@ -167,10 +167,10 @@ function commandBarLabels(): string[] {
 }
 
 describe('Growth Agent compose, review, run', () => {
-  it('keeps three command-bar actions, one primary, with the hint under the buttons', async () => {
+  it('keeps two command-bar actions, one primary, with the hint under the buttons', async () => {
     mount();
     await waitUntil(() => commandBarLabels().length > 0);
-    expect(commandBarLabels()).toEqual(['Plan reviewed workflow', 'Save reviewed watchlist', 'Compose plan']);
+    expect(commandBarLabels()).toEqual(['Plan reviewed workflow', 'Compose plan']);
     const bar = container.querySelector('[aria-label="Mortgage Growth Agent command center"]');
     expect(bar?.querySelectorAll('.growth-agent-command__actions .btn--primary')).toHaveLength(1);
     // The hint shares column 2 with the buttons, below them, not the objective's column.
@@ -180,9 +180,10 @@ describe('Growth Agent compose, review, run', () => {
       'growth-agent__hint growth-agent-command__hint',
     ]);
     expect(side?.textContent).toContain(
-      'Plan reviewed workflow picks one reviewed workflow and counts eligible borrowers. Compose plan drafts a multi-step plan from reviewed tools; you review each step before anything runs.',
+      'Plan reviewed workflow picks one reviewed workflow and counts eligible borrowers; save the result as a watchlist from its card. Compose plan drafts a multi-step plan from reviewed tools; you review each step before anything runs.',
     );
     expect(container.textContent).not.toContain('Execute plan');
+    expect(container.textContent).not.toContain('Save reviewed watchlist');
   });
 
   it('says a first compose runs nothing while it composes', async () => {

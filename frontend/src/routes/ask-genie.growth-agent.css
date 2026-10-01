@@ -63,3 +63,17 @@
 .growth-agent-diff__row--removed .growth-agent-step__title {
   text-decoration: line-through;
 }
+
+/* deviation:growth-agent-run-save
+   Save as watchlist on the run card: the action and its outcome. */
+.growth-agent-run__save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-block-start: var(--sp-3);
+}
+.growth-agent-run__save-note {
+  flex-basis: 100%;
+  margin: 0;
+}
