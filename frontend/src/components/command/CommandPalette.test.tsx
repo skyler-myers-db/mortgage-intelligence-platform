@@ -18,7 +18,7 @@ vi.mock('react-router', () => ({ useNavigate: () => navigate }));
 const setTheme = vi.fn();
 const setConsoleOpen = vi.fn();
 const setGenieOpen = vi.fn();
-const access = vi.hoisted(() => ({ admin: false }));
+const access = vi.hoisted(() => ({ admin: false, auditor: false }));
 vi.mock('../AppContext', () => ({
   useApp: () => ({
     theme: 'dark',
@@ -28,6 +28,13 @@ vi.mock('../AppContext', () => ({
     setGenieOpen,
     canAccessAdmin: access.admin,
   }),
+}));
+
+// The ledger entry reads the shared session (useAuditLedgerAccess); this
+// harness has no QueryClient, so the decision is mocked like useApp's flags.
+vi.mock('../../lib/sessionQuery', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/sessionQuery')>()),
+  useAuditLedgerAccess: () => access.admin || access.auditor,
 }));
 
 const borrowerSearch = vi.fn();
@@ -112,6 +119,23 @@ describe('CommandPalette', () => {
     expect(combo.getAttribute('aria-activedescendant')).toBe('cmdk-option-0');
     expect(container.querySelector('#cmdk-option-0')!.getAttribute('aria-selected')).toBe('true');
     expect(container.textContent).not.toContain('Admin');
+  });
+
+  it('offers the Audit ledger to a read-only auditor and never Admin; a plain user gets neither (D-audit-reads-c3)', () => {
+    pressMetaK();
+    setQuery('audit');
+    expect(container.textContent, 'a plain workspace user is not offered the ledger').not.toContain('Audit ledger');
+    pressMetaK();
+    access.auditor = true;
+    try {
+      pressMetaK();
+      setQuery('audit');
+      expect(container.textContent).toContain('Audit ledger');
+      expect(container.textContent).not.toContain('Admin');
+      pressMetaK();
+    } finally {
+      access.auditor = false;
+    }
   });
 
   it('toggles closed on a second ⌘K', () => {

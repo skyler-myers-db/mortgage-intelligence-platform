@@ -14,6 +14,7 @@ import { api } from '../../lib/api';
 import { openGenie } from '../../lib/genieOpen';
 import { saveDataRequested } from '../../lib/prefetch';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
+import { useAuditLedgerAccess } from '../../lib/sessionQuery';
 import type { LeadSummary } from '../../types';
 import { useModalDialog } from '../../hooks/useModalDialog';
 import {
@@ -90,6 +91,9 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     setGenieOpen,
     canAccessAdmin,
   } = useApp();
+  // The ledger entry for administrators AND read-only auditors: the same
+  // fail-closed session decision RouteNav and the Rail use (D-audit-reads-c3).
+  const canReadAudit = useAuditLedgerAccess();
   const [query, setQuery] = useState('');
   const [borrowers, setBorrowers] = useState<LeadSummary[]>([]);
   const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle');
@@ -158,8 +162,8 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   }, [open, query]);
 
   const actions = useMemo(
-    () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin)),
-    [canAccessAdmin, query],
+    () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin, undefined, canReadAudit)),
+    [canAccessAdmin, canReadAudit, query],
   );
   // Verbs on the page's published selection come first ("Approve 12
   // selected…"); they exist only while a page has a selection.

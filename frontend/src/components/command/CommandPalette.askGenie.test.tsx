@@ -27,6 +27,12 @@ vi.mock('../AppContext', () => ({
 }));
 
 const borrowerSearch = vi.fn();
+// The ledger entry reads the shared session (useAuditLedgerAccess); this
+// harness has no QueryClient, so the decision is mocked like useApp's flags.
+vi.mock('../../lib/sessionQuery', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/sessionQuery')>()),
+  useAuditLedgerAccess: () => false,
+}));
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: { borrowerSearch: (...a: unknown[]) => borrowerSearch(...a) },

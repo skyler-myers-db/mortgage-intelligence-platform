@@ -43,6 +43,7 @@ const ACTIVITY_LABELS: Record<string, string> = {
   RUN_GENIE: 'Genie analysis run',
   VIEW_BORROWER: 'Borrower reviewed',
   VIEW_LEADS: 'Lead queue reviewed',
+  VIEW_AUDIT_LEDGER: 'Audit ledger read',
 };
 
 export function recentActivityPresentation(event: ActorAuditEventSummary): {
