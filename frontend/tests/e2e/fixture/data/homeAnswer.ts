@@ -23,6 +23,18 @@ function trend(latest: number, growthPct: number): KpiTrend {
   return { series, delta_pct: growthPct, direction: 'up', comparison_label: 'vs. 7 days ago', note: null };
 }
 
+/**
+ * The default summary for a returning visitor whose previous visit falls
+ * inside the rate window fixture's series (data/rateWindow.ts: the week of
+ * 2026-01-12 printed 6.41%, the latest week 6.22%), so WHY NOW leads with the
+ * 30-year par move since that visit (W5b flow-05).
+ */
+export const RATE_MOVE_HOME_SUMMARY: HomeSummary = {
+  ...HOME_SUMMARY,
+  previous_visit_at: '2026-01-15T14:30:00+00:00',
+  baseline_snapshot_at: '2026-01-15T06:00:00+00:00',
+};
+
 /** All seven actionable offer codes, every one non-zero. */
 export const LIVE_ACTIONABLE_MIX: OfferMix = [
   { offer_code: 'refi', borrower_count: 55_871 },
