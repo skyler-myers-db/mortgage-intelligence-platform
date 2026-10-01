@@ -398,15 +398,15 @@ test.describe('Home answer band links and reads', () => {
   test('WHY NOW and WHAT TO OFFER deep-link through the Lead Queue URL filter contract', async ({ app, page }) => {
     await app.gotoRoute('/');
     const why = page.locator('.home-answer .login-summary');
-    await expect(why.getByRole('link', { name: 'borrowers whose rate and equity pass the refinance screen' }))
+    await expect(why.getByRole('link', { name: 'borrowers who pass the refi screen' }))
       .toHaveAttribute('href', '/lead-queue?segment=itm');
-    await expect(why.getByRole('link', { name: /opportunity score of 75\+/ }))
+    await expect(why.getByRole('link', { name: /opportunity score 75\+/ }))
       .toHaveAttribute('href', '/lead-queue?funnel_stage=high_opportunity');
     // flow-05: the event measures and the primary offer paths open the queue
     // filter with the same predicate (offers_available, which had none, is gone).
-    await expect(why.getByRole('link', { name: 'borrowers whose homes are listed for sale' }))
+    await expect(why.getByRole('link', { name: 'borrowers with a listed home' }))
       .toHaveAttribute('href', '/lead-queue?purchase_intent=Listed+for+sale');
-    await expect(why.getByRole('link', { name: 'borrowers whose lien is held by a competitor' }))
+    await expect(why.getByRole('link', { name: 'borrowers with a competitor lien' }))
       .toHaveAttribute('href', '/lead-queue?lender_relationship=Competitor+customer');
     await expect(why.getByRole('link', { name: 'borrowers with a primary offer path' }))
       .toHaveAttribute('href', '/lead-queue?funnel_stage=offer_recommended');

@@ -92,11 +92,11 @@ interface TriggerCopy {
  */
 const TRIGGER_COPY: Record<string, TriggerCopy> = {
   listed_for_sale: {
-    noun: 'borrowers whose homes are listed for sale',
+    noun: 'borrowers with a listed home',
     href: leadQueueHref({ purchase_intent: 'Listed for sale' }),
   },
   competitor_lien: {
-    noun: 'borrowers whose lien is held by a competitor',
+    noun: 'borrowers with a competitor lien',
     href: leadQueueHref({ lender_relationship: 'Competitor customer' }),
   },
   offers_recommended: {
@@ -104,11 +104,11 @@ const TRIGGER_COPY: Record<string, TriggerCopy> = {
     href: leadQueueHref({ funnel_stage: 'offer_recommended' }),
   },
   refi_economics_screen: {
-    noun: 'borrowers whose rate and equity pass the refinance screen',
+    noun: 'borrowers who pass the refi screen',
     href: leadQueueHref({ segment: 'itm' }),
   },
   high_opportunity: {
-    noun: `borrowers with an opportunity score of ${HIGH_OPPORTUNITY_SCORE_LABEL}`,
+    noun: `borrowers with opportunity score ${HIGH_OPPORTUNITY_SCORE_LABEL}`,
     href: leadQueueHref({ funnel_stage: 'high_opportunity' }),
   },
   offers_available: {

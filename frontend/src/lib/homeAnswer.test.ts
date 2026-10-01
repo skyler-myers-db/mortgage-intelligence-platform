@@ -96,7 +96,7 @@ describe('whyNowTriggers', () => {
   it('reads a zero movement as "no change in", and falls back to the server label', () => {
     const [, flat, , unknown] = whyNowTriggers(SUMMARY);
     expect(`${flat.display}${flat.joiner}${flat.noun}`).toBe(
-      'no change in borrowers whose rate and equity pass the refinance screen',
+      'no change in borrowers who pass the refi screen',
     );
     expect(unknown.noun).toBe('future things');
   });
@@ -105,7 +105,7 @@ describe('whyNowTriggers', () => {
     const [pct, , count] = whyNowTriggers(SUMMARY);
     // "+1.5% borrowers with ..." would read as a share of borrowers.
     expect(`${pct.display}${pct.joiner}${pct.noun}`).toBe(
-      '+1.5% in borrowers with an opportunity score of 75+',
+      '+1.5% in borrowers with opportunity score 75+',
     );
     expect(`${count.display}${count.joiner}${count.noun}`).toBe('+190 borrowers with an offer decision');
     const negative = whyNowTriggers({
@@ -113,7 +113,7 @@ describe('whyNowTriggers', () => {
       highlights: [{ ...SUMMARY.highlights[0], display: '-0.4%', value_token: '-0.4%', delta: -2, delta_pct: -0.4 }],
     })[0];
     expect(`${negative.display}${negative.joiner}${negative.noun}`).toBe(
-      '-0.4% in borrowers with an opportunity score of 75+',
+      '-0.4% in borrowers with opportunity score 75+',
     );
   });
 
@@ -136,9 +136,9 @@ describe('WHY NOW event and offer triggers', () => {
   it('links listings, competitor liens and primary offer paths to their exact queue filters', () => {
     const triggers = Object.fromEntries(whyNowTriggers(EVENTS).map((t) => [t.highlight.measure, t]));
     expect(triggers.listed_for_sale.href).toBe('/lead-queue?purchase_intent=Listed+for+sale');
-    expect(triggers.listed_for_sale.noun).toBe('borrowers whose homes are listed for sale');
+    expect(triggers.listed_for_sale.noun).toBe('borrowers with a listed home');
     expect(triggers.competitor_lien.href).toBe('/lead-queue?lender_relationship=Competitor+customer');
-    expect(triggers.competitor_lien.noun).toBe('borrowers whose lien is held by a competitor');
+    expect(triggers.competitor_lien.noun).toBe('borrowers with a competitor lien');
     expect(triggers.offers_recommended.href).toBe('/lead-queue?funnel_stage=offer_recommended');
     expect(triggers.offers_recommended.noun).toBe('borrowers with a primary offer path');
     // Older payloads still render offers_available, with no link (no queue filter is that population).

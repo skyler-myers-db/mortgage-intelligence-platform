@@ -221,7 +221,7 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     };
     render(flat);
     expect(container.querySelector('.home-answer__trigger')?.textContent).toBe(
-      'no change in borrowers whose rate and equity pass the refinance screen',
+      'no change in borrowers who pass the refi screen',
     );
     expect(chips().map((chip) => chip.textContent)).toEqual(['no change']);
   });
@@ -230,8 +230,8 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     render(DELTA_SUMMARY);
     const [pct, count] = Array.from(container.querySelectorAll('.home-answer__trigger')).map((el) => el.textContent);
     // "+1.5% borrowers with ..." read as "1.5% of borrowers".
-    expect(pct).toBe('+1.5% in borrowers with an opportunity score of 75+');
-    expect(count).toBe('+2,250 borrowers whose rate and equity pass the refinance screen');
+    expect(pct).toBe('+1.5% in borrowers with opportunity score 75+');
+    expect(count).toBe('+2,250 borrowers who pass the refi screen');
   });
 
   it('first visit renders welcome copy, no delta language, no snapshot citation', () => {
@@ -352,8 +352,8 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     render(events);
     const rows = Array.from(container.querySelectorAll('.home-answer__trigger')).map((el) => el.textContent);
     expect(rows).toEqual([
-      '+44 borrowers whose homes are listed for sale',
-      '-31 borrowers whose lien is held by a competitor',
+      '+44 borrowers with a listed home',
+      '-31 borrowers with a competitor lien',
       '+190 borrowers with a primary offer path',
     ]);
     expect(triggerLink(0)).toBe('/lead-queue?purchase_intent=Listed+for+sale');
