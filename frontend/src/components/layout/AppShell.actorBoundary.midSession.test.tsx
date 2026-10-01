@@ -73,6 +73,8 @@ const okFor = (key: string): Answer => () =>
 const badGateway: Answer = () => json(502, { detail: 'Bad gateway' });
 
 const HEALTH_OR_SESSION = /^\/api(\/v1)?\/(health|session)$/;
+/** The open Console's own read (its Recent activity feed passes `enabled`). */
+const MY_EVENTS = '/api/v1/audit/my-events';
 
 /** A routed page with a live read, as the Lead Queue has: it re-renders with
  *  the shell's actor state, and its query passes `enabled` (as real routes do). */
@@ -102,6 +104,8 @@ describe('AppShell: a proven mid-session actor change (D-identity-review-a3)', (
   // so the shell's import of it resolves in microtasks under fake timers.
   beforeAll(async () => {
     await import('../feedback/Toaster');
+    // The lazy Console, for the Console-open hold case (xiii-b).
+    await import('./Console');
   });
 
   let container: HTMLDivElement;
@@ -131,6 +135,7 @@ describe('AppShell: a proven mid-session actor change (D-identity-review-a3)', (
         return healthAnswer();
       }
       if (url.pathname === '/api/v1/leads') return json(200, { items: [] });
+      if (url.pathname === MY_EVENTS) return json(200, { items: [], next_cursor: null });
       return json(404, { detail: 'not found' });
     }));
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -342,6 +347,37 @@ describe('AppShell: a proven mid-session actor change (D-identity-review-a3)', (
     expect(otherRequests().slice(atObservation)).toEqual([]);
     await advance(60_000);
     expect(resetDocument).toHaveBeenCalledOnce();
+  });
+
+  it('(xiii-b) with the Console open, a held reset swaps the Console for its placeholder too: its feed is never re-read before the 30 s boundary', async () => {
+    // A device preference (DEVICE_LOCAL), so it survives the reset.
+    window.localStorage.setItem('mip.consoleOpen', 'true');
+    await midSessionAt('/lead-queue');
+    for (let step = 0; step < 20 && !requests.includes(MY_EVENTS); step += 1) await advance(10);
+    expect(requests, 'the open Console read its feed').toContain(MY_EVENTS);
+    expect(container.querySelector('#workspace-console[aria-hidden="false"] .tweaks__title'), 'the live Console is mounted').not.toBeNull();
+    const resetDocument = vi.fn();
+    _setResetDocumentForTests(resetDocument);
+    // The last reset was 10 s before the observation: the boundary is 20 s on.
+    const observation = answerWith(ACTOR_B, () => window.sessionStorage.setItem(RESET_AT, String(Date.now() - 10_000)));
+    await nextProbe(healthAnswer);
+    const atObservation = observation.atObservation();
+    expect(atObservation).toBeGreaterThanOrEqual(0);
+    expect(resetDocument, 'not now').not.toHaveBeenCalled();
+    expect(actorResetHeld()).toBe(true);
+    expect(actorScopeStatus()).toBe('closed');
+
+    for (let second = 0; second < 19; second += 1) {
+      await advance(1_000);
+      expect(otherRequests().slice(atObservation), `nothing but health or session by ${second + 1} s`).toEqual([]);
+      expect(container.querySelector('#workspace-console[aria-hidden="true"]'), `the Console placeholder holds its slot at ${second + 1} s`).not.toBeNull();
+    }
+    expect(container.querySelector('.tweaks__title'), 'the live Console is unmounted').toBeNull();
+    expect(queryClient.getQueryCache().find({ queryKey: ['audit', 'my-events'] }), 'its feed query is gone and never re-created').toBeUndefined();
+    expect(resetDocument).not.toHaveBeenCalled();
+    await advance(1_000);
+    expect(resetDocument, 'exactly one reset at the boundary').toHaveBeenCalledOnce();
+    expect(otherRequests().slice(atObservation)).toEqual([]);
   });
 
   it('(xiv) a boot with the notice flag removes it and shows the info toast once, only after the gate opens (StrictMode)', async () => {
