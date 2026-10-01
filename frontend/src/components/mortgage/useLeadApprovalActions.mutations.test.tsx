@@ -41,6 +41,9 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 import { ApiError } from '../../lib/api';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { useLeadApprovalActions } from './useLeadApprovalActions';
+import { bulkCanaryNotice } from './LeadBulkRunStatus.copy';
+import { runBulkApprove, runBulkReject } from './leadBulkDecisions';
+import type { BulkRunsChunk } from './useLeadApprovalActions';
 
 const IDS = Array.from({ length: 7 }, (_, index) => `B-AAAAAAAAAAAA${index + 1}`);
 const BORROWER = IDS[0];
@@ -79,6 +82,8 @@ function lastRowSample(): ReadonlyMap<string, OutreachDraftResult> {
 
 type Actions = ReturnType<typeof useLeadApprovalActions>;
 let actions: Actions | null = null;
+/** The lazy bulk chunk as the harness sees it; a test may unload it. */
+let bulkChunk: BulkRunsChunk | null = { runBulkApprove, runBulkReject };
 const setApproval = vi.fn();
 
 function Harness({ client }: { client: QueryClient }) {
@@ -94,6 +99,7 @@ function Harness({ client }: { client: QueryClient }) {
     campaignBindingBlocked: false,
     canApprove: true,
     tableWrapRef,
+    bulkRuns: () => bulkChunk,
   });
   useEffect(() => {
     actions = current;
@@ -152,6 +158,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     client.clear();
     actions = null;
     harnessLeads = LEADS;
+    bulkChunk = { runBulkApprove, runBulkReject };
   });
 
   function mount() {
@@ -401,6 +408,23 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(actions!.bulkRun.result).toBeNull();
   });
 
+  it('fails closed without the bulk chunk: a covered run drafts and sends nothing; the gate still opens', async () => {
+    bulkChunk = null;
+    mount();
+    act(() => actions!.toggleSelectAll());
+    let started: boolean | undefined;
+    await act(async () => {
+      started = await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(started).toBe(false);
+    expect(actions!.bulkRationaleOpen, 'the gate opens; it renders once the chunk loads').toBe(true);
+    expect(apiMocks.draftOutreach).not.toHaveBeenCalled();
+    expect(apiMocks.approve).not.toHaveBeenCalled();
+    expect(actions!.bulkRun.result).toBeNull();
+    expect(actions!.bulkRun.isRunning()).toBe(false);
+  });
+
   it('runs once every offer has a sample, and each sampled row certifies its own sample', async () => {
     harnessLeads = LEADS.map((row) => (row.borrower_id === IDS[2]
       ? { ...row, recommended_offer_code: 'heloc' } as LeadSummary
@@ -411,10 +435,14 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       [IDS[6], draft('gen-sample-refi')],
       [IDS[2], { ...draft('gen-sample-heloc'), offer_code: 'heloc' } as OutreachDraftResult],
     ]);
+    act(() => actions!.openBulkRationale());
+    let settled: boolean | undefined;
     await act(async () => {
-      await actions!.bulkApprove(samples, 'Q3 refinance push');
+      settled = await actions!.bulkApprove(samples, 'Q3 refinance push');
     });
 
+    expect(settled).toBe(true);
+    expect(actions!.bulkRationaleOpen, 'a settled run closes its gate').toBe(false);
     expect(apiMocks.approve).toHaveBeenCalledTimes(IDS.length);
     const byId = new Map(apiMocks.approve.mock.calls.map((call) => [call[0] as string, call[1] as {
       review_mode: string; draft_generation_id: string;
@@ -458,7 +486,10 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       borrowerId: IDS[0], message: 'bulk_rationale failed the governed text policy',
     });
     expect(actions!.bulkRationaleOpen).toBe(true);
-    expect(actions!.bulkRunNotice).toBe(
+    expect(actions!.bulkRunCanary).toEqual({
+      borrowerId: IDS[0], message: 'bulk_rationale failed the governed text policy',
+    });
+    expect(bulkCanaryNotice(actions!.bulkRunCanary!)).toBe(
       `Nothing else was sent: ${IDS[0]} was refused: bulk_rationale failed the governed text policy`,
     );
     expect([...actions!.selectedIds].sort()).toEqual([...IDS].sort());

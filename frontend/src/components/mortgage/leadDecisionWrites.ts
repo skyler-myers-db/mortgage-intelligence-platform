@@ -1,11 +1,12 @@
 /**
- * One row's governed approve or reject write, with the per-row report a bulk
- * run lists (audit tables-07, flow-03). Split out of useLeadApprovalActions
+ * One row's governed approve write, with the per-row report a bulk run
+ * lists (audit tables-07, flow-03); a bulk run's reject write is its twin in
+ * leadBulkRejectWrite (lazy bulk chunk). Split out of useLeadApprovalActions
  * (file-size gate): the hook hands over the state it owns through
  * DecisionWriteDeps, so every guard below still reads that state
  * synchronously.
  *
- * Both writes keep the hook's invariants: a decision already on the wire is
+ * Both keep the hook's invariants: a decision already on the wire is
  * a 'duplicate' (the R5-04 latch or the MutationCache), the approver /
  * campaign-binding gate runs before any draft or POST, one request_id per
  * intent, pessimistic (the row reads Approved / Rejected only after the POST
@@ -51,7 +52,7 @@ export interface ApproveExtras {
   coveredOfferCodes?: ReadonlySet<string> | null;
 }
 
-/** One bulk rejection run's shared inputs, as each of its rows sends them. */
+/** One bulk rejection run's shared inputs, as each of its rows sends them (leadBulkRejectWrite). */
 export interface BulkRejectRow {
   bulkId: string;
   reasonCode: RejectReasonCode;
@@ -75,7 +76,7 @@ export interface DecisionWriteDeps {
   onDecided: (borrowerId: string, decision: 'approved' | 'rejected', auditEventId: string | null) => void;
 }
 
-function released<T>(deps: DecisionWriteDeps, borrowerId: string, report: Promise<T>): Promise<T> {
+export function released<T>(deps: DecisionWriteDeps, borrowerId: string, report: Promise<T>): Promise<T> {
   // Released before the caller sees the outcome (this reaction is first).
   const release = () => deps.latch(borrowerId, false);
   void report.then(release, release);
@@ -156,55 +157,6 @@ export function approveWithReport(
       // the session dialog must say this approval was NOT recorded.
       if (clientFailureReason(err) === 'session_expired') {
         markUnrecordedWrite('approval');
-        return { outcome: 'session_expired', message };
-      }
-      return { outcome: failure, message };
-    },
-  ));
-}
-
-/**
- * One row of a bulk rejection run (tables-07, D-approval-flow-d): the
- * reject write with the run's bulk id, reason and shared note, reporting
- * into the run (no toast), like a bulk approve row. The evidence and offer
- * are the ones snapshotted when the run started. The signal aborts only on
- * unmount (R5-21), never on Stop.
- */
-export function rejectWithReport(
-  deps: DecisionWriteDeps,
-  borrowerId: string,
-  signal: AbortSignal,
-  run: BulkRejectRow,
-): Promise<BulkRowReport> {
-  if (deps.isInFlight(borrowerId)) return Promise.resolve({ outcome: 'duplicate', message: null });
-  if (!deps.passesGate('rejection', borrowerId, false)) return Promise.resolve({ outcome: 'backend', message: null });
-  deps.latch(borrowerId, true);
-  const intent = intentFingerprint('reject-bulk', run.bulkId, borrowerId, run.reasonCode, run.note);
-  return released(deps, borrowerId, deps.reject({
-    decision: 'reject',
-    borrowerId,
-    requestId: deps.requestIds.idFor(intent),
-    rationaleCode: run.reasonCode,
-    rationale: run.note,
-    campaignBinding: deps.campaignBinding,
-    evidenceIds: [...(run.snapshot?.evidenceIds ?? [])],
-    offerCode: run.snapshot?.offerCode ?? null,
-    bulkId: run.bulkId,
-    signal,
-    suppressInvalidation: true,
-  }).then(
-    (res): BulkRowReport => {
-      if (!res.rejected) return { outcome: 'backend', message: 'The endpoint returned rejected=false.' };
-      deps.requestIds.settle(intent);
-      deps.onDecided(borrowerId, 'rejected', res.audit_event_id ?? null);
-      return { outcome: 'ok', message: null };
-    },
-    (err: unknown): BulkRowReport => {
-      const failure = decisionFailure(err);
-      if (failure === 'aborted') return { outcome: 'aborted', message: null };
-      const message = err instanceof Error ? err.message : null;
-      if (clientFailureReason(err) === 'session_expired') {
-        markUnrecordedWrite('rejection');
         return { outcome: 'session_expired', message };
       }
       return { outcome: failure, message };

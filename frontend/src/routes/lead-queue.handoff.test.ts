@@ -4,9 +4,14 @@
  * Builder URL and the list of filters it cannot carry out.
  */
 import { describe, expect, it } from 'vitest';
-import { buildPortfolioBuilderUrlFromQueue } from './lead-queue.handoff';
+import { buildPortfolioBuilderUrlFromQueue, PB_FILTER_KEYS, PB_FILTER_OPTIONS } from './lead-queue.handoff';
 import { parsePortfolioCriteria } from './lead-queue.filters';
-import { BASE_DEFAULT_FILTERS, parseFiltersFromUrl, URL_FILTER_KEYS } from './portfolio-builder.logic';
+import {
+  BASE_DEFAULT_FILTERS,
+  NON_GEO_FILTER_GROUPS,
+  parseFiltersFromUrl,
+  URL_FILTER_KEYS,
+} from './portfolio-builder.logic';
 
 const LENDERS = ['All', 'Summit Mortgage'];
 
@@ -31,6 +36,22 @@ function queueEffective(query: string) {
   };
   return Object.fromEntries(URL_FILTER_KEYS.map((key) => [key, criteria[key] ?? noOp[key]]));
 }
+
+describe("the handoff's mirror of Portfolio Builder's filters", () => {
+  it('has its URL filter keys, in its order', () => {
+    expect([...PB_FILTER_KEYS]).toEqual([...URL_FILTER_KEYS]);
+  });
+
+  it('has its options for every key, and no list for the target lender alone', () => {
+    const groups = Object.fromEntries(NON_GEO_FILTER_GROUPS.map((group) => [group.key, group.options]));
+    for (const key of PB_FILTER_KEYS) {
+      if (key === 'target_lender_ref') expect(groups[key]).toBeUndefined();
+      else expect([...(PB_FILTER_OPTIONS[key] ?? [])], key).toEqual(groups[key]);
+    }
+    expect(PB_FILTER_OPTIONS.target_lender_ref).toBeNull();
+    expect(Object.keys(groups).sort()).toEqual(PB_FILTER_KEYS.filter((key) => key !== 'target_lender_ref').sort());
+  });
+});
 
 describe('buildPortfolioBuilderUrlFromQueue', () => {
   it('lands on /portfolio-builder and writes every Portfolio Builder filter key', () => {

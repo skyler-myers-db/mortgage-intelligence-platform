@@ -25,10 +25,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetSessionStatusForTests, getSessionStatus, markSessionExpired } from '../../lib/sessionStatus';
 import { readCancelledBulk } from './bulkApproveStash';
+import { bulkCanaryNotice, formatMinutesLeft } from './LeadBulkRunStatus.copy';
+import { bulkRunMinutesLeft, runBulk } from './leadBulkRunLoop';
 import {
-  bulkCanaryNotice,
-  bulkRunMinutesLeft,
-  formatMinutesLeft,
   useLeadBulkRun,
   type BulkRowReport,
   type BulkRunResult,
@@ -86,7 +85,7 @@ describe('useLeadBulkRun', () => {
   function start(posts: 1 | 2 = 2, kind: 'approve' | 'reject' = 'approve'): Promise<BulkRunResult | null> {
     let promise: Promise<BulkRunResult | null> = Promise.resolve(null);
     act(() => {
-      promise = run!.start({
+      promise = runBulk(run!.engine, {
         kind,
         rows: IDS.map((borrowerId) => ({ borrowerId, posts })),
         decide,
@@ -231,7 +230,7 @@ describe('useLeadBulkRun', () => {
     const twelve = Array.from({ length: 12 }, (_, index) => `B-QUARTER${String(index + 1).padStart(6, '0')}`);
     let done: Promise<BulkRunResult | null> = Promise.resolve(null);
     act(() => {
-      done = run!.start({ kind: 'approve', rows: twelve.map((borrowerId) => ({ borrowerId, posts: 2 })), decide });
+      done = runBulk(run!.engine, { kind: 'approve', rows: twelve.map((borrowerId) => ({ borrowerId, posts: 2 })), decide });
     });
     expect(run!.announcement).toBe('Approving 12 borrowers.');
 
@@ -252,7 +251,7 @@ describe('useLeadBulkRun', () => {
     // one (4 of 5 is past 25%, 50% and 75%).
     const five = twelve.slice(0, 5);
     act(() => {
-      done = run!.start({ kind: 'approve', rows: five.map((borrowerId) => ({ borrowerId, posts: 2 })), decide });
+      done = runBulk(run!.engine, { kind: 'approve', rows: five.map((borrowerId) => ({ borrowerId, posts: 2 })), decide });
     });
     await settleWire();
     await settleWire();
@@ -282,7 +281,7 @@ describe('useLeadBulkRun', () => {
     const done = start();
     let second: BulkRunResult | null | undefined;
     await act(async () => {
-      second = await run!.start({ kind: 'approve', rows: [{ borrowerId: 'B-ZZZZZZZZZZZZZ', posts: 2 }], decide });
+      second = await runBulk(run!.engine, { kind: 'approve', rows: [{ borrowerId: 'B-ZZZZZZZZZZZZZ', posts: 2 }], decide });
     });
     expect(second).toBeNull();
     expect(decide).toHaveBeenCalledTimes(1);

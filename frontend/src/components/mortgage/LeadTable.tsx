@@ -253,6 +253,7 @@ export function LeadTable({
     campaignBindingBlocked,
     canApprove: approverGate === null,
     tableWrapRef,
+    bulkRuns: BULK_REVIEW_CHUNK.current,
   });
 
   /**
@@ -335,7 +336,7 @@ export function LeadTable({
   // The bulk chunk also carries a run's progress and report (tables-07).
   const bulkChunk = useLazyModule(
     BULK_REVIEW_CHUNK,
-    approval.selectionCount > 1 || approval.bulkApproving || bulkRun.result !== null,
+    approval.selectionCount > 1 || approval.headerCheckboxState.checked || approval.bulkApproving || bulkRun.result !== null,
   );
   // The module cache is the truth: after one failed chunk load this hook's
   // state stays failed, yet the next Approve re-imports the chunk and drafts
@@ -354,6 +355,7 @@ export function LeadTable({
   const bulkModule = bulkChunk.module ?? BULK_REVIEW_CHUNK.current();
   const BulkReview = bulkModule?.LeadBulkApproveReview;
   const BulkRejectGate = bulkModule?.LeadBulkRejectGate;
+  const BulkCampaignHandoff = bulkModule?.LeadBulkCampaignHandoff;
   const BulkRunProgress = bulkModule?.LeadBulkRunProgress;
   const BulkRunResult = bulkModule?.LeadBulkRunResult;
   const reviewProps = openReview && {
@@ -638,11 +640,11 @@ export function LeadTable({
           samplesShown={samplesShown}
           runKind={bulkRun.progress?.kind ?? null}
           samplesCoverAllOffers={samplesCoverAllOffers}
-          runNotice={approval.bulkRunNotice}
+          runNotice={approval.bulkRunCanary && bulkModule ? bulkModule.bulkCanaryNotice(approval.bulkRunCanary) : null}
           allLoadedSelected={approval.headerCheckboxState.checked}
           loadedCount={leads.length}
           totalMatching={totalMatching}
-          campaignHandoff={campaignHandoff}
+          campaignHandoff={campaignHandoff && BulkCampaignHandoff ? <BulkCampaignHandoff handoff={campaignHandoff} /> : null}
           bulkRejectOpen={approval.bulkRejectOpen}
           onOpenBulkReject={flow.bulkRejectFromToolbar}
           bulkRejectBtnRef={approval.bulkRejectBtnRef}

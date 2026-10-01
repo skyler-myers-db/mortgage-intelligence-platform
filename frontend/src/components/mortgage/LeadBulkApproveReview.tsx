@@ -6,13 +6,17 @@ import { formatCount } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { Button, Chip } from '../Primitives';
 import { offerCounts } from './LeadBulkApproveReview.counts';
-import { bulkSampleCoverage, stratifiedSampleIds } from './LeadBulkApproveReview.coverage';
+import { bulkSampleCoverage } from './LeadBulkApproveReview.coverage';
+import { stratifiedSampleIds } from './LeadBulkApproveReview.sampler';
 import './LeadBulkApproveReview.css';
 
 // A bulk run's progress and report ride this lazy chunk too (tables-07),
 // and so does the bulk reject gate: none of it is in the LeadTable chunk.
 export { LeadBulkRunProgress, LeadBulkRunResult } from './LeadBulkRunStatus';
 export { LeadBulkRejectGate } from './LeadBulkRejectGate';
+export { LeadBulkCampaignHandoff } from './LeadBulkCampaignHandoff';
+export { bulkCanaryNotice } from './LeadBulkRunStatus.copy';
+export { runBulkApprove, runBulkReject } from './leadBulkDecisions';
 export { offerCounts } from './LeadBulkApproveReview.counts';
 
 /**

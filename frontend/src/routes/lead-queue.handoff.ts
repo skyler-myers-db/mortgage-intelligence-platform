@@ -12,8 +12,13 @@
  * silently), and every queue param Portfolio Builder cannot carry is named
  * in `notCarried`, an unknown one by its raw name. The place and view
  * params (sort, dir, row, view) are not filters and are never listed.
+ *
+ * Portfolio Builder's keys and options are mirrored here, not imported:
+ * importing portfolio-builder.logic split it into a 2.8 KiB br chunk that
+ * joined the Lead Queue route's closure. The parity test in
+ * lead-queue.handoff.test.ts pins the mirror to portfolio-builder.logic.
  */
-import { isPublicLenderRef } from '../lib/lenderFilters';
+import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import type { LeadTableCampaignHandoff } from '../components/mortgage/LeadTable.types';
 import {
   GROWTH_AGENT_PROOF_PARAMS,
@@ -21,9 +26,42 @@ import {
   LEAD_TABLE_VIEW_PARAM,
   parsePortfolioCriteria,
 } from './lead-queue.filters';
-import { NON_GEO_FILTER_GROUPS, URL_FILTER_KEYS } from './portfolio-builder.logic';
 
-type PortfolioBuilderKey = (typeof URL_FILTER_KEYS)[number];
+/** Portfolio Builder's URL filter keys (URL_FILTER_KEYS), in its order. */
+export const PB_FILTER_KEYS = [
+  'occupancy',
+  'lien_status',
+  'lender_relationship',
+  'target_lender_ref',
+  'owner_link',
+  'purchase_intent',
+  'product',
+  'min_equity_pct_label',
+  'marketing_eligibility',
+  'consent_status',
+  'recency',
+] as const;
+
+type PortfolioBuilderKey = (typeof PB_FILTER_KEYS)[number];
+
+/**
+ * Portfolio Builder's options per key (NON_GEO_FILTER_GROUPS); null where
+ * it has no fixed list (the target lender is verified against the
+ * tenant's lenders instead).
+ */
+export const PB_FILTER_OPTIONS: Readonly<Record<PortfolioBuilderKey, readonly string[] | null>> = {
+  occupancy: ['Owner-occupied', 'Non-owner-occupied', 'All'],
+  lien_status: ['Open 1st lien', 'Open HELOC', 'Free & clear', 'Any'],
+  lender_relationship: LENDER_RELATIONSHIP_OPTIONS,
+  target_lender_ref: null,
+  owner_link: ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'],
+  purchase_intent: ['All', 'Listed for sale', 'HELOC intent', 'Both'],
+  product: ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'],
+  min_equity_pct_label: ['≥ 15%', '≥ 25%', '≥ 40%', 'Any'],
+  marketing_eligibility: ['Eligible only', 'Any', 'Suppressed only'],
+  consent_status: ['Any', 'Opt-in', 'Opt-out', 'Unknown'],
+  recency: ['Any', 'Untouched 30d', 'Untouched 60d', 'Untouched 90d'],
+};
 
 /** The queue's "no filter" value per Portfolio Builder key. */
 const QUEUE_NO_OP: Record<PortfolioBuilderKey, string> = {
@@ -79,10 +117,6 @@ const QUEUE_ONLY_PORTFOLIO_KEYS: ReadonlySet<string> = new Set(['loan_product', 
 /** Not filters: where the reader is in the table, and its column preset. */
 const NEVER_LISTED: ReadonlySet<string> = new Set([...LEAD_TABLE_PLACE_PARAMS, LEAD_TABLE_VIEW_PARAM]);
 
-function pbOptions(key: PortfolioBuilderKey): readonly string[] | null {
-  return NON_GEO_FILTER_GROUPS.find((group) => group.key === key)?.options ?? null;
-}
-
 function queueStates(searchParams: URLSearchParams): string[] {
   const raw = searchParams.get('states') ?? searchParams.get('state') ?? '';
   const codes = raw.split(',').map((code) => code.trim().toUpperCase()).filter((code) => /^[A-Z]{2}$/.test(code));
@@ -101,11 +135,11 @@ export function buildPortfolioBuilderUrlFromQueue(
   };
   const states = queueStates(searchParams);
   if (states.length > 0) params.set('states', states.join(','));
-  for (const key of URL_FILTER_KEYS) {
+  for (const key of PB_FILTER_KEYS) {
     const effective = criteria[key];
     const spelled = effective === undefined ? undefined : PB_SPELLING[effective] ?? effective;
-    const options = pbOptions(key);
-    const carries = spelled !== undefined && (key === 'target_lender_ref' || options === null || options.includes(spelled));
+    const options = PB_FILTER_OPTIONS[key];
+    const carries = spelled !== undefined && (options === null || options.includes(spelled));
     params.set(key, carries ? spelled : QUEUE_NO_OP[key]);
     if (spelled !== undefined && !carries) listNotCarried(key.replace(/_/g, ' '));
     // A lender the queue could not verify was dropped from its own filter
@@ -115,7 +149,7 @@ export function buildPortfolioBuilderUrlFromQueue(
       listNotCarried('target lender');
     }
   }
-  const handled = new Set<string>([...URL_FILTER_KEYS, 'states', 'state']);
+  const handled = new Set<string>([...PB_FILTER_KEYS, 'states', 'state']);
   for (const [key, value] of searchParams) {
     if (handled.has(key) || NEVER_LISTED.has(key) || value.trim() === '') continue;
     // A queue-only portfolio filter counts only when the queue applies it

@@ -38,6 +38,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 
 import { clearToasts, getToasts } from '../../lib/toast';
 import { useLeadApprovalActions } from './useLeadApprovalActions';
+import { runBulkApprove, runBulkReject } from './leadBulkDecisions';
 
 const BORROWER = 'B-AAAAAAAAAAAA1';
 const OTHER = 'B-AAAAAAAAAAAA2';
@@ -80,6 +81,7 @@ function Harness({ canApprove }: { canApprove: boolean }) {
     campaignBindingBlocked: false,
     canApprove,
     tableWrapRef,
+    bulkRuns: () => ({ runBulkApprove, runBulkReject }),
   });
   // Expose the hook's latest closures to the test after every commit.
   useEffect(() => {
@@ -214,10 +216,13 @@ describe('useLeadApprovalActions approver gate', () => {
     expect(apiMocks.reject).not.toHaveBeenCalled();
     expect(getToasts()).toEqual([]);
 
+    act(() => actions!.openBulkReject());
+    expect(actions!.bulkRejectOpen).toBe(true);
     await act(async () => {
       outcomes.push(await actions!.bulkReject('low_intent', '  Q3 sweep: no intent signal.  '));
     });
     expect(outcomes[4]).toBe(true);
+    expect(actions!.bulkRejectOpen, 'a settled run closes its gate').toBe(false);
     expect(apiMocks.reject).toHaveBeenCalledTimes(2);
     const bodies = apiMocks.reject.mock.calls.map((call) => call[1] as { bulk_id: string; rationale: string });
     expect(new Set(bodies.map((body) => body.bulk_id)).size).toBe(1);

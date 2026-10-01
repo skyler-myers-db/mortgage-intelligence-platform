@@ -5,12 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
-import {
-  bulkSampleCoverage,
-  coveredOfferCodes,
-  stratifiedSampleIds,
-  type CoverageRow,
-} from './LeadBulkApproveReview.coverage';
+import { bulkSampleCoverage, coveredOfferCodes, type CoverageRow } from './LeadBulkApproveReview.coverage';
+import { stratifiedSampleIds } from './LeadBulkApproveReview.sampler';
 
 function rows(offers: readonly string[]): CoverageRow[] {
   return offers.map((offer, index) => ({ borrower_id: `B-${index}`, recommended_offer_code: offer }));

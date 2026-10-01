@@ -1,9 +1,9 @@
 import { formatCount } from '../../lib/formatters';
 import { Button } from '../Primitives';
+import { formatMinutesLeft } from './LeadBulkRunStatus.copy';
 import {
   bulkRunSummary,
   bulkRunVerb,
-  formatMinutesLeft,
   type BulkRunIssue,
   type BulkRunProgress,
   type BulkRunResult,
