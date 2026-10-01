@@ -31,6 +31,10 @@ pending or failed state; it must not claim success.
   replay) but return totals or the actor's own views only, never resolve the
   audit store, and write no row. The Lead Queue reads facet counts only when a
   person opens a filter menu, and the saved views only when the panel opens.
+  Count and facets refuse `borrower_ids` (422): an aggregate over named
+  borrowers would read their attributes with no `VIEW_LEADS` row, so a read of
+  named borrowers is the audited list only, and the Lead Queue shows a borrower
+  list's menus without counts.
 - Saving and deleting a view write `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` in
   the same Lakebase statement as the change (deletes are soft). The audit
   metadata carries the view id, the SHA-256 of its canonical params and the
@@ -75,6 +79,10 @@ the pull request that ships the behaviour, never earlier.
 | Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
 | Admin ledger explorer (`audit.list_events`, `audit.list_event_page`, `audit.audit_rollups`) | none | every read | audit-free until D-audit-reads-c3 ships `VIEW_AUDIT_LEDGER` |
+| Admin ledger explorer filters (`audit.audit_facets`, `audit.count_events`) | none | on an explicit filter-menu open / filter change | audit-free (admin-gated) until D-audit-reads-c3 |
+| Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` (422) | audit-free |
+| Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
+| Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
 
 **Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
 keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`
