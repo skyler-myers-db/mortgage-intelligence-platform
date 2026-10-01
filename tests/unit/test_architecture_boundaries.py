@@ -106,6 +106,11 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/loan-officers/assignments/{assignment_id}/outcome"): "tests/unit/test_assignment_outcome.py",
     ("POST", "/api/lookup/property-loan"): "tests/unit/test_lookup_router.py",
     ("POST", "/api/offers/recommend"): "tests/unit/test_offers_router.py",
+    # The /outreach decisions are per borrower by design (audit tables-07 /
+    # tables-02, report 12.4 #9): no "select all N matching" and no server
+    # batch endpoint; a bulk run is one request per borrower under one bulk_id.
+    # tests/unit/test_outreach_decision_models.py pins the route set and the
+    # request models; a new /outreach route needs that ruling revisited first.
     ("POST", "/api/outreach/approve"): "tests/unit/test_api_routes.py",
     ("POST", "/api/outreach/draft"): "tests/unit/test_api_routes.py",
     ("POST", "/api/outreach/reject"): "tests/unit/test_outreach_reject.py",

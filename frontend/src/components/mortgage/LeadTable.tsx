@@ -113,6 +113,7 @@ export function LeadTable({
   onExpandedChange,
   restoreScroll = false,
   headerStatus,
+  campaignHandoff = null,
 }: LeadTableProps) {
   // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
   // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
@@ -638,6 +639,10 @@ export function LeadTable({
           runKind={bulkRun.progress?.kind ?? null}
           samplesCoverAllOffers={samplesCoverAllOffers}
           runNotice={approval.bulkRunNotice}
+          allLoadedSelected={approval.headerCheckboxState.checked}
+          loadedCount={leads.length}
+          totalMatching={totalMatching}
+          campaignHandoff={campaignHandoff}
           bulkRejectOpen={approval.bulkRejectOpen}
           onOpenBulkReject={flow.bulkRejectFromToolbar}
           bulkRejectBtnRef={approval.bulkRejectBtnRef}

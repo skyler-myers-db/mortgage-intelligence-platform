@@ -20,11 +20,22 @@
  * Prototype.html:1501-1502. It opens the reject gate (one eligible row: that
  * row's reject panel); the gate itself (reason, shared note, counts) rides
  * the lazy bulk chunk and mounts in the `rejectGate` slot.
+ *
+ * Scope (audit tables-07 / tables-02, D-approval-flow-a3;
+ * deviation:bulk-scope-handoff): there is no "select all N matching". When
+ * every loaded row is selected and more borrowers match, a full-width
+ * `.bulk-actions__scope` line says the bulk actions apply only to the rows
+ * shown, and links to Portfolio Builder with the queue's filters (the link
+ * preloads that route's code only; it reads nothing).
  */
 
 import { useId, useState, type ReactNode, type RefObject } from 'react';
+import { Link } from 'react-router';
 import type { SalesTeamMember } from '../../types';
+import { formatCount } from '../../lib/formatters';
+import { preloadRouteForPath } from '../../lib/routePreloaders';
 import { Button } from '../Primitives';
+import type { LeadTableCampaignHandoff } from './LeadTable.types';
 import type { BulkToast } from './useLeadApprovalActions';
 import { bulkRunVerb, type BulkRunKind } from './useLeadBulkRun';
 import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
@@ -73,6 +84,16 @@ interface LeadTableBulkActionsProps {
   bulkRejectBtnRef?: RefObject<HTMLButtonElement | null>;
   /** The reject gate (LeadBulkRejectGate, lazy), shown while it is open. */
   rejectGate?: ReactNode;
+  /** Every loaded selectable row is selected (the header checkbox is checked). */
+  allLoadedSelected?: boolean;
+  /** Rows loaded on screen, and how many borrowers match the filters. */
+  loadedCount?: number;
+  totalMatching?: number | null;
+  campaignHandoff?: LeadTableCampaignHandoff | null;
+}
+
+function preloadPortfolioBuilder(): void {
+  preloadRouteForPath('/portfolio-builder');
 }
 
 const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
@@ -106,6 +127,10 @@ export function LeadTableBulkActions({
   onOpenBulkReject,
   bulkRejectBtnRef,
   rejectGate = null,
+  allLoadedSelected = false,
+  loadedCount = 0,
+  totalMatching = null,
+  campaignHandoff = null,
 }: LeadTableBulkActionsProps) {
   const armingId = useId();
   const [bulkRationale, setBulkRationale] = useState('');
@@ -276,6 +301,34 @@ export function LeadTableBulkActions({
         <span role="alert" className="text-danger fs-12" data-testid="lead-bulk-chunk-failed">
           The bulk review could not load, so nothing can be approved or rejected in bulk. Reload the page.
         </span>
+      )}
+      {allLoadedSelected && totalMatching !== null && totalMatching > loadedCount && (
+        <p className="bulk-actions__scope" data-testid="lead-bulk-scope">
+          <span>
+            All {formatCount(selectionCount)} loaded borrowers are selected. {formatCount(totalMatching)} match these
+            filters; bulk actions apply only to borrowers shown here.
+          </span>
+          {campaignHandoff && (
+            <>
+              <Link
+                to={campaignHandoff.href}
+                className="btn btn--ghost btn--sm"
+                onPointerEnter={preloadPortfolioBuilder}
+                onFocus={preloadPortfolioBuilder}
+                data-testid="lead-bulk-campaign-handoff"
+              >
+                {campaignHandoff.notCarried.length > 0
+                  ? 'Build a campaign from the filters that carry over'
+                  : 'Build a campaign from these filters'}
+              </Link>
+              {campaignHandoff.notCarried.length > 0 && (
+                <span className="muted" data-testid="lead-bulk-not-carried">
+                  Not carried: {campaignHandoff.notCarried.join(', ')}
+                </span>
+              )}
+            </>
+          )}
+        </p>
       )}
       {gateOpen && gateReview}
       {rejectGateOpen && rejectGate}
