@@ -35,6 +35,13 @@ class SessionResponse(BaseModel):
             "ledger. Grants no administrator or approver capability."
         ),
     )
+    presenter_mode: bool = Field(
+        default=False,
+        description=(
+            "Demo-only: gates demo affordances in product surfaces. Never an "
+            "authorization input."
+        ),
+    )
     actor_email: str | None = Field(
         default=None,
         description=(
@@ -135,6 +142,7 @@ async def get_session(request: Request) -> SessionResponse:
         can_access_admin=admin,
         can_approve=approver,
         can_read_audit=can_read_audit(request),
+        presenter_mode=settings.mip_presenter_mode,
         actor_email=identity,
         actor_display_name=display_name_for(identity),
         role_labels=role_labels_for(

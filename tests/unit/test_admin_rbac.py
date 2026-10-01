@@ -108,7 +108,7 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
     assert admitted.status_code == 200
     assert admitted.json() == {
         "can_access_admin": True, "can_approve": True, "can_read_audit": True,
-        "actor_email": None,
+        "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "actor_cache_key": None,
@@ -116,7 +116,7 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
     assert denied.status_code == 200
     assert denied.json() == {
         "can_access_admin": False, "can_approve": False, "can_read_audit": False,
-        "actor_email": None,
+        "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": [],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "actor_cache_key": None,
@@ -142,6 +142,7 @@ def test_session_and_admin_gate_share_email_allowlist_rule(
         "can_access_admin": True,
         "can_approve": True,
         "can_read_audit": True,
+        "presenter_mode": False,
         "actor_email": "operator@example.com",
         "actor_display_name": "operator",
         "role_labels": ["Administrator", "Approver"],
@@ -278,7 +279,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
     )
     assert session_denied.json() == {
         "can_access_admin": False, "can_approve": False, "can_read_audit": False,
-        "actor_email": None,
+        "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": [],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "actor_cache_key": None,
@@ -295,7 +296,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
     )
     assert session_admitted.json() == {
         "can_access_admin": True, "can_approve": True, "can_read_audit": True,
-        "actor_email": None,
+        "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "actor_cache_key": None,

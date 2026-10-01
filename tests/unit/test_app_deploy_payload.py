@@ -68,6 +68,7 @@ def _hermetic_operator_config(monkeypatch, tmp_path):
     for name in app_deploy_payload.SECRET_RESOURCE_BINDINGS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv(app_deploy_payload.PREVIOUS_SECRET_KID_ENV, raising=False)
+    monkeypatch.delenv("MIP_PRESENTER_MODE", raising=False)
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "test-mask-secret")
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_CURRENT", "test-action-secret")
 
@@ -303,6 +304,67 @@ def test_payload_includes_explicit_admin_operator_vars(monkeypatch) -> None:
 
     assert env["MIP_ADMIN_EMAILS"]["value"] == "admin@example.com"
     assert env["MIP_ADMIN_GROUP_NAME"]["value"] == "risk-admin"
+
+
+def test_payload_carries_the_auditor_allowlist_only_when_set(monkeypatch) -> None:
+    """D-audit-reads-c3: no auditor is bootstrapped; an operator's list rides
+    the payload (empty values are dropped, which is the fail-closed default)."""
+    for target in ("dev", "prod"):
+        env = _env_map(build_payload(source_code_path="/Workspace/app/files", target=target))
+        assert "MIP_AUDITOR_EMAILS" not in env
+        assert "MIP_AUDITOR_IDENTITIES" not in env
+
+    monkeypatch.setenv("MIP_AUDITOR_EMAILS", "auditor@example.com")
+    monkeypatch.setenv("MIP_AUDITOR_IDENTITIES", "audit-client")
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+
+    assert env["MIP_AUDITOR_EMAILS"] == {"name": "MIP_AUDITOR_EMAILS", "value": "auditor@example.com"}
+    assert env["MIP_AUDITOR_IDENTITIES"] == {"name": "MIP_AUDITOR_IDENTITIES", "value": "audit-client"}
+    assert "MIP_AUDITOR_EMAILS" not in app_deploy_payload.SAFE_RUNTIME_DEFAULTS
+
+
+@pytest.mark.parametrize("raw", ["yes", "1", "TRUE", " on "])
+def test_presenter_mode_rides_a_dev_payload_as_one_and_says_so(monkeypatch, capsys, raw) -> None:
+    monkeypatch.setenv("MIP_PRESENTER_MODE", raw)
+
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+
+    assert env["MIP_PRESENTER_MODE"] == {"name": "MIP_PRESENTER_MODE", "value": "1"}
+    assert capsys.readouterr().err.strip() == app_deploy_payload.PRESENTER_MODE_NOTICE
+
+
+@pytest.mark.parametrize("raw", [None, "", "off", "0", "false", "No"])
+def test_presenter_mode_is_omitted_when_off(monkeypatch, capsys, raw) -> None:
+    if raw is not None:
+        monkeypatch.setenv("MIP_PRESENTER_MODE", raw)
+
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+
+    assert "MIP_PRESENTER_MODE" not in env
+    assert "presenter mode" not in capsys.readouterr().err
+
+
+def test_presenter_mode_refuses_an_unparseable_value(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_PRESENTER_MODE", "maybe")
+
+    with pytest.raises(ValueError, match="MIP_PRESENTER_MODE must be one of"):
+        build_payload(source_code_path="/Workspace/app/files", target="dev")
+
+
+def test_presenter_mode_is_refused_for_prod_and_off_is_fine(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_PRESENTER_MODE", "true")
+    with pytest.raises(ValueError, match="refused for target prod"):
+        build_payload(source_code_path="/Workspace/app/files", target="prod")
+
+    monkeypatch.setenv("MIP_PRESENTER_MODE", "off")
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+    assert "MIP_PRESENTER_MODE" not in env
+
+
+def test_presenter_mode_is_not_an_operator_passthrough() -> None:
+    """Only the validated '1' may ever reach the runtime, never a raw value."""
+    assert "MIP_PRESENTER_MODE" not in app_deploy_payload.NON_SECRET_OPERATOR_VARS
+    assert "MIP_PRESENTER_MODE" not in app_deploy_payload.SAFE_RUNTIME_DEFAULTS
 
 
 def test_payload_allows_operator_to_enable_lead_rewarm(monkeypatch) -> None:

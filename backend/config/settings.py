@@ -18,7 +18,7 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from backend.schemas._validators_tenant import set_public_lender_name_provider
@@ -196,6 +196,19 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("MIP_PREVIEW_MIRROR", "PREVIEW_MIRROR"),
     )
+    # Demo workspaces only (D-shell-deviations-e1): gates demo affordances,
+    # never a guard, approval, audit or data path. Unparseable reads as off.
+    mip_presenter_mode: bool = Field(
+        default=False, validation_alias=AliasChoices("MIP_PRESENTER_MODE")
+    )
+
+    @field_validator("mip_presenter_mode", mode="before")
+    @classmethod
+    def _parse_presenter_mode(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        return isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on"}
+
     # Default Databricks-hosted model for the orchestrator/specialists.
     mip_agent_model: str = Field(
         default="databricks-claude-sonnet-4-5",

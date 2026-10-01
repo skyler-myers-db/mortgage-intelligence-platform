@@ -297,6 +297,57 @@ else
   echo "  admin allowlist: configured (MIP_ADMIN_EMAILS set)"
 fi
 
+# >>> auditor-sod-check
+# Auditor segregation-of-duties check (D-audit-reads-c3). Warn, never refuse; counts only.
+# Each list resolves from the shell env first, else .env.local (the admin
+# check's precedence above); no identity is ever printed.
+_AUDITOR_SOD="$(
+  MIP_AUDITOR_EMAILS="${MIP_AUDITOR_EMAILS:-}" \
+  MIP_AUDITOR_IDENTITIES="${MIP_AUDITOR_IDENTITIES:-}" \
+  MIP_ADMIN_EMAILS="${MIP_ADMIN_EMAILS:-}" \
+  MIP_ADMIN_IDENTITIES="${MIP_ADMIN_IDENTITIES:-}" \
+  MIP_APPROVER_EMAILS="${MIP_APPROVER_EMAILS:-}" \
+  MIP_APPROVER_IDENTITIES="${MIP_APPROVER_IDENTITIES:-}" \
+  "$PYTHON" - <<'PYEOF'
+import os
+from pathlib import Path
+
+try:
+    from dotenv import dotenv_values
+
+    DOTENV = dotenv_values(Path(".env.local"))
+except Exception:
+    DOTENV = {}
+
+
+def identities(*names):
+    found = set()
+    for name in names:
+        raw = (os.environ.get(name) or DOTENV.get(name) or "").strip()
+        found |= {token.strip().lower() for token in raw.split(",") if token.strip()}
+    return found
+
+
+AUDITORS = identities("MIP_AUDITOR_EMAILS", "MIP_AUDITOR_IDENTITIES")
+PRIVILEGED = identities(
+    "MIP_ADMIN_EMAILS", "MIP_ADMIN_IDENTITIES", "MIP_APPROVER_EMAILS", "MIP_APPROVER_IDENTITIES"
+)
+print(f"{len(AUDITORS)}\t{len(AUDITORS & PRIVILEGED)}")
+PYEOF
+)" || _AUDITOR_SOD=""
+[[ -n "$_AUDITOR_SOD" ]] || _AUDITOR_SOD=$'0\t0'
+IFS=$'\t' read -r _AUDITOR_COUNT _AUDITOR_OVERLAP <<<"$_AUDITOR_SOD"
+echo "  auditor allowlist: ${_AUDITOR_COUNT:-0} configured"
+if [[ "${_AUDITOR_OVERLAP:-0}" =~ ^[1-9][0-9]*$ ]]; then
+  if [[ "$_AUDITOR_OVERLAP" == "1" ]]; then
+    _AUDITOR_OVERLAP_TEXT="1 auditor identity also holds"
+  else
+    _AUDITOR_OVERLAP_TEXT="${_AUDITOR_OVERLAP} auditor identities also hold"
+  fi
+  echo "${YLW}[deploy] WARNING: ${_AUDITOR_OVERLAP_TEXT} the administrator or approver role; auditors should hold neither (segregation of duties).${RST}" >&2
+fi
+# <<< auditor-sod-check
+
 APP_RUNTIME_ENV="${APP_ENV:-}"
 if [[ -z "$APP_RUNTIME_ENV" ]]; then
   if [[ "$TARGET" == "dev" ]]; then

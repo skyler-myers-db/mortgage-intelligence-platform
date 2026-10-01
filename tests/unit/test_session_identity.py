@@ -58,6 +58,7 @@ def test_session_identity_matches_the_actor_the_approver_gate_admits(
         "can_access_admin": False,
         "can_approve": True,
         "can_read_audit": False,
+        "presenter_mode": False,
         "actor_email": _ACTOR,
         "actor_display_name": "Approver One",
         "role_labels": ["Approver"],
@@ -104,6 +105,7 @@ def test_session_ignores_forwarded_identity_when_the_edge_is_untrusted(
         "can_access_admin": False,
         "can_approve": False,
         "can_read_audit": False,
+        "presenter_mode": False,
         "actor_email": None,
         "actor_display_name": None,
         "role_labels": [],
@@ -287,3 +289,31 @@ def test_session_identity_fields_touch_no_warehouse_or_lakebase(
     assert response.status_code == 200
     assert response.json()["lender_name"] == settings.mip_lender_name
     assert calls == []
+
+
+# --- D-shell-deviations-e1: the demo-only presenter flag rides the session ---
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(None, False), ("1", True), ("banana", False)])
+def test_session_presenter_mode_follows_the_strictly_parsed_setting(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    raw: str | None,
+    expected: bool,
+) -> None:
+    """Off by default, on for a truthy value, and off (no boot error) for an
+    unparseable one; never an authorization input."""
+    from backend.config.settings import Settings
+
+    if raw is None:
+        monkeypatch.delenv("MIP_PRESENTER_MODE", raising=False)
+    else:
+        monkeypatch.setenv("MIP_PRESENTER_MODE", raw)
+    parsed = Settings(_env_file=None).mip_presenter_mode
+    monkeypatch.setattr(settings, "mip_presenter_mode", parsed)
+
+    body = client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""}).json()
+
+    assert body["presenter_mode"] is expected
+    assert body["can_access_admin"] is False
+    assert body["can_approve"] is False

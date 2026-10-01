@@ -220,6 +220,31 @@ def test_security_sensitive_defaults_are_fail_closed() -> None:
     # D-audit-reads-c3: no auditor unless configured.
     assert settings.auditor_emails == ""
     assert settings.auditor_identities == ""
+    # D-shell-deviations-e1: demo affordances are off unless configured.
+    assert settings.mip_presenter_mode is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1", True),
+        ("true", True),
+        (" YES ", True),
+        ("on", True),
+        ("0", False),
+        ("off", False),
+        ("", False),
+        ("banana", False),
+        ("2", False),
+    ],
+)
+def test_presenter_mode_parses_strictly_and_an_unparseable_value_fails_closed(
+    raw: str, expected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unparseable runtime value reads as off instead of crashing boot."""
+    monkeypatch.setenv("MIP_PRESENTER_MODE", raw)
+
+    assert Settings(_env_file=None).mip_presenter_mode is expected
 
 
 @pytest.mark.parametrize(
