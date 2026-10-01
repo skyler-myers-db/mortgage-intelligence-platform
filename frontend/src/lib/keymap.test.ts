@@ -342,3 +342,38 @@ describe('single-key preference', () => {
     _resetActorScopeForTests({ status: 'open', owner: NOBODY });
   });
 });
+
+describe('function keys (the toast region F8, wave-3 review #13)', () => {
+  const cleanups: Array<() => void> = [];
+
+  beforeEach(() => {
+    installLocalStorage();
+    clearSingleKeyShortcutsPreference();
+  });
+
+  afterEach(() => {
+    while (cleanups.length > 0) cleanups.pop()?.();
+    document.body.innerHTML = '';
+    expect(listKeyBindings()).toHaveLength(0);
+  });
+
+  it('F8 still fires with the single-key shortcuts off (WCAG 2.1.4 covers character keys only)', () => {
+    const f8 = vi.fn();
+    cleanups.push(registerKeyBinding({ id: 'toast-region', scope: 'global', keys: ['F8'], description: 'toasts', allowInEditable: true, run: f8 }));
+    setSingleKeyShortcutsEnabled(false);
+    const event = press(document.body, { key: 'F8' });
+    expect(f8).toHaveBeenCalledOnce();
+    expect(event.defaultPrevented).toBe(true);
+    press(document.body, { key: 'F8', ctrlKey: true });
+    expect(f8, 'a modified F8 is another chord').toHaveBeenCalledOnce();
+    expect(chordKeycaps('F8')).toEqual(['F8']);
+  });
+
+  it("'j' still does not fire with the single-key shortcuts off", () => {
+    const j = vi.fn();
+    cleanups.push(registerKeyBinding({ id: 'j', scope: 'lead-queue', keys: ['j'], description: 'next', run: j }));
+    setSingleKeyShortcutsEnabled(false);
+    press(document.body, { key: 'j' });
+    expect(j).not.toHaveBeenCalled();
+  });
+});

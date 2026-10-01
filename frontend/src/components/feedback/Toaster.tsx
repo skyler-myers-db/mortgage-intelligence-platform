@@ -11,6 +11,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router';
 import { AUDIT_EVENT_ID_PARAM, AUDIT_EXPLORER_PATH, auditEventHref } from '../../lib/auditLinks';
+import { registerKeyBinding } from '../../lib/keymap';
 import { subscribeModalLayers, topModalLayer } from '../../lib/modalLayers';
 import { dismissToast, getToasts, subscribeToasts, type Toast, type ToastAction } from '../../lib/toast';
 import { useApp } from '../AppContext';
@@ -76,12 +77,15 @@ import './Toaster.css';
  * neutral edge and the info glyph, in the polite list, never timed), one
  * optional action per toast (ToastActionRow: it runs once and dismisses the
  * toast with the Close hand-off, held aria-disabled behind a countdown while
- * a Retry-After runs). Over a modal the region's portal container stops
- * pointer, click and key events from bubbling past it (Tab excepted; see
- * `stopAtModalPortal`).
+ * a Retry-After runs), and a keyboard path: F8 focuses the newest toast's
+ * live action, else its Close, from anywhere (listed in the `?` sheet). Over
+ * a modal the region's portal container stops pointer, click and key events
+ * from bubbling past it (Tab excepted; see `stopAtModalPortal`).
  */
 
 export const SUCCESS_TOAST_MS = 8000;
+
+export const TOAST_REGION_SHORTCUT = 'Move focus to the newest notification';
 
 /**
  * Re-hosted in a modal dialog, the toast portal sits inside that dialog's DOM,
@@ -93,7 +97,9 @@ export const SUCCESS_TOAST_MS = 8000;
  * toast's own handlers are untouched. Tab is never stopped: useFocusTrap's
  * Tab wrap is a window bubble listener, and stopping it here would let a
  * keyboard user tab out of the modal (WCAG 2.4.3 / 2.1.2). Escape is a window
- * capture listener (lib/escapeStack) and focus events are left alone.
+ * capture listener (lib/escapeStack) and focus events are left alone. Known
+ * consequence: the keymap's window listener does not see a non-Tab key typed
+ * while focus is on a toast control inside a modal.
  */
 const MODAL_STOPPED_EVENTS = [
   'click',
@@ -124,6 +130,20 @@ function runToastAction(action: ToastAction): void {
       throw err;
     });
   }
+}
+
+/** F8: focus the newest toast's live action, else its Close; false when there is none. */
+function focusNewestToast(region: HTMLElement | null): boolean {
+  const all = getToasts();
+  const newest = all[all.length - 1];
+  if (!region || !newest) return false;
+  const card = region.querySelector<HTMLElement>(`[data-toast-id="${newest.id}"]`);
+  const target =
+    card?.querySelector<HTMLElement>('.toast__action:not([aria-disabled="true"])') ??
+    card?.querySelector<HTMLElement>('.toast__close');
+  if (!target) return false;
+  target.focus();
+  return true;
 }
 
 function supportsPopover(element: HTMLElement): boolean {
@@ -352,6 +372,23 @@ export function Toaster() {
       portal.remove();
     };
   }, [portal]);
+
+  // wave-3 review #13: a keyboard path to the region (it is already the
+  // named 'Notifications' landmark). A function key, so it fires with the
+  // single-key shortcuts off (lib/keymap) and while typing; with no toast it
+  // declines and F8 falls through to the browser.
+  useEffect(
+    () =>
+      registerKeyBinding({
+        id: 'toast-region',
+        scope: 'global',
+        keys: ['F8'],
+        description: TOAST_REGION_SHORTCUT,
+        allowInEditable: true,
+        run: () => focusNewestToast(regionRef.current),
+      }),
+    [],
+  );
 
   const onFocus = (event: FocusEvent<HTMLElement>) => {
     setFocusWithin(true);

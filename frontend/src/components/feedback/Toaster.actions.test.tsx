@@ -2,9 +2,9 @@
  * @vitest-environment happy-dom
  *
  * The shell toast platform (W5b; states-07 item 1 and states-08 item 3
- * prerequisites and the 12.3 toast-in-modal leftover;
+ * prerequisites, wave-3 review #13 and the 12.3 toast-in-modal leftover;
  * deviation:toast-actions-and-path) at the rendered layer: the info tone, the
- * one-shot action and its Retry-After countdown, and the region inside a
+ * one-shot action and its Retry-After countdown, F8, and the region inside a
  * modal: a click or a key on a toast control never reaches the dialog
  * portal's React ancestors, while Tab still wraps in the dialog's focus trap.
  */
@@ -14,8 +14,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useModalDialog } from '../../hooks/useModalDialog';
+import { listKeyBindings } from '../../lib/keymap';
 import { clearToasts, getToasts, toast } from '../../lib/toast';
-import { SUCCESS_TOAST_MS, Toaster } from './Toaster';
+import { SUCCESS_TOAST_MS, TOAST_REGION_SHORTCUT, Toaster } from './Toaster';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -36,7 +37,7 @@ function key(target: EventTarget, init: KeyboardEventInit): KeyboardEvent {
   return event;
 }
 
-describe('Toaster: info and actions', () => {
+describe('Toaster: info, actions and F8', () => {
   let root: Root;
   let container: HTMLElement;
 
@@ -167,6 +168,29 @@ describe('Toaster: info and actions', () => {
     expect(cards()).toHaveLength(2);
     expect(cards().some((card) => card.querySelector('.toast__count'))).toBe(false);
   });
+
+  it('F8 focuses the newest toast (its live action, else its Close) from anywhere, and declines with none', () => {
+    expect(listKeyBindings().find((binding) => binding.id === 'toast-region')?.description).toBe(TOAST_REGION_SHORTCUT);
+    const field = document.createElement('input');
+    document.body.appendChild(field);
+    act(() => field.focus());
+    expect(key(field, { key: 'F8' }).defaultPrevented, 'no toast: F8 falls through').toBe(false);
+    expect(document.activeElement).toBe(field);
+
+    act(() => {
+      toast.success('Build saved');
+      toast.error('Too many requests', { action: { label: 'Retry', onAction: () => undefined }, retryAfterMs: 5_000 });
+    });
+    expect(key(field, { key: 'F8' }).defaultPrevented).toBe(true);
+    const newest = cards().find((card) => card.textContent?.includes('Too many requests'));
+    expect(document.activeElement, 'the held action is skipped: Close').toBe(closeButton(newest));
+
+    act(() => {
+      toast.info('Assignment recorded', { action: { label: 'View receipt', onAction: () => undefined } });
+    });
+    key(document.body, { key: 'F8' });
+    expect(document.activeElement?.textContent).toBe('View receipt');
+  });
 });
 
 /** A parent with React handlers whose modal renders through a body portal, as BorrowerProofDrawer does. */
@@ -296,6 +320,16 @@ describe('Toaster inside a modal dialog', () => {
     const event = key(first as HTMLButtonElement, { key: 'Tab', shiftKey: true });
     expect(event.defaultPrevented).toBe(true);
     expect(document.activeElement?.id).toBe('dialog-close');
+  });
+
+  it('F8 pressed on a dialog control focuses the newest toast inside the modal', () => {
+    const dialog = openModal();
+    raiseTwoActionToasts();
+    const own = document.getElementById('dialog-close') as HTMLButtonElement;
+    act(() => own.focus());
+    key(own, { key: 'F8' });
+    expect(document.activeElement?.textContent).toBe('Retry reject');
+    expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
   it('with no modal nothing is stopped: a toast click bubbles to the document', () => {
