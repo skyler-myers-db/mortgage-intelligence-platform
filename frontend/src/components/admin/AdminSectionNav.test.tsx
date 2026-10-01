@@ -18,7 +18,10 @@ import { ADMIN_SECTIONS, AdminSectionNav, type AdminStatusItem } from './AdminSe
  * Two observers share the section roots: the BAND (landing line to 40% down
  * the scroller, bottom margin -60%) and the VIEW (landing line to the
  * scroller's bottom). The section a link went to holds the marker while it is
- * in view; otherwise the first section in the band has it.
+ * in view AND still sits where the link landed it (on the line, or below it
+ * with the scroller at its end); otherwise the first section in the band has
+ * it. In this DOM the landing line is 0 and every box sits at 0 unless
+ * `layout` moves it.
  */
 
 type ObserverCallback = (entries: Array<Pick<IntersectionObserverEntry, 'isIntersecting' | 'target'>>) => void;
@@ -93,6 +96,22 @@ function render(entry = '/admin-config?tab=x') {
 }
 
 const links = () => [...document.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Administration sections"] a')];
+const scroller = () => document.querySelector('main.main') as HTMLElement;
+
+/**
+ * Live geometry for the hold check: each listed section's top, in px below
+ * the scroller (the landing line is 0 here), and whether the scroller is at
+ * its end. A user's scroll moves the followed section off its landing.
+ */
+function layout(tops: Record<string, number>, { atEnd }: { atEnd: boolean }) {
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const top = tops[this.id] ?? 0;
+    return { top, bottom: top + 200, left: 0, right: 0, width: 0, height: 200, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+  });
+  Object.defineProperty(scroller(), 'scrollHeight', { configurable: true, value: atEnd ? 0 : 4000 });
+}
+
+const userScroll = () => act(() => scroller().dispatchEvent(new Event('scroll')));
 const current = () => links().filter((link) => link.getAttribute('aria-current') === 'location').map((link) => link.textContent);
 
 beforeEach(() => {
@@ -225,6 +244,60 @@ describe('AdminSectionNav', () => {
     // ...and it does not take the marker back by re-entering the view.
     fire(view(), [['audit', true]]);
     expect(current()).toEqual(['Data operations']);
+  });
+
+  it('hands the marker on once the user scrolls the followed section off its landing, though it is still in view', () => {
+    // Followed 'Data operations', then wheeled up about 450px (fix round 2):
+    // the grid row above now sits on the line and Data operations, pushed
+    // down, is still partly in view.
+    render('/admin-config?tab=x#data-operations');
+    fire(view(), [['data-operations', true], ['buyer-readiness', true]]);
+    fire(band(), [['data-operations', true]]);
+    expect(current()).toEqual(['Data operations']);
+
+    layout({ 'data-operations': 450 }, { atEnd: false });
+    fire(band(), [['offer-rules', true], ['audit', true], ['data-sources', true], ['data-operations', false]]);
+
+    expect(current()).toEqual(['Offer rules']);
+  });
+
+  it('re-checks the hold on the scroll itself when no section crosses a band edge', () => {
+    // Followed 'Appearance' at the page end, then wheeled up about 600px.
+    render('/admin-config?tab=x#appearance');
+    layout({ appearance: 300 }, { atEnd: true });
+    fire(band(), [['activation', true]]);
+    fire(view(), [['activation', true], ['appearance', true]]);
+    expect(current()).toEqual(['Appearance']);
+
+    layout({ appearance: 900 }, { atEnd: false });
+    userScroll();
+
+    expect(current()).toEqual(['Activation']);
+  });
+
+  it('keeps the hold through a scroll that leaves the followed section on its landing (scroll anchoring)', () => {
+    render('/admin-config?tab=x#audit');
+    fire(band(), [['offer-rules', true], ['audit', true], ['data-sources', true]]);
+    fire(view(), [['offer-rules', true], ['audit', true], ['data-sources', true]]);
+    expect(current()).toEqual(['Audit ledger']);
+
+    // A panel above loaded and anchoring moved scrollTop, not the section.
+    layout({}, { atEnd: false });
+    userScroll();
+    fire(band(), [['live-probes', false]]);
+
+    expect(current()).toEqual(['Audit ledger']);
+  });
+
+  it('lets the band decide for a hash the scroller was restored away from', () => {
+    // Back to '#audit' after the user had scrolled off it: the restored offset
+    // leaves Audit ledger in view but nowhere near the landing line.
+    render('/admin-config?tab=x#audit');
+    layout({ 'offer-rules': 300, audit: 300, 'data-sources': 300 }, { atEnd: false });
+    fire(band(), [['live-probes', true], ['offer-rules', true], ['audit', true]]);
+    fire(view(), [['live-probes', true], ['offer-rules', true], ['audit', true]]);
+
+    expect(current()).toEqual(['Live probes']);
   });
 
   it('marks a linked section that cannot scroll up to the landing line (the page end)', () => {

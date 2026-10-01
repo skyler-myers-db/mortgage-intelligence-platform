@@ -56,6 +56,12 @@ const SPY_BOTTOM_MARGIN = '-60%';
 const SPY_LANDING_SLACK_PX = 1;
 
 /**
+ * How far from where its link landed it the followed section may sit and
+ * still hold the marker: sub-pixel scroll rounding, never a user's scroll.
+ */
+const SPY_LANDED_TOLERANCE_PX = 4;
+
+/**
  * How far below the scroller's top edge a hash or focus scroll lands a
  * section: the scroller's scroll-padding plus the section's scroll-margin,
  * which AdminSectionNav.css sets to --nav-clear (the route nav AND the focus
@@ -74,12 +80,15 @@ function landingInset(scroller: HTMLElement | null, sectionRoot: Element | undef
 
 /**
  * The section being read. The section a link (the location hash) went to
- * holds the marker while it is in view below the bars: Offer rules, Audit
+ * holds the marker while it sits where the link landed it: Offer rules, Audit
  * ledger and Data sources share one grid row, and the last sections cannot
  * scroll up to the landing line, so position alone would name a neighbour.
- * Once it has left the view, the marker goes to the first section (in page
- * order) intersecting the band from the landing line to 40% down the
- * scroller. Null where IntersectionObserver is missing; the links still
+ * Any scroll of the user's own moves it off that landing and releases the
+ * hold for good (fix round 2: holding while it was merely in view kept the
+ * marker on it after the user scrolled away). From then on, and for a hash
+ * the scroller was restored away from, the marker goes to the first section
+ * (in page order) intersecting the band from the landing line to 40% down
+ * the scroller. Null where IntersectionObserver is missing; the links still
  * work, without a marker.
  *
  * Each section's CURRENT root is observed: a panel that replaces its root
@@ -115,15 +124,39 @@ function useSectionInView(
       return Math.ceil(landingInset(scroller, root ?? undefined, bars)) + SPY_LANDING_SLACK_PX;
     }
 
+    /**
+     * Whether the held section still sits where following its link put it:
+     * its top on the landing line or, where the page ends before it can reach
+     * the line, the scroller at its end with that top below the line. Read
+     * from the live geometry, so scroll anchoring (the section kept in place
+     * while a panel above it loads) holds and a wheel, key or scrollbar
+     * scroll does not.
+     */
+    function holdLanded(id: string): boolean {
+      const root = observedRoots.get(id);
+      if (!scroller || !root) return true;
+      const line = landingInset(scroller, root, bars);
+      const top = root.getBoundingClientRect().top - scroller.getBoundingClientRect().top - scroller.clientTop;
+      if (Math.abs(top - line) <= SPY_LANDED_TOLERANCE_PX) return true;
+      const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - SPY_LANDED_TOLERANCE_PX;
+      return atEnd && top > line;
+    }
+
     function update(): void {
-      if (held && inView.has(held)) {
+      if (held && inView.has(held) && holdLanded(held)) {
         heldSeen = true;
         setCurrent(held);
         return;
       }
-      if (heldSeen) held = null;
+      if (held && (heldSeen || inView.has(held))) held = null;
       const first = sections.find((section) => inBand.has(section.id));
       if (first) setCurrent(first.id);
+    }
+
+    // A scroll that crosses no band edge delivers no observer entry; the
+    // hold is re-checked on the scroll itself.
+    function onScroll(): void {
+      if (held) update();
     }
 
     function record(ids: Set<string>): IntersectionObserverCallback {
@@ -178,6 +211,7 @@ function useSectionInView(
     }
 
     connect();
+    scroller?.addEventListener('scroll', onScroll, { passive: true });
     const body = nav.parentElement;
     let replacements: MutationObserver | null = null;
     if (typeof MutationObserver !== 'undefined' && body) {
@@ -185,6 +219,7 @@ function useSectionInView(
       replacements.observe(body, { childList: true, subtree: true });
     }
     return () => {
+      scroller?.removeEventListener('scroll', onScroll);
       replacements?.disconnect();
       for (const observer of observers) observer.disconnect();
     };
