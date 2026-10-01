@@ -628,6 +628,12 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             validate_row_count(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"section_index"}):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < 20):
+            raise AuditMetadataValueViolation(field, "must be a planned section index")
+    for field, value in _metadata_values_for(metadata, {"verification_verdict"}):
+        if value is not None and str(value) not in {"verified", "verified_rows_digest"}:
+            raise AuditMetadataValueViolation(field, "must be a governed verification verdict")
     for field, value in _metadata_values_for(metadata, {"per_lo_counts"}):
         if value is None:
             continue

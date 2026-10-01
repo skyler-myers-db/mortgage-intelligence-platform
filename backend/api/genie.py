@@ -680,7 +680,9 @@ def genie_message_status(
     re-signed for the caller, since the job row holds neither.
     """
     # AUDIT EXEMPT: read-only poll of the caller's own completion job; the
-    # job's completion wrote the turn's RUN_GENIE row exactly once.
+    # job's completion wrote the turn's RUN_GENIE row exactly once. Verified
+    # sections it may carry were each audited (GENIE_SECTION_REVEALED) by
+    # the job's sections writer before they were stored, never by this read.
     actor, live_campaign_run_marker, _claims = _verified_turn(payload, request)
     job = read_for_actor(
         lakebase,
@@ -688,6 +690,8 @@ def genie_message_status(
         actor=actor,
         conversation_id=payload.conversation_id,
         message_id=payload.message_id,
+        with_sections=True,
+        known_sections_rev=payload.sections_rev,
     )
     if job is None:
         raise HTTPException(status_code=404, detail="Genie completion job not found")
@@ -697,6 +701,7 @@ def genie_message_status(
         actor=actor,
         live_campaign_run_marker=live_campaign_run_marker,
         typical_seconds=typical_seconds_for(lakebase, job),
+        known_sections_rev=payload.sections_rev,
     )
 
 

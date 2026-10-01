@@ -32,9 +32,10 @@ from fastapi.testclient import TestClient
 from backend.main import _backpressure_controller, app
 from backend.services import genie_completion_jobs as jobs
 from backend.services import genie_completion_runner as runner
+from backend.services import genie_completion_sections as sections
 from backend.services.genie_answers import GenieAnswerSection, GenieMessageResponse
 from backend.services.genie_client import GenieResponse
-from backend.services.genie_completion_stages import GENIE_JOB_CANCELLED_HINT
+from backend.services.genie_completion_stages import GENIE_JOB_CANCELLED_HINT, report_sections
 from backend.services.genie_progress import genie_question_hash
 from backend.services.repositories.databricks_repo import DatabricksGenieRepository
 from backend.services.resilience import CircuitBreaker
@@ -507,6 +508,87 @@ def test_failing_stage_writes_never_fail_the_answer_and_warn_once(monkeypatch: A
     assert 1 <= lakebase.job_statements.count("stage") <= len(_PIPELINE)
     warnings = [record for record in caplog.records if record.getMessage() == "genie_job_stage_write_failed"]
     assert len(warnings) == 1
+
+
+# --------------------------------- verified sections (genie-01 phase 1b, R1)
+
+
+def _section(index: int) -> dict[str, Any]:
+    body = GenieAnswerSection(
+        title=f"Part {index}", question=f"Part {index}?", answer="Illinois leads.",
+        sql_query="SELECT 1 FROM mip.gold.borrower_360", row_count=1, table_rows=[{"state": "IL"}],
+    )
+    return {"index": index, **body.model_dump(mode="json")}
+
+
+class _RevealingRepo(FakeRepo):
+    """Stands in for the sweep: reports three verified sections, waits until
+    the writer stored them, then finishes the governed turn."""
+
+    def __init__(self, lakebase: FakeJobLakebase, audit: FakeAudit) -> None:
+        super().__init__()
+        self.lakebase, self.audit = lakebase, audit
+        self.at_reveal: dict[str, Any] = {}
+
+    def respond_existing(self, question: str, *, conversation_id: str, message_id: str) -> GenieMessageResponse:
+        self.at_reveal["thread"] = threading.get_ident()
+        report_sections([_section(0), _section(1), _section(2)])
+        deadline = time.monotonic() + 10
+        while not self.lakebase.sections_writes and time.monotonic() < deadline:
+            time.sleep(0.01)
+        row = self.lakebase.only_job()
+        self.at_reveal.update(
+            stored=list(self.lakebase.sections_writes),
+            run_query_rows=len(self.audit.run_query_rows()),
+            recorded_at=row["recorded_at"],
+            revealed_rows=[r for r in self.lakebase.audit_rows if r["event_type"] == "GENIE_SECTION_REVEALED"],
+        )
+        return super().respond_existing(question, conversation_id=conversation_id, message_id=message_id)
+
+
+def test_verified_sections_are_audited_and_stored_off_the_governed_thread_before_the_record(monkeypatch: Any) -> None:
+    lakebase, audit = FakeJobLakebase(), FakeAudit()
+    repo = _RevealingRepo(lakebase, audit)
+    written_on: list[int] = []
+    write = sections.write_sections
+
+    def recording(*args: Any, **kwargs: Any) -> None:
+        written_on.append(threading.get_ident())
+        write(*args, **kwargs)
+
+    monkeypatch.setattr(sections, "write_sections", recording)
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+
+    assert post_complete(TestClient(app)).status_code == 202
+    job = wait_for_job(lakebase)
+
+    assert job["status"] == "succeeded" and job["sections_json"] is None, "the terminal state NULLs the reveal"
+    stored = repo.at_reveal["stored"]
+    assert [item["index"] for item in stored[-1]["sections"]] == [0, 1, 2]
+    assert all("confirmation_token" not in str(item) for item in stored)
+    assert (repo.at_reveal["run_query_rows"], repo.at_reveal["recorded_at"]) == (0, None)
+    assert len(repo.at_reveal["revealed_rows"]) == 3, "audited before it could be served (R1)"
+    assert written_on and repo.at_reveal["thread"] not in written_on
+    assert len(audit.run_query_rows()) == 1
+
+
+def test_a_failing_sections_write_never_fails_the_answer(monkeypatch: Any) -> None:
+    lakebase, audit = FakeJobLakebase(), FakeAudit()
+
+    def explode(*_: Any, **__: Any) -> None:
+        raise RuntimeError("sections write exploded")
+
+    class _Repo(FakeRepo):
+        def respond_existing(self, question: str, *, conversation_id: str, message_id: str) -> GenieMessageResponse:
+            report_sections([_section(0), _section(1), _section(2)])
+            return super().respond_existing(question, conversation_id=conversation_id, message_id=message_id)
+
+    monkeypatch.setattr(sections, "write_sections", explode)
+    install(monkeypatch, repo=_Repo(), audit=audit, lakebase=lakebase)
+
+    assert post_complete(TestClient(app)).status_code == 202
+    assert wait_for_job(lakebase)["status"] == "succeeded"
+    assert len(audit.run_query_rows()) == 1
 
 
 # ------------------------------------------ cancel (audit 2026-09-21 genie-03)

@@ -290,6 +290,14 @@ class GenieCompletionJobStatus(BaseModel):
     before its governed record existed. ``typical_seconds`` (audit genie-01)
     is the recent median completion time of this job's class (deep or
     single), only while the job still runs and only with enough samples.
+
+    Verified sections (audit genie-01 phase 1b), only while the job runs and
+    no cancel was requested: ``verified_sections`` counts the deep sweep's
+    sub-analyses that passed their own checks so far, ``sections_rev`` is
+    their revision, and ``revealed_sections`` carries them, in plan order,
+    once the count reaches the sweep's three-section floor and only when
+    the revision differs from the one the poll sent. Each was audited before
+    it was stored; none carries actions. A terminal job never carries them.
     """
 
     kind: Literal["genie_completion_job"] = "genie_completion_job"
@@ -304,6 +312,9 @@ class GenieCompletionJobStatus(BaseModel):
     error_hint: str | None = None
     response: GenieMessageResponse | None = None
     typical_seconds: int | None = None
+    verified_sections: int | None = Field(default=None, ge=0, le=20)
+    sections_rev: int | None = Field(default=None, ge=0)
+    revealed_sections: list[GenieAnswerSection] | None = Field(default=None, max_length=12)
 
 
 class GenieCancelResponse(BaseModel):

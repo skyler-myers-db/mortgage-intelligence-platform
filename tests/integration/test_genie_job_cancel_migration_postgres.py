@@ -45,6 +45,8 @@ _EXPECTED_CHECKS = {
     "genie_completion_jobs_stage_chk",
     "genie_completion_jobs_cancel_or_record_chk",
     "genie_completion_jobs_cancelled_shape_chk",
+    # 2026_10_02 (genie-01 phase 1b): the verified-sections size CHECK.
+    "genie_completion_jobs_sections_size_chk",
 }
 
 

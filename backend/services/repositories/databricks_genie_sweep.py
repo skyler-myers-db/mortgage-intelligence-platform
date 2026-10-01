@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 from backend.services.genie_answers import (
     GenieAnswerSection,
@@ -27,7 +27,11 @@ from backend.services.genie_answers import (
     GenieReasoningStep,
     default_follow_up_questions,
 )
-from backend.services.genie_completion_stages import GenieJobStage, report_stage
+from backend.services.genie_completion_stages import (
+    GenieJobStage,
+    report_sections,
+    report_stage,
+)
 from backend.services.observability import emit
 from backend.services.repositories.databricks_genie_sweep_plan import (  # noqa: F401 - re-exported by name
     _DEPTH_EXPLICIT_RE,
@@ -120,6 +124,26 @@ def _section_is_renderable(title: str | None, response: GenieMessageResponse) ->
     if genie_visible_text_unsafe(_without_allowed_literals(response.question, literals)):
         return False
     return not genie_response_has_unsafe_visible_text(response)
+
+
+_SectionVerdict = Literal["ship", "unsafe", "no_content"]
+
+
+def _section_verdict(title: str | None, response: GenieMessageResponse | None) -> _SectionVerdict:
+    """The shipping verdict the post-loop used to compute, now per result.
+
+    ``ship``: governed content that passed the section's own visible-text
+    scan; ``unsafe``: governed content the scan withheld; ``no_content``:
+    no result, a non-data-bearing source or nothing a reader can use.
+    """
+
+    if (
+        response is not None
+        and response.source in _DATA_BEARING_SOURCES
+        and _has_rendered_prose(response)
+    ):
+        return "ship" if _section_is_renderable(title, response) else "unsafe"
+    return "no_content"
 
 
 def _narrative_was_withheld(response: GenieMessageResponse) -> bool:
@@ -330,6 +354,42 @@ def _labeled_sql(sections: list[tuple[str, GenieMessageResponse]]) -> str | None
     return "\n\n".join(parts) if parts else None
 
 
+def _answer_section(
+    title: str | None, sub_question: str, response: GenieMessageResponse
+) -> GenieAnswerSection:
+    """One shipped sub-analysis as it renders; the reveal and the final
+    composition both build it here, so a revealed section IS the final one."""
+
+    return GenieAnswerSection(
+        title=title or sub_question,
+        question=sub_question,
+        answer=(response.answer or "").strip(),
+        trusted_assets=list(response.trusted_assets),
+        sql_query=response.sql_query,
+        row_count=response.row_count,
+        table_rows=response.table_rows,
+        visualization=response.visualization,
+        narrative_withheld=_narrative_was_withheld(response),
+    )
+
+
+def _report_verified_sections(
+    planned: list[str],
+    titles: dict[str, str | None],
+    results: list[GenieMessageResponse | None],
+    verdicts: list[_SectionVerdict],
+) -> None:
+    """Report every section judged ``ship`` so far, in PLAN order (genie-01
+    phase 1b). Never a section before its verdict; never the synthesis."""
+
+    snapshot: list[dict[str, Any]] = []
+    for index, (sub_question, response) in enumerate(zip(planned, results, strict=True)):
+        if verdicts[index] == "ship" and response is not None:
+            section = _answer_section(titles.get(sub_question), sub_question, response)
+            snapshot.append({"index": index, **section.model_dump(mode="json")})
+    report_sections(snapshot)
+
+
 def run_planned_sweep(
     repo: DatabricksGenieRepository,
     question: str,
@@ -348,6 +408,9 @@ def run_planned_sweep(
 
     started = time.monotonic()
     report_stage(GenieJobStage.PLANNING)
+    # A second sweep in the same turn (the outcome-triggered planner after a
+    # policy_blocked turn) starts its reveal from nothing.
+    report_sections([])
     planned_items, dropped = plan_sub_analyses(repo, question, deep=deep)
     planned = [question_text for _, question_text in planned_items]
     titles = {question_text: title for title, question_text in planned_items}
@@ -401,6 +464,9 @@ def run_planned_sweep(
         return response
 
     results: list[GenieMessageResponse | None] = [None] * len(planned)
+    # Judged as each result is collected, so a section is revealed once it
+    # has passed its own checks; the post-loop reads these verdicts.
+    verdicts: list[_SectionVerdict] = ["no_content"] * len(planned)
     with ThreadPoolExecutor(max_workers=_SWEEP_MAX_WORKERS) as pool:
         futures = {
             pool.submit(_one, sub_question): index
@@ -414,12 +480,19 @@ def run_planned_sweep(
                 if remaining <= 0:
                     break
                 done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+                collected = [futures[future] for future in done]
                 for future in done:
                     try:
                         results[futures[future]] = future.result()
                     except Exception:  # noqa: BLE001 - becomes a disclosed gap
                         results[futures[future]] = None
+                # The stage report (a cancel point) still comes first, so a
+                # stopped sweep is never delayed by judging what it collected.
                 report_stage(GenieJobStage.RESEARCHING, len(planned) - len(pending), len(planned))
+                for index in collected:
+                    verdicts[index] = _section_verdict(titles.get(planned[index]), results[index])
+                if any(verdicts[index] == "ship" for index in collected):
+                    _report_verified_sections(planned, titles, results, verdicts)
         finally:
             # Also when a stage report raises the owner's cancel: sub-turns
             # that have not started never start.
@@ -430,13 +503,9 @@ def run_planned_sweep(
     gaps: list[str] = list(dropped)
     unfinished = 0
     withheld_by_guard = 0
-    for sub_question, response in zip(planned, results, strict=True):
-        if (
-            response is not None
-            and response.source in _DATA_BEARING_SOURCES
-            and _has_rendered_prose(response)
-        ):
-            if not _section_is_renderable(titles.get(sub_question), response):
+    for index, (sub_question, response) in enumerate(zip(planned, results, strict=True)):
+        if response is not None and verdicts[index] != "no_content":
+            if verdicts[index] == "unsafe":
                 withheld_by_guard += 1
                 emit(
                     log,
@@ -493,21 +562,10 @@ def run_planned_sweep(
     synthesis, synthesis_gap = _synthesize_closing(repo, question, sections, deep=deep)
     if synthesis_gap:
         gaps.append(synthesis_gap)
-    answer_sections: list[GenieAnswerSection] = []
-    for sub_question, response in sections:
-        answer_sections.append(
-            GenieAnswerSection(
-                title=titles.get(sub_question) or sub_question,
-                question=sub_question,
-                answer=(response.answer or "").strip(),
-                trusted_assets=list(response.trusted_assets),
-                sql_query=response.sql_query,
-                row_count=response.row_count,
-                table_rows=response.table_rows,
-                visualization=response.visualization,
-                narrative_withheld=_narrative_was_withheld(response),
-            )
-        )
+    answer_sections = [
+        _answer_section(titles.get(sub_question), sub_question, response)
+        for sub_question, response in sections
+    ]
     body_parts: list[str] = []
     if synthesis:
         body_parts.append(f"**Summary**\n\n{synthesis}")

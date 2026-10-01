@@ -21,9 +21,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from backend.services.genie_actions import issue_response_action_tokens
-from backend.services.genie_answers import GenieCompletionJobStatus, GenieMessageResponse
+from backend.services.genie_answers import (
+    GenieAnswerSection,
+    GenieCompletionJobStatus,
+    GenieMessageResponse,
+)
 from backend.services.genie_completion_jobs import GenieCompletionJob
+from backend.services.genie_completion_sections import REVEAL_SECTION_FLOOR
 from backend.services.genie_completion_stages import (
     GENIE_JOB_CANCELLED_HINT,
     GENIE_JOB_EXPIRED_HINT,
@@ -78,12 +85,15 @@ def job_status(
     actor: str,
     live_campaign_run_marker: str | None,
     typical_seconds: int | None = None,
+    known_sections_rev: int | None = None,
 ) -> GenieCompletionJobStatus:
     """The wire status of ``job``; the answer only once it succeeded.
 
     A cancelled job is terminal and NOT failed (a cancel is not a failure):
     its hint says the answer was not recorded. ``typical_seconds`` is the
     duration hint, served only while the job still runs.
+    ``known_sections_rev`` is the verified-sections revision the poller
+    holds (see :func:`_verified_sections`).
     """
 
     status = job.status
@@ -118,6 +128,7 @@ def job_status(
     elif status is GenieJobStatus.CANCELLED:
         error_hint = GENIE_JOB_CANCELLED_HINT
     terminal = status in _TERMINAL
+    verified, rev, revealed = _verified_sections(job, status, known_sections_rev)
     return GenieCompletionJobStatus(
         job_id=job.job_id,
         status=status,
@@ -130,7 +141,38 @@ def job_status(
         error_hint=error_hint,
         response=response,
         typical_seconds=None if terminal else typical_seconds,
+        verified_sections=verified,
+        sections_rev=rev,
+        revealed_sections=revealed,
     )
+
+
+def _verified_sections(
+    job: GenieCompletionJob,
+    status: GenieJobStatus,
+    known_rev: int | None,
+) -> tuple[int | None, int | None, list[GenieAnswerSection] | None]:
+    """(count, revision, sections) of a running job's verified reveal.
+
+    Only while RUNNING with no cancel requested. The sections themselves
+    only from the floor, only when their revision differs from the
+    poller's, each validated (an invalid item is dropped), and only when
+    at least the floor of them survives.
+    """
+
+    if status is not GenieJobStatus.RUNNING or job.cancel_requested or job.sections_rev is None:
+        return None, None, None
+    count = min(max(job.sections_count or 0, 0), 20)
+    revealed: list[GenieAnswerSection] | None = None
+    if count >= REVEAL_SECTION_FLOOR and job.revealed is not None and job.sections_rev != known_rev:
+        valid: list[GenieAnswerSection] = []
+        for item in job.revealed[:12]:
+            try:
+                valid.append(GenieAnswerSection.model_validate(item))
+            except ValidationError:
+                continue
+        revealed = valid if len(valid) >= REVEAL_SECTION_FLOOR else None
+    return count, job.sections_rev, revealed
 
 
 _TERMINAL = frozenset(
