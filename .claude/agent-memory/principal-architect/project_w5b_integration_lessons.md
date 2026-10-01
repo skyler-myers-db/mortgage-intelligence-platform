@@ -1,6 +1,6 @@
 ---
 name: w5b-integration-lessons
-description: W5b (9-lane) integration traps the lanes could not see - dependency-batch holds proven only on the installed tree, prefix-replay Postgres suites, mid-test actor-gate resets, budget gates file split, zsh path modifier
+description: W5b (9-lane) integration traps the lanes could not see - dependency-batch holds proven only on the installed tree, prefix-replay Postgres suites, mid-test actor-gate resets, budget gates file split, zsh path modifier, hash-name brotli noise, repo plan vs orchestrator rebalance lane names
 metadata:
   type: project
 ---
@@ -29,5 +29,18 @@ dependency batch is only proven when the integrator installs it.
 - The budget numbers moved to `tools/frontend_budget_gates.mjs` (pure move) so
   the per-wave attribution comments never push the script past the 900-line cap.
 - zsh: `git show $b:frontend/x` applies the `:f` modifier; write `"${b}:frontend/x"`.
+- A CSS-only commit moved JS brotli (initial +0.06, total -0.36 KiB br) with JS
+  raw bytes identical: hashed CSS asset names are embedded in JS chunks.
+  **How to apply:** compare raw before attributing a br delta; A/B by building
+  the parent from `git archive <sha> frontend tools design_files backend tests
+  sql lakebase data` (tsc needs backend/resources and tests/fixtures JSON) with
+  `frontend/node_modules` symlinked to the worktree's private tree.
+- The repo's report 12.6 records the original 32-lane, four-batch plan; the
+  orchestrator's rebalance (a fifth batch W5e, new lanes such as
+  lead-queue-columns, growth-watchlists, deps-report, actor-binding) lives only
+  in workflow-inputs `w5cd_rebalance.json` / `w5c_revision.json`.
+  **How to apply:** route W5b-era deferrals under the repo plan's lane names
+  and let the W5c merge restate re-homed owners; do not mix W5e labels into
+  the docs until 12.6 itself is restated.
 
 Related: [[project_ui_ux_audit_2026_09]], [[feedback_workflow_resume_prefix_cache]].
