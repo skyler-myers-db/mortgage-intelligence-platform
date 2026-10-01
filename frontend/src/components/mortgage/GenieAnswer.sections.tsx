@@ -32,6 +32,7 @@ import {
   type GenieRowsExtent,
 } from './GenieAnswerRowsActions';
 import type { GenieAnswerExportBase, GenieRowsExportTarget } from './GenieAnswer.exportTarget';
+import { formatCount } from '../../lib/formatters';
 
 // Every row and column, loaded only when the reader asks for it (genie-06).
 const GenieAnswerAllRows = lazy(() => import('./GenieAnswerAllRows'));
@@ -98,6 +99,10 @@ export function GenieRowsVisual({
     columns: everyColumn.length,
     hiddenColumns: everyColumn.length - columns.length,
   };
+  // A preview has no "Show all": name the rows the compact table actually
+  // shows against every row the section holds or reports, so a 30-row
+  // section (held = reported) or a trimmed one never reads as complete.
+  const previewTotal = Math.max(rows.length, reportedRowCount ?? 0);
   const hiddenColumnsNote =
     hiddenColumns.length > 0 ? (
       <div className="genie-answer__more genie-answer__hidden-columns">
@@ -231,9 +236,10 @@ export function GenieRowsVisual({
           </>
         )
       )}
-      {preview && reportedRowCount !== null && reportedRowCount > rows.length && (
+      {preview && previewTotal > visibleRows.length && (
         <div className="genie-answer__more genie-answer__preview-note">
-          Preview: the first {rows.length} of {reportedRowCount} rows. Every row arrives with the recorded answer.
+          Preview: the first {formatCount(visibleRows.length)} of {formatCount(previewTotal)} rows. Every row
+          arrives with the recorded answer.
         </div>
       )}
       {/* The inert "+N more rows" became the control that shows them. */}

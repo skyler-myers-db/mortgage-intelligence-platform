@@ -262,6 +262,38 @@ describe('GenieAnswerSections preview (genie-01 phase 1b partial research)', () 
     expect(notes).toEqual(['Preview: the first 3 of 40 rows. Every row arrives with the recorded answer.']);
   });
 
+  // Real sections hold up to 50 rows, but a preview has no "Show all": the
+  // note names the rows the compact table shows, not the rows held.
+  function stateRows(count: number): Array<Record<string, unknown>> {
+    return Array.from({ length: count }, (_, i) => ({ state: `S${i}`, borrowers: 1000 - i }));
+  }
+
+  function renderSized(sized: GenieAnswerSection[]) {
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieAnswerSections summary={null} sections={sized} exportBase={null} preview />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it('names the rows the compact table shows when a preview section holds more than it shows', () => {
+    renderSized([
+      section({ title: 'Every state', row_count: 30, table_rows: stateRows(30) }),
+      section({ title: 'Trimmed', row_count: 1280, table_rows: stateRows(50) }),
+      section({ title: 'Complete', row_count: 3, table_rows: stateRows(3) }),
+    ]);
+
+    const tables = Array.from(container.querySelectorAll('.genie-answer__table'));
+    expect(tables.map((t) => t.querySelectorAll('tbody tr').length)).toEqual([10, 10, 3]);
+    const notes = Array.from(container.querySelectorAll('.genie-answer__preview-note')).map((n) => n.textContent);
+    expect(notes).toEqual([
+      'Preview: the first 10 of 30 rows. Every row arrives with the recorded answer.',
+      'Preview: the first 10 of 1,280 rows. Every row arrives with the recorded answer.',
+    ]);
+  });
+
   it('keeps the links and the row actions on the recorded answer (control)', () => {
     renderSections(false);
 
