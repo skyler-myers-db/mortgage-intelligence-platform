@@ -136,16 +136,23 @@ for (const theme of FIXTURE_THEMES) {
       const sections = page.getByRole('navigation', { name: 'Administration sections' });
       await expect(sections.getByRole('link')).toHaveCount(10);
 
-      // Scroll-spy (critic-09 fix round). With no link followed, a section
-      // scrolled to the landing line (as a focus scroll does: scroll-margin,
-      // focus-ring allowance included) is the one marked, never the previous
-      // section by its last pixels above that line.
+      // Scroll-spy (critic-09 fix round). With no link followed (no hash
+      // change, so nothing is rebuilt), a section scrolled to the landing line
+      // as a focus scroll does (scroll-margin, focus-ring allowance included)
+      // is the one marked: never Live probes by its last pixels above the
+      // line, and Data estate through the loaded panel that replaced the
+      // skeleton the spy first saw. Offer rules goes first so Data estate's
+      // marker cannot be left over from the page load.
       await expect(page.locator('#data-estate[aria-busy="true"]')).toHaveCount(0);
-      await page.locator('#offer-rules').evaluate((el) => el.scrollIntoView({ block: 'start' }));
-      await expect(sections.getByRole('link', { name: 'Offer rules', exact: true })).toHaveAttribute('aria-current', 'location');
+      for (const [id, label] of [['offer-rules', 'Offer rules'], ['data-estate', 'Data estate']] as const) {
+        await page.locator(`#${id}`).evaluate((el) => el.scrollIntoView({ block: 'start' }));
+        await expect(sections.getByRole('link', { name: label, exact: true }), `${label} is marked once on the line`).toHaveAttribute(
+          'aria-current',
+          'location',
+        );
+      }
       // A followed link marks its own section: Audit ledger and Data sources
-      // share Offer rules' grid row, Appearance cannot scroll up to the line,
-      // and Data estate's root was replaced after mount (skeleton -> panel).
+      // share Offer rules' grid row, and Appearance cannot scroll up to the line.
       for (const label of ['Audit ledger', 'Data sources', 'Data estate', 'Offer rules', 'Appearance']) {
         const link = sections.getByRole('link', { name: label, exact: true });
         await link.click();
