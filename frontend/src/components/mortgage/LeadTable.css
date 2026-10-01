@@ -144,6 +144,19 @@
   gap: var(--sp-1);
   min-inline-size: 0;
 }
+/* deviation:assignment-lifecycle-stepper: five prototype chips on one line. */
+.lead-row-workflow__steps {
+  flex-wrap: nowrap;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lead-row-workflow__steps .chip { font-size: var(--fs-11); }
+.lead-row-workflow__step--upcoming {
+  background: transparent;
+  color: var(--text-3);
+}
 
 /* Keyboard row cursor (audit tables-03): an active row on the native table,
    drawn with the focus-ring tokens (never a hue of its own) while focus is

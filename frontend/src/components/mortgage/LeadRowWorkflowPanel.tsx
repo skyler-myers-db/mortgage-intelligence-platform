@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { LeadSummary } from '../../types';
 import { Button, Chip } from '../Primitives';
-import { AssignmentLifecycleAdvance } from './AssignmentLifecycleAdvance';
+import { AssignmentLifecycleAdvance, AssignmentLifecycleSteps } from './AssignmentLifecycleAdvance';
 import {
   assignmentStatusLabel,
   assignmentStatusVariant,
@@ -80,6 +80,8 @@ export function LeadRowWorkflowPanel({
               {stage}
             </Chip>
           )}
+          {/* deviation:assignment-lifecycle-stepper: every stage at a glance, terminal included. */}
+          {lead.assignment_status && <AssignmentLifecycleSteps status={lead.assignment_status} />}
           {lead.assigned_to_email && lead.assignment_status && lead.assignment_id && (
             <AssignmentLifecycleAdvance
               assignmentId={lead.assignment_id}
