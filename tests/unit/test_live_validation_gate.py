@@ -272,6 +272,29 @@ def test_an_api_error_is_api_error_with_exit_2(fetch_result: object) -> None:
     assert (result.status, result.reason, result.exit_code) == ("API_ERROR", "api_error", 2)
 
 
+def _with_time(entry: dict[str, object], updated_at: object) -> dict[str, object]:
+    return {**entry, "updated_at": updated_at}
+
+
+@pytest.mark.parametrize(
+    "runs",
+    [
+        # A run the listing filters out still feeds the pagination cut-off.
+        [_raw(1, RELEASE, "success", 1), _with_time(_raw(2, RELEASE, "cancelled", 1), "not-a-date")],
+        [_raw(1, RELEASE, "success", 1), _with_time(_raw(2, RELEASE, "success", 1, event="push"), 1727784000)],
+        # A naive timestamp cannot be compared with the aware cut-off.
+        [_with_time(_raw(1, RELEASE, "success", 1), "2026-09-30T12:00:00")],
+        [_with_time(_raw(1, RELEASE, "success", 1), 1727784000)],
+    ],
+    ids=["malformed-filtered-out", "non-string-filtered-out", "naive-timestamp", "non-string-kept-run"],
+)
+def test_a_malformed_timestamp_anywhere_is_api_error_not_a_traceback(runs: list[dict[str, object]]) -> None:
+    result = gate.evaluate(RELEASE, fetch=lambda path: {"workflow_runs": runs}, now=NOW, diff=same_code())
+
+    assert (result.status, result.reason, result.exit_code) == ("API_ERROR", "api_error", 2)
+    assert result.fix is not None and result.fix.startswith("malformed run entry:")
+
+
 def test_the_cli_exits_2_on_an_api_error(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def broken(path: str) -> object:
         raise gate.GateApiError("unreachable")

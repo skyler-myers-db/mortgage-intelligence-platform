@@ -144,7 +144,22 @@ def resolve_sha(ref: str, git: Callable[[Sequence[str]], subprocess.CompletedPro
 
 
 def _parse_time(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp has no UTC offset")
+    return parsed
+
+
+def _oldest_updated(raw: list[object]) -> datetime | None:
+    """The page's oldest updated_at over every raw entry, filtered-out runs included."""
+
+    try:
+        return min(
+            (_parse_time(item["updated_at"]) for item in raw if isinstance(item, dict) and "updated_at" in item),
+            default=None,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise GateApiError(f"malformed run entry: {type(exc).__name__}") from exc
 
 
 def parse_runs(payload: object) -> list[Run]:
@@ -163,7 +178,7 @@ def parse_runs(payload: object) -> list[Run]:
             runs.append(
                 Run(int(item["id"]), str(item["head_sha"]), conclusion, _parse_time(item["updated_at"]), str(item["html_url"]))
             )
-        except (KeyError, TypeError, ValueError) as exc:
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
             raise GateApiError(f"malformed run entry: {type(exc).__name__}") from exc
     return runs
 
@@ -196,7 +211,7 @@ def list_runs(fetch: Fetch, now: datetime) -> list[Run]:
         page_runs = parse_runs(payload)
         raw = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
         runs += [run for run in page_runs if run.updated_at >= cutoff]
-        oldest = min((_parse_time(item["updated_at"]) for item in raw if "updated_at" in item), default=None)
+        oldest = _oldest_updated(raw)
         if len(raw) < PER_PAGE or oldest is None or oldest < cutoff:
             break
     return runs
