@@ -62,6 +62,11 @@
         "finding": "quality-08",
         "waiver": null
       },
+      "src/routes/lead-queue.savedViews.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
       "src/routes/lead-queue.tsx": {
         "targetKiB": null,
         "finding": "quality-08",
