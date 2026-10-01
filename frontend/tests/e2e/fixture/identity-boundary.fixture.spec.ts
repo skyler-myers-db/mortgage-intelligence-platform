@@ -172,7 +172,7 @@ test.describe('a proven mid-session actor change resets the document (D-identity
     });
   }
 
-  test('(1b) /portfolio-builder with unsaved work as A, then B: no "Leave site?" dialog, the tab resets to "/" with the notice and the draft is gone', async ({ app, page, mockApi }, testInfo) => {
+  test('(1b) /portfolio-builder with unsaved work as A, then B: no "Leave site?" dialog, the tab resets to "/" with the notice and the draft is gone', async ({ app, page, mockApi }) => {
     let actor = FIXTURE_ACTOR_A;
     serveActor(mockApi, () => actor);
     const dialogs: string[] = [];
@@ -189,9 +189,7 @@ test.describe('a proven mid-session actor change resets the document (D-identity
     await budget.blur();
     await expect(budget).toHaveValue('25000');
     const beforeFlip = await page.evaluate((key) => window.sessionStorage.getItem(key), DRAFT_KEY);
-    if (beforeFlip === null) {
-      testInfo.annotations.push({ type: 'draft-key', description: 'absent before the flip; w5-portfolio-forms not merged' });
-    }
+    expect(beforeFlip, "A's per-tab campaign draft exists before the flip (non-vacuity)").not.toBeNull();
 
     await flipAndReset(page, app, mockApi, () => {
       actor = FIXTURE_ACTOR_B;
