@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import Executor, Future
 from typing import Any
 
 import pytest
@@ -265,16 +266,33 @@ def test_one_statement_single_flight() -> None:
     assert client.calls == [SEGMENT_COMBINATIONS_SQL]
 
 
-def test_stale_if_error_serves_the_last_good_rows() -> None:
+class _InlineExecutor(Executor):
+    """Runs the cache's background refresh at once, so its outcome is deterministic."""
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        future: Future[Any] = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except BaseException as exc:  # noqa: BLE001 -- recorded on the future, as a pool would
+            future.set_exception(exc)
+        return future
+
+
+def test_stale_if_error_keeps_the_last_good_rows_through_a_failed_refresh() -> None:
     now = [0.0]
     client = _FakeSqlClient()
-    repo = DatabricksSegmentCombinationRepository(client, cache=GoldAggregateCache(now=lambda: now[0]), cache_ttl_s=60.0)
+    cache = GoldAggregateCache(now=lambda: now[0], executor=_InlineExecutor())
+    repo = DatabricksSegmentCombinationRepository(client, cache=cache, cache_ttl_s=60.0)
     first = repo.combinations()
     assert first.built is True
     client.error = DependencyDownError("warehouse", reason="boom", kind=DependencyDownError.KIND_RETRIES_EXHAUSTED)
+    # Past the soft TTL: served stale while one refresh runs, and fails.
     now[0] = 120.0
-    again = repo.combinations()
-    assert again.combinations == first.combinations
+    assert repo.combinations().combinations == first.combinations
+    # The failed refresh kept last-good (without stale-if-error it evicts the
+    # entry and this read recomputes inline and raises).
+    now[0] = 125.0
+    assert repo.combinations().combinations == first.combinations
 
 
 def test_a_cold_failure_propagates() -> None:
