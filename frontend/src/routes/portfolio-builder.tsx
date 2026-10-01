@@ -57,6 +57,7 @@ import {
   type CampaignSetupState,
 } from './portfolio-builder.logic';
 import { campaignSetupsEqual, portfolioUnsavedMessage } from './portfolio-builder.unsaved';
+import { useCampaignDraft } from './portfolio-builder.draft';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { populationKpiLabel } from '../lib/populationLabels';
 
@@ -145,9 +146,20 @@ export default function PortfolioBuilder() {
   const [savePanelOpen, setSavePanelOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [saveValidationError, setSaveValidationError] = useState<string | null>(null);
-  const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
   // The setup last persisted with a build: the unsaved-changes baseline.
   const [savedCampaignSetup, setSavedCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
+  const previewCriteria = useMemo(
+    () => buildPreviewCriteria(committedFilters, committedStateCodes),
+    [committedFilters, committedStateCodes],
+  );
+  // critic-v3: the setup is this tab's draft, bound to the criteria its variants were applied under.
+  const {
+    setup: campaignSetup,
+    setSetup: setCampaignSetup,
+    restore: draftRestore,
+    reset: resetDraft,
+    saved: draftSaved,
+  } = useCampaignDraft(JSON.stringify(previewCriteria), savedCampaignSetup);
   const campaignBuildConfig = useMemo(() => {
     const config = buildCampaignConfig(campaignSetup);
     return {
@@ -186,11 +198,7 @@ export default function PortfolioBuilder() {
     manualRetry: retryBuild,
     isFetching: previewFetching,
   } = useWarmingUpRetry<PortfolioPreview>(
-    (signal) => api.portfolioPreview(
-      buildPreviewCriteria(committedFilters, committedStateCodes),
-      signal,
-      campaignBuildConfig,
-    ),
+    (signal) => api.portfolioPreview(previewCriteria, signal, campaignBuildConfig),
     { queryKey: queryKeys.portfolioPreview([committedKey]), keepPreviousData: true },
   );
   const building = preview === null && warmingUp === null && error === null;
@@ -221,10 +229,7 @@ export default function PortfolioBuilder() {
   });
   const recommendationQuery = useQuery<CampaignRecommendationResponse>({
     queryKey: ['portfolio-campaign-recommendation', committedKey],
-    queryFn: ({ signal }) => api.campaignRecommendation(
-      buildPreviewCriteria(committedFilters, committedStateCodes),
-      signal,
-    ),
+    queryFn: ({ signal }) => api.campaignRecommendation(previewCriteria, signal),
     enabled: Boolean(preview && preview.marketable_population > 0),
     retry: false,
   });
@@ -252,7 +257,7 @@ export default function PortfolioBuilder() {
       ...current,
       marketHouseholdTogether: !current.marketHouseholdTogether,
     }));
-  }, []);
+  }, [setCampaignSetup]);
   const applyRecommendation = useCallback(() => {
     const recommendation = recommendationQuery.data;
     if (!recommendation || recommendation.variants.length !== 2) return;
@@ -269,7 +274,7 @@ export default function PortfolioBuilder() {
       provenanceTokenA: variantA.provenance_token,
       provenanceTokenB: variantB.provenance_token,
     }));
-  }, [recommendationQuery.data]);
+  }, [recommendationQuery.data, setCampaignSetup]);
   const buildDirty = useMemo(
     () =>
       JSON.stringify({ filters, stateCodes }) !==
@@ -357,7 +362,7 @@ export default function PortfolioBuilder() {
     // the panel (and the name) until the save actually succeeds; on failure
     // the form stays open with the typed name and a "Save failed" hint so
     // the operator can retry without re-typing.
-    const criteria = buildPreviewCriteria(committedFilters, committedStateCodes);
+    const criteria = previewCriteria;
     const config = buildCampaignConfig(campaignSetup);
     const intent = intentFingerprint('campaign-create', saveSession, JSON.stringify({ name, criteria, config }));
     let created: PortfolioCreateResponse | undefined;
@@ -370,16 +375,17 @@ export default function PortfolioBuilder() {
     }
     saveRequestIds.settle(intent);
     setSavedCampaignSetup(campaignSetup);
+    draftSaved();
     setSavePanelOpen(false);
     toast.success('Build saved', { detail: name, auditEventId: created?.audit_event_id ?? null });
   }, [
     campaignBuildLimit,
     campaignSetup,
     buildInFlight,
-    committedFilters,
-    committedStateCodes,
     createCampaign,
+    draftSaved,
     preview?.campaign_build_eligible,
+    previewCriteria,
     queryClient,
     saveName,
     saveRequestIds,
@@ -714,6 +720,8 @@ export default function PortfolioBuilder() {
         recommendationFetching={recommendationQuery.isFetching}
         canRecommend={Boolean(preview && preview.marketable_population > 0)}
         canAccessAdmin={canAccessAdmin}
+        draftRestore={draftRestore}
+        onResetDraft={resetDraft}
         onFieldChange={setCampaignField}
         onNumericFieldCommit={(key, value) => setCampaignSetup((current) => ({
           ...current,

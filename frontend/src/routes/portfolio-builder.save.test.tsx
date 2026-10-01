@@ -83,6 +83,8 @@ vi.mock('../components/AppContext', () => ({
 }));
 
 import PortfolioBuilder from './portfolio-builder';
+import { CAMPAIGN_DRAFT_KEY } from './portfolio-builder.draft';
+import { removeActorScoped } from '../lib/actorScope';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -154,6 +156,8 @@ describe('PortfolioBuilder save-build flow', () => {
       warnings: [],
     });
     clearToasts();
+    // critic-v3: an unsaved setup is kept as this tab's draft; each test starts from none.
+    removeActorScoped('session', CAMPAIGN_DRAFT_KEY);
     promptSpy = vi.fn();
     // If ANY code path reaches for the native blocking dialog again, fail
     // loudly instead of freezing a renderer at the booth.

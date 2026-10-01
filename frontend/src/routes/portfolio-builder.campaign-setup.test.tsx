@@ -598,6 +598,55 @@ describe('CampaignSetupPanel', () => {
     }
   });
 
+  it('shows Draft restored, Reset and the variants note only for a restored draft; Reset lands focus on Holdout', () => {
+    const reset = vi.fn();
+    const renderWith = (draftRestore: { kind: 'full' | 'partial'; variantsDropped: boolean } | null) => {
+      act(() => {
+        root.render(
+          <MemoryRouter>
+            <CampaignSetupPanel
+              setup={DEFAULT_CAMPAIGN_SETUP}
+              recommendationPending={false}
+              recommendationError={false}
+              recommendationFetching={false}
+              canRecommend={false}
+              draftRestore={draftRestore}
+              onResetDraft={reset}
+              onFieldChange={() => vi.fn()}
+              onNumericFieldCommit={vi.fn()}
+              onToggleHouseholdDedup={vi.fn()}
+              onRegenerate={vi.fn()}
+              onApply={vi.fn()}
+            />
+          </MemoryRouter>,
+        );
+      });
+    };
+    const chip = () => document.querySelector<HTMLElement>('[data-testid="campaign-draft-restored"]');
+    const resetButton = () => [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Reset');
+    const note = () => document.querySelector('[data-testid="campaign-draft-variants-note"]');
+
+    renderWith(null);
+    expect(chip()).toBeNull();
+    expect(resetButton()).toBeUndefined();
+    expect(note()).toBeNull();
+    // Without a draft the header keeps its bare policy chip.
+    expect(document.querySelector('.surface__hdr > .chip.chip--success')?.textContent).toBe('eligible only · 30d cap');
+
+    renderWith({ kind: 'full', variantsDropped: false });
+    expect(chip()?.className).toBe('chip chip--neutral');
+    expect(chip()?.textContent).toBe('Draft restored');
+    expect(resetButton()?.className).toBe('btn btn--ghost btn--sm');
+    expect(note()).toBeNull();
+
+    renderWith({ kind: 'partial', variantsDropped: true });
+    expect(note()?.textContent).toBe('Message variants were for a different build and were not restored.');
+    resetButton()!.focus();
+    act(() => resetButton()!.click());
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(control('Holdout % (0-50)'));
+  });
+
   it('binds every numeric setup label to its control by id', () => {
     renderSetup(DEFAULT_CAMPAIGN_SETUP);
     for (const label of ['Holdout % (0-50)', 'Budget', 'Email cost', 'SMS cost', 'Mail cost']) {

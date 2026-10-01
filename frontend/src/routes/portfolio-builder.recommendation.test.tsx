@@ -57,6 +57,8 @@ vi.mock('../components/AppContext', () => ({
 }));
 
 import PortfolioBuilder from './portfolio-builder';
+import { CAMPAIGN_DRAFT_KEY } from './portfolio-builder.draft';
+import { removeActorScoped } from '../lib/actorScope';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -133,6 +135,9 @@ describe('PortfolioBuilder recommendation ownership', () => {
       unique_applications_submitted: 0,
       unique_closed_funded: 0,
     });
+    // critic-v3: an applied recommendation is kept as this tab's draft; each
+    // test starts from none.
+    removeActorScoped('session', CAMPAIGN_DRAFT_KEY);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

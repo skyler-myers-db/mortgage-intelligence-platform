@@ -126,6 +126,7 @@ describe('registry', () => {
       QUEUE_CONTEXT_STORAGE_KEY,
       'mip.bulkApprove.lastCancelled',
       'mip.queryCache.v1',
+      'mip.portfolio.campaignDraft.v1',
     ]);
     expect(GENIE_IN_FLIGHT_TURN_KEY).toBe('mip.genie.inFlightTurn');
     expect(ACTOR_SCOPE_REGISTRY.ACTOR_PREFERENCE_LOCAL).toEqual([PREF]);

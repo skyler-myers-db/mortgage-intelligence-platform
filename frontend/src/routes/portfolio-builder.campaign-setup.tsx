@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from 'react';
+import { useRef, useState, type ChangeEvent, type Ref } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip, SurfaceTitle } from '../components/Primitives';
@@ -13,6 +13,7 @@ import {
   type CampaignNumericField,
   type CampaignSetupState,
 } from './portfolio-builder.logic';
+import type { CampaignDraftRestore } from './portfolio-builder.draft';
 
 /** The unit each numeric editor shows beside its control, and says in words (critic-04). */
 const NUMERIC_UNITS: Record<CampaignNumericField, { prefix?: string; suffix?: string; unit: string }> = {
@@ -45,6 +46,8 @@ export function CampaignSetupPanel({
   recommendationFetching,
   canRecommend,
   canAccessAdmin = false,
+  draftRestore = null,
+  onResetDraft,
   onFieldChange,
   onNumericFieldCommit,
   onToggleHouseholdDedup,
@@ -58,6 +61,9 @@ export function CampaignSetupPanel({
   recommendationFetching: boolean;
   canRecommend: boolean;
   canAccessAdmin?: boolean;
+  /** A setup restored from this tab's draft (critic-v3): the chip, Reset and the variants note. */
+  draftRestore?: CampaignDraftRestore | null;
+  onResetDraft?: () => void;
   onFieldChange: (
     key: CampaignField,
   ) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
@@ -77,6 +83,13 @@ export function CampaignSetupPanel({
     if (!recommendationActionable) return;
     onApply();
   };
+  const holdoutRef = useRef<HTMLInputElement>(null);
+  const resetDraft = () => {
+    onResetDraft?.();
+    // The Reset button leaves with the chip; focus lands on the first setting.
+    holdoutRef.current?.focus();
+  };
+  const eligibleChip = <span className="chip chip--success">eligible only · 30d cap</span>;
   return (
     <div className="surface mt-4">
       <div className="surface__hdr surface__hdr--split">
@@ -91,7 +104,15 @@ export function CampaignSetupPanel({
             </div>
           </div>
         </div>
-        <span className="chip chip--success">eligible only · 30d cap</span>
+        {draftRestore ? (
+          // deviation:campaign-draft-restore (design_files/index.html:403-408, the .chip
+          // this reuses): the prototype's setup has no draft state.
+          <div className="chip-row">
+            <span className="chip chip--neutral" data-testid="campaign-draft-restored">Draft restored</span>
+            <Button variant="ghost" size="sm" type="button" onClick={resetDraft}>Reset</Button>
+            {eligibleChip}
+          </div>
+        ) : eligibleChip}
       </div>
       <div className="surface__body">
         <div className="campaign-recommendation" aria-live="polite">
@@ -214,6 +235,11 @@ export function CampaignSetupPanel({
             </>
           ) : null}
         </div>
+        {draftRestore?.variantsDropped && (
+          <p className="muted fs-12 mb-3" data-testid="campaign-draft-variants-note">
+            Message variants were for a different build and were not restored.
+          </p>
+        )}
         <div className="campaign-setup">
           {/* critic-04: copy the operator cannot edit reads as text, never as an input. */}
           <FieldReadout className="campaign-setup__field" label="Benefit-led subject" value={setup.subjectA} empty={COPY_NOT_SET} />
@@ -224,7 +250,7 @@ export function CampaignSetupPanel({
             Borrower copy is rendered from reviewed server templates. Apply or regenerate the
             recommendation to change it.
           </div>
-          <CampaignNumericFieldEditor label="Holdout % (0-50)" field="holdoutPct" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} onCommit={onNumericFieldCommit} />
+          <CampaignNumericFieldEditor label="Holdout % (0-50)" field="holdoutPct" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} onCommit={onNumericFieldCommit} inputRef={holdoutRef} />
           <CampaignTimeField label="Send start" value={setup.startLocal} onChange={onFieldChange('startLocal')} />
           <CampaignTimeField label="Send end" value={setup.endLocal} onChange={onFieldChange('endLocal')} />
           <CampaignNumericFieldEditor label="Budget" field="budget" value={setup.budget} onChange={onFieldChange('budget')} onCommit={onNumericFieldCommit} placeholder="optional" />
@@ -273,6 +299,7 @@ function CampaignNumericFieldEditor({
   onChange,
   onCommit,
   placeholder,
+  inputRef,
 }: {
   label: string;
   field: CampaignNumericField;
@@ -280,6 +307,7 @@ function CampaignNumericFieldEditor({
   onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
   onCommit: (field: CampaignNumericField, value: string) => void;
   placeholder?: string;
+  inputRef?: Ref<HTMLInputElement>;
 }) {
   const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
   // critic-04: a clamp or a rounding is announced in the field's polite
@@ -294,6 +322,7 @@ function CampaignNumericFieldEditor({
       {(control) => (
         <input
           {...control}
+          ref={inputRef}
           className="form-input"
           value={value}
           onChange={onChange}
