@@ -801,3 +801,15 @@ input[type="checkbox"] {
  */
 :root, [data-theme="dark"] { --accent-data: var(--entrada-bright); }
 [data-theme="light"] { --accent-data: #014E80; }
+
+/* ---------- Success CTA fill (a11y-01; W5b w5-theme-white-label) ----------
+ * .btn--success (the Growth Agent run card's "Open eligible refi subset")
+ * painted --text-on-solid on the prototype's dark --signal-success #10B981
+ * (design_files/index.html:398) at 2.54:1. Dark fills #047857 (5.48:1) and
+ * hovers #065F46 (7.68:1); light keeps its --signal-success #045D46 (7.9:1)
+ * and hovers #064E3B (9.72:1). --signal-success itself stays verbatim for
+ * every text, dot and bar that reads it. Declared accessibility departure
+ * (deviation:success-cta-fill); tokenContrast.test.ts gates both pairs.
+ */
+:root, [data-theme="dark"] { --success-fill: #047857; --success-fill-hover: #065F46; }
+[data-theme="light"] { --success-fill: var(--signal-success); --success-fill-hover: #064E3B; }

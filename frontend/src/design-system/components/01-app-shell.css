@@ -606,7 +606,11 @@
 .btn--sm { padding: 5px 10px; min-block-size: var(--sp-6); font-size: var(--fs-12); border-radius: var(--r-sm); }
 .btn--danger { color: var(--signal-danger); border-color: var(--status-danger-line-strong); }
 .btn--danger:hover { background: var(--status-danger-soft-subtle); }
-.btn--success { background: var(--signal-success); border-color: transparent; color: var(--text-on-solid); }
+/* --success-fill, not the prototype's --signal-success: white on the dark
+   signal green read 2.54:1 (deviation:success-cta-fill). The hover keeps the
+   solid fill: .btn:hover's --bg-3 well under white read 1.1:1 in light. */
+.btn--success { background: var(--success-fill); border-color: transparent; color: var(--text-on-solid); }
+.btn--success:hover { background: var(--success-fill-hover); border-color: transparent; }
 .btn[disabled] {
   cursor: not-allowed;
   box-shadow: none;

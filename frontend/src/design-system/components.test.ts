@@ -808,3 +808,14 @@ describe('hover states promise only real clicks (motion-09)', () => {
     expect(activeAt).toBeGreaterThan(hoverAt);
   });
 });
+
+/** W5b w5-theme-white-label: the success CTA fill, the Button loading state and the lender mark. */
+describe('success CTA, loading button and lender mark (a11y-01 / motion-08 / responsive-10)', () => {
+  const rule = (selector: string) => cssRules(designCss()).filter((r) => r.selector === selector).map((r) => r.block.trim());
+
+  it('fills .btn--success with --success-fill and keeps the solid fill on hover', () => {
+    expect(rule('.btn--success')).toEqual(['background: var(--success-fill); border-color: transparent; color: var(--text-on-solid);']);
+    expect(rule('.btn--success:hover')).toEqual(['background: var(--success-fill-hover); border-color: transparent;']);
+    expect(tokensCss()).toMatch(/:root, \[data-theme="dark"\] \{ --success-fill: #047857; --success-fill-hover: #065F46; \}/);
+  });
+});
