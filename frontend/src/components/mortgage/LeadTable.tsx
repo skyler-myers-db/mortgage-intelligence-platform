@@ -484,6 +484,7 @@ export function LeadTable({
     const rowOrder = sortKey === 'rank' ? 'rank' : `${sortKey} ${sortDir}`;
     void runExport({
       plan: csvExport, approvals, exportContext, rowOrder, matchingRows: totalMatching, loadedCount: leads.length,
+      campaignHref: campaignHandoff?.href,
     });
   }
 
@@ -557,7 +558,7 @@ export function LeadTable({
       {exportState.status === 'done' && exportState.notice && leadExportNotice({
         notice: exportState.notice,
         truncatedOf: exportState.truncatedOf,
-        campaignHref: campaignHandoff?.href ?? null,
+        campaignHref: exportState.campaignHref,
       })}
       {exportState.status === 'error' && (
         <div role="alert" className="table-error" data-testid="lead-export-error">

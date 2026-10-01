@@ -9,7 +9,9 @@ import { formatCount } from '../../lib/formatters';
  * handoff (Segment Intelligence) the sentence carries no link.
  *
  * The partial strip never retires (useLeadCsvExport), so its link cannot
- * vanish from under the pointer or focus (WCAG 2.2.1). A plain render
+ * vanish from under the pointer or focus (WCAG 2.2.1), and its link is the
+ * handoff held with the export: after a filter change the count and the
+ * link still name the cohort that was exported. A plain render
  * helper, not a component: the LeadTable chunk carries no compiler memo
  * cache for one confirmation line.
  */

@@ -416,6 +416,22 @@ describe('LeadTable CSV export', () => {
       expect(notice(), 'still on screen with its link').not.toBeNull();
       expect(document.activeElement?.textContent).toBe('build a campaign');
     });
+
+    it('after a filter change the strip still links the cohort it counted, not the new filters', async () => {
+      mount(MIXED, {}, {
+        totalMatching: 2340,
+        campaignHandoff: { href: '/portfolio-builder?states=IL', notCarried: [] },
+      });
+      await exportedCsv();
+      await vi.waitFor(() => expect(notice()).not.toBeNull());
+      // The filters move on (same table, new total and handoff).
+      mount(MIXED, {}, {
+        totalMatching: 980,
+        campaignHandoff: { href: '/portfolio-builder?states=TX', notCarried: [] },
+      });
+      expect(notice()?.textContent).toContain('To work all 2,340, build a campaign.');
+      expect(notice()?.querySelector('a')?.getAttribute('href')).toBe('/portfolio-builder?states=IL');
+    });
   });
 
   /**

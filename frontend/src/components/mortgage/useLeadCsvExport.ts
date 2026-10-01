@@ -37,8 +37,14 @@ export type LeadCsvExportState =
    * `notice` is the confirmation strip; null once it has retired.
    * `truncatedOf`: how many borrowers matched when only the loaded ones were
    * exported (no selection and more matching than loaded); else null.
+   * `campaignHref`: the campaign handoff of the filters that export ran
+   * under, so the strip's link and its count name the same cohort after a
+   * filter change.
    */
-  | { status: 'done'; rowCount: number; notice: string | null; receipt: LeadExportReceipt; truncatedOf: number | null }
+  | {
+    status: 'done'; rowCount: number; notice: string | null; receipt: LeadExportReceipt;
+    truncatedOf: number | null; campaignHref: string | null;
+  }
   | { status: 'error'; message: string };
 
 export interface LeadCsvExportRequest {
@@ -51,6 +57,8 @@ export interface LeadCsvExportRequest {
   matchingRows?: number | null;
   /** How many rows are loaded on screen. */
   loadedCount?: number;
+  /** The current filters' campaign handoff (Lead Queue), held with the strip. */
+  campaignHref?: string | null;
 }
 
 const EXPORT_NOT_DOWNLOADED = 'Nothing was downloaded.';
@@ -123,7 +131,7 @@ export function useLeadCsvExport() {
   }, [state]);
 
   async function exportCsv({
-    plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount,
+    plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount, campaignHref = null,
   }: LeadCsvExportRequest): Promise<void> {
     if (inflight.current || plan.rows.length === 0) return;
     // Placeholder rows belong to the previous filters: never declare them
@@ -153,6 +161,7 @@ export function useLeadCsvExport() {
         notice: describeLeadCsvExport(plan, rowOrder),
         receipt,
         truncatedOf: loadedExportTruncatedOf(plan.scope, matching, loadedCount ?? plan.rows.length),
+        campaignHref,
       });
     } catch (error) {
       if (isAbortError(error)) {
