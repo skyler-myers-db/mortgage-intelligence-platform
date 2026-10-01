@@ -48,7 +48,7 @@ from tests.fixtures.approval_ledger_fake import FakeApprovalLedger
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
-OWNER = "skyler@entrada.ai"
+OWNER = "owner.one@summit.example"
 HEADERS = {"X-Forwarded-Email": OWNER}
 BORROWER = "B-48291"
 BATCH = "44444444-4444-4444-8444-444444444444"
