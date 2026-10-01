@@ -84,14 +84,30 @@ describe('selection verbs (responsive-04: one number format)', () => {
     selectedCount: 1,
     approveCount: 1,
     canApprove: true,
+    rejectCount: 0,
+    canReject: true,
     canAssign: true,
     run: () => undefined,
     ...overrides,
   });
 
   it('groups the counts with en-US separators whatever the browser locale', () => {
-    const labels = commandVerbActions(selection({ approveCount: 1234, selectedCount: 2500 })).map((action) => action.label);
-    expect(labels).toEqual(['Approve 1,234 selected…', 'Assign 2,500 selected…']);
+    const labels = commandVerbActions(selection({ approveCount: 1234, rejectCount: 1234, selectedCount: 2500 }))
+      .map((action) => action.label);
+    expect(labels).toEqual(['Approve 1,234 selected…', 'Reject 1,234 selected…', 'Assign 2,500 selected…']);
+  });
+
+  it('offers Reject with the panel hint for one row and the gate hint for several (tables-07)', () => {
+    const one = commandVerbActions(selection({ rejectCount: 1 })).find((action) => action.id === 'verb-reject-selected');
+    expect(one).toEqual(expect.objectContaining({
+      label: 'Reject 1 selected…',
+      hint: 'Opens the reject panel',
+      target: { kind: 'verb', verb: 'reject-selected' },
+    }));
+    const many = commandVerbActions(selection({ rejectCount: 7 })).find((action) => action.id === 'verb-reject-selected');
+    expect(many?.hint).toBe('Opens the rejection reason gate');
+    expect(commandVerbActions(selection({ rejectCount: 7, canReject: false })).map((action) => action.id))
+      .not.toContain('verb-reject-selected');
   });
 
   it('offers no verb without a selection', () => {

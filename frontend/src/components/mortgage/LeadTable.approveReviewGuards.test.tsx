@@ -108,6 +108,15 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 
 import { LeadTable } from './LeadTable';
 
+/** The reject panel has no default reason (D-approval-flow-d item 13): pick one. */
+function chooseReason(form: Element, code = 'low_intent') {
+  const select = form.querySelector<HTMLSelectElement>('[data-testid="lead-reject-reason"]')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, code);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 // The review and the bulk review are lazy chunks: transform them up front.
 beforeAll(async () => {
   await import('./LeadApproveReview');
@@ -300,6 +309,7 @@ describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOU
     act(() => container.querySelector<HTMLButtonElement>(`[data-testid="lead-reject-${borrowerId}"]`)!.click());
     const panel = container.querySelector<HTMLFormElement>('.decision-panel')!;
     expect(panel.textContent).toContain(borrowerId);
+    chooseReason(panel);
     await act(async () => {
       panel.requestSubmit();
     });
@@ -699,6 +709,7 @@ describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOU
     expect(approve).toHaveBeenCalledTimes(1);
     expect(container.querySelector('.decision-panel'), 'precondition: the panel is still open').toBe(panel);
 
+    chooseReason(panel!);
     await act(async () => {
       panel!.requestSubmit();
     });

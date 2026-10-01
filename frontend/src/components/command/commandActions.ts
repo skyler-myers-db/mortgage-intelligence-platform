@@ -112,6 +112,17 @@ export function commandVerbActions(selection: CommandSelectionContext | null): C
       target: { kind: 'verb', verb: 'approve-selected' },
     });
   }
+  if (selection.canReject && selection.rejectCount > 0) {
+    verbs.push({
+      id: 'verb-reject-selected',
+      label: `Reject ${formatCount(selection.rejectCount)} selected…`,
+      hint: selection.rejectCount === 1 ? 'Opens the reject panel' : 'Opens the rejection reason gate',
+      icon: 'cross',
+      group: 'Selection',
+      keywords: ['reject', 'bulk', 'selected', 'selection', 'reason'],
+      target: { kind: 'verb', verb: 'reject-selected' },
+    });
+  }
   if (selection.canAssign) {
     verbs.push({
       id: 'verb-assign-selected',

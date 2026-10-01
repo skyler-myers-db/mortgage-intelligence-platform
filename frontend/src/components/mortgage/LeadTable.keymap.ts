@@ -14,10 +14,11 @@ export const LEAD_TABLE_KEYS = {
   approve: ['a'],
   reject: ['r'],
   bulkApprove: ['Shift+A'],
+  bulkReject: ['Shift+R'],
 } as const satisfies Record<string, readonly string[]>;
 
 export interface LeadTableKeymapActions {
-  /** A / R / Shift+A are registered only when this is true. */
+  /** A / R / Shift+A / Shift+R are registered only when this is true. */
   approverActive: boolean;
   move: (delta: 1 | -1) => void;
   /** Expand or collapse the cursor row; false when there is none. */
@@ -28,6 +29,8 @@ export interface LeadTableKeymapActions {
   reviewCursorRow: () => void;
   rejectCursorRow: () => void;
   openBulkGate: () => void;
+  /** Shift+R: the bulk reject gate (one row: its reject panel); never submits. */
+  openBulkRejectGate: () => void;
 }
 
 const NATIVE_ACTIVATION = 'button, a[href], summary, [role="button"], [role="link"], [role="checkbox"]';
@@ -71,10 +74,12 @@ export function leadTableHotkeys(actions: LeadTableKeymapActions): LeadTableHotk
     },
     { id: 'reject', keys: LEAD_TABLE_KEYS.reject, description: 'Reject with a reason', run: () => actions.rejectCursorRow() },
     {
+      // One `?` sheet row for Shift+A and Shift+R (tables-07), like X and
+      // Shift+X: a separate row made the sheet's list scroll at 1440x900.
       id: 'bulk-approve',
-      keys: LEAD_TABLE_KEYS.bulkApprove,
-      description: 'Approve the selected borrowers (opens the rationale gate)',
-      run: () => actions.openBulkGate(),
+      keys: [...LEAD_TABLE_KEYS.bulkApprove, ...LEAD_TABLE_KEYS.bulkReject],
+      description: 'Approve or reject the selected borrowers (opens the rationale or reason gate)',
+      run: (event) => (event.key.toLowerCase() === 'r' ? actions.openBulkRejectGate() : actions.openBulkGate()),
     },
   ];
 }

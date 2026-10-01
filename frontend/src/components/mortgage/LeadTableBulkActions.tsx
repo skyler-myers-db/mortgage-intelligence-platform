@@ -14,6 +14,12 @@
  * shared rationale is written and every offer in the run has a previewed
  * sample. A status line says what is missing, and activating Approve then
  * moves focus to the first missing piece instead of submitting.
+ *
+ * Bulk Reject (audit tables-07, D-approval-flow-d; deviation:bulk-reject-gate):
+ * "Reject N" sits before Approve, as in design_files/Module 0
+ * Prototype.html:1501-1502. It opens the reject gate (one eligible row: that
+ * row's reject panel); the gate itself (reason, shared note, counts) rides
+ * the lazy bulk chunk and mounts in the `rejectGate` slot.
  */
 
 import { useId, useState, type ReactNode, type RefObject } from 'react';
@@ -60,6 +66,13 @@ interface LeadTableBulkActionsProps {
   bulkChunkFailed?: boolean;
   /** Why the last run stopped at its first row ("Nothing else was sent: ..."). */
   runNotice?: string | null;
+  /** The bulk reject gate is open (at most one gate is). */
+  bulkRejectOpen?: boolean;
+  /** "Reject N": opens the reject gate, or one eligible row's reject panel. */
+  onOpenBulkReject?: () => void;
+  bulkRejectBtnRef?: RefObject<HTMLButtonElement | null>;
+  /** The reject gate (LeadBulkRejectGate, lazy), shown while it is open. */
+  rejectGate?: ReactNode;
 }
 
 const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
@@ -89,10 +102,15 @@ export function LeadTableBulkActions({
   samplesCoverAllOffers = false,
   bulkChunkFailed = false,
   runNotice = null,
+  bulkRejectOpen = false,
+  onOpenBulkReject,
+  bulkRejectBtnRef,
+  rejectGate = null,
 }: LeadTableBulkActionsProps) {
   const armingId = useId();
   const [bulkRationale, setBulkRationale] = useState('');
   const gateOpen = selectionCount > 1 && bulkRationaleOpen;
+  const rejectGateOpen = selectionCount > 1 && bulkRejectOpen;
   const running = runKind !== null;
   const rationaleMissing = bulkRationale.trim().length === 0;
   const armingCopy = !gateOpen
@@ -128,7 +146,7 @@ export function LeadTableBulkActions({
       data-testid="lead-bulk-actions"
       className={[
         'bulk-actions',
-        gateOpen ? 'bulk-actions--gate' : '',
+        gateOpen || rejectGateOpen ? 'bulk-actions--gate' : '',
         gateOpen && samplesShown ? 'bulk-actions--samples' : '',
         running ? 'bulk-actions--running' : '',
       ].filter(Boolean).join(' ')}
@@ -199,6 +217,30 @@ export function LeadTableBulkActions({
           Clear selection
         </Button>
         <Button
+          ref={bulkRejectBtnRef}
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            if (!bulkBlocked) onOpenBulkReject?.();
+          }}
+          disabled={
+            approverGate !== null || campaignBindingBlocked || bulkApproving
+            || selectedApprovalEligibleCount === 0
+          }
+          aria-disabled={bulkBlocked || undefined}
+          aria-describedby={describedBy(
+            approverGate !== null && APPROVER_ROLE_STATUS_ID,
+            campaignBindingBlocked && 'campaign-binding-status',
+          )}
+          data-testid="lead-bulk-reject"
+          aria-label={`Reject ${selectedApprovalEligibleCount} eligible leads`}
+          aria-keyshortcuts={approverGate === null && shortcutsLive ? 'Shift+R' : undefined}
+        >
+          {bulkApproving && runKind === 'reject'
+            ? `${bulkRunVerb('reject')}…`
+            : `Reject ${selectedApprovalEligibleCount}`}
+        </Button>
+        <Button
           ref={bulkApproveBtnRef}
           variant="primary"
           size="sm"
@@ -236,6 +278,7 @@ export function LeadTableBulkActions({
         </span>
       )}
       {gateOpen && gateReview}
+      {rejectGateOpen && rejectGate}
       {running && runStatus}
     </div>
   );

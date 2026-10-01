@@ -87,7 +87,10 @@ const BULK_REVIEW_CHUNK = lazyModule(() => import('./LeadBulkApproveReview'));
  * whose previewed copy is what it certifies, 'bulk_cohort' for a row
  * approved under the shared rationale without its copy being shown. Shift+A
  * and the Cmd-K verb open that same gate; one selected row opens its own
- * review instead.
+ * review instead. "Reject N" (Shift+R, the Cmd-K verb) opens the bulk reject
+ * gate: one reason (no default) and a required shared note for every row,
+ * one OUTREACH_REJECT row each under one bulk id (tables-07); one selected
+ * row opens its own reject panel.
  */
 
 function ignoreScrollToIndex(): void {
@@ -349,6 +352,7 @@ export function LeadTable({
   const DecisionToast = reviewModule?.LeadTableDecisionToast;
   const bulkModule = bulkChunk.module ?? BULK_REVIEW_CHUNK.current();
   const BulkReview = bulkModule?.LeadBulkApproveReview;
+  const BulkRejectGate = bulkModule?.LeadBulkRejectGate;
   const BulkRunProgress = bulkModule?.LeadBulkRunProgress;
   const BulkRunResult = bulkModule?.LeadBulkRunResult;
   const reviewProps = openReview && {
@@ -634,6 +638,17 @@ export function LeadTable({
           runKind={bulkRun.progress?.kind ?? null}
           samplesCoverAllOffers={samplesCoverAllOffers}
           runNotice={approval.bulkRunNotice}
+          bulkRejectOpen={approval.bulkRejectOpen}
+          onOpenBulkReject={flow.bulkRejectFromToolbar}
+          bulkRejectBtnRef={approval.bulkRejectBtnRef}
+          rejectGate={BulkRejectGate ? (
+            <BulkRejectGate
+              leads={flow.eligibleSelectedIds().map((id) => leadsById.get(id)).filter((lead) => lead !== undefined)}
+              onReject={approval.bulkReject}
+              reasonRef={approval.bulkRejectReasonRef}
+              running={approval.bulkApproving}
+            />
+          ) : null}
           bulkChunkFailed={bulkChunk.failed && !bulkModule}
           runStatus={!bulkRun.progress
             ? null

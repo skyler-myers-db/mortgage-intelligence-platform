@@ -59,6 +59,26 @@ describe('Lead Queue decision forms own their fields', () => {
     expect(onSubmit).toHaveBeenCalledWith('data_quality', ' Stale lien record. ');
   });
 
+  it('the reject form has no default reason: a submit without one focuses Reason and sends nothing', () => {
+    const onSubmit = vi.fn();
+    act(() => root.render(<LeadRejectPanel borrowerId={BORROWER} onCancel={vi.fn()} onSubmit={onSubmit} />));
+    const select = container.querySelector('select')!;
+    const confirm = container.querySelector<HTMLButtonElement>('[data-testid="lead-reject-confirm"]')!;
+    expect(select.value).toBe('');
+    expect(select.options[0].textContent).toBe('Choose a reason');
+    expect(confirm.getAttribute('aria-disabled')).toBe('true');
+    expect(confirm.disabled, 'aria-disabled, never native disabled').toBe(false);
+
+    submit();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(select);
+
+    setValue(select, 'low_intent');
+    expect(confirm.getAttribute('aria-disabled')).toBeNull();
+    submit();
+    expect(onSubmit).toHaveBeenCalledWith('low_intent', '');
+  });
+
   it('the disposition form says a missing callback time inside the form and submits nothing', () => {
     const onSubmit = vi.fn();
     act(() => root.render(

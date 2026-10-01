@@ -16,15 +16,12 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
 import type { LeadSummary } from '../../types';
-import { clientFailureReason } from '../../lib/apiTransport';
-import { markUnrecordedWrite } from '../../lib/sessionStatus';
-import type { OutreachDraftResult, ReviewMode } from '../../lib/apiTypes';
+import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { invalidateOperationalQueries } from '../../lib/queryKeys';
 import {
   decisionFailure,
   draftForApproval as draftGovernedCopy,
   isDecisionPending,
-  OfferNotPreviewedError,
   useApproveLead,
   usePendingDecisions,
   useRejectLead,
@@ -41,17 +38,21 @@ import type { RejectReasonCode } from './LeadTable.types';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { APPROVER_ROLE_REQUIRED } from './approverGate';
 import { bulkSampleCoverage, coveredOfferCodes } from './LeadBulkApproveReview.coverage';
+import { CONSENT_REJECT_CODES } from './LeadTable.constants';
 import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
-import { bulkCanaryNotice, useLeadBulkRun, type BulkRowReport, type BulkRunResult } from './useLeadBulkRun';
+import { bulkCanaryNotice, useLeadBulkRun, type BulkRunResult } from './useLeadBulkRun';
+import {
+  approveWithReport as writeApprove,
+  rejectWithReport as writeReject,
+  type ApproveExtras,
+  type BulkRejectRow,
+  type DecisionSnapshot,
+  type DecisionWriteDeps,
+} from './leadDecisionWrites';
 import { pruneTo, rangeIds } from './LeadTable.selection';
 import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
 const BULK_TOAST_DISMISS_MS = 4000;
-
-/** A single-row approval with no reviewed draft: refused before any draft or POST. */
-const REVIEWED_DRAFT_REQUIRED = 'Approval requires the reviewed draft.';
-/** A bulk row whose drafted offer the gate never previewed (OfferNotPreviewedError). */
-const OFFER_NOT_PREVIEWED = 'Offer changed since preview — review individually';
 /** The gate's Preview control: where a refused run sends focus. */
 const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
 
@@ -71,25 +72,6 @@ export interface BulkToast {
 }
 
 export type LeadDecisionOutcome = 'ok' | 'network' | 'backend' | 'aborted' | 'duplicate';
-
-/** What an approval certifies about its row, snapshotted when a bulk run starts. */
-interface DecisionSnapshot {
-  evidenceIds: readonly string[];
-  offerCode: string | null;
-}
-
-interface ApproveExtras {
-  rationale?: string | null;
-  bulk_id?: string | null;
-  bulk_rationale?: string | null;
-  suppressInvalidation?: boolean;
-  /** A bulk row: the evidence and offer read when the run started, never live mid-run. */
-  snapshot?: DecisionSnapshot;
-  /** A single-row review's mode ('triage' from the Triage deck); default 'individual'. */
-  reviewMode?: Extract<ReviewMode, 'individual' | 'triage'>;
-  /** A bulk run: the offers its gate previewed (the in-run offer check). */
-  coveredOfferCodes?: ReadonlySet<string> | null;
-}
 
 export interface UseLeadApprovalActionsInput {
   displayLeads: LeadSummary[];
@@ -132,11 +114,17 @@ export function useLeadApprovalActions({
   // The shared-rationale field: Shift+A and the Cmd-K verb open the bulk
   // gate and land focus here (they never submit the bulk run themselves).
   const bulkRationaleRef = useRef<HTMLInputElement | null>(null);
+  // The bulk reject gate (tables-07): its trigger (focus returns there after
+  // a run) and its Reason field (Shift+R and the Cmd-K verb land there).
+  const bulkRejectBtnRef = useRef<HTMLButtonElement | null>(null);
+  const bulkRejectReasonRef = useRef<HTMLSelectElement | null>(null);
   // Which row's reject panel is open. The panel's reason and rationale, and
   // the bulk gate's shared rationale, are the panels' own state (audit
   // runtime-04 slice 2): a keystroke re-renders the panel, never the table.
   const [pendingReject, setPendingReject] = useState<string | null>(null);
   const [bulkRationaleOpen, setBulkRationaleOpen] = useState(false);
+  // At most one bulk gate is open: approve (rationale) or reject (reason).
+  const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
   const approveMutation = useApproveLead(queryClient);
   const rejectMutation = useRejectLead(queryClient);
   // Which rows have an approve or reject on the wire, and which decision.
@@ -218,6 +206,11 @@ export function useLeadApprovalActions({
     return passesDecisionGate('approval', borrowerId ?? SELECTION_SUBJECT);
   }
 
+  /** The same gate for a bulk rejection of the selection (Shift+R, the Cmd-K verb). */
+  function canStartRejection(): boolean {
+    return passesDecisionGate('rejection', SELECTION_SUBJECT);
+  }
+
   /** The governed draft an approval certifies, under this table's campaign binding. */
   function draftForApproval(borrowerId: string, signal?: AbortSignal): Promise<OutreachDraftResult> {
     return draftGovernedCopy(borrowerId, campaignBinding, signal);
@@ -233,6 +226,35 @@ export function useLeadApprovalActions({
   function decisionInFlight(borrowerId: string): boolean {
     return rowInFlightRef.current[borrowerId] === true || isDecisionPending(queryClient, borrowerId);
   }
+
+  // The one-row writes (leadDecisionWrites) read this hook's state through
+  // these deps, synchronously, at call time.
+  const writeDeps: DecisionWriteDeps = {
+    leadsById,
+    campaignBinding,
+    approve: (variables) => approveMutation.mutateAsync(variables),
+    reject: (variables) => rejectMutation.mutateAsync(variables),
+    requestIds,
+    isInFlight: decisionInFlight,
+    passesGate: passesDecisionGate,
+    latch: (borrowerId, inFlight) => {
+      rowInFlightRef.current[borrowerId] = inFlight;
+    },
+    onDecided: (borrowerId, decision, auditEventId) => {
+      decidedRef.current.add(borrowerId);
+      setApproval(borrowerId, decision);
+      recordDecision(borrowerId, { auditEventId, decision });
+    },
+  };
+  const approveWithReport = (
+    borrowerId: string,
+    signal: AbortSignal | undefined,
+    extras: ApproveExtras,
+    reviewedDraft: OutreachDraftResult | null,
+  ) => writeApprove(writeDeps, borrowerId, signal, extras, reviewedDraft);
+  const rejectWithReport = (borrowerId: string, signal: AbortSignal, run: BulkRejectRow) => (
+    writeReject(writeDeps, borrowerId, signal, run)
+  );
 
   /** R, Reject or a reject panel's Submit on a row whose decision is on the wire. */
   function reportDecisionInFlight(borrowerId: string): void {
@@ -270,93 +292,6 @@ export function useLeadApprovalActions({
     );
   }
 
-  /**
-   * approveLead with the per-row report a bulk run lists: the outcome
-   * (session_expired told apart) and the server's reason. A bulk row reports
-   * into the run's result, not the table's single alert, and certifies the
-   * evidence and offer snapshotted when the run started.
-   *
-   * The review mode it records: a bulk row is 'bulk_sample' when its copy
-   * was previewed (a reviewedDraft), else 'bulk_cohort'; a single row is the
-   * review's own mode. A single row with no reviewed draft is refused here,
-   * before any draft or POST: nothing approves copy nobody was shown.
-   */
-  function approveWithReport(
-    borrowerId: string,
-    signal: AbortSignal | undefined,
-    extras: ApproveExtras,
-    reviewedDraft: OutreachDraftResult | null,
-  ): Promise<BulkRowReport> {
-    if (decisionInFlight(borrowerId)) return Promise.resolve({ outcome: 'duplicate', message: null });
-    const inBulk = Boolean(extras.bulk_id);
-    if (!passesDecisionGate('approval', borrowerId, !inBulk)) return Promise.resolve({ outcome: 'backend', message: null });
-    if (!inBulk && reviewedDraft === null) {
-      return Promise.resolve({ outcome: 'backend', message: REVIEWED_DRAFT_REQUIRED });
-    }
-    const reviewMode: ReviewMode = inBulk
-      ? (reviewedDraft ? 'bulk_sample' : 'bulk_cohort')
-      : (extras.reviewMode ?? 'individual');
-    rowInFlightRef.current[borrowerId] = true;
-    const lead = leadsById.get(borrowerId);
-    const snapshot = extras.snapshot ?? {
-      evidenceIds: lead?.evidence_ids ?? [],
-      offerCode: lead?.recommended_offer_code ?? null,
-    };
-    const intent = extras.bulk_id
-      ? intentFingerprint('approve-bulk', extras.bulk_id, borrowerId)
-      : intentFingerprint('approve', borrowerId, reviewedDraft?.generation_id);
-    const report = approveMutation.mutateAsync({
-      decision: 'approve',
-      borrowerId,
-      requestId: requestIds.idFor(intent),
-      reviewedDraft,
-      campaignBinding,
-      evidenceIds: [...snapshot.evidenceIds],
-      offerCode: snapshot.offerCode,
-      rationale: extras.rationale ?? null,
-      bulkId: extras.bulk_id ?? null,
-      bulkRationale: extras.bulk_rationale ?? null,
-      reviewMode,
-      coveredOfferCodes: extras.coveredOfferCodes ?? null,
-      signal,
-      suppressInvalidation: extras.suppressInvalidation,
-    }).then(
-      (res): BulkRowReport => {
-        if (!res.approved) {
-          if (!inBulk) toastWriteRefusal(`Couldn't approve ${borrowerId}`, 'The endpoint returned approved=false.');
-          return { outcome: 'backend', message: 'The endpoint returned approved=false.' };
-        }
-        requestIds.settle(intent);
-        decidedRef.current.add(borrowerId);
-        setApproval(borrowerId, 'approved');
-        recordDecision(borrowerId, { auditEventId: res.audit_event_id ?? null, decision: 'approved' });
-        return { outcome: 'ok', message: null };
-      },
-      (err: unknown): BulkRowReport => {
-        const failure = decisionFailure(err);
-        if (failure === 'aborted') return { outcome: 'aborted', message: null };
-        // The drafted offer was never previewed: nothing was sent; the row
-        // stays selected for an individual review.
-        if (err instanceof OfferNotPreviewedError) return { outcome: 'backend', message: OFFER_NOT_PREVIEWED };
-        const message = err instanceof Error ? err.message : null;
-        // A single row's failure is a toast; a bulk row reports in the run.
-        if (!inBulk) toastWriteFailure(`Couldn't approve ${borrowerId}`, err, 'the approval');
-        // The session ended mid-click (on the draft step or the approve POST):
-        // the session dialog must say this approval was NOT recorded.
-        if (clientFailureReason(err) === 'session_expired') {
-          markUnrecordedWrite('approval');
-          return { outcome: 'session_expired', message };
-        }
-        return { outcome: failure, message };
-      },
-    );
-    // Released before the caller sees the outcome (this reaction is first).
-    const release = () => {
-      rowInFlightRef.current[borrowerId] = false;
-    };
-    void report.then(release, release);
-    return report;
-  }
 
   /**
    * Reject from the queue without leaving the page. Audit finding
@@ -523,7 +458,15 @@ export function useLeadApprovalActions({
    */
   function openBulkRationale() {
     setBulkRationaleOpen(true);
+    setBulkRejectOpen(false);
     requestAnimationFrame(() => bulkRationaleRef.current?.focus());
+  }
+
+  /** Open the bulk reject gate (reason + shared note) with focus on Reason; never submits. */
+  function openBulkReject() {
+    setBulkRejectOpen(true);
+    setBulkRationaleOpen(false);
+    requestAnimationFrame(() => bulkRejectReasonRef.current?.focus());
   }
 
   /** What each row of a run certifies, read once when the run starts. */
@@ -550,10 +493,54 @@ export function useLeadApprovalActions({
     setSelectedIds(new Set(keep));
     if (result.ok > 0) void invalidateOperationalQueries(queryClient);
     const focusTarget = bulkActionFocusTarget(keep.length);
+    const trigger = result.kind === 'reject' ? bulkRejectBtnRef : bulkApproveBtnRef;
     requestAnimationFrame(() => {
-      if (focusTarget === 'trigger' && bulkApproveBtnRef.current) bulkApproveBtnRef.current.focus();
+      if (focusTarget === 'trigger' && trigger.current) trigger.current.focus();
       else tableWrapRef.current?.focus();
     });
+  }
+
+
+  /**
+   * Bulk Reject (audit tables-07, D-approval-flow-d): one reject POST (one
+   * OUTREACH_REJECT row) per selected eligible row under one bulk id, one
+   * reason and one required shared note, through the same run as a bulk
+   * approve (canary, BULK_APPROVE_CONCURRENCY, Stop, R5-21). Two or more
+   * rows only (one row goes to its own reject panel); a consent reason (Do
+   * Not Call, Opt-out) is never applied in bulk. The server enforces both.
+   *
+   * @returns true once a run settled: the gate then closes.
+   */
+  async function bulkReject(reasonCode: RejectReasonCode, note: string): Promise<boolean> {
+    // R5-04: the run's synchronous latch, read before any await.
+    if (bulkRun.isRunning() || bulkApproving) return false;
+    const eligible = new Set(approvalEligibleIds);
+    const ids = [...selectedIds].filter((id) => eligible.has(id));
+    const sharedNote = note.trim();
+    if (ids.length < 2 || sharedNote.length === 0 || CONSENT_REJECT_CODES.includes(reasonCode)) return false;
+    if (!canStartRejection()) return false;
+    const bulkId = _newBulkId();
+    const snapshots = snapshotRows(ids);
+    bulkRunIdsRef.current = new Set(ids);
+    setBulkToast(null);
+    setBulkRunNotice(null);
+    const result = await bulkRun.start({
+      kind: 'reject',
+      rows: ids.map((borrowerId) => ({ borrowerId, posts: 1 })),
+      decide: (borrowerId, signal) => rejectWithReport(borrowerId, signal, {
+        bulkId, reasonCode, note: sharedNote, snapshot: snapshots.get(borrowerId),
+      }),
+    });
+    bulkRunIdsRef.current = new Set();
+    if (!result) return false;
+    settleRun(result);
+    if (result.canary) {
+      setBulkRejectOpen(true);
+      setBulkRunNotice(bulkCanaryNotice(result.canary));
+      return false;
+    }
+    setBulkRejectOpen(false);
+    return true;
   }
 
   /**
@@ -691,6 +678,12 @@ export function useLeadApprovalActions({
     headerCheckboxState,
     bulkApprove,
     openBulkRationale,
+    bulkReject,
+    openBulkReject,
+    canStartRejection,
+    bulkRejectOpen,
+    bulkRejectBtnRef,
+    bulkRejectReasonRef,
     bulkApproving,
     bulkRun,
     isDecisionLocked,

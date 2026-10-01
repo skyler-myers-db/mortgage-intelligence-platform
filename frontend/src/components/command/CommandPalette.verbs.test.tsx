@@ -41,6 +41,8 @@ function selection(overrides: Partial<CommandSelectionContext> = {}): CommandSel
     selectedCount: 12,
     approveCount: 11,
     canApprove: true,
+    rejectCount: 11,
+    canReject: true,
     canAssign: true,
     run: vi.fn(),
     ...overrides,
@@ -63,10 +65,10 @@ describe('commandVerbActions', () => {
 
   it('names the eligible count and hides approve when the actor cannot approve', () => {
     expect(commandVerbActions(selection()).map((action) => action.label))
-      .toEqual(['Approve 11 selected…', 'Assign 12 selected…']);
-    expect(commandVerbActions(selection({ canApprove: false })).map((action) => action.label))
+      .toEqual(['Approve 11 selected…', 'Reject 11 selected…', 'Assign 12 selected…']);
+    expect(commandVerbActions(selection({ canApprove: false, canReject: false })).map((action) => action.label))
       .toEqual(['Assign 12 selected…']);
-    expect(commandVerbActions(selection({ approveCount: 0, canAssign: false }))).toEqual([]);
+    expect(commandVerbActions(selection({ approveCount: 0, rejectCount: 0, canAssign: false }))).toEqual([]);
   });
 });
 
@@ -108,6 +110,7 @@ describe('CommandPalette selection verbs', () => {
     const rows = [...(verbGroup()?.querySelectorAll('[role="option"]') ?? [])];
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining('Approve 11 selected…'),
+      expect.stringContaining('Reject 11 selected…'),
       expect.stringContaining('Assign 12 selected…'),
     ]);
     // The first option of the whole list is the approve verb.
@@ -120,12 +123,29 @@ describe('CommandPalette selection verbs', () => {
     expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
   });
 
-  it('shows no approve verb for a selection the actor cannot approve', () => {
+  it('runs the reject verb through the page handler (the reason gate), never a reject', () => {
+    const context = selection();
     act(() => {
-      unpublish = publishCommandSelection(selection({ canApprove: false }));
+      unpublish = publishCommandSelection(context);
+    });
+    openPalette();
+    const reject = [...(verbGroup()?.querySelectorAll('[role="option"]') ?? [])]
+      .find((row) => row.textContent?.includes('Reject 11 selected…'));
+    expect(reject?.textContent).toContain('Opens the rejection reason gate');
+
+    act(() => (reject as HTMLButtonElement).click());
+
+    expect(context.run).toHaveBeenCalledWith('reject-selected');
+    expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
+  });
+
+  it('shows no approve or reject verb for a selection the actor cannot decide', () => {
+    act(() => {
+      unpublish = publishCommandSelection(selection({ canApprove: false, canReject: false }));
     });
     openPalette();
     expect(verbGroup()?.textContent).not.toContain('Approve');
+    expect(verbGroup()?.textContent).not.toContain('Reject');
     expect(verbGroup()?.textContent).toContain('Assign 12 selected…');
   });
 

@@ -40,6 +40,7 @@ import { currentCommandSelection } from '../command/commandSelection';
 
 const draftOutreach = vi.fn();
 const approve = vi.fn();
+const reject = vi.fn();
 const campaign = vi.fn();
 
 const DRAFT = {
@@ -83,6 +84,7 @@ vi.mock('../../lib/api', () => ({
   api: {
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
     approve: (...args: unknown[]) => approve(...args),
+    reject: (...args: unknown[]) => reject(...args),
     campaign: (...args: unknown[]) => campaign(...args),
     salesTeam: () => Promise.resolve({ members: [] }),
   },
@@ -578,6 +580,47 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       expect(
         container.querySelector('[data-testid="lead-bulk-approve"]')?.getAttribute('aria-keyshortcuts'),
       ).toBe('Shift+A');
+      expect(
+        container.querySelector('[data-testid="lead-bulk-reject"]')?.getAttribute('aria-keyshortcuts'),
+      ).toBe('Shift+R');
+    });
+
+    it('Shift+R and the Cmd-K reject verb only open the reject gate; one row opens its own panel (tables-07)', async () => {
+      mount('/lead-queue', null, [lead('B-AAAAAAAAAAAA1'), lead('B-AAAAAAAAAAAA2')]);
+      for (const id of ['B-AAAAAAAAAAAA1', 'B-AAAAAAAAAAAA2']) {
+        act(() => container.querySelector<HTMLInputElement>(`[data-testid="lead-select-${id}"]`)!.click());
+      }
+      const region = container.querySelector<HTMLDivElement>('.tbl-wrap')!;
+      region.focus();
+      act(() => {
+        region.dispatchEvent(new KeyboardEvent('keydown', { key: 'R', shiftKey: true, bubbles: true, cancelable: true }));
+      });
+      await vi.waitFor(async () => {
+        await flush();
+        expect(container.querySelector('[data-testid="lead-bulk-reject-gate"]')).not.toBeNull();
+      }, { timeout: 15_000 });
+      expect(document.activeElement).toBe(container.querySelector('[data-testid="lead-bulk-reject-reason"]'));
+
+      const published = currentCommandSelection();
+      expect(published).toEqual(expect.objectContaining({ rejectCount: 2, canReject: true }));
+      act(() => published!.run('reject-selected'));
+      region.focus();
+      act(() => {
+        region.dispatchEvent(new KeyboardEvent('keydown', { key: 'R', shiftKey: true, bubbles: true, cancelable: true }));
+      });
+      await flush();
+      expect(container.querySelector('[data-testid="lead-bulk-reject-gate"]')).not.toBeNull();
+      expect(reject, 'opening the gate never rejects').not.toHaveBeenCalled();
+
+      // One selected row: its own reject panel, never the gate.
+      act(() => container.querySelector<HTMLInputElement>('[data-testid="lead-select-B-AAAAAAAAAAAA2"]')!.click());
+      region.focus();
+      act(() => {
+        region.dispatchEvent(new KeyboardEvent('keydown', { key: 'R', shiftKey: true, bubbles: true, cancelable: true }));
+      });
+      await flush();
+      expect(container.querySelector('.decision-panel')?.textContent).toContain('B-AAAAAAAAAAAA1');
+      expect(reject).not.toHaveBeenCalled();
     });
   });
 
@@ -642,8 +685,11 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       act(() => checkbox.click());
 
       const published = currentCommandSelection();
-      expect(published).toEqual(expect.objectContaining({ selectedCount: 1, approveCount: 1, canApprove: false }));
+      expect(published).toEqual(expect.objectContaining({
+        selectedCount: 1, approveCount: 1, canApprove: false, canReject: false,
+      }));
       expect(commandVerbActions(published).map((action) => action.id)).not.toContain('verb-approve-selected');
+      expect(commandVerbActions(published).map((action) => action.id)).not.toContain('verb-reject-selected');
     });
 
     it('disables bulk approve with the reason for a non-approver and never drafts on click', async () => {

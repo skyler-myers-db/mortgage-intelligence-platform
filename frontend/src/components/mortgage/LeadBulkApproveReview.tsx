@@ -5,11 +5,15 @@ import { isAbortError } from '../../lib/api';
 import { formatCount } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { Button, Chip } from '../Primitives';
+import { offerCounts } from './LeadBulkApproveReview.counts';
 import { bulkSampleCoverage, stratifiedSampleIds } from './LeadBulkApproveReview.coverage';
 import './LeadBulkApproveReview.css';
 
-// A bulk run's progress and report ride this lazy chunk too (tables-07).
+// A bulk run's progress and report ride this lazy chunk too (tables-07),
+// and so does the bulk reject gate: none of it is in the LeadTable chunk.
 export { LeadBulkRunProgress, LeadBulkRunResult } from './LeadBulkRunStatus';
+export { LeadBulkRejectGate } from './LeadBulkRejectGate';
+export { offerCounts } from './LeadBulkApproveReview.counts';
 
 /**
  * The bulk approve gate's review block (audit states-06, flow-03,
@@ -56,17 +60,6 @@ export interface LeadBulkApproveReviewProps {
   onSamplesChange: (drafts: ReadonlyMap<string, OutreachDraftResult>) => void;
   /** Whether every offer in the run has a ready sample; sent only when it changes. */
   onCoverageChange?: (coverage: BulkSampleCoverageChange) => void;
-}
-
-export function offerCounts(leads: readonly LeadSummary[]): Array<{ label: string; count: number }> {
-  const counts = new Map<string, number>();
-  for (const lead of leads) {
-    const label = offerDisplayLabel(lead.recommended_offer_code, lead.recommended_offer);
-    counts.set(label, (counts.get(label) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([label, count]) => ({ label, count }))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
 const NO_COVERAGE: BulkSampleCoverageChange = { complete: false, missingOfferLabels: [] };
