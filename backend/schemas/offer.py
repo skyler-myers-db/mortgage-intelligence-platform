@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from backend.schemas.approval_request import canonical_uuid_text
 from backend.schemas.common import (
     PUBLIC_UUID_PATTERN,
     validate_internal_staff_email,
@@ -417,6 +418,13 @@ class OutreachApproveRequest(BaseModel):
     def _borrower_id_is_public_safe(cls, value: str) -> str:
         return validate_public_borrower_id(value)
 
+    @field_validator("approval_request_batch_id")
+    @classmethod
+    def _request_link_is_canonical(cls, value: str | None) -> str | None:
+        # The ledger matches the link as text (intent bytes, request-state
+        # SQL, audit payload): one lower-case spelling, whatever the client sent.
+        return canonical_uuid_text(value)
+
     @field_validator("assigned_to_email")
     @classmethod
     def _assigned_to_email_is_staff(cls, value: str | None) -> str | None:
@@ -543,6 +551,13 @@ class OutreachRejectRequest(BaseModel):
     @classmethod
     def _borrower_id_is_public_safe(cls, value: str) -> str:
         return validate_public_borrower_id(value)
+
+    @field_validator("approval_request_batch_id")
+    @classmethod
+    def _request_link_is_canonical(cls, value: str | None) -> str | None:
+        # The ledger matches the link as text (intent bytes, request-state
+        # SQL, audit payload): one lower-case spelling, whatever the client sent.
+        return canonical_uuid_text(value)
 
     @field_validator("request_id", "bulk_id")
     @classmethod

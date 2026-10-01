@@ -54,6 +54,13 @@ _STATEMENTS.update(
 )
 
 
+def _uuid(value: object) -> str:
+    """A uuid column compared with a text parameter: the cast ignores case,
+    and the column prints back lower-case (``uuid::text``)."""
+
+    return str(value).lower()
+
+
 class _Result:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self._rows = rows
@@ -228,8 +235,8 @@ class FakeApprovalLedger:
     def _sql_insert_batch(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         if self._sql_batch_by_key(params):
             return []
-        self.batches[str(params["batch_id"])] = {
-            "batch_id": str(params["batch_id"]),
+        self.batches[_uuid(params["batch_id"])] = {
+            "batch_id": _uuid(params["batch_id"]),
             "requested_by": params["requested_by"],
             "request_key": params["request_key"],
             "request_intent_hash": params["request_intent_hash"],
@@ -238,7 +245,7 @@ class FakeApprovalLedger:
             "audit_event_id": None,
             "created_at": self.now,
         }
-        return [{"batch_id": str(params["batch_id"])}]
+        return [{"batch_id": _uuid(params["batch_id"])}]
 
     def _sql_insert_open_items(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         if self.before_insert_items is not None:
@@ -247,7 +254,7 @@ class FakeApprovalLedger:
         for borrower_id in params["borrower_ids"]:
             if self._open_for(borrower_id):
                 continue
-            self.items[(str(params["batch_id"]), borrower_id)] = {"status": "open", "closed_at": None}
+            self.items[(_uuid(params["batch_id"]), borrower_id)] = {"status": "open", "closed_at": None}
             out.append({"borrower_id": borrower_id})
         return out
 
@@ -257,7 +264,7 @@ class FakeApprovalLedger:
         return [{"audit_id": audit_id, "audit_sequence": len(self.audits), "event_at": self.now}]
 
     def _sql_finalize_batch(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        batch = self.batches.get(str(params["batch_id"]))
+        batch = self.batches.get(_uuid(params["batch_id"]))
         if batch is None or batch["response"] is not None:
             return []
         batch.update(response=json.loads(params["response"]), audit_event_id=params["audit_event_id"])
@@ -267,7 +274,7 @@ class FakeApprovalLedger:
         return {key: batch[key] for key in ("batch_id", "requested_by", "note", "created_at")}
 
     def _sql_batch_by_id(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        batch = self.batches.get(str(params["batch_id"]))
+        batch = self.batches.get(_uuid(params["batch_id"]))
         return [self._batch_view(batch)] if batch and batch["audit_event_id"] else []
 
     _sql_batch_by_id_for_update = _sql_batch_by_id
@@ -296,8 +303,9 @@ class FakeApprovalLedger:
 
     def _sql_items_with_decisions(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         out = []
+        wanted = {_uuid(batch_id) for batch_id in params["batch_ids"]}
         for (batch_id, borrower_id), item in sorted(self.items.items()):
-            if batch_id not in params["batch_ids"]:
+            if batch_id not in wanted:
                 continue
             if params.get("borrower_id") is not None and borrower_id != params["borrower_id"]:
                 continue
@@ -332,7 +340,7 @@ class FakeApprovalLedger:
     def _sql_withdraw_open_items(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         out = []
         for borrower_id in params["borrower_ids"]:
-            item = self.items.get((str(params["batch_id"]), borrower_id))
+            item = self.items.get((_uuid(params["batch_id"]), borrower_id))
             if item is not None and item["status"] == "open":
                 item.update(status="withdrawn", closed_at=self.now)
                 out.append({"borrower_id": borrower_id})
@@ -367,7 +375,8 @@ class FakeApprovalLedger:
         return [
             dict(row)
             for row in self.approvals
-            if str(row["approval_id"]) == params["approval_id"] and row["borrower_id"] == params["borrower_id"]
+            if _uuid(row["approval_id"]) == _uuid(params["approval_id"])
+            and row["borrower_id"] == params["borrower_id"]
         ]
 
     def _sql_outreach_since_approval(self, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -379,7 +388,9 @@ class FakeApprovalLedger:
             )
 
         deliveries = sum(
-            1 for row in self.outbox if row["approval_id"] == params["approval_id"] and row["status"] == "delivered"
+            1
+            for row in self.outbox
+            if _uuid(row["approval_id"]) == _uuid(params["approval_id"]) and row["status"] == "delivered"
         )
         return [{"dispositions": since(self.dispositions), "outcomes": since(self.outcomes), "deliveries": deliveries}]
 
@@ -413,7 +424,7 @@ class FakeApprovalLedger:
 
     def _sql_finalize_approval(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         for row in self.approvals:
-            if str(row["approval_id"]) == params["approval_id"]:
+            if _uuid(row["approval_id"]) == _uuid(params["approval_id"]):
                 if row["decision_response"] is not None or row["audit_event_id"] is not None:
                     return []
                 row["decision_response"] = json.loads(params["decision_response"])

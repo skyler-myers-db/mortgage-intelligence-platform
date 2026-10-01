@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from backend.api import leads as leads_mod
 from backend.main import app
+from backend.services.approval_requests import open_borrower_ids_for_queue
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError
 from backend.services.repositories.factory import get_lead_facet_repository
@@ -80,6 +81,34 @@ def test_the_scope_lists_only_the_requests_open_borrowers_and_is_audited(
     (row,) = _view_rows(audit)
     assert row["approval_request_batch_id"] == batch_id
     assert sorted(row["borrower_ids"]) == [OPEN_A, OPEN_B]
+
+
+def test_an_upper_case_request_id_is_the_same_request(
+    ledger: FakeApprovalLedger, audit: InMemoryAuditStore
+) -> None:
+    # The UUID pattern admits either case and the uuid lookup ignores it, but
+    # the item rows come back keyed by the ledger's lower-case spelling: an
+    # uncanonicalized id read a false-empty queue for an open request.
+    batch_id = _batch(ledger)
+    response = client.get(
+        "/api/leads", params={"approval_request_batch": batch_id.upper()}, headers=APPROVER
+    )
+    assert response.status_code == 200, response.text
+    assert sorted(lead["borrower_id"] for lead in response.json()) == [OPEN_A, OPEN_B]
+    assert response.headers["X-Total-Matching"] != "0"
+    (row,) = _view_rows(audit)
+    assert row["approval_request_batch_id"] == batch_id
+
+
+def test_the_queue_scope_service_groups_by_the_ledgers_spelling(ledger: FakeApprovalLedger) -> None:
+    batch_id = _batch(ledger)
+    open_ids = open_borrower_ids_for_queue(
+        ledger,  # type: ignore[arg-type]
+        batch_id=batch_id.upper(),
+        actor="pat.approver@summit.example",
+        is_approver=True,
+    )
+    assert sorted(open_ids) == [OPEN_A, OPEN_B]
 
 
 def test_a_request_with_no_open_borrower_is_empty_never_the_whole_queue(

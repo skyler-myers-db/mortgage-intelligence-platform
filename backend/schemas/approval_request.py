@@ -16,7 +16,8 @@ withdraw and a 30-day expiry; it is never stored as approved or rejected.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, overload
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -28,6 +29,22 @@ from backend.schemas.common import (
 
 MAX_APPROVAL_REQUEST_BORROWERS = 500
 APPROVAL_REQUEST_NOTE_MAX_LENGTH = 500
+
+
+@overload
+def canonical_uuid_text(value: str) -> str: ...
+@overload
+def canonical_uuid_text(value: None) -> None: ...
+def canonical_uuid_text(value: str | None) -> str | None:
+    """One spelling per id: the lower-case form PostgreSQL prints for ``uuid::text``.
+
+    The public UUID pattern admits either case, but the ledger matches a
+    request id as TEXT (the linked decision's intent bytes, the request-state
+    SQL, the audit payload), so every boundary that accepts an approval
+    request or approval id canonicalizes it once, after the pattern check.
+    """
+
+    return None if value is None else str(UUID(value))
 
 SkipReason = Literal["not_found", "not_contactable", "already_decided", "already_requested"]
 SKIP_REASONS: tuple[SkipReason, ...] = (

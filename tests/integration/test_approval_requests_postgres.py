@@ -28,6 +28,7 @@ import pytest
 from psycopg import sql as psql
 from psycopg.rows import dict_row
 
+from backend.schemas.offer import OutreachApproveRequest
 from backend.schemas.outreach_revoke import OutreachRevokeRequest
 from backend.services.approval_request_create import create_approval_request
 from backend.services.approval_requests import (
@@ -39,6 +40,7 @@ from backend.services.approval_requests import (
     verify_decision_link,
     withdraw_approval_request,
 )
+from backend.services.outreach_decision_intent import _approval_decision_intent
 from backend.services.outreach_revoke import RevokeRefused, revoke_approval
 from backend.services.sales_state import SalesStateStore
 from backend.services.workspace_queue_version import QUEUE_VERSION_SQL, queue_version_from_row
@@ -418,14 +420,19 @@ def _service(conn_kwargs: dict[str, str]) -> _PgLakebase:
 
 
 def _decide(
-    conn_kwargs: dict[str, str], borrower_id: str, action: str, *, batch_id: str | None = None
+    conn_kwargs: dict[str, str],
+    borrower_id: str,
+    action: str,
+    *,
+    batch_id: str | None = None,
+    intent_text: str | None = None,
 ) -> str:
     """A finalized decision row, its intent canonical like _canonical_intent writes it."""
 
     intent: dict[str, Any] = {"action": action, "actor": APPROVER, "borrower_id": borrower_id}
     if batch_id is not None:
         intent["approval_request_batch_id"] = batch_id
-    text = json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    text = intent_text or json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
         row = conn.execute(
             "INSERT INTO mip_app.approvals (borrower_id, action, actor_email, channel, offer_code, "
@@ -496,6 +503,50 @@ def test_create_list_link_and_withdraw_run_on_the_real_statements(conn_kwargs: d
     assert mine.requested_by == ALICE
     assert {row.borrower_id: row.state for row in mine.rows}[LEAD_C] == "withdrawn"
     assert list_approval_requests(lakebase, actor=APPROVER, scope="open").batches == []  # type: ignore[arg-type]
+
+
+def test_an_upper_case_request_id_is_one_request_on_the_real_statements(conn_kwargs: dict[str, str]) -> None:
+    # The public UUID pattern admits either case and the ::uuid lookups ignore
+    # it, but the ledger matches the link as TEXT against batch_id::text: an
+    # uncanonicalized id read a false-empty queue and a linked approve
+    # derived 'decided_outside' (reviewer probe on PG 16).
+    lakebase = _service(conn_kwargs)
+    created = create_approval_request(
+        lakebase, _Leads(), actor=ALICE, borrower_ids=[LEAD_A, LEAD_B], note=NOTE,  # type: ignore[arg-type]
+        request_key=str(uuid4()),
+    )
+    upper = created.batch_id.upper()
+    assert upper != created.batch_id
+    queue = open_borrower_ids_for_queue(lakebase, batch_id=upper, actor=APPROVER, is_approver=True)  # type: ignore[arg-type]
+    assert sorted(queue) == [LEAD_A, LEAD_B]
+
+    payload = OutreachApproveRequest(
+        borrower_id=LEAD_A, offer_code="refi", channel="email", approval_request_batch_id=upper
+    )
+    assert payload.approval_request_batch_id == created.batch_id
+    verify_decision_link(
+        lakebase,  # type: ignore[arg-type]
+        batch_id=created.batch_id,
+        borrower_id=LEAD_A,
+        actor=APPROVER,
+    )
+    intent = _approval_decision_intent(
+        payload,
+        actor=APPROVER,
+        offer_code="refi",
+        evidence_ids=[],
+        safe_rationale=None,
+        safe_bulk_rationale=None,
+        campaign_owner_email=None,
+        campaign_treatment_fingerprint=None,
+    )
+    approval_id = _decide(conn_kwargs, LEAD_A, "approve", intent_text=intent)
+    [mine] = list_approval_requests(lakebase, actor=ALICE, scope="mine").batches  # type: ignore[arg-type]
+    assert {row.borrower_id: (row.state, row.approval_id) for row in mine.rows} == {
+        LEAD_A: ("approved", approval_id),
+        LEAD_B: ("open", None),
+    }
+    assert open_borrower_ids_for_queue(lakebase, batch_id=upper, actor=APPROVER, is_approver=True) == [LEAD_B]  # type: ignore[arg-type]
 
 
 def test_a_replay_returns_the_stored_body_and_a_changed_payload_conflicts(conn_kwargs: dict[str, str]) -> None:

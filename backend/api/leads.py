@@ -17,6 +17,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 
+from backend.schemas.approval_request import canonical_uuid_text
 from backend.schemas.lead import LeadSummary
 from backend.schemas.lead_facets import (
     LeadCountResponse,
@@ -99,14 +100,13 @@ def _refuse_list_only_params(params: LeadQueryParams) -> None:
         raise HTTPException(status_code=422, detail=REQUEST_SCOPE_LIST_ONLY_DETAIL)
 
 
-def _approval_request_scope(request: Request, params: LeadQueryParams) -> list[str]:
+def _approval_request_scope(request: Request, request_batch: str, params: LeadQueryParams) -> list[str]:
     """The open borrowers of the named approval request (maker-checker, flow-02).
 
     Lakebase is resolved here, never as a route dependency, so the Lead Queue
     never fails on Lakebase configuration when no request is named.
     """
 
-    batch_id = str(params.approval_request_batch)
     if (
         params.cohort_id
         or (params.borrower_ids and params.borrower_ids.strip())
@@ -117,7 +117,7 @@ def _approval_request_scope(request: Request, params: LeadQueryParams) -> list[s
     try:
         return open_borrower_ids_for_queue(
             get_lakebase_client(),
-            batch_id=batch_id,
+            batch_id=request_batch,
             actor=actor,
             is_approver=can_access_approver(request),
         )
@@ -185,15 +185,19 @@ def list_leads(
     params: LeadQueryParamsDep,
     limit: LeadLimitDep,
 ) -> list[LeadSummary]:
-    request_batch = params.approval_request_batch
+    # One spelling (the pattern admits either case): the service, the
+    # VIEW_LEADS row and every later reader see the id as the ledger prints it.
+    request_batch = canonical_uuid_text(params.approval_request_batch)
     if request_batch is not None:
-        open_ids = _approval_request_scope(request, params)
+        open_ids = _approval_request_scope(request, request_batch, params)
         if not open_ids:
             # Never an empty borrower_ids: it parses to None, the whole queue.
             response.headers["X-Total-Matching"] = "0"
             response.headers["X-Returned-Rows"] = "0"
             return []
-        params = dataclasses.replace(params, borrower_ids=",".join(open_ids))
+        params = dataclasses.replace(
+            params, borrower_ids=",".join(open_ids), approval_request_batch=request_batch
+        )
     resolved = resolve_lead_query(
         request,
         sales_state,

@@ -139,6 +139,7 @@ def withdraw_approval_request(
             raise ApprovalRequestNotFound(batch_id)
         if normalize_actor(str(batch["requested_by"])) != normalize_actor(actor):
             raise ApprovalRequestForbidden(batch_id)
+        batch_id = str(batch["batch_id"])  # the ledger's spelling, for the audit row
         rows = [derive_row(ItemFacts.from_row(row)) for row in _item_rows_in_transaction(conn, batch_id)]
         open_ids = [row.borrower_id for row in rows if row.state == "open"]
         withdrawn: list[str] = []
@@ -209,9 +210,12 @@ def open_borrower_ids_for_queue(
         raise ApprovalRequestNotFound(batch_id)
     if not is_approver and normalize_actor(str(batch["requested_by"])) != normalize_actor(actor):
         raise ApprovalRequestForbidden(batch_id)
+    # Group by the ledger's own spelling: the uuid lookup above matches any
+    # case, but the item rows come back keyed by ``batch_id::text``.
+    stored_id = str(batch["batch_id"])
     return [
         row.borrower_id
-        for row in rows_by_batch(_item_rows(lakebase, [batch_id])).get(batch_id, [])
+        for row in rows_by_batch(_item_rows(lakebase, [stored_id])).get(stored_id, [])
         if row.state == "open"
     ]
 

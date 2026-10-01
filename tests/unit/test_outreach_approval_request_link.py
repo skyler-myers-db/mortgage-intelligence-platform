@@ -32,6 +32,7 @@ from backend.main import app
 from backend.schemas.offer import OutreachApproveRequest, OutreachRejectRequest
 from backend.services.approval_requests import (
     ApprovalRequestLinkRefused,
+    list_approval_requests,
     verify_decision_link,
 )
 from backend.services.audit_store import get_audit_store
@@ -173,6 +174,17 @@ def test_a_linked_intent_carries_the_request_and_the_matchers_compare_it() -> No
     )
 
 
+def test_a_linked_intent_built_from_an_upper_case_id_carries_the_ledger_spelling() -> None:
+    # The pattern admits either case; the ledger matches the link as TEXT
+    # against batch_id::text (lower-case), so the schema canonicalizes it.
+    upper_approve = _golden_approve(approval_request_batch_id=BATCH.upper())
+    upper_reject = _golden_reject(approval_request_batch_id=BATCH.upper())
+    assert upper_approve.approval_request_batch_id == upper_reject.approval_request_batch_id == BATCH
+    assert _approve_intent(upper_approve) == _approve_intent(_golden_approve(approval_request_batch_id=BATCH))
+    assert _reject_intent(upper_reject) == _reject_intent(_golden_reject(approval_request_batch_id=BATCH))
+    assert f'"approval_request_batch_id":"{BATCH}"' in _approve_intent(upper_approve)
+
+
 def test_a_link_never_rides_a_campaign_binding() -> None:
     with pytest.raises(ValueError, match="campaign binding"):
         _golden_reject(
@@ -272,6 +284,24 @@ def test_a_linked_approve_is_verified_and_the_audit_row_records_the_request(
     assert response.status_code == 200, response.text
     assert link.calls == [{"batch_id": BATCH, "borrower_id": BORROWER, "actor": OWNER}]
     (row,) = _rows(audit, "APPROVE")
+    assert row["approval_request_batch_id"] == BATCH
+    (insert,) = _decision_inserts(fake_lakebase_client)
+    assert json.loads(insert["decision_intent"])["approval_request_batch_id"] == BATCH
+
+
+@pytest.mark.parametrize("verb", ["approve", "reject"])
+def test_an_upper_case_link_is_verified_and_recorded_in_the_ledger_spelling(
+    link: _Link, audit: InMemoryAuditStore, fake_lakebase_client: Any, verb: str
+) -> None:
+    body = (
+        _approval(approval_request_batch_id=BATCH.upper())
+        if verb == "approve"
+        else {"borrower_id": BORROWER, "rationale_code": "low_intent", "approval_request_batch_id": BATCH.upper()}
+    )
+    response = client.post(f"/api/outreach/{verb}", json=body, headers=HEADERS)
+    assert response.status_code == 200, response.text
+    assert link.calls == [{"batch_id": BATCH, "borrower_id": BORROWER, "actor": OWNER}]
+    (row,) = _rows(audit, "APPROVE" if verb == "approve" else "OUTREACH_REJECT")
     assert row["approval_request_batch_id"] == BATCH
     (insert,) = _decision_inserts(fake_lakebase_client)
     assert json.loads(insert["decision_intent"])["approval_request_batch_id"] == BATCH
@@ -384,6 +414,27 @@ def test_the_requester_cannot_decide_their_own_request(ledger: FakeApprovalLedge
     with pytest.raises(ApprovalRequestLinkRefused) as refused:
         verify_decision_link(ledger, batch_id=batch_id, borrower_id=OPEN_ID, actor=" Alice.Analyst@Summit.example ")  # type: ignore[arg-type]
     assert refused.value.kind == "self"
+
+
+def test_a_decision_linked_with_an_upper_case_id_reads_approved_not_decided_outside(
+    ledger: FakeApprovalLedger,
+) -> None:
+    batch_id = ledger.add_batch(ALICE, [OPEN_ID, CLOSED_ID])
+    linked = _golden_approve(approval_request_batch_id=batch_id.upper()).model_copy(
+        update={"borrower_id": OPEN_ID}
+    )
+    verify_decision_link(
+        ledger,  # type: ignore[arg-type]
+        batch_id=str(linked.approval_request_batch_id),
+        borrower_id=OPEN_ID,
+        actor=ACTOR,
+    )
+    approval_id = ledger.add_decision(OPEN_ID, "approve", decision_intent=_approve_intent(linked))
+    [view] = list_approval_requests(ledger, actor=ALICE, scope="mine").batches  # type: ignore[arg-type]
+    assert {row.borrower_id: (row.state, row.approval_id) for row in view.rows} == {
+        OPEN_ID: ("approved", approval_id),
+        CLOSED_ID: ("open", None),
+    }
 
 
 @pytest.mark.parametrize("closure", ["decided", "withdrawn", "expired", "stale", "absent", "unknown"])
