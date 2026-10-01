@@ -31,7 +31,6 @@ from backend.schemas.offer import (
     OutreachRejectResponse,
 )
 from backend.services.audit_decision_inputs import decision_inputs_from_borrower
-from backend.services.audit_metadata_validation import validate_free_text_metadata_value
 from backend.services.audit_store import (
     AuditMetadataValueViolation,
     AuditMetadataViolation,
@@ -83,6 +82,12 @@ from backend.services.outreach_drafts import (
     _verified_generated_draft,
 )
 from backend.services.outreach_intelligence import compose_intelligent_outreach
+from backend.services.outreach_text_policy import (
+    refuse_ungoverned_text as _refuse_ungoverned_text,
+)
+from backend.services.outreach_text_policy import (
+    text_policy_refusal as _text_policy_refusal,
+)
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.rbac import require_approver
 from backend.services.repositories import (
@@ -99,28 +104,6 @@ RepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
 LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
-
-
-def _text_policy_refusal(exc: AuditMetadataValueViolation) -> HTTPException:
-    """422 naming the refused field; the refused text is never echoed."""
-
-    return HTTPException(status_code=422, detail=f"{exc.field} failed the governed text policy")
-
-
-def _refuse_ungoverned_text(values: dict[str, str | None]) -> None:
-    """Refuse free text the audit ledger would refuse, BEFORE any read or write.
-
-    The verdict only: the caller keeps its own scrubbed value, so the decision
-    intent's bytes never change. The same check runs again at the write.
-    """
-
-    for key, value in values.items():
-        if value is None:
-            continue
-        try:
-            validate_free_text_metadata_value(key, value)
-        except AuditMetadataValueViolation as exc:
-            raise _text_policy_refusal(exc) from exc
 
 
 @router.post("/draft", response_model=OutreachDraft, responses=JSON_CONTENT_TYPE_RESPONSE)
