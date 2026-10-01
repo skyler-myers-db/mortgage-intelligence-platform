@@ -130,7 +130,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
         "POST",
         "/api/outreach/approval-requests/{batch_id}/withdraw",
     ): "tests/unit/test_approval_requests_api.py",
-    ("GET", "/api/portfolio"):"tests/unit/test_portfolio_repo_timezone.py",
+    ("GET", "/api/portfolio"): "tests/unit/test_portfolio_repo_timezone.py",
     ("POST", "/api/portfolio/campaign-recommendation"): "tests/unit/test_campaign_intelligence.py",
     ("POST", "/api/portfolio/create"): "tests/unit/test_api_routes.py",
     ("POST", "/api/portfolio/preview"): "tests/unit/test_api_routes.py",

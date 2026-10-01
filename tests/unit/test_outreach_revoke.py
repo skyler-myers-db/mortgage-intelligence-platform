@@ -230,11 +230,12 @@ def test_earlier_outreach_and_undelivered_activation_do_not_block(client: TestCl
     assert client.post(URL, json=_body(approval_id), headers=APPROVER).status_code == 200
 
 
+@pytest.mark.parametrize("worked_status", ["actioned", "outcome_recorded"])
 def test_a_worked_assignment_refuses_and_an_unworked_one_is_released(
-    client: TestClient, ledger: FakeApprovalLedger
+    client: TestClient, ledger: FakeApprovalLedger, worked_status: str
 ) -> None:
     approval_id = _approve(ledger)
-    worked = ledger.add_assignment(BORROWER, status="actioned")
+    worked = ledger.add_assignment(BORROWER, status=worked_status)
     refused = client.post(URL, json=_body(approval_id), headers=APPROVER)
     assert refused.status_code == 409
     assert refused.json()["detail"] == "The loan officer has already worked this lead; it can no longer be revoked."
