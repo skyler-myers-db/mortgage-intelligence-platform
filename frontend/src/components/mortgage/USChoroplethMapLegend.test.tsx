@@ -161,6 +161,7 @@ describe('USChoroplethMapLegend in rate mode', () => {
     step: 0,
     onStepChange: () => undefined,
     scope: null,
+    stateName: (id: string) => id.toUpperCase(),
     control: RateScenarioControl,
     controlFailed: false,
   };

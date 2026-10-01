@@ -175,6 +175,20 @@ export interface HoverState {
    *  5-digit ZIP in the share). Set only when > 0 — the disclosure exists
    *  to explain why the ZIP tiles sum below the state tile. */
   zipUnassigned?: number | null;
+  /** The Rate Lever at the shown step (state cards in rate mode only; wow-stage-1). */
+  scenario?: HoverScenario;
+}
+
+/** A state's scenario facts at the shown step: server counts, and their difference from today. */
+export interface HoverScenario {
+  step: number;
+  /** The server's scenario par rate, in percent. */
+  ratePct: number;
+  today: number;
+  atStep: number;
+  change: number;
+  /** Null when the grid does not report the contactable subset. */
+  contactableAtStep: number | null;
 }
 
 export interface LeadQueuePathInput {

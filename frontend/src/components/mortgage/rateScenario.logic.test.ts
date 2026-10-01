@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RateSensitivityResponse, RateSensitivityState } from '../../types/rateScenario';
 import { classify } from './USChoroplethMap.scale';
-import { fixedScenarioScale, indexRateScenario, scenarioView } from './rateScenario.logic';
+import { RATE_COHORT_NOTE, fixedScenarioScale, indexRateScenario, scenarioView } from './rateScenario.logic';
 import { nearestStep, recountAt } from './rateScenario.recount';
 
 const STEPS = [-100, -75, -50, -25, 0, 25, 50, 75, 100];
@@ -66,6 +66,71 @@ describe('rateScenario.logic', () => {
     if (!index) throw new Error('index');
     expect(recountAt(index, 0, null)?.contactable).toBeNull();
     expect(recountAt(index, 0, 'il')?.contactable).toBe(50);
+  });
+
+  // wow-stage-1 / D-dataviz-geo-b: change versus today, as numbers. The grid
+  // is monotone (tests/integration/test_rate_sensitivity_parity.py::
+  // test_in_the_money_never_rises_with_par), so every change in one frame
+  // has the sign of the step's opposite: no diverging ramp is needed.
+  const PR = state('PR', [70, 60, 50, 40, 30, 20, 10, 5, 0], null);
+
+  it('keeps every fixture state non-increasing along the steps (the premise of single-signed change)', () => {
+    for (const fixture of [IL, TX, PR]) {
+      for (let i = 1; i < fixture.in_the_money.length; i += 1) {
+        expect(fixture.in_the_money[i]).toBeLessThanOrEqual(fixture.in_the_money[i - 1]);
+      }
+    }
+  });
+
+  it('reads change versus today per state, signed against the step', () => {
+    const index = indexRateScenario(response([IL, TX, PR]));
+    if (!index) throw new Error('index');
+    for (const step of STEPS) {
+      const view = scenarioView(index, step);
+      if (!view?.changeById || !view.todayById) throw new Error('change');
+      expect(view.todayById).toEqual({ il: 500, tx: 250, pr: 30 });
+      for (const change of Object.values(view.changeById)) {
+        expect([-Math.sign(step), 0]).toContain(Math.sign(change) + 0);
+      }
+    }
+    const lower = scenarioView(index, -50);
+    expect(lower?.changeById).toEqual({ il: 200, tx: 100, pr: 20 });
+    expect(scenarioView(index, 50)?.changeById).toEqual({ il: -200, tx: -100, pr: -20 });
+    expect(scenarioView(index, 0)?.changeById).toEqual({ il: 0, tx: 0, pr: 0 });
+  });
+
+  it('sums the whole-book change over every grid state, PR included, equal to the recount delta', () => {
+    const index = indexRateScenario(response([IL, TX, PR]));
+    if (!index) throw new Error('index');
+    for (const step of STEPS) {
+      const recount = recountAt(index, step, null);
+      if (!recount) throw new Error('recount');
+      expect(scenarioView(index, step)?.totalChange).toBe(recount.inTheMoney - recount.today);
+    }
+    expect(scenarioView(index, -100)?.totalChange).toBe(640);
+  });
+
+  it('carries the contactable subset at the step, null per state where it is not reported', () => {
+    const index = indexRateScenario(response([IL, PR]));
+    if (!index) throw new Error('index');
+    expect(scenarioView(index, -25)?.contactableById).toEqual({ il: 60, pr: null });
+  });
+
+  it('reports no change at all when the grid has no step 0', () => {
+    const shifted = response([IL]);
+    shifted.steps_bps = [-100, -75, -50, -25, 10, 25, 50, 75, 100];
+    const index = indexRateScenario(shifted);
+    if (!index) throw new Error('index');
+    const view = scenarioView(index, -50);
+    expect(view?.inTheMoneyById).toEqual({ il: 700 });
+    expect(view?.changeById).toBeNull();
+    expect(view?.todayById).toBeNull();
+    expect(view?.contactableById).toBeNull();
+    expect(view?.totalChange).toBeNull();
+  });
+
+  it("states the cohort note once, as the Lead Queue's par", () => {
+    expect(RATE_COHORT_NOTE).toBe("The Lead Queue and campaigns use today's par rate.");
   });
 
   it('snaps a value to the nearest grid step', () => {

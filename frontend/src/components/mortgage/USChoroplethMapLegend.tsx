@@ -10,6 +10,7 @@
  * scale's breaks between the prototype's Lower / Higher words. Declared
  * accessibility deviation from design_files/Module 0 Prototype.html:1864-1871
  * (an accent 15/30/50/70% bar with Lower / Higher only).
+ * deviation:choropleth-ramp
  *
  * Rate Lever (audit wow-stage-1): in rate mode the legend recounts "in the
  * money at scenario" ('—' until the grid is usable), always shows the
@@ -30,7 +31,7 @@ import type { GeoAssignmentOverlayResponse } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import { Chip, EvidenceChip } from '../Primitives';
-import type { MapScenarioView, RateScenarioIndex } from './rateScenario.logic';
+import { RATE_COHORT_NOTE, type MapScenarioView, type RateScenarioIndex } from './rateScenario.logic';
 import { classRanges, formatBreak, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { GeoRead } from './useChoroplethLiveFacts';
 import { formatCount, formatNumber } from '../../lib/formatters';
@@ -49,6 +50,8 @@ export interface RateLeverInputs {
   onStepCommit?: (step: number) => void;
   /** The drilled state (ZIP level, where tiles keep borrower colouring), or null for the whole book. */
   scope: { id: string; name: string } | null;
+  /** A state's display name from its lowercase id; the uppercase USPS code off the map (PR, VI). */
+  stateName: (id: string) => string;
 }
 
 /** The Rate Lever's legend inputs; present only while the rate colouring is on. */
@@ -206,7 +209,7 @@ export function USChoroplethMapLegend({
             <Chip variant="neutral" icon="info">
               Scenario, not a forecast
             </Chip>
-            <span>The Lead Queue and campaigns use today&apos;s par rate.</span>
+            <span>{RATE_COHORT_NOTE}</span>
           </div>
           {/* The slot reserves the control's height, so neither the chunk
               load nor a status line moves the stage. */}

@@ -219,6 +219,19 @@ export function signedBps(value: number): string {
   return BPS.format(unsignedZero(value, 0));
 }
 
+/**
+ * A signed whole count, for a change in a population ("+1,234", "-1,234",
+ * "0"; -0.4 rounds to "0", never "-0"). The minus is the ASCII hyphen-minus
+ * the other signed formatters print (the U+2212 sweep is one later
+ * cross-formatter commit). Rate Lever change versus today (wow-stage-1),
+ * the watchlist briefings, the Delta Explainer.
+ */
+export function signedCount(value: MaybeNumber): string {
+  if (!isKnown(value)) return UNKNOWN;
+  // `+ 0` turns Math.round's -0 (e.g. for -0.4) into 0.
+  return BPS.format(Math.round(value) + 0);
+}
+
 /** `signedBps` with the unit: "+180 bps" / "-422 bps" / "0 bps". */
 export function signedBpsLabel(value: number): string {
   const magnitude = signedBps(value);

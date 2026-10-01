@@ -12,7 +12,8 @@
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup, ZipRollup } from '../../types';
-import type { HoverState, Level, UsaSvgMap } from './USChoroplethMap.utils';
+import type { MapScenarioView } from './rateScenario.logic';
+import type { HoverScenario, HoverState, Level, UsaSvgMap } from './USChoroplethMap.utils';
 
 /** What the card shows: HoverState without the pointer position (the tip is placed outside React). */
 export type MapCard = Omit<HoverState, 'x' | 'y'>;
@@ -36,6 +37,25 @@ export interface MapCardInputs {
   zipFacts: Record<string, ZipRollup> | null;
   /** ZIP currently selected, or null. Gates covering-officer disclosure. */
   selectedZip: string | null;
+  /** The Rate Lever view at the shown step (rate mode); only STATE cards read it. */
+  scenario: MapScenarioView | null;
+}
+
+/** One state's scenario facts, or undefined off the grid (or without a step 0 to compare with). */
+export function stateScenario(id: string, view: MapScenarioView | null): HoverScenario | undefined {
+  const atStep = view?.inTheMoneyById[id];
+  const today = view?.todayById?.[id];
+  const change = view?.changeById?.[id];
+  if (!view || atStep === undefined || today === undefined || change === undefined) return undefined;
+  const contactable = view.contactableById?.[id];
+  return {
+    step: view.step,
+    ratePct: view.ratePct,
+    today,
+    atStep,
+    change,
+    contactableAtStep: typeof contactable === 'number' ? contactable : null,
+  };
 }
 
 /** The card for one hovered or focused unit; null when the unit is not on the stage any more. */
@@ -75,6 +95,7 @@ function stateCard(id: string, inputs: MapCardInputs): MapCard | null {
           coveringOfficers: selectedId === location.id ? overlayUnit.covering_officers : undefined,
         }
       : undefined,
+    scenario: stateScenario(id, inputs.scenario),
   };
 }
 

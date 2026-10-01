@@ -11,7 +11,8 @@
  *    element's box instead of the pointer.
  */
 import type { KeyboardEvent } from 'react';
-import { formatCount, formatNumber } from '../../lib/formatters';
+import { formatCount, formatNumber, ratePct, signedCount } from '../../lib/formatters';
+import type { HoverScenario } from './USChoroplethMap.utils';
 
 /** Attribute every map unit (state path, ZIP tile) carries. */
 export const MAP_UNIT_ATTR = 'data-map-unit';
@@ -44,6 +45,18 @@ function describeFacts(facts: UnitFacts, noun: string): string {
 export type StateLabelStatus = 'loading' | 'ready' | 'unavailable';
 
 /**
+ * The Rate Lever suffix of a state's name (wow-stage-1): the count at the
+ * scenario rate and its change versus today, or today's count at step 0.
+ * The cohort note is the path's description (USChoroplethMapStates).
+ */
+function scenarioSuffix(scenario: HoverScenario | undefined): string {
+  if (!scenario) return '';
+  return scenario.step === 0
+    ? `; in the money today: ${formatCount(scenario.today)}`
+    : `; in the money at ${ratePct(scenario.ratePct)}: ${formatCount(scenario.atStep)} (${signedCount(scenario.change)} vs today)`;
+}
+
+/**
  * Accessible name of one state path: the state name, a colon, then the facts
  * (the Genie answer map's `Name: value` form). The colon keeps "Washington:"
  * apart from "Washington, DC:" for a prefix match, and a screen-reader user
@@ -54,13 +67,14 @@ export function stateAriaLabel(
   facts: UnitFacts | undefined,
   status: StateLabelStatus,
   inFootprint: boolean,
+  scenario?: HoverScenario,
 ): string {
   if (status === 'loading') return `${name}: loading borrower counts`;
   if (status === 'unavailable') return `${name}: borrower counts unavailable`;
   if (!facts) {
     return inFootprint ? `${name}: no borrower rollup` : `${name}: outside the Cotality evaluation scope`;
   }
-  return `${name}: ${describeFacts(facts, 'marketable borrowers')}`;
+  return `${name}: ${describeFacts(facts, 'marketable borrowers')}${scenarioSuffix(scenario)}`;
 }
 
 export function zipAriaLabel(zip: string, facts: UnitFacts): string {

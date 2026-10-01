@@ -276,6 +276,11 @@ export function USChoroplethMap({
     if (!drillStateId) return '';
     return usaMap?.locations.find((l) => l.id === drillStateId)?.name ?? drillStateUC;
   }, [drillStateId, drillStateUC, usaMap]);
+  // The Rate Lever's state names (largest gains); off the map, the USPS code.
+  const stateName = useCallback(
+    (id: string) => usaMap?.locations.find((l) => l.id === id)?.name ?? id.toUpperCase(),
+    [usaMap],
+  );
   const levelWhat = level === 'zip' ? `ZIP rollups for ${drillStateName || 'state'}` : 'State borrower rollups';
   // runtime-06: the previous cohort stays painted while the new one reads,
   // labelled; a warming loop over it keeps the fill and says so in the pill.
@@ -344,6 +349,7 @@ export function USChoroplethMap({
         drillStateName,
         zipFacts,
         selectedZip: current.zip,
+        scenario: shownScenario,
       })
     : null;
 
@@ -369,16 +375,22 @@ export function USChoroplethMap({
       if (level === 'state' ? !stateFacts : !zipFacts) {
         return <div className="map-stage map-stage--empty">Loading rollups…</div>;
       }
+      // Rate mode: change versus today as labelled numbers (wow-stage-1, D-dataviz-geo-b).
+      const scenarioRate = shownScenario ? ratePct(shownScenario.ratePct) : null;
       return (
         <USChoroplethMapTable
           unitLabel={level === 'state' ? 'State' : 'ZIP'}
-          caption={level === 'state'
-            ? `Marketable borrowers by state, ${segmentCaption}`
-            : `Marketable borrowers by ZIP in ${drillStateName}, ${segmentCaption}`}
+          caption={level === 'zip'
+            ? `Marketable borrowers by ZIP in ${drillStateName}, ${segmentCaption}`
+            : scenarioRate
+              ? `Marketable (addressable) borrowers by state, with in-the-money counts at ${scenarioRate} par, ${segmentCaption}`
+              : `Marketable borrowers by state, ${segmentCaption}`}
           groups={tableGroups}
-          extraColumn={shownScenario
-            ? `In the money at ${ratePct(shownScenario.ratePct)}`
+          extraColumn={scenarioRate
+            ? `In the money at ${scenarioRate}`
             : overlayActive ? 'Unattended leads' : null}
+          changeColumn={shownScenario?.changeById && shownScenario.step !== 0 ? 'In the money: change vs today' : null}
+          scenarioContactableColumn={scenarioRate ? `Contactable in the money at ${scenarioRate}` : null}
           autoFocus={drillFocus}
           onAutoFocused={onDrillFocused}
           focusRowId={level === 'state' ? returnFocusTo : null}
@@ -517,6 +529,7 @@ export function USChoroplethMap({
           onStepChange: setRateStep,
           onStepCommit,
           scope: drillStateId ? { id: drillStateId, name: drillStateName } : null,
+          stateName,
           control: lever.module?.default ?? null,
           controlFailed: lever.failed,
         } : null}
