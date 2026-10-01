@@ -19,7 +19,7 @@ and disconnect all PASS and the keep-alive idle run survived. Exit 0 PASS,
 
 Usage (an admin profile; the integrator runs it after the W5b deploy)::
 
-    python tools/databricks/sse_ingress_spike.py --profile paychex \\
+    python tools/databricks/sse_ingress_spike.py --profile <admin-profile> \\
         --base-url https://mip-app-....databricksapps.com --out spike.json
 """
 
