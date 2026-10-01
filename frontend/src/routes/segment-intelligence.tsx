@@ -5,6 +5,7 @@ import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { SegmentCode, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { SegmentCard, SegmentCardSkeleton } from '../components/mortgage/SegmentCard';
+import { SignalStack } from '../components/mortgage/SignalStack';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { EMPTY_MAP_SELECTION, withMapSelection } from '../components/mortgage/USChoroplethMap.selection';
@@ -389,6 +390,10 @@ export default function SegmentIntelligence() {
               ))}
         </div>
       )}
+
+      {/* Where several signals fire on the same borrower (wow-stage-5):
+          whole book, so it sits above the filters it is not narrowed by. */}
+      <SignalStack />
 
       <div
         className="filter-row filter-row--spaced filter-row--stacked"

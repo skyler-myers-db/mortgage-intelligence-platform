@@ -28,6 +28,8 @@ const MAP_UNITS = [
   'USChoroplethMapTable.tsx',
   'useMapHover.ts',
   'useMapModeParams.ts',
+  // Wave 5a's Segment Intelligence addition, compiled under the same bar.
+  'SignalStack.tsx',
 ];
 
 interface CompiledFunction { name: string; emitted: boolean; memoSlots: number }
