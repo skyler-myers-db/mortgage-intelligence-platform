@@ -79,3 +79,4 @@ enforces it.
 
 | id | deviation | prototype cite | class | code | pinning test | finding ids | ruling date | lane |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| field-affixes-readouts | Field gains $ / % affixes beside the control (aria-hidden, the unit in the control's description), a read-only readout (label plus .field__value text, never a read-only input) and :read-only / :disabled / :user-invalid states on Field-wrapped .form-input; the prototype's inputs are bare .tweak-row controls with no units or states. | design_files/index.html:921-925; design_files/index.html:467 | accessibility | frontend/src/components/ui/Field.tsx; frontend/src/components/ui/Field.css | frontend/src/components/ui/Field.test.tsx | critic-04 | 2026-10-01 | w5-portfolio-forms |
