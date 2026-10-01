@@ -197,7 +197,10 @@ def write_sections(
     state.audited |= new_indices
 
 
-_Pending = tuple[LakebaseClient, RevealContext, list[dict[str, Any]]]
+#: (client, context, latest snapshot, a sweep reset is pending). The reset
+#: survives coalescing: an empty snapshot overwritten by the next sweep's first
+#: one before it drained must still start that sweep's audit set from nothing.
+_Pending = tuple[LakebaseClient, RevealContext, list[dict[str, Any]], bool]
 
 
 class _SectionWriter:
@@ -219,7 +222,9 @@ class _SectionWriter:
         snapshot: list[dict[str, Any]],
     ) -> None:
         with self._lock:
-            self._pending[job_id] = (lakebase, context, list(snapshot))
+            queued = self._pending.get(job_id)
+            reset = not snapshot or (queued is not None and queued[3])
+            self._pending[job_id] = (lakebase, context, list(snapshot), reset)
             if self._thread is None or not self._thread.is_alive():
                 self._thread = threading.Thread(target=self._loop, name="genie-job-sections", daemon=True)
                 self._thread.start()
@@ -242,8 +247,13 @@ class _SectionWriter:
                 if not self._pending:
                     return
                 job_id = next(iter(self._pending))
-                lakebase, context, snapshot = self._pending.pop(job_id)
+                lakebase, context, snapshot, reset = self._pending.pop(job_id)
                 state = self._states.setdefault(job_id, _JobReveal())
+                if reset:
+                    # Only this thread mutates a job's state (R1: a new
+                    # sweep's plan indices are new sections to audit).
+                    state.audited.clear()
+                    state.withheld.clear()
                 self._writing += 1
             token = set_correlation_id(context.correlation_id)
             try:

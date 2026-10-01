@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from typing import Any
 
@@ -200,6 +201,33 @@ def test_the_process_writer_audits_off_the_caller_thread_under_the_turn_correlat
     rows = _revealed_rows(lakebase)
     assert len(rows) == 3
     assert {row["correlation_id"] for row in rows} == {"corr-reveal"}
+
+
+def test_a_sweep_reset_survives_coalescing_so_the_next_sweep_is_audited_anew() -> None:
+    # Latest snapshot wins per job: an empty (reset) snapshot can be
+    # overwritten by the next sweep's first one before the writer drains it.
+    # The new sweep's sections reuse plan indices 0..2 and must still each get
+    # their own GENIE_SECTION_REVEALED row before they are stored (R1).
+    lakebase = FakeJobLakebase()
+    job_id = _running_job(lakebase)
+    writer = sections._SectionWriter()
+    hold = threading.Event()
+    parked = threading.Thread(target=hold.wait, daemon=True)
+    parked.start()
+    writer._thread = parked  # keeps submit from starting the drain loop
+    try:
+        writer.submit(lakebase, job_id, _context(), [_item(0), _item(1), _item(2)])
+        writer._drain()
+        assert len(_revealed_rows(lakebase)) == 3
+
+        writer.submit(lakebase, job_id, _context(), [])
+        writer.submit(lakebase, job_id, _context(), [_item(0), _item(1), _item(2)])
+        writer._drain()
+    finally:
+        hold.set()
+
+    assert len(_revealed_rows(lakebase)) == 6, "the second sweep's sections are new sections"
+    assert [item["index"] for item in lakebase.rows[job_id]["sections_json"]["sections"]] == [0, 1, 2]
 
 
 # --------------------------------------------------------- the status poll
