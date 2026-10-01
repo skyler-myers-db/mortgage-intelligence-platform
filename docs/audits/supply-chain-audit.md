@@ -18,9 +18,10 @@ this remediation pass.
   optional), at both the `--audit-level=high` gate and the advisory
   `--audit-level=moderate` level. The batch adds web-vitals and stylelint
   (with its 97 dev-only transitive packages). Re-read by the W5b integrator
-  on the installed tree after `npm --prefix frontend ci` and the two holds
-  below (`@tanstack/react-virtual`, `happy-dom`): `npm audit`, 0 advisories
-  at any level across 351 packages (19 prod, 333 dev, 46 optional).
+  on the installed tree after `npm --prefix frontend ci` and the three holds
+  below (`@tanstack/react-virtual`, `happy-dom`, the TanStack Query pair):
+  `npm audit`, 0 advisories at any level across 351 packages (19 prod, 333
+  dev, 46 optional).
 - Frontend `npm audit`, 2026-09-25, after the wave-4 test-infra batch
   (Playwright 1.63.0 and oxlint 1.85.0; no other package moved): 0
   advisories at any level (0 low, 0 moderate, 0 high, 0 critical) across 251
@@ -370,8 +371,8 @@ bytes).
 
 | Package | Current | Latest | Taken | Note |
 |---|---|---|---|---|
-| `@tanstack/react-query` | 5.100.10 | 5.104.0 | 5.104.0 | Lockstep with the persist client: one `@tanstack/query-core` and one `query-persist-client-core` in the lock, both 5.104.0 (pinned by `tests/unit/test_dependency_pins.py`). |
-| `@tanstack/react-query-persist-client` | 5.100.10 | 5.104.0 | 5.104.0 | Lockstep (W5a carryover). |
+| `@tanstack/react-query` | 5.100.10 | 5.104.0 | **held 5.100.10** | Held 2026-10-01 by the W5b integrator: on the installed tree the fixture suite goes red in `tests/e2e/fixture/shell-wayfinding.fixture.spec.ts` ('Console motion under reduced motion: closing hides the Console at once', 3 of 3 runs): with query-core 5.104.0 the reduced-motion Console is still `display: flex` one macrotask after Close, where 5.100.10 has already swapped in the hidden placeholder. Bisected on the base tree (base lock green; base + vite 8.3.2 and @rolldown/plugin-babel 0.2.4 green; + TanStack Query 5.104.0 red). The lockstep still holds: one `@tanstack/query-core` and one `query-persist-client-core` in the lock, both 5.100.10. Re-take it with W5d `w5-test-harness-deps-report` once the exit timing is understood (5.104.0 also saved 0.22 KiB br initial JS). |
+| `@tanstack/react-query-persist-client` | 5.100.10 | 5.104.0 | **held 5.100.10** | Lockstep with `@tanstack/react-query` (held with it). |
 | `@tanstack/react-virtual` | 3.13.24 | 3.14.13 | **held 3.13.24** | Held 2026-10-01 by the W5b integrator: on the installed tree `@tanstack/virtual-core` 3.14.0 -> 3.17.11 grows the shared LeadTable lazy chunk (Lead Queue and Segment Intelligence) by +9.00 raw / +2.59 gzip / +2.28 brotli KiB (37.96 -> 40.31 br, measured by building the batch with and without it), which turns the largest-lazy-chunk budget gate red on base code that `w5-lead-triage-export` also extends. No W5b or W5c item needs a 3.14 API. Re-take it with a lane that funds the bytes (W5c `w5-lead-queue-paging` owns the chunk). |
 | `vite` | 8.3.0 | 8.3.2 | 8.3.2 | `rolldown` 1.2.10 -> 1.2.12. Moves VRT and budget bytes at most marginally; re-baselined once by the integrator. |
 | `@rolldown/plugin-babel` | 0.2.3 | 0.2.4 | 0.2.4 | Patch. |
