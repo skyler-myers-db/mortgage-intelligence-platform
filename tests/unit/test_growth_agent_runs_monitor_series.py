@@ -48,10 +48,13 @@ _FINALIZE_ONLY_FUNCTION = """    IF (to_jsonb(NEW) - 'audit_event_id')
 
 
 def _series_block() -> str:
-    return _SCHEMA[_SCHEMA.index(_MARKER):]
+    # Bounded by its own version row: later blocks are appended after it.
+    start = _SCHEMA.index(_MARKER)
+    end = _SCHEMA.index("ON CONFLICT (version) DO NOTHING;", start)
+    return _SCHEMA[start : end + len("ON CONFLICT (version) DO NOTHING;")]
 
 
-def test_the_series_block_is_the_last_block_and_is_versioned_once() -> None:
+def test_the_series_block_is_versioned_once() -> None:
     block = _series_block()
     assert _SCHEMA.count(_MARKER) == 1
     assert block.count("INSERT INTO mip_app.schema_migrations") == 1

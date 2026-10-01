@@ -49,6 +49,11 @@ _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     "genie_completion_jobs": ("SELECT", "INSERT", "UPDATE"),
     # Saved Lead Queue views: deletes are soft (deleted_at), so no DELETE.
     "saved_views": ("SELECT", "INSERT", "UPDATE"),
+    # Approval requests (maker-checker): a batch is finalized once and an
+    # item only moves open -> withdrawn | expired, both trigger-enforced; no
+    # row is ever deleted, so no DELETE.
+    "approval_request_batches": ("SELECT", "INSERT", "UPDATE"),
+    "approval_request_items": ("SELECT", "INSERT", "UPDATE"),
 }
 
 _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {
@@ -96,6 +101,8 @@ _APP_ROLE_ROUTINE_PRIVILEGES: dict[tuple[str, str], tuple[str, ...]] = {
     ("enforce_ai_gateway_proof_timestamp_bounds", ""): (),
     ("enforce_campaign_decision_lifecycle", ""): (),
     ("enforce_approval_finalize_only", ""): (),
+    ("enforce_approval_request_batch_finalize_only", ""): (),
+    ("enforce_approval_request_item_transition", ""): (),
 }
 
 # Exact non-internal trigger surface for the dedicated application-state
@@ -183,6 +190,26 @@ _APP_TRIGGER_CONTRACT: dict[
         "mip_app",
         "growth_agent_runs",
         "trg_growth_agent_runs_no_remove",
+    ): ("mip_app", "prevent_outreach_evidence_mutation", "", 42),
+    (
+        "mip_app",
+        "approval_request_batches",
+        "trg_approval_request_batches_finalize_only",
+    ): ("mip_app", "enforce_approval_request_batch_finalize_only", "", 19),
+    (
+        "mip_app",
+        "approval_request_batches",
+        "trg_approval_request_batches_no_remove",
+    ): ("mip_app", "prevent_outreach_evidence_mutation", "", 42),
+    (
+        "mip_app",
+        "approval_request_items",
+        "trg_approval_request_items_transition",
+    ): ("mip_app", "enforce_approval_request_item_transition", "", 19),
+    (
+        "mip_app",
+        "approval_request_items",
+        "trg_approval_request_items_no_remove",
     ): ("mip_app", "prevent_outreach_evidence_mutation", "", 42),
 }
 

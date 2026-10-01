@@ -2999,7 +2999,7 @@ def test_trigger_contract_matches_every_schema_trigger_exactly() -> None:
         )
 
     assert actual == lakebase_migrate._APP_TRIGGER_CONTRACT
-    assert len(actual) == 15
+    assert len(actual) == 19
     assert (
         lakebase_migrate._APP_ROLE_ROUTINE_PRIVILEGES[
             ("enforce_campaign_decision_lifecycle", "")

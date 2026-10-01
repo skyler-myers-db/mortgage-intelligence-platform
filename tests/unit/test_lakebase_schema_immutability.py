@@ -458,3 +458,147 @@ def test_seed_approvals_are_bound_to_seeded_immutable_variants() -> None:
     assert "ON CONFLICT (campaign_id, variant_name, channel) DO NOTHING" in seed
     assert "approval_id, campaign_id, variant_name, channel, borrower_id" in seed
     assert seed.count("'Benefit-led',") >= 8
+
+
+# --- 2026_10_01_approval_requests (W5b approval ledger) ---------------------
+
+_APPROVAL_REQUEST_MARKER = "-- Approval requests (maker-checker), revoke and decided_at ---"
+
+
+def _approval_request_block() -> str:
+    start = _SCHEMA.index(_APPROVAL_REQUEST_MARKER)
+    end = _SCHEMA.index("ON CONFLICT (version) DO NOTHING;", start)
+    return _SCHEMA[start:end]
+
+
+def test_the_approval_request_block_is_post_seed_and_versioned_once() -> None:
+    from jobs import lakebase_migrate
+
+    _pre_seed, post_seed = lakebase_migrate._split_schema_sql(_SCHEMA)
+    block = _approval_request_block()
+    assert _SCHEMA.count(_APPROVAL_REQUEST_MARKER) == 1
+    assert block in post_seed
+    assert _SCHEMA.index(_APPROVAL_REQUEST_MARKER) > _SCHEMA.index(
+        "'2026_10_01_growth_agent_watchlist_series'"
+    )
+    assert block.count("INSERT INTO mip_app.schema_migrations") == 1
+    assert "'2026_10_01_approval_requests'" in block
+
+
+@pytest.mark.parametrize(
+    ("table", "trigger", "function", "level", "events"),
+    [
+        (
+            "approval_request_batches",
+            "trg_approval_request_batches_finalize_only",
+            "enforce_approval_request_batch_finalize_only",
+            "ROW",
+            "UPDATE",
+        ),
+        (
+            "approval_request_batches",
+            "trg_approval_request_batches_no_remove",
+            "prevent_outreach_evidence_mutation",
+            "STATEMENT",
+            "DELETE OR TRUNCATE",
+        ),
+        (
+            "approval_request_items",
+            "trg_approval_request_items_transition",
+            "enforce_approval_request_item_transition",
+            "ROW",
+            "UPDATE",
+        ),
+        (
+            "approval_request_items",
+            "trg_approval_request_items_no_remove",
+            "prevent_outreach_evidence_mutation",
+            "STATEMENT",
+            "DELETE OR TRUNCATE",
+        ),
+    ],
+)
+def test_approval_request_tables_carry_their_four_guard_triggers(
+    table: str, trigger: str, function: str, level: str, events: str
+) -> None:
+    block = _approval_request_block()
+    assert re.search(rf"DROP TRIGGER IF EXISTS {trigger}\s+ON mip_app\.{table};", block), trigger
+    assert re.search(
+        rf"CREATE TRIGGER {trigger}\s+BEFORE {events} ON mip_app\.{table}\s+"
+        rf"FOR EACH {level}\s+EXECUTE FUNCTION mip_app\.{function}\(\);",
+        block,
+    ), trigger
+
+
+def test_approval_request_guard_functions_diff_every_other_column() -> None:
+    block = _approval_request_block()
+    batch = block[block.index("enforce_approval_request_batch_finalize_only()") :]
+    batch = batch[: batch.index("$$;")]
+    assert "(to_jsonb(NEW) - ARRAY['response', 'audit_event_id'])" in batch
+    assert "(to_jsonb(OLD) - ARRAY['response', 'audit_event_id'])" in batch
+    for clause in (
+        "OLD.response IS NOT NULL",
+        "OLD.audit_event_id IS NOT NULL",
+        "NEW.response IS NULL",
+        "NEW.audit_event_id IS NULL",
+        "USING ERRCODE = '42501'",
+        "SECURITY INVOKER",
+    ):
+        assert clause in batch, clause
+    item = block[block.index("enforce_approval_request_item_transition()") :]
+    item = item[: item.index("$$;")]
+    assert "(to_jsonb(NEW) - ARRAY['status', 'closed_at'])" in item
+    assert "(to_jsonb(OLD) - ARRAY['status', 'closed_at'])" in item
+    for clause in (
+        "OLD.status IS DISTINCT FROM 'open'",
+        "NEW.status NOT IN ('withdrawn', 'expired')",
+        "NEW.closed_at IS NULL",
+        "USING ERRCODE = '42501'",
+        "SECURITY INVOKER",
+    ):
+        assert clause in item, clause
+
+
+def test_the_approvals_action_check_is_widened_for_revoke_only_when_needed() -> None:
+    block = _approval_request_block()
+    guarded = block[block.index("DO $$") : block.index("END $$;")]
+    assert "conname = 'approvals_action_check'" in guarded
+    assert "LIKE '%''revoke''%'" in guarded
+    assert "DROP CONSTRAINT IF EXISTS approvals_action_check" in guarded
+    assert "CHECK (action IN ('approve','reject','hold','revoke'))" in guarded
+    # The approvals CREATE TABLE literal is untouched (single-block rule).
+    assert "CHECK (action IN ('approve','reject','hold'))," in _table_ddl("approvals")
+    assert re.search(
+        r"CREATE INDEX IF NOT EXISTS idx_approvals_decided_at\s+"
+        r"ON mip_app\.approvals \(decided_at DESC\);",
+        block,
+    )
+
+
+def test_approval_request_tables_have_no_destructive_dml_or_unreviewed_hooks() -> None:
+    from jobs.lakebase_migration_contracts import _SAFE_SCHEMA_HOOK_FUNCTION_NAMES
+    from jobs.lakebase_migration_schema_hooks import _schema_hook_function_calls
+
+    destructive = re.compile(
+        r"^\s*(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|UPDATE)\s+"
+        r"mip_app\.approval_request_(?:batches|items)\b",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    assert destructive.search(_SCHEMA) is None
+    assert destructive.search(_SEED) is None
+    checks: list[str] = []
+    for table in ("approval_request_batches", "approval_request_items"):
+        ddl = _table_ddl(table)
+        for match in re.finditer(r"CHECK\s*\(", ddl):
+            depth, position = 1, match.end()
+            while depth:
+                depth += {"(": 1, ")": -1}.get(ddl[position], 0)
+                position += 1
+            checks.append(ddl[match.end() : position - 1])
+        assert "char_length" not in ddl
+        assert "jsonb_typeof" not in ddl
+    # Five column CHECKs and two named table CHECKs, all reviewed builtins.
+    assert len(checks) == 7
+    calls = set().union(*(_schema_hook_function_calls(check) for check in checks)) - {"in"}
+    assert calls == {"length", "btrim"}
+    assert calls <= _SAFE_SCHEMA_HOOK_FUNCTION_NAMES
