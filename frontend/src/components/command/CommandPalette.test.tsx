@@ -10,6 +10,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { consumeGeniePrefill } from '../../lib/genieOpen';
+import { publishCommandSelection } from './commandSelection';
 
 const navigate = vi.fn();
 vi.mock('react-router', () => ({ useNavigate: () => navigate }));
@@ -17,6 +18,7 @@ vi.mock('react-router', () => ({ useNavigate: () => navigate }));
 const setTheme = vi.fn();
 const setConsoleOpen = vi.fn();
 const setGenieOpen = vi.fn();
+const access = vi.hoisted(() => ({ admin: false }));
 vi.mock('../AppContext', () => ({
   useApp: () => ({
     theme: 'dark',
@@ -24,7 +26,7 @@ vi.mock('../AppContext', () => ({
     consoleOpen: false,
     setConsoleOpen,
     setGenieOpen,
-    canAccessAdmin: false,
+    canAccessAdmin: access.admin,
   }),
 }));
 
@@ -32,6 +34,15 @@ const borrowerSearch = vi.fn();
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: { borrowerSearch: (...a: unknown[]) => borrowerSearch(...a) },
+}));
+
+// The active-row chunk preload (audit bundle-09 item 2) is observed, never run.
+const preloadRouteForPath = vi.fn();
+vi.mock('../../lib/routePreloaders', () => ({ preloadRouteForPath: (path: string) => preloadRouteForPath(path) }));
+const saveData = vi.hoisted(() => ({ on: false }));
+vi.mock('../../lib/prefetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/prefetch')>()),
+  saveDataRequested: () => saveData.on,
 }));
 
 import { CommandPalette, loadCommandPaletteDialog } from './CommandPalette';
@@ -237,9 +248,13 @@ describe('CommandPalette', () => {
     expect(closing.querySelector('[role="option"]')?.textContent).toContain('Analytics');
   });
 
-  it('shows an empty state when nothing matches, with the Ask Genie handoff as the only row', () => {
+  it('shows an empty state when nothing matches, with the Ask Genie handoff as the only row', async () => {
     pressMetaK();
     setQuery('zzzznope');
+    // The empty state waits for the borrower search to settle (shell-07 item 4).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 220));
+    });
     // Since audit 2026-09-21 `shell-07` the palette never dead-ends: the
     // typed text can always be handed to Genie (a prefill, never a submit).
     const options = container.querySelectorAll('[role="option"]');
@@ -399,4 +414,162 @@ describe('CommandPalette borrower search (networked path)', () => {
     });
     expect(container.querySelector('.cmdk__status--error')).not.toBeNull();
   });
+
+  it('hides the empty state while the borrower search runs or has failed (shell-07 item 4)', async () => {
+    let settle: (rows: unknown[]) => void = () => undefined;
+    borrowerSearch.mockReturnValue(new Promise((resolve) => {
+      settle = resolve;
+    }));
+    pressMetaK();
+    setQuery('zz');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(220);
+    });
+    expect(borrowerSearch).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.cmdk__empty')).toBeNull();
+    expect([...container.querySelectorAll('[role="status"]')].map((el) => el.textContent)).toEqual(['Searching borrowers…']);
+
+    await act(async () => settle([]));
+    expect(container.querySelector('.cmdk__empty')?.textContent).toContain('No pages, actions, or borrowers match');
+    expect(container.querySelector('.cmdk__status')).toBeNull();
+
+    borrowerSearch.mockRejectedValue(new Error('warehouse down'));
+    setQuery('zzq');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(220);
+    });
+    expect(container.querySelector('.cmdk__empty')).toBeNull();
+    expect([...container.querySelectorAll('[role="status"]')].map((el) => el.textContent)).toEqual([
+      'Borrower search is temporarily unavailable.',
+    ]);
+  });
 });
+
+describe('CommandPalette active-row chunk preload (bundle-09 item 2)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    saveData.on = false;
+    access.admin = false;
+    borrowerSearch.mockResolvedValue([]);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root.render(<CommandPalette />));
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+    consumeGeniePrefill();
+  });
+
+  const input = () => container.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+  const activeRow = () => container.querySelector<HTMLElement>('.cmdk__row.is-active');
+  function pressMetaK() {
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
+    });
+  }
+  function setQuery(value: string) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => {
+      setter.call(input(), value);
+      input().dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+  function keyOnInput(key: string) {
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    });
+  }
+  async function settleSearch() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(220);
+    });
+  }
+  const preloaded = () => preloadRouteForPath.mock.calls.map(([path]) => path as string);
+
+  it('warms the first route row on open and the next one on ArrowDown, and nothing once closed', () => {
+    expect(preloadRouteForPath).not.toHaveBeenCalled();
+    pressMetaK();
+    // A route row's hint is its route pattern (commandActions.routeAction).
+    const first = activeRow()?.querySelector('.cmdk__row-hint')?.textContent;
+    expect(first).toMatch(/^\//);
+    expect(preloadRouteForPath).toHaveBeenLastCalledWith(first);
+    keyOnInput('ArrowDown');
+    const second = activeRow()?.querySelector('.cmdk__row-hint')?.textContent;
+    expect(second).not.toBe(first);
+    expect(preloadRouteForPath).toHaveBeenLastCalledWith(second);
+
+    const calls = preloadRouteForPath.mock.calls.length;
+    pressMetaK();
+    expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
+    expect(preloadRouteForPath).toHaveBeenCalledTimes(calls);
+    // Chunks only: the borrower search is the palette's one network call.
+    expect(borrowerSearch).not.toHaveBeenCalled();
+  });
+
+  it("warms the dossier chunk for a borrower row (the id never leaves the palette's own path)", async () => {
+    const lead = { borrower_id: 'B-1EEEN00S99GXC', city: 'Chicago', state: 'IL', zip: '60611' };
+    borrowerSearch.mockResolvedValue([lead]);
+    pressMetaK();
+    setQuery('B-1EEEN00S99GXC');
+    await settleSearch();
+    expect(activeRow()?.textContent).toContain('B-1EEEN00S99GXC');
+    expect(preloadRouteForPath).toHaveBeenLastCalledWith('/borrower-360/B-1EEEN00S99GXC');
+    expect(borrowerSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('warms nothing for Ask Genie, workspace-command or selection-verb rows', async () => {
+    pressMetaK();
+    setQuery('zyrplax');
+    await settleSearch();
+    expect(activeRow()?.textContent).toContain('Ask Genie: zyrplax');
+    preloadRouteForPath.mockClear();
+    keyOnInput('ArrowDown');
+    expect(preloadRouteForPath).not.toHaveBeenCalled();
+
+    setQuery('toggle theme');
+    await settleSearch();
+    expect(activeRow()?.textContent).toContain('Toggle');
+    expect(preloadRouteForPath).not.toHaveBeenCalled();
+
+    pressMetaK();
+    const unpublish = publishCommandSelection({
+      selectedCount: 2, approveCount: 2, canApprove: true, rejectCount: 2, canReject: true, canAssign: false, run: () => undefined,
+    });
+    pressMetaK();
+    expect(activeRow()?.textContent).toContain('Approve 2 selected');
+    expect(preloadRouteForPath).not.toHaveBeenCalled();
+    unpublish();
+  });
+
+  it('never warms /admin-config for a non-admin, and warms nothing under Save-Data', () => {
+    // Control: an admin's Admin row is warmed like any route row.
+    access.admin = true;
+    pressMetaK();
+    setQuery('admin');
+    expect(preloaded()).toContain('/admin-config');
+    pressMetaK();
+    access.admin = false;
+    preloadRouteForPath.mockClear();
+
+    pressMetaK();
+    setQuery('admin');
+    for (let i = 0; i < 12; i += 1) keyOnInput('ArrowDown');
+    expect(container.textContent).not.toContain('/admin-config');
+    expect(preloaded()).not.toContain('/admin-config');
+    pressMetaK();
+
+    preloadRouteForPath.mockClear();
+    saveData.on = true;
+    pressMetaK();
+    keyOnInput('ArrowDown');
+    expect(preloadRouteForPath).not.toHaveBeenCalled();
+  });
+});
+

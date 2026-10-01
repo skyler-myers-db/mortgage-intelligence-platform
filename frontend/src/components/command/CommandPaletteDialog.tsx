@@ -12,6 +12,8 @@ import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { api } from '../../lib/api';
 import { openGenie } from '../../lib/genieOpen';
+import { saveDataRequested } from '../../lib/prefetch';
+import { preloadRouteForPath } from '../../lib/routePreloaders';
 import type { LeadSummary } from '../../types';
 import { useModalDialog } from '../../hooks/useModalDialog';
 import {
@@ -60,6 +62,18 @@ type FlatItem =
   | { kind: 'action'; action: CommandAction }
   | { kind: 'genie'; prompt: string }
   | { kind: 'borrower'; lead: LeadSummary };
+
+/**
+ * The route chunk the row opens, for the active-row preload (audit bundle-09
+ * item 2): a route action's path, or the dossier route for a borrower row
+ * (preloadRouteForPath maps it to the borrower-360 chunk; no request carries
+ * the id). Verb, workspace-command and Ask Genie rows open no route.
+ */
+function routeChunkPath(item: FlatItem | undefined): string | null {
+  if (item?.kind === 'borrower') return `/borrower-360/${item.lead.borrower_id}`;
+  if (item?.kind === 'action' && item.action.target.kind === 'route') return item.action.target.to;
+  return null;
+}
 
 const DEBOUNCE_MS = 160;
 const MAX_BORROWERS = 6;
@@ -240,6 +254,15 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     [items, activeIndex, moveTo, runItem, searchStatus, borrowers.length],
   );
 
+  // Warm the active row's route chunk while the palette is open (bundle-09
+  // item 2), so Enter does not wait on a cold download. Chunks only: no
+  // query, no prefetchRouteData and no audited read; nothing under Save-Data.
+  useEffect(() => {
+    if (!open || saveDataRequested()) return;
+    const path = routeChunkPath(items[activeIndex]);
+    if (path) preloadRouteForPath(path);
+  }, [open, activeIndex, items]);
+
   // Keep the active row scrolled into view as arrows move it.
   useEffect(() => {
     if (!open) return;
@@ -289,8 +312,11 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
 
         <div className="cmdk__list" id="cmdk-listbox" role="listbox" ref={listRef}>
           {/* The Genie row is a way out, not a match: the empty state still
-              says so when no page, action or borrower matched. */}
-          {allActionItems.length === 0 && borrowerItems.length === 0 && (
+              says so when no page, action or borrower matched. While the
+              borrower search runs or after it failed, its status line speaks
+              instead (shell-07 item 4): "no borrowers" is not known yet. */}
+          {allActionItems.length === 0 && borrowerItems.length === 0
+            && searchStatus !== 'loading' && searchStatus !== 'error' && (
             <div className="cmdk__empty" role="status">
               No pages, actions, or borrowers match “{query.trim()}”.
             </div>
