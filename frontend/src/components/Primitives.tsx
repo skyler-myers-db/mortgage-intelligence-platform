@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode, Ref, ComponentPropsWithRef } from 'react';
+import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode, Ref, ComponentPropsWithRef, MouseEvent } from 'react';
 import { Icon, type IconName } from './Icon';
 import { useApp, type DrawerSource } from './AppContext';
 import { useEvidenceHoverCard } from './EvidenceHoverCard';
@@ -90,6 +90,20 @@ interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   tooltip?: ReactNode;
   /** A keyboard shortcut shown in the tooltip's `<kbd>`. */
   tooltipShortcut?: string;
+  /**
+   * Pending (motion-08 slice 2): `.btn--loading`, aria-busy and
+   * aria-disabled, a spinner over the invisible label (same box, same
+   * accessible name) and every activation swallowed. Never native
+   * `disabled`: a focused button that turns disabled drops focus to <body>
+   * (the pending-state rule, 20-audit-explorer.css). App-added state
+   * (deviation:button-loading). False renders exactly the plain button.
+   */
+  loading?: boolean;
+}
+
+/** A pending button's activation: no submit, and the consumer's onClick never runs. */
+function swallowActivation(event: MouseEvent<HTMLButtonElement>) {
+  event.preventDefault();
 }
 
 export function Button({
@@ -101,15 +115,26 @@ export function Button({
   className,
   tooltip,
   tooltipShortcut,
+  loading = false,
   ...rest
 }: BtnProps) {
   const cls = [
     'btn',
     variant !== 'default' ? `btn--${variant}` : '',
     size === 'sm' ? 'btn--sm' : '',
+    loading ? 'btn--loading' : '',
     className ?? '',
   ].filter(Boolean).join(' ');
-  const button = (
+  const button = loading ? (
+    <button className={cls} {...rest} aria-busy="true" aria-disabled="true" onClick={swallowActivation}>
+      <span className="btn__label">
+        {icon && <Icon name={icon} size={14} />}
+        {children}
+        {iconEnd && <Icon name={iconEnd} size={14} />}
+      </span>
+      <span className="btn__spinner" aria-hidden="true" />
+    </button>
+  ) : (
     <button className={cls} {...rest}>
       {icon && <Icon name={icon} size={14} />}
       {children}

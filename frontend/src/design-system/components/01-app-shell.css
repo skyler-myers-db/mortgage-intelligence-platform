@@ -630,6 +630,26 @@
   background: var(--accent-fill-hover);
   box-shadow: 0 1px 0 var(--surface-inset-shadow) inset;
 }
+/* Pending (motion-08 slice 2; Button's `loading` prop): the label keeps
+   its box at opacity 0, so the inline size and the accessible name hold,
+   and a spinner shares its grid cell. The variant fill stays. App-added
+   state, not in design_files/index.html:378-398 (deviation:button-loading). */
+.btn--loading { display: inline-grid; place-items: center; cursor: progress; }
+.btn--loading > .btn__label,
+.btn--loading > .btn__spinner { grid-area: 1 / 1; }
+.btn__label { display: inline-flex; align-items: center; gap: var(--sp-2); opacity: 0; }
+.btn__spinner {
+  inline-size: var(--sp-3);
+  block-size: var(--sp-3);
+  border: 2px solid currentColor;
+  border-inline-end-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin var(--dur-spin) var(--ease-linear) infinite;
+}
+@keyframes btn-spin { to { rotate: 1turn; } }
+@media (prefers-reduced-motion: reduce) {
+  .btn__spinner { animation: none; }
+}
 
 /* ============================================================
    KEYBOARD HINT

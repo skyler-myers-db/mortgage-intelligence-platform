@@ -818,4 +818,19 @@ describe('success CTA, loading button and lender mark (a11y-01 / motion-08 / res
     expect(rule('.btn--success:hover')).toEqual(['background: var(--success-fill-hover); border-color: transparent;']);
     expect(tokensCss()).toMatch(/:root, \[data-theme="dark"\] \{ --success-fill: #047857; --success-fill-hover: #065F46; \}/);
   });
+
+  it('stacks the invisible label and the spinner in one cell while a button is loading', () => {
+    const css = designCss();
+    expect(rule('.btn--loading')).toEqual(['display: inline-grid; place-items: center; cursor: progress;']);
+    expect(rule('.btn--loading > .btn__label, .btn--loading > .btn__spinner')).toEqual(['grid-area: 1 / 1;']);
+    // Opacity, never visibility or display: the label stays the accessible name and keeps the box.
+    const label = rule('.btn__label').join(' ');
+    expect(label).toMatch(/opacity:\s*0;/);
+    expect(label).toMatch(/gap:\s*var\(--sp-2\);/);
+    expect(label).not.toMatch(/visibility|display:\s*none/);
+    expect(rule('.btn__spinner').join(' ')).toMatch(/animation:\s*btn-spin var\(--dur-spin\) var\(--ease-linear\) infinite;/);
+    expect(css).toMatch(/@keyframes btn-spin\s*\{\s*to\s*\{\s*rotate:\s*1turn;\s*\}\s*\}/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.btn__spinner\s*\{\s*animation:\s*none;\s*\}\s*\}/);
+    expect(tokensCss()).toMatch(/:root \{ --dur-spin: 900ms; --ease-linear: linear; \}/);
+  });
 });

@@ -813,3 +813,9 @@ input[type="checkbox"] {
  */
 :root, [data-theme="dark"] { --success-fill: #047857; --success-fill-hover: #065F46; }
 [data-theme="light"] { --success-fill: var(--signal-success); --success-fill-hover: #064E3B; }
+
+/* ---------- Pending spinner (motion-08 slice 2; W5b) ----------
+ * One turn of the Button loading spinner (.btn__spinner) and its constant
+ * speed; the reduced-motion block stops it (deviation:button-loading).
+ */
+:root { --dur-spin: 900ms; --ease-linear: linear; }
