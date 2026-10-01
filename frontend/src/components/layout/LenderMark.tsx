@@ -22,7 +22,12 @@ import { lenderMarkLender, lenderMarkUrl } from '../../lib/themePreference';
  * default build's first paint free of its code (W5b initial-JS cap; an own
  * query import reshuffled the shared chunks, +0.33 KiB br measured).
  */
-export function LenderMark({ iconSize, sessionLender }: { iconSize: number; sessionLender: string | null }) {
+export interface LenderMarkProps {
+  iconSize: number;
+  sessionLender: string | null;
+}
+
+export function LenderMark({ iconSize, sessionLender }: LenderMarkProps) {
   const [failed, setFailed] = useState(false);
   const url = lenderMarkUrl();
   const lender = sessionLender?.trim();

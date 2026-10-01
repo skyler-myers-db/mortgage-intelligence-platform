@@ -177,6 +177,30 @@ test('a mark built for another lender never shows, in the pill or the Console ch
   await expect(page.locator('img.lender-mark')).toHaveCount(0);
 });
 
+test('a failed lender-mark chunk leaves the shell up with the building glyph in the pill', async ({ app, hygiene, mockApi, page }, testInfo) => {
+  // The one chunk this test fails on purpose (a network blip, or a stale chunk
+  // after a redeploy), and the browser's and the client error log's lines for it.
+  hygiene.allow('request-failed', /\/assets\/LenderMark-[\w-]+\.js failed/);
+  hygiene.allow('console.error', /\/assets\/LenderMark-[\w-]+\.js/);
+  mockApi.register('GET', '/api/session', () => json({ ...SESSION, lender_name: LENDER }));
+  await serveBuildMetas(page, testInfo, CO_BRANDED);
+  const aborted: string[] = [];
+  await page.route(/\/assets\/LenderMark-[\w-]+\.js$/, async (route) => {
+    aborted.push(route.request().url());
+    await route.abort('failed');
+  });
+  await app.gotoRoute('/');
+
+  await expect(pill(page).locator('.topbar__pill-tenant')).toBeVisible();
+  await expect(pill(page).locator('.topbar__pill-tenant')).toHaveText(LENDER);
+  // Non-vacuity: the co-branded build really asked for the chunk this test failed.
+  await expect.poll(() => aborted.length, { message: 'the LenderMark chunk was requested and aborted' }).toBeGreaterThan(0);
+  await expect(pill(page).locator('svg')).toHaveCount(1);
+  await expect(pill(page).locator('img.lender-mark')).toHaveCount(0);
+  await expect(page.locator('.error-surface--page')).toHaveCount(0);
+  await expect(page.getByRole('main')).toBeVisible();
+});
+
 test('print shows no lender mark', async ({ app, mockApi, page }, testInfo) => {
   mockApi.register('GET', '/api/session', () => json({ ...SESSION, lender_name: LENDER }));
   await serveBuildMetas(page, testInfo, CO_BRANDED);
