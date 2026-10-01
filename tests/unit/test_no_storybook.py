@@ -37,11 +37,7 @@ EXEMPT_PREFIXES = ("docs/audits/",)
 # Shrink-only: files another lane owns this wave whose comment still says the
 # word. Each entry must still contain it (a reworded file fails as stale and
 # its entry is removed in the same change); never add one.
-PENDING_WORDING = {
-    "frontend/src/components/mortgage/USChoroplethMap.tsx": (
-        "w5-geo-foundation (W5a, merges after this lane; removes this entry with its item 9)"
-    ),
-}
+PENDING_WORDING: dict[str, str] = {}
 
 
 def tracked_files(root: Path = ROOT) -> list[str]:
