@@ -4,10 +4,8 @@
  * LenderMark (audit responsive-10, 12.4 #9; deviation:lender-mark): the
  * reviewed lender mark shows only on a co-branded build whose session lender
  * equals the lender the build validated it for. Everything else is the
- * prototype's building glyph, and without the build's meta nothing
- * subscribes to the session.
+ * prototype's building glyph.
  */
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,15 +18,16 @@ import { mount } from '../../test/render';
 
 declare const process: { cwd(): string };
 
-const session = vi.hoisted(() => ({ fn: vi.fn() }));
+const app = vi.hoisted(() => ({ lender: 'Fixture Test Lending', sessionStatus: 'ready' as 'loading' | 'ready' | 'error' }));
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
-  api: { session: (...args: unknown[]) => session.fn(...args), borrowerSearch: vi.fn().mockResolvedValue([]) },
+  api: { borrowerSearch: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('../AppContext', () => ({
   useApp: () => ({
-    lender: 'Fixture Test Lending',
+    lender: app.lender,
+    sessionStatus: app.sessionStatus,
     theme: 'dark',
     setTheme: vi.fn(),
     genieOpen: false,
@@ -52,19 +51,10 @@ function setMetas(metas: Record<string, string>): void {
   document.head.innerHTML = Object.entries(metas).map(([name, content]) => `<meta name="${name}" content="${content}">`).join('');
 }
 
-function client(): QueryClient {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
-}
-
-async function settle(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-}
-
 describe('LenderMark', () => {
   beforeEach(() => {
-    session.fn.mockReset();
+    app.lender = LENDER;
+    app.sessionStatus = 'ready';
     setMetas({ 'mip-lender-mark': MARK_URL, 'mip-lender-mark-lender': LENDER });
   });
   afterEach(() => {
@@ -72,9 +62,7 @@ describe('LenderMark', () => {
   });
 
   it('draws one decorative mark when the session lender is the build lender', async () => {
-    session.fn.mockResolvedValue({ lender_name: ` ${LENDER} ` });
-    const { container } = await mount(<QueryClientProvider client={client()}><LenderMark iconSize={12} /></QueryClientProvider>);
-    await settle();
+    const { container } = await mount(<LenderMark iconSize={12} sessionLender={` ${LENDER} `} />);
     const images = container.querySelectorAll('img');
     expect(images).toHaveLength(1);
     expect(images[0].className).toBe('lender-mark');
@@ -84,27 +72,13 @@ describe('LenderMark', () => {
     expect(container.querySelector(BUILDING)).toBeNull();
   });
 
-  it('keeps the building glyph while loading, on a mismatch, on an error and after a failed image load', async () => {
-    session.fn.mockReturnValue(new Promise(() => undefined));
-    const loading = await mount(<QueryClientProvider client={client()}><LenderMark iconSize={12} /></QueryClientProvider>);
-    expect(loading.container.querySelector('img')).toBeNull();
-    expect(loading.container.querySelector(BUILDING)).not.toBeNull();
-
-    session.fn.mockResolvedValue({ lender_name: 'Summit Mortgage' });
-    const mismatch = await mount(<QueryClientProvider client={client()}><LenderMark iconSize={12} /></QueryClientProvider>);
-    await settle();
-    expect(mismatch.container.querySelector('img')).toBeNull();
-    expect(mismatch.container.querySelector(BUILDING)).not.toBeNull();
-
-    session.fn.mockRejectedValue(new Error('session down'));
-    const failed = await mount(<QueryClientProvider client={client()}><LenderMark iconSize={12} /></QueryClientProvider>);
-    await settle();
-    expect(failed.container.querySelector('img')).toBeNull();
-    expect(failed.container.querySelector(BUILDING)).not.toBeNull();
-
-    session.fn.mockResolvedValue({ lender_name: LENDER });
-    const broken = await mount(<QueryClientProvider client={client()}><LenderMark iconSize={12} /></QueryClientProvider>);
-    await settle();
+  it('keeps the building glyph while the session is unknown, on a mismatch and after a failed image load', async () => {
+    for (const sessionLender of [null, '', '   ', 'Summit Mortgage', `${LENDER} Two`]) {
+      const { container } = await mount(<LenderMark iconSize={12} sessionLender={sessionLender} />);
+      expect(container.querySelector('img'), String(sessionLender)).toBeNull();
+      expect(container.querySelector(BUILDING), String(sessionLender)).not.toBeNull();
+    }
+    const broken = await mount(<LenderMark iconSize={12} sessionLender={LENDER} />);
     const image = broken.container.querySelector('img');
     expect(image).not.toBeNull();
     act(() => {
@@ -114,26 +88,24 @@ describe('LenderMark', () => {
     expect(broken.container.querySelector(BUILDING)).not.toBeNull();
   });
 
-  it('without the build meta draws the building glyph and never reads the session', async () => {
+  it('without the build meta (every default build) draws the building glyph', async () => {
     document.head.innerHTML = '';
-    // No QueryClientProvider either: the default build needs none.
-    const { container } = await mount(<LenderMark iconSize={10} />);
+    const { container } = await mount(<LenderMark iconSize={10} sessionLender={LENDER} />);
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector(BUILDING)?.closest('svg')?.getAttribute('width')).toBe('10');
-    expect(session.fn).not.toHaveBeenCalled();
     // A mark URL without its lender is no mark either.
     setMetas({ 'mip-lender-mark': MARK_URL });
-    const { container: unbound } = await mount(<LenderMark iconSize={10} />);
+    const { container: unbound } = await mount(<LenderMark iconSize={10} sessionLender={LENDER} />);
     expect(unbound.querySelector('img')).toBeNull();
-    expect(session.fn).not.toHaveBeenCalled();
   });
 
-  it('keeps the tenant pill aria-label and tooltip copy in the Topbar', async () => {
-    session.fn.mockResolvedValue({ lender_name: LENDER });
-    const { container } = await mount(
-      <QueryClientProvider client={client()}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>,
-    );
-    await settle();
+  it('the Topbar pill draws the mark once the session lender matches, keeping its aria-label and tooltip copy', async () => {
+    const { container, rerender } = await mount(<MemoryRouter><Topbar /></MemoryRouter>);
+    // The Topbar loads the mark lazily, only on a co-branded build.
+    await act(async () => {
+      await import('./LenderMark');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     const pill = container.querySelector<HTMLElement>('.topbar__pill[aria-label^="Configured tenant"]');
     expect(pill?.getAttribute('aria-label')).toBe(`Configured tenant: ${LENDER}`);
     expect(pill?.querySelector('img.lender-mark')).not.toBeNull();
@@ -141,9 +113,14 @@ describe('LenderMark', () => {
     const described = (pill?.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
       .map((id) => document.getElementById(id)?.textContent).join(' | ');
     expect(described).toBe(`Configured tenant · ${LENDER}. Lender configuration is applied server-side.`);
+
+    // Before /api/session answers, AppContext's label is not the session's: no mark.
+    app.sessionStatus = 'loading';
+    await rerender(<MemoryRouter><Topbar /></MemoryRouter>);
+    expect(container.querySelector('.topbar__pill img')).toBeNull();
   });
 
-  it('is the only module that reads the lender mark URL (AppContext never exposes it)', () => {
+  it('is the only component that reads the lender mark URL (AppContext never exposes it)', () => {
     const src = join(process.cwd(), 'src');
     const readers: string[] = [];
     const walk = (dir: string) => {
@@ -156,6 +133,8 @@ describe('LenderMark', () => {
       }
     };
     walk(src);
-    expect(readers.sort()).toEqual(['components/layout/LenderMark.tsx', 'lib/themePreference.ts']);
+    // The Topbar only asks whether a mark exists, to load LenderMark at all.
+    expect(readers.sort()).toEqual(['components/layout/LenderMark.tsx', 'components/layout/Topbar.tsx', 'lib/themePreference.ts']);
+    expect(readFileSync(join(src, 'components', 'AppContext.tsx'), 'utf8')).not.toMatch(/lenderMark/);
   });
 });

@@ -80,6 +80,7 @@ export function Console() {
     accent, setAccent,
     density, setDensity,
     lender,
+    sessionStatus,
     showEvidence, setShowEvidence,
     showConfidence, setShowConfidence,
     setGenieOpen,
@@ -271,7 +272,7 @@ export function Console() {
         <div className="tweak-row">
           <label>Configured tenant</label>
           <div className="stack-sm">
-            <Chip variant="neutral" leading={<LenderMark iconSize={10} />}>{lender}</Chip>
+            <Chip variant="neutral" leading={<LenderMark iconSize={10} sessionLender={sessionStatus === 'ready' ? lender : null} />}>{lender}</Chip>
             <div className="muted fs-12">
               Read-only in Module 0; lender configuration is applied server-side.
             </div>

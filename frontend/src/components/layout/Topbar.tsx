@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
@@ -9,16 +9,20 @@ import { useHealth } from '../HealthProvider';
 import type { ConnectionStatus } from '../connectionState';
 import { Breadcrumbs } from './Breadcrumbs';
 import { IdentityMenu } from './IdentityMenu';
-import { LenderMark } from './LenderMark';
 import { useFootprint } from '../FootprintProvider';
 import { api, type HealthPayload } from '../../lib/api';
 import { hasOpenModal, registerKeyBinding } from '../../lib/keymap';
+import { lenderMarkUrl } from '../../lib/themePreference';
 import {
   GENIE_LAUNCHER_STATUS_ID,
   genieLauncherStateClass,
   useGenieTurnStatus,
 } from '../../lib/genieTurnStatus';
 import type { LeadSummary } from '../../types';
+
+// The reviewed lender mark (responsive-10) loads only on a co-branded build,
+// so a default build's first paint carries none of its code (bundle cap).
+const LenderMark = lazy(() => import('./LenderMark').then((module) => ({ default: module.LenderMark })));
 
 // Platform-aware command-palette shortcut label. Mac shows ⌘K; everyone else
 // Ctrl K. Computed once at module load (the platform doesn't change at runtime).
@@ -205,7 +209,7 @@ function SystemStatusPill({ status }: { status: SystemStatusView }) {
  */
 
 export function Topbar() {
-  const { lender, theme, setTheme, genieOpen, setGenieOpen, consoleOpen, setConsoleOpen } = useApp();
+  const { lender, sessionStatus, theme, setTheme, genieOpen, setGenieOpen, consoleOpen, setConsoleOpen } = useApp();
   // A Genie turn keeps running behind the closed panel; this toggle is the
   // only desktop launcher, so it carries the running ring / answer-ready badge.
   const genieTurn = useGenieTurnStatus();
@@ -458,7 +462,13 @@ export function Topbar() {
           className="topbar__pill"
           aria-label={`Configured tenant: ${lender}`}
         >
-          <LenderMark iconSize={12} />
+          {lenderMarkUrl() ? (
+            <Suspense fallback={<Icon name="building" size={12} />}>
+              <LenderMark iconSize={12} sessionLender={sessionStatus === 'ready' ? lender : null} />
+            </Suspense>
+          ) : (
+            <Icon name="building" size={12} />
+          )}
           <span className="topbar__pill-tenant">{lender}</span>
         </div>
       </Tooltip>
