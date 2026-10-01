@@ -273,6 +273,11 @@ function isFunctionKeyChord(chord: KeyChord): boolean {
   return FUNCTION_KEY_RE.test(chord.key) && !isModifierChord(chord);
 }
 
+/** A chord the single-key switch leaves on: a modifier chord or a bare function key. */
+export function survivesSingleKeySwitch(chord: KeyChord): boolean {
+  return isModifierChord(chord) || isFunctionKeyChord(chord);
+}
+
 function candidatesFor(event: KeyboardEvent): RegisteredKeyBinding[] {
   const target = event.target instanceof Element ? event.target : null;
   const active = typeof document === 'undefined' ? null : document.activeElement;
@@ -280,7 +285,7 @@ function candidatesFor(event: KeyboardEvent): RegisteredKeyBinding[] {
   const singleKeys = singleKeyShortcutsEnabled();
   return bindings
     .filter((binding) => binding.chords.some((chord) => (
-      matchesChord(chord, event) && (singleKeys || isModifierChord(chord) || isFunctionKeyChord(chord))
+      matchesChord(chord, event) && (singleKeys || survivesSingleKeySwitch(chord))
     )))
     .filter((binding) => !editable || binding.allowInEditable === true)
     .sort((a, b) => (

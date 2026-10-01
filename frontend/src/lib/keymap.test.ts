@@ -22,6 +22,7 @@ import {
   parseChord,
   registerKeyBinding,
   subscribeKeyBindings,
+  survivesSingleKeySwitch,
   type KeyBindingSpec,
 } from './keymap';
 import {
@@ -367,6 +368,16 @@ describe('function keys (the toast region F8, wave-3 review #13)', () => {
     press(document.body, { key: 'F8', ctrlKey: true });
     expect(f8, 'a modified F8 is another chord').toHaveBeenCalledOnce();
     expect(chordKeycaps('F8')).toEqual(['F8']);
+    // The ? sheet marks a binding Off with the switch from the same rule
+    // (Shift+F8 is still no character key; F25 is no function key).
+    expect(['F8', 'F24', 'Shift+F8', 'Mod+K', 'F25', 'j'].map((text) => survivesSingleKeySwitch(parseChord(text)))).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+    ]);
   });
 
   it("'j' still does not fire with the single-key shortcuts off", () => {
