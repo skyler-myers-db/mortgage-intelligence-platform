@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.schemas.approval_request import canonical_uuid_text
 from backend.schemas.common import (
     PUBLIC_UUID_PATTERN,
     validate_no_human_name_shape,
@@ -43,6 +44,13 @@ class OutreachRevokeRequest(BaseModel):
     @classmethod
     def _borrower_id_is_public_safe(cls, value: str) -> str:
         return validate_public_borrower_id(value)
+
+    @field_validator("approval_id")
+    @classmethod
+    def _approval_id_is_canonical(cls, value: str) -> str:
+        # Compared as text with the ledger's ``approval_id::text`` (the
+        # current-decision check, the intent, the audit row): one spelling.
+        return canonical_uuid_text(value)
 
     @field_validator("rationale")
     @classmethod
