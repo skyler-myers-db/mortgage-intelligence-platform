@@ -72,3 +72,6 @@ frontend/tsconfig.tsbuildinfo
 # partial dependency state + stack traces. Untracked so operator-laptop
 # and CI evidence stays local; attach to release PRs manually.
 tools/kill_drill/evidence/
+
+# npm run budget -- --json writes this report locally (tools/check_frontend_budgets.mjs).
+frontend-budget.json
