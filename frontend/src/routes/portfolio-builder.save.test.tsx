@@ -413,16 +413,14 @@ describe('PortfolioBuilder save-build flow', () => {
     mount();
     await waitUntil(() => !saveButton().disabled);
 
-    const subject = container.querySelector<HTMLInputElement>(
-      'input[aria-label="Benefit-led subject"]',
-    );
-    expect(subject).not.toBeNull();
-    expect(subject!.readOnly).toBe(true);
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-      setter.call(subject!, 'Review your mortgage options');
-      subject!.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    // critic-04: the copy is a readout (label plus text), so there is no
+    // control to tamper with; text written into it is never what is saved.
+    const subject = [...container.querySelectorAll<HTMLElement>('.campaign-setup__field')]
+      .find((node) => node.firstElementChild?.textContent === 'Benefit-led subject');
+    expect(subject).not.toBeUndefined();
+    expect(subject!.getAttribute('role')).toBe('group');
+    expect(subject!.querySelector('input, textarea')).toBeNull();
+    expect(container.querySelector('input[aria-label="Benefit-led subject"], textarea[aria-label="Benefit-led message"]')).toBeNull();
     act(() => saveButton().click());
     act(() => {
       container
@@ -645,9 +643,12 @@ describe('PortfolioBuilder save-build flow', () => {
 
     expect(container.textContent).toContain('Mortgage Growth Supervisor');
     expect(container.textContent).toContain('Verified at creation');
-    const variant = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Message variant for Supervisor IL refinance campaign"]',
-    )!;
+    // critic-04: the picker is labelled through Field (a visually hidden label), not aria-label.
+    const variantLabel = [...container.querySelectorAll<HTMLLabelElement>('label.field__label')]
+      .find((node) => node.textContent === 'Message variant for Supervisor IL refinance campaign')!;
+    const variant = document.getElementById(variantLabel.htmlFor) as HTMLSelectElement;
+    expect(variant.tagName).toBe('SELECT');
+    expect(variantLabel.classList.contains('sr-only')).toBe(true);
     const action = () => container.querySelector<HTMLAnchorElement>(
       'a[aria-label="Open Supervisor IL refinance campaign variant B in Lead Queue"]',
     );

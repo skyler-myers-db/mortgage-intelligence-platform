@@ -57,6 +57,27 @@ function notice(input: HTMLElement): HTMLElement {
   return region;
 }
 
+/** The text of each element a control's aria-describedby names, in order. */
+function descriptions(input: HTMLElement): string[] {
+  return (input.getAttribute('aria-describedby') ?? '')
+    .split(' ')
+    .filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent ?? `missing #${id}`);
+}
+
+/** A FieldReadout: role=group named by its label. */
+function readout(label: string): HTMLElement {
+  const group = [...document.querySelectorAll<HTMLElement>('[role="group"][aria-labelledby]')]
+    .find((node) => document.getElementById(node.getAttribute('aria-labelledby') ?? '')?.textContent === label);
+  if (!group) throw new Error(`no readout labelled ${label}`);
+  return group;
+}
+
+/** Every text-entry control (the elements a 'textbox' role query would return). */
+function textboxes(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>('textarea, input:not([type]), input[type="text"], [role="textbox"]')];
+}
+
 function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location">{`${location.pathname}${location.search}${location.hash}`}</output>;
@@ -305,10 +326,16 @@ describe('CampaignSetupPanel', () => {
     const applyButton = [...document.querySelectorAll('button')].find((button) => (
       button.textContent?.includes('Apply variants')
     ));
-    expect(document.querySelector<HTMLInputElement>('[aria-label="Benefit-led subject"]')?.readOnly)
-      .toBe(true);
-    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Benefit-led message"]')?.readOnly)
-      .toBe(true);
+    // critic-04: the copy reads as text (a labelled readout), never as an
+    // input the operator could type into; no textbox exists in the panel.
+    expect(textboxes()).toEqual([]);
+    expect(readout('Benefit-led subject').querySelector('.field__value')?.textContent).toBe('Operator-edited subject');
+    expect(readout('Benefit-led message').querySelector('.field__value')?.textContent).toBe('Operator-edited message');
+    expect(readout('Guidance-led subject').querySelector('.field__value')?.textContent)
+      .toBe('Not set. Apply a recommendation to fill it.');
+    for (const label of ['Benefit-led subject', 'Guidance-led subject', 'Benefit-led message', 'Guidance-led message']) {
+      expect(readout(label).querySelector('input, textarea'), label).toBeNull();
+    }
     expect(document.body.textContent).toContain('rendered from reviewed server templates');
     act(() => applyButton?.click());
     expect(apply).toHaveBeenCalledTimes(1);
@@ -475,7 +502,8 @@ describe('CampaignSetupPanel', () => {
     expect(region.getAttribute('role')).toBe('status');
     expect(region.getAttribute('aria-live')).toBe('polite');
     expect(region.textContent).toBe('');
-    expect(holdout.getAttribute('aria-describedby')).toBeNull();
+    // Only the unit describes the control until a notice is written.
+    expect(descriptions(holdout)).toEqual(['percent']);
 
     type(holdout, '80');
     blur(holdout);
@@ -483,7 +511,7 @@ describe('CampaignSetupPanel', () => {
     expect(control('Holdout % (0-50)').value).toBe('50');
     expect(notice(control('Holdout % (0-50)'))).toBe(region);
     expect(region.textContent).toBe('Capped at 50%');
-    expect(control('Holdout % (0-50)').getAttribute('aria-describedby')).toBe(region.id);
+    expect(descriptions(control('Holdout % (0-50)'))).toEqual(['percent', 'Capped at 50%']);
 
     type(control('Budget'), '20000000');
     blur(control('Budget'));
@@ -495,7 +523,7 @@ describe('CampaignSetupPanel', () => {
     expect(commit).toHaveBeenLastCalledWith('holdoutPct', '25');
     expect(region.isConnected).toBe(true);
     expect(region.textContent).toBe('');
-    expect(control('Holdout % (0-50)').getAttribute('aria-describedby')).toBeNull();
+    expect(descriptions(control('Holdout % (0-50)'))).toEqual(['percent']);
     // The other field's notice is its own.
     expect(notice(control('Budget')).textContent).toBe('Capped at $10,000,000');
   });
@@ -514,7 +542,60 @@ describe('CampaignSetupPanel', () => {
     expect(control('Holdout % (0-50)').value).toBe('15');
     expect(region.isConnected).toBe(true);
     expect(region.textContent).toBe('');
-    expect(control('Holdout % (0-50)').getAttribute('aria-describedby')).toBeNull();
+    expect(descriptions(control('Holdout % (0-50)'))).toEqual(['percent']);
+  });
+
+  it('announces a rounding to the committed precision, in the field unit (critic-04)', () => {
+    const commit = vi.fn();
+    act(() => root.render(<StatefulSetup commit={commit} />));
+    type(control('Holdout % (0-50)'), '12.346');
+    blur(control('Holdout % (0-50)'));
+    expect(commit).toHaveBeenLastCalledWith('holdoutPct', '12.35');
+    expect(control('Holdout % (0-50)').value).toBe('12.35');
+    expect(notice(control('Holdout % (0-50)')).textContent).toBe('Rounded to 12.35%');
+    type(control('Email cost'), '0.125');
+    blur(control('Email cost'));
+    expect(notice(control('Email cost')).textContent).toBe('Rounded to $0.13');
+    // A value already at the precision says nothing.
+    type(control('Budget'), '1250.50');
+    blur(control('Budget'));
+    expect(notice(control('Budget')).textContent).toBe('');
+  });
+
+  it('shows $ and % beside the numeric controls, hidden from assistive tech, with the unit as the description', () => {
+    renderSetup(DEFAULT_CAMPAIGN_SETUP);
+    const cases: Array<[string, string, string, 'before' | 'after']> = [
+      ['Holdout % (0-50)', '%', 'percent', 'after'],
+      ['Budget', '$', 'US dollars', 'before'],
+      ['Email cost', '$', 'US dollars', 'before'],
+      ['SMS cost', '$', 'US dollars', 'before'],
+      ['Mail cost', '$', 'US dollars', 'before'],
+    ];
+    for (const [label, affix, unit, side] of cases) {
+      const input = control(label);
+      const wrapper = input.parentElement!;
+      expect(wrapper.classList.contains('field__control'), label).toBe(true);
+      const affixes = [...wrapper.querySelectorAll<HTMLElement>('.field__affix')];
+      expect(affixes.map((node) => [node.textContent, node.getAttribute('aria-hidden')]), label).toEqual([[affix, 'true']]);
+      const position = input.compareDocumentPosition(affixes[0]);
+      expect(position & (side === 'after' ? Node.DOCUMENT_POSITION_FOLLOWING : Node.DOCUMENT_POSITION_PRECEDING), label)
+        .not.toBe(0);
+      // The accessible name stays the visible label; the unit is the description.
+      expect(input.labels?.[0]?.textContent, label).toBe(label);
+      expect(descriptions(input), label).toEqual([unit]);
+      expect(document.getElementById(input.getAttribute('aria-describedby')!)?.classList.contains('sr-only'), label).toBe(true);
+    }
+  });
+
+  it('labels the send window by id, through Field', () => {
+    renderSetup({ ...DEFAULT_CAMPAIGN_SETUP, startLocal: '08:30', endLocal: '17:15' });
+    for (const [label, value] of [['Send start', '08:30'], ['Send end', '17:15']] as const) {
+      const input = control(label);
+      expect(input.type, label).toBe('time');
+      expect(input.value, label).toBe(value);
+      expect(input.hasAttribute('aria-label'), label).toBe(false);
+      expect(input.labels?.[0]?.textContent, label).toBe(label);
+    }
   });
 
   it('binds every numeric setup label to its control by id', () => {

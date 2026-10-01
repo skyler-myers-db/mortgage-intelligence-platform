@@ -168,24 +168,21 @@ describe('PortfolioBuilder recommendation ownership', () => {
     }
   }
 
-  function field(label: string): HTMLInputElement | HTMLTextAreaElement {
-    const match = [...container.querySelectorAll<HTMLLabelElement>('.campaign-setup__field')]
+  /** A copy readout (critic-04: label plus text, never an input). */
+  function readout(label: string): HTMLElement {
+    const match = [...container.querySelectorAll<HTMLElement>('.campaign-setup__field')]
       .find((node) => node.firstElementChild?.textContent === label);
-    const input = match?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
-    if (!input) throw new Error(`missing campaign field: ${label}`);
-    return input;
+    if (!match) throw new Error(`missing campaign field: ${label}`);
+    expect(match.querySelector('input, textarea'), `${label} is not an input`).toBeNull();
+    const value = match.querySelector<HTMLElement>('.field__value');
+    if (!value) throw new Error(`missing readout value: ${label}`);
+    return value;
   }
 
-  function setField(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
-    const prototype = input instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype
-      : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
-    if (!setter) throw new Error('missing native value setter');
-    act(() => {
-      setter.call(input, value);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+  /** The copy shown, or '' while the readout says it is not set. */
+  function copyText(label: string): string {
+    const value = readout(label);
+    return value.classList.contains('field__readout--empty') ? '' : (value.textContent ?? '');
   }
 
   function applyButton(): HTMLButtonElement | undefined {
@@ -204,7 +201,7 @@ describe('PortfolioBuilder recommendation ownership', () => {
   async function applyAndSaveRecommendation() {
     await waitUntil(() => applyButton()?.disabled === false);
     act(() => applyButton()!.click());
-    await waitUntil(() => field('Benefit-led subject').value === RECOMMENDATION.variants[0].subject);
+    await waitUntil(() => copyText('Benefit-led subject') === RECOMMENDATION.variants[0].subject);
     await waitUntil(() => !saveButton().disabled);
     act(() => saveButton().click());
     const confirm = container.querySelector<HTMLButtonElement>(
@@ -240,20 +237,19 @@ describe('PortfolioBuilder recommendation ownership', () => {
     mount();
     await waitUntil(() => campaignRecommendation.mock.calls.length === 1);
 
-    const subject = field('Benefit-led subject');
-    expect(subject.readOnly).toBe(true);
-    setField(subject, 'Operator-owned subject');
-    expect(subject.value).toBe('');
+    // Nothing to type into: the copy is a readout, and reads as not set.
+    expect(copyText('Benefit-led subject')).toBe('');
+    expect(readout('Benefit-led subject').textContent).toBe('Not set. Apply a recommendation to fill it.');
 
     recommendation.resolve(RECOMMENDATION);
     await waitUntil(() => applyButton()?.disabled === false);
 
-    expect(field('Benefit-led subject').value).toBe('');
-    expect(field('Benefit-led message').value).toBe('');
+    expect(copyText('Benefit-led subject')).toBe('');
+    expect(copyText('Benefit-led message')).toBe('');
 
     act(() => applyButton()!.click());
-    expect(field('Benefit-led subject').value).toBe('Recommended benefit subject');
-    expect(field('Benefit-led message').value).toBe('Recommended benefit body');
+    expect(copyText('Benefit-led subject')).toBe('Recommended benefit subject');
+    expect(copyText('Benefit-led message')).toBe('Recommended benefit body');
   });
 
   it('round-trips both signed provenance tokens on an untouched generated save', async () => {
@@ -279,10 +275,14 @@ describe('PortfolioBuilder recommendation ownership', () => {
     mount();
     await waitUntil(() => applyButton()?.disabled === false);
     act(() => applyButton()!.click());
-    await waitUntil(() => field('Benefit-led subject').value === RECOMMENDATION.variants[0].subject);
+    await waitUntil(() => copyText('Benefit-led subject') === RECOMMENDATION.variants[0].subject);
 
-    setField(field('Benefit-led subject'), 'Operator revised benefit subject');
-    expect(field('Benefit-led subject').value).toBe('Recommended benefit subject');
+    // Nothing in the panel accepts copy edits: every copy field is a readout.
+    for (const label of ['Benefit-led subject', 'Guidance-led subject', 'Benefit-led message', 'Guidance-led message']) {
+      readout(label);
+    }
+    expect(container.querySelectorAll('.campaign-setup textarea, .campaign-setup input[type="text"], .campaign-setup input:not([type])'))
+      .toHaveLength(0);
     await waitUntil(() => !saveButton().disabled);
     act(() => saveButton().click());
     const confirm = container.querySelector<HTMLButtonElement>(

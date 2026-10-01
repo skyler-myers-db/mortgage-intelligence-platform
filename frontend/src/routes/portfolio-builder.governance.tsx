@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { useApp } from '../components/AppContext';
 import { Icon } from '../components/Icon';
 import { Button, SurfaceTitle } from '../components/Primitives';
+import { Field } from '../components/ui/Field';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { campaignMutationKeys, useArchiveCampaign } from '../lib/mutations/campaigns';
 import { formatCount } from '../lib/formatters';
@@ -232,21 +233,25 @@ export function SavedCampaignsPanel({
                             <span className={`chip ${selected.verifiedAtCreation ? 'chip--success' : 'chip--warning'} chip--compact`}>
                               {selected.verifiedAtCreation ? 'Verified at creation' : 'Saved copy only'}
                             </span>
-                            <select
-                              className="outreach-routing__select"
-                              value={selectedName}
-                              onChange={(event) => setSelectedVariants((current) => ({
-                                ...current,
-                                [campaign.campaign_id]: event.target.value,
-                              }))}
-                              aria-label={`Message variant for ${campaign.name}`}
-                            >
-                              {variants.map((variant) => (
-                                <option key={variant.variantName} value={variant.variantName}>
-                                  Variant {variant.variantName}
-                                </option>
-                              ))}
-                            </select>
+                            <Field className="field--inline" label={`Message variant for ${campaign.name}`} labelHidden>
+                              {(control) => (
+                                <select
+                                  {...control}
+                                  className="outreach-routing__select"
+                                  value={selectedName}
+                                  onChange={(event) => setSelectedVariants((current) => ({
+                                    ...current,
+                                    [campaign.campaign_id]: event.target.value,
+                                  }))}
+                                >
+                                  {variants.map((variant) => (
+                                    <option key={variant.variantName} value={variant.variantName}>
+                                      Variant {variant.variantName}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                            </Field>
                             <Link
                               to={savedCampaignLeadQueueUrl(campaign, selected.variantName)}
                               className="btn btn--primary btn--sm"

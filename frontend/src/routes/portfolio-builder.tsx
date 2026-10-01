@@ -20,6 +20,7 @@ import { Icon } from '../components/Icon';
 import { useApp } from '../components/AppContext';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { Field } from '../components/ui/Field';
 import { parseCampaignPrefill } from '../lib/campaignPrefill';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { useFootprint } from '../components/FootprintProvider';
@@ -517,18 +518,19 @@ export default function PortfolioBuilder() {
                 void onConfirmSave();
               }}
             >
-              <label className="save-build-form__label" htmlFor="portfolio-save-name">
-                Build name
-              </label>
-              <input
-                id="portfolio-save-name"
-                className="form-input save-build-form__input"
-                value={saveName}
-                onChange={(e) => setSaveName(e.target.value)}
-                maxLength={80}
-                autoFocus
-                data-testid="portfolio-save-name"
-              />
+              <Field className="field--inline" label="Build name">
+                {(control) => (
+                  <input
+                    {...control}
+                    className="form-input save-build-form__input"
+                    value={saveName}
+                    onChange={(e) => setSaveName(e.target.value)}
+                    maxLength={80}
+                    autoFocus
+                    data-testid="portfolio-save-name"
+                  />
+                )}
+              </Field>
               <Button
                 variant="primary"
                 size="sm"

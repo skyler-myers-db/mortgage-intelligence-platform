@@ -2,7 +2,7 @@ import { useState, type ChangeEvent } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip, SurfaceTitle } from '../components/Primitives';
-import { Field } from '../components/ui/Field';
+import { Field, FieldReadout } from '../components/ui/Field';
 import { drawerForAsset } from '../lib/drawerSources';
 import type { CampaignRecommendationResponse } from '../types';
 import { publicAgentResponsesText } from '../lib/agentLabels';
@@ -13,6 +13,16 @@ import {
   type CampaignNumericField,
   type CampaignSetupState,
 } from './portfolio-builder.logic';
+
+/** The unit each numeric editor shows beside its control, and says in words (critic-04). */
+const NUMERIC_UNITS: Record<CampaignNumericField, { prefix?: string; suffix?: string; unit: string }> = {
+  holdoutPct: { suffix: '%', unit: 'percent' },
+  budget: { prefix: '$', unit: 'US dollars' },
+  emailCost: { prefix: '$', unit: 'US dollars' },
+  smsCost: { prefix: '$', unit: 'US dollars' },
+  mailCost: { prefix: '$', unit: 'US dollars' },
+};
+const COPY_NOT_SET = 'Not set. Apply a recommendation to fill it.';
 
 type CampaignField = Exclude<
   keyof CampaignSetupState,
@@ -205,17 +215,18 @@ export function CampaignSetupPanel({
           ) : null}
         </div>
         <div className="campaign-setup">
-          <CampaignTextField label="Benefit-led subject" value={setup.subjectA} maxLength={120} readOnly />
-          <CampaignTextField label="Guidance-led subject" value={setup.subjectB} maxLength={120} readOnly />
-          <CampaignTextField label="Benefit-led message" value={setup.bodyA} maxLength={700} multiline readOnly />
-          <CampaignTextField label="Guidance-led message" value={setup.bodyB} maxLength={700} multiline readOnly />
+          {/* critic-04: copy the operator cannot edit reads as text, never as an input. */}
+          <FieldReadout className="campaign-setup__field" label="Benefit-led subject" value={setup.subjectA} empty={COPY_NOT_SET} />
+          <FieldReadout className="campaign-setup__field" label="Guidance-led subject" value={setup.subjectB} empty={COPY_NOT_SET} />
+          <FieldReadout className="campaign-setup__field campaign-setup__field--wide" label="Benefit-led message" value={setup.bodyA} empty={COPY_NOT_SET} multiline />
+          <FieldReadout className="campaign-setup__field campaign-setup__field--wide" label="Guidance-led message" value={setup.bodyB} empty={COPY_NOT_SET} multiline />
           <div className="campaign-setup__field campaign-setup__field--wide muted fs-12">
             Borrower copy is rendered from reviewed server templates. Apply or regenerate the
             recommendation to change it.
           </div>
           <CampaignNumericFieldEditor label="Holdout % (0-50)" field="holdoutPct" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} onCommit={onNumericFieldCommit} />
-          <CampaignTextField label="Send start" value={setup.startLocal} onChange={onFieldChange('startLocal')} type="time" />
-          <CampaignTextField label="Send end" value={setup.endLocal} onChange={onFieldChange('endLocal')} type="time" />
+          <CampaignTimeField label="Send start" value={setup.startLocal} onChange={onFieldChange('startLocal')} />
+          <CampaignTimeField label="Send end" value={setup.endLocal} onChange={onFieldChange('endLocal')} />
           <CampaignNumericFieldEditor label="Budget" field="budget" value={setup.budget} onChange={onFieldChange('budget')} onCommit={onNumericFieldCommit} placeholder="optional" />
           <CampaignNumericFieldEditor label="Email cost" field="emailCost" value={setup.emailCost} onChange={onFieldChange('emailCost')} onCommit={onNumericFieldCommit} />
           <CampaignNumericFieldEditor label="SMS cost" field="smsCost" value={setup.smsCost} onChange={onFieldChange('smsCost')} onCommit={onNumericFieldCommit} />
@@ -271,14 +282,15 @@ function CampaignNumericFieldEditor({
   placeholder?: string;
 }) {
   const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
-  // critic-04: a clamp is announced in the field's polite notice ('Capped at
-  // 50%'), never applied silently. The notice belongs to the value it was
-  // written for: the next in-range commit, a keystroke, or a value set from
-  // outside the field (Apply variants) clears it.
+  // critic-04: a clamp or a rounding is announced in the field's polite
+  // notice ('Capped at 50%', 'Rounded to 12.35%'), never applied silently.
+  // The notice belongs to the value it was written for: the next in-range
+  // commit, a keystroke, or a value set from outside the field (Apply
+  // variants) clears it.
   const [notice, setNotice] = useState<{ text: string; value: string } | null>(null);
   if (notice !== null && notice.value !== value) setNotice(null);
   return (
-    <Field className="campaign-setup__field" label={label} notice={notice?.text ?? null}>
+    <Field className="campaign-setup__field" label={label} notice={notice?.text ?? null} {...NUMERIC_UNITS[field]}>
       {(control) => (
         <input
           {...control}
@@ -303,47 +315,18 @@ function CampaignNumericFieldEditor({
   );
 }
 
-function CampaignTextField({
+function CampaignTimeField({
   label,
   value,
   onChange,
-  maxLength,
-  multiline = false,
-  type,
-  readOnly = false,
 }: {
   label: string;
   value: string;
-  onChange?: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
-  maxLength?: number;
-  multiline?: boolean;
-  type?: string;
-  readOnly?: boolean;
+  onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
 }) {
-  const className = `campaign-setup__field${multiline ? ' campaign-setup__field--wide' : ''}`;
   return (
-    <label className={className}>
-      <span>{label}</span>
-      {multiline ? (
-        <textarea
-          className="form-input campaign-setup__textarea"
-          aria-label={label}
-          value={value}
-          onChange={onChange}
-          readOnly={readOnly}
-          maxLength={maxLength}
-        />
-      ) : (
-        <input
-          className="form-input"
-          aria-label={label}
-          value={value}
-          onChange={onChange}
-          readOnly={readOnly}
-          maxLength={maxLength}
-          type={type}
-        />
-      )}
-    </label>
+    <Field className="campaign-setup__field" label={label}>
+      {(control) => <input {...control} className="form-input" type="time" value={value} onChange={onChange} />}
+    </Field>
   );
 }
