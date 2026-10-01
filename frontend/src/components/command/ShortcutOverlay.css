@@ -6,7 +6,10 @@
    in the header row, and static (non-interactive) rows whose keycaps
    are the global `kbd` style.
    ============================================================ */
-.cmdk__panel--sheet { inline-size: min(36rem, 100%); }
+/* Taller than the palette's 70vh: the sheet's rows are static, so its list
+   must not scroll at 1440x900 on the busiest page (Lead Queue, with the
+   toast region's F8 row), or axe flags an unfocusable scroll region. */
+.cmdk__panel--sheet { inline-size: min(36rem, 100%); max-block-size: 80vh; }
 .cmdk__title {
   flex: 1;
   margin: 0;
