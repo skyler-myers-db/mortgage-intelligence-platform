@@ -106,20 +106,21 @@ export function resolveExportRulesVersion(context: LeadExportContext | undefined
 
 export function useLeadCsvExport() {
   const [state, setState] = useState<LeadCsvExportState>({ status: 'idle' });
-  // The strip holds the pointer or focus: it does not retire (WCAG 2.2.1).
-  const [noticeHeld, setNoticeHeld] = useState(false);
   // One receipt per click: a second click while the first is in flight would
   // otherwise write a second LEAD_EXPORT row for the same file.
   const inflight = useRef(false);
 
   // The confirmation strip retires on its own; the receipt line does not.
+  // A partial export's strip (its campaign link, D-approval-flow-b) never
+  // retires: an action can never vanish from under a reader's pointer or
+  // focus (WCAG 2.2.1). It goes with the next export.
   useEffect(() => {
-    if (state.status !== 'done' || state.notice === null || noticeHeld) return undefined;
+    if (state.status !== 'done' || state.notice === null || state.truncatedOf !== null) return undefined;
     const timer = window.setTimeout(() => {
       setState((current) => (current.status === 'done' ? { ...current, notice: null } : current));
     }, LEAD_EXPORT_NOTICE_MS);
     return () => window.clearTimeout(timer);
-  }, [state, noticeHeld]);
+  }, [state]);
 
   async function exportCsv({
     plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount,
@@ -164,5 +165,5 @@ export function useLeadCsvExport() {
     }
   }
 
-  return { state, exportCsv, holdNotice: setNoticeHeld };
+  return { state, exportCsv };
 }

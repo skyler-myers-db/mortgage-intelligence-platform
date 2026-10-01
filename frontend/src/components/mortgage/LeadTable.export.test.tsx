@@ -22,7 +22,8 @@
  * matching than are loaded, the button reads "Export k loaded" and describes
  * the match count; the file states `# matching_rows` and the contact policy;
  * the confirmation says only the loaded leads were exported and links to the
- * campaign handoff, and it does not retire while hovered or focused.
+ * campaign handoff, and that strip never retires (its link cannot vanish
+ * from under the pointer or focus, WCAG 2.2.1).
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -398,7 +399,7 @@ describe('LeadTable CSV export', () => {
       expect(notice()?.querySelector('a')).toBeNull();
     });
 
-    it('does not retire while it holds the pointer or focus (WCAG 2.2.1)', async () => {
+    it('the partial strip never retires: its link cannot vanish from under the pointer or focus (WCAG 2.2.1)', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       mount(MIXED, {}, {
         totalMatching: 2340,
@@ -408,26 +409,12 @@ describe('LeadTable CSV export', () => {
         exportButton().click();
         await vi.waitFor(() => expect(blobs).toHaveLength(1));
       });
-      expect(notice()).not.toBeNull();
-
-      act(() => notice()!.dispatchEvent(new Event('pointerenter')));
-      act(() => {
-        vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS * 2);
-      });
-      expect(notice(), 'held by the pointer').not.toBeNull();
-
-      act(() => notice()!.dispatchEvent(new Event('pointerleave')));
       act(() => notice()!.querySelector<HTMLAnchorElement>('a')!.focus());
       act(() => {
-        vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS * 2);
+        vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS * 4);
       });
-      expect(notice(), 'held by keyboard focus').not.toBeNull();
-
-      act(() => exportButton().focus());
-      act(() => {
-        vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS);
-      });
-      expect(notice(), 'released: it retires').toBeNull();
+      expect(notice(), 'still on screen with its link').not.toBeNull();
+      expect(document.activeElement?.textContent).toBe('build a campaign');
     });
   });
 

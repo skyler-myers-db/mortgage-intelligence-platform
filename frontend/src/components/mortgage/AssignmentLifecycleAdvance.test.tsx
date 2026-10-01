@@ -9,7 +9,7 @@
  * confirmed ("Record <outcome> for <id>?"); Cancel and Escape close the
  * picker with zero writes and return focus to "Record outcome"; only
  * Record posts, once. The compact stepper (critic-06 item d) is
- * AssignmentLifecycleSteps.
+ * lifecycleSteps.
  *
  * Audit states-09: both writes run on keyed mutations under
  * ['mip','sales'], so the Lead Queue's own-write store sees them.
@@ -33,7 +33,8 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   api: apiMocks,
 }));
 
-import { AssignmentLifecycleAdvance, AssignmentLifecycleSteps } from './AssignmentLifecycleAdvance';
+import { AssignmentLifecycleAdvance } from './AssignmentLifecycleAdvance';
+import { lifecycleSteps } from './AssignmentLifecycleSteps';
 
 const ASSIGNMENT_ID = '66666666-6666-4666-8666-666666666601';
 const BORROWER = 'B-48291';
@@ -240,7 +241,7 @@ describe('AssignmentLifecycleAdvance', () => {
       ['actioned', 'Actioned', 3],
       ['outcome_recorded', 'Outcome recorded', 4],
     ] as const) {
-      await act(async () => root.render(<AssignmentLifecycleSteps status={status} />));
+      await act(async () => root.render(lifecycleSteps(status)));
       const items = [...document.querySelectorAll('[data-testid="assignment-lifecycle-steps"] > li')];
       expect(items).toHaveLength(5);
       expect(document.querySelector('[aria-current="step"]')?.textContent, status).toBe(label);

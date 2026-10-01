@@ -9,7 +9,8 @@
  *
  * Audit critic-06 item (d): the compact five-step lifecycle stepper sits
  * beside the stage chip whenever the row has an assignment stage, terminal
- * included, and its aria-current moves once an advance returned.
+ * included, and its aria-current moves once an advance returned. It is its
+ * own lazy chunk (code only), so these tests wait for it to render.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -130,7 +131,7 @@ describe('the expanded row\'s lifecycle stepper (critic-06 item d)', () => {
     );
   }
 
-  function mount(lead: LeadSummary) {
+  async function mount(lead: LeadSummary) {
     act(() => {
       root.render(
         <QueryClientProvider client={new QueryClient()}>
@@ -141,10 +142,14 @@ describe('the expanded row\'s lifecycle stepper (critic-06 item d)', () => {
   }
 
   const steps = () => document.querySelector('[data-testid="assignment-lifecycle-steps"]');
+  async function stepsRendered() {
+    await vi.waitFor(() => expect(steps()).not.toBeNull(), { timeout: 15_000 });
+  }
   const currentStep = () => steps()?.querySelector('[aria-current="step"]')?.textContent;
 
-  it('renders five prototype chips: done success, current neutral with aria-current, upcoming muted', () => {
-    mount({ ...ASSIGNED, assignment_status: 'approved' } as LeadSummary);
+  it('renders five prototype chips: done success, current neutral with aria-current, upcoming muted', async () => {
+    await mount({ ...ASSIGNED, assignment_status: 'approved' } as LeadSummary);
+    await stepsRendered();
     const list = steps();
     expect(list?.tagName).toBe('OL');
     expect(list?.getAttribute('aria-label')).toBe('Assignment lifecycle');
@@ -166,12 +171,13 @@ describe('the expanded row\'s lifecycle stepper (critic-06 item d)', () => {
     expect(document.querySelector('[title="Assignment lifecycle stage"]')?.textContent).toBe('Approved');
   });
 
-  it('keeps the stepper at the terminal stage and hides it with no stage', () => {
-    mount({ ...ASSIGNED, assignment_status: 'outcome_recorded' } as LeadSummary);
+  it('keeps the stepper at the terminal stage and hides it with no stage', async () => {
+    await mount({ ...ASSIGNED, assignment_status: 'outcome_recorded' } as LeadSummary);
+    await stepsRendered();
     expect(currentStep()).toBe('Outcome recorded');
     act(() => root.unmount());
     root = createRoot(document.getElementById('root') as HTMLElement);
-    mount(BASE);
+    await mount(BASE);
     expect(steps()).toBeNull();
   });
 
@@ -180,7 +186,8 @@ describe('the expanded row\'s lifecycle stepper (critic-06 item d)', () => {
     apiMocks.updateAssignmentStatus.mockReturnValue(new Promise((resolve) => {
       finish = resolve;
     }));
-    mount(ASSIGNED);
+    await mount(ASSIGNED);
+    await stepsRendered();
     expect(currentStep()).toBe('Assigned');
     const advance = [...document.querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent?.trim() === 'Mark contact drafted');

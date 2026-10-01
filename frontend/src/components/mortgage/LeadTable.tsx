@@ -7,7 +7,7 @@ import { useIsOnline } from '../../lib/connectivity';
 import { queryKeys } from '../../lib/queryKeys';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import { loadedExportTruncatedOf, planLeadCsvExport } from './LeadTable.csv';
-import { LeadExportNotice } from './LeadExportNotice';
+import { leadExportNotice } from './LeadExportNotice';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.constants';
 import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
@@ -27,7 +27,7 @@ import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
 import { useTableScrollClearance } from './useTableScrollClearance';
-import { useBulkCanaryNotice } from './useBulkCanaryNotice';
+import type { CapturedCanary } from './LeadTable.canary';
 import { useLeadTableScroll, type LeadTableVirtualScroll } from './useLeadTableScroll';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
@@ -361,13 +361,11 @@ export function LeadTable({
   const BulkRunProgress = bulkModule?.LeadBulkRunProgress;
   const BulkRunResult = bulkModule?.LeadBulkRunResult;
   // The canary line belongs to its run's selection and gate (W5a ruling R2).
-  const canaryShown = useBulkCanaryNotice({
-    canary: approval.bulkRunCanary,
-    selectedIds: approval.selectedIds,
-    runKind: bulkRun.result?.kind ?? null,
-    approveGateOpen: approval.bulkRationaleOpen,
-    rejectGateOpen: approval.bulkRejectOpen,
-  });
+  // A canary exists only after a bulk run, which loaded the bulk chunk.
+  const [canaryCapture, setCanaryCapture] = useState<CapturedCanary | null>(null);
+  const canary = bulkModule?.canaryNotice(canaryCapture, approval, bulkRun.result?.kind ?? null);
+  if (canary && canary.next !== canaryCapture) setCanaryCapture(canary.next);
+  const canaryShown = canary?.shown ?? null;
   const reviewProps = openReview && {
     review: openReview,
     actorEmail,
@@ -439,7 +437,7 @@ export function LeadTable({
     ? 'selected'
     : csvExportCount === 1 ? 'lead' : 'leads';
   const csvExportTruncatedOf = loadedExportTruncatedOf(csvExport.scope, totalMatching, leads.length);
-  const { state: exportState, exportCsv: runExport, holdNotice } = useLeadCsvExport();
+  const { state: exportState, exportCsv: runExport } = useLeadCsvExport();
   const exportBlockedReason = exportContext?.exportBlockedReason ?? null;
   function exportCsv() {
     if (csvExportCount === 0 || exportBlockedReason) return;
@@ -514,14 +512,11 @@ export function LeadTable({
           onSubmit={(payload) => void sales.submitDisposition(payload)}
         />
       )}
-      {exportState.status === 'done' && exportState.notice && (
-        <LeadExportNotice
-          notice={exportState.notice}
-          truncatedOf={exportState.truncatedOf}
-          campaignHref={campaignHandoff?.href ?? null}
-          onHold={holdNotice}
-        />
-      )}
+      {exportState.status === 'done' && exportState.notice && leadExportNotice({
+        notice: exportState.notice,
+        truncatedOf: exportState.truncatedOf,
+        campaignHref: campaignHandoff?.href ?? null,
+      })}
       {exportState.status === 'error' && (
         <div role="alert" className="table-error" data-testid="lead-export-error">
           {exportState.message}
