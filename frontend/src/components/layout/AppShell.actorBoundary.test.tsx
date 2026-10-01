@@ -9,7 +9,7 @@ import { ACTOR_SCOPE_REGISTRY, NOBODY, _resetActorScopeForTests, actorScopeStatu
 import { api } from '../../lib/api';
 import { GENIE_IN_FLIGHT_TURN_KEY } from '../../lib/genieConversation';
 import { GENIE_CONVERSATION_TURNS_KEY, getGenieTurns } from '../../lib/genieConversationStore';
-import { getGenieTurnSnapshot } from '../../lib/genieInFlightTurn';
+import { __resetGenieTurnStoreForTests, getGenieTurnSnapshot, startGenieTurn } from '../../lib/genieInFlightTurn';
 import { PINNED_INSIGHTS_KEY } from '../../lib/pinnedInsights';
 import { _resetSessionStatusForTests } from '../../lib/sessionStatus';
 import { ACTOR_A, ACTOR_B } from '../../test/actorKeys';
@@ -259,6 +259,7 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     queryClient.clear();
     window.sessionStorage.clear();
     _resetSessionStatusForTests();
+    __resetGenieTurnStoreForTests();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -316,9 +317,16 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
   }
 
   /** A trusted nobody after A: storage kept byte for byte, the gate closed,
-   *  the shell's in-memory actor state cleared by the W5a bridge. */
+   *  the shell's in-memory actor state cleared by the W5a bridge. A's live
+   *  Genie turn (its submit never answers) is in flight when nobody arrives:
+   *  the bridge's reset ends it, and its record removal is dropped. */
   async function closesOn(answer: HealthAnswer): Promise<void> {
     await midSession();
+    vi.spyOn(api, 'genieSubmit').mockReturnValue(new Promise(() => undefined));
+    act(() => {
+      startGenieTurn({ question: 'A live question', conversationId: null, surface: 'panel', startedAt: Date.now() });
+    });
+    expect(getGenieTurnSnapshot().inFlight?.question, "A's turn is in flight").toBe('A live question');
     const before = storageBytes();
     await nextProbe(answer);
     expect(storageBytes(), 'storage byte-identical').toBe(before);
@@ -326,7 +334,7 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     expect(actorScopeStatus()).toBe('closed');
     expect(lastBorrower(), 'the bridge cleared the last borrower').toBe('');
     expect(getGenieTurns(), 'the stores read nothing while closed').toEqual([]);
-    expect(getGenieTurnSnapshot().inFlight).toBeNull();
+    expect(getGenieTurnSnapshot().inFlight, "the bridge ended A's live turn").toBeNull();
   }
 
   it('(i) trusted a, then a 502 and a dropped connection, then a: keeps everything', async () => {
