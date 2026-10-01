@@ -125,7 +125,9 @@ def test_each_revealed_section_is_audited_once_in_the_same_transaction_and_never
     assert "in the money in part" not in flat and "48396" not in flat and "Illinois" not in flat
 
 
-def test_an_audit_failure_withholds_the_section_until_the_final_answer(caplog: pytest.LogCaptureFixture) -> None:
+def test_an_audit_failure_withholds_the_section_until_the_final_answer(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     lakebase = FakeJobLakebase()
     job_id = _running_job(lakebase)
     state = sections._JobReveal()
@@ -134,6 +136,17 @@ def test_an_audit_failure_withholds_the_section_until_the_final_answer(caplog: p
 
     with caplog.at_level(logging.WARNING, logger="mip-genie-jobs"):
         _write(lakebase, job_id, [_item(0), _item(1), _item(2), _item(3)], state)
+
+    # R1, at the state a poll reads: the fail-closed write stores only the
+    # sections whose audit rows committed, never the one whose write failed.
+    after_failure = lakebase.rows[job_id]["sections_json"]
+    assert [item["index"] for item in after_failure["sections"]] == [0, 1, 2]
+    assert after_failure["count"] == 4
+    assert [json.loads(row["metadata"])["section_index"] for row in _revealed_rows(lakebase)] == [0, 1, 2]
+    polled = _poll(lakebase, job_id, monkeypatch, sections_rev=1)
+    assert polled["verified_sections"] == 4 and polled["sections_rev"] == 2
+    assert [s["title"] for s in polled["revealed_sections"]] == ["Section 0", "Section 1", "Section 2"]
+
     _write(lakebase, job_id, [_item(0), _item(1), _item(2), _item(3), _item(4)], state)
 
     stored = lakebase.rows[job_id]["sections_json"]
