@@ -761,7 +761,13 @@ expired item or a request older than 30 days (`expired`), a later finalized
 approve or reject without the link (`decided_outside`), else `open`. Hold
 and revoke rows never decide a request. A request older than 30 days frees
 its borrowers lazily: the next request for one of them expires the stale
-item first.
+item first. A decided item keeps `status = 'open'` in the table (the
+decision is derived), so the approvers' list (`scope=open`, oldest first, at
+most 100) excludes requests with no derived-open borrower in its SQL read,
+and fully decided requests never crowd newer open ones out. Request and
+approval ids are compared in the ledger's lower-case spelling: the API
+canonicalizes an upper-case id on approve, reject, revoke and
+`GET /api/v1/leads?approval_request_batch=`.
 
 Revoke rules (`POST /api/v1/outreach/revoke`, approver-only): the named
 approval must still be the borrower's current, finalized, unbound decision;
