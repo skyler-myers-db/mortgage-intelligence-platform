@@ -94,6 +94,10 @@ tier; neither implies the other.
 | Ranked leads, Borrower 360, Offer reads | yes | yes | yes | yes | yes |
 | Approve / reject outreach | no | no | yes | no | yes |
 | Bulk approve / reject | no | no | yes | no | yes |
+| Request approval (`POST /outreach/approval-requests`) | yes | yes | no (409: approvers decide directly) | yes | no (an administrator is an approver: 409) |
+| Approval requests list (`GET /outreach/approval-requests`) | own (`scope=mine`) | own (`scope=mine`) | the open queue and own | own (`scope=mine`) | the open queue and own |
+| Withdraw an approval request (`POST /outreach/approval-requests/{id}/withdraw`) | own requests only | own requests only | own requests only | own requests only | own requests only |
+| Revoke an approval (`POST /outreach/revoke`) | no | no | yes | no | yes |
 | Lead assign, disposition, outcome | only if also on the sales roster | by roster role and scope: assign and outcome a `sales_manager` (own loan officers) or roster `admin`; disposition the loan officer, their manager or a roster `admin` | only if also on the sales roster | only if also on the sales roster | only if also on the sales roster |
 | Own activity (`/audit/my-events`) and own decision receipts | yes | yes | yes | yes | yes |
 | Another actor's decision receipt | no | no | no | yes | yes |
