@@ -164,6 +164,19 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   if (key.includes('borrower_opportunity_metric_view')) return enrichAsset(DRAWER_SOURCES.borrowerOpportunityView);
   if (key.includes('lead_generation_metric_view')) return enrichAsset(DRAWER_SOURCES.leadGenerationView);
   if (key.includes('lead_population')) return enrichAsset(DRAWER_SOURCES.leadPopulation);
+  // The signal stack's gold table (wow-stage-5): the segment family's lineage,
+  // its own asset; the asset page carries the registry description.
+  if (key.includes('segment_combination_rollup')) {
+    return {
+      ...DRAWER_SOURCES.segmentPopulation,
+      title: 'Segment combinations',
+      short: 'Segment combinations',
+      description: undefined,
+      signals: [],
+      assetKey: 'segment_combination_rollup',
+      assetPath: 'mip.gold.segment_combination_rollup',
+    };
+  }
   if (key.includes('segment_population')) return enrichAsset(DRAWER_SOURCES.segmentPopulation);
   if (key.includes('borrower_dossier')) return enrichAsset(DRAWER_SOURCES.borrowerDossier);
   if (key.includes('household_rollup')) return enrichAsset(DRAWER_SOURCES.householdRollup);
