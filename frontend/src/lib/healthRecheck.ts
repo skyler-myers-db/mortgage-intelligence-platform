@@ -12,8 +12,11 @@
  * that answers the same actor still reaches the gate and reopens it.
  *
  * A plain module set, like lib/apiFailure's network-failure nudges (owned by
- * another module), so the gate never imports the poll or React.
+ * another module), so the gate never imports the poll or React. This module
+ * registers requestHealthRecheck with the gate when it loads (the gate
+ * imports nothing back; see ActorScopeHooks in lib/actorScope).
  */
+import { registerActorScopeHooks } from './actorScope';
 
 type RecheckListener = () => void;
 
@@ -39,3 +42,5 @@ export function subscribeHealthRecheck(listener: RecheckListener): () => void {
     listeners.delete(listener);
   };
 }
+
+registerActorScopeHooks({ requestHealthRecheck });

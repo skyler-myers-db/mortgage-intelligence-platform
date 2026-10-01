@@ -4,7 +4,7 @@ import { act, StrictMode, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { createMemoryRouter, Outlet, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UNSAVED_DIALOG_TITLE } from '../feedback/UnsavedChangesDialog';
 import { unsavedWorkMessage, useUnsavedGuard } from '../../hooks/useUnsavedGuard';
 import {
@@ -98,6 +98,12 @@ function setHidden(hidden: boolean): void {
 }
 
 describe('AppShell: a proven mid-session actor change (D-identity-review-a3)', () => {
+  // The notice is raised by the shell's lazy Toaster: load its chunk once,
+  // so the shell's import of it resolves in microtasks under fake timers.
+  beforeAll(async () => {
+    await import('../feedback/Toaster');
+  });
+
   let container: HTMLDivElement;
   let root: Root;
   let queryClient: QueryClient;

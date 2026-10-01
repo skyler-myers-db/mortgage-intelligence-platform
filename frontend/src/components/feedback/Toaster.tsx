@@ -16,6 +16,7 @@ import { subscribeModalLayers, topModalLayer } from '../../lib/modalLayers';
 import { dismissToast, getToasts, subscribeToasts, type Toast, type ToastAction } from '../../lib/toast';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
+import { useActorResetNotice } from '../layout/useActorResetNotice';
 import { ToastActionRow } from './ToastActionRow';
 import './Toaster.css';
 
@@ -311,6 +312,9 @@ function noModalLayer(): null {
 }
 
 export function Toaster() {
+  // The one-time notice after an actor reset (D-identity-review-a3): raised
+  // from this lazy shell chunk, so the initial bundle does not carry it.
+  useActorResetNotice();
   const toasts = useSyncExternalStore(subscribeToasts, getToasts, getToasts);
   const { canAccessAdmin } = useApp();
   // The topmost open modal dialog, or null for the shell (see the module note).

@@ -189,11 +189,10 @@ export function startHealthPoll({
   // lib/healthRecheck (D-identity-review-a3): the actor gate's requests for a
   // fresh trusted observation, counted (a clamped performance.now() can give
   // a request and a probe start the same instant, so order is a count, not a
-  // time), how many a trusted probe has answered, and the one tick that may
-  // be scheduled for them.
+  // time), how many a trusted probe has answered, and whether one more probe
+  // runs when the in-flight one ends.
   let rechecksRequested = 0;
   let rechecksAnswered = 0;
-  let recheckTimer: ReturnType<typeof setTimeout> | null = null;
   let recheckAfterProbe = false;
 
   const isHidden = () =>
@@ -361,10 +360,11 @@ export function startHealthPoll({
       void tick();
       return;
     }
-    if (recheckTimer !== null) return;
-    recheckTimer = setTimeout(() => {
-      recheckTimer = null;
-      runRecheck();
+    // The next poll, brought forward to the end of the gap: still one timer,
+    // so a second request inside the gap schedules nothing more.
+    clearTimer();
+    timer = setTimeout(() => {
+      void tick();
     }, wait);
   };
 
@@ -402,7 +402,6 @@ export function startHealthPoll({
     cancelled = true;
     ctrl.abort();
     clearTimer();
-    if (recheckTimer !== null) clearTimeout(recheckTimer);
     unsubscribeOnline();
     unsubscribeSession();
     unsubscribeFailures();

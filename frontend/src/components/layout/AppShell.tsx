@@ -26,7 +26,6 @@ import { createIdlePreloader } from '../../lib/prefetch';
 import { actorResetHeld, observeActor, subscribeActorScope } from '../../lib/actorScope';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
 import { RouteFallback } from './RouteFallback';
-import { useActorResetNotice } from './useActorResetNotice';
 import { useExitRetained } from '../../hooks/useExitRetained';
 import { useMainScroll } from '../../hooks/useMainScroll';
 import { useRouteAnnouncer } from '../../hooks/useRouteAnnouncer';
@@ -160,7 +159,6 @@ function AppShellInner({ children }: PropsWithChildren) {
     queryClient.setDefaultOptions({ ...defaults, queries: { ...defaults.queries, enabled: false } });
     clearActorMemory();
   }, [clearActorMemory, queryClient, resetHeld]);
-  useActorResetNotice();
 
   // Every trusted actor observation goes to the gate. HealthProvider's
   // `actorIdentity` is set only by a TRUSTED probe (lib/healthTrust) or, before

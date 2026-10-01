@@ -59,8 +59,6 @@
  * Preference map ('mip.shortcuts.singleKey'): JSON {actorKey | '~nobody':
  * value}, at most 8 entries, most recently written first; never cleared.
  */
-import { clearUnsavedWork } from '../hooks/useUnsavedGuard';
-import { requestHealthRecheck } from './healthRecheck';
 
 export type ActorScopeArea = 'local' | 'session';
 export type ActorScopeStatus = 'pending' | 'open' | 'closed';
@@ -132,6 +130,24 @@ type ProvenChangeHandler = (key: string, aliases: readonly string[]) => void;
 const AREAS: readonly ActorScopeArea[] = ['local', 'session'];
 const PRIVATE: Readonly<Record<ActorScopeArea, readonly string[]>> = { local: PRIVATE_LOCAL, session: PRIVATE_SESSION };
 const PREFERENCE_CAP = 8;
+
+/**
+ * What a reset and a suspend call outside the gate: hooks/useUnsavedGuard's
+ * clearUnsavedWork and lib/healthRecheck's requestHealthRecheck. Each module
+ * registers itself here when it loads (both are in the shell's initial
+ * closure), so this module imports neither: the bundler keeps this module in
+ * a chunk shared with lazy routes, and an import from here pulled both into
+ * it (measured +0.48 KiB br of initial JS in chunk overhead).
+ */
+export interface ActorScopeHooks {
+  clearUnsavedWork?: () => void;
+  requestHealthRecheck?: () => void;
+}
+const hooks: Required<ActorScopeHooks> = { clearUnsavedWork: () => undefined, requestHealthRecheck: () => undefined };
+
+export function registerActorScopeHooks(next: ActorScopeHooks): void {
+  Object.assign(hooks, next);
+}
 
 let status: ActorScopeStatus = 'pending';
 /** The last resolution's owner (k or NOBODY); null before the first. */
@@ -299,11 +315,13 @@ function leaveDocument(): void {
   resetDocument();
 }
 
-/** The last reset of this tab is younger than RESET_LOOP_MS (ms left, else 0). */
+/**
+ * Ms left until RESET_LOOP_MS has passed since this tab's last reset, else 0.
+ * An absent, unparsable (NaN) or non-positive stamp gives a NaN or huge age,
+ * which reads as no recent reset (staleChunkRecovery's claim pattern).
+ */
 function loopGuardWait(): number {
-  const last = Number(rawRead('session', RESET_AT_KEY));
-  if (!Number.isFinite(last) || last <= 0) return 0;
-  const age = Date.now() - last;
+  const age = Date.now() - Number(rawRead('session', RESET_AT_KEY));
   return age >= 0 && age < RESET_LOOP_MS ? RESET_LOOP_MS - age : 0;
 }
 
@@ -316,27 +334,26 @@ function resetForProvenChange(key: string, aliases: readonly string[]): void {
   status = 'closed';
   resetting = true;
   queue = [];
-  clearUnsavedWork();
+  hooks.clearUnsavedWork();
   for (const area of AREAS) {
     const stamp = rawRead(area, STAMPS[area]);
     if (stamp !== key && !(stamp !== null && aliases.includes(stamp))) removePrivate(area);
   }
   for (const area of AREAS) rawWrite(area, STAMPS[area], key);
   const wait = loopGuardWait();
-  if (wait === 0) {
-    emit('restamped');
+  // Set before 'restamped', so the shell's swap reads it on that event.
+  resetHeld = wait > 0;
+  emit('restamped');
+  if (!resetHeld) {
     leaveDocument();
     return;
   }
-  resetHeld = true;
-  emit('restamped');
   emit('closed');
-  if (heldTimer === null) {
-    heldTimer = setTimeout(() => {
-      heldTimer = null;
-      leaveDocument();
-    }, wait);
-  }
+  // The only timer: `resetting` makes every later observation a no-op.
+  heldTimer = setTimeout(() => {
+    heldTimer = null;
+    leaveDocument();
+  }, wait);
 }
 
 let provenChange: ProvenChangeHandler = resetForProvenChange;
@@ -352,7 +369,7 @@ function suspend(): void {
     status = 'closed';
     emit('restamped');
   }
-  requestHealthRecheck();
+  hooks.requestHealthRecheck();
 }
 
 /** Present and not this document's owner: another tab restamped the area. */

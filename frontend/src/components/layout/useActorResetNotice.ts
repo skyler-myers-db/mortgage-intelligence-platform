@@ -16,6 +16,10 @@ export const ACTOR_RESET_NOTICE =
  * taken (read and removed) only at the moment the toast is raised, so a
  * StrictMode re-run of this effect raises it once. A storage area that
  * throws lost the flag with the old document: then nothing is shown.
+ *
+ * Called by the shell's lazy Toaster (components/feedback/Toaster), which
+ * the shell loads at mount: the initial bundle stays without it, and a gate
+ * that opened before the chunk arrived is seen at its mount.
  */
 export function useActorResetNotice(): void {
   useEffect(() => {
