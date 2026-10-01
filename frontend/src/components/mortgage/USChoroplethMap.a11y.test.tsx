@@ -435,6 +435,25 @@ describe('populated-only roving and activation (dataviz-10, WCAG 2.1.1)', () => 
     );
   });
 
+  it('formats counts and averages through the shared formatters, byte-identical (responsive-04)', async () => {
+    apiMocks.stateRollups.mockResolvedValue({
+      ...STATES,
+      rollups: [{ ...STATES.rollups[0], addressable: 1_234_567, avg_score: 72.5 }, ...STATES.rollups.slice(1)],
+    });
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap segmentFilter={['equity']} /></Providers>);
+    });
+    await waitFor(() => path('il')?.classList.contains('has-data'));
+    expect(path('il')?.getAttribute('aria-label')).toBe(
+      'Illinois: 1,234,567 marketable borrowers, average opportunity score 72.5, top segment Prime Refi Candidates',
+    );
+    const toggle = [...document.querySelectorAll('button')].find((b) => b.textContent === 'View as table');
+    await act(async () => toggle?.click());
+    const row = await waitFor(() => document.querySelector('tr[data-map-row="il"]'));
+    expect([...row.querySelectorAll('td.num')].map((td) => td.textContent)).toEqual(['1,234,567', '897', '72.5']);
+    expect(document.querySelector('[data-testid="map-table-total"]')?.textContent).toBe('1,251,365');
+  });
+
   it('makes a ZIP with no borrowers an image tile, never a stop', async () => {
     apiMocks.zipRollups.mockResolvedValue({
       ...TX_ZIPS,

@@ -23,6 +23,7 @@
  * column's total counts every group (USChoroplethMap.table.ts).
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { formatCount, formatNumber } from '../../lib/formatters';
 import { claimDrillFocus } from './USChoroplethMap.a11y';
 import type { MapClass } from './USChoroplethMap.scale';
 import { EMPTY_GROUP_LABEL, OFF_MAP_GROUP_LABEL, type MapTableGroups } from './USChoroplethMap.table';
@@ -70,8 +71,6 @@ interface USChoroplethMapTableProps {
 
 const countOf = (row: MapTableRow) => row.count ?? 0;
 
-const fmt = (value: number | null | undefined) =>
-  typeof value === 'number' ? value.toLocaleString('en-US') : '—';
 
 export function USChoroplethMapTable({
   unitLabel,
@@ -140,7 +139,7 @@ export function USChoroplethMapTable({
             <tbody key={label}>
               <tr className="map-table__group">
                 <th scope="colgroup" colSpan={columns}>
-                  {label} ({group.length.toLocaleString('en-US')})
+                  {label} ({formatCount(group.length)})
                 </th>
               </tr>
               {group.map(renderRow)}
@@ -149,16 +148,16 @@ export function USChoroplethMapTable({
         )}
         <tfoot>
           <tr>
-            <th scope="row">Total ({counted.length.toLocaleString('en-US')})</th>
-            <td className="num tbl-cell--right" data-testid="map-table-total">{fmt(total)}</td>
+            <th scope="row">Total ({formatCount(counted.length)})</th>
+            <td className="num tbl-cell--right" data-testid="map-table-total">{formatCount(total)}</td>
             {showContactable && (
               <td className="num tbl-cell--right">
-                {fmt(counted.reduce((sum, row) => sum + (row.contactable ?? 0), 0))}
+                {formatCount(counted.reduce((sum, row) => sum + (row.contactable ?? 0), 0))}
               </td>
             )}
             {extraColumn && (
               <td className="num tbl-cell--right" data-testid="map-table-extra-total">
-                {fmt(extraTotal)}
+                {formatCount(extraTotal)}
               </td>
             )}
             <td />
@@ -190,10 +189,10 @@ function MapTableBodyRow({ row, showContactable, showExtra }: MapTableBodyRowPro
           row.name
         )}
       </th>
-      <td className="num tbl-cell--right">{fmt(row.count)}</td>
-      {showContactable && <td className="num tbl-cell--right">{fmt(row.contactable)}</td>}
-      {showExtra && <td className="num tbl-cell--right">{fmt(row.extra)}</td>}
-      <td className="num tbl-cell--right">{fmt(row.avgScore)}</td>
+      <td className="num tbl-cell--right">{formatCount(row.count)}</td>
+      {showContactable && <td className="num tbl-cell--right">{formatCount(row.contactable)}</td>}
+      {showExtra && <td className="num tbl-cell--right">{formatCount(row.extra)}</td>}
+      <td className="num tbl-cell--right">{formatNumber(row.avgScore)}</td>
       {row.note ? <td className="map-table__note">{row.note}</td> : <td>{row.topSegment ?? '—'}</td>}
     </tr>
   );

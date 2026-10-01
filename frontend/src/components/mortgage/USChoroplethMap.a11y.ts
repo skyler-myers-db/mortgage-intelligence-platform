@@ -11,6 +11,7 @@
  *    element's box instead of the pointer.
  */
 import type { KeyboardEvent } from 'react';
+import { formatCount, formatNumber } from '../../lib/formatters';
 
 /** Attribute every map unit (state path, ZIP tile) carries. */
 export const MAP_UNIT_ATTR = 'data-map-unit';
@@ -23,8 +24,6 @@ export const MAP_UNIT_ATTR = 'data-map-unit';
  */
 export const MAP_POPULATED_ATTR = 'data-populated';
 
-const fmt = (value: number) => value.toLocaleString('en-US');
-
 export interface UnitFacts {
   count: number | null;
   avgScore: number | null;
@@ -35,10 +34,10 @@ export interface UnitFacts {
 
 /** "N marketable borrowers, average opportunity score S, top segment X[, U unattended leads]". */
 function describeFacts(facts: UnitFacts, noun: string): string {
-  const parts = [facts.count !== null ? `${fmt(facts.count)} ${noun}` : `${noun}: unknown`];
-  if (facts.avgScore !== null) parts.push(`average opportunity score ${fmt(facts.avgScore)}`);
+  const parts = [facts.count !== null ? `${formatCount(facts.count)} ${noun}` : `${noun}: unknown`];
+  if (facts.avgScore !== null) parts.push(`average opportunity score ${formatNumber(facts.avgScore)}`);
   if (facts.topSegment) parts.push(`top segment ${facts.topSegment}`);
-  if (typeof facts.unattended === 'number') parts.push(`${fmt(facts.unattended)} unattended leads`);
+  if (typeof facts.unattended === 'number') parts.push(`${formatCount(facts.unattended)} unattended leads`);
   return parts.join(', ');
 }
 
@@ -98,7 +97,7 @@ export function moveRovingFocus(event: KeyboardEvent<Element>): void {
 export function skippedStatesNote(count: number): string {
   return count === 1
     ? '1 state has no borrowers in this selection and is skipped; the table view lists them.'
-    : `${fmt(count)} states have no borrowers in this selection and are skipped; the table view lists them.`;
+    : `${formatCount(count)} states have no borrowers in this selection and are skipped; the table view lists them.`;
 }
 
 /** Where the hover card anchors for a focused unit: top centre of its box, in client coordinates. */

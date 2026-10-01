@@ -34,7 +34,7 @@ import { indexRateScenario, scenarioView } from './rateScenario.logic';
 import { RATE_SCENARIO_CONTROL } from './rateScenario.lazy';
 import { useLazyModule } from './useLazyModule';
 import { safeSegmentName } from '../../lib/segmentMetadata';
-import { ratePct } from '../../lib/formatters';
+import { formatCount, ratePct } from '../../lib/formatters';
 import './USChoroplethMap.css';
 
 export type { MapSelection } from './USChoroplethMap.selection';
@@ -241,7 +241,7 @@ export function USChoroplethMap({
   }, [level, overlayActive, overlayData, rateIndex, shownScenario, stateFacts, zipFacts]);
   const zipCount = zipFacts ? Object.keys(zipFacts).length : 0;
   const scaleScope = level === 'zip' && !overlayActive && zipCount > ZIP_TILE_CAP
-    ? `over the ${ZIP_TILE_CAP} densest of ${zipCount.toLocaleString('en-US')} ZIPs`
+    ? `over the ${ZIP_TILE_CAP} densest of ${formatCount(zipCount)} ZIPs`
     : null;
 
   const activeSegNames = useMemo(() => {

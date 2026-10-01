@@ -33,7 +33,7 @@ import { Chip, EvidenceChip } from '../Primitives';
 import type { MapScenarioView, RateScenarioIndex } from './rateScenario.logic';
 import { classRanges, formatBreak, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { GeoRead } from './useChoroplethLiveFacts';
-import { formatCount } from '../../lib/formatters';
+import { formatCount, formatNumber } from '../../lib/formatters';
 
 /** What the lazy RateScenarioControl reads. */
 export interface RateLeverInputs {
@@ -114,8 +114,8 @@ export function USChoroplethMapLegend({
   const barLabel = scale
     ? `Fill classes: no borrowers or no data; ${ranges
         .map((range) => (range.to === null
-          ? `${range.from.toLocaleString('en-US')} or more`
-          : `${range.from.toLocaleString('en-US')} to ${range.to.toLocaleString('en-US')}`))
+          ? `${formatCount(range.from)} or more`
+          : `${formatCount(range.from)} to ${formatCount(range.to)}`))
         .join('; ')}`
     : 'Fill classes: lower to higher';
   return (
@@ -163,7 +163,7 @@ export function USChoroplethMapLegend({
               key={index}
               className={`map-legend__break map-legend__break--${index + 1}`}
               data-break={value}
-              title={value.toLocaleString('en-US')}
+              title={formatNumber(value)}
             >
               {repeat ? '' : label}
             </span>
