@@ -435,6 +435,30 @@ once it lands, `frontend/src/lib/rum.ts` forwards these entries with a
 route-templated path only; until then the header is read in the browser's
 network panel.
 
+### X-Data-Last-Good-At (stale-after-failure marker)
+
+A separate header, emitted by the same middleware (decision record e1,
+2026-09-30):
+
+```
+X-Data-Last-Good-At: 2026-09-29T06:00:00Z
+```
+
+- It is set ONLY when a value the response served was retained after a failed
+  refresh (`stale_if_error` in `gold_cache.py` or `TTLCache`), or was built
+  from such a read (a list whose readiness gates were retained, say). The
+  value is the UTC second of that value's last successful Unity Catalog read.
+- When several reads in one request are marked, the OLDEST time wins.
+- It is absent on a plain soft-window stale serve (a background refresh is
+  merely in flight, nothing failed) and on every fresh or miss response.
+- The staleness travels through `backend/services/cache_staleness.py`: each
+  cache factory runs in its own ContextVar scope, a cache that serves a
+  retained entry calls `report_stale(wall)`, and an entry built inside a
+  marked scope is stored `degraded`, so later hits keep marking. Executor
+  threads never set the request collector, as for Server-Timing.
+- Server-Timing names and values are unchanged; the RUM cache vocabulary is
+  still `hit|miss|stale`.
+
 ## 7. Warehouse keep-warm: cost vs cold start
 
 The SQL warehouse is serverless (`2X-Small`, `auto_stop_mins: 10` in
@@ -479,8 +503,28 @@ inline. A served-stale payload keeps its own `data_refreshed_at` /
 `snapshot_date`. DEBUG events `gold_cache_hit` / `gold_cache_stale` /
 `gold_cache_miss` and the WARNING `gold_cache_refresh_failed` carry the cache
 key and exception type only; the per-request outcome is the `cache` entry of
-`Server-Timing` (§6). A cold failure of the segment source-readiness read
-logs `segment_source_readiness_unavailable`, gates no card and is not cached.
+`Server-Timing` (§6).
+
+The segment list (`DatabricksSegmentRepository.list`, `/api/v1/segments`) is on
+this cache too since 2026-09-30 (decision record e1): 300 s soft TTL, the
+24 h `MIP_GOLD_CACHE_MAX_STALE_S` hard cap, `stale_if_error`. An expired list
+never MASKS a refresh failure: a cold failure propagates as the 503, and a
+list retained after a failed refresh (or built from retained readiness gates)
+is served with `X-Data-Last-Good-At` (§6), which clears after one successful
+refresh. The source-readiness gates fail closed: a cold failure of the
+readiness read logs WARNING `segment_source_readiness_unavailable` and
+RE-RAISES (the list answers 503; nothing is cached as good), and an EMPTY
+readiness snapshot gates every mapped segment `not_connected` instead of
+skipping the gates.
+
+Admin data-source readiness (`/api/v1/admin/sources`, `/api/v1/data-estate`) no
+longer probes: it reads `mip.gold.source_readiness` only (App SQL is
+gold-only). A source the summary has no row for reads `unavailable`, every
+non-roadmap source does when the summary is absent, and the WARNING
+`admin_source_readiness_unavailable` (outcome `absent` / `partial`,
+`missing_count`) says so; any other read failure is the 503. The App never
+runs `DESCRIBE DETAIL` or `COUNT(*)` against `mip.silver.*` /
+`mip.first_party.*`.
 
 The state coverage footprint the Genie footprint guards and the schema
 validators read (`backend/services/state_footprint.py`) is the one site with
@@ -541,7 +585,11 @@ breaker, and one landing as the half-open probe closes it), and answers 503
 `{retryable: true, reason: retries_exhausted}` with the constant detail after
 that single attempt. The `dependency_down_handled` WARNING shows
 `last_error_type=DatabricksSqlObjectMissingError`. The Rate Lever's own two
-tables answer 200 `built: false` instead.
+tables answer 200 `built: false` instead. Since 2026-09-30 a missing schema
+(`SCHEMA_NOT_FOUND`) or routine (`UNRESOLVED_ROUTINE`) fails fast the same way,
+under the same `retries_exhausted` reason; only the error classes match
+(SQLSTATE 42704 / 42883 are shared with other classes), and a missing
+`mip.gold` schema stays a 503 on the Rate Lever too.
 
 ## 9. Genie completion jobs
 
