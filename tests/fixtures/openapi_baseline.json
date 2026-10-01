@@ -7931,6 +7931,16 @@
             "title": "Monitors",
             "type": "array"
           },
+          "scheduler_state": {
+            "default": "unavailable",
+            "enum": [
+              "active",
+              "paused",
+              "unavailable"
+            ],
+            "title": "Scheduler State",
+            "type": "string"
+          },
           "workflows": {
             "items": {
               "$ref": "#/components/schemas/GrowthAgentWorkflow"

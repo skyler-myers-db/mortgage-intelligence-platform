@@ -51,6 +51,7 @@ from backend.services.capabilities_models import (
 from backend.services.capabilities_models import (
     LiveCapabilityStatus as LiveCapabilityStatus,
 )
+from backend.services.databricks_jobs import GROWTH_AGENT_SCHEDULER_JOB, read_only_job_bound
 
 
 def _module_present(name: str) -> bool:
@@ -393,6 +394,32 @@ def probe_capabilities(
             ga=True,
             status=sync_status,
             detail=sync_detail,
+        )
+    )
+
+    # Audit 2026-09-21 flow-08 / wow-ai-4: the saved-watchlist scheduler job.
+    # Bound (its id env var set) is only "configured"; a live Jobs API read of
+    # an UNPAUSED schedule is the only way to "available" and claimable.
+    scheduler_status, scheduler_detail = _status_from_live(
+        key="growth_agent_scheduler",
+        configured=read_only_job_bound(GROWTH_AGENT_SCHEDULER_JOB),
+        configured_detail=(
+            "The saved-watchlist scheduler job is bound to this App; a live read of an "
+            "unpaused job schedule must pass before this row is claimable."
+        ),
+        not_provisioned_detail=(
+            "The saved-watchlist scheduler job is not bound to this App; saved "
+            "watchlists refresh only when a lender runs them."
+        ),
+        live_statuses=live_statuses,
+    )
+    caps.append(
+        Capability(
+            key="growth_agent_scheduler",
+            label="Scheduled watchlist refresh",
+            ga=True,
+            status=scheduler_status,
+            detail=scheduler_detail,
         )
     )
 

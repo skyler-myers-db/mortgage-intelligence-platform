@@ -112,6 +112,7 @@ from backend.services.growth_agent_runtime import (
 from backend.services.growth_agent_runtime import (
     tool_steps as _tool_steps,
 )
+from backend.services.growth_agent_scheduler import growth_agent_scheduler_status
 from backend.services.growth_agent_workflows import (
     WORKFLOWS as _WORKFLOWS,
 )
@@ -154,6 +155,7 @@ def growth_agent_home(
         workflows=[workflow.schema() for workflow in _WORKFLOWS.values()],
         monitors=list_monitors(lakebase, actor=actor),
         capabilities=public_capability_rows(live_statuses=live_statuses),
+        scheduler_state=growth_agent_scheduler_status().state,
     )
 
 
