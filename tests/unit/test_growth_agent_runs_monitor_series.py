@@ -48,7 +48,10 @@ _FINALIZE_ONLY_FUNCTION = """    IF (to_jsonb(NEW) - 'audit_event_id')
 
 
 def _series_block() -> str:
-    return _SCHEMA[_SCHEMA.index(_MARKER):]
+    # Up to its own version row: later waves append blocks after it.
+    start = _SCHEMA.index(_MARKER)
+    end_marker = "ON CONFLICT (version) DO NOTHING;"
+    return _SCHEMA[start : _SCHEMA.index(end_marker, start) + len(end_marker)]
 
 
 def test_the_series_block_is_the_last_block_and_is_versioned_once() -> None:
