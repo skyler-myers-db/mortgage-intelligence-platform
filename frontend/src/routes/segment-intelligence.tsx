@@ -9,6 +9,7 @@ import { LeadTable } from '../components/mortgage/LeadTable';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { EMPTY_MAP_SELECTION, withMapSelection } from '../components/mortgage/USChoroplethMap.selection';
 import { useMapSelectionParams } from '../components/mortgage/useMapSelectionParams';
+import { useMapModeParams } from '../components/mortgage/useMapModeParams';
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
@@ -140,6 +141,8 @@ export default function SegmentIntelligence() {
   // ZIP is pushed down to /api/leads so the ranked table follows the same
   // state → ZIP cohort the map counted. `county` is always null.
   const [mapSelection, setMapSelection] = useMapSelectionParams();
+  // The map's colouring and Rate Lever step, in the URL too (?map_mode=&rate_step=).
+  const mapMode = useMapModeParams();
   const selectedLocationState = chipFilters.location === 'All' ? undefined : chipFilters.location;
   const secondaryPortfolioCriteria = useMemo(
     () => buildSecondaryPortfolioCriteria(chipFilters),
@@ -621,6 +624,10 @@ export default function SegmentIntelligence() {
           portfolioCriteria={secondaryPortfolioCriteria}
           selection={mapSelection}
           onSelectionChange={setMapSelection}
+          mode={mapMode.mode}
+          step={mapMode.step}
+          onModeChange={mapMode.setMode}
+          onStepCommit={mapMode.setStep}
         />
       </div>
     </PageShell>

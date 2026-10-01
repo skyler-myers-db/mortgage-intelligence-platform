@@ -289,3 +289,97 @@ describe('USChoroplethMap rate scenario', () => {
   });
 });
 
+/**
+ * The colouring and step from the route (D-dataviz-geo-d2 2(iii),
+ * deviation:map-mode-url): a link is a request, never a read the mode does
+ * not allow, and a scrub commits once.
+ */
+describe('USChoroplethMap mode and step from the URL', () => {
+  let root: Root;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    client = createMipQueryClient();
+    mocks.stateRollups.mockResolvedValue(rollups(9_000, 1_000));
+    mocks.rateSensitivity.mockResolvedValue(GRID);
+    mocks.assignmentOverlay.mockResolvedValue({
+      level: 'state', state: null, county_fips: null, total_leads: 10, total_assigned: 5, total_unattended: 5,
+      lead_definition: 'score >= 50',
+      units: [{ unit_id: 'IL', lead_count: 10, assigned_count: 5, unattended_count: 5, covering_officer_count: 1, covering_officers: [] }],
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  type MapProps = Parameters<typeof USChoroplethMap>[0];
+  const renderMap = (props: MapProps) => act(async () => root.render(<Providers><USChoroplethMap {...props} /></Providers>));
+  const range = () => document.querySelector<HTMLInputElement>('input[type="range"]');
+
+  it('a rate link under a segment filter falls back to borrowers with no rate read', async () => {
+    await renderMap({ mode: 'rate', step: -50, segmentFilter: ['itm'] });
+    await until(() => cls('il') === '4');
+    await settle();
+    expect(button('Borrowers')?.getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.rateSensitivity).not.toHaveBeenCalled();
+    expect(document.querySelector('.map-legend__lever')).toBeNull();
+  });
+
+  it('an unattended link issues only the overlay read', async () => {
+    await renderMap({ mode: 'unattended' });
+    await until(() => document.querySelector('.map-legend__value')?.textContent === '5');
+    expect(mocks.assignmentOverlay).toHaveBeenCalledTimes(1);
+    expect(mocks.rateSensitivity).not.toHaveBeenCalled();
+  });
+
+  it('a rate link opens at its step after one read, and an off-grid step snaps with one commit', async () => {
+    const commits: number[] = [];
+    await renderMap({ mode: 'rate', step: -50, onStepCommit: (step) => commits.push(step) });
+    await until(() => range()?.value === '-50' && document.querySelector('.map-legend__value')?.textContent === '1,500');
+    expect(mocks.rateSensitivity).toHaveBeenCalledTimes(1);
+    expect(commits).toEqual([]);
+
+    // Back / Forward: a new step prop moves the thumb and the fill.
+    await renderMap({ mode: 'rate', step: 25, onStepCommit: (step) => commits.push(step) });
+    await until(() => range()?.value === '25' && document.querySelector('.map-legend__value')?.textContent === '750');
+    // A step between grid points snaps to the nearest (ties lower) and the URL follows once.
+    await renderMap({ mode: 'rate', step: -60, onStepCommit: (step) => commits.push(step) });
+    await until(() => range()?.value === '-50');
+    await settle();
+    expect(commits).toEqual([-50]);
+    expect(mocks.rateSensitivity).toHaveBeenCalledTimes(1);
+  });
+
+  it('a scrub (pointerdown, five inputs, pointerup) commits exactly once', async () => {
+    const commits: number[] = [];
+    await renderMap({ mode: 'rate', step: 0, onStepCommit: (step) => commits.push(step) });
+    await until(() => range() !== null);
+    const input = range() as HTMLInputElement;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+    for (const value of ['-25', '-50', '-75', '-100', '-75']) {
+      await act(async () => {
+        setValue?.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+    expect(commits).toEqual([]);
+    await act(async () => input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })));
+    expect(commits).toEqual([-75]);
+  });
+
+  it('a picked colouring goes to the route, which owns it', async () => {
+    const modes: string[] = [];
+    await renderMap({ mode: 'borrowers', onModeChange: (mode) => modes.push(mode) });
+    await until(() => cls('il') === '4');
+    await act(async () => button('Unattended leads')?.click());
+    expect(modes).toEqual(['unattended']);
+    // Still borrowers until the route says otherwise.
+    expect(button('Borrowers')?.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+

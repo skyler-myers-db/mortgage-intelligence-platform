@@ -1,4 +1,5 @@
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
+import type { GeoAssignmentOverlayResponse, GeoAssignmentOverlayUnit } from '../../lib/api';
 import type { CountyRollup, ZipRollup } from '../../types';
 import { labelAnchor } from './USChoroplethMap.labels';
 import { fixedAttr } from '../../lib/fixedPrecision';
@@ -314,6 +315,33 @@ export function featureBBox(f: Feature): [number, number, number, number] {
     f.geometry.coordinates.forEach((poly) => poly.forEach(visit));
   }
   return [minX, minY, maxX, maxY];
+}
+
+/**
+ * Footprint-aware drill allowlist: the configured state codes, keyed like the
+ * map's location ids (lowercase USPS) and filtered through the intrinsic
+ * USPS->FIPS table, so a malformed configured code can never become a
+ * drillable region.
+ */
+export function footprintStateMap(stateCodes: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const code of stateCodes) {
+    const lc = code.toLowerCase();
+    const fips = USCODE_TO_FIPS[lc];
+    if (fips) out[lc] = fips;
+  }
+  return out;
+}
+
+/** Overlay units keyed by unit_id: USPS lowercase at state level (the map's location ids), ZIP verbatim otherwise. */
+export function overlayUnitsById(overlay: GeoAssignmentOverlayResponse | null): Record<string, GeoAssignmentOverlayUnit> {
+  const out: Record<string, GeoAssignmentOverlayUnit> = {};
+  if (!overlay) return out;
+  for (const unit of overlay.units) {
+    const key = overlay.level === 'state' ? unit.unit_id.toLowerCase() : unit.unit_id;
+    out[key] = unit;
+  }
+  return out;
 }
 
 /** Densest-N ZIP tiles rendered per state. The grid stays readable, but

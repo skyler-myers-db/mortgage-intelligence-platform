@@ -45,6 +45,8 @@ export interface RateLeverInputs {
   /** The thumb's step (undeferred). */
   step: number;
   onStepChange: (step: number) => void;
+  /** A committed step (pointerup, a moving key, Reset): the route writes it to the URL (useMapModeParams). */
+  onStepCommit?: (step: number) => void;
   /** The drilled state (ZIP level, where tiles keep borrower colouring), or null for the whole book. */
   scope: { id: string; name: string } | null;
 }

@@ -27,6 +27,7 @@ const MAP_UNITS = [
   'USChoroplethMapLegend.tsx',
   'USChoroplethMapTable.tsx',
   'useMapHover.ts',
+  'useMapModeParams.ts',
 ];
 
 interface CompiledFunction { name: string; emitted: boolean; memoSlots: number }

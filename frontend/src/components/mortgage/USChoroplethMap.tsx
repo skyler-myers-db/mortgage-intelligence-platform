@@ -1,12 +1,12 @@
-import { useCallback, useDeferredValue, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { useOptionalFootprint } from '../FootprintProvider';
 import {
-  USCODE_TO_FIPS,
   ZIP_TILE_CAP,
   buildLeadQueuePath,
   densestZips,
+  footprintStateMap,
+  overlayUnitsById,
   type Level,
   type UsaSvgMapLocation,
 } from './USChoroplethMap.utils';
@@ -27,6 +27,7 @@ import { campaignPrefillPath as buildCampaignPath } from './USChoroplethMap.camp
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { buildMapCard } from './USChoroplethMap.hover';
 import { useMapHover } from './useMapHover';
+import { snapStep, useMapColoring } from './useMapModeParams';
 import { USChoroplethMapZipLevel } from './USChoroplethMapZipLevel';
 import { useChoroplethLiveFacts, type GeoRead } from './useChoroplethLiveFacts';
 import { indexRateScenario, scenarioView } from './rateScenario.logic';
@@ -118,6 +119,12 @@ interface USChoroplethMapProps {
   /** State-level drill behavior. `"filter"` drills in place and reports the
    *  selection; `"navigate"` deep-links to `/lead-queue?state=XX`. */
   drillBehavior?: 'filter' | 'navigate';
+  /** The colouring and Rate Lever step, owned by the route (see useMapModeParams). Omit to let the map keep its own. */
+  mode?: MapColorMode;
+  step?: number;
+  onModeChange?: (mode: MapColorMode) => void;
+  /** A committed step (pointerup, a key, Reset, or the snap to the grid). */
+  onStepCommit?: (step: number) => void;
 }
 
 /**
@@ -131,6 +138,10 @@ export function USChoroplethMap({
   selection,
   onSelectionChange,
   drillBehavior = 'filter',
+  mode: modeProp,
+  step: stepProp,
+  onModeChange,
+  onStepCommit,
 }: USChoroplethMapProps) {
   const [ownSelection, setOwnSelection] = useState<MapSelection>(EMPTY_MAP_SELECTION);
   const current = selection ?? ownSelection;
@@ -149,7 +160,7 @@ export function USChoroplethMap({
   // The hover / focus card: only the hovered unit's id is state; the tip
   // follows the pointer outside React (useMapHover, D-dataviz-geo-d1).
   const { hovered, stage: hoverStage, hide: hideCard, tipRef, placeTip } = useMapHover();
-  const [mode, setMode] = useState<MapColorMode>('borrowers');
+  const { mode, setMode, rateStep, setRateStep } = useMapColoring({ mode: modeProp, step: stepProp, onModeChange });
   // The rate grid is the whole book: under any cohort filter it would recolour
   // a different population than the one on screen, so the mode falls back.
   const rateAvailable = !segmentFilter?.length && !Object.keys(portfolioCriteria ?? {}).length;
@@ -161,7 +172,6 @@ export function USChoroplethMap({
   // the legend saying so; it never throws into the route error boundary.
   const lever = useLazyModule(RATE_SCENARIO_CONTROL, rateOn);
   const scenarioOn = rateOn && !lever.failed;
-  const [rateStep, setRateStep] = useState(0);
   const shownStep = useDeferredValue(rateStep);
   const [view, setView] = useState<MapView>('map');
   // A keyboard drill, and any drill from a table row, removes the control
@@ -181,18 +191,8 @@ export function USChoroplethMap({
   const navigate = useNavigate();
   const footprint = useOptionalFootprint();
 
-  // Footprint-aware drill allowlist: the active state set comes from
-  // FootprintProvider, filtered through the intrinsic USPS->FIPS table so a
-  // malformed configured code can never become a drillable region.
-  const footprintStates = useMemo<Record<string, string>>(() => {
-    const out: Record<string, string> = {};
-    for (const code of footprint.stateCodes) {
-      const lc = code.toLowerCase();
-      const fips = USCODE_TO_FIPS[lc];
-      if (fips) out[lc] = fips;
-    }
-    return out;
-  }, [footprint.stateCodes]);
+  // The configured footprint, keyed like the map's location ids.
+  const footprintStates = useMemo(() => footprintStateMap(footprint.stateCodes), [footprint.stateCodes]);
   const leadQueuePath = useMemo(() => {
     return (geo: { state?: string; county?: string; zip?: string }) => {
       return buildLeadQueuePath({ geo, segmentFilter, segmentFilterMode, portfolioCriteria });
@@ -218,19 +218,17 @@ export function USChoroplethMap({
   // (The React Compiler memoizes both on their inputs.)
   const rateIndex = scenarioOn ? indexRateScenario(rate.data) : null;
   const scenarioAtShown = rateIndex ? scenarioView(rateIndex, shownStep) : null;
+  // A linked step off the grid snaps once the grid is up, and the URL follows (one replace).
+  useEffect(() => {
+    const snapped = rateIndex ? snapStep(rateIndex.steps, rateStep) : rateStep;
+    if (snapped === rateStep) return;
+    setRateStep(snapped);
+    onStepCommit?.(snapped);
+  }, [onStepCommit, rateIndex, rateStep, setRateStep]);
   // ZIP tiles keep borrower colouring: there is no sub-state scenario.
   const shownScenario = level === 'state' ? scenarioAtShown : null;
-  // Overlay units keyed by unit_id (USPS lowercase at state level to match
-  // map location ids; ZIP verbatim otherwise) for O(1) lookup.
-  const overlayByUnit = useMemo(() => {
-    const out: Record<string, GeoAssignmentOverlayUnit> = {};
-    if (!overlayData) return out;
-    for (const unit of overlayData.units) {
-      const key = overlayData.level === 'state' ? unit.unit_id.toLowerCase() : unit.unit_id;
-      out[key] = unit;
-    }
-    return out;
-  }, [overlayData]);
+  // Overlay units keyed like the map's units, for O(1) lookup.
+  const overlayByUnit = useMemo(() => overlayUnitsById(overlayData), [overlayData]);
 
   // One scale per painted level: the legend prints the same breaks the
   // fill uses (see USChoroplethMap.scale). The ZIP scale is built over the
@@ -301,11 +299,7 @@ export function USChoroplethMap({
     return `opportunity within ${labels.join(', ')}`;
   }, [segmentFilter]);
 
-  // S9 "Start campaign from this geography" link target. The drilled state
-  // stays the campaign context while its ZIP grid is on screen; a ZIP tile
-  // click deep-links to the Lead Queue instead. Carries the segment filter +
-  // mode and, when the overlay is loaded, the state's lead / unattended
-  // snapshot counts.
+  // S9 "Start campaign from this geography" (USChoroplethMap.campaign).
   const activeStateCode = current.state;
   const campaignPrefillPath = useMemo(
     () => buildCampaignPath({
@@ -520,6 +514,7 @@ export function USChoroplethMap({
           view: scenarioAtShown,
           step: rateStep,
           onStepChange: setRateStep,
+          onStepCommit,
           scope: drillStateId ? { id: drillStateId, name: drillStateName } : null,
           control: lever.module?.default ?? null,
           controlFailed: lever.failed,

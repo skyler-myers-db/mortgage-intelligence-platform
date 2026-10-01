@@ -53,12 +53,14 @@ function read(overrides: Partial<GeoRead<RateSensitivityResponse>> = {}): GeoRea
 }
 
 /** The map's arrangement: the control gets the input step, the fill a deferred copy. */
-function Harness({ onShown }: { onShown: (step: number) => void }) {
+function Harness({ onShown, onStepCommit }: { onShown: (step: number) => void; onStepCommit?: (step: number) => void }) {
   const [step, setStep] = useState(0);
   const shown = useDeferredValue(step);
   onShown(shown);
   return (
-    <RateScenarioControl rate={{ read: read(), index: INDEX, view: null, step, onStepChange: setStep, scope: null }} />
+    <RateScenarioControl
+      rate={{ read: read(), index: INDEX, view: null, step, onStepChange: setStep, onStepCommit, scope: null }}
+    />
   );
 }
 
@@ -201,4 +203,28 @@ describe('RateScenarioControl', () => {
     );
     expect(slider()).toBeNull();
   });
+
+  it('commits the step on pointerup, on keyup of a moving key and on Reset, never per input (D-dataviz-geo-d2)', () => {
+    const commits: number[] = [];
+    act(() => root.render(<Harness onShown={() => undefined} onStepCommit={(step) => commits.push(step)} />));
+    const input = slider() as HTMLInputElement;
+    act(() => input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+    for (const value of [-25, -50, -75, -50, -75]) change(value);
+    expect(commits).toEqual([]);
+    act(() => input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })));
+    expect(commits).toEqual([-75]);
+
+    // A key that moves the range commits on keyup; others do not.
+    change(-100);
+    act(() => input.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowLeft', bubbles: true })));
+    act(() => input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', bubbles: true })));
+    act(() => input.dispatchEvent(new KeyboardEvent('keyup', { key: 'PageDown', bubbles: true })));
+    expect(commits).toEqual([-75, -100, -100]);
+
+    const reset = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Reset to today');
+    act(() => reset?.click());
+    expect(commits).toEqual([-75, -100, -100, 0]);
+    expect(slider()?.value).toBe('0');
+  });
 });
+
