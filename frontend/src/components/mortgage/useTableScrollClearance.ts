@@ -16,6 +16,8 @@ function fullyInside(control: Element, wrap: HTMLElement): boolean {
 
 /** How long a key or pointer press stays the offset of the focus it causes. */
 const PRESS_WINDOW_MS = 500;
+/** Frames after the restore frame in which a late reveal's scroll event is still undone. */
+const LATE_REVEAL_FRAMES = 5;
 
 /**
  * WebKit 26 scrolls `.tbl-wrap` to its inline end when a control in the
@@ -37,10 +39,11 @@ const PRESS_WINDOW_MS = 500;
  *
  * It is restored in a microtask (a programmatic focus() has scrolled by the
  * time its caller's task ends), in the next animation frame (a Tab or a
- * click focus scrolls after the focus events) and on the first scroll event
- * up to the frame after that one (WebKit's reveal can land after the restore
- * frame); a key or pointer press, a wheel or a touch in between is the
- * reader moving the table, and ends the watch, as does the frame after.
+ * click focus scrolls after the focus events) and, for LATE_REVEAL_FRAMES
+ * frames after that one, on a scroll event that lands the table at its
+ * inline end from somewhere else: WebKit's reveal always goes there, while a
+ * reader's or a script's scroll elsewhere is left alone. A key or pointer
+ * press, a wheel or a touch ends the watch.
  * Each restore runs only
  * if the offset moved, and is kept only if the control is still fully
  * inside the scrollport at the restored offset; otherwise the engine's
@@ -69,6 +72,8 @@ function guardPinnedFocusScroll(wrap: HTMLElement): () => void {
   const onScroll = () => {
     const watch = watching;
     if (!watch) return;
+    const end = wrap.scrollWidth - wrap.clientWidth;
+    if (wrap.scrollLeft < end - 1 || watch.before >= end - 1) return;
     watching = null;
     restore(watch.control, watch.before);
   };
@@ -85,10 +90,14 @@ function guardPinnedFocusScroll(wrap: HTMLElement): () => void {
     window.cancelAnimationFrame(frame);
     frame = window.requestAnimationFrame(() => {
       restore(control, before);
-      // The reveal's scroll event lands by the next frame at the latest.
-      window.requestAnimationFrame(() => {
-        if (watching === watch) watching = null;
-      });
+      let left = LATE_REVEAL_FRAMES;
+      const tick = () => {
+        if (watching !== watch) return;
+        left -= 1;
+        if (left <= 0) watching = null;
+        else window.requestAnimationFrame(tick);
+      };
+      window.requestAnimationFrame(tick);
     });
   };
   // [type, listener, capture]; all passive.

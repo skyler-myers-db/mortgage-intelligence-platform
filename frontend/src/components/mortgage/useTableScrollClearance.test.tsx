@@ -165,6 +165,13 @@ describe('useTableScrollClearance', () => {
       act(() => root.render(<PinnedTable />));
       // The thead measurement's frame.
       act(() => frames.shift()?.(0));
+      // A 284px scroll range, as at 1440x900 with the Console open.
+      Object.defineProperty(wrap(), 'scrollWidth', { configurable: true, value: 684 });
+      Object.defineProperty(wrap(), 'clientWidth', { configurable: true, value: 400 });
+    }
+    /** Run queued frames until the queue is empty (at most n). */
+    function runFrames(n = 10) {
+      for (let i = 0; i < n && frames.length > 0; i += 1) act(() => frames.shift()?.(0));
     }
 
     it('restores the offset a programmatic focus() scrolled away, in a microtask', async () => {
@@ -269,7 +276,7 @@ describe('useTableScrollClearance', () => {
       expect(wrap().scrollLeft, 'the reader\'s own scroll stands').toBe(200);
     });
 
-    it('the watch ends a frame after the restore frame: a later script scroll stands', async () => {
+    it('a scroll elsewhere during the watch stands: only a landing at the inline end is the reveal', async () => {
       mountPinned();
       wrap().scrollLeft = 142;
       act(() => {
@@ -277,13 +284,27 @@ describe('useTableScrollClearance', () => {
       });
       await flushMicrotasks();
       act(() => frames.shift()?.(0));
-      act(() => frames.shift()?.(0));
-      // The next check's own script scroll (the CI walks): never put back.
+      // The next check's own script scroll (the CI walks), inside the watch: never put back.
       wrap().scrollLeft = 0;
       act(() => {
         wrap().dispatchEvent(new Event('scroll'));
       });
       expect(wrap().scrollLeft).toBe(0);
+    });
+
+    it('the watch ends LATE_REVEAL_FRAMES frames after the restore frame', async () => {
+      mountPinned();
+      wrap().scrollLeft = 60;
+      act(() => {
+        button('approve').dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      });
+      await flushMicrotasks();
+      runFrames();
+      wrap().scrollLeft = 284;
+      act(() => {
+        wrap().dispatchEvent(new Event('scroll'));
+      });
+      expect(wrap().scrollLeft, 'past the watch: the scroll stands').toBe(284);
     });
 
     it('keeps the engine scroll when the control would not be fully in view at the restored offset', async () => {
