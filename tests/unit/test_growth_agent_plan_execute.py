@@ -24,7 +24,12 @@ import backend.services.growth_agent_plan_digest as digest_module
 import backend.services.growth_agent_plan_executor as executor_module
 import backend.services.growth_agent_reviewed_plan as reviewed_module
 from backend.main import app
-from backend.schemas.agent_plan import ComposedPlan, ComposePlanRequest, PlanStep
+from backend.schemas.agent_plan import (
+    EXECUTE_RETIRED_DETAIL,
+    ComposedPlan,
+    ComposePlanRequest,
+    PlanStep,
+)
 from backend.services.audit_store import get_audit_store
 from backend.services.growth_agent_composer import ComposeOutcome, build_validated_plan
 from backend.services.growth_agent_plan_digest import issue_plan_digest
@@ -203,18 +208,25 @@ def test_compose_signs_composed_plans_only(harness: _Harness, monkeypatch: pytes
     assert invalid["status"] == "invalid" and invalid["plan_digest"] is None
 
 
-def test_legacy_one_shot_compose_execute_still_signs_its_plan(
-    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+def test_the_retired_one_shot_compose_execute_runs_nothing(
+    harness: _Harness, execute_spy: list[ComposedPlan], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(compose_routes, "compose_growth_agent_plan", lambda payload: _composed(_validated(READ_PLAN)))
+    composed: list[object] = []
+    monkeypatch.setattr(
+        compose_routes,
+        "compose_growth_agent_plan",
+        lambda payload: composed.append(payload) or _composed(_validated(READ_PLAN)),
+    )
     response = harness.client.post(
         COMPOSE_PATH,
         json={"objective": OBJECTIVE, "execute": True},
         headers={"X-Forwarded-Email": ACTOR},
     )
-    assert response.status_code == 200, response.text
-    assert response.json()["executed"] is True
-    assert response.json()["plan_digest"].startswith("v1.")
+    assert response.status_code == 422, response.text
+    assert EXECUTE_RETIRED_DETAIL in response.json()["detail"][0]["msg"]
+    assert composed == [] and execute_spy == []
+    assert harness.sql.calls == []
+    assert harness.nothing_written()
 
 
 @pytest.mark.parametrize(

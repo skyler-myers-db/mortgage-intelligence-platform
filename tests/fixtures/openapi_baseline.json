@@ -3871,10 +3871,11 @@
       },
       "ComposePlanRequest": {
         "additionalProperties": false,
-        "description": "Ask the co-pilot to compose (and optionally execute) a governed plan.",
+        "description": "Ask the co-pilot to compose a governed plan for the lender to review.\n\nCompose never runs the plan: the reviewed plan runs only through\n``POST /growth-agent/agent/plan/execute`` with the compose response's\ndigest. ``execute`` is a retired, tolerant field: false or absent is\naccepted, true is a 422 (``EXECUTE_RETIRED_DETAIL``).",
         "properties": {
           "execute": {
             "default": false,
+            "description": "Retired: compose never executes; run a reviewed plan with POST /api/v1/growth-agent/agent/plan/execute.",
             "title": "Execute",
             "type": "boolean"
           },
@@ -20068,7 +20069,7 @@
     "/api/growth-agent/agent/compose": {
       "post": {
         "deprecated": true,
-        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, then \u2014 when\n``execute`` is set \u2014 runs the validated steps deterministically with the\nexisting per-step audit and approval rails. Every composed response is\nlabelled ``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
+        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, and returns it\nsigned and unexecuted for the lender to review. It never runs a step: the\nreviewed plan runs only through ``/agent/plan/execute``, and the retired\n``execute: true`` flag is a 422. Every composed response is labelled\n``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
         "operationId": "post_api_growth_agent_agent_compose_compose_mortgage_growth_agent_plan",
         "requestBody": {
           "content": {
@@ -28017,7 +28018,7 @@
     },
     "/api/v1/growth-agent/agent/compose": {
       "post": {
-        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, then \u2014 when\n``execute`` is set \u2014 runs the validated steps deterministically with the\nexisting per-step audit and approval rails. Every composed response is\nlabelled ``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
+        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, and returns it\nsigned and unexecuted for the lender to review. It never runs a step: the\nreviewed plan runs only through ``/agent/plan/execute``, and the retired\n``execute: true`` flag is a 422. Every composed response is labelled\n``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
         "operationId": "post_api_v1_growth_agent_agent_compose_compose_mortgage_growth_agent_plan",
         "requestBody": {
           "content": {

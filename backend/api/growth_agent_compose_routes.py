@@ -8,10 +8,11 @@ Behavior is unchanged and pinned by the compose tests in
 ``/growth-agent`` prefix.
 
 Audit 2026-09-21 ``critic-01`` / ``genie-09``: compose signs every composed
-plan (``plan_digest``); ``POST /growth-agent/agent/plan/execute`` runs exactly
-that reviewed plan, and ``GET /growth-agent/runs`` lists the caller's own
-reviewed-workflow runs. Both mount here because ``backend/api`` modules may
-not import each other and this router is already registered.
+plan (``plan_digest``) and never runs it; ``POST
+/growth-agent/agent/plan/execute`` runs exactly that reviewed plan, and ``GET
+/growth-agent/runs`` lists the caller's own reviewed-workflow runs. They mount
+here because ``backend/api`` modules may not import each other and this router
+is already registered.
 """
 
 from __future__ import annotations
@@ -37,7 +38,6 @@ from backend.services.growth_agent_plan_digest import (
     PlanDigestUnavailable,
     issue_plan_digest,
 )
-from backend.services.growth_agent_plan_executor import execute_plan
 from backend.services.growth_agent_reviewed_plan import execute_reviewed_plan
 from backend.services.growth_agent_run_history import (
     DEFAULT_RUN_LIST_LIMIT,
@@ -82,24 +82,24 @@ def compose_mortgage_growth_agent_plan(
     payload: ComposePlanRequest,
     request: Request,
     _: Annotated[None, Depends(require_json_content_type)],
-    sql_client: SqlDep,
-    lakebase: LakebaseDep,
-    audit_store: Annotated[AuditStore, Depends(get_audit_store)],
 ) -> ComposePlanResponse:
     """Compose a specialized multi-step plan from the governed tool registry.
 
     Unlike ``/agent/run`` (which selects one reviewed workflow), this endpoint
     asks the Supervisor serving endpoint to *compose* a plan whose every step is
-    validated against the reviewed deterministic tool registry, then — when
-    ``execute`` is set — runs the validated steps deterministically with the
-    existing per-step audit and approval rails. Every composed response is
-    labelled ``planner="supervisor_composed"`` and carries the model endpoint, so
+    validated against the reviewed deterministic tool registry, and returns it
+    signed and unexecuted for the lender to review. It never runs a step: the
+    reviewed plan runs only through ``/agent/plan/execute``, and the retired
+    ``execute: true`` flag is a 422. Every composed response is labelled
+    ``planner="supervisor_composed"`` and carries the model endpoint, so
     nothing composed can masquerade as a reviewed catalog workflow. When the
     Supervisor host is unavailable the response degrades honestly and offers the
     reviewed catalog workflows as a labelled fallback; when the model answers but
     the plan fails validation the response is ``invalid`` with no canned plan.
     """
 
+    # AUDIT EXEMPT: compose drafts a plan for review and runs nothing; the
+    # reviewed plan's audit rows are written by /agent/plan/execute.
     actor = resolve_actor(request)
     outcome = compose_growth_agent_plan(payload)
     if outcome.status == "degraded":
@@ -117,7 +117,7 @@ def compose_mortgage_growth_agent_plan(
             message=outcome.message or "The composed plan failed governed validation.",
         )
     plan = outcome.plan
-    response = ComposePlanResponse(
+    return ComposePlanResponse(
         status="composed",
         model_endpoint=outcome.endpoint,
         plan=plan,
@@ -130,25 +130,6 @@ def compose_mortgage_growth_agent_plan(
         approval_required=plan.requires_approval,
         interpreted_intent=outcome.interpreted_intent,
         reasoning_summary=outcome.reasoning_summary,
-    )
-    if not payload.execute:
-        return response
-    execution = execute_plan(
-        plan,
-        sql_client=sql_client,
-        lakebase=lakebase,
-        audit_store=audit_store,
-        actor=actor,
-        request_id=payload.request_id,
-    )
-    return response.model_copy(
-        update={
-            "executed": True,
-            "trace": execution.trace,
-            "plan_id": execution.plan_id,
-            "approval_gate_step_id": execution.approval_gate_step_id,
-            "audit_event_ids": execution.audit_event_ids,
-        }
     )
 
 
