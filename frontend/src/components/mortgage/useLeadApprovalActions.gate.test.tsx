@@ -195,4 +195,32 @@ describe('useLeadApprovalActions approver gate', () => {
     expect(apiMocks.approve).not.toHaveBeenCalled();
     expect(getToasts()).toEqual([]);
   });
+
+  it('never runs a bulk reject of one row, under a consent reason or without a shared note (tables-07)', async () => {
+    mount(true);
+    act(() => actions!.toggleSelect(BORROWER));
+    const outcomes: boolean[] = [];
+    await act(async () => {
+      outcomes.push(await actions!.bulkReject('low_intent', 'Q3 sweep: no intent signal.'));
+    });
+    act(() => actions!.toggleSelect(OTHER));
+    await act(async () => {
+      outcomes.push(await actions!.bulkReject('do_not_call', 'Q3 sweep: asked not to be called.'));
+      outcomes.push(await actions!.bulkReject('opt_out', 'Q3 sweep: opted out.'));
+      outcomes.push(await actions!.bulkReject('low_intent', '   '));
+    });
+
+    expect(outcomes).toEqual([false, false, false, false]);
+    expect(apiMocks.reject).not.toHaveBeenCalled();
+    expect(getToasts()).toEqual([]);
+
+    await act(async () => {
+      outcomes.push(await actions!.bulkReject('low_intent', '  Q3 sweep: no intent signal.  '));
+    });
+    expect(outcomes[4]).toBe(true);
+    expect(apiMocks.reject).toHaveBeenCalledTimes(2);
+    const bodies = apiMocks.reject.mock.calls.map((call) => call[1] as { bulk_id: string; rationale: string });
+    expect(new Set(bodies.map((body) => body.bulk_id)).size).toBe(1);
+    expect(bodies.every((body) => body.rationale === 'Q3 sweep: no intent signal.')).toBe(true);
+  });
 });
