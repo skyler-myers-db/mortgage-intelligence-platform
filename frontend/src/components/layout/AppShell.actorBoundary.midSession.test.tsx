@@ -349,13 +349,15 @@ describe('AppShell: a proven mid-session actor change (D-identity-review-a3)', (
     expect(resetDocument).toHaveBeenCalledOnce();
   });
 
-  it('(xiii-b) with the Console open, a held reset swaps the Console for its placeholder too: its feed is never re-read before the 30 s boundary', async () => {
+  it('(xiii-b) with the Console open, a held reset swaps the Console for its placeholder too: its feed is never re-read before the 30 s boundary and no skip link points at it', async () => {
     // A device preference (DEVICE_LOCAL), so it survives the reset.
     window.localStorage.setItem('mip.consoleOpen', 'true');
     await midSessionAt('/lead-queue');
     for (let step = 0; step < 20 && !requests.includes(MY_EVENTS); step += 1) await advance(10);
     expect(requests, 'the open Console read its feed').toContain(MY_EVENTS);
     expect(container.querySelector('#workspace-console[aria-hidden="false"] .tweaks__title'), 'the live Console is mounted').not.toBeNull();
+    const consoleSkipLink = () => container.querySelector('a.sr-skip-link[href="#workspace-console"]');
+    expect(consoleSkipLink(), 'the Console skip link is offered while it is live').not.toBeNull();
     const resetDocument = vi.fn();
     _setResetDocumentForTests(resetDocument);
     // The last reset was 10 s before the observation: the boundary is 20 s on.
@@ -373,6 +375,7 @@ describe('AppShell: a proven mid-session actor change (D-identity-review-a3)', (
       expect(container.querySelector('#workspace-console[aria-hidden="true"]'), `the Console placeholder holds its slot at ${second + 1} s`).not.toBeNull();
     }
     expect(container.querySelector('.tweaks__title'), 'the live Console is unmounted').toBeNull();
+    expect(consoleSkipLink(), 'no skip link points at the aria-hidden placeholder').toBeNull();
     expect(queryClient.getQueryCache().find({ queryKey: ['audit', 'my-events'] }), 'its feed query is gone and never re-created').toBeUndefined();
     expect(resetDocument).not.toHaveBeenCalled();
     await advance(1_000);

@@ -187,7 +187,8 @@ function AppShellInner({ children }: PropsWithChildren) {
     <div className="app-shell">
       {/*
         Skip-links. Keyboard users first get "Skip to main content". The
-        workspace-console shortcut exists only while its destination is open.
+        workspace-console shortcut exists only while its destination is open
+        (never during a held reset, whose Console placeholder is aria-hidden).
         Links are visually hidden until focused, per the standard pattern in
         frontend/src/design-system/components.css; targets use tabIndex=-1 so
         the anchor jump shifts focus rather than only scrolling.
@@ -195,7 +196,7 @@ function AppShellInner({ children }: PropsWithChildren) {
       <a href="#main-content" className="sr-skip-link">
         Skip to main content
       </a>
-      {consoleOpen && (
+      {consoleOpen && !resetHeld && (
         <a href="#workspace-console" className="sr-skip-link">
           Skip to workspace console
         </a>
