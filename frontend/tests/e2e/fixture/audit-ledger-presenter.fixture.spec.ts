@@ -18,6 +18,7 @@
  */
 import type { Page, Request } from '@playwright/test';
 import type { SessionResponse } from '../../../src/types';
+import { expectSectionSpyMarksLandings } from './adminSectionSpy';
 import { expectAxeClean } from './axe';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import { SESSION } from './data/shell';
@@ -136,28 +137,10 @@ for (const theme of FIXTURE_THEMES) {
       const sections = page.getByRole('navigation', { name: 'Administration sections' });
       await expect(sections.getByRole('link')).toHaveCount(10);
 
-      // Scroll-spy (critic-09 fix round). With no link followed (no hash
-      // change, so nothing is rebuilt), a section scrolled to the landing line
-      // as a focus scroll does (scroll-margin, focus-ring allowance included)
-      // is the one marked: never Live probes by its last pixels above the
-      // line, and Data estate through the loaded panel that replaced the
-      // skeleton the spy first saw. Offer rules goes first so Data estate's
-      // marker cannot be left over from the page load.
-      await expect(page.locator('#data-estate[aria-busy="true"]')).toHaveCount(0);
-      for (const [id, label] of [['offer-rules', 'Offer rules'], ['data-estate', 'Data estate']] as const) {
-        await page.locator(`#${id}`).evaluate((el) => el.scrollIntoView({ block: 'start' }));
-        await expect(sections.getByRole('link', { name: label, exact: true }), `${label} is marked once on the line`).toHaveAttribute(
-          'aria-current',
-          'location',
-        );
-      }
-      // A followed link marks its own section: Audit ledger and Data sources
-      // share Offer rules' grid row, and Appearance cannot scroll up to the line.
-      for (const label of ['Audit ledger', 'Data sources', 'Data estate', 'Offer rules', 'Appearance']) {
-        const link = sections.getByRole('link', { name: label, exact: true });
-        await link.click();
-        await expect(link, `${label} is marked current once it lands`).toHaveAttribute('aria-current', 'location');
-      }
+      // Scroll-spy (critic-09 fix round): Offer rules and Data estate scrolled
+      // to the landing line, then Audit ledger, Data sources, Data estate,
+      // Offer rules and Appearance followed, each marked aria-current.
+      await expectSectionSpyMarksLandings(page);
 
       await sections.getByRole('link', { name: 'Data operations' }).click();
       const operations = page.locator('#data-operations');
