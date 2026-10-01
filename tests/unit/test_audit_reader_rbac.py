@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from backend.config.settings import settings
 from backend.main import app
@@ -183,6 +184,75 @@ def test_auditor_page_read_writes_exactly_one_row(
     assert row.payload_json["returned_row_count"] == 2
     assert re.fullmatch(r"[0-9a-f]{64}", row.payload_json["filter_fingerprint"])
     assert set(row.payload_json) <= ROW_KEYS - {"read_audit_event_id"}
+
+
+def _new_ledger_row(store: InMemoryAuditStore, seen: list[Any]) -> Any:
+    """The one VIEW_AUDIT_LEDGER row written since ``seen`` was taken."""
+
+    known = {row.event_id for row in seen}
+    (row,) = [row for row in _ledger_rows(store) if row.event_id not in known]
+    return row
+
+
+def test_a_cursor_page_turn_is_recorded_with_has_cursor(
+    audit_store: InMemoryAuditStore, lakebase: _LedgerLakebase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first page records has_cursor False; the page turned with its
+    next_cursor records has_cursor True (a page turn is itself accountable)."""
+
+    # The deployed posture signs cursors with the configured server secret.
+    monkeypatch.setattr(
+        settings, "mip_genie_action_secret_current", SecretStr("ledger-cursor-key-0123456789abcdef")
+    )
+    _seed_events(audit_store, 3)
+
+    first = client.get(LEDGER_READS["events_page"], params={"limit": 1}, headers=AUDITOR_HEADERS)
+    assert first.status_code == 200, first.text
+    next_cursor = first.json()["next_cursor"]
+    assert next_cursor, "three seeded rows and limit=1 leave a next page"
+    (first_row,) = _ledger_rows(audit_store)
+    assert first_row.payload_json["ledger_surface"] == "events_page"
+    assert first_row.payload_json["has_cursor"] is False
+    assert first_row.payload_json["returned_row_count"] == 1
+
+    seen = _ledger_rows(audit_store)
+    second = client.get(
+        LEDGER_READS["events_page"],
+        params={"limit": 1, "cursor": next_cursor},
+        headers=AUDITOR_HEADERS,
+    )
+    assert second.status_code == 200, second.text
+    assert len(second.json()["items"]) == 1
+    turned = _new_ledger_row(audit_store, seen)
+    assert turned.payload_json["ledger_surface"] == "events_page"
+    assert turned.payload_json["has_cursor"] is True
+    assert turned.payload_json["returned_row_count"] == 1
+    assert turned.payload_json["filter_fingerprint"] == first_row.payload_json["filter_fingerprint"]
+
+
+def test_an_offset_events_read_is_recorded_with_has_cursor(
+    audit_store: InMemoryAuditStore, lakebase: _LedgerLakebase
+) -> None:
+    """GET /events at offset 0 records has_cursor False; offset 1 records True."""
+
+    _seed_events(audit_store, 3)
+
+    assert client.get(
+        LEDGER_READS["events"], params={"limit": 1, "offset": 0}, headers=AUDITOR_HEADERS
+    ).status_code == 200
+    (start_row,) = _ledger_rows(audit_store)
+    assert start_row.payload_json["ledger_surface"] == "events"
+    assert start_row.payload_json["has_cursor"] is False
+
+    seen = _ledger_rows(audit_store)
+    later = client.get(
+        LEDGER_READS["events"], params={"limit": 1, "offset": 1}, headers=AUDITOR_HEADERS
+    )
+    assert later.status_code == 200, later.text
+    offset_row = _new_ledger_row(audit_store, seen)
+    assert offset_row.payload_json["ledger_surface"] == "events"
+    assert offset_row.payload_json["has_cursor"] is True
+    assert offset_row.payload_json["returned_row_count"] == 1
 
 
 @pytest.mark.parametrize(
