@@ -75,10 +75,11 @@ export function leadTableHotkeys(actions: LeadTableKeymapActions): LeadTableHotk
     { id: 'reject', keys: LEAD_TABLE_KEYS.reject, description: 'Reject with a reason', run: () => actions.rejectCursorRow() },
     {
       // One `?` sheet row for Shift+A and Shift+R (tables-07), like X and
-      // Shift+X: a separate row made the sheet's list scroll at 1440x900.
+      // Shift+X: a separate row, or a description that wraps, made the
+      // sheet's list scroll at 1440x900 (axe scrollable-region-focusable).
       id: 'bulk-approve',
       keys: [...LEAD_TABLE_KEYS.bulkApprove, ...LEAD_TABLE_KEYS.bulkReject],
-      description: 'Approve or reject the selected borrowers (opens the rationale or reason gate)',
+      description: 'Approve or reject the selected borrowers (opens a gate)',
       run: (event) => (event.key.toLowerCase() === 'r' ? actions.openBulkRejectGate() : actions.openBulkGate()),
     },
   ];
