@@ -3768,3 +3768,39 @@ VALUES (
     'Genie completion-job cancel: cancel_requested_at and recorded_at (one commit point, never both), the submit-time deep flag, named widened status/stage CHECKs with cancelled, and the recorded-duration index'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Growth Agent watchlist series ------------------------------------------
+-- Audit 2026-09-21 wow-ai-4 / genie-09: a saved watchlist's runs form a
+-- series, so "change since the previous run" reads the ledger instead of
+-- guessing. growth_agent_runs stays append-only: the column is added, never
+-- updated, and trg_growth_agent_runs_finalize_only still allows only the
+-- one-time audit_event_id attach. A run started from a watchlist (Run now,
+-- run-due, run-due-all, or a re-save of an existing name) is INSERTed with
+-- its monitor_id; a brand-new watchlist's first run keeps monitor_id NULL and
+-- is recorded on the monitor as its seed_run_id. Monitors carry no append-only
+-- trigger, so the one-statement backfill below is allowed; no run row is
+-- touched. No table, CHECK, routine or trigger is added.
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS monitor_id UUID
+    REFERENCES mip_app.growth_agent_monitors(monitor_id);
+CREATE INDEX IF NOT EXISTS idx_growth_agent_runs_monitor_created
+    ON mip_app.growth_agent_runs (monitor_id, created_at DESC)
+    WHERE monitor_id IS NOT NULL;
+ALTER TABLE mip_app.growth_agent_monitors
+    ADD COLUMN IF NOT EXISTS seed_run_id UUID
+    REFERENCES mip_app.growth_agent_runs(run_id);
+UPDATE mip_app.growth_agent_monitors
+   SET seed_run_id = last_run_id
+ WHERE seed_run_id IS NULL
+   AND last_run_id IS NOT NULL;
+COMMENT ON COLUMN mip_app.growth_agent_runs.monitor_id IS
+    'The saved watchlist this run refreshed (Run now, run-due, run-due-all, or a re-save of an existing name); NULL for one-off runs and for a new watchlist''s first run, which is the monitor''s seed_run_id. Set at INSERT only; the row stays append-only.';
+COMMENT ON COLUMN mip_app.growth_agent_monitors.seed_run_id IS
+    'The run a watchlist was first saved from (its series origin, recorded before monitor_id tagging existed or when the run predates the monitor row). Written on INSERT, kept on conflict, never changed by a refresh.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_01_growth_agent_watchlist_series',
+    'Growth Agent watchlist series: nullable growth_agent_runs.monitor_id (set at INSERT, append-only kept) with its partial index, and growth_agent_monitors.seed_run_id backfilled from last_run_id'
+)
+ON CONFLICT (version) DO NOTHING;
