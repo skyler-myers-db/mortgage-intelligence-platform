@@ -85,7 +85,7 @@ export function DataEstatePanel({ estate }: { estate: DataEstateResponse }) {
   const [expandedAssetKey, setExpandedAssetKey] = useState<string | null>(null);
 
   return (
-    <div className="surface data-estate" id={DATA_ESTATE_ANCHOR_ID}>
+    <div className="surface data-estate" id={DATA_ESTATE_ANCHOR_ID} tabIndex={-1}>
       <div className="surface__hdr surface__hdr--split">
         <div className="surface__hdr-main">
           <div className="surface__icon">

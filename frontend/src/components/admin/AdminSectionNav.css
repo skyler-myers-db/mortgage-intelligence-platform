@@ -1,0 +1,84 @@
+/* ============================================================
+   ADMINISTRATION — status row + section nav (audit critic-09)
+   ============================================================
+   Shipped with AdminSectionNav.tsx, so it lives in the admin route chunk and
+   costs the initial CSS nothing. APP-ADDED ELEMENT (deviation:admin-section-nav):
+   the prototype has no administration page; this is the route nav's pattern
+   (01-app-shell.css `.route-nav__link`, itself built on the prototype's
+   `.segmented`, design_files/index.html:926-935) one size down: Geist sans
+   12/500, a 2px --accent-ink indicator under the section being read.
+
+   One line, never wrapping: it scrolls sideways instead, so its block size is
+   exact and the sections below can clear it. With the vertical room for it
+   (the route nav's own 40rem condition) it is sticky directly under the
+   one-line route nav, whose block size is the expression
+   38-focus-clearance.css documents (57px at 1440x900), below the route nav's
+   --z-sticky. */
+
+/* The sections sit in one wrapper (the scroll-margin scope below), so the
+   shell's direct-child surface rules (09-console-and-layout.css
+   `.main__inner > .surface`, 13-route-composition.css's narrow-container
+   reset) are restated for them here. */
+.admin-config-sections > .surface {
+  margin-inline: 0;
+  width: 100%;
+}
+@container main (max-width: 640px) {
+  .admin-config-sections > .surface { min-width: 0; max-width: 100%; }
+}
+
+.admin-status {
+  margin: 0 0 var(--sp-3);
+  padding: 0;
+  list-style: none;
+}
+
+.admin-section-nav {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--sp-1);
+  overflow-x: auto;
+  margin-block-end: var(--sp-4);
+  padding-block: var(--sp-1);
+  border-block-end: 1px solid var(--line-1);
+  /* Opaque, not the route nav's blur: content scrolls under it. */
+  background: var(--bg-1);
+  scrollbar-width: none;
+}
+
+.admin-section-nav__link {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-block-size: var(--sp-8);
+  padding-inline: var(--sp-2);
+  border-block-end: 2px solid transparent;
+  color: var(--text-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.admin-section-nav__link:hover { color: var(--text-1); }
+.admin-section-nav__link[aria-current="location"] {
+  color: var(--text-1);
+  border-block-end-color: var(--accent-ink);
+}
+
+@media (min-height: 40rem) {
+  .admin-section-nav {
+    position: sticky;
+    inset-block-start: calc(var(--sp-3) * 2 + var(--sp-8) + 1px);
+    z-index: var(--z-raised-4);
+  }
+
+  /* Focus and hash scrolling stop below BOTH sticky bars: the route nav's
+     clearance (--nav-clear, set on .main by 38-focus-clearance.css) plus this
+     nav's block size. One class beats that file's zero-specificity
+     universal rule without a :has(); its exclusions (inner scrollers) hold
+     here for the same reasons. */
+  .admin-config-sections :where(:not(.tbl-wrap *, .filter-menu *)) {
+    scroll-margin-block-start: calc(var(--nav-clear, 0px) + var(--sp-1) * 2 + var(--sp-8) + 1px);
+  }
+}

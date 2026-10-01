@@ -221,7 +221,7 @@ export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesEr
   const attention = items.filter((item) => item.tone === 'warning' || item.tone === 'danger').length;
 
   return (
-    <div className="surface mt-grid" id="buyer-readiness">
+    <div className="surface mt-grid" id="buyer-readiness" tabIndex={-1}>
       <div className="surface__hdr surface__hdr--split">
         <div>
           <SurfaceTitle>Buyer readiness</SurfaceTitle>

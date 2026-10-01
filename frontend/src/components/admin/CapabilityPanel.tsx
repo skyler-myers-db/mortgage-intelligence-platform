@@ -82,7 +82,7 @@ export function CapabilityPanel() {
   ).length;
 
   return (
-    <div className="surface mt-grid" id="capability-readiness">
+    <div className="surface mt-grid" id="capability-readiness" tabIndex={-1}>
       <div className="surface__hdr surface__hdr--split">
         <div>
           <SurfaceTitle>Agentic capability readiness</SurfaceTitle>

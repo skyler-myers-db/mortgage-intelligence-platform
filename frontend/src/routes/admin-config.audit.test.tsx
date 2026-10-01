@@ -93,10 +93,10 @@ vi.mock('../components/admin/DataOperationsPanel', () => ({
   ),
 }));
 vi.mock('../components/admin/BuyerReadinessPanel', () => ({
-  BuyerReadinessPanel: () => null,
+  BuyerReadinessPanel: () => <div id="buyer-readiness" tabIndex={-1} />,
 }));
 vi.mock('../components/admin/CapabilityPanel', () => ({
-  CapabilityPanel: () => null,
+  CapabilityPanel: () => <div id="capability-readiness" tabIndex={-1} />,
 }));
 vi.mock('../components/activation/ActivationLoopPanel', () => ({
   ActivationOperationsPanel: () => null,
@@ -204,6 +204,33 @@ describe('AdminConfig audit ledger card', () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
     expect(document.activeElement).toBe(audit);
   });
+  it('mounts the status row and the section nav over focusable section roots (critic-09)', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    await renderAdmin('/admin-config#appearance');
+
+    const status = document.querySelector('ul[aria-label="Administration status"]');
+    expect(status?.textContent).toContain('Offer rules: loading');
+    expect(status?.textContent).toContain('Presenter mode: Off');
+    const nav = document.querySelector('nav[aria-label="Administration sections"]');
+    const targets = [...(nav?.querySelectorAll('a') ?? [])].map((link) => link.getAttribute('href')?.split('#')[1]);
+    expect(targets).toHaveLength(10);
+    // data-estate is the mocked DataEstatePanel here; every other root is on the page.
+    for (const id of targets.filter((target) => target !== 'data-estate')) {
+      const section = document.getElementById(id as string);
+      expect(section, id).not.toBeNull();
+      expect(section?.tabIndex, id).toBe(-1);
+      expect(section?.closest('.admin-config-sections'), id).not.toBeNull();
+    }
+    // A generalized hash effect: any linked section scrolls and takes focus.
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+    expect(document.activeElement?.id).toBe('appearance');
+  });
+
   it('scrolls and moves focus to data operations for its deep link', async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {

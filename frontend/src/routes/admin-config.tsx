@@ -14,8 +14,10 @@ import { CapabilityPanel } from '../components/admin/CapabilityPanel';
 import { ActivationOperationsPanel } from '../components/activation/ActivationLoopPanel';
 import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
 import { PlatformCapabilitiesPanel } from '../components/admin/PlatformCapabilitiesPanel';
+import { ADMIN_SECTIONS, ADMIN_SECTION_IDS, AdminSectionNav } from '../components/admin/AdminSectionNav';
 import { api } from '../lib/api';
 import { ROUTES } from '../lib/routeMeta';
+import { usePresenterMode } from '../lib/sessionQuery';
 import { formatDate, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
@@ -174,13 +176,11 @@ export default function AdminConfig() {
     }
   }, [location.hash]);
 
+  // Every section the section nav links to scrolls to the top (below both
+  // sticky bars, AdminSectionNav.css) and takes focus (critic-09).
   useEffect(() => {
-    const targetId = location.hash === '#audit'
-      ? 'audit'
-      : location.hash === '#data-operations'
-        ? 'data-operations'
-        : null;
-    if (!targetId) return;
+    const targetId = location.hash.slice(1);
+    if (!ADMIN_SECTION_IDS.has(targetId)) return;
     const target = document.getElementById(targetId);
     if (!target) return;
     target.scrollIntoView({ block: 'start' });
@@ -200,6 +200,8 @@ export default function AdminConfig() {
   const sourcesError = sourcesErrorObj
     ? 'Data source readiness temporarily unavailable'
     : null;
+
+  const presenterMode = usePresenterMode();
 
   // Data-estate proof surface (relocated from Home so the operator console
   // owns source-readiness chrome). Same plain useQuery + honest fallback the
@@ -228,6 +230,21 @@ export default function AdminConfig() {
       lede="View the active offer ruleset, data source status and operations; the audit ledger has its own page. Per-user workspace appearance is in the Console panel."
       heroRight={<EntradaWordmark height={28} />}
     >
+      {/* Status row + sticky section nav (critic-09): computed only from what
+          this page already reads; no request of their own. */}
+      <AdminSectionNav
+        sections={ADMIN_SECTIONS}
+        status={[
+          rules
+            ? { label: 'Offer rules', value: 'active', tone: 'success' }
+            : { label: 'Offer rules', value: rulesError ? 'unavailable' : 'loading', tone: rulesError ? 'warning' : 'neutral' },
+          sourcesError
+            ? { label: 'Data sources', value: 'unavailable', tone: 'warning' }
+            : { label: 'Data sources', value: sourcesPending ? 'loading' : `${liveCount} of ${totalCount} live`, tone: 'neutral' },
+          { label: 'Presenter mode', value: presenterMode ? 'On' : 'Off', tone: presenterMode ? 'warning' : 'neutral' },
+        ]}
+      />
+      <div className="admin-config-sections">
       {/* Data estate — source-readiness proof, directly above the
           "Data source readiness" card in the admin grid below. */}
       {dataEstate ? (
@@ -238,12 +255,14 @@ export default function AdminConfig() {
 
       {/* Platform capability + proof status — relocated here from the Ask Genie
           general-user surface so operators own the live-capability diagnostics. */}
-      <PlatformCapabilitiesPanel />
+      <div id="live-probes" tabIndex={-1}>
+        <PlatformCapabilitiesPanel />
+      </div>
 
       {/* First row — the three operator-grade panels */}
       <div className="admin-grid">
         {/* Offer rules — clickable to expand threshold table */}
-        <div className="surface" id="offer-rules">
+        <div className="surface" id="offer-rules" tabIndex={-1}>
           <div className="surface__hdr surface__hdr--split">
             <SurfaceTitle>Offer rules</SurfaceTitle>
             <button
@@ -353,7 +372,7 @@ export default function AdminConfig() {
         </div>
 
         {/* Data source readiness — per-source status rows */}
-        <div className="surface">
+        <div className="surface" id="data-sources" tabIndex={-1}>
           <div className="surface__hdr surface__hdr--split">
             <SurfaceTitle>Data source readiness</SurfaceTitle>
             <Chip variant={sourcesError ? 'warning' : 'neutral'}>
@@ -425,10 +444,12 @@ export default function AdminConfig() {
 
       <CapabilityPanel />
 
-      <ActivationOperationsPanel />
+      <div id="activation" tabIndex={-1}>
+        <ActivationOperationsPanel />
+      </div>
 
       {/* Second row — disclosure for per-user appearance controls */}
-      <div className="surface">
+      <div className="surface" id="appearance" tabIndex={-1}>
         <button
           type="button"
           className="surface__hdr appearance-toggle"
@@ -513,6 +534,7 @@ export default function AdminConfig() {
             </Row>
           </div>
         )}
+      </div>
       </div>
     </PageShell>
   );
