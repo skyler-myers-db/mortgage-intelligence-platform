@@ -125,12 +125,19 @@ def _git(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
 
 
 def runtime_changed_paths(a: str, b: str, git: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] = _git) -> list[str] | None:
-    """Runtime paths changed between two commits; None when a sha is missing from local history."""
+    """Runtime paths changed between two commits; None when a sha is missing from local history.
+
+    ``--no-renames`` is load-bearing: with git's default rename detection a
+    rename prints only its destination, so moving runtime code into a
+    NON_RUNTIME path (backend/x.py -> tests/x.py) would read as an empty
+    runtime diff. Without it a rename lists its deleted source and its added
+    destination, and the source stays runtime.
+    """
 
     for sha in (a, b):
         if git(["cat-file", "-e", f"{sha}^{{commit}}"]).returncode != 0:
             return None
-    diff = git(["diff", "--name-only", a, b])
+    diff = git(["diff", "--name-only", "--no-renames", a, b])
     if diff.returncode != 0:
         return None
     return [path for path in diff.stdout.splitlines() if path and not is_non_runtime(path)]

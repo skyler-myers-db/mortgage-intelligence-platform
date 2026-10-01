@@ -115,6 +115,68 @@ def test_runtime_changed_paths_filters_non_runtime_and_a_missing_sha_is_not_equi
     assert gate.runtime_changed_paths(OTHER, RELEASE, git=_fake_git(set(), ["docs/x.md"])) == []
 
 
+def _real_git(repo: Path):
+    """A git bound to a scratch repo with rename detection forced ON (git's default, and GitHub's)."""
+
+    def git(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-c", "diff.renames=true", *args], cwd=repo, capture_output=True, text=True, check=False
+        )
+
+    return git
+
+
+def _commit_rename(repo: Path, source: str, destination: str) -> tuple[str, str]:
+    """Commit ``source``, then ``git mv`` it to ``destination``; return (old_sha, new_sha)."""
+
+    def run_git(*args: str) -> str:
+        identity = ("-c", "user.email=gate@example.invalid", "-c", "user.name=Gate", "-c", "commit.gpgsign=false")
+        result = subprocess.run(["git", *identity, *args], cwd=repo, capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+
+    run_git("init", "-q")
+    (repo / source).parent.mkdir(parents=True, exist_ok=True)
+    (repo / source).write_text("def scored() -> int:\n    return 42\n" * 8, encoding="utf-8")
+    run_git("add", source)
+    run_git("commit", "-q", "--no-verify", "-m", "add")
+    old = run_git("rev-parse", "HEAD")
+    (repo / destination).parent.mkdir(parents=True, exist_ok=True)
+    run_git("mv", source, destination)
+    run_git("commit", "-q", "--no-verify", "-m", "move")
+    return old, run_git("rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize(
+    ("source", "destination", "expected"),
+    [
+        ("backend/x.py", "tests/x.py", ["backend/x.py"]),
+        ("backend/x.py", "docs/x.py", ["backend/x.py"]),
+        ("backend/x.py", "backend/y.py", ["backend/x.py", "backend/y.py"]),
+        ("tests/x.py", "backend/x.py", ["backend/x.py"]),
+    ],
+    ids=["runtime-into-tests", "runtime-into-docs", "runtime-to-runtime", "tests-into-runtime"],
+)
+def test_a_real_git_rename_reports_its_deleted_source(
+    tmp_path: Path, source: str, destination: str, expected: list[str]
+) -> None:
+    old, new = _commit_rename(tmp_path, source, destination)
+    git = _real_git(tmp_path)
+    # Non-vacuity control: this repo's git really detects the move as a rename.
+    assert git(["diff", "--name-status", old, new]).stdout.startswith("R100\t")
+
+    assert gate.runtime_changed_paths(old, new, git=git) == expected
+
+    # A green run on the pre-move code never certifies the moved-away release.
+    result = gate.verdict(
+        [run(1, old, "success", 1)],
+        new,
+        NOW,
+        diff=lambda sha, release: gate.runtime_changed_paths(sha, release, git=git),
+        jobs=lambda run_id: dict(ALL_GREEN),
+    )
+    assert (result.status, result.reason, result.run_sha, result.paths) == ("FAIL", "runtime_changed", old, expected)
+
+
 # ------------------------------------------------------------------ verdict
 
 
