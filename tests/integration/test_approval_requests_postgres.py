@@ -25,6 +25,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from psycopg import sql as psql
 from psycopg.rows import dict_row
 
 from backend.schemas.outreach_revoke import OutreachRevokeRequest
@@ -278,6 +279,54 @@ def test_one_borrower_holds_at_most_one_open_item(conn_kwargs: dict[str, str]) -
         )
         # Once the open item closes, the borrower can be requested again.
         assert conn.execute(insert, (second, BORROWER)).fetchone() == (BORROWER,)
+
+
+def test_the_app_role_postflight_passes_and_grants_no_delete(
+    conn_kwargs: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The grant step's privilege, routine and trigger postflight with the new
+    contract entries: the app role may read, insert and update both tables,
+    never delete, and cannot call the two trigger functions."""
+
+    _migrated(conn_kwargs)
+    suffix = uuid4().hex[:12]
+    app_role, verifier_role = f"mip_test_app_{suffix}", f"mip_test_verifier_{suffix}"
+    with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+        for role in (app_role, verifier_role):
+            conn.execute(psql.SQL("CREATE ROLE {} LOGIN NOREPLICATION INHERIT").format(psql.Identifier(role)))
+    monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: app_role)
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", verifier_role)
+    try:
+        lakebase_migrate._apply_app_role_grants(
+            conn_kwargs,
+            role_wait_timeout_s=0,
+            role_wait_interval_s=1,
+            allow_absent_managed_event_triggers=True,
+            allow_absent_provider_schema=True,
+        )
+        with psycopg.connect(**conn_kwargs) as conn:
+            for table in ("approval_request_batches", "approval_request_items"):
+                granted = conn.execute(
+                    "SELECT has_table_privilege(%(role)s, %(table)s, 'SELECT'), "
+                    "has_table_privilege(%(role)s, %(table)s, 'INSERT'), "
+                    "has_table_privilege(%(role)s, %(table)s, 'UPDATE'), "
+                    "has_table_privilege(%(role)s, %(table)s, 'DELETE'), "
+                    "has_table_privilege(%(role)s, %(table)s, 'TRUNCATE')",
+                    {"role": app_role, "table": f"mip_app.{table}"},
+                ).fetchone()
+                assert granted == (True, True, True, False, False), table
+            for function in ("enforce_approval_request_batch_finalize_only", "enforce_approval_request_item_transition"):
+                callable_by_app = conn.execute(
+                    "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+                    (app_role, f"mip_app.{function}()"),
+                ).fetchone()
+                assert callable_by_app == (False,), function
+    finally:
+        with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+            for role in (app_role, verifier_role):
+                conn.execute(psql.SQL("DROP OWNED BY {}").format(psql.Identifier(role)))
+                conn.execute(psql.SQL("DROP ROLE {}").format(psql.Identifier(role)))
 
 
 def test_the_approvals_action_check_admits_revoke_and_refuses_anything_else(

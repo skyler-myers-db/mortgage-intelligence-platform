@@ -53,7 +53,7 @@ RETURNING batch_id::text AS batch_id
 
 INSERT_OPEN_ITEMS = """
 INSERT INTO mip_app.approval_request_items (batch_id, borrower_id)
-SELECT %(batch_id)s, candidate.borrower_id
+SELECT %(batch_id)s::uuid, candidate.borrower_id
 FROM unnest(%(borrower_ids)s::text[]) AS candidate(borrower_id)
 ON CONFLICT (borrower_id) WHERE status = 'open' DO NOTHING
 RETURNING borrower_id
