@@ -116,6 +116,30 @@ function guardPinnedFocusScroll(wrap: HTMLElement): () => void {
   };
 }
 
+/** The block-start flag LeadTable.css reads where scroll-state queries are missing. */
+export const AT_BLOCK_START_ATTR = 'data-at-block-start';
+
+/**
+ * WebKit 26 has no scroll-state container queries, so LeadTable.css's
+ * `@container not scroll-state(scrollable: top)` header clearance never
+ * applied there (a11y-v2 residual): a sort or select-all control focused
+ * from under the route nav stayed under it. There the scroller carries
+ * `data-at-block-start` while it sits at its block start (a passive scroll
+ * listener), and the sheet mirrors the rule on it. A no-op elsewhere.
+ *
+ * @returns the detach.
+ */
+function flagBlockStart(wrap: HTMLElement): () => void {
+  if (typeof CSS !== 'undefined' && CSS.supports('container-type: scroll-state')) return () => undefined;
+  const sync = () => wrap.toggleAttribute(AT_BLOCK_START_ATTR, wrap.scrollTop <= 0);
+  sync();
+  wrap.addEventListener('scroll', sync, { passive: true });
+  return () => {
+    wrap.removeEventListener('scroll', sync);
+    wrap.removeAttribute(AT_BLOCK_START_ATTR);
+  };
+}
+
 function writePx(element: HTMLElement, property: string, size: number): void {
   const next = `${Math.ceil(size)}px`;
   if (element.style.getPropertyValue(property) !== next) element.style.setProperty(property, next);
@@ -159,7 +183,12 @@ export function useTableScrollClearance(wrapRef: RefObject<HTMLElement | null>, 
   useLayoutEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return undefined;
-    const unguard = guardPinnedFocusScroll(wrap);
+    const unguardFocus = guardPinnedFocusScroll(wrap);
+    const unflag = flagBlockStart(wrap);
+    const unguard = () => {
+      unguardFocus();
+      unflag();
+    };
     const head = wrap.querySelector<HTMLElement>('thead');
     if (!head) return unguard;
 

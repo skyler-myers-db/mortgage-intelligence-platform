@@ -276,12 +276,13 @@
    Shift+Tab from the first row): the table cannot move, and `.main` alone
    scrolls the header clear of the nav. A scroll-state container is not a
    size container, so the table's `cqw` units still resolve against `.main`.
-   An engine without scroll-state queries (WebKit 26) keeps the old
-   behaviour: no margin on the header. */
+   An engine without scroll-state queries (WebKit 26) gets the same rule
+   from useTableScrollClearance's `data-at-block-start` flag (a11y-v2). */
 .tbl-wrap:has(> .lead-table__table) { container-type: scroll-state; }
 @container not scroll-state(scrollable: top) {
   .lead-table__table thead * { scroll-margin-block-start: var(--tbl-focus-clear); }
 }
+.tbl-wrap[data-at-block-start] > .lead-table__table thead * { scroll-margin-block-start: var(--tbl-focus-clear); }
 
 /* Row expand motion (audit motion-08 slice 1, queue part): the expand
    column's one chevron turns a quarter on the expanded row (replacing the

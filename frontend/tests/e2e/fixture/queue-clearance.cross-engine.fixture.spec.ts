@@ -135,8 +135,6 @@ async function scrollLeftReachedByPinnedFocus(page: Page, borrowerId: string, st
   }, { id: borrowerId, left: start });
 }
 
-const HEADER_FIXME =
-  'w5-lead-triage-export · a11y-v2 residual · WebKit 26 has no scroll-state container queries: a sort / select-all control focused from under the route nav stays there';
 /** Zeroes the sticky header controls' clearance (LeadTable.css, scroll-state query). */
 const ZERO_HEADER_MARGIN = '.lead-table__table thead * { scroll-margin-block-start: 0px !important; }';
 
@@ -168,8 +166,9 @@ function headerControls(page: Page): Record<string, Locator> {
 
 test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
   for (const zeroed of [false, true]) {
-    test(`${zeroed ? 'non-vacuity, header margin zeroed: ' : ''}with the table at its start, sort and select-all focused from under the route nav ${zeroed ? 'stay there' : 'stop below it'}`, async ({ app, browserName, page }) => {
-      if (!zeroed) test.fixme(browserName === 'webkit', HEADER_FIXME);
+    // WebKit 26 has no scroll-state container queries: useTableScrollClearance's
+    // data-at-block-start flag carries the same clearance there (a11y-v2).
+    test(`${zeroed ? 'non-vacuity, header margin zeroed: ' : ''}with the table at its start, sort and select-all focused from under the route nav ${zeroed ? 'stay there' : 'stop below it'}`, async ({ app, page }) => {
       await app.gotoRoute('/lead-queue');
       if (zeroed) await page.addStyleTag({ content: ZERO_HEADER_MARGIN });
       for (const [name, control] of Object.entries(headerControls(page))) {
