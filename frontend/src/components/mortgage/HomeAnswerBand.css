@@ -129,15 +129,12 @@
 
 /* ---------- WHO ---------- */
 .home-answer__who,
-/* No row gap (flow-05 events): a trigger row is already taller than its
-   24px evidence chip, so six rows (the par move plus five triggers) keep the
-   tallest band above the fold with the map heading in view. */
 .home-answer__triggers {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 0;
+  gap: var(--sp-1);
 }
 /* The WHO list is the query container for its rows' layout (below). */
 .home-answer__who {
@@ -204,6 +201,14 @@
 }
 
 /* ---------- WHY NOW ---------- */
+/* No row gap (flow-05 events): a trigger row is already taller than its
+   24px evidence chip, so six rows (the par move plus five triggers) keep the
+   tallest band above the fold with the map heading in view. Only the loaded
+   WHY NOW rows drop the gap: the WHO list and the loading skeleton's bars keep
+   the shared --sp-1 row gap above. */
+.home-answer__triggers:has(> .home-answer__trigger) {
+  gap: 0;
+}
 .home-answer__trigger {
   display: flex;
   align-items: baseline;

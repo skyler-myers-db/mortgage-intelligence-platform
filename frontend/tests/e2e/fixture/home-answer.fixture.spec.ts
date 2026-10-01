@@ -131,6 +131,23 @@ async function mapHeadingBottom(page: Page): Promise<number> {
   return box.y + box.height;
 }
 
+/** The block-axis space between each item of a list and the next, in px. */
+async function itemGaps(list: Locator): Promise<number[]> {
+  return list.evaluate((node) => {
+    const items = Array.from(node.children).map((child) => child.getBoundingClientRect());
+    return items.slice(1).map((rect, index) => rect.top - items[index].bottom);
+  });
+}
+
+async function tokenPx(page: Page, token: string): Promise<number> {
+  const raw = await page.evaluate(
+    (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
+    token,
+  );
+  expect(raw, `${token} resolves to a pixel length`).toMatch(/^\d+(\.\d+)?px$/);
+  return Number.parseFloat(raw);
+}
+
 async function gapGridPx(page: Page): Promise<number> {
   const raw = await page.evaluate(() =>
     getComputedStyle(document.documentElement).getPropertyValue('--gap-grid').trim(),
@@ -223,6 +240,47 @@ for (const theme of FIXTURE_THEMES) {
       );
       expect(overflowing).toEqual([]);
       await page.screenshot({ path: test.info().outputPath(`home-max-${theme}.png`) });
+    });
+
+    test('only the WHY NOW list drops its row gap: the WHO rows keep --sp-1 between them', async ({ app, mockApi, page }) => {
+      // The fold fix for the tallest band (flow-05) removes the trigger list's
+      // row gap. The WHO list and the WHY NOW loading skeleton share that
+      // list rule, so this pins that the five ranked rows and the skeleton's
+      // bars keep the prototype's --sp-1 spacing.
+      let releaseSummary = () => {};
+      const summaryHeld = new Promise<void>((resolve) => {
+        releaseSummary = resolve;
+      });
+      mockApi.register('POST', '/api/portfolio/preview', homePreviewHandler(MAX_HOME_PREVIEW));
+      mockApi.register('GET', '/api/home/summary', async () => {
+        await summaryHeld;
+        return { body: MAX_HOME_SUMMARY };
+      });
+      // A fresh document with no restored briefing, so WHY NOW starts loading.
+      await page.addInitScript(() => window.sessionStorage.removeItem('mip.queryCache.v1'));
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      const band = page.locator('.home-answer');
+      const sp1 = await tokenPx(page, '--sp-1');
+      expect(sp1, '--sp-1 is a non-zero gap').toBeGreaterThan(0);
+
+      const skeleton = band.locator('ul.home-answer__triggers[aria-hidden="true"]');
+      await expect(skeleton.locator('.skeleton')).toHaveCount(3);
+      const skeletonGaps = await itemGaps(skeleton);
+      expect(skeletonGaps, 'one gap between each pair of skeleton bars').toHaveLength(2);
+      for (const gap of skeletonGaps) expect(gap, 'WHY NOW skeleton bar gap').toBeCloseTo(sp1, 0);
+      releaseSummary();
+      await app.settle();
+
+      await expect(band.locator('.home-answer__who-row')).toHaveCount(5);
+      await expect(band.locator('.home-answer__trigger')).toHaveCount(MAX_HOME_SUMMARY.highlights.length + 1);
+
+      const whoGaps = await itemGaps(band.locator('ol.home-answer__who'));
+      expect(whoGaps, 'one gap between each pair of the five WHO rows').toHaveLength(4);
+      for (const gap of whoGaps) expect(gap, 'WHO row gap').toBeCloseTo(sp1, 0);
+
+      const triggerGaps = await itemGaps(band.locator('ul.home-answer__triggers'));
+      expect(triggerGaps, 'one gap between each pair of WHY NOW rows').toHaveLength(MAX_HOME_SUMMARY.highlights.length);
+      for (const gap of triggerGaps) expect(gap, 'WHY NOW row gap').toBeCloseTo(0, 0);
     });
 
     test('offer slices and swatches paint distinct segment hues, refi + HELOC striped (dataviz-09)', async ({ app, mockApi, page }) => {
