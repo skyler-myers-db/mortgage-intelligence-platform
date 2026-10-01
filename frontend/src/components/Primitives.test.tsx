@@ -3,6 +3,11 @@
  */
 import { act, useRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// unit test reads one Playwright source under Vitest only.
+import { readFileSync } from 'node:fs';
+
+declare const process: { cwd(): string };
 import { mount } from '../test/render';
 import { Button, Chip, freshnessBucket } from './Primitives';
 // Installs the delegated tooltip listeners the shell loads at idle.
@@ -190,6 +195,20 @@ describe('Button loading', () => {
     act(() => button.click());
     expect(onClick).toHaveBeenCalledTimes(1);
     expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('is exactly the markup the rendered CSS contract (theme-white-label.fixture) injects', async () => {
+    const spec = readFileSync(`${process.cwd()}/tests/e2e/fixture/theme-white-label.fixture.spec.ts`, 'utf8') as string;
+    const literal = (name: string) => spec.match(new RegExp(`const ${name} = '([^']+)';`))?.[1];
+    const { container } = await mount(
+      <>
+        <Button variant="primary">Approve outreach</Button>
+        <Button variant="primary" loading>Approve outreach</Button>
+      </>,
+    );
+    const [plain, loading] = [...container.querySelectorAll('button')];
+    expect(literal('PLAIN_BUTTON')).toBe(plain?.outerHTML);
+    expect(literal('LOADING_BUTTON')).toBe(loading?.outerHTML);
   });
 
   it('renders exactly the plain markup when not loading', async () => {

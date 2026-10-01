@@ -130,17 +130,23 @@ test.describe('command palette', () => {
   });
 });
 
+// Exactly what `<Button variant="primary">Approve outreach</Button>` and its
+// `loading` twin render: Primitives.test reads these two literals from this
+// file and compares them with the component's own markup, so a Button markup
+// change cannot leave this rendered contract checking stale HTML.
+const PLAIN_BUTTON = '<button class="btn btn--primary">Approve outreach</button>';
+const LOADING_BUTTON = '<button class="btn btn--primary btn--loading" aria-busy="true" aria-disabled="true"><span class="btn__label">Approve outreach</span><span class="btn__spinner" aria-hidden="true"></span></button>';
+
 /** An injected primary button and its loading twin, as Button renders them. */
 async function injectButtons(page: Page): Promise<void> {
-  await page.locator('#main-content').evaluate((main) => {
+  await page.locator('#main-content').evaluate((main, markup) => {
     const host = document.createElement('div');
     host.dataset.buttonProbe = '';
-    host.innerHTML =
-      '<button type="button" class="btn btn--primary" data-plain>Approve outreach</button> ' +
-      '<button type="button" class="btn btn--primary btn--loading" aria-busy="true" aria-disabled="true" data-loading>' +
-      '<span class="btn__label">Approve outreach</span><span class="btn__spinner" aria-hidden="true"></span></button>';
+    host.innerHTML = `${markup.plain} ${markup.loading}`;
+    host.children[0]?.setAttribute('data-plain', '');
+    host.children[1]?.setAttribute('data-loading', '');
     main.prepend(host);
-  });
+  }, { plain: PLAIN_BUTTON, loading: LOADING_BUTTON });
 }
 
 test.describe('Button loading CSS contract', () => {
