@@ -158,6 +158,7 @@ const reads = vi.hoisted(() => ({
   combinations: null as unknown as Read,
 }));
 const tableProps = vi.hoisted(() => ({ current: null as null | { exportContext?: LeadExportContext; headerStatus?: unknown } }));
+const mapProps = vi.hoisted(() => ({ current: null as null | { onReadStale?: (lastGoodAt: string | null) => void } }));
 
 vi.mock('../lib/useWarmingUpRetry', () => ({
   useWarmingUpRetry: (_fetcher: unknown, opts: { queryKey: readonly unknown[] }) => (
@@ -178,7 +179,12 @@ vi.mock('../components/AppContext', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../components/AppContext')>()),
   useApp: () => ({ setDrawer: () => undefined, showEvidence: true, showConfidence: true }),
 }));
-vi.mock('../components/mortgage/USChoroplethMap', () => ({ USChoroplethMap: () => null }));
+vi.mock('../components/mortgage/USChoroplethMap', () => ({
+  USChoroplethMap: (props: { onReadStale?: (lastGoodAt: string | null) => void }) => {
+    mapProps.current = props;
+    return null;
+  },
+}));
 vi.mock('../components/mortgage/SegmentCard', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../components/mortgage/SegmentCard')>()),
   SegmentCard: () => <div className="seg-card" data-testid="segment-card" />,
@@ -225,6 +231,11 @@ function read(overrides: Partial<Read> = {}): Read {
   };
 }
 
+/** The catalog read's Fresh payload (delivery-06): the rows and a retained value's age. */
+function catalog(rows: unknown[], lastGoodAt: string | null = null) {
+  return { data: rows, lastGoodAt };
+}
+
 function leadsPage(leads: unknown[]) {
   return { leads, totalMatching: leads.length, truncatedAt: null, dataRefreshedAt: '2026-09-24T07:30:00Z' };
 }
@@ -240,7 +251,7 @@ describe('Segment Intelligence rendered states', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
-    reads.segments = read({ data: [SEGMENT] });
+    reads.segments = read({ data: catalog([SEGMENT]) });
     reads.leads = read({ data: leadsPage([LEAD]) });
     reads.combinations = read({ data: COMBINATIONS });
     tableProps.current = null;
@@ -270,7 +281,7 @@ describe('Segment Intelligence rendered states', () => {
   const empties = () => [...document.querySelectorAll('.empty')];
 
   it('a measured zero of segments is the day-zero EmptyState, never "Loading segments…"', async () => {
-    reads.segments = read({ data: [] });
+    reads.segments = read({ data: catalog([]) });
     await mount();
     expect(empties()[0]?.getAttribute('data-empty-cause')).toBe('day-zero');
     expect(text()).not.toContain('Loading segments');
@@ -278,7 +289,7 @@ describe('Segment Intelligence rendered states', () => {
   });
 
   it('a filtered zero of segments offers Clear filters, which clears the URL in one step', async () => {
-    reads.segments = read({ data: [] });
+    reads.segments = read({ data: catalog([]) });
     await mount('/segment-intelligence?segment=itm&owner_link=Portfolio%20investor%20(5%2B)');
     expect(empties()[0]?.getAttribute('data-empty-cause')).toBe('filtered');
     expect(empties()[0]?.textContent).toContain('No segments match these filters.');
@@ -289,7 +300,7 @@ describe('Segment Intelligence rendered states', () => {
   it.each([
     ['loading', read()],
     ['warming', read({ warmingUp: { dependency: 'warehouse', label: 'Warehouse warming up', attempt: 1, maxAttempts: 6, correlationId: null } })],
-    ['a placeholder zero', read({ data: [], isPlaceholderData: true })],
+    ['a placeholder zero', read({ data: catalog([]), isPlaceholderData: true })],
   ])('while %s the grid keeps its skeletons and says no zero', async (_label, segments) => {
     reads.segments = segments;
     await mount();
@@ -346,5 +357,43 @@ describe('Segment Intelligence rendered states', () => {
     expect(grid?.nextElementSibling).toBe(stack);
     expect(stack?.nextElementSibling).toBe(filters);
   });
-});
 
+  // delivery-06 client half: ONE note for the page, the oldest last good read
+  // of the catalog and the map read on screen, beside the table's FetchedAt.
+  const notes = () => [...document.querySelectorAll('[data-testid="stale-data-note"]')];
+
+  it('shows one stale note from the oldest of the catalog and map reads, beside FetchedAt', async () => {
+    reads.segments = read({ data: catalog([SEGMENT], '2026-09-25T10:00:00Z') });
+    await mount();
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0].closest('[data-testid="lead-table"]')).not.toBeNull();
+    expect(notes()[0].nextElementSibling?.getAttribute('data-testid')).toBe('fetched-at');
+    expect(notes()[0].querySelector('time')?.getAttribute('dateTime')).toBe('2026-09-25T10:00:00.000Z');
+
+    act(() => mapProps.current?.onReadStale?.('2026-09-25T08:00:00Z'));
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0].querySelector('time')?.getAttribute('dateTime')).toBe('2026-09-25T08:00:00.000Z');
+
+    // The next responses without the header clear it.
+    act(() => mapProps.current?.onReadStale?.(null));
+    reads.segments = read({ data: catalog([SEGMENT]) });
+    await mount();
+    expect(notes()).toHaveLength(0);
+  });
+
+  it('owns the map read\'s note (the map gets onReadStale), and shows none when nothing is stale', async () => {
+    await mount();
+    expect(typeof mapProps.current?.onReadStale).toBe('function');
+    expect(notes()).toHaveLength(0);
+    act(() => mapProps.current?.onReadStale?.('2026-09-25T08:00:00Z'));
+    expect(notes()).toHaveLength(1);
+  });
+
+  it('puts the note directly above the EmptyState when a measured zero replaces the table', async () => {
+    reads.segments = read({ data: catalog([SEGMENT], '2026-09-25T10:00:00Z') });
+    reads.leads = read({ data: leadsPage([]) });
+    await mount();
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0].nextElementSibling?.classList.contains('empty')).toBe(true);
+  });
+});

@@ -36,7 +36,16 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
-  api: { stateRollups: mocks.stateRollups, zipRollups: mocks.zipRollups, assignmentOverlay: mocks.assignmentOverlay },
+  api: {
+    stateRollups: mocks.stateRollups,
+    zipRollups: mocks.zipRollups,
+    assignmentOverlay: mocks.assignmentOverlay,
+    // delivery-06: the map reads the Fresh twins (no retained-value header here).
+    stateRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(mocks.stateRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: null })),
+    zipRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(mocks.zipRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: null })),
+  },
 }));
 vi.mock('../../lib/apiClients/rateScenario', () => ({ rateScenarioApi: { rateSensitivity: mocks.rateSensitivity } }));
 // The real control chunk, or (chunk.retired) an import that rejects the way

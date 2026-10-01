@@ -24,11 +24,21 @@ const mocks = vi.hoisted(() => ({
   zipRollups: vi.fn(),
   assignmentOverlay: vi.fn(),
   rateSensitivity: vi.fn(),
+  fresh: { states: null as string | null, zips: null as string | null },
 }));
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
-  api: { stateRollups: mocks.stateRollups, zipRollups: mocks.zipRollups, assignmentOverlay: mocks.assignmentOverlay },
+  api: {
+    stateRollups: mocks.stateRollups,
+    zipRollups: mocks.zipRollups,
+    assignmentOverlay: mocks.assignmentOverlay,
+    // delivery-06: the hook reads the Fresh twins; `fresh` sets the retained-value header.
+    stateRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(mocks.stateRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: mocks.fresh.states })),
+    zipRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(mocks.zipRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: mocks.fresh.zips })),
+  },
 }));
 vi.mock('../../lib/apiClients/rateScenario', () => ({ rateScenarioApi: { rateSensitivity: mocks.rateSensitivity } }));
 vi.mock('./USStateMapData', () => ({ loadUsaStateMap: () => new Promise(() => undefined) }));
@@ -95,6 +105,8 @@ describe('useChoroplethLiveFacts', () => {
     act(() => root.unmount());
     client.clear();
     vi.clearAllMocks();
+    mocks.fresh.states = null;
+    mocks.fresh.zips = null;
   });
 
   async function render(input: UseChoroplethLiveFactsInput) {
@@ -184,5 +196,28 @@ describe('useChoroplethLiveFacts', () => {
     expect(seen.facts?.zips.updating).toBe(false);
     await act(async () => texas.resolve(zips('TX', '77002')));
     await until(() => seen.facts?.zips.data?.['77002'] !== undefined);
+  });
+
+  // delivery-06 client half: a retained serve carries its last good read;
+  // the next response without the header clears it.
+  it('exposes lastGoodAt on the state and ZIP reads, null on the overlay and rate reads', async () => {
+    mocks.fresh.states = '2026-09-30T08:00:00Z';
+    mocks.fresh.zips = '2026-09-29T08:00:00Z';
+    mocks.stateRollups.mockResolvedValue(states(100));
+    mocks.zipRollups.mockResolvedValue(zips('IL', '60611'));
+    mocks.assignmentOverlay.mockResolvedValue({ level: 'zip', units: [] });
+    await render({ ...INPUT, drillState: 'IL', overlayOn: true });
+    await until(() => seen.facts?.zips.data?.['60611'] !== undefined && seen.facts?.states.data?.il !== undefined);
+    expect(seen.facts?.states.lastGoodAt).toBe('2026-09-30T08:00:00Z');
+    expect(seen.facts?.zips.lastGoodAt).toBe('2026-09-29T08:00:00Z');
+    // The Record shapes consumers read are unchanged.
+    expect(seen.facts?.states.data?.il?.addressable).toBe(100);
+    expect(seen.facts?.rate.lastGoodAt).toBeNull();
+
+    mocks.fresh.states = null;
+    mocks.stateRollups.mockResolvedValue(states(120));
+    await render({ ...INPUT, drillState: 'IL', overlayOn: true, segmentFilter: ['itm'] });
+    await until(() => seen.facts?.states.data?.il?.addressable === 120);
+    expect(seen.facts?.states.lastGoodAt).toBeNull();
   });
 });

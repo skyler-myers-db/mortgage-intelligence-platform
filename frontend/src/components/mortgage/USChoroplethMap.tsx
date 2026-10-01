@@ -125,6 +125,13 @@ interface USChoroplethMapProps {
   onModeChange?: (mode: MapColorMode) => void;
   /** A committed step (pointerup, a key, Reset, or the snap to the grid). */
   onStepCommit?: (step: number) => void;
+  /**
+   * The map read on screen (state rollups at the national view, ZIP rollups
+   * when drilled) was retained by the server after a failed refresh: its last
+   * good read, or null (delivery-06). A host that passes this owns the stale
+   * note; without it the legend shows the note itself.
+   */
+  onReadStale?: (lastGoodAt: string | null) => void;
 }
 
 /**
@@ -142,6 +149,7 @@ export function USChoroplethMap({
   step: stepProp,
   onModeChange,
   onStepCommit,
+  onReadStale,
 }: USChoroplethMapProps) {
   const [ownSelection, setOwnSelection] = useState<MapSelection>(EMPTY_MAP_SELECTION);
   const current = selection ?? ownSelection;
@@ -267,6 +275,11 @@ export function USChoroplethMap({
     return zipFacts ? Object.values(zipFacts).reduce((a, r) => a + (r.addressable_borrowers ?? 0), 0) : null;
   }, [level, stateFacts, zipFacts]);
   const primary: GeoRead<unknown> = level === 'zip' ? zips : states;
+  // delivery-06: the age of a retained read on screen, reported to the host or shown in the legend.
+  const staleAt = primary.data !== null ? primary.lastGoodAt : null;
+  useEffect(() => {
+    onReadStale?.(staleAt);
+  }, [onReadStale, staleAt]);
   const mapBusy = !usaMap || primary.loading || (level === 'zip' && states.loading);
   // Borrowers in the drilled state that the ZIP layer cannot show. The
   // backend derives it as (state total - sum of ZIP tiles) off one refresh
@@ -521,6 +534,7 @@ export function USChoroplethMap({
         segmentCaption={segmentCaption}
         segmentFilter={segmentFilter}
         updating={updating}
+        staleLastGoodAt={onReadStale ? null : staleAt}
         rate={rateOn ? {
           read: rate,
           index: rateIndex,

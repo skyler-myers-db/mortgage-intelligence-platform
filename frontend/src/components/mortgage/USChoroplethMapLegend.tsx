@@ -31,6 +31,7 @@ import type { GeoAssignmentOverlayResponse } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import { Chip, EvidenceChip } from '../Primitives';
+import { StaleDataNote } from '../ui/StaleDataNote';
 import { RATE_COHORT_NOTE, type MapScenarioView, type RateScenarioIndex } from './rateScenario.logic';
 import { classRanges, formatBreak, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { GeoRead } from './useChoroplethLiveFacts';
@@ -87,6 +88,11 @@ interface USChoroplethMapLegendProps {
   rate?: LegendRate | null;
   /** A placeholder cohort is on screen (runtime-06): the legend desaturates with the fill. */
   updating?: boolean;
+  /**
+   * The map read on screen was retained after a failed refresh (delivery-06):
+   * its last good read; null when current or when the host page shows the note.
+   */
+  staleLastGoodAt?: string | null;
 }
 
 export function USChoroplethMapLegend({
@@ -102,6 +108,7 @@ export function USChoroplethMapLegend({
   segmentFilter,
   rate = null,
   updating = false,
+  staleLastGoodAt = null,
 }: USChoroplethMapLegendProps) {
   // What the fill encodes once the grid is up: the scenario over states, or
   // (drilled) the borrower tiles the scenario cannot split.
@@ -201,6 +208,7 @@ export function USChoroplethMapLegend({
         )}
         {offMapNote && <span className="map-legend__scale">{` · ${offMapNote}`}</span>}
       </div>
+      <StaleDataNote lastGoodAt={staleLastGoodAt} />
       {rate && (
         // The label never waits on the lazy chunk or the read: it is the
         // legend's own, in every rate state.

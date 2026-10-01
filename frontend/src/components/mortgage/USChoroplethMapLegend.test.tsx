@@ -126,7 +126,7 @@ describe('USChoroplethMapLegend in rate mode', () => {
   });
 
   function read(overrides: Partial<GeoRead<RateSensitivityResponse>>): GeoRead<RateSensitivityResponse> {
-    return { data: null, warmingUp: null, error: null, loading: false, updating: false, retry: () => undefined, ...overrides };
+    return { data: null, warmingUp: null, error: null, loading: false, updating: false, lastGoodAt: null, retry: () => undefined, ...overrides };
   }
 
   async function renderRate(rate: LegendRate) {

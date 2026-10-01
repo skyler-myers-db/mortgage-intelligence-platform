@@ -51,7 +51,7 @@ const INDEX = indexRateScenario(RESPONSE) as RateScenarioIndex;
 const stateName = (id: string) => id.toUpperCase();
 
 function read(overrides: Partial<GeoRead<RateSensitivityResponse>> = {}): GeoRead<RateSensitivityResponse> {
-  return { data: RESPONSE, warmingUp: null, error: null, loading: false, updating: false, retry: vi.fn(), ...overrides };
+  return { data: RESPONSE, warmingUp: null, error: null, loading: false, updating: false, lastGoodAt: null, retry: vi.fn(), ...overrides };
 }
 
 /** The map's arrangement: the control gets the input step, the fill a deferred copy. */

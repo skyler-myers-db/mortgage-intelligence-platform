@@ -31,7 +31,14 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
-  api: apiMocks,
+  api: {
+    ...apiMocks,
+    // delivery-06: the map reads the Fresh twins (no retained-value header here).
+    stateRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(apiMocks.stateRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: null })),
+    zipRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(apiMocks.zipRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: null })),
+  },
 }));
 
 vi.mock('./USStateMapData', () => ({

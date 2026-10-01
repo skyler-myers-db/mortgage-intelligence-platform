@@ -27,11 +27,19 @@ const apiMocks = vi.hoisted(() => ({
   stateRollups: vi.fn(),
   countyRollups: vi.fn(),
   zipRollups: vi.fn(),
+  fresh: { states: null as string | null, zips: null as string | null },
 }));
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
-  api: apiMocks,
+  api: {
+    ...apiMocks,
+    // delivery-06: the map reads the Fresh twins; `fresh` sets the retained-value header.
+    stateRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(apiMocks.stateRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: apiMocks.fresh.states })),
+    zipRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(apiMocks.zipRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: apiMocks.fresh.zips })),
+  },
 }));
 
 vi.mock('./USStateMapData', () => ({
@@ -141,6 +149,33 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     act(() => root.unmount());
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    apiMocks.fresh.states = null;
+    apiMocks.fresh.zips = null;
+  });
+
+  // delivery-06 client half: a host without onReadStale (Home) shows the
+  // retained read's age in the legend; a host that passes it (Segment
+  // Intelligence) owns the note, so the legend shows none.
+  const legendNote = () => document.querySelector('.map-legend [data-testid="stale-data-note"]');
+
+  it('shows the stale note in the legend when only the map read is retained', async () => {
+    apiMocks.fresh.states = '2026-06-19T08:00:00Z';
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap /></Providers>);
+    });
+    for (let i = 0; i < 80 && !legendNote(); i += 1) await settle();
+    expect(legendNote()?.querySelector('time')?.getAttribute('dateTime')).toBe('2026-06-19T08:00:00.000Z');
+  });
+
+  it('reports the retained read to a host that owns the note, and the legend shows none', async () => {
+    apiMocks.fresh.states = '2026-06-19T08:00:00Z';
+    const reported: (string | null)[] = [];
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap onReadStale={(at) => reported.push(at)} /></Providers>);
+    });
+    for (let i = 0; i < 80 && !reported.includes('2026-06-19T08:00:00Z'); i += 1) await settle();
+    expect(reported).toContain('2026-06-19T08:00:00Z');
+    expect(legendNote()).toBeNull();
   });
 
   it('marks state rollups as loading and announces map load state', async () => {
