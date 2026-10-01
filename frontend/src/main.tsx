@@ -64,3 +64,8 @@ ReactDOM.createRoot(document.getElementById("root")!, rootErrorOptions()).render
     </ErrorBoundary>
   </React.StrictMode>
 );
+
+// The entry ran: public/boot-watchdog.js must not swap the shell skeleton
+// for its "did not finish loading" surface (deviation:boot-load-error).
+// Last, after render, so a throw anywhere above leaves the watchdog armed.
+document.documentElement.setAttribute("data-mip-boot", "ready");

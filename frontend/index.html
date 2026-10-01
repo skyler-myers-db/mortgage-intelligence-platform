@@ -11,6 +11,11 @@
          every edit to public/theme-boot.js so a cached copy is never
          served stale. -->
     <script src="/theme-boot.js?v=b74a3a78"></script>
+    <!-- Boot watchdog: swaps the shell skeleton for a reload prompt when the
+         entry chunk fails to load or has not run within 20 s (classic,
+         network-free; CSP is script-src 'self'). Its ?v= is the first 8 hex
+         of its sha256, pinned by src/lib/bootWatchdog.test.ts. -->
+    <script src="/boot-watchdog.js?v=bf2c4d44"></script>
     <title>Mortgage Intelligence Platform</title>
     <meta
       name="description"

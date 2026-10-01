@@ -184,6 +184,22 @@ def test_built_html_paints_the_text_free_shell_skeleton() -> None:
             assert f'class="{name}"' in skeleton
 
 
+def test_both_shells_load_the_boot_watchdog_after_theme_boot_and_before_the_modules() -> None:
+    """12.3 review leftover (entry chunk never loads): exactly one classic
+    ``/boot-watchdog.js?v=`` script, after ``/theme-boot.js`` and before every
+    module script, in both shells, and the file itself is served from dist."""
+    _built_entry_chunk()
+    assert (DIST / "boot-watchdog.js").is_file()
+    for shell in ("index.html", "index.home.html"):
+        html = (DIST / shell).read_text(encoding="utf-8")
+        tags = re.findall(r'<script src="/boot-watchdog\.js\?v=[0-9a-f]{8}"></script>', html)
+        assert len(tags) == 1, f"{shell}: one classic watchdog script"
+        assert html.count("/boot-watchdog.js") == 1
+        at = html.index(tags[0])
+        assert html.index('<script src="/theme-boot.js?v=') < at, f"{shell}: after theme-boot"
+        assert at < html.index('<script type="module"'), f"{shell}: before the module scripts"
+
+
 _MODULEPRELOAD = re.compile(r'<link rel="modulepreload" crossorigin href="/(assets/[^"]+\.js)">')
 
 
