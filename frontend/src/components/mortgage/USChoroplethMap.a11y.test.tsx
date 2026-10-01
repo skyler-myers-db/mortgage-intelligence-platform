@@ -417,7 +417,9 @@ describe('populated-only roving and activation (dataviz-10, WCAG 2.1.1)', () => 
     await act(async () => toggle?.click());
     const table = await waitFor(() => document.querySelector('[data-testid="map-table"] table'));
     const groups = [...table.querySelectorAll('tbody')];
+    // Every state is drawn here: no "Not drawn on the map" group.
     expect(groups).toHaveLength(2);
+    expect(table.textContent).not.toContain('Not drawn on the map');
     const header = groups[1].querySelector('tr.map-table__group th');
     expect(header?.getAttribute('scope')).toBe('colgroup');
     expect(header?.textContent).toBe('No borrowers in this selection (1)');

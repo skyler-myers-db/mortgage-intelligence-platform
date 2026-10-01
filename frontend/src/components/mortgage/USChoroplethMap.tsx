@@ -22,7 +22,7 @@ import { USChoroplethMapLegend } from './USChoroplethMapLegend';
 import { USChoroplethMapStates } from './USChoroplethMapStates';
 import { USChoroplethMapTable } from './USChoroplethMapTable';
 import { MapUnavailable } from './USChoroplethMapUnavailable';
-import { buildMapTableRows, type MapTableGroups } from './USChoroplethMap.table';
+import { buildMapTableRows, offMapCaption, type MapTableGroups } from './USChoroplethMap.table';
 import { campaignPrefillPath as buildCampaignPath } from './USChoroplethMap.campaign';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { buildMapCard } from './USChoroplethMap.hover';
@@ -510,6 +510,7 @@ export function USChoroplethMap({
         totalCount={totalCount}
         scale={scale}
         scaleScope={scaleScope}
+        offMapNote={offMapCaption(tableGroups.offMap, shownScenario || overlayActive ? 'extra' : 'count')}
         segmentCaption={segmentCaption}
         segmentFilter={segmentFilter}
         updating={updating}

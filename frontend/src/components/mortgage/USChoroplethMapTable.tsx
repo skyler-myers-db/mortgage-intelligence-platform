@@ -14,16 +14,18 @@
  * caption), so a keyboard or screen-reader user lands on the drilled data
  * instead of <body>.
  *
- * deviation:map-table-coverage-groups (dataviz-10): the states the map draws
- * but skips (no borrowers in this selection) follow as their own <tbody>
- * under a `.map-table__group` header, with a `.map-table__note` saying why,
- * so the table still lists every drawn state. The borrower total counts only
- * the populated group; the extra column's total counts every group.
+ * deviation:map-table-coverage-groups (dataviz-10, wow-stage-1): the ids
+ * the map cannot draw (PR, VI) and the drawn states it skips (no borrowers in
+ * this selection) follow as their own <tbody> groups under a
+ * `.map-table__group` header, the skipped ones with a `.map-table__note`
+ * saying why, so the table lists the whole book. The borrower total counts
+ * the populated and not-drawn groups (the legend's total); the extra
+ * column's total counts every group (USChoroplethMap.table.ts).
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { claimDrillFocus } from './USChoroplethMap.a11y';
 import type { MapClass } from './USChoroplethMap.scale';
-import { EMPTY_GROUP_LABEL, type MapTableGroups } from './USChoroplethMap.table';
+import { EMPTY_GROUP_LABEL, OFF_MAP_GROUP_LABEL, type MapTableGroups } from './USChoroplethMap.table';
 
 export interface MapTableRow {
   id: string;
@@ -95,13 +97,13 @@ export function USChoroplethMapTable({
     claimDrillFocus(row?.querySelector<HTMLButtonElement>('button') ?? null);
     onFocusRowDone?.();
   }, [focusRowId, onFocusRowDone]);
-  const { rows, empty } = groups;
+  const { rows, offMap, empty } = groups;
   const sorted = useMemo(() => {
     const sign = direction === 'descending' ? -1 : 1;
     return [...rows].sort((a, b) => sign * (countOf(a) - countOf(b)) || a.name.localeCompare(b.name));
   }, [direction, rows]);
-  // The borrower total counts the populated group; the extra column's every group.
-  const counted = rows;
+  // The borrower total counts the populated and not-drawn groups; the extra column's every group.
+  const counted = [...rows, ...offMap];
   const total = counted.reduce((sum, row) => sum + countOf(row), 0);
   const extraTotal = [...counted, ...empty].reduce((sum, row) => sum + (row.extra ?? 0), 0);
   const showContactable = rows.some((row) => typeof row.contactable === 'number');
@@ -133,15 +135,17 @@ export function USChoroplethMapTable({
           </tr>
         </thead>
         <tbody>{sorted.map(renderRow)}</tbody>
-        {empty.length > 0 && (
-          <tbody>
-            <tr className="map-table__group">
-              <th scope="colgroup" colSpan={columns}>
-                {EMPTY_GROUP_LABEL} ({empty.length.toLocaleString('en-US')})
-              </th>
-            </tr>
-            {empty.map(renderRow)}
-          </tbody>
+        {[[OFF_MAP_GROUP_LABEL, offMap] as const, [EMPTY_GROUP_LABEL, empty] as const].map(([label, group]) =>
+          group.length > 0 ? (
+            <tbody key={label}>
+              <tr className="map-table__group">
+                <th scope="colgroup" colSpan={columns}>
+                  {label} ({group.length.toLocaleString('en-US')})
+                </th>
+              </tr>
+              {group.map(renderRow)}
+            </tbody>
+          ) : null,
         )}
         <tfoot>
           <tr>

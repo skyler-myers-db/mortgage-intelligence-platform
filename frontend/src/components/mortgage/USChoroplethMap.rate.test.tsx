@@ -232,5 +232,60 @@ describe('USChoroplethMap rate scenario', () => {
     expect(rovingSet()).toEqual(['il', 'tx']);
     expect(document.querySelector('path[data-map-unit="wy"]')?.getAttribute('role')).toBe('img');
   });
+
+  it('lists the whole book: the table footer equals the legend in all three modes, PR and VI included (wow-stage-1)', async () => {
+    mocks.stateRollups.mockResolvedValue({
+      ...rollups(9_000, 1_000),
+      rollups: [...rollups(9_000, 1_000).rollups, { state: 'PR', addressable: 300, in_the_money: 1, top_tier_opportunities: 1, avg_score: 60 }],
+    });
+    mocks.rateSensitivity.mockResolvedValue({
+      ...GRID,
+      states: [...GRID.states, { state: 'VI', addressable: 20, rate_movable: 10, in_the_money: [9, 9, 8, 8, 7, 6, 5, 4, 3] }],
+    });
+    mocks.assignmentOverlay.mockResolvedValue({
+      level: 'state', state: null, county_fips: null, total_leads: 40, total_assigned: 18, total_unattended: 22,
+      lead_definition: 'score >= 50',
+      units: [
+        { unit_id: 'IL', lead_count: 10, assigned_count: 5, unattended_count: 5, covering_officer_count: 1, covering_officers: [] },
+        { unit_id: 'WY', lead_count: 25, assigned_count: 10, unattended_count: 15, covering_officer_count: 1, covering_officers: [] },
+        { unit_id: 'PR', lead_count: 5, assigned_count: 3, unattended_count: 2, covering_officer_count: 0, covering_officers: [] },
+      ],
+    });
+    const legendValue = () => document.querySelector('.map-legend__value')?.textContent;
+    const legendCaption = () => document.querySelector('.map-legend__caption')?.textContent ?? '';
+    const groupHeaders = () => [...document.querySelectorAll('tr.map-table__group th')].map((th) => th.textContent);
+    const footer = (testId: string) => document.querySelector(`[data-testid="${testId}"]`)?.textContent;
+    await act(async () => root.render(<Providers><USChoroplethMap /></Providers>));
+    await until(() => cls('il') === '4');
+    const viewAsTable = [...document.querySelectorAll('button')].find((b) => b.textContent === 'View as table');
+    await act(async () => viewAsTable?.click());
+    await until(() => footer('map-table-total') !== undefined);
+
+    // Borrowers: the not-drawn group counts; Total (3) = IL, TX + PR.
+    expect(legendValue()).toBe('10,300');
+    expect(footer('map-table-total')).toBe('10,300');
+    expect(document.querySelector('tfoot th')?.textContent).toBe('Total (3)');
+    expect(groupHeaders()).toEqual(['Not drawn on the map (1)', 'No borrowers in this selection (1)']);
+    const pr = document.querySelector('tr[data-map-row="pr"]');
+    expect(pr?.querySelector('th')?.textContent).toBe('PR');
+    expect(pr?.querySelector('button')).toBeNull();
+    expect(pr?.querySelector('.map-table__swatch')?.classList.contains('lvl-0')).toBe(true);
+    expect(legendCaption()).toContain('Includes 300 in PR (not drawn on the map)');
+
+    // Rate: the grid's VI joins the group; the extra footer is the grid total.
+    await act(async () => button('Rate scenario')?.click());
+    await until(() => footer('map-table-extra-total') !== undefined && legendValue() !== '—');
+    expect(legendValue()).toBe('1,007');
+    expect(footer('map-table-extra-total')).toBe('1,007');
+    expect(groupHeaders()).toEqual(['Not drawn on the map (2)', 'No borrowers in this selection (1)']);
+    expect(legendCaption()).toContain('Includes 7 in PR, VI (not drawn on the map)');
+
+    // Unattended: the overlay is segment-agnostic, so the empty group's
+    // Wyoming counts; the extra footer is the overlay's total_unattended.
+    await act(async () => button('Unattended leads')?.click());
+    await until(() => legendValue() === '22');
+    await until(() => footer('map-table-extra-total') === '22');
+    expect(legendCaption()).toContain('Includes 2 in PR (not drawn on the map)');
+  });
 });
 

@@ -68,6 +68,12 @@ interface USChoroplethMapLegendProps {
   scale: ChoroplethScale | null;
   /** Which units the scale was built over, when not all of them ("over the 24 densest of 212 ZIPs"). */
   scaleScope?: string | null;
+  /**
+   * The whole-book total includes ids the map cannot draw (wow-stage-1):
+   * "Includes 1,234 in PR, VI (not drawn on the map)", in the fill's value;
+   * null when every id is drawn.
+   */
+  offMapNote?: string | null;
   /** "marketable population" / "opportunity within <segments>". */
   segmentCaption: string;
   /** Active segment filter — drives the overlay's scope-mismatch note. */
@@ -86,6 +92,7 @@ export function USChoroplethMapLegend({
   totalCount,
   scale,
   scaleScope = null,
+  offMapNote = null,
   segmentCaption,
   segmentFilter,
   rate = null,
@@ -187,6 +194,7 @@ export function USChoroplethMapLegend({
             {scaleScope ? ` ${scaleScope}` : ''}
           </span>
         )}
+        {offMapNote && <span className="map-legend__scale">{` · ${offMapNote}`}</span>}
       </div>
       {rate && (
         // The label never waits on the lazy chunk or the read: it is the

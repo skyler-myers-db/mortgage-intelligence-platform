@@ -71,6 +71,26 @@ describe('USChoroplethMapLegend break row', () => {
     expect(breaks.map((b) => b.title)).toEqual(['1,343', '5,370', '12,083']);
   });
 
+  it('says what the whole-book total includes off the map (wow-stage-1)', () => {
+    act(() => {
+      root.render(
+        <USChoroplethMapLegend
+          overlayOn={false}
+          overlayData={null}
+          overlayLoading={false}
+          overlayError={null}
+          totalCount={10_300}
+          scale={buildChoroplethScale([9_000, 1_000])}
+          offMapNote="Includes 300 in PR (not drawn on the map)"
+          segmentCaption="marketable population"
+        />,
+      );
+    });
+    expect(document.querySelector('.map-legend__caption')?.textContent).toContain(
+      'marketable population · square-root scale · Includes 300 in PR (not drawn on the map)',
+    );
+  });
+
   it('says Escape backs out a level in the keyboard hint (dataviz-10)', () => {
     renderLegend([3, 2, 1]);
     expect(document.querySelector('.map-legend__hint')?.textContent?.replace(/\s+/g, ' ')).toBe(

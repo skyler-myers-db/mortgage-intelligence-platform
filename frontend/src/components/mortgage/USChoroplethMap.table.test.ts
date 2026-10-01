@@ -10,7 +10,7 @@ import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import type { StateRollup, ZipRollup } from '../../types';
 import type { MapScenarioView } from './rateScenario.logic';
 import { buildChoroplethScale } from './USChoroplethMap.scale';
-import { EMPTY_GROUP_LABEL, buildMapTableRows, type MapTableInputs } from './USChoroplethMap.table';
+import { EMPTY_GROUP_LABEL, buildMapTableRows, offMapCaption, type MapTableInputs } from './USChoroplethMap.table';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
 
 const USA: UsaSvgMap = {
@@ -75,8 +75,8 @@ describe('buildMapTableRows (d2 step 0 characterization)', () => {
       extra: undefined,
       cls: 4,
     });
-    expect(buildMapTableRows(inputs({ stateFacts: null }))).toEqual({ rows: [], empty: [] });
-    expect(buildMapTableRows(inputs({ usaMap: null }))).toEqual({ rows: [], empty: [] });
+    expect(buildMapTableRows(inputs({ stateFacts: null }))).toEqual({ rows: [], offMap: [], empty: [] });
+    expect(buildMapTableRows(inputs({ usaMap: null }))).toEqual({ rows: [], offMap: [], empty: [] });
   });
 
   it('emits one row per ZIP at the ZIP level', () => {
@@ -131,4 +131,25 @@ describe('buildMapTableRows (d2 step 0 characterization)', () => {
     const overlay = buildMapTableRows(inputs({ overlayActive: true, overlayByUnit: { wy: unit('WY', 4) } })).empty;
     expect(overlay[0].extra).toBe(4);
   });
+
+  it('lists ids the map cannot draw from every source the mode reads (wow-stage-1)', () => {
+    const facts = { ...STATE_FACTS, pr: rollup('PR', 300) };
+    const borrowers = buildMapTableRows(inputs({ stateFacts: facts })).offMap;
+    expect(borrowers).toEqual([
+      { id: 'pr', name: 'PR', count: 300, avgScore: 70, topSegment: 'Prime Refi Candidates', contactable: 30, extra: undefined, cls: null },
+    ]);
+    expect(offMapCaption(borrowers, 'count')).toBe('Includes 300 in PR (not drawn on the map)');
+
+    // Rate mode adds the grid's ids; unattended mode the overlay units'.
+    const shownScenario: MapScenarioView = { step: 0, ratePct: 6.3, inTheMoneyById: { az: 1, vi: 7 }, total: 8 };
+    const rate = buildMapTableRows(inputs({ stateFacts: facts, shownScenario })).offMap;
+    expect(rate.map((row) => [row.name, row.count, row.extra])).toEqual([['PR', 300, null], ['VI', null, 7]]);
+    expect(offMapCaption(rate, 'extra')).toBe('Includes 7 in PR, VI (not drawn on the map)');
+    const overlay = buildMapTableRows(inputs({ overlayActive: true, overlayByUnit: { gu: unit('GU', 2) } })).offMap;
+    expect(overlay.map((row) => [row.name, row.extra])).toEqual([['GU', 2]]);
+
+    expect(offMapCaption([], 'count')).toBeNull();
+    expect(buildMapTableRows(inputs({ level: 'zip', zipFacts: {} })).offMap).toEqual([]);
+  });
 });
+
