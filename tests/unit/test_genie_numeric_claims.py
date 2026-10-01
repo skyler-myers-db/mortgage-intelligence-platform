@@ -45,6 +45,28 @@ def test_each_support_class_gets_its_derivation(text: str, token: str, derivatio
     assert _derivations(text)[token] == derivation
 
 
+@pytest.mark.parametrize(
+    ("extra", "derivation"),
+    [
+        ({"period": "2026-09-30"}, "derived_from_rows"),
+        ({"refreshed_at": "2026-09-30 04:00:00"}, "derived_from_rows"),
+        ({"property_id": "P2026"}, "derived_from_rows"),
+        # Control: a number inside a free-text cell is still one a reader finds.
+        ({"note": "2,026 borrowers in scope"}, "returned_value"),
+    ],
+)
+def test_a_date_or_identifier_cell_never_labels_a_figure_a_returned_value(
+    extra: dict[str, str], derivation: str
+) -> None:
+    # 2,026 is the two states' total; the year in a date cell (or the digits
+    # of an identifier) must not relabel it. The verdict is unchanged.
+    rows = [{"state": "IL", "borrowers": 1000, **extra}, {"state": "TX", "borrowers": 1026, **extra}]
+    check = check_numeric_claims("Together the two states hold 2,026 borrowers.", rows, "q")
+
+    assert (check.total, check.unsupported) == (1, [])
+    assert {item.token: item.derivation for item in check.verified} == {"2,026": derivation}
+
+
 def test_a_row_count_is_derived_from_the_rows() -> None:
     rows = [{"state": "IL"}, {"state": "TX"}, {"state": "CA"}]
 

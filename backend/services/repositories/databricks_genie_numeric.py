@@ -203,17 +203,28 @@ def _unsupported_answer_numeric_claims(
     return check_numeric_claims(answer_text, rows, question).unsupported
 
 
+#: An ISO date or timestamp cell ("2026-09", "2026-09-30T12:00:00Z"): its
+#: year is not a figure a reader would call a returned value.
+_ISO_DATE_CELL_RE = re.compile(r"\d{4}-\d{2}(?:-\d{2})?(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
+
+
 def _direct_cell_values(rows: list[dict[str, Any]] | None, claim: _NumericClaim) -> set[float]:
     """Values a reader can find in ONE cell: kind-compatible, non-identifier,
-    non-date column cells and numeric tokens in string cells, with their
-    display variants and column unit multipliers (no aggregates)."""
+    non-date column cells and numeric tokens in non-identifier, non-date
+    string cells, with their display variants and column unit multipliers (no
+    aggregates). Only the derivation LABEL reads this; the verdict does not."""
 
     values: set[float] = set()
     if not rows:
         return values
     for row in rows:
-        for cell in row.values():
-            if isinstance(cell, str):
+        for col, cell in row.items():
+            if (
+                isinstance(cell, str)
+                and not _is_genie_identifier_column(col)
+                and not _column_looks_dateish(col)
+                and not _ISO_DATE_CELL_RE.fullmatch(cell.strip())
+            ):
                 for token in re.findall(r"-?\d[\d,]*\.?\d*", cell):
                     try:
                         _add_supported_variants(values, float(token.replace(",", "")))
