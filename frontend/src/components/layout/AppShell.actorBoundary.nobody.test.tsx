@@ -286,6 +286,34 @@ describe('AppShell: a trusted nobody closes the gate on everything (D-identity-r
     });
   }
 
+  // D-identity-review-a3's suspend meets a2: another tab restamped the shared
+  // local stamp (B signed in there), which suspends this tab's gate with
+  // 'restamped' only; B's session is then gone, so the recheck answers
+  // nobody. That answer must contain this tab exactly as a nobody from open
+  // does, or A's Genie turn and the shell's actor state stay on screen.
+  for (const [label, answer] of [['a 403', forbidden], ['the reachable anonymous body', anonymous], ['a 401', unauthorized]] as const) {
+    it(`a cross-tab suspend whose recheck answers ${label}: the same containment as a nobody from open`, async () => {
+      await openForA();
+      await advance(2_000);
+      queryClient.setQueryData(['routed', 'of-a'], { rows: ['a'] });
+      window.localStorage.setItem(STAMPS.local, ACTOR_B);
+      const before = storageBytes();
+      const probes = healthCalls;
+      healthAnswer = answer;
+      act(() => {
+        window.dispatchEvent(new StorageEvent('storage', { key: STAMPS.local, oldValue: ACTOR_A, newValue: ACTOR_B, storageArea: window.localStorage }));
+      });
+      await advance(0);
+      expect(healthCalls, 'the recheck probe ran').toBe(probes + 1);
+      expect(actorScopeStatus()).toBe('closed');
+      expect(lastBorrower(), 'the shell forgot the last borrower').toBe('');
+      expect(getGenieTurnSnapshot().inFlight, 'the live turn ended').toBeNull();
+      expect(queryClient.getQueryData(['routed', 'of-a']), "the query cache dropped A's data").toBeUndefined();
+      expect(pinShown(), 'no pin while closed').toBe(false);
+      expect(storageBytes(), 'every stored key byte-identical').toBe(before);
+    });
+  }
+
   it('a 401: closes; no probe for 60 s; a reload as A keeps everything and resumes; a new document as B clears as a first observation', async () => {
     await closesOn(unauthorized);
     const probes = healthCalls;

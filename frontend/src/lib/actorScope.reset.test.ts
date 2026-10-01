@@ -51,6 +51,12 @@ const privateLeft = () => [
   ...ACTOR_SCOPE_REGISTRY.PRIVATE_LOCAL.filter((key) => local().getItem(key) !== null),
   ...ACTOR_SCOPE_REGISTRY.PRIVATE_SESSION.filter((key) => session().getItem(key) !== null),
 ];
+/** Every private key and both stamps, as stored. */
+const storageBytes = () =>
+  JSON.stringify([
+    [...ACTOR_SCOPE_REGISTRY.PRIVATE_LOCAL, STAMPS.local].map((key) => local().getItem(key)),
+    [...ACTOR_SCOPE_REGISTRY.PRIVATE_SESSION, STAMPS.session].map((key) => session().getItem(key)),
+  ]);
 
 /** A document opened for A over A's private data in both areas. */
 function openForA(): void {
@@ -242,6 +248,53 @@ describe('cross-tab: another tab restamps the shared local stamp (B5)', () => {
     expect(resetDocument).toHaveBeenCalledOnce();
   });
 
+  it("a trusted nobody answering the suspend emits 'closed' (row 5's containment) with storage byte-identical", () => {
+    openForA();
+    local().setItem(STAMPS.local, ACTOR_B);
+    storageEvent({ key: STAMPS.local, oldValue: ACTOR_A, newValue: ACTOR_B, storageArea: window.localStorage });
+    expect(events).toEqual(['restamped']);
+    const bytes = storageBytes();
+    events.length = 0;
+
+    observeActor({ key: null });
+    expect(events, "the shell's a2 containment runs, as from open").toEqual(['closed']);
+    expect(actorScopeStatus()).toBe('closed');
+    expect(storageBytes(), 'nothing is removed or rewritten').toBe(bytes);
+    observeActor({ key: null });
+    expect(events, 'once: a second nobody is closed to closed').toEqual(['closed']);
+
+    // Back as A: the local area names B, so row 3 applies to it; this tab's
+    // session area is A's and is kept.
+    events.length = 0;
+    observeActor({ key: ACTOR_A });
+    expect(actorScopeStatus()).toBe('open');
+    expect(events.at(-1)).toBe('opened');
+    expect(stamps()).toEqual([ACTOR_A, ACTOR_A]);
+    expect(privateLeft()).toEqual(['mip.genie.inFlightTurn', 'mip.queueContext']);
+    expect(resetDocument).not.toHaveBeenCalled();
+  });
+
+  it("a synthetic event, then nobody, then A: 'closed', then 'opened' with nothing removed", () => {
+    openForA();
+    storageEvent({ key: STAMPS.local, newValue: ACTOR_B, storageArea: window.localStorage });
+    events.length = 0;
+    observeActor({ key: null });
+    expect(events).toEqual(['closed']);
+    observeActor({ key: ACTOR_A });
+    expect(events).toEqual(['closed', 'opened']);
+    expect(privateLeft()).toHaveLength(4);
+  });
+
+  it("a suspend of an already-closed gate leaves no 'closed' owed: the containment already ran", () => {
+    openForA();
+    observeActor({ key: null });
+    expect(events).toEqual(['closed']);
+    storageEvent({ key: STAMPS.local, newValue: ACTOR_B, storageArea: window.localStorage });
+    expect(rechecks).toBe(1);
+    observeActor({ key: null });
+    expect(events, 'no second containment').toEqual(['closed']);
+  });
+
   it('suspends a document open for nobody when another tab stamps a real actor', () => {
     _resetActorScopeForTests({ status: 'pending', owner: NOBODY });
     observeActor({ key: null });
@@ -287,6 +340,17 @@ describe('the stamp guard: no PRIVATE_LOCAL access under a foreign stamp (B6)', 
     await Promise.resolve();
     expect(actorScopeStatus()).toBe('open');
     expect(rechecks).toBe(0);
+  });
+
+  it("a suspend from a read under a foreign stamp, answered by nobody, emits 'closed'", async () => {
+    openForA();
+    local().setItem(STAMPS.local, ACTOR_B);
+    expect(readActorScoped('local', PINNED_INSIGHTS_KEY)).toBeNull();
+    await Promise.resolve();
+    expect(events).toEqual(['restamped']);
+    observeActor({ key: null });
+    expect(events).toEqual(['restamped', 'closed']);
+    expect(actorScopeStatus()).toBe('closed');
   });
 
   it("an open-for-nobody document's owner is '~nobody'", async () => {

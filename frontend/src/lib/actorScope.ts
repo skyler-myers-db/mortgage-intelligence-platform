@@ -42,19 +42,22 @@
  * Cross-tab (the W5a integrator ruling): another tab restamping the shared
  * local stamp SUSPENDS an open gate (closed, 'restamped' only, then a health
  * recheck through lib/healthRecheck): a probe answering the owner reopens it,
- * another actor is a proven change. While open, a local read returns null and
- * a local write is dropped when the stored local stamp is present and is not
- * this document's owner; either queues one suspend. An absent stamp is not
- * foreign.
+ * another actor is a proven change, and nobody emits 'closed' as row 5 does
+ * from open (the shell's containment runs then). While open, a local read
+ * returns null and a local write is dropped when the stored local stamp is
+ * present and is not this document's owner; either queues one suspend. An
+ * absent stamp is not foreign.
  *
  * Events, in order, after the status is set: 'cleared' (a PRESENT private key
  * was removed), 'restamped' (a stamp now names another owner: row 2 with
  * s !== k, or rows 1/3/4, a suspend, a reset), then 'opened' / 'closed' on a
- * status change. The shell clears in-memory state on 'cleared' and 'closed'
- * only, so a first visit never clears the boot prefetches; stores drop their
- * caches on every event. Storage that throws holds values (stamps included)
- * in memory for the document, so row 1 applies at every document start, and
- * the reset notice and its loop guard are lost with the old document.
+ * status change (and 'closed' when the observation answering a suspend
+ * leaves the gate closed). The shell clears in-memory state on 'cleared' and
+ * 'closed' only, so a first visit never clears the boot prefetches; stores
+ * drop their caches on every event. Storage that throws holds values (stamps
+ * included) in memory for the document, so row 1 applies at every document
+ * start, and the reset notice and its loop guard are lost with the old
+ * document.
  *
  * Preference map ('mip.shortcuts.singleKey'): JSON {actorKey | '~nobody':
  * value}, at most 8 entries, most recently written first; never cleared.
@@ -162,6 +165,8 @@ let resetHeld = false;
 let heldTimer: ReturnType<typeof setTimeout> | null = null;
 /** One suspend is queued from a read or write under a foreign local stamp. */
 let suspendQueued = false;
+/** A suspend closed an OPEN gate, and no observation has resolved since. */
+let suspendedOpen = false;
 const listeners = new Set<(event: ActorScopeEvent) => void>();
 const memory = new Map<string, string>();
 
@@ -257,6 +262,10 @@ function removePrivate(area: ActorScopeArea): boolean {
 }
 
 function runRows(key: string | null, aliases: readonly string[]): void {
+  // A suspend closed an open gate without 'closed'; the observation that
+  // answers it decides as row 5 would have from open (see the emit below).
+  const wasSuspended = suspendedOpen;
+  suspendedOpen = false;
   const next = key ?? NOBODY;
   let cleared = false;
   let restamped = false;
@@ -297,7 +306,10 @@ function runRows(key: string | null, aliases: readonly string[]): void {
   }
   if (cleared) emit('cleared');
   if (restamped) emit('restamped');
-  if (before !== status) emit(status === 'open' ? 'opened' : 'closed');
+  // After a suspend the status was already 'closed', but nothing has been
+  // contained yet: a trusted nobody answering it emits 'closed' as row 5 does
+  // from open, so the shell clears its in-memory state and Genie resets.
+  if (before !== status || (wasSuspended && status === 'closed')) emit(status === 'open' ? 'opened' : 'closed');
 }
 
 /** Replace the document: a full load of '/', so every module, cache and
@@ -333,6 +345,7 @@ function loopGuardWait(): number {
 function resetForProvenChange(key: string, aliases: readonly string[]): void {
   status = 'closed';
   resetting = true;
+  suspendedOpen = false;
   queue = [];
   hooks.clearUnsavedWork();
   for (const area of AREAS) {
@@ -362,11 +375,14 @@ let provenChange: ProvenChangeHandler = resetForProvenChange;
  * Another tab may have changed the actor: close an open gate at once, drop
  * nothing, and ask for a trusted probe. 'restamped', never 'cleared' or
  * 'closed': stores drop their caches and read null, the query cache stays.
+ * The probe decides: the owner reopens ('opened'), another actor is a proven
+ * change, and nobody emits 'closed' (runRows, through `suspendedOpen`).
  */
 function suspend(): void {
   if (status === 'pending' || resetting) return;
   if (status === 'open') {
     status = 'closed';
+    suspendedOpen = true;
     emit('restamped');
   }
   hooks.requestHealthRecheck();
@@ -534,6 +550,7 @@ export function _resetActorScopeForTests({ status: next, owner: who }: { status:
   resetting = false;
   resetHeld = false;
   suspendQueued = false;
+  suspendedOpen = false;
   if (heldTimer !== null) clearTimeout(heldTimer);
   heldTimer = null;
   resetDocument = browserResetDocument;
