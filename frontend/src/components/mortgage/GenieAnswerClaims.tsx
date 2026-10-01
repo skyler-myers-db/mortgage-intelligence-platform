@@ -6,8 +6,9 @@
  * The server's claims verifier already checks every figure in Genie's prose
  * against the rows before the prose may ship; this makes that check visible:
  * an "N of N verified" metric and, per figure, its kind and how the rows
- * support it. Nothing renders when the answer carries no claims (withheld
- * prose, refusals, history recorded before the field) or checked none. An
+ * support it (the first 40; the list says so when the metric counts more).
+ * Nothing renders when the answer carries no claims (withheld prose,
+ * refusals, history recorded before the field) or checked none. An
  * unsupported figure is never listed: its prose was withheld instead.
  */
 import type { GenieClaimsSummary, GenieVerifiedClaim } from '../../types';
@@ -76,6 +77,13 @@ export function GenieClaimsList({ claims }: { claims: GenieClaimsSummary }) {
           </ul>
         </div>
       ))}
+      {claims.items.length < claims.verified && (
+        // The server lists at most 40 figures (GenieClaimsSummary.items) while
+        // the metric counts every verified one; say the list is a prefix.
+        <div className="genie-claims__more">
+          The first {claims.items.length} of {claims.verified} verified figures are listed.
+        </div>
+      )}
     </div>
   );
 }

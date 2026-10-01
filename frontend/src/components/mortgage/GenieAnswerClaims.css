@@ -37,6 +37,11 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.genie-claims__more {
+  margin-top: var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
 @media (max-width: 640px) {
   .genie-claims__item {
     grid-template-columns: minmax(0, 1fr);

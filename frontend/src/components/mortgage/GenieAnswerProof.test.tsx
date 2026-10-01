@@ -149,6 +149,22 @@ describe('GenieProofPanel: figures verified against the rows (genie-10 phase 1)'
       '$1.2MAmountDerived from the returned rows (a total, average, share or change)',
       '80%PercentA threshold the returned values satisfy',
     ]);
+    expect(container.querySelector('.genie-claims__more')).toBeNull();
+  });
+
+  it('says the list is the first 40 when the metric counts more verified figures', () => {
+    const items = Array.from({ length: 40 }, (_, i) => ({
+      token: String(100 + i),
+      kind: 'number' as const,
+      derivation: 'returned_value' as const,
+    }));
+    render(withClaims({ verified: 45, total: 45, items }));
+
+    expect(container.textContent).toContain('45 of 45 verified against the returned rows');
+    expect(container.querySelectorAll('.genie-claims__item')).toHaveLength(40);
+    expect(container.querySelector('.genie-claims__more')?.textContent).toBe(
+      'The first 40 of 45 verified figures are listed.',
+    );
   });
 
   it('shows no group heading on a single-turn answer', () => {
