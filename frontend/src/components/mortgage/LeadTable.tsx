@@ -267,7 +267,12 @@ export function LeadTable({
   const triageMode = triage?.mode ?? null;
   const triageRefused = approverGate !== null && sessionStatus !== 'loading';
   const triageOn = triageMode === 'triage' && !triageRefused;
-  const triageActive = triageOn && approverGate === null && !exportContext?.exportBlockedReason;
+  // The deck first opens on settled rows, then stays open for its session: a
+  // filter change's placeholder rows never unmount it, so it never
+  // re-snapshots (brief 6.4); rows that leave drop out as gone cards.
+  const [triageOpened, setTriageOpened] = useState(false);
+  const triageActive = triageOn && approverGate === null && (triageOpened || !exportContext?.exportBlockedReason);
+  if (triageActive !== triageOpened) setTriageOpened(triageActive);
   useEffect(() => {
     if (triageMode === 'triage' && triageRefused) triage?.onModeChange(null);
   }, [triageMode, triageRefused, triage]);

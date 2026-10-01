@@ -76,6 +76,9 @@ export function TriageDeck(props: TriageDeckProps) {
   const [state, dispatch] = useLeadTriage(
     () => triageEntryOrder(sortedLeads, approval.approvalEligibleIds, approval.selectedIds),
   );
+  // The rows at entry: a card decided here stays readable (K) after a filter
+  // change took it out of the loaded rows. Only decided cards outlive them.
+  const [entryLeads] = useState(() => new Map(leadsById));
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   // The card whose approve answered 409: "Review draft again", never automatic.
   const [staleId, setStaleId] = useState<string | null>(null);
@@ -91,7 +94,7 @@ export function TriageDeck(props: TriageDeckProps) {
   const available: TriageAvailability = (id) => leadsById.has(id) && (id === submittingId || !isLocked(id));
   const view = triageView(state, available);
   const currentId = view.currentId;
-  const lead = currentId ? leadsById.get(currentId) : undefined;
+  const lead = currentId ? leadsById.get(currentId) ?? entryLeads.get(currentId) : undefined;
   const decision = currentId ? state.decided[currentId] : undefined;
   const busy = submittingId !== null;
 

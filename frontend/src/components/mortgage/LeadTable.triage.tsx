@@ -7,7 +7,9 @@
  *   - A definitive non-approver (or a failed session check) never sees the
  *     deck: the table strips the mode from the URL (replace).
  *   - The deck opens once the session says approver and the rows are the
- *     current filters' (not placeholder rows).
+ *     current filters' (not placeholder rows), then stays open for its
+ *     session: a later filter change's placeholder rows never unmount it,
+ *     so it never re-snapshots (LeadTable latches it).
  *   - The deck snapshots its order when it mounts (useLeadTriage's
  *     triageEntryOrder): two or more selected eligible rows, else every
  *     eligible row, in the table's current sort. Entry keeps the selection,
@@ -45,7 +47,7 @@ export interface LeadTableTriageState {
   triage: LeadTableTriage | null;
   /** The table is hidden behind the deck (or its loading line). */
   hideTable: boolean;
-  /** The deck is open: approver session, settled rows. */
+  /** The deck is open: approver session, settled rows at its first open. */
   active: boolean;
   Deck: ComponentType<TriageDeckProps> | null;
   failed: boolean;

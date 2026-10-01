@@ -14,10 +14,13 @@
  *  - J / K / Skip write nothing; after five decisions Esc returns to the
  *    table with ?row= naming the last card and focus on that row;
  *  - the keys are inert outside the deck and with the single-key switch off;
- *  - a non-approver never sees the deck: the mode is stripped.
+ *  - a non-approver never sees the deck: the mode is stripped;
+ *  - a filter change while the deck is open never re-snapshots it: the
+ *    placeholder rows keep it mounted, an approve returning meanwhile is
+ *    counted, and the settled rows only drop cards (brief 6.4).
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act } from 'react';
+import { act, useMemo, useSyncExternalStore } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createMemoryRouter, useSearchParams } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
@@ -51,6 +54,28 @@ const store = vi.hoisted(() => {
     },
     reset: () => {
       state = {};
+    },
+  };
+});
+/** The route's rows: `ids` null for the six cards; `blocked` while placeholder rows show. */
+const rows = vi.hoisted(() => {
+  type Rows = { ids: readonly string[] | null; blocked: string | null };
+  let state: Rows = { ids: null, blocked: null };
+  const listeners = new Set<() => void>();
+  return {
+    get: () => state,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    set: (next: Rows) => {
+      state = next;
+      listeners.forEach((listener) => listener());
+    },
+    reset: () => {
+      state = { ids: null, blocked: null };
     },
   };
 });
@@ -146,9 +171,13 @@ function draftFor(borrowerId: string) {
 /** The Lead Queue's URL contract for the table: `?row=` and `?mode=triage`. */
 function QueueHarness() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { ids, blocked } = useSyncExternalStore(rows.subscribe, rows.get);
+  const leads = useMemo(() => (ids ?? IDS).map(lead), [ids]);
+  const exportContext = useMemo(() => ({ exportBlockedReason: blocked }), [blocked]);
   return (
     <LeadTable
-      leads={IDS.map(lead)}
+      leads={leads}
+      exportContext={exportContext}
       expandedId={searchParams.get('row')}
       onExpandedChange={(row) => setSearchParams(searchParamsWithLeadTablePlace(searchParams, { row }), { replace: true })}
       triage={{
@@ -169,6 +198,7 @@ describe('Triage deck', { timeout: 30_000 }, () => {
   beforeEach(() => {
     vi.clearAllMocks();
     store.reset();
+    rows.reset();
     session.canApprove = true;
     session.sessionStatus = 'ready';
     installLocalStorage();
@@ -491,5 +521,66 @@ describe('Triage deck', { timeout: 30_000 }, () => {
       await flush(1);
       expect(position()).toBe('Borrower 1 of 6');
     }, { timeout: 15_000 });
+  });
+
+  it('a filter change never re-snapshots the deck: placeholder rows keep it mounted, and the settled rows only drop cards', async () => {
+    const OUTSIDE = 'B-OUTSIDE0000001';
+    const progress = () => q('[data-testid="triage-progress"]')?.textContent;
+    mount();
+    await enterDeck();
+    // Card 1 approved, card 2 skipped.
+    press('a');
+    await waitForReview();
+    enterOnConfirm();
+    await flush(3);
+    await vi.waitFor(() => expect(position()).toBe('Borrower 2 of 6'));
+    press('j');
+    expect(position()).toBe('Borrower 3 of 6');
+    // Card 3's approve is on the wire across the filter change.
+    let release: () => void = () => undefined;
+    approve.mockImplementation((borrowerId: string) => new Promise((resolve) => {
+      release = () => resolve({ approved: true, audit_event_id: `audit-${borrowerId}`, approval_id: 'apr-3' });
+    }));
+    press('a');
+    await waitForReview();
+    enterOnConfirm();
+    await flush();
+    expect(approve).toHaveBeenCalledTimes(2);
+
+    // A filter change: the route shows the previous rows as placeholders.
+    act(() => rows.set({ ids: null, blocked: 'Export waits for the rows of the current filters' }));
+    await flush(2);
+    expect(q('[data-testid="triage-deck"]'), 'placeholder rows never unmount the deck').not.toBeNull();
+    expect(q('[data-testid="triage-deck-loading"]')).toBeNull();
+    expect(progress()).toContain('Approved 1 · Rejected 0 · Skipped 1');
+    // The approve returns while the placeholder rows show: the deck counts it.
+    await act(async () => {
+      release();
+    });
+    await flush(3);
+    expect(progress()).toContain('Approved 2 · Rejected 0 · Skipped 1');
+    expect(q('[data-testid="lead-decision-status"]')?.textContent, 'no table toast for a deck approve').toBe('');
+
+    // The filtered rows settle: two snapshot cards and a borrower the deck never had.
+    act(() => rows.set({ ids: [IDS[3], OUTSIDE, IDS[5]], blocked: null }));
+    await flush(3);
+    expect(q('[data-testid="triage-deck"]')).not.toBeNull();
+    expect(position(), 'decided cards stay; gone ones drop out').toBe('Borrower 3 of 4');
+    expect(progress()).toContain('Approved 2 · Rejected 0 · Skipped 0');
+    expect(q('[data-testid="triage-last-receipt"]')?.textContent).toBe(`Approved ${IDS[2]} · audit audit-${IDS[2]}`);
+    // K reaches a decided card the filter took out of the loaded rows: its outcome, not the summary.
+    press('k');
+    expect(position()).toBe('Borrower 2 of 4');
+    expect(q(`[data-testid="triage-card-${IDS[2]}"] [data-testid="triage-outcome"]`)).not.toBeNull();
+    const seen = new Set<string>();
+    for (let step = 0; step < 4; step += 1) {
+      press('j');
+      const card = q('.triage__card')?.getAttribute('data-testid');
+      if (card) seen.add(card);
+    }
+    expect([...seen]).toEqual([`triage-card-${IDS[3]}`, `triage-card-${IDS[5]}`]);
+    expect(q('[data-testid="triage-summary"]')).not.toBeNull();
+    expect(q(`[data-testid="triage-card-${OUTSIDE}"]`)).toBeNull();
+    expect(draftOutreach).toHaveBeenCalledTimes(2);
   });
 });
