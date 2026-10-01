@@ -41,7 +41,7 @@ const PINS = JSON.stringify([{ id: 'p1', question: 'q1', summary: 's1', source: 
 
 let events: ActorScopeReason[];
 let rechecks: number;
-let resetDocument: ReturnType<typeof vi.fn>;
+let resetDocument: ReturnType<typeof vi.fn<() => void>>;
 const cleanups: Array<() => void> = [];
 
 const local = () => window.localStorage;
@@ -61,7 +61,7 @@ function openForA(): void {
   session().setItem('mip.queueContext', '{}');
   observeActor({ key: ACTOR_A });
   expect(actorScopeStatus()).toBe('open');
-  resetDocument = vi.fn();
+  resetDocument = vi.fn<() => void>();
   _setResetDocumentForTests(resetDocument);
   events.length = 0;
 }
@@ -122,7 +122,7 @@ describe('a proven change resets the document (B1)', () => {
   it('resets even when the path is already "/" and nothing private is stored', () => {
     _resetActorScopeForTests({ status: 'pending', owner: NOBODY });
     observeActor({ key: ACTOR_A });
-    resetDocument = vi.fn();
+    resetDocument = vi.fn<() => void>();
     _setResetDocumentForTests(resetDocument);
     observeActor({ key: ACTOR_B });
     expect(resetDocument).toHaveBeenCalledOnce();
