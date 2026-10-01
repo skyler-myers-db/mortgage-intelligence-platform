@@ -63,6 +63,13 @@ export interface UseLeadTableKeyboardFlowInput {
    * placeholder page without the row, w3-queue-place #11d).
    */
   urlRowId?: string | null;
+  /**
+   * The Triage deck (D-approval-flow-a2). While active the review's approval
+   * reports to the deck (no toast, no cursor advance), the table's keys are
+   * suspended and a history move never abandons the deck's review. When the
+   * deck closes, the cursor returns to the last card shown.
+   */
+  triage?: { active: boolean; onApproved: (borrowerId: string) => void; lastShown: () => string | null };
 }
 
 /** Focus an element once it is rendered (a virtualized row may need a frame or two). */
@@ -132,8 +139,11 @@ export function useLeadTableKeyboardFlow({
   campaignBindingKey,
   onCampaignBindingChange,
   urlRowId = null,
+  triage,
 }: UseLeadTableKeyboardFlowInput) {
   'use no memo';
+
+  const triageActive = triage?.active === true;
 
   const effectiveStatus = (lead: LeadSummary) => approvals[lead.borrower_id] ?? lead.approval_status;
   const isPending = (lead: LeadSummary) => isLeadApprovalEligible(
@@ -194,6 +204,10 @@ export function useLeadTableKeyboardFlow({
     isEligible: canStillApprove,
     isDecisionInFlight: approval.isDecisionInFlight,
     onApproved: (borrowerId) => {
+      if (triage?.active) {
+        triage.onApproved(borrowerId);
+        return;
+      }
       setToast({ borrowerId });
       cursor.advanceAfter(borrowerId);
       setRefocusTable(true);
@@ -265,7 +279,7 @@ export function useLeadTableKeyboardFlow({
     seenExpandedRef.current = expanded;
     const ours = requestedExpandedRef.current === expanded;
     requestedExpandedRef.current = expanded;
-    if (ours || navigationType !== 'POP') return;
+    if (ours || navigationType !== 'POP' || triageActive) return;
     if (!current || current.mode !== 'inline' || current.borrowerId !== previous) return;
     // The URL still names the review's row: only `expanded` lagged (a
     // placeholder page without the row). The review stays.
@@ -279,8 +293,25 @@ export function useLeadTableKeyboardFlow({
     return approval.approvalEligibleIds.filter((id) => approval.selectedIds.has(id));
   }
 
-  /** The first Approve (click or A): open the review; never approve here. */
-  function openReview(borrowerId: string) {
+  // The deck closed (Back to table, Esc or a history move): the cursor and
+  // focus return to the last card shown, once the table is on screen again.
+  const wasTriageRef = useRef(triageActive);
+  useEffect(() => {
+    const was = wasTriageRef.current;
+    wasTriageRef.current = triageActive;
+    const last = was && !triageActive ? triage?.lastShown() ?? null : null;
+    if (last === null) return;
+    requestAnimationFrame(() => {
+      cursor.moveTo(last);
+      focusWhenRendered(`lead-row-toggle-${last}`);
+    });
+  });
+
+  /**
+   * The first Approve (click or A): open the review; never approve here.
+   * `inline`: the Triage deck's review, always in its card.
+   */
+  function openReview(borrowerId: string, inline = false) {
     // Never start a review (or its draft) while a bulk run is on the wire.
     if (approval.bulkApproving || approval.isBulkRunInFlight()) return;
     if (!canStillApprove(borrowerId)) return;
@@ -290,11 +321,11 @@ export function useLeadTableKeyboardFlow({
     if (current?.borrowerId !== borrowerId && approval.isDecisionInFlight(borrowerId)) return;
     cursor.setCursorId(borrowerId);
     if (!reviewChunk.isReady()) {
-      loadReviewThenOpen(borrowerId);
+      loadReviewThenOpen(borrowerId, inline);
       return;
     }
     // review.open runs the approver / campaign-binding gate before it drafts.
-    const result = review.open(borrowerId, expanded === borrowerId ? 'inline' : 'dialog');
+    const result = review.open(borrowerId, inline || expanded === borrowerId ? 'inline' : 'dialog');
     if (result === 'already-open') {
       // An inline review whose row the virtualizer took out of the DOM is
       // brought back first (#9), then Confirm takes focus once rendered.
@@ -329,7 +360,7 @@ export function useLeadTableKeyboardFlow({
    * open without a Cancel, and says so. After the load, the Approve runs
    * again with the latest state (every gate re-checked).
    */
-  function loadReviewThenOpen(borrowerId: string) {
+  function loadReviewThenOpen(borrowerId: string, inline: boolean) {
     pendingApproveRef.current = borrowerId;
     setReviewLoading(borrowerId);
     setReviewLoadFailed(false);
@@ -355,11 +386,11 @@ export function useLeadTableKeyboardFlow({
         setReviewLoadFailed(true);
         return;
       }
-      openReviewRef.current(wanted);
+      openReviewRef.current(wanted, inline);
     });
   }
 
-  const openReviewRef = useRef<(borrowerId: string) => void>(() => undefined);
+  const openReviewRef = useRef<(borrowerId: string, inline: boolean) => void>(() => undefined);
   useEffect(() => {
     openReviewRef.current = openReview;
   });
@@ -510,6 +541,7 @@ export function useLeadTableKeyboardFlow({
   const targetId = cursor.cursorId ?? expanded;
   useLeadTableHotkeys({
     approverActive: approverGate === null,
+    suspended: triageActive,
     move: cursor.move,
     toggleCursorRow: () => {
       const lead = cursor.cursorId ? leadsById.get(cursor.cursorId) : undefined;
@@ -555,7 +587,8 @@ export function useLeadTableKeyboardFlow({
     const inTable = active !== null && tableWrapRef.current?.contains(active) === true;
     const inDialog = active instanceof HTMLDialogElement || active?.closest('dialog') != null;
     const idle = active === null || active === document.body;
-    if (!(inTable || inDialog || idle || isInsideLeadApproveReview(active, borrowerId))) return false;
+    const inDeck = triageActive && active?.closest('[data-triage-deck]') != null;
+    if (!(inTable || inDialog || idle || inDeck || isInsideLeadApproveReview(active, borrowerId))) return false;
     return cursor.cursorId === null || cursor.cursorId === borrowerId;
   }
 
@@ -573,7 +606,8 @@ export function useLeadTableKeyboardFlow({
   const approveCount = approval.selectedApprovalEligibleCount;
   const canApproveVerb = approverGate === null && !campaignBindingBlocked && !approval.bulkApproving;
   useEffect(() => {
-    if (selectedCount === 0) return undefined;
+    // The deck has no bulk toolbar: its selection verbs are not offered.
+    if (selectedCount === 0 || triageActive) return undefined;
     return publishCommandSelection({
       selectedCount,
       approveCount,
@@ -584,7 +618,7 @@ export function useLeadTableKeyboardFlow({
       canAssign: canAssign && selectedCount > 0,
       run: (verb) => verbRunRef.current(verb),
     });
-  }, [selectedCount, approveCount, canApproveVerb, canAssign]);
+  }, [selectedCount, approveCount, canApproveVerb, canAssign, triageActive]);
 
   return {
     cursor,
@@ -594,6 +628,8 @@ export function useLeadTableKeyboardFlow({
     toast,
     dismissToast: () => setToast(null),
     openReview,
+    /** The Triage deck's A: the same guards as openReview, always inline. */
+    openTriageReview: (borrowerId: string) => openReview(borrowerId, true),
     cancelReview,
     toggleRow,
     focusRow,

@@ -337,3 +337,34 @@ describe('single-key preference', () => {
     _resetActorScopeForTests({ status: 'open', owner: NOBODY });
   });
 });
+
+describe('the Triage deck scope (D-approval-flow-a2)', () => {
+  const offs: Array<() => void> = [];
+
+  beforeEach(() => {
+    installLocalStorage();
+    clearSingleKeyShortcutsPreference();
+  });
+
+  afterEach(() => {
+    while (offs.length > 0) offs.pop()?.();
+    document.body.innerHTML = '';
+  });
+
+  it('is labelled for the sheet and beats the table and global scopes on a shared chord', async () => {
+    const { KEYMAP_SCOPE_LABELS } = await import('./keymap');
+    expect(KEYMAP_SCOPE_LABELS.triage).toBe('Triage deck');
+    const table = vi.fn();
+    const deck = vi.fn();
+    const global = vi.fn();
+    offs.push(registerKeyBinding({ id: 'g', scope: 'global', keys: ['j'], description: 'global j', run: global }));
+    offs.push(registerKeyBinding({ id: 't', scope: 'triage', keys: ['j'], description: 'skip', run: deck }));
+    offs.push(registerKeyBinding({ id: 'q', scope: 'lead-queue', keys: ['j'], description: 'next row', run: table }));
+    const event = new KeyboardEvent('keydown', { key: 'j', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    expect(deck).toHaveBeenCalledOnce();
+    expect(table).not.toHaveBeenCalled();
+    expect(global).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+});

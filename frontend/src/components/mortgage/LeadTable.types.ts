@@ -45,6 +45,16 @@ export interface LeadTableCampaignHandoff {
   notCarried: string[];
 }
 
+/**
+ * The Triage deck (D-approval-flow-a2): the Lead Queue keeps the mode in
+ * `?mode=triage`. Segment Intelligence never passes it.
+ */
+export interface LeadTableTriage {
+  mode: 'triage' | null;
+  /** Enter (a new entry) or leave (replace, with the row the table returns to). */
+  onModeChange: (mode: 'triage' | null, row?: string | null) => void;
+}
+
 export interface LeadTableProps {
   leads: LeadSummary[];
   totalMatching?: number | null;
@@ -86,6 +96,8 @@ export interface LeadTableProps {
   headerStatus?: ReactNode;
   /** "Build a campaign from these filters" (lead-queue.handoff.ts); absent elsewhere. */
   campaignHandoff?: LeadTableCampaignHandoff | null;
+  /** The Triage deck's URL contract (the Lead Queue only). */
+  triage?: LeadTableTriage | null;
 }
 
 export type RejectReasonCode =

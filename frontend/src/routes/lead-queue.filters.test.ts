@@ -16,13 +16,18 @@ import {
   parseLeadTableView,
   parsePortfolioCriteria,
   parseSegmentCodes,
+  parseTriageMode,
   portfolioFilterEntries,
   searchParamsWithLeadTablePlace,
   searchParamsWithLeadTableView,
+  searchParamsWithTriageMode,
+  searchWithoutTriageMode,
   segmentDisplayLabel,
   segmentFilterDisplayValue,
 } from './lead-queue.filters';
 import { hasLeadQueueFilters, searchParamsCleared } from './lead-queue.activeFilters';
+import { leadsRequestFromSearchParams } from './lead-queue.request';
+import { leadsQuery } from '../lib/leadsQuery';
 
 describe('lead queue effective workflow filters', () => {
   it('shows Approved when the approved funnel stage is driving the filter', () => {
@@ -316,5 +321,48 @@ describe('public score and rate-spread bounds (audit tables-06, wow-stage-1)', (
     expect(parseLeadBound('max_opportunity_score', '')).toBeUndefined();
     expect(leadBoundsBlocked(new URLSearchParams('cohort_id=%20'))).toBe(false);
     expect(leadBoundsBlocked(new URLSearchParams('growth_agent_run_id=r'))).toBe(true);
+  });
+});
+
+describe('the Triage deck deep link (D-approval-flow-a2)', () => {
+  it('parses only `triage` as a mode', () => {
+    expect(parseTriageMode('triage')).toBe('triage');
+    expect(parseTriageMode(' TRIAGE ')).toBe('triage');
+    expect(parseTriageMode('deck')).toBeNull();
+    expect(parseTriageMode(null)).toBeNull();
+  });
+
+  it('enters keeping filters, sort and the campaign binding; leaving names the row to return to', () => {
+    const base = new URLSearchParams('state=IL&sort=equity&dir=asc&campaign_id=c1&variant_name=A');
+    const entered = searchParamsWithTriageMode(base, 'triage');
+    expect(Object.fromEntries(entered)).toEqual({
+      state: 'IL', sort: 'equity', dir: 'asc', campaign_id: 'c1', variant_name: 'A', mode: 'triage',
+    });
+    const left = searchParamsWithTriageMode(entered, null, 'B-0000000000001');
+    expect(left.get('mode')).toBeNull();
+    expect(left.get('row')).toBe('B-0000000000001');
+    expect(searchParamsWithTriageMode(entered, null, 'not-an-id').get('row')).toBeNull();
+  });
+
+  it('Copy link and saved views omit it, naming it "the triage deck"', () => {
+    const share = leadQueueShareParams(new URLSearchParams('state=IL&mode=triage'), { stateFilter: 'IL' });
+    expect(share.search).not.toContain('mode');
+    expect(share.omitted).toEqual(['the triage deck']);
+  });
+
+  it('never reaches the leads request or its query key (no refetch, no VIEW_LEADS row)', () => {
+    const refs = ['All'];
+    const without = new URLSearchParams('state=IL&segment_codes=itm&sort=equity');
+    const withMode = searchParamsWithTriageMode(without, 'triage');
+    const key = (sp: URLSearchParams) => JSON.stringify(
+      leadsQuery('lead-queue', leadsRequestFromSearchParams(sp, refs, null), ['']).queryKey,
+    );
+    expect(key(withMode)).toBe(key(without));
+  });
+
+  it('is stripped from the search the queue publishes for dossier crumbs', () => {
+    expect(searchWithoutTriageMode('?state=IL&mode=triage&row=B-0000000000001')).toBe('?state=IL&row=B-0000000000001');
+    expect(searchWithoutTriageMode('?mode=triage')).toBe('');
+    expect(searchWithoutTriageMode('?state=IL')).toBe('?state=IL');
   });
 });

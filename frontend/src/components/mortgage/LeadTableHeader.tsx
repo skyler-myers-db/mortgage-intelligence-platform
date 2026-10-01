@@ -8,6 +8,7 @@ import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyb
 import { LeadTableViewControl } from './LeadTableViewControl';
 import type { LeadTableView } from './LeadTable.columns';
 import type { LeadCsvExportState } from './useLeadCsvExport';
+import type { TriageEntry } from './LeadTable.triage';
 
 export interface LeadTableHeaderProps {
   headerStatus?: ReactNode;
@@ -31,6 +32,9 @@ export interface LeadTableHeaderProps {
   csvExportTruncatedOf?: number | null;
   exportBlockedReason: string | null;
   onExport: () => void;
+  /** The Triage deck's entry (approvers; null hides it). */
+  triageEntry?: TriageEntry | null;
+  onEnterTriage?: () => void;
 }
 
 /**
@@ -54,6 +58,8 @@ export function LeadTableHeader({
   csvExportTruncatedOf = null,
   exportBlockedReason,
   onExport,
+  triageEntry = null,
+  onEnterTriage,
 }: LeadTableHeaderProps) {
   // The shell's compile posture (audit runtime-04, cut 5): compiled, this
   // module's memo caches would ride the LeadTable chunk and buy nothing
@@ -62,6 +68,7 @@ export function LeadTableHeader({
 
   const exporting = exportState.status === 'pending';
   const scopeNoteId = useId();
+  const triageNoteId = useId();
   const partial = csvExportTruncatedOf !== null;
   const exportNoun = partial ? 'loaded' : csvExportNoun;
   return (
@@ -71,13 +78,31 @@ export function LeadTableHeader({
           <Icon name="user" size={14} />
         </div>
         <div>
-          {/* The view's freshness sits beside the title, not in the action
-              row: there it squeezed the keyboard hint onto a second line
-              and pushed the 480px scroller past the fold at 1440x900. */}
-          {headerStatus ? (
+          {/* The view's freshness (and the Triage entry) sit beside the
+              title, not in the action row: there they squeezed the keyboard
+              hint onto a second line and pushed the 480px scroller past the
+              fold at 1440x900. */}
+          {headerStatus || triageEntry ? (
             <div className="inline-flex">
               <SurfaceTitle>Ranked borrowers</SurfaceTitle>
               {headerStatus}
+              {triageEntry && (
+                // deviation:triage-deck: the deck's entry (D-approval-flow-a2); aria-disabled with its reason.
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (triageEntry.disabledReason === null) onEnterTriage?.();
+                  }}
+                  aria-disabled={triageEntry.disabledReason !== null || undefined}
+                  aria-describedby={triageEntry.disabledReason !== null ? triageNoteId : undefined}
+                  data-testid="lead-triage-enter"
+                >
+                  {triageEntry.label}
+                </Button>
+              )}
+              {triageEntry?.disabledReason && (
+                <span id={triageNoteId} className="sr-only">{triageEntry.disabledReason}</span>
+              )}
             </div>
           ) : (
             <SurfaceTitle>Ranked borrowers</SurfaceTitle>

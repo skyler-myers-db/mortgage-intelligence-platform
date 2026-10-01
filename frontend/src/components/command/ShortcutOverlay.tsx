@@ -40,7 +40,7 @@ interface SheetEntry {
 }
 
 /** Page-specific scopes first, then what works everywhere. */
-const SCOPE_ORDER: readonly KeymapScope[] = ['lead-queue', 'global'];
+const SCOPE_ORDER: readonly KeymapScope[] = ['triage', 'lead-queue', 'global'];
 
 function sheetEntries(): Map<KeymapScope, SheetEntry[]> {
   const grouped = new Map<KeymapScope, SheetEntry[]>();

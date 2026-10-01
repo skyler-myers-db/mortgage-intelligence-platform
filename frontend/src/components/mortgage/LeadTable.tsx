@@ -28,6 +28,10 @@ import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
 import { useTableScrollClearance } from './useTableScrollClearance';
 import type { CapturedCanary } from './LeadTable.canary';
+import {
+  TRIAGE_CHUNK, enterTriage, renderTriageDeck, triageEntry, triageFlowInput,
+  type LeadTableTriageState, type TriageApprovedSignal,
+} from './LeadTable.triage';
 import { useLeadTableScroll, type LeadTableVirtualScroll } from './useLeadTableScroll';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
@@ -116,6 +120,7 @@ export function LeadTable({
   restoreScroll = false,
   headerStatus,
   campaignHandoff = null,
+  triage = null,
 }: LeadTableProps) {
   // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
   // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
@@ -257,6 +262,29 @@ export function LeadTable({
     tableWrapRef,
     bulkRuns: BULK_REVIEW_CHUNK.current,
   });
+  // The Triage deck (D-approval-flow-a2): `?mode=triage`, approvers only. A
+  // failed or negative approver check strips the mode; a loading one waits.
+  const triageMode = triage?.mode ?? null;
+  const triageRefused = approverGate !== null && sessionStatus !== 'loading';
+  const triageOn = triageMode === 'triage' && !triageRefused;
+  const triageActive = triageOn && approverGate === null && !exportContext?.exportBlockedReason;
+  useEffect(() => {
+    if (triageMode === 'triage' && triageRefused) triage?.onModeChange(null);
+  }, [triageMode, triageRefused, triage]);
+  const triageChunk = useLazyModule(TRIAGE_CHUNK, triageActive);
+  const [triageSignal, setTriageSignal] = useState<TriageApprovedSignal>(null);
+  const [triageLastShown, setTriageLastShown] = useState<string | null>(null);
+  const triageCtl: LeadTableTriageState = {
+    triage,
+    hideTable: triageOn,
+    active: triageActive,
+    Deck: (triageChunk.module ?? TRIAGE_CHUNK.current())?.TriageDeck ?? null,
+    failed: triageChunk.failed,
+    approvedSignal: triageSignal,
+    setApprovedSignal: setTriageSignal,
+    lastShown: triageLastShown,
+    setLastShown: setTriageLastShown,
+  };
 
   /**
    * Keyboard triage (wave 1c): a row cursor (J / K / arrows), Enter, X and
@@ -303,6 +331,7 @@ export function LeadTable({
       setSamplesShown(false);
       setSamplesCoverAllOffers(false);
     },
+    triage: triageFlowInput(triageCtl),
   });
   const { review } = flow;
   const openReview = review.review;
@@ -333,7 +362,7 @@ export function LeadTable({
   });
   // Load the review chunk once the reader engages with rows (the draft is
   // requested only on Approve); the bulk review chunk once rows are selected.
-  const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null);
+  const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null || triageActive);
   const bulkRun = approval.bulkRun;
   // The bulk chunk also carries a run's progress and report (tables-07).
   const bulkChunk = useLazyModule(
@@ -381,6 +410,10 @@ export function LeadTable({
     onInspectEvidence: openReview.mode === 'dialog' ? flow.inspectEvidenceFromDialog : undefined,
   };
   const skipTargetId = `${useId()}-end`;
+  const triageEntryNow = triageEntry(
+    triageCtl, approval, approverGate !== null && sessionStatus === 'ready', approverGate, campaignBindingState,
+    approval.bulkApproving || openReview?.phase === 'submitting',
+  );
   // Row callbacks are made here, once, never per row, with one identity for
   // the table's life: a compiled LeadTableRow then gets identical props
   // (LeadTableBody) and skips its cells on an expand elsewhere.
@@ -481,6 +514,8 @@ export function LeadTable({
         csvExportTruncatedOf={csvExportTruncatedOf}
         exportBlockedReason={exportBlockedReason}
         onExport={exportCsv}
+        triageEntry={triageEntryNow}
+        onEnterTriage={() => enterTriage(triageCtl, triageEntryNow, flow.cancelReview)}
       />
       <LeadTableStatusChips
         growthAgentVerification={growthAgentVerification}
@@ -492,7 +527,7 @@ export function LeadTable({
         actorEmail={actorEmail}
       />
       {/* Keyed by the row: each form owns its fields, and a new row starts clean. */}
-      {approval.pendingReject && (
+      {!triageOn && approval.pendingReject && (
         <LeadRejectPanel
           key={approval.pendingReject}
           borrowerId={approval.pendingReject}
@@ -501,7 +536,7 @@ export function LeadTable({
           onSubmit={(reasonCode, rationale) => void flow.submitReject(reasonCode, rationale)}
         />
       )}
-      {sales.pendingDisposition && (
+      {!triageOn && sales.pendingDisposition && (
         <LeadDispositionPanel
           key={sales.pendingDisposition}
           borrowerId={sales.pendingDisposition}
@@ -522,7 +557,7 @@ export function LeadTable({
           {exportState.message}
         </div>
       )}
-      {flow.toast && DecisionToast && (
+      {!triageOn && flow.toast && DecisionToast && (
         <DecisionToast
           toast={flow.toast}
           hasReceipt={Boolean(approval.decisionReceipts[flow.toast.borrowerId]?.auditEventId)}
@@ -565,6 +600,7 @@ export function LeadTable({
       </span>
       <div
         ref={tableWrapRef}
+        hidden={triageOn}
         className={fillHeight ? 'tbl-wrap tbl-wrap--fill' : 'tbl-wrap'}
         role="region"
         tabIndex={0}
@@ -591,7 +627,7 @@ export function LeadTable({
             rowIds={rowIds}
             view={view}
             columnCount={columnCount}
-            expanded={expanded}
+            expanded={triageOn ? null : expanded}
             expandedRowIndex={expandedRowIndex}
             virtualized={shouldVirtualize}
             rowEstimatePx={rowEstimatePx}
@@ -610,7 +646,7 @@ export function LeadTable({
             salesBusy={sales.salesBusy}
             salesTeamCount={salesTeam.length}
             shortcutsLive={singleKeysOn}
-            reviewSlot={reviewProps && ReviewInline && openReview?.mode === 'inline'
+            reviewSlot={!triageOn && reviewProps && ReviewInline && openReview?.mode === 'inline'
               ? { borrowerId: openReview.borrowerId, node: <ReviewInline {...reviewProps} /> }
               : null}
             // From the flow state, not from whether the review chunk rendered.
@@ -620,8 +656,12 @@ export function LeadTable({
         </table>
       </div>
       <span id={skipTargetId} className="sr-only lead-table__skip-target" tabIndex={-1}>End of ranked borrowers table</span>
+      {renderTriageDeck(triageCtl, {
+        sortedLeads, flow, approval, leadsById, approvals, ReviewInline: ReviewInline ?? null,
+        actorEmail: actorEmail ?? null, campaignBinding, canAccessAdmin,
+      })}
       {reviewProps && ReviewDialog && openReview?.mode === 'dialog' && <ReviewDialog {...reviewProps} />}
-      {flow.reviewLoadFailed ? (
+      {triageOn ? null : flow.reviewLoadFailed ? (
         <div role="alert" className="table-error" data-testid="lead-approve-review-loading">
           {online
             ? 'The approval review could not load, so no draft was generated and nothing was approved. Reload the page, then approve again.'
@@ -634,7 +674,7 @@ export function LeadTable({
       )}
       {/* The toolbar stays while a run is on the wire, even when a filter
           change took every selected row off screen. */}
-      {(approval.selectionCount > 0 || approval.bulkApproving) && (
+      {!triageOn && (approval.selectionCount > 0 || approval.bulkApproving) && (
         <LeadTableBulkActions
           selectionCount={approval.selectionCount}
           selectedApprovalEligibleCount={approval.selectedApprovalEligibleCount}
@@ -707,14 +747,14 @@ export function LeadTable({
           }}
         />
       )}
-      <LeadTableFooter
+      {!triageOn && <LeadTableFooter
         loadedCount={leads.length}
         totalMatching={totalMatching}
         truncatedAt={truncatedAt}
         sortKey={sortKey}
         sortedCount={sortedLeads.length}
         onResetSort={() => toggleSort('rank')}
-      />
+      />}
     </div>
   );
 }

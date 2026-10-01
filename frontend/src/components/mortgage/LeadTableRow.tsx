@@ -167,6 +167,7 @@ export function LeadTableRow({
       <td className="is-primary">
         <button
           type="button"
+          id={`lead-row-toggle-${lead.borrower_id}`}
           className="lead-table__borrower-btn"
           aria-expanded={isOpen}
           aria-label={`Toggle preview for lead ${lead.borrower_id}`}

@@ -28,17 +28,19 @@
  */
 import { singleKeyShortcutsEnabled } from './keymapPreference';
 
-export type KeymapScope = 'global' | 'lead-queue';
+export type KeymapScope = 'global' | 'lead-queue' | 'triage';
 
 /** Higher wins when two active bindings share a chord. */
 const SCOPE_SPECIFICITY: Readonly<Record<KeymapScope, number>> = {
   global: 0,
   'lead-queue': 1,
+  triage: 2,
 };
 
 export const KEYMAP_SCOPE_LABELS: Readonly<Record<KeymapScope, string>> = {
   global: 'Everywhere',
   'lead-queue': 'Ranked borrowers table',
+  triage: 'Triage deck',
 };
 
 /** Window event the `?` sheet also opens on (the identity menu dispatches it). */

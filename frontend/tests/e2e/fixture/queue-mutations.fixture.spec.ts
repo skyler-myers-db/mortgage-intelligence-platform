@@ -20,7 +20,10 @@
  *      waits, so the LEAD_EXPORT declaration pairs filters with their rows;
  *  (g) a queue left and re-entered while an approve is still on the wire
  *      (a new LeadTable, the same QueryClient) drafts nothing for that row:
- *      A opens no review, so no second DRAFT_OUTREACH row, and one approve.
+ *      A opens no review, so no second DRAFT_OUTREACH row, and one approve;
+ *  (h) with the Console open at 1440x900, every bulk toolbar control of the
+ *      approve gate (D-approval-flow-a1) and the reject gate (d) is on
+ *      screen and the control row wraps to at most two lines (W5b).
  *
  * Axe runs on '.tbl-wrap' during the pending approve in (a), and on '.toast'
  * in (c), on the sales toast. The brief asked for '.toast' during (a)'s
@@ -425,5 +428,50 @@ test.describe('(g) a re-entered queue never re-drafts a borrower whose approve i
     await expect(approvalCell(page, ID).locator('.chip--success')).toHaveText(/Approved/);
     expect(held.approvals.map((body) => body.borrower_id), 'one approve POST, for the held row').toEqual([ID]);
     expect(callsTo(mockApi, 'POST', /^\/api\/outreach\/approve$/)).toBe(1);
+  });
+});
+
+test.describe('(h) the bulk toolbar fits with the Console open', () => {
+  /** Distinct rows the visible controls sit on (rounded tops). */
+  async function controlLines(page: Page): Promise<number> {
+    return page.locator('[data-testid="lead-bulk-actions"] .bulk-actions__controls').evaluate((row) => {
+      const tops = [...row.children]
+        .filter((child) => child.getBoundingClientRect().width > 0)
+        .map((child) => Math.round(child.getBoundingClientRect().top));
+      return new Set(tops.map((top) => Math.round(top / 8))).size;
+    });
+  }
+
+  async function expectOnScreen(page: Page, locator: Locator, label: string): Promise<void> {
+    await expect(locator, label).toBeVisible();
+    const box = await locator.boundingBox();
+    const viewport = page.viewportSize();
+    expect(box && viewport && box.x >= 0 && box.x + box.width <= viewport.width, `${label} inside the viewport`).toBe(true);
+  }
+
+  test('the approve gate (a1) and the reject gate (d): every control on screen, two lines at most', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    await app.openConsole();
+    const boxes = page.locator('table.tbl tbody [data-testid^="lead-select-B-"]');
+    for (let index = 0; index < 3; index += 1) await boxes.nth(index).check();
+    const toolbar = page.getByTestId('lead-bulk-actions');
+    await expect(toolbar).toBeVisible();
+
+    await page.getByTestId('lead-bulk-approve').click();
+    await expect(page.locator('.bulk-actions__rationale input')).toBeVisible();
+    for (const testId of ['lead-bulk-clear', 'lead-bulk-reject', 'lead-bulk-approve']) {
+      await expectOnScreen(page, page.getByTestId(testId), testId);
+    }
+    await expectOnScreen(page, page.locator('.bulk-actions__rationale input'), 'the shared rationale');
+    await expect(page.getByTestId('lead-bulk-preview-samples')).toBeVisible();
+    await expectOnScreen(page, page.getByTestId('lead-bulk-preview-samples'), 'Preview samples');
+    expect(await controlLines(page), 'approve gate: the controls wrap to two lines at most').toBeLessThanOrEqual(2);
+
+    await page.getByTestId('lead-bulk-reject').click();
+    await expect(page.getByTestId('lead-bulk-reject-gate')).toBeVisible();
+    for (const testId of ['lead-bulk-reject-reason', 'lead-bulk-reject-note', 'lead-bulk-reject-confirm']) {
+      await expectOnScreen(page, page.getByTestId(testId), testId);
+    }
+    expect(await controlLines(page), 'reject gate: the controls wrap to two lines at most').toBeLessThanOrEqual(2);
   });
 });

@@ -64,9 +64,12 @@ import {
   parseLeadTablePlace,
   parseLeadTableView,
   parseTargetLenderRef,
+  parseTriageMode,
   searchParamsAfterSegmentRemoval,
   searchParamsWithLeadTablePlace,
   searchParamsWithLeadTableView,
+  searchParamsWithTriageMode,
+  searchWithoutTriageMode,
   segmentFilterChips,
   type LeadQueueExportFiltersInput,
   segmentFilterDisplayValue,
@@ -450,7 +453,7 @@ export default function LeadQueue() {
   // ranked masked ids) for the dossier breadcrumbs and pager. Settled rows
   // only: placeholder rows still belong to the previous filters.
   usePublishQueueContext(leadsData && !leadsPlaceholderData ? {
-    search: queueSearch,
+    search: searchWithoutTriageMode(queueSearch), // dossier crumbs return to the table
     label: queueFilterLabel([
       stateFilterDisplay !== 'All states' && stateFilterDisplay,
       segmentFilter !== 'All segments' && segmentFilter,
@@ -767,6 +770,13 @@ export default function LeadQueue() {
                   restoreScroll
                   headerStatus={freshness}
                   campaignHandoff={campaignHandoff}
+                  // D-approval-flow-a2: entering is a new entry; leaving replaces it (Back never re-enters).
+                  triage={{
+                    mode: parseTriageMode(searchParams.get('mode')),
+                    onModeChange: (mode, row) => setSearchParams(
+                      searchParamsWithTriageMode(searchParams, mode, row), { replace: mode === null },
+                    ),
+                  }}
                   // A sort (and Reset to rank) is a new history entry; expand and
                   // collapse replace the current one, so Back leaves the queue.
                   sort={place.sort}
