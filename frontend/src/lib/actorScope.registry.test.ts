@@ -55,7 +55,6 @@ const STORAGE_FILES: readonly string[] = [
   'src/lib/staleChunkRecovery.ts',
   'public/theme-boot.js',
   ACTOR_SCOPE_FILE,
-  'src/components/mortgage/bulkApproveStash.ts', // TRANSITIONAL, see INDIRECTION
 ];
 
 /** Stores converted to lib/actorScope's guarded accessors: storage-free. */
@@ -68,6 +67,7 @@ const GUARDED_STORES: readonly string[] = [
   'src/lib/queueContextPublish.ts',
   'src/lib/keymapPreference.ts',
   'src/components/layout/GenieDock.tsx',
+  'src/components/mortgage/bulkApproveStash.ts',
 ];
 
 interface IndirectionRow {
@@ -119,12 +119,6 @@ const INDIRECTION: readonly IndirectionRow[] = [
     keys: [THEME, ACCENT, DENSITY, CONSOLE, THEME_CHOSEN, ACCENT_CHOSEN],
   },
   { file: ACTOR_SCOPE_FILE, functions: ['rawRead', 'rawWrite'], keys: 'ALL' },
-  {
-    file: 'src/components/mortgage/bulkApproveStash.ts',
-    functions: ['stashCancelledBulk', 'readCancelledBulk', 'clearCancelledBulk'],
-    keys: ['mip.bulkApprove.lastCancelled'],
-    removedBy: 'w5-identity-reset-portfolio',
-  },
 ];
 
 /** Non-key `mip` strings, each reviewed. */
