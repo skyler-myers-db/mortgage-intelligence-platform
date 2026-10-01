@@ -5,8 +5,9 @@ and reports, through ``report_sections``, the plan-ordered snapshot of every
 section judged ``ship`` so far. Pinned here: only shipped sections are ever
 reported (never one the per-section output scan withheld, never before its
 verdict, never the synthesis), in plan order, only from the owner thread; a
-sweep starts its reveal with an empty snapshot; every reported item IS the
-final section; and the final response is identical with and without a sink.
+sweep starts its reveal with an empty snapshot and an abandoned sweep ends
+with one; every reported item IS the final section; and the final response is
+identical with and without a sink.
 """
 
 from __future__ import annotations
@@ -34,9 +35,9 @@ _PLAN = """1. Market size by state — How many borrowers are in the money in ea
 class _Repo:
     """Planner turn, synthesis turn and one scripted sub-turn per question."""
 
-    def __init__(self, *, unsafe: str | None = None, empty: str | None = None) -> None:
+    def __init__(self, *, unsafe: str | None = None, empty: str | tuple[str, ...] | None = None) -> None:
         self.unsafe = unsafe
-        self.empty = empty
+        self.empty = (empty,) if isinstance(empty, str) else (empty or ())
         self.lock = threading.Lock()
 
     def ask_raw(self, prompt: str) -> str | None:
@@ -49,7 +50,7 @@ class _Repo:
         rows: list[dict[str, Any]] = [{"state": "IL", "borrowers": 48396}, {"state": "TX", "borrowers": 10914}]
         if self.unsafe and self.unsafe in question:
             rows = [{"state": "IL", "contact": "jane.doe@example.com"}]
-        answer = "" if self.empty and self.empty in question else f"Illinois leads for: {question[:30]}"
+        answer = "" if any(term in question for term in self.empty) else f"Illinois leads for: {question[:30]}"
         return GenieMessageResponse(
             conversation_id="conv-sweep", message_id=f"msg-{abs(hash(question)) % 997}",
             question=question, question_hash="h", answer=answer, source="genie",
@@ -96,6 +97,18 @@ def test_only_shipped_sections_are_reported_in_plan_order_from_the_owner_thread(
         section.model_dump(mode="json") for section in result.sections
     ]
     assert all("Summary" not in item["title"] for item in final), "never the synthesis"
+
+
+def test_a_sweep_that_aborts_below_the_section_floor_withdraws_its_count() -> None:
+    # Two of five sub-analyses ship, then the sweep abandons itself at the
+    # section floor and the caller falls through to the single-turn path.
+    result, snapshots, _ = _run(_Repo(empty=("equity", "listed-for-sale", "liens")))
+
+    assert result is None
+    shown = [snapshot for snapshot in snapshots if snapshot]
+    assert shown, "the shipped sections were reported while the sweep ran"
+    assert max(len(snapshot) for snapshot in shown) == 2
+    assert snapshots[-1] == [], "an abandoned sweep leaves no verified count behind"
 
 
 def test_a_section_the_output_scan_withholds_is_never_reported() -> None:

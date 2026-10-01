@@ -581,6 +581,11 @@ def run_planned_sweep(
         floor=_MIN_PLANNED,
     )
     if len(sections) < _MIN_PLANNED:
+        # The sweep is abandoned and the caller falls through to the
+        # single-turn path: withdraw the count of sections verified so far,
+        # or every later poll would keep reporting work that never reaches
+        # the answer.
+        report_sections([])
         return None
 
     assets: list[str] = []

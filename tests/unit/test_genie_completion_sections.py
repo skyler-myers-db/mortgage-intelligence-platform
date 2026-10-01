@@ -232,6 +232,22 @@ def test_the_poll_reveals_from_the_floor_and_only_a_new_revision(monkeypatch: py
     assert len(_revealed_rows(lakebase)) == 3
 
 
+def test_a_withdrawn_count_is_served_as_zero_on_the_next_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A sweep that abandons itself below the floor reports an empty snapshot;
+    # the single-turn fall-through that follows must not keep showing its count.
+    lakebase = FakeJobLakebase()
+    job_id = _running_job(lakebase)
+    state = sections._JobReveal()
+    _write(lakebase, job_id, [_item(0), _item(1)], state)
+    assert _poll(lakebase, job_id, monkeypatch)["verified_sections"] == 2
+
+    _write(lakebase, job_id, [], state)
+    status = _poll(lakebase, job_id, monkeypatch, sections_rev=1)
+
+    assert (status["verified_sections"], status["sections_rev"], status["revealed_sections"]) == (0, 2, None)
+    assert _revealed_rows(lakebase) == []
+
+
 @pytest.mark.parametrize("ending", ["cancel_requested", "succeeded", "failed", "expired", "cancelled"])
 def test_a_terminal_or_cancel_requested_job_never_carries_sections(monkeypatch: pytest.MonkeyPatch, ending: str) -> None:
     lakebase = FakeJobLakebase()
