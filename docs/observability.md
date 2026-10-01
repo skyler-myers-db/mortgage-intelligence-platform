@@ -717,3 +717,97 @@ release after this SPA ships, make `review_mode` required on
 `POST /api/v1/outreach/approve`. A request without it then gets a 422 whose
 detail tells the reader to reload the app to approve, and the server stops
 writing `undeclared`.
+
+## 11. Approval requests, revoke and the queue version
+
+<!-- w5-approval-ledger-api, 2026-10-01. Appended as section 11; the integrator renumbers. -->
+
+Audit flow-02 / shell-06 (report 12.4 #10), flow-v2 and states-09. A
+signed-in user without the approver role asks an approver to review named
+borrowers (a maker-checker request); an approver may revoke an approval
+while its outreach is still none or queued. Lakebase migration
+`2026_10_01_approval_requests` adds `mip_app.approval_request_batches`
+(finalize-only) and `mip_app.approval_request_items` (open, then withdrawn
+or expired; one open item per borrower), widens `approvals_action_check` to
+admit `revoke`, and indexes `approvals.decided_at`. Nothing is ever deleted
+from either table, and the approve row a revoke supersedes is never changed.
+
+Event vocabulary (all server-owned; free text only on `rationale`, through
+the governed text policy unchanged):
+
+| Event | Action / entity | Metadata | Written |
+| --- | --- | --- | --- |
+| `APPROVAL_REQUESTED` | `outreach.approval_request` / `approval_request_batch` (the batch id) | `approval_request_batch_id`, `borrower_ids` (requested), `requested_count`, `skipped_count`, `skipped_by_reason` (when any was skipped), `rationale` (the screened note) | in the same transaction as the batch and its items |
+| `APPROVAL_REQUEST_REFUSED` | `outreach.approval_request_refused` / `approval_request` (the client request key) | `borrower_ids` (every id asked for), `requested_count` 0, `skipped_count`, `skipped_by_reason`, `rationale` | its own transaction, after the attempt rolled back; the 409 answers counts per reason only |
+| `APPROVAL_REQUEST_WITHDRAWN` | `outreach.approval_request_withdraw` / `approval_request_batch` | `approval_request_batch_id`, `withdrawn_count`, `borrower_ids` (withdrawn) | only when the withdraw closed at least one borrower |
+| `OUTREACH_REVOKE` | `outreach.revoke` / `approval` (the revoke row) | `approval_id`, `revoked_approval_id`, `borrower_id`, `offer_code`, `channel`, `rationale`, `request_id`, `released_assignment_id` (when a not-yet-worked assignment was released) | in the same transaction as the revoke's approvals row |
+
+Value rules: `approval_request_batch_id`, `revoked_approval_id` and
+`released_assignment_id` are opaque ids; the three counts are bounded row
+counts; `skipped_by_reason` groups masked borrower ids under the four closed
+reasons `not_found`, `not_contactable`, `already_decided`,
+`already_requested`. APPROVE and OUTREACH_REJECT carry
+`approval_request_batch_id` when the decision answers a request; the decision
+intent carries it only then, so every unlinked intent (and its derived
+fallback request id) is unchanged. The decision receipt reads a revoke as
+`revoked`.
+
+Request state is Lakebase workflow app state, not audit-explorer visibility
+(12.4 #3 is unchanged): the list (`GET /api/v1/outreach/approval-requests`)
+writes no audit row. Each borrower's state is derived, never stored, in this
+order: the latest finalized approve or reject LINKED to the request
+(`approved` / `rejected`), the requester's withdraw (`withdrawn`), an
+expired item or a request older than 30 days (`expired`), a later finalized
+approve or reject without the link (`decided_outside`), else `open`. Hold
+and revoke rows never decide a request. A request older than 30 days frees
+its borrowers lazily: the next request for one of them expires the stale
+item first.
+
+Revoke rules (`POST /api/v1/outreach/revoke`, approver-only): the named
+approval must still be the borrower's current, finalized, unbound decision;
+no call disposition or lead outcome may exist since it was decided, and no
+delivered activation for it; an active assignment a loan officer has worked
+(`actioned`, `outcome_recorded`) refuses, a not-yet-worked one is released.
+The borrower's open request items expire so it can be requested again. A new
+revoke clears the sales-state cache and enqueues the lifecycle sync with
+reason `revocation`; the sync, `lifecycle_for` and the activation delivery
+guard read the borrower as pending / none / superseded. The funnel's
+"approved" stage counts borrowers ever approved, so a revoked approval still
+counts there, exactly like approve-then-reject.
+
+Queue version: the change signal now reads six ledgers (approvals,
+assignments, call dispositions, loan-officer outcomes, activation delivery
+status and CRM-imported `lead_outcomes`) under the prefix
+`mip.queue-version.v2|`. The prefix change moves every version once, so each
+open Lead Queue shows one "Queue updated" pill after the deploy that ships
+it. The request tables are not folded in (a request sends no notification).
+
+Open requests by age (run as the audit reader):
+
+```sql
+SELECT batch.batch_id,
+       batch.created_at,
+       now() - batch.created_at AS age,
+       count(*) FILTER (WHERE item.status = 'open') AS open_items
+FROM mip_app.approval_request_batches AS batch
+JOIN mip_app.approval_request_items AS item USING (batch_id)
+WHERE batch.audit_event_id IS NOT NULL
+  AND batch.created_at >= now() - interval '30 days'
+GROUP BY batch.batch_id, batch.created_at
+HAVING count(*) FILTER (WHERE item.status = 'open') > 0
+ORDER BY batch.created_at;
+```
+
+Revokes in the last 30 days, with what each superseded:
+
+```sql
+SELECT event_at,
+       actor_email,
+       metadata->>'revoked_approval_id' AS revoked_approval_id,
+       metadata->>'borrower_id' AS borrower_id,
+       metadata->>'released_assignment_id' AS released_assignment_id
+FROM mip_app.action_audit
+WHERE event_type = 'OUTREACH_REVOKE'
+  AND event_at >= now() - interval '30 days'
+ORDER BY event_at DESC;
+```
