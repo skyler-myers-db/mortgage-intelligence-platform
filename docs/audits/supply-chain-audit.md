@@ -11,6 +11,14 @@ this remediation pass.
 
 - Browser-shipped production dependencies have no known commercial-use license
   blockers.
+- Frontend `npm audit`, 2026-10-01, after the W5b dependency batch (see the
+  2026-10-01 W5b addendum below), read from the refreshed lock with
+  `npm audit --package-lock-only`: 0 advisories at any level (0 low, 0
+  moderate, 0 high, 0 critical) across 351 packages (19 prod, 333 dev, 46
+  optional), at both the `--audit-level=high` gate and the advisory
+  `--audit-level=moderate` level. The batch adds web-vitals and stylelint
+  (with its 97 dev-only transitive packages). The integrator re-reads it on
+  the installed tree after `npm --prefix frontend ci`.
 - Frontend `npm audit`, 2026-09-25, after the wave-4 test-infra batch
   (Playwright 1.63.0 and oxlint 1.85.0; no other package moved): 0
   advisories at any level (0 low, 0 moderate, 0 high, 0 critical) across 251
@@ -110,7 +118,7 @@ a batch lands, check each of these:
   in the same change, and the baselines are regenerated once, from that
   bump PR's pinned-image CI renders (never on a developer host).
 - **oxlint is an exact dev pin with platform bindings.** `oxlint` 1.85.0
-  (MIT) runs the jsx-a11y ratchet (`tools/oxlint_ratchet.mjs`, see
+  (MIT; 1.86.0 held in the W5b batch, see the addendum) runs the jsx-a11y ratchet (`tools/oxlint_ratchet.mjs`, see
   docs/testing.md). Its native binaries are the `@oxlint/binding-*`
   packages, declared as optional dependencies (npm installs only the host's
   one); its optional peers `vite-plus` and `oxlint-tsgolint` are never
@@ -123,7 +131,7 @@ a batch lands, check each of these:
   `frontend/.oxlintrc.json` explicitly and re-runs `node
   tools/oxlint_ratchet.mjs --ratchet frontend/oxlint-baseline.json`, which
   records the new version.
-- **typescript-eslint gates TypeScript 7.** typescript-eslint 8.70.1 peers
+- **typescript-eslint gates TypeScript 7.** typescript-eslint 8.71.0, like 8.70.1, still peers
   `typescript >=4.8.4 <6.1.0`. TypeScript 7 waits until a typescript-eslint
   release admits it; check the peer range with `npm view
   @typescript-eslint/parser peerDependencies`.
@@ -131,8 +139,9 @@ a batch lands, check each of these:
   `tests/e2e/fixture/axe.fixture.spec.ts` on the new version. New rule ids
   that fire are fixed in the lane that owns the surface, or the bump is held;
   they are never added to the `KNOWN_VIOLATIONS` ratchet.
-- **Update signal.** Dependency-update signal pending owner decision #7; no
-  bot branch (existing contract, see `docs/modernization-todo.md`).
+- **Update signal.** Ruled 2026-09-30 (owner decision #7): a weekly report
+  workflow and no bots, built in W5d (`w5-test-harness-deps-report`); no bot
+  branch (existing contract, see `docs/modernization-todo.md`).
 
 Additional manual checks:
 
@@ -339,3 +348,49 @@ patched release that resolves cleanly.
   `-r requirements.in` provenance comment, and test_supply_chain_licenses pins
   both.
 
+## 2026-10-01 addendum: the W5b dependency batch
+
+Audit stack-10, W5b lane `w5-wire-contract-deps`. Every package was
+re-verified on 2026-10-01 with `npm view <pkg> version` and `npm view
+<pkg>@<current major> version`; the batch takes the newest version within each
+current major as an exact pin, except the holds below. The lock was refreshed
+with `npm install <pkg>@<ver> --save-exact --package-lock-only
+--ignore-scripts` over a scratch copy of `package.json` and
+`package-lock.json` with no `node_modules` (npm 11), then copied back; no
+shared `node_modules` was written. The lanes may not install, so the gates on
+the installed tree (build, the full vitest suite, lint with `lint:a11y` and
+both typechecks, React Compiler coverage, `dependencyContracts.test.ts`, the
+budget and the fixture suite) are the integrator's, after `npm --prefix
+frontend ci`; any bump that turns one of them red on another lane's files, or
+adds more than +0.3 KiB brotli initial JS or +4.0 KiB total JS, is held at its
+previous pin with a dated line here (an advisory-fixing bump is never held for
+bytes).
+
+| Package | Current | Latest | Taken | Note |
+|---|---|---|---|---|
+| `@tanstack/react-query` | 5.100.10 | 5.104.0 | 5.104.0 | Lockstep with the persist client: one `@tanstack/query-core` and one `query-persist-client-core` in the lock, both 5.104.0 (pinned by `tests/unit/test_dependency_pins.py`). |
+| `@tanstack/react-query-persist-client` | 5.100.10 | 5.104.0 | 5.104.0 | Lockstep (W5a carryover). |
+| `@tanstack/react-virtual` | 3.13.24 | 3.14.13 | 3.14.13 | `@tanstack/virtual-core` 3.14.0 -> 3.17.11. |
+| `vite` | 8.3.0 | 8.3.2 | 8.3.2 | `rolldown` 1.2.10 -> 1.2.12. Moves VRT and budget bytes at most marginally; re-baselined once by the integrator. |
+| `@rolldown/plugin-babel` | 0.2.3 | 0.2.4 | 0.2.4 | Patch. |
+| `eslint` | 10.2.1 | 10.11.0 | 10.11.0 | Minor releases add no rule to `recommended`. |
+| `@typescript-eslint/eslint-plugin` / `parser` | 8.70.1 | 8.71.0 | 8.71.0 | Still peers `typescript >=4.8.4 <6.1.0`. |
+| `happy-dom` | 20.10.3 | 20.14.5 | 20.14.5 | Vitest environment; the full suite is the integrator's proof. |
+| `web-vitals` | (new) | 6.2.2 | 6.2.2 | Production dependency, Apache-2.0 (licence row added). Nothing imports it in W5b (0 bytes); W5c `w5-field-vitals` consumes it lazily. |
+| `stylelint` | (new) | 17.16.0 | 17.16.0 | Dev only, MIT (licence row added); no script yet: W5d `w5-compiler-lint` calls it from `tools/lint_css_literals.mjs`. |
+| `oxlint` | 1.85.0 | 1.86.0 | **held 1.85.0** | Held 2026-10-01: `frontend/oxlint-baseline.json` records the installed oxlint version and `--check` fails on a mismatch, and a new version's jsx-a11y rule list must be named in `.oxlintrc.json`; both need the installed binary, and the ratchet files belong to W5d `w5-compiler-lint`. |
+| `typescript` | 6.0.3 | 7.0.2 | **held 6.0.3** | typescript-eslint 8.71.0 peers `<6.1.0`; 6.0.3 is the newest 6.0.x (D-platform-process-a, review_by 2026-11-15). |
+| `vitest` | 4.1.11 | 5.0.3 | **held 4.1.11** | Newest 4.x; vitest 5 held by D-platform-process-a (review_by 2026-11-15). |
+| `@babel/core` | 7.29.7 | 8.0.6 | **held 7.29.7** | Newest 7.x; Babel 8 held by D-platform-process-a (review_by 2026-11-15). |
+| `@playwright/test` | 1.63.0 | 1.63.0 | 1.63.0 | Held to the VRT image (`mcr.microsoft.com/playwright:v1.63.0-noble`); any move belongs to W5d with the image tag. |
+
+Unchanged because already current: `react`, `react-dom`, `react-router`,
+`@types/react`, `@types/react-dom`, `@types/topojson-client`,
+`@vitejs/plugin-react`, `@axe-core/playwright`, `babel-plugin-react-compiler`,
+`eslint-plugin-react-hooks`, `topojson-client`, `us-atlas` and both
+`@fontsource-variable` fonts. `rollup-plugin-visualizer` (the bundle treemap)
+moved to W5d `w5-test-harness-deps-report` with the treemap itself (integrator
+correction C3). Both `GITLEAKS_VERSION` literals in `ci.yml` are now 8.30.1:
+the host's gitleaks 8.30.1 scanned all refs (`gitleaks detect --source .
+--config .gitleaks.toml --redact --log-opts="--all"`, 2,264 commits) with no
+finding, so `.gitleaks.toml` is unchanged.

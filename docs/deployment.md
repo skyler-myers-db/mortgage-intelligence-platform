@@ -149,6 +149,18 @@ itself with:
 The SHA printed by this gate is the value advertised as `MIP_GIT_SHA` and
 verified by the live smoke test.
 
+Frontend dependencies are checked in step 0, before the confirmation prompt,
+by `python -m tools.frontend_deps_check`. If the install is `fresh`, the deploy
+continues. If it is `shared` (this checkout's `frontend/node_modules` is a
+symlink) or the check errors, the deploy stops. If it is `stale` (the install
+does not match `frontend/package-lock.json`), `npm --prefix frontend ci` runs
+in this checkout after the prompt. The check can only see an outbound symlink.
+A checkout whose real `node_modules` other worktrees link to (for example a
+main checkout shared by agent worktrees) looks like a private install, so a
+`stale` result there reinstalls the tree every linked worktree uses. Deploy
+from a checkout that owns its `node_modules` and that nothing else links to,
+or answer no at the prompt and refresh the shared install deliberately.
+
 ### Per-run M2M identities
 
 Live app validation and agent ownership use seven service principals and store only their OAuth
@@ -953,3 +965,17 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
 - Frontend build passes (`npm --prefix frontend run build`).
 - Python tests pass (`pytest -q`).
 - Talk track rehearsed.
+- Live evidence is certified, never asserted. A customer release is the
+  `scripts/package_source.sh` zip plus `dist/release-readiness.json`
+  generated on the release sha (`python tools/release_readiness.py
+  --release-sha <sha>`) with an empty `cannot_claim`. Its six live checks
+  (SQL/Python parity, Lakebase round trip, Genie live, Playwright live,
+  the simulated resilience drill and the non-admin proof) reach `passed`
+  only from a green `live validation (on demand)` run certified by
+  `tools/live_validation_gate.py`: the newest completed run on `main` whose
+  code is runtime-equivalent to the release (deny-by-default: only docs,
+  repo-root `*.md`, tests and workflow files are non-runtime), 14 days old
+  or newer, with its three release jobs green. An operator `passed` without
+  such a run is recorded `unknown`. The `prod-readiness-gate` workflow
+  (`deploy-prod.yml`) runs the same gate as a convenience; neither
+  `scripts/deploy.sh` nor `scripts/package_source.sh` calls GitHub.

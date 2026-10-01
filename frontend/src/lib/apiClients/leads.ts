@@ -141,6 +141,11 @@ export const leadsPageApi = {
     ),
 };
 
+/** The `/api/offers/recommend` body. */
+export interface OfferRecommendRequest {
+  borrower_id: string;
+}
+
 export const borrowerApi = {
   borrower: (id: string, signal?: AbortSignal, fresh = false) =>
     getJson<Borrower360>(
@@ -161,7 +166,7 @@ export const borrowerApi = {
   },
 
   recommendOffer: (borrower_id: string, signal?: AbortSignal) =>
-    postJson<OfferRecommendation, { borrower_id: string }>(
+    postJson<OfferRecommendation, OfferRecommendRequest>(
       '/api/offers/recommend',
       { borrower_id },
       signal,
