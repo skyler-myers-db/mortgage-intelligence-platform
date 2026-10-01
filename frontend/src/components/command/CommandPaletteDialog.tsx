@@ -277,6 +277,17 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   const actionItems = allActionItems.filter((it) => it.action.target.kind !== 'verb');
   const genieItems = items.filter((it) => it.kind === 'genie') as Extract<FlatItem, { kind: 'genie' }>[];
   const borrowerItems = items.filter((it) => it.kind === 'borrower') as Extract<FlatItem, { kind: 'borrower' }>[];
+  // At most one line speaks (shell-07 item 4): the empty state only once the
+  // borrower search has neither failed nor is still running.
+  const searching = query.trim().length >= 2 && searchStatus === 'loading' && borrowerItems.length === 0;
+  const searchFailed = query.trim().length >= 2 && searchStatus === 'error';
+  const noMatch = allActionItems.length === 0 && borrowerItems.length === 0
+    && searchStatus !== 'loading' && searchStatus !== 'error';
+  const statusText = searching
+    ? 'Searching borrowers…'
+    : searchFailed
+      ? 'Borrower search is temporarily unavailable.'
+      : noMatch ? `No pages, actions, or borrowers match “${query.trim()}”.` : '';
 
   return (
     <dialog
@@ -313,13 +324,12 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
         <div className="cmdk__list" id="cmdk-listbox" role="listbox" ref={listRef}>
           {/* The Genie row is a way out, not a match: the empty state still
               says so when no page, action or borrower matched. While the
-              borrower search runs or after it failed, its status line speaks
-              instead (shell-07 item 4): "no borrowers" is not known yet. */}
-          {allActionItems.length === 0 && borrowerItems.length === 0
-            && searchStatus !== 'loading' && searchStatus !== 'error' && (
-            <div className="cmdk__empty" role="status">
-              No pages, actions, or borrowers match “{query.trim()}”.
-            </div>
+              borrower search runs or after it failed, its status line shows
+              instead (shell-07 item 4): "no borrowers" is not known yet. The
+              visible lines are aria-hidden: a listbox may own only options and
+              groups, so the one live region below the list announces them. */}
+          {noMatch && (
+            <div className="cmdk__empty" aria-hidden="true">{statusText}</div>
           )}
 
           {verbItems.length > 0 && (
@@ -392,12 +402,8 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
             </div>
           )}
 
-          {query.trim().length >= 2 && searchStatus === 'loading' && borrowerItems.length === 0 && (
-            <div className="cmdk__status" role="status">Searching borrowers…</div>
-          )}
-          {query.trim().length >= 2 && searchStatus === 'error' && (
-            <div className="cmdk__status cmdk__status--error" role="status">Borrower search is temporarily unavailable.</div>
-          )}
+          {searching && <div className="cmdk__status" aria-hidden="true">{statusText}</div>}
+          {searchFailed && <div className="cmdk__status cmdk__status--error" aria-hidden="true">{statusText}</div>}
 
           {/* The fallback, after every match (and the same order as `items`,
               so the running index stays in step). */}
@@ -424,6 +430,8 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
             </div>
           )}
         </div>
+        {/* The palette's one live region, outside the listbox (see above). */}
+        <div className="sr-only" role="status">{open ? statusText : ''}</div>
 
         <div className="cmdk__footer">
           <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>

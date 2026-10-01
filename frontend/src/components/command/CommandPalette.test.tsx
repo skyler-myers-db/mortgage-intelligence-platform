@@ -420,28 +420,32 @@ describe('CommandPalette borrower search (networked path)', () => {
     borrowerSearch.mockReturnValue(new Promise((resolve) => {
       settle = resolve;
     }));
+    // Visible lines are aria-hidden; one live region outside the listbox
+    // speaks (a listbox may own only options and groups).
+    const visible = () => [...container.querySelectorAll('.cmdk__empty, .cmdk__status')].map((el) => el.textContent);
+    const spoken = () => [...container.querySelectorAll('[role="status"]')].map((el) => el.textContent);
     pressMetaK();
     setQuery('zz');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(220);
     });
     expect(borrowerSearch).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('.cmdk__empty')).toBeNull();
-    expect([...container.querySelectorAll('[role="status"]')].map((el) => el.textContent)).toEqual(['Searching borrowers…']);
+    expect(visible()).toEqual(['Searching borrowers…']);
+    expect(spoken()).toEqual(['Searching borrowers…']);
 
     await act(async () => settle([]));
-    expect(container.querySelector('.cmdk__empty')?.textContent).toContain('No pages, actions, or borrowers match');
-    expect(container.querySelector('.cmdk__status')).toBeNull();
+    expect(visible()).toEqual(['No pages, actions, or borrowers match “zz”.']);
+    expect(spoken()).toEqual(['No pages, actions, or borrowers match “zz”.']);
 
     borrowerSearch.mockRejectedValue(new Error('warehouse down'));
     setQuery('zzq');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(220);
     });
-    expect(container.querySelector('.cmdk__empty')).toBeNull();
-    expect([...container.querySelectorAll('[role="status"]')].map((el) => el.textContent)).toEqual([
-      'Borrower search is temporarily unavailable.',
-    ]);
+    expect(visible()).toEqual(['Borrower search is temporarily unavailable.']);
+    expect(spoken()).toEqual(['Borrower search is temporarily unavailable.']);
+    expect(container.querySelector('#cmdk-listbox [role="status"]')).toBeNull();
+    expect([...container.querySelectorAll('#cmdk-listbox .cmdk__empty, #cmdk-listbox .cmdk__status')].every((el) => el.getAttribute('aria-hidden') === 'true')).toBe(true);
   });
 });
 
