@@ -380,7 +380,9 @@ export function USChoroplethMap({
               Open Lead Queue for {drillStateName}
             </button>
           ) : undefined}
-          autoFocus={drillFocus}
+          // A keyboard drill waiting on this read, or an Escape out of a ZIP
+          // level whose national stage is down: park focus here, not on <body>.
+          autoFocus={drillFocus || (level === 'state' && returnFocusTo !== null)}
         />
       );
     }
