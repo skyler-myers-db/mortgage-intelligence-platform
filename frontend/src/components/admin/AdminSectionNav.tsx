@@ -50,11 +50,50 @@ export const ADMIN_SECTION_IDS: ReadonlySet<string> = new Set(ADMIN_SECTIONS.map
 const SPY_BOTTOM_MARGIN = '-60%';
 
 /**
- * The section being read: the first section (in page order) intersecting the
- * band between the two sticky bars and 40% down the scroller. Null where
- * IntersectionObserver is missing; the links still work, without a marker.
+ * Past the landing line, so the previous section's last pixel above it (an
+ * edge-adjacent intersection still counts) never marks that section.
  */
-function useSectionInView(sections: readonly AdminSection[], navRef: RefObject<HTMLElement | null>): string | null {
+const SPY_LANDING_SLACK_PX = 1;
+
+/**
+ * How far below the scroller's top edge a hash or focus scroll lands a
+ * section: the scroller's scroll-padding plus the section's scroll-margin,
+ * which AdminSectionNav.css sets to --nav-clear (the route nav AND the focus
+ * ring allowance) plus this nav's block size. Reading the resolved style
+ * keeps the spy's band on the line the scroll uses; the two bars' heights
+ * alone fell short by the focus ring, so the previous section's last pixels
+ * stayed in the band and won (critic-09 fix round). Where computed style
+ * resolves neither (a test DOM), the two bars' heights stand in.
+ */
+function landingInset(scroller: HTMLElement | null, sectionRoot: Element | undefined, fallback: () => number): number {
+  const margin = sectionRoot ? parseFloat(getComputedStyle(sectionRoot).scrollMarginBlockStart) : Number.NaN;
+  if (!Number.isFinite(margin)) return fallback();
+  const padding = scroller ? parseFloat(getComputedStyle(scroller).scrollPaddingBlockStart) : Number.NaN;
+  return margin + (Number.isFinite(padding) ? padding : 0);
+}
+
+/**
+ * The section being read. The section a link (the location hash) went to
+ * holds the marker while it is in view below the bars: Offer rules, Audit
+ * ledger and Data sources share one grid row, and the last sections cannot
+ * scroll up to the landing line, so position alone would name a neighbour.
+ * Once it has left the view, the marker goes to the first section (in page
+ * order) intersecting the band from the landing line to 40% down the
+ * scroller. Null where IntersectionObserver is missing; the links still
+ * work, without a marker.
+ *
+ * Each section's CURRENT root is observed: a panel that replaces its root
+ * after mount (Data estate's skeleton for the loaded panel) is re-observed
+ * through a MutationObserver on the page body, and an entry for a replaced
+ * root is ignored. The landing line is re-read on every callback and both
+ * observers are rebuilt when it has moved: the admin chunk's stylesheet
+ * (this nav's scroll-margin) can apply after mount (seen on WebKit).
+ */
+function useSectionInView(
+  sections: readonly AdminSection[],
+  navRef: RefObject<HTMLElement | null>,
+  hash: string,
+): string | null {
   const [current, setCurrent] = useState<string | null>(null);
 
   useEffect(() => {
@@ -62,25 +101,94 @@ function useSectionInView(sections: readonly AdminSection[], navRef: RefObject<H
     if (typeof IntersectionObserver === 'undefined' || !nav) return undefined;
     const scroller = nav.closest<HTMLElement>('.main');
     const routeNav = scroller?.querySelector<HTMLElement>('.route-nav');
-    const topClearance = (routeNav?.offsetHeight ?? 0) + nav.offsetHeight;
-    const intersecting = new Set<string>();
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) intersecting.add(entry.target.id);
-          else intersecting.delete(entry.target.id);
-        }
-        const first = sections.find((section) => intersecting.has(section.id));
-        if (first) setCurrent(first.id);
-      },
-      { root: scroller ?? null, rootMargin: `-${topClearance}px 0px ${SPY_BOTTOM_MARGIN} 0px` },
-    );
-    for (const section of sections) {
-      const target = document.getElementById(section.id);
-      if (target) observer.observe(target);
+    const bars = () => (routeNav?.offsetHeight ?? 0) + nav.offsetHeight;
+    const observedRoots = new Map<string, Element>();
+    const inBand = new Set<string>();
+    const inView = new Set<string>();
+    let observers: IntersectionObserver[] = [];
+    let builtTop = 0;
+    let held = sections.find((section) => `#${section.id}` === hash)?.id ?? null;
+    let heldSeen = false;
+
+    function topMargin(): number {
+      const root = sections.map((section) => document.getElementById(section.id)).find((node) => node !== null);
+      return Math.ceil(landingInset(scroller, root ?? undefined, bars)) + SPY_LANDING_SLACK_PX;
     }
-    return () => observer.disconnect();
-  }, [navRef, sections]);
+
+    function update(): void {
+      if (held && inView.has(held)) {
+        heldSeen = true;
+        setCurrent(held);
+        return;
+      }
+      if (heldSeen) held = null;
+      const first = sections.find((section) => inBand.has(section.id));
+      if (first) setCurrent(first.id);
+    }
+
+    function record(ids: Set<string>): IntersectionObserverCallback {
+      return (entries) => {
+        if (topMargin() !== builtTop) {
+          connect();
+          return;
+        }
+        for (const entry of entries) {
+          const { id } = entry.target;
+          if (observedRoots.get(id) !== entry.target) continue;
+          if (entry.isIntersecting) ids.add(id);
+          else ids.delete(id);
+        }
+        update();
+      };
+    }
+
+    function observeCurrentRoots(): void {
+      for (const section of sections) {
+        const root = document.getElementById(section.id);
+        const observedRoot = observedRoots.get(section.id);
+        if (root === observedRoot) continue;
+        if (observedRoot) {
+          for (const observer of observers) observer.unobserve(observedRoot);
+          observedRoots.delete(section.id);
+          inBand.delete(section.id);
+          inView.delete(section.id);
+        }
+        if (root) {
+          observedRoots.set(section.id, root);
+          for (const observer of observers) observer.observe(root);
+        }
+      }
+    }
+
+    function connect(): void {
+      for (const observer of observers) observer.disconnect();
+      observedRoots.clear();
+      inBand.clear();
+      inView.clear();
+      builtTop = topMargin();
+      const band = (bottomMargin: string): IntersectionObserverInit => ({
+        root: scroller ?? null,
+        rootMargin: `-${builtTop}px 0px ${bottomMargin} 0px`,
+      });
+      observers = [
+        new IntersectionObserver(record(inBand), band(SPY_BOTTOM_MARGIN)),
+        new IntersectionObserver(record(inView), band('0px')),
+      ];
+      observeCurrentRoots();
+    }
+
+    connect();
+    const body = nav.parentElement;
+    let replacements: MutationObserver | null = null;
+    if (typeof MutationObserver !== 'undefined' && body) {
+      replacements = new MutationObserver(observeCurrentRoots);
+      replacements.observe(body, { childList: true, subtree: true });
+    }
+    return () => {
+      replacements?.disconnect();
+      for (const observer of observers) observer.disconnect();
+    };
+  }, [navRef, sections, hash]);
 
   return current;
 }
@@ -91,9 +199,9 @@ interface AdminSectionNavProps {
 }
 
 export function AdminSectionNav({ sections, status }: AdminSectionNavProps) {
-  const { search } = useLocation();
+  const { search, hash } = useLocation();
   const navRef = useRef<HTMLElement | null>(null);
-  const current = useSectionInView(sections, navRef);
+  const current = useSectionInView(sections, navRef, hash);
 
   return (
     <>

@@ -136,6 +136,22 @@ for (const theme of FIXTURE_THEMES) {
       const sections = page.getByRole('navigation', { name: 'Administration sections' });
       await expect(sections.getByRole('link')).toHaveCount(10);
 
+      // Scroll-spy (critic-09 fix round). With no link followed, a section
+      // scrolled to the landing line (as a focus scroll does: scroll-margin,
+      // focus-ring allowance included) is the one marked, never the previous
+      // section by its last pixels above that line.
+      await expect(page.locator('#data-estate[aria-busy="true"]')).toHaveCount(0);
+      await page.locator('#offer-rules').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+      await expect(sections.getByRole('link', { name: 'Offer rules', exact: true })).toHaveAttribute('aria-current', 'location');
+      // A followed link marks its own section: Audit ledger and Data sources
+      // share Offer rules' grid row, Appearance cannot scroll up to the line,
+      // and Data estate's root was replaced after mount (skeleton -> panel).
+      for (const label of ['Audit ledger', 'Data sources', 'Data estate', 'Offer rules', 'Appearance']) {
+        const link = sections.getByRole('link', { name: label, exact: true });
+        await link.click();
+        await expect(link, `${label} is marked current once it lands`).toHaveAttribute('aria-current', 'location');
+      }
+
       await sections.getByRole('link', { name: 'Data operations' }).click();
       const operations = page.locator('#data-operations');
       await expect(operations).toBeFocused();
