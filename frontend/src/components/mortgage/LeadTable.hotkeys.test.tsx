@@ -22,6 +22,14 @@
  * chrome. Pins 4-8 below: A/R act only while focus is inside the `.tbl-wrap`
  * region and no dialog, drawer, listbox or menu is open.
  *
+ * The overlays are built in the app's real markup (w5-approval-core review
+ * leftover): the evidence drawer and the command palette are native modal
+ * <dialog>s (`dialog.drawer.is-open[open]`, `dialog.cmdk[open]`), closed
+ * they stay mounted as `aria-hidden` + `inert` dialogs without `open`, and
+ * Genie is a NON-modal `role="dialog"` with no aria-modal. A stand-in that
+ * carried `role="dialog"` on an <aside> passed whether or not
+ * OPEN_OVERLAY_SELECTOR knew `dialog[open]`.
+ *
  * Wave 1c (audit flow-03 / states-06): A no longer approves blind. It opens
  * the approve review, which drafts on that intent and shows the copy;
  * Confirm approves that exact draft. "Opened the review" (one draft call, no
@@ -472,8 +480,8 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       mount();
       const btn = expandViaBorrowerButton();
       addToBody(
-        '<aside class="drawer is-open" role="dialog" aria-modal="true" aria-hidden="false">'
-        + '<button type="button">Close</button></aside>',
+        '<dialog class="drawer is-open" open aria-label="Data source and lineage">'
+        + '<button type="button">Close</button></dialog>',
       );
 
       pressKey(btn, 'a');
@@ -487,8 +495,8 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       mount();
       expandViaBorrowerButton();
       const drawer = addToBody(
-        '<aside class="drawer is-open" role="dialog" aria-modal="true" aria-hidden="false">'
-        + '<button type="button">Close</button></aside>',
+        '<dialog class="drawer is-open" open aria-label="Data source and lineage">'
+        + '<button type="button">Close</button></dialog>',
       );
       const close = drawer.querySelector('button') as HTMLButtonElement;
       close.focus();
@@ -503,8 +511,8 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     it.each([
       ['a filter listbox', '<ul class="filter-menu" role="listbox"><li role="option">IL</li></ul>'],
       ['a menu', '<div class="filter-menu" role="menu"><button role="menuitem">Past chat</button></div>'],
-      ['the command palette', '<div class="cmdk"><div class="cmdk__panel" role="dialog" aria-modal="true"></div></div>'],
-      ['the Genie panel', '<div class="genie is-open" role="dialog" aria-hidden="false"></div>'],
+      ['the command palette', '<dialog class="cmdk" open aria-label="Command palette"><div class="cmdk__panel"></div></dialog>'],
+      ['the Genie panel', '<div class="genie is-open" role="dialog" aria-label="Genie chat" tabindex="-1" aria-hidden="false"></div>'],
     ])('does not approve while %s is open', async (_name, html) => {
       mount();
       const btn = expandViaBorrowerButton();
@@ -517,12 +525,13 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       expect(approve).not.toHaveBeenCalled();
     });
 
-    it('still opens the review with the always-mounted drawer and Genie panel CLOSED', async () => {
+    it('still opens the review with the always-mounted drawer, palette and Genie panel CLOSED', async () => {
       mount();
       const btn = expandViaBorrowerButton();
-      addToBody('<aside class="drawer" role="dialog" aria-modal="true" aria-hidden="true"></aside>');
+      addToBody('<dialog class="drawer" aria-label="Data source and lineage" aria-hidden="true" inert></dialog>');
+      addToBody('<dialog class="cmdk" aria-label="Command palette" aria-hidden="true" inert></dialog>');
       addToBody(
-        '<div class="genie" role="dialog" aria-hidden="true"><div role="menu"></div></div>',
+        '<div class="genie" role="dialog" aria-label="Genie chat" aria-hidden="true"><div role="menu"></div></div>',
       );
 
       pressKey(btn, 'a');
@@ -621,6 +630,51 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       await flush();
       expect(container.querySelector('.decision-panel')?.textContent).toContain('B-AAAAAAAAAAAA1');
       expect(reject).not.toHaveBeenCalled();
+    });
+
+    it('Shift+A and the Cmd-K approve verb only open the rationale gate: nothing is drafted or sent', async () => {
+      mount('/lead-queue', null, [lead('B-AAAAAAAAAAAA1'), lead('B-AAAAAAAAAAAA2')]);
+      for (const id of ['B-AAAAAAAAAAAA1', 'B-AAAAAAAAAAAA2']) {
+        act(() => container.querySelector<HTMLInputElement>(`[data-testid="lead-select-${id}"]`)!.click());
+      }
+      const region = container.querySelector<HTMLDivElement>('.tbl-wrap')!;
+      region.focus();
+      act(() => {
+        region.dispatchEvent(new KeyboardEvent('keydown', { key: 'A', shiftKey: true, bubbles: true, cancelable: true }));
+      });
+      await vi.waitFor(async () => {
+        await flush();
+        expect(container.querySelector('[data-testid="lead-bulk-review"]')).not.toBeNull();
+      }, { timeout: 15_000 });
+      expect(document.activeElement).toBe(container.querySelector('.bulk-actions__rationale input'));
+
+      act(() => currentCommandSelection()!.run('approve-selected'));
+      await flush();
+      expect(container.querySelector('[data-testid="lead-bulk-review"]')).not.toBeNull();
+      expect(draftOutreach, 'opening the gate drafts nothing').not.toHaveBeenCalled();
+      expect(approve, 'opening the gate approves nothing').not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the evidence drawer', '<dialog class="drawer is-open" open aria-label="Data source and lineage"></dialog>'],
+      ['the command palette', '<dialog class="cmdk" open aria-label="Command palette"></dialog>'],
+    ])('Shift+A and Shift+R open no gate while %s is open', async (_name, html) => {
+      mount('/lead-queue', null, [lead('B-AAAAAAAAAAAA1'), lead('B-AAAAAAAAAAAA2')]);
+      for (const id of ['B-AAAAAAAAAAAA1', 'B-AAAAAAAAAAAA2']) {
+        act(() => container.querySelector<HTMLInputElement>(`[data-testid="lead-select-${id}"]`)!.click());
+      }
+      const region = container.querySelector<HTMLDivElement>('.tbl-wrap')!;
+      region.focus();
+      addToBody(html);
+      for (const key of ['A', 'R']) {
+        act(() => {
+          region.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey: true, bubbles: true, cancelable: true }));
+        });
+      }
+      await flush();
+      expect(container.querySelector('.bulk-actions__rationale')).toBeNull();
+      expect(container.querySelector('[data-testid="lead-bulk-reject-gate"]')).toBeNull();
+      expect(draftOutreach).not.toHaveBeenCalled();
     });
   });
 
