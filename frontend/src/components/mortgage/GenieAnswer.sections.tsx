@@ -134,6 +134,9 @@ export function GenieRowsVisual({
           valueCol={chart.valueCol}
           tableRowCount={rows.length}
           tableExpanded={showAll}
+          sourceRows={rows}
+          cellCohort={cellCohort}
+          preview={preview}
         />
       )}
       {/* A single METRIC row is a set of headline facts, not a table —

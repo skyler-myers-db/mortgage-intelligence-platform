@@ -9,59 +9,19 @@ import {
   humanizeKey,
   isIdentifierColumn,
   level,
-  MAX_TABLE_ROWS,
   normalizeState,
-  type ChartRow,
 } from './GenieAnswer.logic';
 import { loadUsaStateMap } from './USStateMapData';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import { borrower360Path } from '../../lib/genieCellLinks';
-import { fixedAttr } from '../../lib/fixedPrecision';
 
-/** Bars a bar chart draws before it truncates. */
-export const MAX_BAR_POINTS = 12;
-/** Points a line chart draws before it truncates. */
-export const MAX_LINE_POINTS = 24;
-
-/**
- * Honest chart caption (audit 2026-09-21 `genie-06`). The old caption
- * promised "full N rows in the table below" while the table shows at most
- * MAX_TABLE_ROWS. It names both real caps, and it counts the two row sets
- * separately because they differ: the chart drops every row whose measure is
- * null or not numeric, the table keeps them. The chart takes its rows in SQL
- * order, so it shows the FIRST rows, not the "top" ones.
- *
- * `shown` bars/points out of `charted` chartable rows; `tableRows` is the row
- * count of the answer's table. Null when the chart shows every table row.
- * `tableExpanded`: "Show all" put every row in the table below, so the
- * caption stops counting the compact cap (genie-06 item 1).
- */
-export function chartTruncationCaption(
-  shown: number,
-  charted: number,
-  tableRows: number,
-  unit: 'rows' | 'points',
-  tableExpanded = false,
-): string | null {
-  const uncharted = Math.max(0, tableRows - charted);
-  if (shown >= charted && uncharted === 0) return null;
-  const chart =
-    shown < charted
-      ? `Chart shows the first ${shown} of ${charted} charted ${unit}`
-      : `Chart shows all ${charted} charted ${unit}`;
-  const skipped =
-    uncharted > 0 ? ` (${uncharted} row${uncharted === 1 ? ' has' : 's have'} no value to chart)` : '';
-  const table = tableExpanded
-    ? `the table below shows all ${tableRows} rows`
-    : `the table below shows ${Math.min(MAX_TABLE_ROWS, tableRows)} of ${tableRows} rows`;
-  return `${chart}${skipped}; ${table}.`;
-}
-
-function ChartCaption({ text }: { text: string | null }) {
-  return text ? <div className="genie-chart__more">{text}</div> : null;
-}
+// The line and bar charts live on the chart kit in their own modules
+// (dataviz-05 / stack-06); every name stays importable from here.
+export { GenieBarChart } from './GenieBarChart';
+export { GenieLineChart } from './GenieLineChart';
+export { chartTruncationCaption, MAX_BAR_POINTS, MAX_LINE_POINTS } from './GenieChartCaption';
 
 export function strategySegmentLabel(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null;
@@ -73,150 +33,6 @@ function strategyOfferLabel(row: Record<string, unknown>): string | null {
   const fallback = row.leading_recommended_offer ?? row.recommended_offer ?? row.product_label;
   if (!code && !fallback) return null;
   return offerDisplayLabel(code ? String(code) : null, fallback ? String(fallback) : null);
-}
-
-/**
- * Inline horizontal bar chart. Dependency-free SVG so we don't pull
- * a 100KB+ chart lib. Each bar is sized relative to the max value;
- * negative values are clamped to 0 (real Genie data is counts /
- * scores / dollars -- all >= 0). Truncates to 12 bars to stay
- * readable in the Ask Genie surface; the capped table renders below,
- * and the caption states both caps.
- */
-export function GenieBarChart({
-  data,
-  labelCol,
-  valueCol,
-  tableRowCount,
-  tableExpanded = false,
-}: {
-  data: ChartRow[];
-  labelCol: string;
-  valueCol: string;
-  /** Rows of the answer table below: the chart's own `data` can be shorter. */
-  tableRowCount: number;
-  /** "Show all" is open: the table below holds every row. */
-  tableExpanded?: boolean;
-}) {
-  const MAX_BARS = MAX_BAR_POINTS;
-  const bars = data.slice(0, MAX_BARS);
-  const maxV = Math.max(1, ...bars.map((b) => b.value));
-  const rowH = 22;
-  const labelW = 140;
-  const trackW = 240;
-  const valueW = 70;
-  const totalW = labelW + trackW + 12 + valueW;
-  const totalH = bars.length * rowH + 28;
-  return (
-    <div className="genie-chart">
-      <div className="eyebrow genie-chart__title">
-        {humanizeKey(valueCol)} by {humanizeKey(labelCol)}
-      </div>
-      <svg
-        width="100%"
-        viewBox={`0 0 ${totalW} ${totalH}`}
-        role="img"
-        aria-label={`Bar chart: ${humanizeKey(valueCol)} by ${humanizeKey(labelCol)}`}
-        className="genie-chart__svg"
-      >
-        {bars.map((b, i) => {
-          const y = i * rowH + 10;
-          const w = (b.value / maxV) * trackW;
-          return (
-            <g key={`${b.label}-${i}`}>
-              <text
-                x={labelW - 8}
-                y={y + rowH / 2}
-                textAnchor="end"
-                dominantBaseline="middle"
-                fontSize={11}
-                fill="var(--text-2)"
-                fontFamily="var(--font-sans)"
-              >
-                {b.label.length > 22 ? `${b.label.slice(0, 21)}…` : b.label}
-              </text>
-              <rect
-                x={labelW}
-                y={y + 4}
-                width={trackW}
-                height={rowH - 8}
-                fill="var(--bg-3)"
-                rx={3}
-              />
-              <rect
-                x={labelW}
-                y={y + 4}
-                width={Math.max(2, w)}
-                height={rowH - 8}
-                fill="var(--accent-data)"
-                rx={3}
-              />
-              <text
-                x={labelW + trackW + 8}
-                y={y + rowH / 2}
-                dominantBaseline="middle"
-                fontSize={11}
-                fill="var(--text-1)"
-                fontFamily="var(--font-mono)"
-                fontVariant="tabular-nums"
-              >
-                {formatGenieNumber(b.value)}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-      <ChartCaption text={chartTruncationCaption(bars.length, data.length, tableRowCount, 'rows', tableExpanded)} />
-    </div>
-  );
-}
-
-export function GenieLineChart({
-  data,
-  labelCol,
-  valueCol,
-  tableRowCount,
-  tableExpanded = false,
-}: {
-  data: ChartRow[];
-  labelCol: string;
-  valueCol: string;
-  /** Rows of the answer table below: the chart's own `data` can be shorter. */
-  tableRowCount: number;
-  /** "Show all" is open: the table below holds every row. */
-  tableExpanded?: boolean;
-}) {
-  const points = data.slice(0, MAX_LINE_POINTS);
-  const maxV = Math.max(1, ...points.map((p) => p.value));
-  const minV = Math.min(0, ...points.map((p) => p.value));
-  const width = 520;
-  const height = 180;
-  const span = Math.max(1, maxV - minV);
-  const path = points
-    .map((p, i) => {
-      const x = points.length === 1 ? width / 2 : (i / (points.length - 1)) * width;
-      const y = height - ((p.value - minV) / span) * height;
-      return `${i === 0 ? 'M' : 'L'}${fixedAttr(x, 1)},${fixedAttr(y, 1)}`;
-    })
-    .join(' ');
-  return (
-    <div className="genie-chart">
-      <div className="eyebrow genie-chart__title">
-        {humanizeKey(valueCol)} over {humanizeKey(labelCol)}
-      </div>
-      <svg className="genie-chart__svg" viewBox={`0 0 ${width} ${height + 36}`} role="img" aria-label={`Line chart: ${humanizeKey(valueCol)} over ${humanizeKey(labelCol)}`}>
-        <path d={path} className="genie-line__path" />
-        {points.map((p, i) => {
-          const x = points.length === 1 ? width / 2 : (i / (points.length - 1)) * width;
-          const y = height - ((p.value - minV) / span) * height;
-          return <circle key={`${p.label}-${i}`} cx={x} cy={y} r="3" className="genie-line__dot" />;
-        })}
-        {points[0] && <text x="0" y={height + 24} className="genie-line__axis">{points[0].label}</text>}
-        {points[points.length - 1] && <text x={width} y={height + 24} textAnchor="end" className="genie-line__axis">{points[points.length - 1].label}</text>}
-      </svg>
-      <ChartCaption text={chartTruncationCaption(points.length, data.length, tableRowCount, 'points', tableExpanded)} />
-    </div>
-  );
 }
 
 export function GenieMapChart({

@@ -90,7 +90,7 @@ describe('chart captions', () => {
 
   it('the bar chart draws MAX_BAR_POINTS bars and no longer promises the full rows below', () => {
     act(() => root.render(<GenieBarChart data={rows(30)} labelCol="state" valueCol="borrowers" tableRowCount={30} />));
-    expect(container.querySelectorAll('svg text').length).toBe(MAX_BAR_POINTS * 2);
+    expect(container.querySelectorAll('.genie-bars__row').length).toBe(MAX_BAR_POINTS);
     expect(caption()).toBe(chartTruncationCaption(MAX_BAR_POINTS, 30, 30, 'rows'));
     expect(caption()).not.toContain('full 30 rows');
     expect(caption()).toContain(`the table below shows ${MAX_TABLE_ROWS} of 30 rows`);
@@ -107,7 +107,7 @@ describe('chart captions', () => {
 
   it('the line chart discloses its point cap too', () => {
     act(() => root.render(<GenieLineChart data={rows(40)} labelCol="week" valueCol="score" tableRowCount={40} />));
-    expect(container.querySelectorAll('circle').length).toBe(MAX_LINE_POINTS);
+    expect(container.querySelectorAll('.genie-line__point').length).toBe(MAX_LINE_POINTS);
     expect(caption()).toBe(chartTruncationCaption(MAX_LINE_POINTS, 40, 40, 'points'));
     act(() =>
       root.render(
@@ -140,6 +140,6 @@ describe('chart captions', () => {
     expect(caption()).toBe(
       `Chart shows the first ${MAX_BAR_POINTS} of 28 charted rows (2 rows have no value to chart); the table below shows ${MAX_TABLE_ROWS} of 30 rows.`,
     );
-    expect(container.querySelectorAll('.genie-chart svg text').length).toBe(MAX_BAR_POINTS * 2);
+    expect(container.querySelectorAll('.genie-chart .genie-bars__row').length).toBe(MAX_BAR_POINTS);
   });
 });

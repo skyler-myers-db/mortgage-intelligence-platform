@@ -1,0 +1,162 @@
+/* Genie line and bar charts on the chart kit (audit dataviz-05 / stack-06,
+   Genie half). deviation:genie-chart-axes-drill. Lazy: imported by the
+   chart modules only; the axes, grid and tooltip reuse the shared
+   `.analytics-chart__*` chrome. Tokens only, Geist / Geist Mono. */
+
+/* Line: the plot is the kit's 0-100 percent space. */
+.genie-line__svg {
+  display: block;
+  inline-size: 100%;
+  block-size: var(--analytics-chart-h);
+  overflow: visible;
+}
+.genie-line__path {
+  fill: none;
+  stroke: var(--accent-data);
+  stroke-width: 2;
+}
+.genie-line__points {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: var(--analytics-chart-h);
+  pointer-events: none;
+}
+.genie-line__point {
+  position: absolute;
+  inset-inline-start: var(--point-x);
+  inset-block-start: var(--point-y);
+  inline-size: var(--sp-1);
+  block-size: var(--sp-1);
+  border-radius: var(--r-pill);
+  background: var(--accent-data);
+  transform: translate(-50%, -50%);
+}
+
+/* Bars: one grid, three columns (label, track, value); the list, the
+   gridline overlay and the value axis share it through subgrid. */
+.genie-bars-chart {
+  display: grid;
+  grid-template-columns: minmax(0, calc(var(--sp-16) * 2)) minmax(var(--sp-16), 1fr) max-content;
+  column-gap: var(--sp-2);
+  min-inline-size: 0;
+}
+.genie-bars {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: subgrid;
+  row-gap: var(--sp-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.genie-bars__row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-11);
+}
+.genie-bars__row:hover,
+.genie-bars__row:focus-within {
+  background: var(--bg-2);
+}
+.genie-bars__row:hover .genie-bars__value,
+.genie-bars__row:focus-within .genie-bars__value {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.genie-bars__label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: end;
+  color: var(--text-2);
+  font-family: var(--font-sans);
+}
+.genie-bars__link {
+  color: var(--accent-ink);
+}
+.genie-bars__track {
+  position: relative;
+  display: block;
+  block-size: var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.genie-bars__bar {
+  display: block;
+  block-size: 100%;
+  inline-size: var(--bar-w);
+  min-inline-size: 1px;
+  border-radius: var(--r-sm);
+  background: var(--accent-data);
+}
+.genie-bars__value {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.genie-bars__grid {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  pointer-events: none;
+}
+.genie-bars__gridline {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: var(--tick-pos);
+  inline-size: 1px;
+  background: var(--line-1);
+}
+.genie-bars__axis {
+  grid-column: 2;
+  grid-row: 2;
+  position: relative;
+  min-block-size: var(--sp-5);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+.genie-bars__tick {
+  position: absolute;
+  inset-block-start: var(--sp-1);
+  inset-inline-start: var(--tick-pos);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.genie-bars__tick:first-child {
+  transform: none;
+}
+.genie-bars__tick:last-child {
+  transform: translateX(-100%);
+}
+.genie-chart__drill-note {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+
+/* Forced colours: bars and the line are non-text data marks and keep ink. */
+@media (forced-colors: active) {
+  .genie-bars__bar,
+  .genie-line__point {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+  .genie-bars__track {
+    forced-color-adjust: none;
+    background: Canvas;
+    outline: 1px solid CanvasText;
+  }
+  .genie-line__path {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+  }
+}
