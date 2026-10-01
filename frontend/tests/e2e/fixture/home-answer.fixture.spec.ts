@@ -194,11 +194,13 @@ for (const theme of FIXTURE_THEMES) {
       await app.gotoRoute('/');
       const band = page.locator('.home-answer');
       // The payload really is the maximum: every actionable offer, the
-      // unverified-figures warning, five WHO rows, three triggers.
+      // unverified-figures warning, five WHO rows, the rate move since the
+      // visit plus five triggers (flow-05).
       await expect(band.locator('.offer-mix__seg')).toHaveCount(LIVE_ACTIONABLE_MIX.length);
       await expect(band.getByRole('status').filter({ hasText: 'could not be verified' })).toBeVisible();
       await expect(band.locator('.home-answer__who-row')).toHaveCount(5);
-      await expect(band.locator('.home-answer__trigger')).toHaveCount(MAX_HOME_SUMMARY.highlights.length);
+      await expect(band.locator('[data-testid="why-now-rate-move"]')).toBeVisible();
+      await expect(band.locator('.home-answer__trigger')).toHaveCount(MAX_HOME_SUMMARY.highlights.length + 1);
 
       const bandBox = (await band.boundingBox())!;
       const mapBox = (await page.locator('#main-content .map-wrap').boundingBox())!;
@@ -400,7 +402,14 @@ test.describe('Home answer band links and reads', () => {
       .toHaveAttribute('href', '/lead-queue?segment=itm');
     await expect(why.getByRole('link', { name: /opportunity score of 75\+/ }))
       .toHaveAttribute('href', '/lead-queue?funnel_stage=high_opportunity');
-    // "offers available" counts "Monitor for later" too; no queue filter is that population.
+    // flow-05: the event measures and the primary offer paths open the queue
+    // filter with the same predicate (offers_available, which had none, is gone).
+    await expect(why.getByRole('link', { name: 'borrowers whose homes are listed for sale' }))
+      .toHaveAttribute('href', '/lead-queue?purchase_intent=Listed+for+sale');
+    await expect(why.getByRole('link', { name: 'borrowers whose lien is held by a competitor' }))
+      .toHaveAttribute('href', '/lead-queue?lender_relationship=Competitor+customer');
+    await expect(why.getByRole('link', { name: 'borrowers with a primary offer path' }))
+      .toHaveAttribute('href', '/lead-queue?funnel_stage=offer_recommended');
     await expect(why.getByRole('link', { name: 'borrowers with an offer decision' })).toHaveCount(0);
 
     const offers = page.locator('.offer-mix__legend');

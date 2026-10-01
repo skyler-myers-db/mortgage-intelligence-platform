@@ -80,6 +80,10 @@ const COMPETITOR_LIENS = 412_870;
  */
 export const MAX_HOME_SUMMARY: HomeSummary = {
   ...HOME_SUMMARY,
+  // A visit inside the rate window fixture's series (data/rateWindow.ts), so
+  // the 30-year par move since the visit renders as the first trigger.
+  previous_visit_at: '2026-01-15T14:30:00+00:00',
+  baseline_snapshot_at: '2026-01-15T06:00:00+00:00',
   highlights: [
     { measure: 'listed_for_sale', label: 'listed for sale', display: '+11,412', value_token: '+11,412', current: LISTED, baseline: 50_000, delta: 11_412, delta_pct: 22.8 },
     { measure: 'competitor_lien', label: 'competitor liens', display: '-12,310', value_token: '-12,310', current: COMPETITOR_LIENS, baseline: 425_180, delta: -12_310, delta_pct: -2.9 },

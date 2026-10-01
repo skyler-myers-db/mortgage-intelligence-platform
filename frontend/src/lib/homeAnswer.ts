@@ -1,4 +1,4 @@
-import type { HomeSummary, HomeSummaryHighlight, TopBorrowerAnalyticsRow } from '../types';
+import type { HomeSummary, HomeSummaryHighlight, RateWindowWeek, TopBorrowerAnalyticsRow } from '../types';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from './opportunityScore';
 
 /**
@@ -74,18 +74,35 @@ interface TriggerCopy {
  * Plain lender language for each summary measure, and the queue filter whose
  * predicate is the SAME population:
  *
+ *   listed_for_sale       -> `purchase_intent=Listed for sale`: the same
+ *                            `listed_for_sale` indicator (flow-05 events)
+ *   competitor_lien       -> `lender_relationship=Competitor customer`: the
+ *                            same `is_competitor_lien` indicator
  *   refi_economics_screen -> `segment=itm`: `in_the_money` is exactly what puts
  *                            `itm` in segment_codes (the approval banner's link)
  *   high_opportunity      -> `funnel_stage=high_opportunity`: score >= 75
+ *   offers_recommended    -> `funnel_stage=offer_recommended`: a non-null,
+ *                            non-nurture offer, the "Primary offer paths" KPI
  *   marketable_population -> the whole queue (first visit: "your book today")
- *   offers_available      -> none. `offer_available` counts every borrower
- *                            with ANY offer decision, "Monitor for later"
- *                            included; the queue's closest filter
- *                            (`funnel_stage=offer_recommended`) excludes it,
- *                            so a link would open a different population.
- *                            The offer-mix column links by product instead.
+ *   offers_available      -> none (kept for older payloads; the server now
+ *                            sends offers_recommended). `offer_available`
+ *                            counts every borrower with ANY offer decision,
+ *                            "Monitor for later" included, so no queue
+ *                            filter is that population.
  */
 const TRIGGER_COPY: Record<string, TriggerCopy> = {
+  listed_for_sale: {
+    noun: 'borrowers whose homes are listed for sale',
+    href: leadQueueHref({ purchase_intent: 'Listed for sale' }),
+  },
+  competitor_lien: {
+    noun: 'borrowers whose lien is held by a competitor',
+    href: leadQueueHref({ lender_relationship: 'Competitor customer' }),
+  },
+  offers_recommended: {
+    noun: 'borrowers with a primary offer path',
+    href: leadQueueHref({ funnel_stage: 'offer_recommended' }),
+  },
   refi_economics_screen: {
     noun: 'borrowers whose rate and equity pass the refinance screen',
     href: leadQueueHref({ segment: 'itm' }),
@@ -135,4 +152,45 @@ export function whyNowTriggers(summary: HomeSummary | null | undefined): WhyNowT
       href: copy ? copy.href : null,
     };
   });
+}
+
+/** The 30-year par move between the week of the last visit and the latest week (flow-05). */
+export interface RateMoveSinceVisit {
+  /** Week-starting Monday (YYYY-MM-DD) of the print that was current at the visit. */
+  fromWeek: string;
+  fromPct: number;
+  /** The latest week (`is_latest`). */
+  toWeek: string;
+  toPct: number;
+  /** Signed basis points: the one client-side subtraction, of two server prints. */
+  deltaBps: number;
+}
+
+/** The visit's UTC calendar date, or null when it does not parse. */
+function utcDate(instant: string): string | null {
+  const at = Date.parse(instant);
+  return Number.isFinite(at) ? new Date(at).toISOString().slice(0, 10) : null;
+}
+
+/**
+ * The FRED MORTGAGE30US move since the last visit, from the rate window's own
+ * weekly prints: the latest week against the latest week whose Monday is on
+ * or before the visit's UTC date. Null with no visit, no latest week, a visit
+ * that predates the series, the same week on both sides, or no move.
+ */
+export function rateMoveSinceVisit(
+  weeks: readonly RateWindowWeek[] | null | undefined,
+  previousVisitAt: string | null | undefined,
+): RateMoveSinceVisit | null {
+  if (!previousVisitAt || !Array.isArray(weeks)) return null;
+  const visitDate = utcDate(previousVisitAt);
+  const latest = weeks.find((week) => week.is_latest === true);
+  if (!visitDate || !latest) return null;
+  const from = weeks
+    .filter((week) => week.week <= visitDate)
+    .reduce<RateWindowWeek | null>((best, week) => (best === null || week.week > best.week ? week : best), null);
+  if (!from || from.week === latest.week) return null;
+  const deltaBps = Math.round((latest.market_rate_pct - from.market_rate_pct) * 100);
+  if (deltaBps === 0) return null;
+  return { fromWeek: from.week, fromPct: from.market_rate_pct, toWeek: latest.week, toPct: latest.market_rate_pct, deltaBps };
 }
