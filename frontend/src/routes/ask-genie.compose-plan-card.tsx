@@ -1,7 +1,9 @@
-import { useId, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { ComposePlanDiffView } from './ask-genie.compose-plan-diff-view';
 import { formatStepParams, type SegmentLabeler } from './ask-genie.compose-plan-params';
+import type { GrowthAgentPlanChanges } from './ask-genie.growth-agent-state';
 import { CUSTOM_SEGMENTS } from './ask-genie.growth-agent.helpers';
 import {
   DATABRICKS_AGENT_RESPONSES_LABEL,
@@ -51,6 +53,7 @@ const SEGMENT_LABELS: ReadonlyMap<string, string> = new Map(
   CUSTOM_SEGMENTS.map((segment) => [segment.code, segment.label]),
 );
 const segmentLabel: SegmentLabeler = (code) => SEGMENT_LABELS.get(code) ?? code;
+const formatParams = (params: Record<string, unknown>) => formatStepParams(params, segmentLabel);
 
 /** Run controls for a composed, unexecuted plan (audit 2026-09-21 `critic-01`). */
 export interface ComposePlanRunControls {
@@ -69,6 +72,11 @@ interface ComposePlanCardProps {
   onOpenRoute?: (route: string) => void;
   renderSourceAssetChip?: (asset: string) => ReactNode;
   run?: ComposePlanRunControls;
+  /** What changed against the plan the lender reviewed (a recompose only). */
+  changes?: GrowthAgentPlanChanges | null;
+  /** Set once by Compose again: focus the diff summary (or the title) on mount. */
+  focusOnMount?: boolean;
+  onMountFocused?: () => void;
 }
 
 function runHint(stepCount: number, signed: boolean): string {
@@ -85,8 +93,23 @@ function runHint(stepCount: number, signed: boolean): string {
  * until the server answers. A 409 means nothing ran; the lender composes
  * again and reviews the current plan. After a run, the trace replaces this
  * row: there is no re-run from the same card.
+ *
+ * While the run is pending the button is aria-disabled, not natively
+ * disabled, so keyboard focus stays on it (critic-01); the click is ignored.
  */
-function ComposePlanRunRow({ run, stepCount, signed }: { run: ComposePlanRunControls; stepCount: number; signed: boolean }) {
+function ComposePlanRunRow({
+  run,
+  stepCount,
+  signed,
+  onRun,
+  composeAgainRef,
+}: {
+  run: ComposePlanRunControls;
+  stepCount: number;
+  signed: boolean;
+  onRun: () => void;
+  composeAgainRef: RefObject<HTMLButtonElement | null>;
+}) {
   const hintId = useId();
   return (
     <div className="growth-agent-run__section mt-3">
@@ -106,14 +129,17 @@ function ComposePlanRunRow({ run, stepCount, signed }: { run: ComposePlanRunCont
           variant="primary"
           size="sm"
           icon="play"
-          onClick={run.onRun}
-          disabled={!signed || run.pending || run.conflict}
+          onClick={() => {
+            if (!run.pending) onRun();
+          }}
+          disabled={!signed || run.conflict}
+          aria-disabled={run.pending || undefined}
           aria-describedby={hintId}
         >
           {run.pending ? 'Running…' : 'Run this plan'}
         </Button>
         {run.conflict && (
-          <Button variant="ghost" size="sm" icon="sparkle" onClick={run.onComposeAgain}>
+          <Button ref={composeAgainRef} variant="ghost" size="sm" icon="sparkle" onClick={run.onComposeAgain}>
             Compose again
           </Button>
         )}
@@ -133,15 +159,48 @@ export function ComposePlanCard({
   onOpenRoute,
   renderSourceAssetChip,
   run,
+  changes,
+  focusOnMount = false,
+  onMountFocused,
 }: ComposePlanCardProps) {
   const { status, plan } = response;
+  const traceTitleId = useId();
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const summaryRef = useRef<HTMLParagraphElement>(null);
+  const traceRef = useRef<HTMLElement>(null);
+  const composeAgainRef = useRef<HTMLButtonElement>(null);
+  // Focus follows only the answer to THIS card's own Run (critic-01), never a remount.
+  const ranHere = useRef(false);
+  const conflict = run?.conflict ?? false;
+
+  useEffect(() => {
+    if (!focusOnMount) return;
+    (summaryRef.current ?? titleRef.current)?.focus();
+    onMountFocused?.();
+  }, [focusOnMount, onMountFocused]);
+
+  useEffect(() => {
+    if (!ranHere.current) return;
+    if (response.executed) {
+      ranHere.current = false;
+      traceRef.current?.focus();
+    } else if (conflict) {
+      ranHere.current = false;
+      composeAgainRef.current?.focus();
+    }
+  }, [response.executed, conflict]);
+
+  function runPlan() {
+    ranHere.current = true;
+    run?.onRun();
+  }
 
   return (
     <section className="growth-agent-run" aria-label="Composed Growth Agent plan">
       <div className="growth-agent-run__head">
         <div>
           <div className="eyebrow">Composed plan</div>
-          <SurfaceTitle level={3}>
+          <SurfaceTitle level={3} ref={titleRef} tabIndex={-1}>
             {publicAgentResponsesText(
               plan ? plan.objective_summary : response.message ?? 'Plan unavailable',
             )}
@@ -205,6 +264,15 @@ export function ComposePlanCard({
             </div>
           )}
 
+          {changes && (
+            <ComposePlanDiffView
+              diff={changes.diff}
+              scopeChanged={changes.scopeChanged}
+              formatParams={formatParams}
+              summaryRef={summaryRef}
+            />
+          )}
+
           <div className="growth-agent-run__section">
             <div className="eyebrow">Plan steps</div>
             <div className="growth-agent-timeline">
@@ -218,7 +286,7 @@ export function ComposePlanCard({
                     <div className="growth-agent-step__detail">
                       {publicAgentResponsesText(step.rationale)}
                     </div>
-                    <div className="growth-agent-step__meta">{formatStepParams(step.params, segmentLabel)}</div>
+                    <div className="growth-agent-step__meta">{formatParams(step.params)}</div>
                     <div className="growth-agent-step__meta">step {step.step_id}</div>
                   </div>
                 </div>
@@ -238,12 +306,23 @@ export function ComposePlanCard({
           )}
 
           {run && !response.executed && (
-            <ComposePlanRunRow run={run} stepCount={plan.steps.length} signed={Boolean(response.plan_digest)} />
+            <ComposePlanRunRow
+              run={run}
+              stepCount={plan.steps.length}
+              signed={Boolean(response.plan_digest)}
+              onRun={runPlan}
+              composeAgainRef={composeAgainRef}
+            />
           )}
 
           {response.executed && response.trace.length > 0 && (
-            <div className="growth-agent-run__section">
-              <div className="eyebrow">Execution trace</div>
+            <section
+              ref={traceRef}
+              tabIndex={-1}
+              className="growth-agent-run__section"
+              aria-labelledby={traceTitleId}
+            >
+              <div className="eyebrow" id={traceTitleId}>Execution trace</div>
               <div className="growth-agent-timeline">
                 {response.trace.map((step) => {
                   const isGate =
@@ -286,7 +365,7 @@ export function ComposePlanCard({
                   );
                 })}
               </div>
-            </div>
+            </section>
           )}
         </>
       )}

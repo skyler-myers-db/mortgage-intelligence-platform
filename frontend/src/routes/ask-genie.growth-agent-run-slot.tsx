@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePrefersReducedMotion } from '../lib/usePrefersReducedMotion';
 import { ComposePlanCard } from './ask-genie.compose-plan-card';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
-import type { GrowthAgentRunOrigin, GrowthAgentWorkspace } from './ask-genie.growth-agent-state';
+import type { GrowthAgentRunKind, GrowthAgentRunOrigin, GrowthAgentWorkspace } from './ask-genie.growth-agent-state';
 import { renderSourceAssetChip } from './ask-genie.growth-agent.helpers';
 import { GrowthAgentRunCard } from './ask-genie.growth-run-card';
 import { SurfaceTitle } from '../components/Primitives';
@@ -17,8 +17,21 @@ import { SurfaceTitle } from '../components/Primitives';
  * It scrolls itself into view (`block: 'nearest'`, so only when it is off
  * screen): a run started from a card further down the tab would otherwise
  * report its progress somewhere the user cannot see.
+ *
+ * The sentence says what THIS kind of action does (audit 2026-09-21
+ * `critic-01`): composing runs nothing, and drafting sends nothing.
  */
-export function GrowthAgentRunPending({ label }: { label: string }) {
+const PENDING_INTENT: Record<GrowthAgentRunKind, string> = {
+  workflow:
+    'Counting eligible borrowers and checking each review rule. The counts, the checks and the Lead Queue link '
+    + 'appear here when the run finishes.',
+  compose:
+    'Composing a multi-step plan from reviewed tools. Nothing runs until you review the steps and choose Run this plan.',
+  recompose: 'Composing the plan again. The new plan is compared step by step with the plan you reviewed.',
+  draft: 'Drafting Slack and Teams notes for review. Nothing is sent.',
+};
+
+export function GrowthAgentRunPending({ label, kind = 'workflow' }: { label: string; kind?: GrowthAgentRunKind }) {
   const ref = useRef<HTMLElement>(null);
   const reducedMotion = usePrefersReducedMotion();
   // Once per run card: a motion-preference change mid-run does not re-scroll.
@@ -47,10 +60,7 @@ export function GrowthAgentRunPending({ label }: { label: string }) {
           <span />
         </span>
       </div>
-      <p className="growth-agent-run__intent">
-        Counting eligible borrowers and checking each review rule. The counts, the checks and the Lead Queue link
-        appear here when the run finishes.
-      </p>
+      <p className="growth-agent-run__intent">{PENDING_INTENT[kind]}</p>
     </section>
   );
 }
@@ -68,9 +78,13 @@ interface GrowthAgentRunSlotProps {
 export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRunSlotProps) {
   const here = agent.runOrigin === origin;
   const composePlan = agent.composePlan;
+  // Set by Compose again: the card that answers it takes focus once (critic-01).
+  const [focusNextCard, setFocusNextCard] = useState(false);
   return (
     <>
-      {agent.activeRun?.origin === origin && <GrowthAgentRunPending label={agent.activeRun.label} />}
+      {agent.activeRun?.origin === origin && (
+        <GrowthAgentRunPending label={agent.activeRun.label} kind={agent.activeRun.kind} />
+      )}
       {here && agent.growthAgentError && (
         <div className="status-callout status-callout--danger mt-3" role="alert">
           {agent.growthAgentError}
@@ -88,12 +102,18 @@ export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRu
           response={composePlan}
           onOpenRoute={onOpenRoute}
           renderSourceAssetChip={renderSourceAssetChip}
+          changes={agent.planChanges}
+          focusOnMount={focusNextCard}
+          onMountFocused={() => setFocusNextCard(false)}
           run={{
             pending: agent.planExecution.pending,
             conflict: agent.planExecution.conflict !== null,
             errorMessage: agent.planExecution.errorMessage,
             onRun: () => agent.executeComposedPlan(composePlan),
-            onComposeAgain: () => void agent.composeGrowthAgentPlan(),
+            onComposeAgain: () => {
+              setFocusNextCard(true);
+              void agent.composeGrowthAgentPlan();
+            },
           }}
         />
       )}

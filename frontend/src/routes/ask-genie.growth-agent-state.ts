@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
 import type {
+  ComposedPlan,
   ComposePlanResponse,
   GrowthAgentCadence,
   GrowthAgentMonitor,
@@ -13,6 +14,7 @@ import type {
   GrowthAgentWorkflow,
   GrowthAgentWorkflowId,
 } from '../types';
+import { diffComposedPlans, planScopeChanged, type PlanDiff } from './ask-genie.compose-plan-diff';
 import { mergeExecutedPlan, useComposedPlanExecution } from './ask-genie.compose-plan-execute';
 import { parseGrowthAgentStateInput } from './ask-genie.growth-agent.helpers';
 
@@ -40,16 +42,26 @@ function settle<T>(
 /** The `/ask-genie` tab an action was started from; its feedback renders there. */
 export type GrowthAgentRunOrigin = 'workflows' | 'monitors';
 
+/** What an action in flight is doing; its pending copy depends on it (critic-01). */
+export type GrowthAgentRunKind = 'workflow' | 'compose' | 'recompose' | 'draft';
+
 /** An action in flight: where it was started and what it is doing, in lender copy. */
 export interface GrowthAgentActiveRun {
   origin: GrowthAgentRunOrigin;
   label: string;
+  kind: GrowthAgentRunKind;
 }
 
 /** The objective and state scope a plan was composed for. */
 export interface GrowthAgentComposeSnapshot {
   objective: string;
   states: string[];
+}
+
+/** The step diff a recompose shows against the plan the lender reviewed. */
+export interface GrowthAgentPlanChanges {
+  diff: PlanDiff;
+  scopeChanged: boolean;
 }
 
 /**
@@ -94,19 +106,27 @@ export function useGrowthAgentWorkspace() {
   const [composeSnapshot, setComposeSnapshot] = useState<GrowthAgentComposeSnapshot | null>(null);
   const [runOrigin, setRunOrigin] = useState<GrowthAgentRunOrigin>('workflows');
   const [activeRun, setActiveRun] = useState<GrowthAgentActiveRun | null>(null);
+  // The last composed plan the lender was shown. Kept across objective edits
+  // (clearGrowthAgentFeedback leaves it), so a recompose is diffed against it.
+  const [reviewedBaseline, setReviewedBaseline] = useState<{ plan: ComposedPlan; snapshot: GrowthAgentComposeSnapshot } | null>(null);
+  const [planChanges, setPlanChanges] = useState<GrowthAgentPlanChanges | null>(null);
   const planExecution = useComposedPlanExecution({
     onExecuted: (result, request) => setComposePlan((current) => mergeExecutedPlan(current, result, request)),
   });
 
-  function beginRun(origin: GrowthAgentRunOrigin, label: string) {
+  function beginRun(origin: GrowthAgentRunOrigin, label: string, kind: GrowthAgentRunKind = 'workflow') {
     setRunOrigin(origin);
-    setActiveRun({ origin, label });
+    setActiveRun({ origin, label, kind });
   }
 
   function clearGrowthAgentFeedback() {
+    // While a reviewed plan runs, its card and answer must survive: the
+    // controls that call this are disabled then, and this is the backstop.
+    if (planExecution.pending) return;
     setLatestGrowthRun(null);
     setLatestGrowthDrafts([]);
     setComposePlan(null);
+    setPlanChanges(null);
     planExecution.reset();
     setGrowthAgentError(null);
   }
@@ -215,9 +235,12 @@ export function useGrowthAgentWorkspace() {
       return Promise.resolve();
     }
     const snapshot: GrowthAgentComposeSnapshot = { objective, states: parsed.states };
+    const baseline = reviewedBaseline;
     setComposePending('compose');
-    beginRun('workflows', 'Composing a plan for your objective');
+    if (baseline) beginRun('workflows', 'Composing the current plan for your objective', 'recompose');
+    else beginRun('workflows', 'Composing a plan for your objective', 'compose');
     setComposePlan(null);
+    setPlanChanges(null);
     planExecution.reset();
     setGrowthAgentError(null);
     return settle(
@@ -228,6 +251,14 @@ export function useGrowthAgentWorkspace() {
       (result) => {
         setComposePlan(result);
         setComposeSnapshot(snapshot);
+        // critic-01: a composed plan is diffed against the one the lender
+        // reviewed, then becomes the new baseline. Degraded and invalid
+        // answers show no diff and leave the baseline alone.
+        if (result.status !== 'composed' || !result.plan) return;
+        setPlanChanges(baseline
+          ? { diff: diffComposedPlans(baseline.plan, result.plan), scopeChanged: planScopeChanged(baseline.snapshot, snapshot) }
+          : null);
+        setReviewedBaseline({ plan: result.plan, snapshot });
       },
       (err) => setGrowthAgentError(err instanceof Error ? err.message : 'Compose plan failed.'),
       () => {
@@ -326,7 +357,7 @@ export function useGrowthAgentWorkspace() {
 
   function draftGrowthAgentMonitorNotifications(monitor: GrowthAgentMonitor): Promise<void> {
     setMonitorDraftPending(monitor.monitor_id);
-    beginRun('monitors', `Drafting Slack and Teams notes for ${monitor.name}`);
+    beginRun('monitors', `Drafting Slack and Teams notes for ${monitor.name}`, 'draft');
     setLatestGrowthRun(null);
     setLatestGrowthDrafts([]);
     setGrowthAgentError(null);
@@ -381,6 +412,7 @@ export function useGrowthAgentWorkspace() {
     composePending,
     composeSnapshot,
     planExecution,
+    planChanges,
     runOrigin,
     activeRun,
     workflowsLoading: growthAgentQuery.isPending,

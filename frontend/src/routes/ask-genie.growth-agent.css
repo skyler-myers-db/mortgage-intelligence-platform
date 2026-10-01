@@ -1,0 +1,65 @@
+/* Growth Agent trust surface (audit 2026-09-21 critic-01, genie-09, flow-08).
+   Imported by ask-genie.growth-agent-panel.tsx, so these rules ship in the
+   lazy /ask-genie CSS chunk and add nothing to the initial stylesheet. Every
+   selector is new (no override of 06-genie-chat.css), tokens only.
+   /ask-genie has no prototype page; the nearest anchors are the floating Genie
+   panel (design_files/Module 0 Prototype.html :1365) and the trigger timeline
+   (:569 CSS, :1942 markup). Deviation ids: docs/prototype-deviations.md,
+   "Pending rows". */
+
+/* deviation:growth-agent-command-side
+   Command bar, column 2: the buttons with the hint UNDER them. The hint used
+   to auto-place into row 2, column 1 (under the objective). contain:
+   inline-size keeps the hint from widening the auto-sized column. */
+.growth-agent-command__side {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: end;
+  min-width: 0;
+}
+.growth-agent-command__hint {
+  contain: inline-size;
+  inline-size: 100%;
+  text-align: end;
+}
+@media (max-width: 48rem) {
+  .growth-agent-command__side {
+    justify-items: start;
+  }
+  .growth-agent-command__hint {
+    text-align: start;
+  }
+}
+
+/* deviation:growth-agent-plan-diff
+   Recompose diff: what changed against the plan the lender reviewed. */
+.growth-agent-diff {
+  margin-block-start: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.growth-agent-diff__summary {
+  margin-block: var(--sp-1) 0;
+  color: var(--text-1);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+.growth-agent-diff__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.growth-agent-diff__row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: start;
+}
+.growth-agent-diff__row--removed .growth-agent-step__title {
+  text-decoration: line-through;
+}
