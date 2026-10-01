@@ -88,6 +88,11 @@ def job_status(
 
     status = job.status
     stage = job.stage
+    if status is GenieJobStatus.RUNNING and stage is GenieJobStage.QUEUED:
+        # Claimed but no stage written yet (the stage writer is off-thread,
+        # or an older process ran it inline without stages): the claim is
+        # followed by collecting Genie's turn, so "Queued" would be untrue.
+        stage = GenieJobStage.COLLECTING
     failure_kind = job.failure_kind
     response: GenieMessageResponse | None = None
     if status is GenieJobStatus.SUCCEEDED:

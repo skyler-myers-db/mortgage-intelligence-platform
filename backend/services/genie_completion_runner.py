@@ -10,8 +10,9 @@ second time. The tail now lives in :func:`complete_governed_turn` and runs:
   adopts its Genie concurrency slot, enqueues :func:`run_completion_job` and
   answers 202; the browser polls ``/message/status``;
 * INLINE (older tabs): the request creates the job, runs the tail in its own
-  thread holding its own slot, and records the outcome on the job, so a
-  retried legacy complete JOINS it and waits instead of running it again;
+  thread holding its own slot, publishes the same stages as a job run, and
+  records the outcome on the job, so a retried legacy complete JOINS it and
+  waits instead of running it again;
 * WITHOUT A JOB when the table is not provisioned yet (the App promoted
   ahead of its migration): exactly today's inline path, for older tabs only.
   An async request that cannot get a job is refused with a non-retryable
@@ -75,6 +76,7 @@ from backend.services.genie_completion_stages import (
     GenieJobStage,
     GenieJobStatus,
     GenieTurnCancelled,
+    StageCallback,
     commit_governed_record,
     report_stage,
     stage_sink,
@@ -324,6 +326,22 @@ def _governed_hooks(turn: GovernedTurn, job_id: str) -> tuple[Callable[[], bool]
     return cancelled, commit
 
 
+def _job_callbacks(turn: GovernedTurn, job_id: str) -> StageCallback:
+    """The progress callbacks every job-backed run installs, async or inline.
+
+    Wave-3 remainder: the legacy inline path used to install a no-op stage
+    callback, so a job it created stayed ``stage='queued'`` while it ran and
+    an async complete that joined it polled "Queued" for the whole run.
+    """
+
+    def write(stage: GenieJobStage, done: int | None, planned: int | None) -> None:
+        # Recorded for the stage writer's thread: the governed thread never
+        # waits on Lakebase for progress.
+        jobs.STAGE_WRITER.submit(turn.lakebase, job_id, stage, done, planned)
+
+    return write
+
+
 def _end_cancelled(turn: GovernedTurn, job_id: str, started: float) -> None:
     """A stopped job: ended ``cancelled`` (never failed), nothing recorded."""
 
@@ -340,10 +358,6 @@ def _end_cancelled(turn: GovernedTurn, job_id: str, started: float) -> None:
             job_id=job_id,
         )
     _finished(job_id, GenieJobStatus.CANCELLED, started, None)
-
-
-def _no_stage(stage: GenieJobStage, done: int | None, planned: int | None) -> None:
-    """The legacy inline job publishes no stages; its sink only gates."""
 
 
 def _store_success(turn: GovernedTurn, job_id: str, response: GenieMessageResponse, started: float) -> None:
@@ -366,14 +380,8 @@ def _run_job(turn: GovernedTurn, job_id: str, slot: DependencySlot | None, corre
             emit(log, "genie_job_claim_lost", level=logging.WARNING, dependency="lakebase", outcome="lost", job_id=job_id)
             return
         claimed = True
-
-        def write(stage: GenieJobStage, done: int | None, planned: int | None) -> None:
-            # Recorded for the stage writer's thread: the governed thread
-            # never waits on Lakebase for progress.
-            jobs.STAGE_WRITER.submit(turn.lakebase, job_id, stage, done, planned)
-
         cancelled, commit = _governed_hooks(turn, job_id)
-        with stage_sink(write, cancelled=cancelled, commit=commit):
+        with stage_sink(_job_callbacks(turn, job_id), cancelled=cancelled, commit=commit):
             response = complete_governed_turn(turn)
         _store_success(turn, job_id, response, started)
     except GenieTurnCancelled:
@@ -425,7 +433,7 @@ def run_inline_job(turn: GovernedTurn, job: GenieCompletionJob) -> GenieMessageR
         claimed = True
         cancelled, commit = _governed_hooks(turn, job.job_id)
         try:
-            with stage_sink(_no_stage, cancelled=cancelled, commit=commit):
+            with stage_sink(_job_callbacks(turn, job.job_id), cancelled=cancelled, commit=commit):
                 response = complete_governed_turn(turn)
         except GenieTurnCancelled:
             # Stopped before the record: nothing recorded, and a

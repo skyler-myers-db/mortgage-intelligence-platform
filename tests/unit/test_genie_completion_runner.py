@@ -464,14 +464,33 @@ def test_a_hung_stage_write_never_holds_the_governed_answer(monkeypatch: Any) ->
     wait_for_stage_writer()
 
 
-def test_the_legacy_inline_path_publishes_no_stages(monkeypatch: Any) -> None:
-    lakebase = FakeJobLakebase()
+def test_the_legacy_inline_path_publishes_its_stages_to_a_joined_async_poll(monkeypatch: Any) -> None:
+    # Wave-3 remainder: a job the legacy inline path created used to stay
+    # stage='queued' while it ran, so an async complete that joined it polled
+    # "Queued for governed completion" for the whole run.
+    lakebase, genie = FakeJobLakebase(), _StubGenie(gate=threading.Event())
+    assert genie.gate is not None
+    reported = _record_reported_stages(monkeypatch)
+    install(monkeypatch, repo=DatabricksGenieRepository(genie), audit=FakeAudit(), lakebase=lakebase)  # type: ignore[arg-type]
+    client = TestClient(app)
+    legacy: dict[str, Any] = {}
+    worker = threading.Thread(target=lambda: legacy.update(res=post_complete(client, respond_async=False)))
+    worker.start()
+    try:
+        assert genie.started.wait(10)
+        joined = post_complete(client)
+        assert joined.status_code == 202
+        status = post_status(client, joined.json()["job_id"]).json()
+        assert (status["status"], status["stage"]) == ("running", "collecting")
+    finally:
+        genie.gate.set()
+        worker.join(15)
+    wait_for_stage_writer()
 
-    res = _real_repo_job(monkeypatch, lakebase, respond_async=False)
-
-    assert res.status_code == 200
-    assert lakebase.stage_writes == []
-    assert "stage" not in lakebase.job_statements
+    assert legacy["res"].status_code == 200
+    assert reported == _PIPELINE, "the inline path reports the real pipeline stages"
+    assert [stage for stage, _, _ in lakebase.stage_writes], "and they reach the job row"
+    assert lakebase.only_job()["status"] == "succeeded"
 
 
 def test_failing_stage_writes_never_fail_the_answer_and_warn_once(monkeypatch: Any, caplog: Any) -> None:
