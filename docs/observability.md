@@ -621,6 +621,9 @@ answer, SQL, or exception text; ids are the job UUID only:
 | `genie_job_cancel_end_failed` (logger `mip-genie`) | WARNING | `error_type`, `job_id` | The runner could not mark a stopped job `cancelled`. Nothing was recorded; the lease lapses and the next read expires the job. |
 | `genie_jobs_table_absent`, 2026_09_25 columns | WARNING, once per absence | — | Also logged when the table exists without `cancel_requested_at`, `recorded_at` and `deep` (the App promoted ahead of the 2026_09_25 migration): the App completes inline exactly as without the table. |
 | `genie_job_durations_failed` | WARNING, at most once a minute per process | `error_type` | The typical-duration aggregate (audit `genie-01`) could not be read. The status poll simply carries no `typical_seconds`; the miss is cached for 60 s. |
+| `genie_job_section_write_failed` | WARNING, at most once a minute per process | `error_type` | Audit `genie-01` phase 1b: a verified-sections write (its `GENIE_SECTION_REVEALED` audit rows and the `sections_json` UPDATE share one transaction) failed. Fail closed: the sections that write would have revealed stay withheld until the final answer; the answer itself is unaffected. |
+| `genie_job_sections_skipped` | WARNING, once per job | `reason` too_large, `sections`, `job_id` | The verified-sections payload of a running deep job exceeded 4 MiB, so nothing was written or audited for it; the recorded answer is unaffected. |
+| `genie_jobs_table_absent`, 2026_10_02 column | WARNING, once per absence | — | Also logged when the table lacks `sections_json` (the App promoted ahead of the 2026_10_02 migration): the App completes inline exactly as without the table, so no job statement can fail on the column. |
 
 Leases and expiry. Postgres `now()` is the only clock. A job is leased to its
 process for 45 s; one daemon thread per process renews its own queued and
@@ -642,6 +645,29 @@ The status poll is budgeted as `genie-job` (the default read rate and a
 Lakebase slot, never the 30/min Genie budget or a Genie slot). The complete
 call's Genie slot is adopted by the job and released when the job ends. The
 poll is also excluded from RUM `api_call` events, like the progress poll.
+
+Verified sections (audit `genie-01` phase 1b). While a deep sweep runs, each
+sub-analysis that passes its own output-policy scan is written to the job's
+`sections_json` by one background writer per process (latest snapshot wins
+per job, rows capped at 50 per section). Every newly revealed section first
+gets a `GENIE_SECTION_REVEALED` audit row in the same transaction (ruling R1);
+the status poll serves the sections from the three-section floor, only for a
+revision the poller does not hold, and never on a terminal or
+cancel-requested job. Every terminal statement NULLs the column.
+
+### Admin SSE ingress probe (delivery-04)
+
+`GET /api/v1/admin/sse-probe` (admin only, schema-hidden, audit exempt)
+streams a bounded tick sequence so `tools/databricks/sse_ingress_spike.py`
+can measure whether the Apps ingress passes Server-Sent Events unbuffered and
+reports a disconnect (docs/load-baseline.md). It holds no dependency slot
+(budget `admin-diagnostic`) and reads no product data. Logger
+`mip-sse-probe`; no event carries the actor:
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `sse_probe_started` | INFO | `outcome` started, `probe_id`, `events` | A probe stream opened. |
+| `sse_probe_finished` | INFO | `outcome` completed / disconnected, `events_sent`, `duration_ms`, `probe_id` | The stream ended at its bound, or the server saw `http.disconnect` (or a failed send) first. `GET /api/v1/admin/sse-probe/{probe_id}` returns the same record for 10 minutes (32 runs per process). |
 
 ## 10. Approval review ledger
 

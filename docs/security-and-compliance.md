@@ -83,6 +83,9 @@ the pull request that ships the behaviour, never earlier.
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
+| Genie completion-job status poll (`genie.genie_message_status`) | none | every ~1.5 s poll of the caller's own job; while a deep job runs it may carry verified sections as Partial research | audit-free; `genie.run_query` RUN_GENIE stays at the job's single `recorded_at` commit point and no action token is issued for a revealed section |
+| Genie verified section revealed (the job's sections writer, `genie_completion_sections`) | `GENIE_SECTION_REVEALED` | once per section, before it can be served (ruling R1): job and turn ids, plan index, row count, SQL hash, verification verdict; never question text or a row value | same Lakebase transaction as the `sections_json` write, fail-closed: a failed audit write withholds the section until the final answer; a turn that later fails, stops or expires keeps the rows |
+| Admin SSE ingress probe (`admin_sse_probe.sse_probe`, `admin_sse_probe.sse_probe_outcome`) | none | admin-only transport diagnostic (delivery-04) | audit-free; reads no UC or Lakebase data |
 
 **Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
 keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`

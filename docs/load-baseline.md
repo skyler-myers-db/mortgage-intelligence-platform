@@ -134,3 +134,46 @@ MIP_LOAD_TEST_WRITE_BASELINE=1 bash tools/load_test/run.sh
 For write-path baseline capture, include `MIP_LOAD_TEST_WRITE=1`.
 Commit `tools/load_test/baseline.json` only when the new values are
 expected and the CSV/HTML evidence is attached to the release PR.
+
+## SSE ingress spike (delivery-04)
+
+The Genie job-events stream (named post-guard stages pushed instead of the
+1.5 s status poll) is built only if the Databricks Apps ingress carries SSE
+unbuffered and reports a client disconnect. The instrument is the admin
+probe `GET /api/v1/admin/sse-probe` (backend/api/admin_sse_probe.py) and the
+spike tool `tools/databricks/sse_ingress_spike.py`, run by the integrator as
+an admin after the W5b deploy:
+
+    python tools/databricks/sse_ingress_spike.py --profile <admin profile> \
+        --base-url https://<mip-app>.databricksapps.com --out spike.json
+
+Method. `flush`: 20 events x 500 ms. `pad`: the same with a 2,048-byte
+comment per event. `idle`: 3 events x 45 s gaps, once with no keep-alive and
+once with a `: keepalive` comment every 15 s. `disconnect`: read 3 of 60
+events, close, wait 3 s, then read the server's record of the run.
+
+PASS rule. flush and pad pass when the first event arrives within 3 s, the
+median per-event lag stays within 250 ms of the server cadence, and no burst
+follows a silence of 2 s or more (a buffering ingress releases events in
+bursts). disconnect passes when the server stopped by sequence 6. Decision:
+build the job-events stream only if flush, pad and disconnect all PASS and
+the keep-alive idle run survived; otherwise keep polling (the stages already
+reach the rail through the poll). Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE
+(auth or network).
+
+In-process observation (W5b, tests/unit/test_admin_sse_probe.py, driving
+`backend.main.app` with a recording ASGI `send` through the real middleware
+stack): each event leaves as its own body message with `more_body=True`, GZip
+leaves `text/event-stream` alone, and an `http.disconnect` delivered after 3
+events DOES reach the probe through the four BaseHTTPMiddleware layers
+(events_sent 3, disconnected_at_seq 3, completed false). Recorded as a fact,
+not asserted in CI.
+
+| Scenario | Result | Notes |
+| --- | --- | --- |
+| flush | pending integrator run | |
+| pad | pending integrator run | |
+| idle, no keep-alive | pending integrator run | |
+| idle, keep-alive 15 s | pending integrator run | |
+| disconnect | pending integrator run | |
+| Decision | pending integrator run | build / keep_polling |
