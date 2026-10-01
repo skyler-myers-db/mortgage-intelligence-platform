@@ -237,6 +237,20 @@ describe('Saved views panel', () => {
     expect(panel.querySelector('.lead-queue-saved-views__link')?.textContent).toBe('IL pending');
   });
 
+  it('closes on a pointer-down outside without pulling focus back to the trigger', async () => {
+    await mountAt('state=IL');
+    await open();
+    const outside = document.body.appendChild(document.createElement('button'));
+    outside.focus();
+    await act(async () => {
+      outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    });
+    expect(byTestId('lead-queue-saved-views-panel')).toBeNull();
+    expect(trigger().getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
   it('closes on Escape and hands focus back to the trigger', async () => {
     await mountAt('state=IL');
     await open();

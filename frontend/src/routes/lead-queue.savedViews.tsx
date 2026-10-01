@@ -103,7 +103,8 @@ export function LeadQueueSavedViewsPanel({
   searchParams: URLSearchParams;
   /** The trigger and this panel: a pointer-down outside it closes. */
   rootRef: RefObject<HTMLElement | null>;
-  onClose: () => void;
+  /** `refocus` false: a pointer-down elsewhere keeps the focus it moved. */
+  onClose: (refocus?: boolean) => void;
 }) {
   const queryClient = useQueryClient();
   const configOptions = useConfigOptionsQuery();
@@ -124,7 +125,7 @@ export function LeadQueueSavedViewsPanel({
   const onEscape = useEffectEvent(() => onClose());
   const onOutside = useEffectEvent((event: PointerEvent) => {
     if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
-    onClose();
+    onClose(false);
   });
   useEffect(() => pushEscapeLayer(() => {
     onEscape();
@@ -200,7 +201,7 @@ export function LeadQueueSavedViewsPanel({
                   to={{ search: `?${view.params}` }}
                   className={`filter-menu__item lead-queue-saved-views__link${current ? ' is-selected' : ''}`}
                   aria-current={current ? 'true' : undefined}
-                  onClick={onClose}
+                  onClick={() => onClose()}
                 >
                   {view.name}
                 </Link>

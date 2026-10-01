@@ -127,9 +127,9 @@ function LeadQueueSavedViewsControl({ searchParams }: { searchParams: URLSearchP
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const { module: panel, failed } = useLazyModule(SAVED_VIEWS, open);
-  const close = () => {
+  const close = (refocus = true) => {
     setOpen(false);
-    triggerRef.current?.focus();
+    if (refocus) triggerRef.current?.focus();
   };
   return (
     <div ref={rootRef} className="lead-queue-views__saved-root">
