@@ -193,7 +193,19 @@ export const RUNS_LIST: GrowthAgentRunSummary[] = [
 
 /** The run Plan reviewed workflow answers with (no watchlist yet, so Save is offered). */
 export function plannedRun(): GrowthAgentRunResponse {
-  return { ...growthRunFixture(), monitor: null };
+  // Every key the server serializes: a reviewed-workflow run carries no
+  // Genie provenance and no actionable proof, so those are null (quality-09 a4-i).
+  return {
+    ...growthRunFixture(),
+    monitor: null,
+    actionable_cohort_fingerprint: null,
+    actionable_snapshot_id: null,
+    genie_conversation_id: null,
+    genie_message_id: null,
+    genie_question_hash: null,
+    genie_sql_hash: null,
+    genie_row_count: null,
+  };
 }
 
 /** POST /runs/:runId/monitors 200: the watchlist built from the stored run. */
