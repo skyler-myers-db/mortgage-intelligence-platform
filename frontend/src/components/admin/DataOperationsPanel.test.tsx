@@ -5,6 +5,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { queryKeys } from '../../lib/queryKeys';
 import { mount, type Mounted } from '../../test/render';
 import { DataOperationsPanel } from './DataOperationsPanel';
 
@@ -243,6 +244,29 @@ describe('DataOperationsPanel', () => {
     ]);
     expect(radios.some((radio) => radio.checked)).toBe(false);
     expect(document.activeElement?.textContent).toBe('Cancel');
+  });
+
+  it('an open confirm shows the last run of the latest poll, keeping the chosen reason', async () => {
+    await render();
+    await openDialog();
+    await act(async () => {
+      reasonRadio('Release validation')?.click();
+    });
+    expect(dialog()?.textContent).toContain('Run 201');
+
+    // The 5 s operations poll lands while the confirm is open.
+    const [fred, ...rest] = OPERATIONS.jobs;
+    const latest = { ...fred.latest_run, run_id: 202, started_at: '2026-06-06T09:00:00+00:00' };
+    await act(async () => {
+      queryClient.setQueryData(queryKeys.adminOperations(), {
+        jobs: [{ ...fred, latest_run: latest, recent_runs: [latest, ...fred.recent_runs] }, ...rest],
+      });
+    });
+    await settle();
+
+    expect(dialog()?.textContent).toContain('Run 202');
+    expect(dialog()?.textContent).not.toContain('Run 201');
+    expect(reasonRadio('Release validation')?.checked).toBe(true);
   });
 
   it('keeps Confirm disabled until a reason is chosen', async () => {

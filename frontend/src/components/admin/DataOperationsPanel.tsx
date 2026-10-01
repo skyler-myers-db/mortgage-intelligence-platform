@@ -167,8 +167,9 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
   const [operationPolling, setOperationPolling] = useState(false);
   const [operationPollGeneration, setOperationPollGeneration] = useState(0);
   // The job whose Run confirm is open (critic-09): Run opens it, only its
-  // Start posts.
-  const [confirmingJob, setConfirmingJob] = useState<OperationJobStatus | null>(null);
+  // Start posts. Held by key and read from the latest poll below, so an open
+  // confirm never shows a last run the 5 s poll has already replaced.
+  const [confirmingKey, setConfirmingKey] = useState<OperationJobKey | null>(null);
 
   useEffect(() => {
     if (!operationPolling) return undefined;
@@ -197,6 +198,9 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
       ? operationsErrorObj.message
       : 'Operations endpoint unreachable'
     : null;
+  const confirmingJob = confirmingKey === null
+    ? null
+    : operations?.jobs.find((job) => job.key === confirmingKey) ?? null;
   const activeOperationCount = operations
     ? operations.jobs.filter((job) => job.latest_run?.active).length
     : 0;
@@ -226,11 +230,11 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
   const openRunConfirm = (job: OperationJobStatus) => {
     if (!job.configured || operationRunningKey) return;
     setOperationError(null);
-    setConfirmingJob(job);
+    setConfirmingKey(job.key);
   };
 
   const closeRunConfirm = () => {
-    setConfirmingJob(null);
+    setConfirmingKey(null);
     setOperationError(null);
   };
 
@@ -246,7 +250,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
         reason,
         request_id: newRequestId(),
       });
-      setConfirmingJob(null);
+      setConfirmingKey(null);
       setOperationLaunch(launch);
       setOperationPolling(true);
       setOperationPollGeneration((value) => value + 1);
