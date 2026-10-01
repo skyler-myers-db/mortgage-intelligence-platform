@@ -17,8 +17,10 @@ this remediation pass.
   moderate, 0 high, 0 critical) across 351 packages (19 prod, 333 dev, 46
   optional), at both the `--audit-level=high` gate and the advisory
   `--audit-level=moderate` level. The batch adds web-vitals and stylelint
-  (with its 97 dev-only transitive packages). The integrator re-reads it on
-  the installed tree after `npm --prefix frontend ci`.
+  (with its 97 dev-only transitive packages). Re-read by the W5b integrator
+  on the installed tree after `npm --prefix frontend ci` and the two holds
+  below (`@tanstack/react-virtual`, `happy-dom`): `npm audit`, 0 advisories
+  at any level across 351 packages (19 prod, 333 dev, 46 optional).
 - Frontend `npm audit`, 2026-09-25, after the wave-4 test-infra batch
   (Playwright 1.63.0 and oxlint 1.85.0; no other package moved): 0
   advisories at any level (0 low, 0 moderate, 0 high, 0 critical) across 251
@@ -370,12 +372,12 @@ bytes).
 |---|---|---|---|---|
 | `@tanstack/react-query` | 5.100.10 | 5.104.0 | 5.104.0 | Lockstep with the persist client: one `@tanstack/query-core` and one `query-persist-client-core` in the lock, both 5.104.0 (pinned by `tests/unit/test_dependency_pins.py`). |
 | `@tanstack/react-query-persist-client` | 5.100.10 | 5.104.0 | 5.104.0 | Lockstep (W5a carryover). |
-| `@tanstack/react-virtual` | 3.13.24 | 3.14.13 | 3.14.13 | `@tanstack/virtual-core` 3.14.0 -> 3.17.11. |
+| `@tanstack/react-virtual` | 3.13.24 | 3.14.13 | **held 3.13.24** | Held 2026-10-01 by the W5b integrator: on the installed tree `@tanstack/virtual-core` 3.14.0 -> 3.17.11 grows the shared LeadTable lazy chunk (Lead Queue and Segment Intelligence) by +9.00 raw / +2.59 gzip / +2.28 brotli KiB (37.96 -> 40.31 br, measured by building the batch with and without it), which turns the largest-lazy-chunk budget gate red on base code that `w5-lead-triage-export` also extends. No W5b or W5c item needs a 3.14 API. Re-take it with a lane that funds the bytes (W5c `w5-lead-queue-paging` owns the chunk). |
 | `vite` | 8.3.0 | 8.3.2 | 8.3.2 | `rolldown` 1.2.10 -> 1.2.12. Moves VRT and budget bytes at most marginally; re-baselined once by the integrator. |
 | `@rolldown/plugin-babel` | 0.2.3 | 0.2.4 | 0.2.4 | Patch. |
 | `eslint` | 10.2.1 | 10.11.0 | 10.11.0 | Minor releases add no rule to `recommended`. |
 | `@typescript-eslint/eslint-plugin` / `parser` | 8.70.1 | 8.71.0 | 8.71.0 | Still peers `typescript >=4.8.4 <6.1.0`. |
-| `happy-dom` | 20.10.3 | 20.14.5 | 20.14.5 | Vitest environment; the full suite is the integrator's proof. |
+| `happy-dom` | 20.10.3 | 20.14.5 | **held 20.10.3** | Held 2026-10-01 by the W5b integrator: on the installed tree the full vitest suite goes red in `src/components/EvidenceHoverCard.test.tsx` (W5a platform-backend's anchored hover card): 20.14.5 invokes `CSSStyleDeclaration.prototype.setProperty` with a `this` that is not the element's `style` object (a probe on the bare library reproduces it), so the test's same-object proof of where `anchor-name` lands fails although the value is set. The suite is green on 20.10.3 (454 files / 4674 tests). Re-take it with W5d `w5-test-harness-deps-report`, which may re-model that proof on the observable value. |
 | `web-vitals` | (new) | 6.2.2 | 6.2.2 | Production dependency, Apache-2.0 (licence row added). Nothing imports it in W5b (0 bytes); W5c `w5-field-vitals` consumes it lazily. |
 | `stylelint` | (new) | 17.16.0 | 17.16.0 | Dev only, MIT (licence row added); no script yet: W5d `w5-compiler-lint` calls it from `tools/lint_css_literals.mjs`. |
 | `oxlint` | 1.85.0 | 1.86.0 | **held 1.85.0** | Held 2026-10-01: `frontend/oxlint-baseline.json` records the installed oxlint version and `--check` fails on a mismatch, and a new version's jsx-a11y rule list must be named in `.oxlintrc.json`; both need the installed binary, and the ratchet files belong to W5d `w5-compiler-lint`. |
