@@ -14,8 +14,13 @@
  * Audit genie-03 / genie-01: the script can also answer `/message/cancel`
  * (an outcome, a delay and a status the test picks, recording every body
  * the browser sent) and stamp `typical_seconds` on every running status.
+ *
+ * Genie-01 phase 1b: a running step may carry `reveal` (verified count,
+ * revision and the revealed sections); like the server, a poll that sends
+ * the step's revision back gets `revealed_sections: null`. Synthetic
+ * sections only: Summit Mortgage scope, no borrower ids, names or emails.
  */
-import type { GenieAnswer } from '../../../../src/types';
+import type { GenieAnswer, GenieAnswerSection } from '../../../../src/types';
 import type { GenieLiveProgress } from '../../../../src/lib/apiTypes';
 import type {
   GenieCancelResult,
@@ -55,18 +60,46 @@ export type GenieJobStatusBody = Omit<GenieCompletionJobStatus, 'response'> & { 
 export const GENIE_JOB_EXPIRED_HINT = 'This answer is no longer available here. Check History, or ask the question again.';
 export const GENIE_JOB_CANCELLED_HINT = 'You stopped this question before its answer was recorded. Ask it again to get an answer.';
 
+/** Verified sections a running step reveals (genie-01 phase 1b). */
+export interface GenieJobReveal {
+  verified: number;
+  rev: number;
+  sections: readonly GenieAnswerSection[] | null;
+}
+
 /** One step of a scripted job: a running stage (optionally with sweep
- *  parts), or a terminal outcome. */
+ *  parts and a verified-sections reveal), or a terminal outcome. */
 export type GenieJobStep =
-  | { stage: GenieJobStage; parts?: readonly [done: number, planned: number] }
+  | { stage: GenieJobStage; parts?: readonly [done: number, planned: number]; reveal?: GenieJobReveal }
   | 'succeeded'
   | 'expired'
   | 'cancelled';
+
+/** Three synthetic verified sections (state-level aggregates only). */
+export function genieRevealSectionsFixture(count = 3): GenieAnswerSection[] {
+  const titles = ['Market size by state', 'Rate spread by segment', 'Equity depth', 'Listing pipeline'];
+  return Array.from({ length: count }, (_, index) => ({
+    title: titles[index % titles.length],
+    question: `How do Summit Mortgage borrowers compare on part ${index + 1}?`,
+    answer: `Illinois leads part ${index + 1} with 48,396 in-the-money borrowers.`,
+    trusted_assets: ['mip.gold.borrower_360'],
+    sql_query: `SELECT state, COUNT(*) AS borrowers FROM mip.gold.borrower_360 GROUP BY state -- part ${index + 1}`,
+    row_count: 40,
+    table_rows: [
+      { state: 'IL', borrowers: 48396 },
+      { state: 'TX', borrowers: 10914 },
+      { state: 'FL', borrowers: 8120 },
+    ],
+    visualization: null,
+    narrative_withheld: false,
+  }));
+}
 
 export function genieJobStatusFixture(
   step: GenieJobStep,
   answer: GenieAnswer = genieAnswerFixture(),
   typicalSeconds?: number,
+  knownRev: number | null = null,
 ): GenieJobStatusBody {
   if (step === 'succeeded') {
     return { ...base('succeeded', 'done'), terminal: true, response: answer };
@@ -82,6 +115,16 @@ export function genieJobStatusFixture(
     ...base(status, step.stage),
     parts_done: step.parts?.[0] ?? null,
     parts_planned: step.parts?.[1] ?? null,
+    ...(step.reveal && status === 'running'
+      ? {
+          verified_sections: step.reveal.verified,
+          sections_rev: step.reveal.rev,
+          revealed_sections:
+            step.reveal.verified >= 3 && step.reveal.rev !== knownRev && step.reveal.sections
+              ? [...step.reveal.sections]
+              : null,
+        }
+      : {}),
     ...(typicalSeconds === undefined ? {} : { typical_seconds: typicalSeconds }),
   };
 }
@@ -105,6 +148,9 @@ function base(status: GenieCompletionJobStatus['status'], stage: GenieJobStage):
     failed: false,
     error_hint: null,
     response: null,
+    verified_sections: null,
+    sections_rev: null,
+    revealed_sections: null,
   };
 }
 
@@ -200,7 +246,8 @@ export function registerGenieJob(mockApi: MockApi, script: GenieJobScript = {}):
     counts.statusPolls += 1;
     statusBodies.push(request.body);
     await statusGate;
-    return { body: current() };
+    const sent = (request.body as { sections_rev?: unknown } | null)?.sections_rev;
+    return { body: genieJobStatusFixture(steps[index], answer, script.typicalSeconds, typeof sent === 'number' ? sent : null) };
   });
   mockApi.register<GenieCancelResult | { detail: string }>('POST', '/api/genie/message/cancel', async (request: FixtureRequest) => {
     counts.cancels += 1;
@@ -283,6 +330,11 @@ export function contractSamples(): ContractSample[] {
     sample('/api/genie/message/status', 200, genieJobStatusFixture('expired')),
     sample('/api/genie/message/status', 200, genieJobStatusFixture('cancelled')),
     sample('/api/genie/message/status', 200, genieJobStatusFixture({ stage: 'researching', parts: [3, 7] }, undefined, 170)),
+    sample(
+      '/api/genie/message/status',
+      200,
+      genieJobStatusFixture({ stage: 'researching', parts: [4, 7], reveal: { verified: 3, rev: 2, sections: genieRevealSectionsFixture() } }),
+    ),
     sample('/api/genie/message/complete', 202, genieJobStatusFixture({ stage: 'queued' }, undefined, 42)),
     ...(['cancelled', 'recorded', 'ended'] as const).map((outcome) =>
       sample('/api/genie/message/cancel', 200, genieCancelFixture(outcome)),
