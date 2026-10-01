@@ -5,8 +5,10 @@
  * are still coming. deviation:genie-partial-research-reveal (the prototype's
  * pending state is the typing-dots bubble only).
  *
- * Lazy-loaded by GenieProgress (which sits in the idle-preloaded launcher
- * chunk), so the answer stack below never rides along with the rail. Below
+ * Imported statically by GenieProgress: the card already ships in the
+ * shared genie-answer chunk with the answer stack, and a measured React.lazy
+ * boundary here only re-split the shared chunks (apiTransport left the
+ * queryKeys chunk: +0.44 KiB br initial JS, +1.8 KiB br total). Below
  * the three-section floor there is one count line and no content; from it,
  * the sections render through the answer's own section renderer in preview
  * mode: no row actions, no CSV, no cell or chart links, and a note when the
@@ -16,7 +18,7 @@ import { genieRevealCountLine, type GenieVerifiedRevealState } from '../../lib/g
 import { GenieAnswerSections } from './GenieAnswer.sections';
 import './GenieVerifiedReveal.css';
 
-export default function GenieVerifiedReveal({
+export function GenieVerifiedReveal({
   reveal,
   dense = false,
 }: {

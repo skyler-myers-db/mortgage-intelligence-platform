@@ -393,7 +393,7 @@ describe('GenieProgress: verified sections as partial research (genie-01 phase 1
   });
   // Warm the answer stack once: its first transform is slow on a loaded host.
   beforeAll(async () => {
-    await import('./GenieVerifiedReveal');
+    await import('./GenieAnswer.sections');
   }, 120_000);
 
   const RESEARCHING: GenieTurnProgress = {
@@ -434,25 +434,12 @@ describe('GenieProgress: verified sections as partial research (genie-01 phase 1
         </MemoryRouter>,
       );
     });
-    // The reveal is lazy: let its chunk resolve, then commit.
-    await act(async () => {
-      await import('./GenieVerifiedReveal');
-    });
   }
 
-  it('loads lazily (first commit: the null fallback) and shows nothing without a running job', async () => {
+  it('shows nothing without a running job', async () => {
     publishGenieReveal(status({ verified_sections: 3, sections_rev: 2, revealed_sections: [0, 1, 2].map(section) }));
-    act(() => {
-      root.render(
-        <MemoryRouter>
-          <GenieProgress progress={RESEARCHING} startedAt={Date.now()} />
-        </MemoryRouter>,
-      );
-    });
-    // The first synchronous commit holds only the Suspense fallback (null).
-    expect(container.querySelector('.genie-reveal')).toBeNull();
-
     await renderLoaded({ ...LIVE_TERMINAL });
+
     expect(container.querySelector('.genie-reveal, .genie-reveal__count')).toBeNull();
   });
 

@@ -1,16 +1,14 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useGenieVerifiedReveal } from '../../lib/genieVerifiedReveal';
+import { GenieVerifiedReveal } from './GenieVerifiedReveal';
 import type { GenieTurnProgress } from '../../types/genieJobs';
 import { Icon } from '../Icon';
 import { ElapsedTicker } from '../ui/ElapsedTicker';
 
 const INDETERMINATE_LABEL = 'Waiting for Genie response';
 
-// Partial research (genie-01 phase 1b): lazy, so the idle-preloaded launcher
-// chunk this card rides in never pulls the answer stack along.
-// deviation:genie-partial-research-reveal
-const GenieVerifiedReveal = lazy(() => import('./GenieVerifiedReveal'));
+
 
 /**
  * Genie message statuses → human progress copy. Server-owned stage labels
@@ -237,11 +235,10 @@ export function GenieProgress({
         </ul>
       )}
 
-      {/* Verified sections while a job runs; never announced (genie-01 1b). */}
+      {/* Verified sections while a job runs; never announced (genie-01 1b).
+          deviation:genie-partial-research-reveal */}
       {progress?.job && reveal && (
-        <Suspense fallback={null}>
-          <GenieVerifiedReveal reveal={reveal} dense={dense} />
-        </Suspense>
+        <GenieVerifiedReveal reveal={reveal} dense={dense} />
       )}
 
       {sql && (
