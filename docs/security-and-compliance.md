@@ -83,6 +83,9 @@ the pull request that ships the behaviour, never earlier.
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
+| Home Delta Explainer (`home.home_summary_attribution`) | none | only while an evidence drawer for a supported "since your last login" measure is open on Overview; never on hover, prefetch or poll | audit-free (gold and ref aggregates) |
+| Home watchlist briefings (`growth_agent_compose_routes.growth_agent_watchlist_summary`) | none | once per Home load (the card never POSTs, so it starts no run) | audit-free |
+| Home WHY NOW rate move (`analytics_rate_window.rate_window`) | none | on Home only when the summary is a delta with a previous visit (and on Analytics as before) | audit-free |
 
 **Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
 keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`

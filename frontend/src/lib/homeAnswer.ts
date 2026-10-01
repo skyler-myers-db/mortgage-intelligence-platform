@@ -90,26 +90,45 @@ interface TriggerCopy {
  *                            "Monitor for later" included, so no queue
  *                            filter is that population.
  */
+/** Each measure's Lead Queue filter with the SAME predicate (see above). */
+const MEASURE_QUEUE_FILTERS: Record<string, Record<string, string>> = {
+  listed_for_sale: { purchase_intent: 'Listed for sale' },
+  competitor_lien: { lender_relationship: 'Competitor customer' },
+  offers_recommended: { funnel_stage: 'offer_recommended' },
+  refi_economics_screen: { segment: 'itm' },
+  high_opportunity: { funnel_stage: 'high_opportunity' },
+};
+
+/**
+ * The Lead Queue narrowed to one measure's population, and to one state when
+ * given (the Delta Explainer's state rows); null when no queue filter is that
+ * population.
+ */
+export function measureQueueHref(measure: string, state?: string): string | null {
+  const filters = MEASURE_QUEUE_FILTERS[measure];
+  return filters ? leadQueueHref({ ...filters, state }) : null;
+}
+
 const TRIGGER_COPY: Record<string, TriggerCopy> = {
   listed_for_sale: {
     noun: 'borrowers with a listed home',
-    href: leadQueueHref({ purchase_intent: 'Listed for sale' }),
+    href: measureQueueHref('listed_for_sale'),
   },
   competitor_lien: {
     noun: 'borrowers with a competitor lien',
-    href: leadQueueHref({ lender_relationship: 'Competitor customer' }),
+    href: measureQueueHref('competitor_lien'),
   },
   offers_recommended: {
     noun: 'borrowers with a primary offer path',
-    href: leadQueueHref({ funnel_stage: 'offer_recommended' }),
+    href: measureQueueHref('offers_recommended'),
   },
   refi_economics_screen: {
     noun: 'borrowers who pass the refi screen',
-    href: leadQueueHref({ segment: 'itm' }),
+    href: measureQueueHref('refi_economics_screen'),
   },
   high_opportunity: {
     noun: `borrowers with opportunity score ${HIGH_OPPORTUNITY_SCORE_LABEL}`,
-    href: leadQueueHref({ funnel_stage: 'high_opportunity' }),
+    href: measureQueueHref('high_opportunity'),
   },
   offers_available: {
     noun: 'borrowers with an offer decision',

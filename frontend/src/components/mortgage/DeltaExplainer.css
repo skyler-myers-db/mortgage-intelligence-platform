@@ -1,0 +1,41 @@
+/*
+ * DeltaExplainer (audit 2026-09-21 wow-ai-3): the evidence drawer's "where
+ * the change came from" card, a declared extension of the drawer body's
+ * source card (design_files/index.html:665-681). deviation:delta-explainer.
+ * Increases paint the fixed data ink, decreases the tertiary text ink: a
+ * change is accounting, never an alarm. Colocated with the lazy chunk.
+ */
+.delta-explainer {
+  display: grid;
+  gap: var(--sp-2);
+}
+.delta-explainer__skeleton {
+  block-size: calc(var(--sp-16) * 2);
+  border-radius: var(--r-sm);
+}
+.delta-explainer__chart {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+}
+.delta-explainer__chart svg {
+  inline-size: 100%;
+  block-size: auto;
+}
+.delta-explainer__label {
+  fill: var(--text-2);
+  font-size: var(--fs-11);
+}
+.delta-explainer__bar--up { fill: var(--accent-data); }
+.delta-explainer__bar--down { fill: var(--text-3); }
+.delta-explainer__bar--total { fill: var(--bg-4); stroke: var(--text-3); stroke-width: 0.5; }
+.delta-explainer__table th a {
+  color: var(--accent-ink);
+}
+.delta-explainer__coincided ul {
+  margin: var(--sp-1) 0;
+  padding-inline-start: var(--sp-4);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+}

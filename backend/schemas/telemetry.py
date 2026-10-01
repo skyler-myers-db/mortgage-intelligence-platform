@@ -121,7 +121,7 @@ RUM_CACHE_STATES = frozenset({"hit", "miss", "stale"})
 # the `v1` version prefix and the `{param}` segments; sorted.
 RUM_API_ROUTE_SEGMENTS = frozenset({
     "actions", "activation", "admin", "agent", "aging", "analytics", "approve",
-    "assets", "assign", "assignment", "assignment-overlay", "assignments", "audit",
+    "assets", "assign", "assignment", "assignment-overlay", "assignments", "attribution", "audit",
     "borrowers", "campaign-performance", "campaign-recommendation", "campaigns",
     "cancel",
     "capabilities", "combinations", "complete", "compose", "config", "conversion", "count", "county-rollups",

@@ -13,8 +13,9 @@ import type {
   SalesTeamMember,
 } from '../../../../src/types';
 import type { GrowthAgentWatchlistSummaryResponse } from '../../../../src/types/growthAgent';
+import type { HomeAttributionMeasure, HomeSummaryAttributionResponse } from '../../../../src/types/homeAttribution';
 import { fixture, json, type FixtureEntry, type FixtureRequest } from '../mockApi';
-import { SNAPSHOT_AT, TOTALS } from './reference';
+import { SNAPSHOT_AT, STATES, TOTALS } from './reference';
 
 function trend(latest: number, growthPct: number): KpiTrend {
   // Seven points ending on the headline value, rising by `growthPct` overall.
@@ -195,6 +196,51 @@ export const HOME_WATCHLIST_SUMMARY: GrowthAgentWatchlistSummaryResponse = {
   ],
 };
 
+/** Per-state change in the funnel snapshots behind the Delta Explainer (wow-ai-3); 30 more are unattributed. */
+const ATTRIBUTION_CHANGES: Readonly<Record<string, number>> = { IL: 620, TX: 540, CA: 410, FL: 300, AZ: 180, WA: 90, CO: 40, GA: 20 };
+const ATTRIBUTION_UNATTRIBUTED = 30;
+const ATTRIBUTION_LABELS: Readonly<Record<HomeAttributionMeasure, string>> = {
+  refi_economics_screen: 'refi candidates',
+  high_opportunity: 'high-opportunity',
+  offers_recommended: 'primary offer paths',
+  listed_for_sale: 'listed for sale',
+};
+
+/**
+ * GET /api/home/summary/attribution: whole-book state counts that reconcile
+ * (baseline + every state change + the unattributed 30 = now), the par prints
+ * of both weeks and an offer-rules change after the baseline. No ids.
+ */
+export function homeAttribution(measureParam: string | null, baseline: string | null): HomeSummaryAttributionResponse {
+  const measure = (measureParam && measureParam in ATTRIBUTION_LABELS ? measureParam : 'refi_economics_screen') as HomeAttributionMeasure;
+  const states = STATES.map((state) => {
+    const change = ATTRIBUTION_CHANGES[state.code] ?? 0;
+    return { state: state.code, baseline_count: state.inTheMoney - change, current_count: state.inTheMoney, change };
+  }).sort((a, b) => Math.abs(b.change) - Math.abs(a.change) || a.state.localeCompare(b.state));
+  const attributed = states.reduce((sum, row) => sum + row.change, 0);
+  const current = states.reduce((sum, row) => sum + row.current_count, 0);
+  const totalChange = attributed + ATTRIBUTION_UNATTRIBUTED;
+  return {
+    measure,
+    label: ATTRIBUTION_LABELS[measure],
+    population: 'addressable',
+    requested_baseline_date: baseline ?? '2026-07-09',
+    baseline_snapshot_date: '2026-07-08',
+    current_snapshot_date: SNAPSHOT_AT.slice(0, 10),
+    nearest_snapshot: true,
+    baseline_total: current - totalChange,
+    current_total: current,
+    total_change: totalChange,
+    states,
+    unattributed_change: ATTRIBUTION_UNATTRIBUTED,
+    rate: { series_id: 'MORTGAGE30US', baseline_week: '2026-07-06', baseline_pct: 6.7, latest_week: '2026-07-13', latest_pct: 6.62 },
+    offer_rules_last_updated: '2026-07-20T09:00:00',
+    offer_rules_changed_since_baseline: true,
+    sources: ['mip.gold.funnel_snapshot_daily', 'mip.gold.rate_window_weekly', 'mip.ref.offer_rules_config'],
+    note: 'These coincided with the change; they are not shown as causes.',
+  };
+}
+
 export const SALES_TEAM: SalesTeamMember[] = [
   { email: 'lo.alpha@summit.example', display_label: 'Loan Officer A', role: 'loan_officer', region: 'Midwest', manager_email: 'manager@summit.example', capacity_per_day: 25, active: true },
   { email: 'lo.bravo@summit.example', display_label: 'Loan Officer B', role: 'loan_officer', region: 'South', manager_email: 'manager@summit.example', capacity_per_day: 20, active: true },
@@ -258,4 +304,6 @@ export const portfolioFixtures: FixtureEntry[] = [
   fixture('GET', '/api/home/summary', () => json<HomeSummary>(HOME_SUMMARY)),
   fixture('GET', '/api/growth-agent/monitors/summary', () =>
     json<GrowthAgentWatchlistSummaryResponse>(HOME_WATCHLIST_SUMMARY)),
+  fixture('GET', '/api/home/summary/attribution', ({ query }) =>
+    json<HomeSummaryAttributionResponse>(homeAttribution(query.get('measure'), query.get('baseline')))),
 ];

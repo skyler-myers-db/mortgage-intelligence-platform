@@ -1319,6 +1319,41 @@ export interface ResponseSchemas {
     status: string;
     workspace_host?: string | null;
   };
+  /** The weekly par print for the baseline week and the latest week. */
+  HomeAttributionRate: {
+    baseline_pct: number | null;
+    baseline_week: string | null;
+    latest_pct: number | null;
+    latest_week: string | null;
+    series_id: string;
+  };
+  /** One state's count at the two snapshots; None where it has no row. */
+  HomeAttributionState: {
+    baseline_count: number | null;
+    change: number | null;
+    current_count: number | null;
+    state: string;
+  };
+  /** Where one headline measure moved between two funnel snapshots. */
+  HomeSummaryAttributionResponse: {
+    baseline_snapshot_date: string | null;
+    baseline_total: number | null;
+    current_snapshot_date: string | null;
+    current_total: number | null;
+    label: string;
+    measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+    nearest_snapshot: boolean;
+    note: string;
+    offer_rules_changed_since_baseline: boolean | null;
+    offer_rules_last_updated: string | null;
+    population: "addressable";
+    rate: ResponseSchemas['HomeAttributionRate'];
+    requested_baseline_date: string;
+    sources: string[];
+    states: ResponseSchemas['HomeAttributionState'][];
+    total_change: number | null;
+    unattributed_change: number | null;
+  };
   /**
    * One number in the summary sentence, traceable to its sources.
    *
@@ -3381,6 +3416,16 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['HomeSummaryResponse'];
+  };
+  "GET /api/v1/home/summary/attribution": {
+    pathParams: Record<string, never>;
+    query: {
+      measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+      baseline: string;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['HomeSummaryAttributionResponse'];
   };
   "GET /api/v1/leads": {
     pathParams: Record<string, never>;

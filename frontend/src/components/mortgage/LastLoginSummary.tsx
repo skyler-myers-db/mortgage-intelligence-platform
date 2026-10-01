@@ -113,6 +113,8 @@ export function LastLoginSummary({
                 <EvidenceChip
                   source={loginSummaryDrawerSource(trigger.highlight, {
                     previousVisitAt: summary?.previous_visit_at ?? null,
+                    baselineSnapshotAt: summary?.baseline_snapshot_at ?? null,
+                    status: summary?.status,
                   })}
                 >
                   {trigger.display}

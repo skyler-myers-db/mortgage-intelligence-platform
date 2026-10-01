@@ -9634,6 +9634,269 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "HomeAttributionRate": {
+        "description": "The weekly par print for the baseline week and the latest week.",
+        "properties": {
+          "baseline_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Pct"
+          },
+          "baseline_week": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Week"
+          },
+          "latest_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Pct"
+          },
+          "latest_week": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Week"
+          },
+          "series_id": {
+            "title": "Series Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "series_id"
+        ],
+        "title": "HomeAttributionRate",
+        "type": "object"
+      },
+      "HomeAttributionState": {
+        "description": "One state's count at the two snapshots; None where it has no row.",
+        "properties": {
+          "baseline_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Count"
+          },
+          "change": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change"
+          },
+          "current_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Count"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "HomeAttributionState",
+        "type": "object"
+      },
+      "HomeSummaryAttributionResponse": {
+        "description": "Where one headline measure moved between two funnel snapshots.",
+        "properties": {
+          "baseline_snapshot_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Snapshot Date"
+          },
+          "baseline_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Total"
+          },
+          "current_snapshot_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Snapshot Date"
+          },
+          "current_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Total"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "measure": {
+            "enum": [
+              "refi_economics_screen",
+              "high_opportunity",
+              "offers_recommended",
+              "listed_for_sale"
+            ],
+            "title": "Measure",
+            "type": "string"
+          },
+          "nearest_snapshot": {
+            "default": false,
+            "title": "Nearest Snapshot",
+            "type": "boolean"
+          },
+          "note": {
+            "default": "These coincided with the change; they are not shown as causes.",
+            "title": "Note",
+            "type": "string"
+          },
+          "offer_rules_changed_since_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Rules Changed Since Baseline"
+          },
+          "offer_rules_last_updated": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Rules Last Updated"
+          },
+          "population": {
+            "const": "addressable",
+            "default": "addressable",
+            "title": "Population",
+            "type": "string"
+          },
+          "rate": {
+            "$ref": "#/components/schemas/HomeAttributionRate"
+          },
+          "requested_baseline_date": {
+            "format": "date",
+            "title": "Requested Baseline Date",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/HomeAttributionState"
+            },
+            "title": "States",
+            "type": "array"
+          },
+          "total_change": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Change"
+          },
+          "unattributed_change": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unattributed Change"
+          }
+        },
+        "required": [
+          "measure",
+          "label",
+          "requested_baseline_date",
+          "rate"
+        ],
+        "title": "HomeSummaryAttributionResponse",
+        "type": "object"
+      },
       "HomeSummaryHighlight": {
         "description": "One number in the summary sentence, traceable to its sources.\n\n``display`` is the exact rendered token (e.g. ``+1.5%``, ``+2,250``\nor ``5,240,100``); ``value_token`` is the unsigned magnitude used to\nlocate the number inside a Genie-phrased sentence (``1.5%``,\n``2,250``). Keeping both here means the backend validator and the\nfrontend chip-wrapper agree character-for-character.",
         "properties": {
@@ -22088,6 +22351,66 @@
         ]
       }
     },
+    "/api/home/summary/attribution": {
+      "get": {
+        "deprecated": true,
+        "description": "Where one since-your-last-login measure moved (audit wow-ai-3).\n\nWhole-book state counts from the funnel snapshot nearest ``baseline``\nand the latest one, the 30-year par print on both weeks, and whether the\noffer rules changed since: gold and ref reads only. Audit-free: the\ndrawer issues it only when a supported measure's evidence is open, and\nit writes no row.",
+        "operationId": "get_api_home_summary_attribution_home_summary_attribution",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "measure",
+            "required": true,
+            "schema": {
+              "enum": [
+                "refi_economics_screen",
+                "high_opportunity",
+                "offers_recommended",
+                "listed_for_sale"
+              ],
+              "title": "Measure",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "baseline",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Baseline",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeSummaryAttributionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Home Summary Attribution",
+        "tags": [
+          "home"
+        ]
+      }
+    },
     "/api/leads": {
       "get": {
         "deprecated": true,
@@ -32089,6 +32412,65 @@
           }
         },
         "summary": "Home Summary",
+        "tags": [
+          "home"
+        ]
+      }
+    },
+    "/api/v1/home/summary/attribution": {
+      "get": {
+        "description": "Where one since-your-last-login measure moved (audit wow-ai-3).\n\nWhole-book state counts from the funnel snapshot nearest ``baseline``\nand the latest one, the 30-year par print on both weeks, and whether the\noffer rules changed since: gold and ref reads only. Audit-free: the\ndrawer issues it only when a supported measure's evidence is open, and\nit writes no row.",
+        "operationId": "get_api_v1_home_summary_attribution_home_summary_attribution",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "measure",
+            "required": true,
+            "schema": {
+              "enum": [
+                "refi_economics_screen",
+                "high_opportunity",
+                "offers_recommended",
+                "listed_for_sale"
+              ],
+              "title": "Measure",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "baseline",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Baseline",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeSummaryAttributionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Home Summary Attribution",
         "tags": [
           "home"
         ]
