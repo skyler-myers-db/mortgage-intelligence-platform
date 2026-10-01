@@ -505,6 +505,8 @@ I did not evaluate the CSS architecture of components.css, preload hints or the 
 
 ---
 
+**Wave-5 status.** W5a (2026-10-01): built (12.4 #6): delegated handlers, rAF placement and a popover top-layer tip; hover state holds only the hovered unit.
+
 ## Design-system architecture and modern CSS (`css`) — grade B-
 
 **Auditor:** Disciplined, prototype-faithful, fully tokenized CSS with flat specificity and genuine 2023-era modern features (color-mix in oklab, named container queries, :has()), but it stops there: no cascade layers, top layer, color-scheme, forced-colors, view transitions or derived/typed tokens. It also ships verifiable defects (illegible accent x theme combinations, dead overlay exit animations, undefined custom properties) that a Linear/Stripe-grade system would catch in CI.
@@ -1130,6 +1132,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** toggleSelect ignores shiftKey, select-all covers loaded rows, no progress or cancel, two POSTs per approve: verified. Phantom selection is label-only; approve and assign intersect with current ids (:474, :598). Server batch contradicts the documented per-borrower draft-proof design (:573-576).
 - **Constraint conflict:** Approving by filter fingerprint through a server batch approves borrowers no human saw and bypasses the per-borrower draft proof; conflicts with the 'human approval always required' posture unless the owner explicitly accepts it.
 
+**Wave-5 status.** W5a (2026-10-01): bulk Reject with a bulk_id on every OUTREACH_REJECT row, a human-chosen reason (consent reasons refused in bulk), a required shared note, a canary row and kind-aware progress; no "select all N matching" and no server batch endpoint (12.4 #9 ruling).
+
 ### `tables-09` No saved views, recent filters or copy-link; sort state never reaches the URL
 
 `medium` · `gap` · effort `L` · corrected
@@ -1180,6 +1184,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Stale screenshots:** the committed screenshots under docs/validation/screenshots date from 2026-04-22 and were not used.
 
 ---
+
+**Wave-5 status.** W5a (2026-10-01): admin-gated, audit-free explorer facets and count, and an AUDIT_EXPORT receipt. The Auditor role and VIEW_AUDIT_LEDGER surfaces go to W5b w5-audit-ledger-presenter, the explorer UX to W5d w5-print-glossary-sales-manager.
 
 ## Data visualization and geography (`dataviz`) — grade C+
 
@@ -2519,6 +2525,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** Existing StaleWhileRevalidateCache.get_or_refresh; snapshot-versioned cache keys; no new dependency.
 - **Verifier:** All cited call sites use hard-expiry get_or_set; the SWR cache is health-only. Two flaws: mip-swr has three workers shared with the three health probes (resilience.py:594), and preview embeds live approval counts with no mutation invalidation anywhere.
 
+**Wave-5 status.** W5a (2026-10-01): one footprint snapshot per decision (Genie guards and config options), the segment list on stale-while-error with X-Data-Last-Good-At and fail-closed readiness gates, SCHEMA_NOT_FOUND and UNRESOLVED_ROUTINE fail fast. The client half goes to W5b w5-home-geo-lever, the gold snapshot id in cache keys to W5c w5-field-vitals, cross-process lifecycle observation to W5b w5-home-geo-lever.
+
 ### `delivery-01` Routine serverless resume trips the red Degraded pill and Reconnecting banner (3 s binary health budget); the Home hero collapses only on real retryable 503s
 
 `medium` · `defect` · effort `M` · corrected
@@ -2591,6 +2599,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** TanStack Query v5 useQueries/queryOptions (installed); existing lazyWithPreload helper.
 - **Verifier:** Raw-effect Promise.all, module Map, shared dossier key and the mount-time preview({}) and adminRules calls reproduce. But borrowers.py:171-173 records what the approver saw, so dropping that row on the approval surface is a governance call. The 842-line route plus 627-line test is not M.
 - **Constraint conflict:** Audit log must stay: sharing the cached dossier removes a VIEW_BORROWER row on the approval surface, which Governance section 4 (borrowers.py:171-173) treats as evidence of what the approver saw.
+
+**Wave-5 status.** Ruling (wave 5, 2026-09-30): supersedes "get compliance sign-off or write VIEW_OFFER". The Offer keeps its own audited reads, no VIEW_OFFER exists, and RECOMMEND_OFFER is the approval-surface open record; see docs/security-and-compliance.md, "Read-audit semantics by surface".
 
 ### `delivery-09` Read-only POST preview is budgeted as a Lakebase mutation; dependency slots (24+16+6) exceed the 40-thread pool that also serves health, session and static files
 
@@ -2754,6 +2764,8 @@ The live Databricks deployment was not inspected.
 - **Recommendation:** Ship one Tooltip primitive: hover and focus, short open delay with skip-delay between neighbours, Esc to dismiss, a kbd slot for shortcuts, token-styled. Move the DNC and eligibility source into visible row detail. Ban raw title= in JSX with an ESLint no-restricted-syntax rule.
 - **Tech:** @base-ui/react 1.8.0 Tooltip (unstyled, npm-verified) or native popover plus anchor positioning. popover=hint is not Baseline (no Safari, verified), so use it only as an enhancement.
 - **Verifier:** My script reproduces 52 DOM title attributes plus about 30 through Chip, Link, EvidenceChip and Button; one role=tooltip. popover=hint lacks Safari (verified); @base-ui/react 1.8.0 verified. Consider generalising the existing portal-based EvidenceHoverCard instead of adding a dependency.
+
+**Wave-5 status.** W5a (2026-10-01): a Tooltip primitive, the Topbar migration and an additive Chip/Button tooltip prop. The Rail and quick-pick links, the remaining call sites and the title= lint ban go to W5d w5-compiler-lint.
 
 ### `critic-09` Administration is a 3,500px scroll of nine read-only panels with no section navigation, and 'Run' launches production jobs in one click
 
