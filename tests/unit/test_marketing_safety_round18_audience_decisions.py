@@ -167,7 +167,7 @@ def test_audience_decisions_fail_every_body_and_objective_boundary(unsafe_text: 
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=unsafe_text)
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
-        ComposePlanRequest(objective=unsafe_text, execute=True)
+        ComposePlanRequest(objective=unsafe_text)
 
 
 @pytest.mark.parametrize("unsafe_text", _UNSAFE_SUBJECT_DECISIONS)

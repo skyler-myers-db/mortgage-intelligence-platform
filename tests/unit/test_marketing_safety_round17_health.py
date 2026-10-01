@@ -100,7 +100,7 @@ def test_structural_selection_is_rejected_at_copy_and_objective_boundaries(
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=unsafe_text)
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
-        ComposePlanRequest(objective=unsafe_text, execute=True)
+        ComposePlanRequest(objective=unsafe_text)
 
 
 @pytest.mark.parametrize("safe_text", _SAFE_REVIEWED_SELECTION_TEXT)

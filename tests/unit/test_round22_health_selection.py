@@ -134,7 +134,7 @@ def test_unknown_selection_grammar_fails_both_growth_contracts(objective: str) -
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
-        ComposePlanRequest(objective=objective, execute=True)
+        ComposePlanRequest(objective=objective)
 
 
 @pytest.mark.parametrize(

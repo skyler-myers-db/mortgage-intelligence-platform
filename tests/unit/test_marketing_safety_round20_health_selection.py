@@ -193,7 +193,7 @@ def test_protected_health_selection_rejects_both_growth_request_contracts(
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
-        ComposePlanRequest(objective=objective, execute=True)
+        ComposePlanRequest(objective=objective)
 
 
 @pytest.mark.parametrize("objective", _PROTECTED_HEALTH_SELECTIONS)

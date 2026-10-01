@@ -111,24 +111,19 @@ def post_growth_execute(
     headers: Mapping[str, str],
     states: Sequence[str] | None = None,
 ) -> Any:
-    """Post a refused objective to BOTH execute paths and prove they agree.
+    """Post a refused objective to the reviewed-plan execute path.
 
-    Parity harness, before the one-shot execute is retired: the batteries'
-    ``{objective, execute: true}`` post to ``/agent/compose`` and the same
-    objective on ``/agent/plan/execute`` must both be governed refusals with
-    an audit row and the SAME ``refusal_reason``. Returns the compose
-    response, so each caller keeps its own assertions on it.
+    The batteries used to post ``{objective, execute: true}`` to
+    ``/agent/compose``. A parity run proved every battery input refused
+    identically on both paths (same status and ``refusal_reason``, or the
+    same fixed detail for a non-guard 422) before the one-shot execute was
+    retired, so the batteries now run on ``/agent/plan/execute``. Each caller
+    keeps its own assertions (422, objective not echoed, planners not
+    called, isolation) on the response this returns.
     """
 
     _record_parity_objective(objective, states)
-    compose = client.post(
-        LEGACY_COMPOSE_PATH,
-        json={"objective": objective, "states": list(states or []), "execute": True},
-        headers=dict(headers),
-    )
-    execute = client.post(PLAN_EXECUTE_PATH, json=execute_body(objective, states), headers=dict(headers))
-    assert refusal_signature(compose) == refusal_signature(execute), (compose.text, execute.text)
-    return compose
+    return client.post(PLAN_EXECUTE_PATH, json=execute_body(objective, states), headers=dict(headers))
 
 
 def refusal_signature(response: Any) -> tuple[int, str | None, str | None]:
