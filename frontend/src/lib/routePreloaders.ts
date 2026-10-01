@@ -28,6 +28,7 @@ export const GlossaryRoute = lazyWithPreload(() => import('../routes/glossary'))
 export const NotFoundRoute = lazyWithPreload(() => import('../routes/not-found'));
 export const OfferOrchestratorRoute = lazyWithPreload(() => import('../routes/offer-orchestrator'));
 export const AskGenieRoute = lazyWithPreload(() => import('../routes/ask-genie'));
+export const AuditLedgerRoute = lazyWithPreload(() => import('../routes/audit-ledger'));
 export const AdminConfigRoute = lazyWithPreload(() => import('../routes/admin-config'));
 
 /**
@@ -45,6 +46,7 @@ export const ROUTE_CHUNKS = {
   glossary: GlossaryRoute,
   offer: OfferOrchestratorRoute,
   askGenie: AskGenieRoute,
+  auditLedger: AuditLedgerRoute,
   admin: AdminConfigRoute,
 } as const satisfies Record<RouteChunk, { preload: () => Promise<unknown> }>;
 

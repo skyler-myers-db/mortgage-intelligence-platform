@@ -54,8 +54,6 @@ vi.mock('../lib/useWarmingUpRetry', () => ({
             ? 'cursor-page-2'
             : null,
         }
-      : key.includes('latest')
-        ? apiMocks.auditRows
       : key.includes('rollups')
         ? []
         : null;
@@ -143,21 +141,7 @@ async function renderAdmin(entry = '/admin-config'): Promise<void> {
   await settle();
 }
 
-function buttonByLabel(label: RegExp): HTMLButtonElement {
-  const button = [...document.querySelectorAll('button')].find((candidate) => (
-    label.test(candidate.getAttribute('aria-label') ?? candidate.textContent ?? '')
-  ));
-  if (!(button instanceof HTMLButtonElement)) throw new Error(`Button not found: ${label}`);
-  return button;
-}
-
-function setNativeValue(input: HTMLInputElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-  setter?.call(input, value);
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-describe('AdminConfig audit explorer', () => {
+describe('AdminConfig audit ledger card', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
@@ -188,50 +172,24 @@ describe('AdminConfig audit explorer', () => {
     vi.clearAllMocks();
   });
 
-  it('expands a row into accessible forensic details from the audit event contract', async () => {
+  it('replaces the explorer with an "Audit ledger" link card and reads nothing from the ledger', async () => {
     await renderAdmin();
 
-    expect(document.getElementById('audit')).not.toBeNull();
-
-    const expand = buttonByLabel(/^Expand audit event evt-8ecf7294$/);
-    const detailId = expand.getAttribute('aria-controls');
-    expect(expand.getAttribute('aria-expanded')).toBe('false');
-    expect(detailId).toBeTruthy();
-    expect(document.getElementById(detailId as string)).toBeNull();
-
-    const table = document.querySelector('table[aria-label="Audit events"]');
-    expect(table?.textContent).toContain('Outreach approved');
-    expect(table?.querySelector('.chip.mono')?.textContent).toBe('APPROVE');
-    expect(table?.textContent).toContain('outreach.approve');
-    expect(table?.textContent).toContain('approval-42');
-    expect(table?.textContent).toContain('vera@summit.example');
-    expect(table?.querySelector('time')?.getAttribute('datetime')).toBe('2026-07-13T14:30:00Z');
-
-    act(() => expand.click());
-
-    const details = document.getElementById(detailId as string);
-    expect(expand.getAttribute('aria-expanded')).toBe('true');
-    expect(details?.textContent).toContain('evt-8ecf7294');
-    expect(details?.textContent).toContain('req-approval-42');
-    expect(details?.textContent).toContain('corr-admin-audit-42');
-    expect(details?.textContent).toContain('Masked subject reference');
-    expect(details?.textContent).toContain('ev-001');
-    expect(details?.textContent).toContain('ev-002');
-    expect(details?.textContent).toContain('offer_code');
-    expect(details?.textContent).toContain('minimum_score');
-    // flow-04: the only links are back into the explorer itself (this event
-    // on its own, and every row of its request); nothing links out.
-    expect([...(details?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))).toEqual([
-      '/admin-config?audit_event_id=evt-8ecf7294#audit',
-      '/admin-config?audit_correlation_id=corr-admin-audit-42#audit',
-    ]);
-
-    act(() => expand.click());
-    expect(expand.getAttribute('aria-expanded')).toBe('false');
-    expect(document.getElementById(detailId as string)).toBeNull();
+    const card = document.getElementById('audit');
+    expect(card?.tabIndex).toBe(-1);
+    expect(card?.querySelector('h2, h3')?.textContent).toBe('Audit ledger');
+    expect(card?.textContent).toContain('Reading it is itself recorded.');
+    const link = card?.querySelector<HTMLAnchorElement>('a.btn');
+    expect(link?.textContent).toBe('Open audit ledger');
+    expect(link?.getAttribute('href')).toBe('/audit-ledger');
+    expect(document.querySelector('table[aria-label="Audit events"]')).toBeNull();
+    // D-audit-reads-c3: every ledger read is recorded, so opening Admin
+    // issues none (the old "last event" probe is gone with the explorer).
+    expect(apiMocks.hookKeys.some((key) => key.includes('audit'))).toBe(false);
+    expect(document.body.textContent).not.toContain('Last event');
   });
 
-  it('scrolls and moves focus to the audit explorer for the #audit deep link', async () => {
+  it('scrolls and moves focus to the ledger card for the #audit deep link', async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
       configurable: true,
@@ -242,11 +200,10 @@ describe('AdminConfig audit explorer', () => {
 
     const audit = document.getElementById('audit');
     expect(audit?.tabIndex).toBe(-1);
-    expect(audit?.getAttribute('aria-labelledby')).toBe('audit-explorer-title');
+    expect(audit?.getAttribute('aria-labelledby')).toBe('admin-audit-ledger-title');
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
     expect(document.activeElement).toBe(audit);
   });
-
   it('scrolls and moves focus to data operations for its deep link', async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -263,94 +220,4 @@ describe('AdminConfig audit explorer', () => {
     expect(document.activeElement).toBe(operations);
   });
 
-  it('applies borrower, action, and event filters to the audit query key', async () => {
-    await renderAdmin();
-    const entity = document.querySelector<HTMLInputElement>('input[placeholder="B-... or approval UUID"]');
-    const action = document.querySelector<HTMLInputElement>('input[placeholder="outreach.approve"]');
-    expect(entity && action).toBeTruthy();
-
-    act(() => {
-      setNativeValue(entity!, 'B-ABC123');
-      setNativeValue(action!, 'outreach.approve');
-    });
-    // Event type is a FilterSelect fed by the labels registry (tables-10).
-    act(() => buttonByLabel(/^Event type: /).click());
-    const option = [...document.querySelectorAll('[role="option"]')]
-      .find((candidate) => candidate.textContent === 'Outreach approved');
-    act(() => (option as HTMLElement).click());
-    act(() => buttonByLabel(/^Apply filters$/).click());
-    await settle();
-
-    const explorerKeys = apiMocks.hookKeys.filter((key) => key.includes('explorer'));
-    const appliedKey = String(explorerKeys[explorerKeys.length - 1][4]);
-    expect(Object.fromEntries(new URLSearchParams(appliedKey))).toEqual({
-      audit_entity: 'B-ABC123',
-      audit_action: 'outreach.approve',
-      audit_event_type: 'APPROVE',
-    });
-    expect(document.body.textContent).toContain('entity = B-ABC123');
-    expect(document.body.textContent).toContain('action = outreach.approve');
-    expect(document.body.textContent).toContain('event = Outreach approved · APPROVE');
-  });
-
-  it('normalizes borrower references and rejects malformed B-prefixed filters', async () => {
-    await renderAdmin();
-    const entity = document.querySelector<HTMLInputElement>('input[placeholder="B-... or approval UUID"]');
-    expect(entity).not.toBeNull();
-
-    act(() => setNativeValue(entity!, 'b-abc123'));
-    act(() => buttonByLabel(/^Apply filters$/).click());
-    expect(entity?.value).toBe('B-ABC123');
-    expect(document.body.textContent).toContain('entity = B-ABC123');
-
-    act(() => setNativeValue(entity!, 'B-ABC 123'));
-    act(() => buttonByLabel(/^Apply filters$/).click());
-    expect(entity?.getAttribute('aria-invalid')).toBe('true');
-    expect(document.body.textContent).toContain(
-      'Borrower reference must use B- followed by letters and numbers only.',
-    );
-    expect(document.body.textContent).toContain('entity = B-ABC123');
-  });
-
-  it('pages through older audit rows without calling a 25-row result a total', async () => {
-    apiMocks.auditRows = Array.from({ length: 26 }, (_, index) => ({
-      ...fixtures.auditEvent,
-      event_id: `evt-page-${index}`,
-      entity_id: `approval-${index}`,
-    }));
-    await renderAdmin();
-
-    expect(document.body.textContent).toContain('page 1 · 25 rows');
-    expect(document.body.textContent).not.toContain('25 matching');
-    const next = buttonByLabel(/^Next$/);
-    expect(next.disabled).toBe(false);
-    act(() => next.click());
-
-    const explorerKeys = apiMocks.hookKeys.filter((key) => key.includes('explorer'));
-    expect(explorerKeys[explorerKeys.length - 1]).toContain('cursor-page-2');
-    expect(document.body.textContent).toContain('Page 2');
-    expect(document.body.textContent).toContain('page 2 · 1 rows');
-    expect(buttonByLabel(/^Previous$/).disabled).toBe(false);
-  });
-
-  it('copies the real table context and an exact record query without creating a row URL', async () => {
-    await renderAdmin();
-
-    await act(async () => buttonByLabel(/^Copy Lakebase audit table context$/).click());
-    expect(writeText).toHaveBeenLastCalledWith('mip_app.action_audit');
-    expect(document.body.textContent).toContain('Table context copied');
-
-    act(() => buttonByLabel(/^Expand audit event evt-8ecf7294$/).click());
-    await act(async () => buttonByLabel(/^Copy event ID evt-8ecf7294$/).click());
-
-    expect(writeText).toHaveBeenLastCalledWith('evt-8ecf7294');
-    expect(document.body.textContent).toContain('Event ID copied');
-
-    await act(async () => buttonByLabel(/^Copy Lakebase query for audit event evt-8ecf7294$/).click());
-    expect(writeText).toHaveBeenLastCalledWith(
-      "SELECT * FROM mip_app.action_audit WHERE audit_id = 'evt-8ecf7294';",
-    );
-    expect(document.body.textContent).toContain('Lakebase record query copied');
-    expect(document.querySelector('a[href*="lakebase" i]')).toBeNull();
-  });
 });

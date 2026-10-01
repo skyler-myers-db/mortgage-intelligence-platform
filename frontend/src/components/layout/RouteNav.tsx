@@ -13,7 +13,7 @@ import {
   type AppPath,
   type NavigationRouteId,
 } from '../../lib/routeMeta';
-import { sessionQueryOptions } from '../../lib/sessionQuery';
+import { sessionQueryOptions, useAuditLedgerAccess } from '../../lib/sessionQuery';
 
 /**
  * Secondary route nav. APP-ADDED ELEMENT: the prototype is a single screen
@@ -54,6 +54,7 @@ export function useAdminNavigationAccess(): boolean {
 export function RouteNav() {
   const { lastBorrowerId } = useApp();
   const canAccessAdmin = useAdminNavigationAccess();
+  const canReadLedger = useAuditLedgerAccess();
   const queryClient = useQueryClient();
   // Intent (hover / focus) preloads the route chunk. Analytics alone also
   // prefetches its unfiltered hero reads (non-audited aggregates, audit
@@ -65,8 +66,12 @@ export function RouteNav() {
     if (to === ROUTES.analytics.pattern && !saveDataRequested()) prefetchRouteData(queryClient, to, '');
     else preloadRouteForPath(to);
   };
+  // Admin for administrators; 'Audit' (the ledger) only for a non-admin
+  // auditor, in Admin's place, so the nav stays one 57px line at 1440x900 with
+  // the Console open (D-audit-reads-c3). Administrators reach the ledger from
+  // the rail, the Admin page and the palette.
   const items = NAVIGATION_ROUTE_IDS
-    .filter((id) => canAccessAdmin || id !== 'admin')
+    .filter((id) => (id === 'admin' ? canAccessAdmin : id === 'auditLedger' ? canReadLedger && !canAccessAdmin : true))
     .map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] }));
   return (
     <nav aria-label="Main navigation" className="route-nav">

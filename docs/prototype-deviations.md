@@ -79,3 +79,5 @@ enforces it.
 
 | id | deviation | prototype cite | class | code | pinning test | finding ids | ruling date | lane |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| audit-ledger-route | /audit-ledger is its own route with a nav entry (non-admin auditors), a palette entry and a rail item; the prototype is one screen | design_files/Module 0 Prototype.html:1188-1204 | product | frontend/src/lib/routeMeta.ts::ROUTES.auditLedger; frontend/src/routes/audit-ledger.tsx | frontend/src/lib/routeMeta.test.tsx | flow-04; tables-10; critic-03 | 2026-10-01 | w5-audit-ledger-presenter |
+| rail-audit-ledger | A rail item for the audit ledger above the settings gear, for administrators and auditors; the prototype rail ends with Settings only | design_files/Module 0 Prototype.html:1201-1202 | product | frontend/src/components/layout/Rail.tsx | frontend/src/components/layout/RoleNavigation.test.tsx | flow-04 | 2026-10-01 | w5-audit-ledger-presenter |

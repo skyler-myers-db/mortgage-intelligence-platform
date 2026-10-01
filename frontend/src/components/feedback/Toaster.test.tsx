@@ -81,7 +81,7 @@ describe('Toaster', () => {
     });
     const link = document.querySelector<HTMLAnchorElement>('a.toast__link');
     expect(link?.textContent).toBe('View audit event');
-    expect(link?.getAttribute('href')).toBe('/admin-config?audit_event_id=evt-0001#audit');
+    expect(link?.getAttribute('href')).toBe('/audit-ledger?audit_event_id=evt-0001#audit');
 
     act(() => clearToasts());
     session.canAccessAdmin = false;

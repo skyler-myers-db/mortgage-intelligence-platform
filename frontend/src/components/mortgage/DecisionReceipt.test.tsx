@@ -41,7 +41,8 @@ vi.mock('../AppContext', () => ({
 }));
 
 import { ApiError } from '../../lib/api';
-import { DecisionReceipt, auditExplorerHref } from './DecisionReceipt';
+import { auditEventHref } from '../../lib/auditLinks';
+import { DecisionReceipt } from './DecisionReceipt';
 import { PRINT_HOST_CLASS } from './DecisionReceipt.actions';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -177,8 +178,8 @@ describe('DecisionReceipt', () => {
     expect(card.textContent).toContain('evidence ev-1 · ev-2');
     expect(card.querySelector('[data-testid="decision-receipt-score"]')?.textContent).toContain('91');
     const link = card.querySelector<HTMLAnchorElement>('[data-testid="decision-receipt-explorer-link"]')!;
-    expect(link.getAttribute('href')).toBe(auditExplorerHref(AUDIT_ID));
-    expect(link.getAttribute('href')).toContain(`audit_event_id=${AUDIT_ID}`);
+    expect(link.getAttribute('href')).toBe(auditEventHref(AUDIT_ID));
+    expect(link.getAttribute('href')).toBe(`/audit-ledger?audit_event_id=${AUDIT_ID}#audit`);
   });
 
   it('states how the copy was reviewed: one review line per mode, and none when nothing was recorded (flow-03)', async () => {
@@ -232,6 +233,22 @@ describe('DecisionReceipt', () => {
     expect(receipt()!.classList.contains('decision-receipt--reveal')).toBe(false);
     expect(announcement()!.textContent).toBe(`Decision receipt: Approved, audit event ${AUDIT_ID}`);
     expect(onRevealed).toHaveBeenCalledTimes(1);
+  });
+
+  it('links a read-only auditor to the audit ledger, by the session decision the ledger gate makes (D-audit-reads-c3)', async () => {
+    appMocks.canAccessAdmin = false;
+    queryClient.setQueryData(['session', 'access'], {
+      can_access_admin: false,
+      can_approve: false,
+      can_read_audit: true,
+      presenter_mode: false,
+    });
+    apiMocks.auditReceipt.mockResolvedValue(LEDGER);
+    mount();
+    await settle();
+
+    const link = receipt()!.querySelector<HTMLAnchorElement>('[data-testid="decision-receipt-explorer-link"]');
+    expect(link?.getAttribute('href')).toBe(`/audit-ledger?audit_event_id=${AUDIT_ID}#audit`);
   });
 
   it('renders the finished receipt without the reveal for a durable decision and hides the explorer link from non-admins', async () => {

@@ -38,7 +38,7 @@ function Shell() {
     <>
       <Routes>
         <Route path="/notes" element={<NotePage />} />
-        <Route path="/admin-config" element={<h1>Audit explorer</h1>} />
+        <Route path="/audit-ledger" element={<h1>Audit explorer</h1>} />
       </Routes>
       <Where />
       <Toaster />
@@ -100,7 +100,7 @@ describe('Toaster audit link under the unsaved guard', () => {
 
     await click(auditLink() as HTMLAnchorElement);
     await click(dialogButton('Leave'));
-    expect(where()).toBe(`/admin-config?audit_event_id=${AUDIT_ID}`);
+    expect(where()).toBe(`/audit-ledger?audit_event_id=${AUDIT_ID}`);
     expect(getToasts()).toEqual([]);
   });
 });

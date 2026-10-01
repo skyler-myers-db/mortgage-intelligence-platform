@@ -242,7 +242,7 @@ describe('LeadTable audited export', () => {
     const receipt = container.querySelector('[data-testid="lead-export-receipt"]');
     expect(receipt?.textContent).toBe('Exported 2 rows · audit evt-receipt-4242');
     const link = receipt?.querySelector('a');
-    expect(link?.getAttribute('href')).toBe('/admin-config?audit_event_id=evt-receipt-4242#audit');
+    expect(link?.getAttribute('href')).toBe('/audit-ledger?audit_event_id=evt-receipt-4242#audit');
     expect(exportButton().disabled).toBe(false);
     expect(exportButton().hasAttribute('aria-disabled')).toBe(false);
     expect(exportButton().textContent).toContain('Export 2 leads');

@@ -24,7 +24,7 @@ export default function AdminAccessDeniedRoute({ unverified = false }: AdminAcce
     <PageShell
       eyebrow="Administration"
       title={unverified ? 'Administrator access could not be confirmed' : 'Administrator access required'}
-      lede="The offer ruleset, data source readiness, and the audit trail are an administrator surface."
+      lede="The offer ruleset, data source readiness, and data operations are an administrator surface."
     >
       <AccessDenied
         title={unverified ? 'Access check did not complete' : 'This page is limited to administrators'}
@@ -35,9 +35,10 @@ export default function AdminAccessDeniedRoute({ unverified = false }: AdminAcce
         }}
         testId="admin-access-denied"
       >
-        Admin Config shows the active offer ruleset, data source readiness, and the full audit
-        trail. The lead workflow — portfolio, segments, lead queue, borrower dossiers, offers, and
-        Genie — does not need it.
+        Admin Config shows the active offer ruleset, data source readiness, and data operations.
+        The audit ledger now lives on its own page, /audit-ledger, for administrators and
+        auditors. The lead workflow — portfolio, segments, lead queue, borrower dossiers, offers,
+        and Genie — does not need either.
       </AccessDenied>
     </PageShell>
   );

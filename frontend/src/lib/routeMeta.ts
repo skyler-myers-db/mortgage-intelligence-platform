@@ -43,7 +43,7 @@ export type IndexPath<P extends string> = P extends `${infer Base}/:${string}` ?
 /** The lazy route module that renders a route (see routePreloaders.ts). */
 export type RouteChunk =
   | 'home' | 'analytics' | 'asset' | 'portfolio' | 'segments' | 'leads'
-  | 'borrower' | 'glossary' | 'offer' | 'askGenie' | 'admin';
+  | 'borrower' | 'glossary' | 'offer' | 'askGenie' | 'auditLedger' | 'admin';
 
 export interface RouteDefinition {
   /** Route pattern, served verbatim as the `<Route path>` in `app.tsx`. */
@@ -104,6 +104,12 @@ export const ROUTES = {
     detail: 'conversation',
     chunk: 'askGenie',
   },
+  // The audit ledger, for administrators and the read-only Auditor role
+  // (D-audit-reads-c3; deviation:audit-ledger-route). navLabel 'Audit' keeps
+  // the route nav one line at 1440x900 with the Console open.
+  auditLedger: {
+    pattern: '/audit-ledger', name: 'Audit ledger', navLabel: 'Audit', icon: 'audit', chunk: 'auditLedger',
+  },
   admin: { pattern: '/admin-config', name: 'Admin', navLabel: 'Admin', icon: 'settings', chunk: 'admin' },
   // Legacy outreach paths redirect to the Lead Queue (outreach drafting lives
   // inside the Offer Orchestrator). Naming them after their destination keeps
@@ -124,16 +130,20 @@ export const ROUTE_IDS = Object.keys(ROUTES) as RouteId[];
 /**
  * The ONE navigation order, in product-flow order: build the portfolio,
  * segment, rank, explain (Borrower 360), recommend (Offer), then the
- * analytics, Genie, glossary and admin destinations. The route-nav links, and
- * so their Tab order, and the command palette's "Navigate" group both render
- * it (audit shell-08: the nav used to put Analytics second, between Home and
- * Portfolio, interrupting the flow the palette already followed). Borrower
- * 360 and Offer link to the last borrower's detail route when there is one;
- * Admin is shown only to an admitted actor.
+ * analytics, Genie, glossary, audit-ledger and admin destinations. The
+ * route-nav links, and so their Tab order, and the command palette's
+ * "Navigate" group both render it (audit shell-08: the nav used to put
+ * Analytics second, between Home and Portfolio, interrupting the flow the
+ * palette already followed). Borrower 360 and Offer link to the last
+ * borrower's detail route when there is one; Admin is shown only to an
+ * admitted actor. The audit ledger (D-audit-reads-c3) is in the route nav
+ * only for a non-admin auditor, whose 'Audit' link takes Admin's place (an
+ * eleventh link would wrap the pinned one-line nav); the palette and the
+ * rail offer it to administrators and auditors.
  */
 export const NAVIGATION_ROUTE_IDS = [
   'home', 'portfolio', 'segments', 'leads', 'borrowerIndex',
-  'offerIndex', 'analytics', 'askGenie', 'glossary', 'admin',
+  'offerIndex', 'analytics', 'askGenie', 'glossary', 'auditLedger', 'admin',
 ] as const satisfies readonly RouteId[];
 
 export type NavigationRouteId = (typeof NAVIGATION_ROUTE_IDS)[number];

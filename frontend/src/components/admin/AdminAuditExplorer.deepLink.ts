@@ -1,7 +1,7 @@
 /**
  * Bring a deep-linked audit row into view (audit flow-04 phase 1).
  *
- * admin-config scrolls `#audit` to the top when the page opens on that hash,
+ * The page scrolls `#audit` to the top when it opens on that hash,
  * but it does so on mount, before the ledger page has loaded: the explorer is
  * still short then, the page cannot scroll far enough, and the expanded row
  * lands below the fold under the rollups. Once the linked row is on screen in
