@@ -15,8 +15,9 @@ import { intentFingerprint, useIntentRequestIds } from '../lib/mutations/request
 import { queueHref, useQueueContext } from '../lib/queueContext';
 import { queuePosition } from '../lib/queuePosition';
 import { offerPath } from '../lib/routeMeta';
+import { usePresenterMode } from '../lib/sessionQuery';
 import { PageShell } from '../components/layout/PageShell';
-import { BorrowerOfferPreviewMock } from '../components/mortgage/BorrowerOfferPreviewMock';
+import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { QueuePager } from '../components/mortgage/QueuePager';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
@@ -40,6 +41,12 @@ import {
   OfferWarmingRoute,
   useOfferCampaignBinding,
 } from './offer-orchestrator.route-ui';
+
+// The PROTOTYPE borrower view is a demo affordance (D-shell-deviations-e1):
+// shown only in presenter mode, and its module is never downloaded otherwise.
+// Loaded through useLazyModule, not React.lazy, so a stale chunk after a
+// deploy renders nothing instead of reaching the route error boundary.
+const PREVIEW_MOCK_CHUNK = lazyModule(() => import('../components/mortgage/BorrowerOfferPreviewMock'));
 
 // Saved campaign variants are currently persisted as governed email copy.
 // Keep campaign handoffs on that exact channel until the campaign contract
@@ -90,6 +97,9 @@ export default function OfferOrchestrator() {
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
   const [borrowerPreviewOpen, setBorrowerPreviewOpen] = useState(false);
+  const presenterMode = usePresenterMode();
+  const previewChunk = useLazyModule(PREVIEW_MOCK_CHUNK, presenterMode && borrowerPreviewOpen);
+  const BorrowerOfferPreviewMock = presenterMode && borrowerPreviewOpen ? previewChunk.module?.BorrowerOfferPreviewMock : undefined;
   const allowedDraftChannels = campaignBinding
     ? SAVED_CAMPAIGN_OUTREACH_CHANNELS
     : undefined;
@@ -390,16 +400,19 @@ export default function OfferOrchestrator() {
                 docked decision bar keeps routing and Approve together and in
                 view at 1440x900 (2026-09-21 audit visual-v1). */}
             {/* Auto-offer Module 1 prototype: show the borrower-facing offer
-                experience (the "click yes" vision). Clearly a mock. */}
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="user"
-              onClick={() => setBorrowerPreviewOpen(true)}
-              data-testid="preview-borrower-offer"
-            >
-              Preview borrower view
-            </Button>
+                experience (the "click yes" vision). Clearly a mock, and a
+                demo affordance: presenter mode only (D-shell-deviations-e1). */}
+            {presenterMode && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="user"
+                onClick={() => setBorrowerPreviewOpen(true)}
+                data-testid="preview-borrower-offer"
+              >
+                Preview borrower view
+              </Button>
+            )}
           </>
         )
       }
@@ -433,7 +446,7 @@ export default function OfferOrchestrator() {
           )}
         </div>
       )}
-      {borrowerPreviewOpen && b && (
+      {BorrowerOfferPreviewMock && b && (
         <BorrowerOfferPreviewMock borrower={b} onClose={() => setBorrowerPreviewOpen(false)} />
       )}
       <OfferReviewGrid
