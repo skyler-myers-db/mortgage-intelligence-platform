@@ -10,7 +10,8 @@
  *  - The briefing's age (states-09 / delivery-05): a snapshot restored after
  *    a reload says "Fetched 3h ago" while "Refreshing…", then "now"; a
  *    restored snapshot whose first refresh fails shows the failure, never
- *    the restored figures; a failed manual Refresh over data on screen shows
+ *    the restored figures, and neither does one that failed before the
+ *    lazy restore landed; a failed manual Refresh over data on screen shows
  *    the stale-data note with that data's age.
  *  - The Delta Explainer (wow-ai-3) opens from the refi trigger's chip, its
  *    table reconciles with its total, and nothing reads the attribution
@@ -30,10 +31,6 @@ const QUERY_CACHE_KEY = 'mip.queryCache.v1';
 /** Home's hero reads: the two portfolio previews and the since-last-login summary. */
 const HERO_READS = /\/api(?:\/v\d+)?\/(?:portfolio\/preview|home\/summary)(?:\?|$)/;
 const QUERY_PERSIST_CHUNK = /\/assets\/queryPersist-[\w-]+\.js$/;
-const RESTORE_RACE_FIXME =
-  'integrator (lib/queryPersist.ts, W5a delivery-05 9236600a; no W5b lane owns it) · delivery-05 / R1 · a hero read whose ' +
-  'every retry fails BEFORE the lazy snapshot restore lands is overwritten by the newer-wins hydrate: the restored figures ' +
-  'come back as a success with no error, and settleRestored never sees a later refresh';
 const ATTRIBUTION_READ = /\/home\/summary\/attribution$/;
 const RATE_WINDOW_READ = /\/analytics\/rate-window$/;
 const LEAD_LIST_READ = /^\/api(?:\/v\d+)?\/leads(?:\/|$)/;
@@ -173,7 +170,8 @@ test.describe("the briefing's age", () => {
   });
 
   test('a refresh that fails before the snapshot restore lands never brings the restored figures back', async ({ app, page }) => {
-    test.fixme(true, RESTORE_RACE_FIXME);
+    // lib/queryPersist screens a read that already failed out of the snapshot
+    // right before the newer-wins hydrate (delivery-05 / R1).
     await loadAndSave(app, page);
     let releaseRestore: () => void = () => undefined;
     const restoreHeld = new Promise<void>((resolve) => {
