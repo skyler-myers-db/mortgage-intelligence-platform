@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from backend.services.genie_answers import GenieClaimsSummary, GenieVerifiedClaim
 from backend.services.repositories.databricks_genie_visualization import (
     _is_genie_identifier_column,
     _row_columns,
@@ -104,6 +105,90 @@ class _NumericClaim:
     kind: Literal["currency", "percent", "bps", "number"]
 
 
+ClaimDerivation = Literal["returned_value", "derived_from_rows", "bound"]
+_MAX_VERIFIED_CLAIMS = 40
+
+
+@dataclass(frozen=True)
+class VerifiedNumericClaim:
+    """A figure the verifier proved against the rows, and how (genie-10)."""
+
+    token: str
+    kind: Literal["currency", "percent", "bps", "number"]
+    derivation: ClaimDerivation
+
+
+@dataclass(frozen=True)
+class NumericClaimCheck:
+    """``unsupported``: today's labels (capped at 5); ``total``: the claims
+    checked; ``verified``: the supported ones (capped at 40), never an
+    unsupported number; ``verified_count``: all supported claims."""
+
+    unsupported: list[str]
+    total: int
+    verified: list[VerifiedNumericClaim]
+    verified_count: int = 0
+
+
+def check_numeric_claims(
+    answer_text: str | None,
+    rows: list[dict[str, Any]] | None,
+    question: str,
+) -> NumericClaimCheck:
+    """One evaluation per claim, in today's order: the claim filters, then the
+    row support, then the stated bound. The verdict is exactly
+    ``_unsupported_answer_numeric_claims``; the derivation is only recorded
+    for a claim that is already supported."""
+
+    if not answer_text:
+        return NumericClaimCheck(unsupported=[], total=0, verified=[])
+    claims = [
+        claim
+        for claim in _numeric_claims(answer_text)
+        if _is_measure_claim(answer_text, claim)
+        and not _is_identifier_or_date_context(answer_text, claim)
+        and not _number_is_query_limit(question, claim)
+        and not _number_is_timeframe(answer_text, claim)
+    ]
+    unsupported: list[str] = []
+    verified: list[VerifiedNumericClaim] = []
+    for claim in claims:
+        support = _numeric_support_values_from_rows(rows, claim=claim)
+        if _is_supported(claim.value, support):
+            direct = _is_supported(claim.value, _direct_cell_values(rows, claim))
+            verified.append(_verified(claim, "returned_value" if direct else "derived_from_rows"))
+            continue
+        if _bounded_claim_holds(answer_text, claim, support):
+            verified.append(_verified(claim, "bound"))
+            continue
+        unsupported.append("unsupported_numeric_claim")
+    return NumericClaimCheck(
+        unsupported=unsupported[:5],
+        total=len(claims),
+        verified=verified[:_MAX_VERIFIED_CLAIMS],
+        verified_count=len(verified),
+    )
+
+
+def _verified(claim: _NumericClaim, derivation: ClaimDerivation) -> VerifiedNumericClaim:
+    return VerifiedNumericClaim(token=claim.raw.strip()[:32], kind=claim.kind, derivation=derivation)
+
+
+def claims_summary(check: NumericClaimCheck, *, section: str | None = None) -> GenieClaimsSummary | None:
+    """The proof drawer's figure count and list; None when nothing was checked."""
+
+    if check.total == 0:
+        return None
+    return GenieClaimsSummary(
+        verified=min(check.verified_count, 500),
+        total=min(check.total, 500),
+        items=[
+            GenieVerifiedClaim(token=item.token, kind=item.kind, derivation=item.derivation, section=section)
+            for item in check.verified
+        ],
+    )
+
+
 def _unsupported_answer_numeric_claims(
     answer_text: str | None,
     rows: list[dict[str, Any]] | None,
@@ -115,27 +200,51 @@ def _unsupported_answer_numeric_claims(
     unsupported number back to the user because that repeats the hallucination.
     """
 
-    if not answer_text:
-        return []
-    claims = [
-        claim
-        for claim in _numeric_claims(answer_text)
-        if _is_measure_claim(answer_text, claim)
-        and not _is_identifier_or_date_context(answer_text, claim)
-        and not _number_is_query_limit(question, claim)
-        and not _number_is_timeframe(answer_text, claim)
-    ]
-    if not claims:
-        return []
-    unsupported: list[str] = []
-    for claim in claims:
-        support = _numeric_support_values_from_rows(rows, claim=claim)
-        if _is_supported(claim.value, support):
+    return check_numeric_claims(answer_text, rows, question).unsupported
+
+
+#: An ISO date or timestamp cell ("2026-09", "2026-09-30T12:00:00Z"): its
+#: year is not a figure a reader would call a returned value.
+_ISO_DATE_CELL_RE = re.compile(r"\d{4}-\d{2}(?:-\d{2})?(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
+
+
+def _direct_cell_values(rows: list[dict[str, Any]] | None, claim: _NumericClaim) -> set[float]:
+    """Values a reader can find in ONE cell: kind-compatible, non-identifier,
+    non-date column cells and numeric tokens in non-identifier, non-date
+    string cells, with their display variants and column unit multipliers (no
+    aggregates). Only the derivation LABEL reads this; the verdict does not."""
+
+    values: set[float] = set()
+    if not rows:
+        return values
+    for row in rows:
+        for col, cell in row.items():
+            if (
+                isinstance(cell, str)
+                and not _is_genie_identifier_column(col)
+                and not _column_looks_dateish(col)
+                and not _ISO_DATE_CELL_RE.fullmatch(cell.strip())
+            ):
+                for token in re.findall(r"-?\d[\d,]*\.?\d*", cell):
+                    try:
+                        _add_supported_variants(values, float(token.replace(",", "")))
+                    except ValueError:
+                        continue
+    for col in _row_columns(rows):
+        if (
+            _is_genie_identifier_column(col)
+            or _column_looks_dateish(col)
+            or not _column_supports_claim_kind(col, claim.kind)
+        ):
             continue
-        if _bounded_claim_holds(answer_text, claim, support):
-            continue
-        unsupported.append("unsupported_numeric_claim")
-    return unsupported[:5]
+        for row in rows:
+            numeric_value = _numeric_cell_value(row.get(col))
+            if numeric_value is None:
+                continue
+            _add_supported_variants(values, numeric_value)
+            if multiplier := _column_unit_multiplier(col):
+                _add_supported_variants(values, numeric_value * multiplier)
+    return values
 
 
 _BOUND_ABOVE_RE = re.compile(

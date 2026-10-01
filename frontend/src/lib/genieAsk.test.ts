@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GenieCompletionJobStatus, GenieSubmitResultWithJobs } from '../types/genieJobs';
 import { ApiError, api, type GenieLiveProgress } from './api';
 import { genieJobsApi } from './apiClients/genieJobs';
+import { genieRevealSnapshot } from './genieVerifiedReveal';
 import {
   GenieLiveError,
   JOB_RESUME_WINDOW_MS,
@@ -406,7 +407,7 @@ describe('pollGenieJob (genie-01)', () => {
 
     expect(result).toEqual(ANSWER);
     expect(seen).toEqual(['researching', 'done']);
-    expect(status).toHaveBeenCalledWith({ ...IDS, question: 'question?' }, 'job-1', undefined);
+    expect(status).toHaveBeenCalledWith({ ...IDS, question: 'question?' }, 'job-1', undefined, null);
   });
 
   it.each(['failed', 'expired'] as const)('ends a %s job with the server hint', async (outcome) => {
@@ -464,6 +465,53 @@ describe('pollGenieJob (genie-01)', () => {
       pollGenieJob(IDS, 'question?', 'job-1', { deadline: Date.now() + JOB_RESUME_WINDOW_MS, sleep: noSleep }),
     ).rejects.toBe(transient);
     expect(status).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('pollGenieJob and the verified-sections reveal (genie-01 phase 1b)', () => {
+  const JOB = '0a1b2c3d-0000-4000-8000-000000000001';
+  const section = (n: number) => ({ title: `Part ${n}`, question: `Part ${n}?`, answer: 'Illinois leads.' });
+
+  it('sends back the revision it holds and publishes every status, keeping sections on a null re-send', async () => {
+    vi.useFakeTimers();
+    const status = vi
+      .spyOn(genieJobsApi, 'genieJobStatus')
+      .mockResolvedValueOnce(jobOf({ stage: 'researching', verified_sections: 1, sections_rev: 1 }))
+      .mockResolvedValueOnce(
+        jobOf({ stage: 'researching', verified_sections: 3, sections_rev: 2, revealed_sections: [0, 1, 2].map(section) }),
+      )
+      .mockResolvedValueOnce(jobOf({ stage: 'synthesizing', verified_sections: 3, sections_rev: 2, revealed_sections: null }))
+      .mockResolvedValueOnce(jobOf({ status: 'succeeded', stage: 'done', terminal: true, response: ANSWER }));
+    const shown: Array<number | null> = [];
+
+    await pollGenieJob(IDS, 'question?', JOB, {
+      deadline: Date.now() + JOB_RESUME_WINDOW_MS,
+      sleep: noSleep,
+      onJob: () => shown.push(genieRevealSnapshot()?.sections?.length ?? null),
+    });
+
+    expect(status.mock.calls.map((call) => call[3])).toEqual([null, 1, 2, 2]);
+    expect(shown).toEqual([null, 3, 3, 3]);
+    // Settled: the sections stay until the answer has replaced the rail.
+    expect(genieRevealSnapshot()?.sections).toHaveLength(3);
+    vi.runAllTimers();
+    expect(genieRevealSnapshot()).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('withdraws the sections at once when the job ends any other way', async () => {
+    vi.spyOn(genieJobsApi, 'genieJobStatus')
+      .mockResolvedValueOnce(
+        jobOf({ stage: 'researching', verified_sections: 3, sections_rev: 4, revealed_sections: [0, 1, 2].map(section) }),
+      )
+      .mockResolvedValueOnce(
+        jobOf({ status: 'cancelled', stage: 'cancelled', terminal: true, error_hint: 'Stopped.' }),
+      );
+
+    await expect(
+      pollGenieJob(IDS, 'question?', JOB, { deadline: Date.now() + JOB_RESUME_WINDOW_MS, sleep: noSleep }),
+    ).rejects.toMatchObject({ hint: 'Stopped.' });
+    expect(genieRevealSnapshot()).toBeNull();
   });
 });
 

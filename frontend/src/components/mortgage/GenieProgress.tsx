@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+import { useGenieVerifiedReveal } from '../../lib/genieVerifiedReveal';
+import { GenieVerifiedReveal } from './GenieVerifiedReveal';
 import type { GenieTurnProgress } from '../../types/genieJobs';
 import { Icon } from '../Icon';
 import { ElapsedTicker } from '../ui/ElapsedTicker';
@@ -173,6 +175,7 @@ export function GenieProgress({
   }, [askKey, reportedIdx]);
   const trace = dedupeTrace(progress?.reasoning_trace ?? []);
   const sql = progress?.sql_preview?.trim() || null;
+  const reveal = useGenieVerifiedReveal();
 
   return (
     // No role="status" on the card: status regions are implicitly atomic, so
@@ -228,6 +231,12 @@ export function GenieProgress({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Verified sections while a job runs; never announced (genie-01 1b).
+          deviation:genie-partial-research-reveal */}
+      {progress?.job && reveal && (
+        <GenieVerifiedReveal reveal={reveal} dense={dense} />
       )}
 
       {sql && (

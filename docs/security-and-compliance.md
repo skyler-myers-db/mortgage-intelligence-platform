@@ -156,6 +156,9 @@ the pull request that ships the behaviour, never earlier.
 | Home Delta Explainer (`home.home_summary_attribution`) | none | only while an evidence drawer for a supported "since your last login" measure is open on Overview; never on hover, prefetch or poll | audit-free (gold and ref aggregates) |
 | Home watchlist briefings (`growth_agent_compose_routes.growth_agent_watchlist_summary`) | none | once per Home load (the card never POSTs, so it starts no run) | audit-free |
 | Home WHY NOW rate move (`analytics_rate_window.rate_window`) | none | on Home only when the summary is a delta with a previous visit (and on Analytics as before) | audit-free |
+| Genie completion-job status poll (`genie.genie_message_status`) | none | every ~1.5 s poll of the caller's own job; while a deep job runs it may carry verified sections as Partial research | audit-free; `genie.run_query` RUN_GENIE stays at the job's single `recorded_at` commit point and no action token is issued for a revealed section |
+| Genie verified section revealed (the job's sections writer, `genie_completion_sections`) | `GENIE_SECTION_REVEALED` | once per section, before it can be served (ruling R1): job and turn ids, plan index, row count, SQL hash, verification verdict; never question text or a row value | same Lakebase transaction as the `sections_json` write, fail-closed: a failed audit write withholds the section until the final answer; a turn that later fails, stops or expires keeps the rows |
+| Admin SSE ingress probe (`admin_sse_probe.sse_probe`, `admin_sse_probe.sse_probe_outcome`) | none | admin-only transport diagnostic (delivery-04) | audit-free; reads no UC or Lakebase data |
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the

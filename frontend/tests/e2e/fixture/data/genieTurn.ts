@@ -98,6 +98,8 @@ export function genieAnswerFixture(overrides: Partial<GenieAnswer> = {}): GenieA
       conversation_id: GENIE_CONVERSATION_ID,
       message_id: GENIE_MESSAGE_ID,
       elapsed_ms: 18400,
+      // genie-10 phase 1: the server sends claims (null when nothing was checked).
+      claims: null,
       generated_at: SNAPSHOT_AT,
     },
     actions: [],

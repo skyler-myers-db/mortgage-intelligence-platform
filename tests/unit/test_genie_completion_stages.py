@@ -33,6 +33,7 @@ from backend.services.genie_completion_stages import (
     GenieJobStage,
     GenieTurnCancelled,
     commit_governed_record,
+    report_sections,
     report_stage,
     stage_sink,
 )
@@ -290,6 +291,39 @@ def test_report_stage_is_a_no_op_without_a_sink_and_off_the_owner_thread() -> No
 
     report_stage(GenieJobStage.FINALIZING)  # uninstalled again on exit
     assert recorder.stages == ["verifying"]
+
+
+def test_report_sections_is_owner_thread_only_swallows_failures_and_is_never_a_cancel_point() -> None:
+    seen: list[list[dict[str, Any]]] = []
+    report_sections([{"index": 0}])  # no sink installed: nothing to call
+
+    with stage_sink(_Recorder(), cancelled=lambda: True, sections=seen.append):
+        report_sections([{"index": 0}])  # a cancel predicate never fires here
+        context = contextvars.copy_context()
+        worker = threading.Thread(target=context.run, args=(report_sections, [{"index": 1}]))
+        worker.start()
+        worker.join()
+
+    def explode(_snapshot: list[dict[str, Any]]) -> None:
+        raise RuntimeError("sections sink exploded")
+
+    with stage_sink(_Recorder(), sections=explode):
+        report_sections([{"index": 2}])  # swallowed
+    assert seen == [[{"index": 0}]]
+
+
+def test_the_deep_sweep_reports_verified_sections_through_the_real_repository() -> None:
+    seen: list[tuple[int, list[dict[str, Any]]]] = []
+    genie = _scenarios()["deep"][1]()
+    repo = DatabricksGenieRepository(genie)  # type: ignore[arg-type]
+
+    with stage_sink(_Recorder(), sections=lambda snap: seen.append((threading.get_ident(), snap))):
+        response = repo.respond_existing(DEEP_QUESTION, conversation_id="conv-1", message_id="msg-1")
+
+    assert {thread for thread, _ in seen} == {threading.get_ident()}
+    assert seen[0][1] == []
+    final = seen[-1][1]
+    assert [item["title"] for item in final] == [section.title for section in response.sections]
 
 
 def test_no_stage_label_claims_the_answer_is_ready() -> None:

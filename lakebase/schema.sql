@@ -4035,3 +4035,39 @@ VALUES (
     'Approval requests (maker-checker): approval_request_batches (finalize-only) and approval_request_items (open -> withdrawn|expired, one open per borrower), no DELETE; approvals_action_check admits revoke; idx_approvals_decided_at'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Genie completion-job verified sections ---------------------------------
+-- Audit 2026-09-21 genie-01 phase 1b. A running deep-research job stores the
+-- sweep's sections that already passed their own checks, so the status poll
+-- can show them as "Partial research" before the summary and the recorded
+-- answer. Each stored section was audited (GENIE_SECTION_REVEALED) in the
+-- same transaction as its write (ruling R1); every terminal UPDATE NULLs the
+-- column. Nullable, no index and no grant change: the existing
+-- SELECT/INSERT/UPDATE covers it. Rollback-safe: older App code never touches
+-- the column. The CHECK is static ADD CONSTRAINT text so the executable-hook
+-- replay scanner reviews it.
+ALTER TABLE mip_app.genie_completion_jobs
+    ADD COLUMN IF NOT EXISTS sections_json JSONB;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.genie_completion_jobs'::regclass
+          AND conname = 'genie_completion_jobs_sections_size_chk'
+    ) THEN
+        ALTER TABLE mip_app.genie_completion_jobs
+            ADD CONSTRAINT genie_completion_jobs_sections_size_chk
+            CHECK (sections_json IS NULL OR pg_column_size(sections_json) <= 8388608);
+    END IF;
+END $$;
+
+COMMENT ON COLUMN mip_app.genie_completion_jobs.sections_json IS
+    'The verified planned sections of a running deep-research job (rows capped at 50 per section), each audited as GENIE_SECTION_REVEALED when written; NULLed at every terminal state.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_02_genie_job_sections',
+    'Genie completion-job verified sections: nullable sections_json with a named 8 MiB pg_column_size CHECK, NULLed at every terminal state'
+)
+ON CONFLICT (version) DO NOTHING;

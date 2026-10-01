@@ -8,9 +8,11 @@
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieLiveProgress } from '../../lib/api';
-import type { GenieTurnProgress } from '../../types/genieJobs';
+import { MemoryRouter } from 'react-router';
+import { beginGenieReveal, endGenieReveal, publishGenieReveal } from '../../lib/genieVerifiedReveal';
+import type { GenieCompletionJobStatus, GenieTurnProgress } from '../../types/genieJobs';
 import {
   GENIE_DEEP_WAIT_LABEL,
   GENIE_VERIFY_WAIT_LABEL,
@@ -370,5 +372,108 @@ describe('GenieProgress: the completion job speaks with the server stage (genie-
       expect(genieTypicalDurationHint({ ...RESEARCHING, job })).toBeNull();
     }
     expect(genieTypicalDurationHint(LIVE_TERMINAL)).toBeNull();
+  });
+});
+
+describe('GenieProgress: verified sections as partial research (genie-01 phase 1b)', () => {
+  // deviation:genie-partial-research-reveal (pinned here)
+  const JOB = '0a1b2c3d-0000-4000-8000-0000000000bb';
+  let container: HTMLDivElement;
+  let root: Root;
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    beginGenieReveal(JOB);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    endGenieReveal(JOB, 'ended');
+  });
+  // Warm the answer stack once: its first transform is slow on a loaded host.
+  beforeAll(async () => {
+    await import('./GenieAnswer.sections');
+  }, 120_000);
+
+  const RESEARCHING: GenieTurnProgress = {
+    ...LIVE_TERMINAL,
+    deep: true,
+    job: { stage: 'researching', stage_label: 'Running governed sub-analyses', parts_done: 3, parts_planned: 7 },
+  };
+  const status = (partial: Partial<GenieCompletionJobStatus>): GenieCompletionJobStatus => ({
+    kind: 'genie_completion_job',
+    job_id: JOB,
+    status: 'running',
+    stage: 'researching',
+    stage_label: 'Running governed sub-analyses',
+    parts_done: 3,
+    parts_planned: 7,
+    terminal: false,
+    failed: false,
+    error_hint: null,
+    response: null,
+    ...partial,
+  });
+  const section = (n: number) => ({
+    title: `Part ${n} heading`,
+    question: `Part ${n}?`,
+    answer: `Illinois leads part ${n}.`,
+    row_count: 40,
+    table_rows: [
+      { state: 'IL', borrowers: 48396 },
+      { state: 'TX', borrowers: 10914 },
+    ],
+  });
+
+  async function renderLoaded(progress: GenieTurnProgress | null): Promise<void> {
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <GenieProgress progress={progress} startedAt={Date.now()} />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it('shows nothing without a running job', async () => {
+    publishGenieReveal(status({ verified_sections: 3, sections_rev: 2, revealed_sections: [0, 1, 2].map(section) }));
+    await renderLoaded({ ...LIVE_TERMINAL });
+
+    expect(container.querySelector('.genie-reveal, .genie-reveal__count')).toBeNull();
+  });
+
+  it('shows one count line and no content before the floor', async () => {
+    publishGenieReveal(status({ verified_sections: 1, sections_rev: 1 }));
+    await renderLoaded(RESEARCHING);
+
+    expect(container.querySelector('.genie-reveal__count')?.textContent).toBe(
+      'Partial research · 1 of 7 sub-analyses verified so far',
+    );
+    expect(container.querySelector('.genie-reveal')).toBeNull();
+    expect(container.querySelector('.genie-answer__section')).toBeNull();
+  });
+
+  it('shows the verified sections from the floor, previewed and never announced', async () => {
+    publishGenieReveal(status({ verified_sections: 3, sections_rev: 2, revealed_sections: [0, 1, 2].map(section) }));
+    await renderLoaded(RESEARCHING);
+
+    const group = container.querySelector('[role="group"][aria-label="Partial research"]');
+    expect(group).not.toBeNull();
+    expect(Array.from(group!.querySelectorAll('h3')).map((h) => h.textContent)).toEqual([
+      'Part 0 heading',
+      'Part 1 heading',
+      'Part 2 heading',
+    ]);
+    expect(group!.textContent).toContain('Verified so far. The summary, the final checks and the recorded answer follow.');
+    expect(group!.querySelectorAll('a')).toHaveLength(0);
+    expect(group!.textContent).not.toMatch(/Show all|CSV/);
+    expect(group!.textContent).toContain('Preview: the first 2 of 40 rows. Every row arrives with the recorded answer.');
+    expect(group!.closest('[aria-live]')).toBeNull();
+    // The reveal sits after the trace, before the generated SQL.
+    const order = Array.from(container.querySelectorAll('.genie-progress__trace, .genie-reveal, .genie-progress__sql'));
+    expect(order.map((el) => el.className.split(' ')[0])).toEqual(
+      LIVE_TERMINAL.sql_preview ? ['genie-progress__trace', 'genie-reveal', 'genie-progress__sql'] : ['genie-progress__trace', 'genie-reveal'],
+    );
   });
 });

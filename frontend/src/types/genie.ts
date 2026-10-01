@@ -121,6 +121,26 @@ export interface GenieFreshness {
   note?: string | null;
 }
 
+/**
+ * One figure in the shipped prose that the claims verifier proved against
+ * the returned rows (audit genie-10 phase 1). Mirrors backend
+ * `GenieVerifiedClaim`; `section` is null for the summary or a single turn.
+ */
+export interface GenieVerifiedClaim {
+  token: string;
+  kind: 'currency' | 'percent' | 'bps' | 'number';
+  derivation: 'returned_value' | 'derived_from_rows' | 'bound';
+  section?: string | null;
+}
+
+/** How many of the prose's figures were verified, and which. Mirrors
+ *  backend `GenieClaimsSummary`. */
+export interface GenieClaimsSummary {
+  verified: number;
+  total: number;
+  items: GenieVerifiedClaim[];
+}
+
 export interface GenieProof {
   sql_query?: string | null;
   source_assets?: string[];
@@ -134,6 +154,8 @@ export interface GenieProof {
   message_id?: string | null;
   elapsed_ms?: number | null;
   generated_at?: string | null;
+  /** Figures verified against the rows (genie-10); absent on older answers. */
+  claims?: GenieClaimsSummary | null;
 }
 
 export interface GenieVisualization {

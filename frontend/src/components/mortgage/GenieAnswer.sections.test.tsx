@@ -20,6 +20,7 @@ vi.mock('../../lib/api', async () => {
 vi.mock('../HealthProvider', () => ({ useWorkspaceHost: () => null }));
 
 import { GenieAnswer } from './GenieAnswer';
+import { GenieAnswerSections } from './GenieAnswer.sections';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -224,5 +225,120 @@ describe('GenieAnswer deep-research sections', () => {
     // Top-level rows still render their own table under the prose.
     expect(container.querySelectorAll('.genie-answer__table')).toHaveLength(1);
     expect(container.textContent).toContain('Top Level Only');
+  });
+});
+
+describe('GenieAnswerSections preview (genie-01 phase 1b partial research)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function renderSections(preview: boolean) {
+    const sections = [section({ row_count: 40 }), section({ title: 'Second', row_count: 3 })];
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieAnswerSections summary={null} sections={sections} exportBase={null} preview={preview} />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it('hides row actions, CSV and cell links, and says the rows were trimmed', () => {
+    renderSections(true);
+
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+    expect(container.querySelector('.genie-answer__rows-actions, .genie-answer__toolbar')).toBeNull();
+    expect(container.textContent).not.toMatch(/Show all|CSV/);
+    const notes = Array.from(container.querySelectorAll('.genie-answer__preview-note')).map((n) => n.textContent);
+    expect(notes).toEqual(['Preview: the first 3 of 40 rows. Every row arrives with the recorded answer.']);
+  });
+
+  // Real sections hold up to 50 rows, but a preview has no "Show all": the
+  // note names the rows the compact table shows, not the rows held.
+  function stateRows(count: number): Array<Record<string, unknown>> {
+    return Array.from({ length: count }, (_, i) => ({ state: `S${i}`, borrowers: 1000 - i }));
+  }
+
+  function renderSized(sized: GenieAnswerSection[]) {
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieAnswerSections summary={null} sections={sized} exportBase={null} preview />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it('names the rows the compact table shows when a preview section holds more than it shows', () => {
+    renderSized([
+      section({ title: 'Every state', row_count: 30, table_rows: stateRows(30) }),
+      section({ title: 'Trimmed', row_count: 1280, table_rows: stateRows(50) }),
+      section({ title: 'Complete', row_count: 3, table_rows: stateRows(3) }),
+    ]);
+
+    const tables = Array.from(container.querySelectorAll('.genie-answer__table'));
+    expect(tables.map((t) => t.querySelectorAll('tbody tr').length)).toEqual([10, 10, 3]);
+    const notes = Array.from(container.querySelectorAll('.genie-answer__preview-note')).map((n) => n.textContent);
+    expect(notes).toEqual([
+      'Preview: the first 10 of 30 rows. Every row arrives with the recorded answer.',
+      'Preview: the first 10 of 1,280 rows. Every row arrives with the recorded answer.',
+    ]);
+  });
+
+  it('keeps the links and the row actions on the recorded answer (control)', () => {
+    renderSections(false);
+
+    expect(container.querySelectorAll('a[href^="/lead-queue"]').length).toBeGreaterThan(0);
+    expect(container.querySelector('.genie-answer__preview-note')).toBeNull();
+  });
+
+  // A shortlist-shaped sub-analysis (string borrower_id rows) plans as a
+  // borrower_list, whose board used to emit a Borrower 360 <Link> per card
+  // even inside Partial research.
+  function renderBorrowerSections(preview: boolean) {
+    const borrowerRows = [
+      { borrower_id: 'B-0000000000001', state: 'TX', opportunity_score: 91 },
+      { borrower_id: 'B-0000000000002', state: 'CA', opportunity_score: 88 },
+      { borrower_id: 'B-0000000000003', opportunity_score: 85 },
+    ];
+    const sections = [
+      section({ title: 'Who to call first', row_count: 3, table_rows: borrowerRows }),
+      section({ title: 'Second shortlist', row_count: 3, table_rows: borrowerRows }),
+    ];
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieAnswerSections summary={null} sections={sections} exportBase={null} preview={preview} />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it('renders borrower cards as plain text with no Borrower 360 link in a preview', () => {
+    renderBorrowerSections(true);
+
+    const cards = container.querySelectorAll('.genie-board__card');
+    expect(cards).toHaveLength(6);
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+    for (const card of cards) {
+      expect(card.tagName).toBe('DIV');
+      expect(card.getAttribute('href')).toBeNull();
+    }
+    expect(container.textContent).not.toMatch(/Open borrower evidence|Borrower drill-down/);
+  });
+
+  it('keeps the Borrower 360 card links on the recorded answer (control)', () => {
+    renderBorrowerSections(false);
+
+    expect(container.querySelectorAll('a.genie-board__card[href^="/borrower-360/B-"]')).toHaveLength(6);
   });
 });

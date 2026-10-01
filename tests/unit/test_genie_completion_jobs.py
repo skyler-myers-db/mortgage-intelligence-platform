@@ -31,10 +31,14 @@ from backend.main import app
 from backend.services import genie_completion_jobs as jobs
 from backend.services import genie_completion_runner as runner
 from backend.services.genie_client import GenieClientError
+from backend.services.genie_completion_delivery import job_status
 from backend.services.genie_completion_stages import (
     GENIE_JOB_EXPIRED_HINT,
     GENIE_JOB_FAILURE_HINTS,
+    GENIE_JOB_STAGE_LABELS,
     GenieJobFailureKind,
+    GenieJobStage,
+    GenieJobStatus,
 )
 from backend.services.genie_deterministic import _policy_blocked_genie_output_response
 from backend.services.genie_message_policy import GenieMessageRequest
@@ -721,3 +725,26 @@ def test_two_adopters_of_one_job_give_one_claim_and_keep_its_lease_until_both_en
     assert len(audit.run_query_rows()) == 1
     runner._reset_executor_for_tests()
     assert row["job_id"] not in jobs.HEARTBEAT.tracked()
+
+
+# ------------------------------------- status presentation (wave-3, genie-01 1b)
+
+
+def _job_row(status: str, stage: str, **extra: Any) -> jobs.GenieCompletionJob:
+    lakebase = FakeJobLakebase()
+    row = lakebase.insert_row(status=status, stage=stage, actor_email=ACTOR, **extra)
+    view = lakebase._view(row)
+    return jobs._job_from_row(view)
+
+
+def _status(job: jobs.GenieCompletionJob, **kwargs: Any) -> Any:
+    return job_status(job, question=QUESTION, actor=ACTOR, live_campaign_run_marker=None, **kwargs)
+
+
+def test_a_running_job_whose_stored_stage_is_still_queued_is_presented_as_collecting() -> None:
+    status = _status(_job_row("running", "queued"))
+
+    assert (status.status, status.stage) == (GenieJobStatus.RUNNING, GenieJobStage.COLLECTING)
+    assert status.stage_label == GENIE_JOB_STAGE_LABELS[GenieJobStage.COLLECTING]
+    # Control: a job nobody claimed yet is honestly queued.
+    assert _status(_job_row("queued", "queued")).stage is GenieJobStage.QUEUED

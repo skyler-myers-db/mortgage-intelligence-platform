@@ -46,6 +46,9 @@ export interface GenieCompleteAsyncJobBody extends GenieJobTurnBody {
 /** `POST /api/genie/message/status`: one poll of the caller's own job. */
 export interface GenieCompletionJobStatusRequest extends GenieJobTurnBody {
   job_id: string;
+  /** The verified-sections revision the poller holds (genie-01 phase 1b);
+   *  the server does not re-send the same revision. */
+  sections_rev?: number | null;
 }
 
 /** 202 + the job's status, or an older server's 200 with the answer itself. */
@@ -70,11 +73,12 @@ export const genieJobsApi = {
       signal,
     ),
 
-  /** One poll of the caller's own job (a POST: the token never lands in a URL). */
-  genieJobStatus: (turn: GenieJobTurn, jobId: string, signal?: AbortSignal) =>
+  /** One poll of the caller's own job (a POST: the token never lands in a
+   *  URL). `sectionsRev` is the verified-sections revision already held. */
+  genieJobStatus: (turn: GenieJobTurn, jobId: string, signal?: AbortSignal, sectionsRev: number | null = null) =>
     postJson<GenieCompletionJobStatus, GenieCompletionJobStatusRequest>(
       '/api/genie/message/status',
-      { ...turnBody(turn), job_id: jobId },
+      { ...turnBody(turn), job_id: jobId, sections_rev: sectionsRev },
       signal,
     ),
 

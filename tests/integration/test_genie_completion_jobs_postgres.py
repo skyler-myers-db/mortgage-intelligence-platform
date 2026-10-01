@@ -58,6 +58,12 @@ def _cancel_block_ddl() -> str:
     return _SCHEMA[start:end]
 
 
+def _sections_block_ddl() -> str:
+    start = _SCHEMA.index("-- Genie completion-job verified sections ---")
+    end = _SCHEMA.index("INSERT INTO mip_app.schema_migrations", start)
+    return _SCHEMA[start:end]
+
+
 def _action_audit_ddl() -> str:
     start = _SCHEMA.index("CREATE TABLE IF NOT EXISTS mip_app.action_audit (")
     end = _SCHEMA.index("-- Audit archival run ledger", start)
@@ -112,6 +118,7 @@ def pg() -> Iterator[_PgLakebase]:
         cur.execute("CREATE SCHEMA mip_app")
         cur.execute(_job_table_ddl())  # type: ignore[arg-type]
         cur.execute(_cancel_block_ddl())  # type: ignore[arg-type]
+        cur.execute(_sections_block_ddl())  # type: ignore[arg-type]
         cur.execute(_action_audit_ddl())  # type: ignore[arg-type]
     try:
         yield _PgLakebase(dsn)
@@ -358,6 +365,14 @@ def test_claim_never_takes_a_queued_job_whose_cancel_was_requested(pg: _PgLakeba
 def test_the_probe_requires_the_cancel_columns(pg: _PgLakebase) -> None:
     assert pg.fetchone(jobs._PROBE_SQL) == {"present": True}
     pg.sql("ALTER TABLE mip_app.genie_completion_jobs DROP COLUMN deep")
+    assert pg.fetchone(jobs._PROBE_SQL) == {"present": False}
+
+
+def test_the_probe_requires_the_sections_column(pg: _PgLakebase) -> None:
+    # genie-01 phase 1b: an App promoted ahead of the 2026_10_02 migration
+    # completes inline instead of 503ing every job statement.
+    assert pg.fetchone(jobs._PROBE_SQL) == {"present": True}
+    pg.sql("ALTER TABLE mip_app.genie_completion_jobs DROP COLUMN sections_json")
     assert pg.fetchone(jobs._PROBE_SQL) == {"present": False}
 
 

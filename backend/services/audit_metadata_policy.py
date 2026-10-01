@@ -299,6 +299,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # job's server-issued UUID. Not ``job_id``, which carries Databricks
         # job ids.
         "genie_job_id",
+        # A verified deep-research section revealed before the final answer
+        # (genie-01 phase 1b, ruling R1): its plan index and closed verdict
+        # only, never the sub-question, prose or a row value.
+        "section_index",
+        "verification_verdict",
         # Genie answer feedback (thumbs up/down). ``helpful`` is a bool;
         # ``comment_present`` records only whether a sanitized free-text note
         # accompanied the feedback -- the note itself is scrubbed and posted as

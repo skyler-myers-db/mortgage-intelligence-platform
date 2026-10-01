@@ -39,7 +39,7 @@ export const API_ROUTE_SEGMENTS = [
   'runs',
   'saved-views',
   'run-due', 'run-due-all', 'sales', 'search', 'segments', 'session', 'sessions',
-  'settings', 'signals', 'sources', 'stage', 'standup', 'start', 'state-rollups',
+  'settings', 'signals', 'sources', 'sse-probe', 'stage', 'standup', 'start', 'state-rollups',
   'status', 'submit', 'summary', 'team', 'telemetry', 'workflows', 'workspace',
   'withdraw',
   'zip-rollups',

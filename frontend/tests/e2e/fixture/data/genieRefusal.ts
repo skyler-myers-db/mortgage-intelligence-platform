@@ -86,6 +86,7 @@ export function refusedTurn(reason: GenieRefusalReason, question: string): Genie
       filters: [],
       known_data_gaps: ['prompt refused before Genie execution (fixture)'],
       conversation_id: null,
+      claims: null,
     },
     table_rows: [],
     // The backend's outreach branch attaches two generic sample questions;

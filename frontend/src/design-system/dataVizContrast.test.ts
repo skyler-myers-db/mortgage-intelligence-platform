@@ -37,14 +37,15 @@ const DATA_MARK_SELECTORS = [
   '.analytics-bars__fill',
   '.funnel-sankey__bar',
   '.genie-line__path',
-  '.genie-line__dot',
+  '.genie-line__point',
+  '.genie-bars__bar',
   '.chart-hist__bar--past',
 ];
 
-/** TSX sites that paint a data mark inline. */
+/** TSX sites that paint a data mark inline. The Genie line and bar charts
+ *  paint from GenieAnswerCharts.css now (dataviz-05), listed above. */
 const TSX_DATA_MARK_FILES = [
   'src/routes/analytics.charts.tsx',
-  'src/components/mortgage/GenieAnswerCharts.tsx',
   'src/components/mortgage/Sparkline.tsx',
 ];
 
@@ -102,7 +103,7 @@ describe('data marks never paint the bare accent', () => {
     expect(new Set(inks)).toEqual(new Set(['var(--accent-data)']));
   });
 
-  it('keeps the bare accent out of the three TSX data-mark sites', () => {
+  it('keeps the bare accent out of the TSX data-mark sites', () => {
     for (const file of TSX_DATA_MARK_FILES) {
       const source = readFileSync(join(process.cwd(), file), 'utf8') as string;
       expect(BARE_ACCENT.test(source), `${file} paints var(--accent)`).toBe(false);

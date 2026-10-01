@@ -36,6 +36,7 @@ export const AUDIT_EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   GENIE_FEEDBACK: 'Genie feedback submitted',
   GENIE_FEEDBACK_INTENT: 'Genie feedback started',
   GENIE_REFUSAL_REPORT: 'Genie refusal reported',
+  GENIE_SECTION_REVEALED: 'Genie verified section made available',
   GENIE_TURN_CANCELLED: 'Genie turn cancelled',
   GROWTH_AGENT_COMPOSE: 'Growth agent composed a draft',
   GROWTH_AGENT_MONITOR_SAVE: 'Growth agent watchlist saved',
