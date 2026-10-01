@@ -10,10 +10,11 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api';
 import { createMipQueryClient } from '../../lib/queryClient';
 import type { SegmentCombinationResponse } from '../../types/segmentCombinations';
+import { preloadAsyncFailure } from '../ui/AsyncState';
 import { SignalStack } from './SignalStack';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -68,6 +69,12 @@ async function until(check: () => boolean): Promise<void> {
 
 const text = () => (document.querySelector('.signal-stack')?.textContent ?? '').replace(/\s+/g, ' ');
 const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('.signal-stack button')].find((b) => b.textContent === name);
+
+// The failure surface's lazy chunk, transformed once up front so a loaded
+// machine cannot push it past a wait.
+beforeAll(async () => {
+  await preloadAsyncFailure();
+}, 60_000);
 
 describe('SignalStack', () => {
   let root: Root;

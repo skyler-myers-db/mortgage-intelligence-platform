@@ -95,9 +95,10 @@ export function moveRovingFocus(event: KeyboardEvent<Element>): void {
 
 /** The state stage's description: how many drawn states the keys skip (none: no note). */
 export function skippedStatesNote(count: number): string {
-  return count === 1
-    ? '1 state has no borrowers in this selection and is skipped; the table view lists them.'
-    : `${formatCount(count)} states have no borrowers in this selection and are skipped; the table view lists them.`;
+  const one = count === 1;
+  return `${one ? '1 state has' : `${formatCount(count)} states have`} no borrowers in this selection and ${
+    one ? 'is' : 'are'
+  } skipped; the table view lists them.`;
 }
 
 /** Where the hover card anchors for a focused unit: top centre of its box, in client coordinates. */
