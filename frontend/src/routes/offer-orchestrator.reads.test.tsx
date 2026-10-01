@@ -21,6 +21,7 @@ import type { Borrower360, BorrowerLifecycle, OfferRecommendation, SalesTeamMemb
 import type { OutreachDraftResult } from '../lib/apiTypes';
 import { ApiError } from '../lib/apiTransport';
 import { queryKeys } from '../lib/queryKeys';
+import { loanOfficersOnly } from '../lib/salesRoster';
 import { refetchRecoveredQueries } from '../components/healthRecovery';
 
 const apiMocks = vi.hoisted(() => ({
@@ -507,7 +508,7 @@ describe('Offer Orchestrator read-count table (audit parity with the effect it r
     expect(delta(before, counts())).toEqual({ B: 1, R: 1, L: 1, D: 0 });
   });
 
-  it('the assignment roster: its own key, active loan officers and sales managers, one read per minute', async () => {
+  it('the assignment roster: the one shared roster entry, active loan officers and sales managers, one read per minute', async () => {
     const roster: SalesTeamMember[] = [
       { email: 'lo.a@summit-mortgage.example', display_label: 'Loan Officer A', role: 'loan_officer', capacity_per_day: 20, active: true },
       { email: 'sm.b@summit-mortgage.example', display_label: 'Sales Manager B', role: 'sales_manager', capacity_per_day: 5, active: true },
@@ -515,16 +516,21 @@ describe('Offer Orchestrator read-count table (audit parity with the effect it r
       { email: 'admin.d@summit-mortgage.example', display_label: 'Admin D', role: 'admin', capacity_per_day: 0, active: true },
     ];
     apiMocks.salesTeam.mockResolvedValue(roster);
-    // Lead Queue / Sales ops cache a loan-officer-only list under salesTeam():
-    // Offer must not read (or overwrite) it.
-    const loOnly = roster.filter((member) => member.role === 'loan_officer');
-    queryClient.setQueryData(queryKeys.salesTeam(), loOnly);
     mount();
     await waitUntil(() => loaded() && container.querySelectorAll('#lo-assign option').length > 1);
     const options = () => [...container.querySelectorAll<HTMLOptionElement>('#lo-assign option')].map((option) => option.value);
     expect(options()).toEqual(['', 'lo.a@summit-mortgage.example', 'sm.b@summit-mortgage.example']);
     expect(apiMocks.salesTeam).toHaveBeenCalledTimes(1);
-    expect(queryClient.getQueryData(queryKeys.salesTeam())).toBe(loOnly);
+    // runtime-06: one cache entry, the UNFILTERED roster, two selections:
+    // Offer's reviewers above, Lead Queue / Sales ops' loan officers here.
+    const rosterEntries = queryClient.getQueryCache().findAll({ predicate: (query) => query.queryKey[1] === 'sales' });
+    expect(rosterEntries.map((query) => query.queryKey)).toEqual([queryKeys.salesRoster()]);
+    const cached = queryClient.getQueryData<SalesTeamMember[]>(queryKeys.salesRoster());
+    expect(cached).toEqual(roster);
+    expect(loanOfficersOnly(cached ?? []).map((member) => member.email)).toEqual([
+      'lo.a@summit-mortgage.example',
+      'lo.c@summit-mortgage.example',
+    ]);
     // A re-open within the minute reuses the roster (no audit row either way).
     await reopen();
     await waitUntil(() => loaded() && counts().D === 2);

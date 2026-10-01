@@ -6,7 +6,6 @@ import { leadsQuery, type LeadsRequest } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { isAbortError } from '../lib/apiTransport';
-import type { SalesTeamMember } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable, type LeadExportContext } from '../components/mortgage/LeadTable';
 import { Chip } from '../components/Primitives';
@@ -17,6 +16,7 @@ import { FilterSelect } from '../components/ui/FilterSelect';
 import { useFootprint } from '../components/FootprintProvider';
 import { useApp } from '../components/AppContext';
 import { queryKeys } from '../lib/queryKeys';
+import { loanOfficersOnly, useSalesRoster } from '../lib/salesRoster';
 import { queueFilterLabel, usePublishQueueContext } from '../lib/queueContextPublish';
 import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
@@ -198,11 +198,7 @@ export default function LeadQueue() {
   const growthAgentProofKey = GROWTH_AGENT_PROOF_PARAMS.map((key) => searchParams.get(key) ?? '').join('|');
   // Sales team feeds the ASSIGNED filter and LeadTable's assign actions. The
   // Sales ops snapshot that also used it moved to the Analytics "Sales ops" tab.
-  const salesTeamQuery = useQuery<SalesTeamMember[]>({
-    queryKey: queryKeys.salesTeam(),
-    queryFn: ({ signal }) => api.salesTeam(signal).then((team) => team.filter((member) => member.role === 'loan_officer')),
-    staleTime: 60_000,
-  });
+  const salesTeamQuery = useSalesRoster(loanOfficersOnly);
   const salesTeam = salesTeamQuery.data ?? [];
   // require_visible_assignee answers 422 for anyone but a listed loan officer.
   const actorIsListedLo = Boolean(actorEmail) && salesTeam.some(
