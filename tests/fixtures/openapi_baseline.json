@@ -1331,8 +1331,9 @@
             "title": "Is Mine",
             "type": "boolean"
           },
-          "note": {
-            "title": "Note",
+          "rationale": {
+            "description": "The requester's screened justification.",
+            "title": "Rationale",
             "type": "string"
           },
           "requested_by": {
@@ -1371,7 +1372,7 @@
           "batch_id",
           "requested_by_display",
           "is_mine",
-          "note",
+          "rationale",
           "created_at",
           "rows"
         ],
@@ -1392,11 +1393,11 @@
             "title": "Borrower Ids",
             "type": "array"
           },
-          "note": {
+          "rationale": {
             "description": "Why these borrowers: required, without personal details. It is screened by the governed text policy and recorded on the audit row.",
             "maxLength": 500,
             "minLength": 1,
-            "title": "Note",
+            "title": "Rationale",
             "type": "string"
           },
           "request_key": {
@@ -1409,7 +1410,7 @@
         },
         "required": [
           "borrower_ids",
-          "note",
+          "rationale",
           "request_key"
         ],
         "title": "ApprovalRequestCreate",

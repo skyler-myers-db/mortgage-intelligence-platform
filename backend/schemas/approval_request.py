@@ -52,7 +52,10 @@ class ApprovalRequestCreate(BaseModel):
         max_length=MAX_APPROVAL_REQUEST_BORROWERS,
         description="The masked borrower ids to request approval for, each named once.",
     )
-    note: str = Field(
+    # Named rationale, not note: the request's justification is the audit
+    # row's rationale, and no request body may grow a free-text note
+    # property (tests/unit/test_no_free_text_borrower_notes.py).
+    rationale: str = Field(
         min_length=1,
         max_length=APPROVAL_REQUEST_NOTE_MAX_LENGTH,
         description=(
@@ -74,12 +77,12 @@ class ApprovalRequestCreate(BaseModel):
             raise ValueError("borrower_ids must name each borrower once")
         return ids
 
-    @field_validator("note")
+    @field_validator("rationale")
     @classmethod
-    def _note_is_public_safe(cls, value: str) -> str:
+    def _rationale_is_public_safe(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("note must not be blank")
-        return validate_no_human_name_shape(value, field_name="note")
+            raise ValueError("rationale must not be blank")
+        return validate_no_human_name_shape(value, field_name="rationale")
 
     @field_validator("request_key")
     @classmethod
@@ -136,7 +139,7 @@ class ApprovalRequestBatchView(BaseModel):
         description="A readable label derived from the requester's identity, never looked up."
     )
     is_mine: bool
-    note: str
+    rationale: str = Field(description="The requester's screened justification.")
     created_at: datetime
     requested_by: str | None = Field(
         default=None,

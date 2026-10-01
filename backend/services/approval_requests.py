@@ -114,7 +114,7 @@ def list_approval_requests(
                 batch_id=batch_id,
                 requested_by_display=display_name_for(requester),
                 is_mine=normalize_actor(requester) == requested_by,
-                note=str(batch["note"]),
+                rationale=str(batch["note"]),
                 created_at=batch["created_at"],
                 requested_by=requester if scope == "mine" else None,
                 rows=rows,

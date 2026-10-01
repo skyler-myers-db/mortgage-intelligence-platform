@@ -199,7 +199,8 @@ export interface ResponseSchemas {
     batch_id: string;
     created_at: string;
     is_mine: boolean;
-    note: string;
+    /** The requester's screened justification. */
+    rationale: string;
     /** The requester's own identity, present only in their own scope=mine list. */
     requested_by: string | null;
     /** A readable label derived from the requester's identity, never looked up. */
@@ -2365,7 +2366,7 @@ export interface RequestSchemas {
     /** The masked borrower ids to request approval for, each named once. */
     borrower_ids: string[];
     /** Why these borrowers: required, without personal details. It is screened by the governed text policy and recorded on the audit row. */
-    note: string;
+    rationale: string;
     /** Client idempotency key (a UUID); a retry with the same key replays the stored answer. */
     request_key: string;
   };

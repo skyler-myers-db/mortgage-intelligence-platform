@@ -1,11 +1,11 @@
 """Maker-checker approval requests (audit flow-02 / shell-06, 12.4 #10).
 
 A signed-in user without the approver role asks an approver to review named
-borrowers. The router is thin: identity and role gates, the note's governed
+borrowers. The router is thin: identity and role gates, the rationale's governed
 text screen, and the mapping of the service's typed outcomes to HTTP.
 
 * POST /outreach/approval-requests: approvers are told to decide directly
-  (409, nothing read or written); a refused note answers 422 before any read
+  (409, nothing read or written); a refused rationale answers 422 before any read
   or write; every attempt that reaches classification is audited, a
   zero-eligible one included (409 with counts per reason only).
 * GET /outreach/approval-requests: audit-free; approvers default to the open
@@ -80,7 +80,7 @@ def request_outreach_approval(
     actor = require_authenticated_actor(request)
     if can_access_approver(request):
         raise HTTPException(status_code=409, detail=APPROVER_DECIDES_DIRECTLY)
-    note = scrub_free_text(payload.note)
+    note = scrub_free_text(payload.rationale)
     # The note is stored exactly as the audit row's rationale carries it, and
     # refused before any read or write when the ledger would refuse it.
     refuse_ungoverned_text({"rationale": note})

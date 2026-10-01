@@ -83,7 +83,7 @@ def client(ledger: FakeApprovalLedger, leads: _Leads) -> Iterator[TestClient]:
 
 
 def _body(ids: list[str], *, key: str | None = None, note: str = NOTE) -> dict[str, Any]:
-    return {"borrower_ids": ids, "note": note, "request_key": key or str(uuid4())}
+    return {"borrower_ids": ids, "rationale": note, "request_key": key or str(uuid4())}
 
 
 def _create(client: TestClient, ids: list[str], **kwargs: Any) -> Any:

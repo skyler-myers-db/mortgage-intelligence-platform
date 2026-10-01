@@ -239,7 +239,7 @@ def test_a_revoke_reopens_the_borrower_for_a_new_request(client: TestClient, led
     assert ledger.items[(batch_id, BORROWER)]["status"] == "expired"
     again = client.post(
         "/api/outreach/approval-requests",
-        json={"borrower_ids": [BORROWER], "note": "Offer reconsidered; please review again.", "request_key": str(uuid4())},
+        json={"borrower_ids": [BORROWER], "rationale": "Offer reconsidered; please review again.", "request_key": str(uuid4())},
         headers=ANALYST,
     )
     assert again.status_code == 200, again.text

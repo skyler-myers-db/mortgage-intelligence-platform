@@ -18,7 +18,7 @@ NOTE = "Rate-sensitive refinance candidates in our footprint."
 
 
 def _create(**overrides: object) -> ApprovalRequestCreate:
-    values: dict[str, object] = {"borrower_ids": IDS, "note": NOTE, "request_key": str(uuid4())}
+    values: dict[str, object] = {"borrower_ids": IDS, "rationale": NOTE, "request_key": str(uuid4())}
     values.update(overrides)
     return ApprovalRequestCreate.model_validate(values)
 
@@ -26,7 +26,7 @@ def _create(**overrides: object) -> ApprovalRequestCreate:
 def test_a_well_formed_request_validates() -> None:
     created = _create()
     assert created.borrower_ids == IDS
-    assert created.note == NOTE
+    assert created.rationale == NOTE
 
 
 @pytest.mark.parametrize(
@@ -36,10 +36,10 @@ def test_a_well_formed_request_validates() -> None:
         {"borrower_ids": [f"B-{index:013d}" for index in range(MAX_APPROVAL_REQUEST_BORROWERS + 1)]},
         {"borrower_ids": ["B-ARQTESTX00001", "B-ARQTESTX00001"]},
         {"borrower_ids": ["12345"]},
-        {"note": ""},
-        {"note": "   "},
-        {"note": "n" * 501},
-        {"note": "Please ask Jane Smith to call them"},
+        {"rationale": ""},
+        {"rationale": "   "},
+        {"rationale": "n" * 501},
+        {"rationale": "Please ask Jane Smith to call them"},
         {"request_key": "not an opaque key"},
         {"request_key": "jane@summit.example"},
         {"campaign_id": str(uuid4())},
@@ -64,7 +64,7 @@ def test_malformed_requests_are_refused(overrides: dict[str, object]) -> None:
 
 
 def test_the_request_carries_no_campaign_or_channel_field() -> None:
-    assert set(ApprovalRequestCreate.model_fields) == {"borrower_ids", "note", "request_key"}
+    assert set(ApprovalRequestCreate.model_fields) == {"borrower_ids", "rationale", "request_key"}
 
 
 def test_row_states_are_the_closed_vocabulary() -> None:
