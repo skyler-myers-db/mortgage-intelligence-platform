@@ -22,6 +22,8 @@ tests/unit/test_frontend_wire_contract_parser.py.
 
 from __future__ import annotations
 
+import fnmatch
+import json
 import re
 from functools import cache
 
@@ -252,6 +254,21 @@ def test_check_files_import_types_only_and_only_siblings_import_the_helper() -> 
     )
 
     assert importers == sorted(wire.rel_path(path) for path in wire.check_files())
+
+
+def test_tsc_still_checks_every_wire_contract_file() -> None:
+    """The pairs are only as live as tsc's scope: narrowing it would make every pair vacuous."""
+
+    config = json.loads((wire.SRC.parent / "tsconfig.json").read_text(encoding="utf-8"))
+    files = [path.relative_to(wire.SRC.parent).as_posix() for path in [wire.CHECK_HELPER, *wire.check_files()]]
+
+    assert "src" in config.get("include", []), "tsconfig.json must include src"
+    assert "files" not in config, "a `files` list would replace include"
+    for pattern in config.get("exclude", []):
+        prefix = pattern.rstrip("/") + "/"
+        hit = [f for f in files if fnmatch.fnmatch(f, pattern) or f.startswith(prefix)]
+        assert hit == [], f"tsconfig.json exclude {pattern!r} drops {hit}"
+    assert all(f.startswith("src/types/") for f in files)
 
 
 def test_every_domain_check_file_exports_one_contract_under_500_lines() -> None:
