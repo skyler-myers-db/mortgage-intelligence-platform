@@ -14,8 +14,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -23,7 +27,20 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from jobs import lakebase_migrate
+from backend.schemas.outreach_revoke import OutreachRevokeRequest
+from backend.services.approval_request_create import create_approval_request
+from backend.services.approval_requests import (
+    ApprovalRequestConflict,
+    ApprovalRequestLinkRefused,
+    ApprovalRequestRefused,
+    list_approval_requests,
+    open_borrower_ids_for_queue,
+    verify_decision_link,
+    withdraw_approval_request,
+)
+from backend.services.outreach_revoke import RevokeRefused, revoke_approval
+from backend.services.sales_state import SalesStateStore
+from jobs import lakebase_migrate, sync_lifecycle_state
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
@@ -74,7 +91,7 @@ def _migrated(conn_kwargs: dict[str, str]) -> None:
 def _audit_id(conn: psycopg.Connection[Any]) -> str:
     row = conn.execute(
         "INSERT INTO mip_app.action_audit (event_type, actor_email, entity_type, entity_id) "
-        "VALUES ('APPROVAL_REQUESTED', %s, 'approval_request_batch', 'x') RETURNING audit_id::text",
+        "VALUES ('APPROVE', %s, 'approval', 'x') RETURNING audit_id::text",
         (ALICE,),
     ).fetchone()
     assert row is not None
@@ -298,3 +315,265 @@ def test_the_approvals_action_check_admits_revoke_and_refuses_anything_else(
             )
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("DELETE FROM mip_app.approvals WHERE approval_id = %s", (approval_id,))
+
+
+# -- the service over real SQL -------------------------------------------------------------
+#
+# The unit suites drive the services against an in-memory model of these
+# statements; these prove the statements themselves.
+
+APPROVER = "pat.approver@summit.example"
+LEAD_A, LEAD_B, LEAD_C = "B-ARQTESTX00001", "B-ARQTESTX00002", "B-ARQTESTX00003"
+NOTE = "Rate-sensitive refinance candidates in our footprint."
+
+
+class _PgLakebase:
+    """The LakebaseClient surface the services use, one real connection per call."""
+
+    _supports_atomic_transactions = True
+
+    def __init__(self, conn_kwargs: dict[str, str]) -> None:
+        self._kwargs = conn_kwargs
+
+    def fetchone(self, statement: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        with psycopg.connect(**self._kwargs, row_factory=dict_row) as conn:
+            return conn.execute(statement, params).fetchone()
+
+    def fetchall(
+        self, statement: str, params: dict[str, Any] | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        with psycopg.connect(**self._kwargs, row_factory=dict_row) as conn:
+            return conn.execute(statement, params).fetchall()[:limit]
+
+    @contextmanager
+    def transaction(self) -> Iterator[psycopg.Connection[dict[str, Any]]]:
+        with psycopg.connect(**self._kwargs, row_factory=dict_row) as conn:
+            yield conn
+
+
+class _Leads:
+    def list(self, segment: str | None, portfolio_id: str | None, limit: int | None = None, **kwargs: Any) -> list[Any]:
+        return [
+            SimpleNamespace(
+                borrower_id=bid, marketing_eligible=True, dnc=False, consent_status="opt_in",
+                suppression_reason=None, approval_status="pending",
+            )
+            for bid in kwargs.get("borrower_ids") or []
+        ]
+
+
+def _service(conn_kwargs: dict[str, str]) -> _PgLakebase:
+    _migrated(conn_kwargs)
+    return _PgLakebase(conn_kwargs)
+
+
+def _decide(
+    conn_kwargs: dict[str, str], borrower_id: str, action: str, *, batch_id: str | None = None
+) -> str:
+    """A finalized decision row, its intent canonical like _canonical_intent writes it."""
+
+    intent: dict[str, Any] = {"action": action, "actor": APPROVER, "borrower_id": borrower_id}
+    if batch_id is not None:
+        intent["approval_request_batch_id"] = batch_id
+    text = json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+        row = conn.execute(
+            "INSERT INTO mip_app.approvals (borrower_id, action, actor_email, channel, offer_code, "
+            "decision_intent, decided_at) VALUES (%s, %s, %s, 'email', 'refi', %s, clock_timestamp()) "
+            "RETURNING approval_id::text",
+            (borrower_id, action, APPROVER, text),
+        ).fetchone()
+        assert row is not None
+        approval_id = str(row[0])
+        conn.execute(
+            "UPDATE mip_app.approvals SET decision_response = '{}'::jsonb, audit_event_id = %s "
+            "WHERE approval_id = %s",
+            (_audit_id(conn), approval_id),
+        )
+    return approval_id
+
+
+def test_create_list_link_and_withdraw_run_on_the_real_statements(conn_kwargs: dict[str, str]) -> None:
+    lakebase = _service(conn_kwargs)
+    created = create_approval_request(
+        lakebase, _Leads(), actor=ALICE, borrower_ids=[LEAD_A, LEAD_B, LEAD_C], note=NOTE,  # type: ignore[arg-type]
+        request_key=str(uuid4()),
+    )
+    batch_id = created.batch_id
+    assert created.requested == [LEAD_A, LEAD_B, LEAD_C]
+    with psycopg.connect(**conn_kwargs, row_factory=dict_row) as conn:
+        batch = conn.execute(
+            "SELECT requested_by, response, audit_event_id::text AS audit_event_id "
+            "FROM mip_app.approval_request_batches WHERE batch_id = %s",
+            (batch_id,),
+        ).fetchone()
+        audit = conn.execute(
+            "SELECT event_type, metadata FROM mip_app.action_audit WHERE audit_id = %s",
+            (created.audit_event_id,),
+        ).fetchone()
+    assert batch is not None and audit is not None
+    assert batch["requested_by"] == ALICE and batch["audit_event_id"] == created.audit_event_id
+    assert batch["response"]["batch_id"] == batch_id
+    assert audit["event_type"] == "APPROVAL_REQUESTED"
+    assert audit["metadata"]["borrower_ids"] == [LEAD_A, LEAD_B, LEAD_C]
+
+    # The requester may not decide their own request; another approver may.
+    with pytest.raises(ApprovalRequestLinkRefused) as own:
+        verify_decision_link(lakebase, batch_id=batch_id, borrower_id=LEAD_A, actor=ALICE.upper())  # type: ignore[arg-type]
+    assert own.value.kind == "self"
+    verify_decision_link(lakebase, batch_id=batch_id, borrower_id=LEAD_A, actor=APPROVER)  # type: ignore[arg-type]
+
+    linked = _decide(conn_kwargs, LEAD_A, "approve", batch_id=batch_id)
+    _decide(conn_kwargs, LEAD_B, "reject")  # without the link
+    with pytest.raises(ApprovalRequestLinkRefused) as closed:
+        verify_decision_link(lakebase, batch_id=batch_id, borrower_id=LEAD_A, actor=APPROVER)  # type: ignore[arg-type]
+    assert closed.value.kind == "not_open"
+
+    [view] = list_approval_requests(lakebase, actor=APPROVER, scope="open").batches  # type: ignore[arg-type]
+    assert view.requested_by is None and view.requested_by_display == "Alice Analyst"
+    assert {row.borrower_id: (row.state, row.approval_id) for row in view.rows} == {
+        LEAD_A: ("approved", linked),
+        LEAD_B: ("decided_outside", None),
+        LEAD_C: ("open", None),
+    }
+    assert open_borrower_ids_for_queue(lakebase, batch_id=batch_id, actor=APPROVER, is_approver=True) == [LEAD_C]  # type: ignore[arg-type]
+
+    withdrawn = withdraw_approval_request(lakebase, actor=ALICE, batch_id=batch_id)  # type: ignore[arg-type]
+    assert (withdrawn.withdrawn_now, withdrawn.already_closed) == (1, 2)
+    again = withdraw_approval_request(lakebase, actor=ALICE, batch_id=batch_id)  # type: ignore[arg-type]
+    assert (again.withdrawn_now, again.audit_event_id) == (0, None)
+    [mine] = list_approval_requests(lakebase, actor=ALICE, scope="mine").batches  # type: ignore[arg-type]
+    assert mine.requested_by == ALICE
+    assert {row.borrower_id: row.state for row in mine.rows}[LEAD_C] == "withdrawn"
+    assert list_approval_requests(lakebase, actor=APPROVER, scope="open").batches == []  # type: ignore[arg-type]
+
+
+def test_a_replay_returns_the_stored_body_and_a_changed_payload_conflicts(conn_kwargs: dict[str, str]) -> None:
+    lakebase = _service(conn_kwargs)
+    key = str(uuid4())
+    first = create_approval_request(lakebase, _Leads(), actor=ALICE, borrower_ids=[LEAD_A], note=NOTE, request_key=key)  # type: ignore[arg-type]
+    again = create_approval_request(lakebase, _Leads(), actor=ALICE, borrower_ids=[LEAD_A], note=NOTE, request_key=key)  # type: ignore[arg-type]
+    assert again == first
+    with pytest.raises(ApprovalRequestConflict):
+        create_approval_request(lakebase, _Leads(), actor=ALICE, borrower_ids=[LEAD_B], note=NOTE, request_key=key)  # type: ignore[arg-type]
+
+
+def test_two_concurrent_requests_for_one_borrower_hold_it_once(conn_kwargs: dict[str, str]) -> None:
+    lakebase = _service(conn_kwargs)
+    first_batch = str(uuid4())
+    # The first request's transaction holds the borrower but has not committed.
+    first = psycopg.connect(**conn_kwargs)
+    try:
+        first.execute(
+            "INSERT INTO mip_app.approval_request_batches "
+            "(batch_id, requested_by, request_key, request_intent_hash, note) VALUES (%s, %s, %s, %s, %s)",
+            (first_batch, "bob.analyst@summit.example", str(uuid4()), HASH, NOTE),
+        )
+        first.execute(
+            "INSERT INTO mip_app.approval_request_items (batch_id, borrower_id) VALUES (%s, %s)",
+            (first_batch, LEAD_A),
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            second = pool.submit(
+                create_approval_request,
+                lakebase,  # type: ignore[arg-type]
+                _Leads(),  # type: ignore[arg-type]
+                actor=ALICE,
+                borrower_ids=[LEAD_A, LEAD_B],
+                note=NOTE,
+                request_key=str(uuid4()),
+            )
+            # The second insert waits on the one-open-item index.
+            time.sleep(0.5)
+            assert not second.done()
+            first.execute(
+                "UPDATE mip_app.approval_request_batches SET response = '{}'::jsonb, audit_event_id = %s "
+                "WHERE batch_id = %s",
+                (_audit_id(first), first_batch),
+            )
+            first.commit()
+            result = second.result(timeout=30)
+    finally:
+        first.close()
+    assert result.requested == [LEAD_B]
+    assert [(skip.borrower_id, skip.reason) for skip in result.skipped] == [(LEAD_A, "already_requested")]
+    with psycopg.connect(**conn_kwargs) as conn:
+        open_rows = conn.execute(
+            "SELECT batch_id::text FROM mip_app.approval_request_items WHERE borrower_id = %s AND status = 'open'",
+            (LEAD_A,),
+        ).fetchall()
+    assert open_rows == [(first_batch,)]
+
+
+def test_a_zero_eligible_request_writes_only_its_refusal_audit_row(conn_kwargs: dict[str, str]) -> None:
+    lakebase = _service(conn_kwargs)
+    _decide(conn_kwargs, LEAD_A, "approve")
+    with pytest.raises(ApprovalRequestRefused) as refused:
+        create_approval_request(lakebase, _Leads(), actor=ALICE, borrower_ids=[LEAD_A], note=NOTE, request_key=str(uuid4()))  # type: ignore[arg-type]
+    assert refused.value.skipped_counts["already_decided"] == 1
+    with psycopg.connect(**conn_kwargs) as conn:
+        batches = conn.execute("SELECT count(*) FROM mip_app.approval_request_batches").fetchone()
+        audits = conn.execute(
+            "SELECT event_type FROM mip_app.action_audit WHERE event_type LIKE 'APPROVAL_REQUEST%%'"
+        ).fetchall()
+    assert batches == (0,)
+    assert audits == [("APPROVAL_REQUEST_REFUSED",)]
+
+
+def _revoke(lakebase: _PgLakebase, approval_id: str) -> Any:
+    payload = OutreachRevokeRequest(
+        borrower_id=LEAD_A, approval_id=approval_id, rationale="Offer code was mis-keyed; needs a second review.",
+        request_id=str(uuid4()),
+    )
+    return revoke_approval(lakebase, actor=APPROVER, payload=payload, rationale=payload.rationale, subject_clip=None)  # type: ignore[arg-type]
+
+
+def test_a_revoke_appends_and_finalizes_and_every_reader_sees_pending(conn_kwargs: dict[str, str]) -> None:
+    lakebase = _service(conn_kwargs)
+    approval_id = _decide(conn_kwargs, LEAD_A, "approve")
+    with pytest.raises(ApprovalRequestRefused):  # approved: not requestable
+        create_approval_request(lakebase, _Leads(), actor=ALICE, borrower_ids=[LEAD_A], note=NOTE, request_key=str(uuid4()))  # type: ignore[arg-type]
+    response, created = _revoke(lakebase, approval_id)
+    assert created and response.revoked_approval_id == approval_id
+    with psycopg.connect(**conn_kwargs, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            "SELECT approval_id::text AS approval_id, action, audit_event_id::text AS audit_event_id "
+            "FROM mip_app.approvals WHERE borrower_id = %s ORDER BY decided_at",
+            (LEAD_A,),
+        ).fetchall()
+        synced = [row for row in conn.execute(sync_lifecycle_state._LAKEBASE_QUERY).fetchall() if row["borrower_id"] == LEAD_A]
+    assert [(row["approval_id"], row["action"]) for row in rows] == [
+        (approval_id, "approve"), (response.approval_id, "revoke"),
+    ]
+    assert rows[1]["audit_event_id"] == response.audit_event_id
+    assert (synced[0]["approval_status"], synced[0]["outreach_status"]) == ("pending", "none")
+    lifecycle = SalesStateStore(lakebase).lifecycle_for(LEAD_A)  # type: ignore[arg-type]
+    assert (lifecycle["approval_status"], lifecycle["outreach_status"]) == ("pending", "none")
+    # Pending again: the borrower can be requested again.
+    again = create_approval_request(lakebase, _Leads(), actor=ALICE, borrower_ids=[LEAD_A], note=NOTE, request_key=str(uuid4()))  # type: ignore[arg-type]
+    assert again.requested == [LEAD_A]
+
+
+@pytest.mark.parametrize("ledger", ["delivered", "outcome"])
+def test_delivered_activation_or_a_recorded_outcome_refuses_the_revoke(
+    conn_kwargs: dict[str, str], ledger: str
+) -> None:
+    lakebase = _service(conn_kwargs)
+    approval_id = _decide(conn_kwargs, LEAD_A, "approve")
+    with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+        if ledger == "delivered":
+            conn.execute(
+                "INSERT INTO mip_app.activation_outbox (destination_key, entity_type, entity_id, borrower_id, "
+                "approval_id, channel, status, request_id, created_by) "
+                "VALUES ('salesforce_crm', 'borrower', %s, %s, %s, 'email', 'delivered', %s, %s)",
+                (LEAD_A, LEAD_A, approval_id, str(uuid4()), APPROVER),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO mip_app.lead_outcomes (borrower_id, outcome_type, source_system, request_id, created_by) "
+                "VALUES (%s, 'application_submitted', 'manual_import', %s, %s)",
+                (LEAD_A, str(uuid4()), APPROVER),
+            )
+    with pytest.raises(RevokeRefused) as refused:
+        _revoke(lakebase, approval_id)
+    assert refused.value.kind == {"delivered": "delivered", "outcome": "outcome_recorded"}[ledger]
