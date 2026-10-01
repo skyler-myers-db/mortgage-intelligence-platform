@@ -254,6 +254,28 @@ def test_an_auditor_reads_another_actors_receipt_and_the_read_is_recorded(
     assert row.payload_json["read_audit_event_id"] == event_id
 
 
+def test_a_cross_actor_receipt_read_records_the_stored_id_not_the_path_spelling(
+    audit_store: InMemoryAuditStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Lakebase matches the path id through ``audit_id = %(event_id)s::uuid``,
+    # so an upper-case path reads the same row; the accountability row must
+    # name the canonical stored id, not whatever spelling the caller sent.
+    approved = _approve(ALICE_WRITE)
+    event_id = _with_uuid_event_id(audit_store, approved["audit_event_id"])
+    stored_list = audit_store.list
+
+    def _uuid_cast_list(*args: Any, event_id: str | None = None, **kwargs: Any) -> list[AuditEvent]:
+        return stored_list(*args, event_id=event_id.lower() if event_id else event_id, **kwargs)
+
+    monkeypatch.setattr(audit_store, "list", _uuid_cast_list)
+
+    assert _receipt(event_id.upper(), CAROL_ADMIN).status_code == 200
+
+    (row,) = _ledger_reads(audit_store, event_id)
+    assert row.entity_id == event_id
+    assert row.payload_json["read_audit_event_id"] == event_id
+
+
 def test_a_refused_or_not_a_decision_receipt_writes_no_ledger_read(
     audit_store: InMemoryAuditStore,
 ) -> None:

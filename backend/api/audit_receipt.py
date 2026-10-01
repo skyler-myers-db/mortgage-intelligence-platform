@@ -58,6 +58,8 @@ def read_decision_receipt(
     if receipt is None:
         raise HTTPException(status_code=404, detail="audit event is not a decision")
     if cross_actor:
+        # The stored id, not the path spelling: Lakebase matches the path
+        # through a ``::uuid`` cast, so an upper-case path names the same row.
         record_ledger_read(
             background,
             store,
@@ -66,6 +68,6 @@ def read_decision_receipt(
             filter_fingerprint=None,
             has_cursor=False,
             returned_row_count=1,
-            read_audit_event_id=audit_event_id,
+            read_audit_event_id=event.event_id,
         )
     return receipt
