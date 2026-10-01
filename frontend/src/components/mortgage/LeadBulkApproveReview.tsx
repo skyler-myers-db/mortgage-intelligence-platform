@@ -21,8 +21,9 @@ export { offerCounts } from './LeadBulkApproveReview.counts';
 
 /**
  * The bulk approve gate's review block (audit states-06, flow-03,
- * D-approval-flow-a1): shown under the required shared rationale while the
- * gate is open for two or more rows.
+ * D-approval-flow-a1; deviation:bulk-approve-arming: it reports the
+ * coverage that arms Approve): shown under the required shared rationale
+ * while the gate is open for two or more rows.
  *
  *   - Count by offer: what the run would approve, per primary offer.
  *   - Sampled drafts ONLY behind an explicit "Preview k sample drafts (one

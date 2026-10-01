@@ -594,3 +594,78 @@ The status poll is budgeted as `genie-job` (the default read rate and a
 Lakebase slot, never the 30/min Genie budget or a Genie slot). The complete
 call's Genie slot is adopted by the job and released when the job ends. The
 poll is also excluded from RUM `api_call` events, like the progress poll.
+
+## 10. Approval review ledger
+
+<!-- w5-approval-core, 2026-09-30. Appended as section 10; the integrator renumbers. -->
+
+Every APPROVE row in `mip_app.action_audit` says how the copy it certifies
+was reviewed (audit `flow-03` / `states-06` / `wow-power-1`,
+D-approval-flow-a1), and a bulk rejection is one run under one id
+(`tables-07`, D-approval-flow-d). Both are metadata keys on the existing
+table, under the existing audit metadata allowlist and value policy; there
+is no migration.
+
+`review_mode` (APPROVE rows, every row from this release on). The client
+declares it on `POST /api/v1/outreach/approve`; the server checks it against
+the request's shape (a bulk mode needs a `bulk_id`, an individual mode must
+not carry one, any mode needs the generated draft proof) and refuses a
+mismatch with 422 before anything is written. The value policy admits
+exactly these tokens:
+
+| Value | Meaning |
+| --- | --- |
+| `individual` | One row's review (the Lead Queue review, the Offer Orchestrator): the approver was shown this copy. |
+| `triage` | The same, from the Triage deck. |
+| `bulk_sample` | A bulk run's row whose copy the approver previewed in the gate's samples: what was shown is what the row certifies. |
+| `bulk_cohort` | A bulk run's row drafted during the run and approved under the shared rationale: its copy was not individually shown, and its offer was one the samples showed (the in-run check). |
+| `undeclared` | Written by the server when a request carried no `review_mode` (an older client). |
+
+`draft_age_seconds` (APPROVE rows). Whole seconds from the generated
+draft's `created_at` to the approval, on the Postgres clock (`now()`),
+floored at 0 and capped by the value policy at 315,360,000. It is omitted
+when the draft lookup returned no age and never enters the decision intent
+or the request id. For `individual` and `triage` it is roughly how long the
+review was open; for `bulk_sample`, how long the samples sat before the run;
+for `bulk_cohort`, seconds.
+
+Dwell by review mode (run as the audit reader; the 30-day window is an
+example):
+
+```sql
+SELECT metadata->>'review_mode' AS review_mode,
+       count(*) AS approvals,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY (metadata->>'draft_age_seconds')::bigint) AS median_draft_age_s,
+       percentile_cont(0.9) WITHIN GROUP (ORDER BY (metadata->>'draft_age_seconds')::bigint) AS p90_draft_age_s
+FROM mip_app.action_audit
+WHERE event_type = 'APPROVE'
+  AND metadata ? 'draft_age_seconds'
+  AND event_at >= now() - interval '30 days'
+GROUP BY 1
+ORDER BY 1;
+```
+
+A `bulk_cohort` share that grows while `bulk_sample` dwell shrinks toward
+zero is the signal to look at: runs approved with little time on the
+samples. `undeclared` rows should fall to zero within a release.
+
+OUTREACH_REJECT rows now carry `decision_inputs` (the same governed
+decision inputs an APPROVE row carries) on every rejection, and `bulk_id`
+on each row of a bulk rejection run: one id, one reason code and one
+required shared note (the `rationale`) for every row of the run. A bulk
+rejection without a note, or under a consent reason (`do_not_call`,
+`opt_out`), is refused with 422; consent is recorded per borrower. Group a
+run with `metadata->>'bulk_id'`; the decision receipt projects
+`review_mode` and `bulk_id` (a foreign value reads null).
+
+Free text on these writes (the approval rationale, the shared bulk
+rationale, the rejection note) is checked against the governed text policy
+before the replay lookup and again at commit: a refusal is a 422
+`"<field> failed the governed text policy"` and writes no approval or
+audit row (it was a 503 before).
+
+Follow-up, dated 2026-09-30 (tracked in the audit report's §12.3): one
+release after this SPA ships, make `review_mode` required on
+`POST /api/v1/outreach/approve`. A request without it then gets a 422 whose
+detail tells the reader to reload the app to approve, and the server stops
+writing `undeclared`.
