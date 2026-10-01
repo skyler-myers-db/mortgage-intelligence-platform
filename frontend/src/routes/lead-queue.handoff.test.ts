@@ -113,9 +113,9 @@ describe('buildPortfolioBuilderUrlFromQueue', () => {
     ]);
   });
 
-  it("lists the score and spread filters another lane adds by raw name, with no label edit (fail-honest)", () => {
-    const { notCarried } = handoff('min_opportunity_score=70&max_rate_spread_bps=150');
-    expect(notCarried).toEqual(['min_opportunity_score', 'max_rate_spread_bps']);
+  it('lists the Lead Queue score and spread bounds by what they filter, once per range', () => {
+    const { notCarried } = handoff('min_opportunity_score=70&max_opportunity_score=90&max_rate_spread_bps=150');
+    expect(notCarried).toEqual(['score range', 'rate spread range']);
   });
 
   it('never lists where the reader is in the table or its column preset', () => {
