@@ -293,6 +293,12 @@ Talk track:
 > success state is shown. That is the behavior reviewers should expect from an
 > enterprise Databricks App."
 
+Optional Triage beat (approver session, Lead Queue → "Triage (N)"):
+
+> "Triage is the same gate one borrower at a time: J and K move without writing
+> anything, A drafts the outreach for review, and only Confirm approves — each
+> approval is still its own audit row, and Esc returns to the table's row."
+
 Only click approval in a rehearsal/demo workspace where writing an audit row is
 expected.
 

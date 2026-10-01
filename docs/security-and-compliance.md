@@ -83,6 +83,8 @@ the pull request that ships the behaviour, never earlier.
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
+| Triage deck (`/lead-queue?mode=triage`) | none on entry, card show, J / K / Skip, Back or Esc (the cards are the loaded rows); `DRAFT_OUTREACH` only on A; `APPROVE` with `review_mode` `triage` per Confirm; `OUTREACH_REJECT` per card rejected | per explicit action | as the draft / approve / reject rows above |
+| Lead Queue CSV export (`leads_export.create_lead_export_receipt`) | `LEAD_EXPORT` | once per download, before it starts; carries `exported_row_count` and, when the client knew it, `matching_row_count` (how many borrowers matched: a loaded-rows export states it is partial; a count below the file's row count is refused with 422 and nothing written) | synchronous, fail-closed (no download without the row) |
 
 **Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
 keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`
