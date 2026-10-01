@@ -13,7 +13,7 @@
 import { act, Suspense } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './lib/api';
 import type { SessionResponse } from './types';
@@ -38,7 +38,13 @@ const PLAIN: SessionResponse = { can_access_admin: false, can_approve: true, can
 
 function WhereAmI() {
   const { pathname, search, hash } = useLocation();
-  return <output data-testid="where">{`${pathname}${search}${hash}`}</output>;
+  // POP for the initial entry, REPLACE after a <Navigate replace>, PUSH otherwise.
+  const navigationType = useNavigationType();
+  return (
+    <output data-testid="where" data-navigation-type={navigationType}>
+      {`${pathname}${search}${hash}`}
+    </output>
+  );
 }
 
 describe('AuditLedgerGate', { timeout: TEST_TIMEOUT_MS }, () => {
@@ -62,6 +68,7 @@ describe('AuditLedgerGate', { timeout: TEST_TIMEOUT_MS }, () => {
   const ledgerDenied = () => container.querySelector<HTMLElement>('[data-testid="audit-ledger-access-denied"]');
   const adminDenied = () => container.querySelector<HTMLElement>('[data-testid="admin-access-denied"]');
   const where = () => container.querySelector('[data-testid="where"]')?.textContent;
+  const navigationType = () => container.querySelector('[data-testid="where"]')?.getAttribute('data-navigation-type');
 
   async function renderAt(entries: string[], { settle = true } = {}): Promise<void> {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -147,6 +154,8 @@ describe('AuditLedgerGate', { timeout: TEST_TIMEOUT_MS }, () => {
     expect(console_()).toBeNull();
     expect(adminDenied()).toBeNull();
     expect(where()).toBe(`/audit-ledger?audit_event_id=${EVENT_ID}#audit`);
+    // Replaced, not pushed: Back from the ledger skips the dead admin link.
+    expect(navigationType()).toBe('REPLACE');
   });
 
   it('carries every explorer filter of an old link over unchanged', async () => {
@@ -165,5 +174,6 @@ describe('AuditLedgerGate', { timeout: TEST_TIMEOUT_MS }, () => {
     expect(console_()).not.toBeNull();
     expect(ledger()).toBeNull();
     expect(where()).toBe('/admin-config#audit');
+    expect(navigationType()).toBe('POP');
   });
 });
