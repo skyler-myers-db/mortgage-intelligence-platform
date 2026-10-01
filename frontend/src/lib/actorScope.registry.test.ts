@@ -450,10 +450,10 @@ describe('the storage registry (lib/actorScope)', () => {
     }
   });
 
-  it('(v) non-vacuity: every registered key but the pre-registered ones is found as a literal (at least 23)', () => {
+  it('(v) non-vacuity: every registered key but the pre-registered ones is found as a literal (at least 25)', () => {
     const expected = [...CLASSES.keys()].filter((key) => !(key in PREREGISTERED));
     expect(expected.filter((key) => !REAL.foundKeys.has(key)), 'registered keys no source spells').toEqual([]);
-    expect(expected.filter((key) => REAL.foundKeys.has(key)).length).toBeGreaterThanOrEqual(23);
+    expect(expected.filter((key) => REAL.foundKeys.has(key)).length).toBeGreaterThanOrEqual(25);
   });
 
   describe('(v) non-vacuity: injected sources each fail', () => {

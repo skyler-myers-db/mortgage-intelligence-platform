@@ -325,14 +325,19 @@ describe('single-key preference', () => {
     setSingleKeyShortcutsEnabled(false);
     expect(singleKeyShortcutsEnabled()).toBe(false);
     expect(JSON.parse(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) ?? '{}')).toEqual({ [ACTOR_A]: 'off' });
+    expect(seen, 'once for the write').toHaveBeenCalledTimes(1);
 
+    // The change, as a NEW document (a mid-session change resets the tab,
+    // D-identity-review-a3): pending over A's stamps, then B first.
+    _resetActorScopeForTests({ status: 'pending', owner: ACTOR_A });
+    seen.mockClear();
     observeActor({ key: ACTOR_B });
 
     // B has no entry: the default. A keeps its own, which applies again when A returns.
     expect(singleKeyShortcutsEnabled()).toBe(true);
     expect(JSON.parse(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) ?? '{}')).toEqual({ [ACTOR_A]: 'off' });
-    // Once for the write, once per gate event of the change ('cleared', 'restamped').
-    expect(seen).toHaveBeenCalledTimes(3);
+    // Once per gate event of the first observation ('restamped', 'opened').
+    expect(seen).toHaveBeenCalledTimes(2);
     unsubscribe();
     _resetActorScopeForTests({ status: 'open', owner: NOBODY });
   });
