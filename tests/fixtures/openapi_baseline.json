@@ -13952,7 +13952,7 @@
         "description": "Opaque version of the Lakebase decision ledgers behind the Lead Queue.",
         "properties": {
           "version": {
-            "description": "32 lowercase hex characters. Changes when an approval, a lead assignment (including its status), a call disposition or a loan officer outcome is recorded; equal versions mean none was.",
+            "description": "32 lowercase hex characters. Changes when an approval, a lead assignment (including its status), a call disposition, a loan officer outcome, an outreach delivery status or an imported CRM outcome is recorded; equal versions mean none was.",
             "pattern": "^[0-9a-f]{32}$",
             "title": "Version",
             "type": "string"

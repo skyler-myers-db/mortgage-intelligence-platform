@@ -21,7 +21,8 @@ class QueueVersionResponse(BaseModel):
         pattern=r"^[0-9a-f]{32}$",
         description=(
             "32 lowercase hex characters. Changes when an approval, a lead "
-            "assignment (including its status), a call disposition or a loan "
-            "officer outcome is recorded; equal versions mean none was."
+            "assignment (including its status), a call disposition, a loan "
+            "officer outcome, an outreach delivery status or an imported CRM "
+            "outcome is recorded; equal versions mean none was."
         ),
     )

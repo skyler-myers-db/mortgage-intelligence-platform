@@ -1851,7 +1851,7 @@ export interface ResponseSchemas {
   };
   /** Opaque version of the Lakebase decision ledgers behind the Lead Queue. */
   QueueVersionResponse: {
-    /** 32 lowercase hex characters. Changes when an approval, a lead assignment (including its status), a call disposition or a loan officer outcome is recorded; equal versions mean none was. */
+    /** 32 lowercase hex characters. Changes when an approval, a lead assignment (including its status), a call disposition, a loan officer outcome, an outreach delivery status or an imported CRM outcome is recorded; equal versions mean none was. */
     version: string;
   };
   /** Evidence manifest: every table and rule the grid was read or derived from. */

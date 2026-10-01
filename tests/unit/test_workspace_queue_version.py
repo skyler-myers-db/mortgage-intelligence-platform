@@ -4,7 +4,7 @@ Audit 2026-09-21 ``states-09``. The Lead Queue polls this about once a minute
 and shows "Queue updated · Refresh" when it moves, instead of re-reading
 ``/api/leads`` (which writes a VIEW_LEADS audit row). Pins: fail-closed auth,
 no audit write, the SQL's reach, the 30 s cache, version sensitivity to each
-of the eight inputs, the response contract, Lakebase failure mapping, the
+of the twelve inputs, the response contract, Lakebase failure mapping, the
 backpressure bucket, and that /api/health never carries the version.
 """
 
@@ -51,6 +51,10 @@ BASE_ROW: dict[str, Any] = {
     "dispositions_latest": T0 - timedelta(hours=1),
     "outcomes_count": 1,
     "outcomes_latest": T0 - timedelta(days=1),
+    "deliveries_count": 2,
+    "deliveries_latest": T0 - timedelta(hours=2),
+    "crm_outcomes_count": 4,
+    "crm_outcomes_latest": T0 - timedelta(hours=3),
 }
 
 
@@ -131,14 +135,19 @@ def test_answers_an_opaque_version_with_one_select_and_no_audit_write(
     assert not re.search(r"\b(INSERT|UPDATE|DELETE|MERGE|UPSERT)\b", fake.statements[0], re.IGNORECASE)
 
 
-def test_the_sql_reads_only_the_four_decision_ledgers_as_aggregates() -> None:
+def test_the_sql_reads_only_the_six_queue_ledgers_as_aggregates() -> None:
     tables = set(re.findall(r"\bFROM\s+([a-z_]+\.[a-z_]+)", QUEUE_VERSION_SQL, re.IGNORECASE))
     assert tables == {
         "mip_app.approvals",
         "mip_app.lead_assignments",
         "mip_app.call_dispositions",
         "mip_app.feedback",
+        # states-09: outreach delivery status and CRM-imported outcomes.
+        "mip_app.activation_outbox",
+        "mip_app.lead_outcomes",
     }
+    # A request is not a queue change (no notifications): never folded in.
+    assert "approval_request" not in QUEUE_VERSION_SQL
     assert "assignment_id IS NOT NULL" in QUEUE_VERSION_SQL
     assert "status_updated_at" in QUEUE_VERSION_SQL
     lowered = QUEUE_VERSION_SQL.lower()
@@ -195,7 +204,7 @@ def test_identical_rows_give_the_same_version() -> None:
 
 
 @pytest.mark.parametrize("name", VERSION_INPUTS)
-def test_each_of_the_eight_inputs_moves_the_version(name: str) -> None:
+def test_each_of_the_twelve_inputs_moves_the_version(name: str) -> None:
     changed = dict(BASE_ROW)
     value = changed[name]
     changed[name] = value + 1 if isinstance(value, int) else value + timedelta(seconds=1)

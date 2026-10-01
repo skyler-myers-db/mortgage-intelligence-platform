@@ -40,6 +40,7 @@ from backend.services.approval_requests import (
 )
 from backend.services.outreach_revoke import RevokeRefused, revoke_approval
 from backend.services.sales_state import SalesStateStore
+from backend.services.workspace_queue_version import QUEUE_VERSION_SQL, queue_version_from_row
 from jobs import lakebase_migrate, sync_lifecycle_state
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
@@ -560,6 +561,13 @@ def test_delivered_activation_or_a_recorded_outcome_refuses_the_revoke(
 ) -> None:
     lakebase = _service(conn_kwargs)
     approval_id = _decide(conn_kwargs, LEAD_A, "approve")
+    _record_outreach(conn_kwargs, ledger, approval_id)
+    with pytest.raises(RevokeRefused) as refused:
+        _revoke(lakebase, approval_id)
+    assert refused.value.kind == {"delivered": "delivered", "outcome": "outcome_recorded"}[ledger]
+
+
+def _record_outreach(conn_kwargs: dict[str, str], ledger: str, approval_id: str) -> None:
     with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
         if ledger == "delivered":
             conn.execute(
@@ -574,6 +582,18 @@ def test_delivered_activation_or_a_recorded_outcome_refuses_the_revoke(
                 "VALUES (%s, 'application_submitted', 'manual_import', %s, %s)",
                 (LEAD_A, str(uuid4()), APPROVER),
             )
-    with pytest.raises(RevokeRefused) as refused:
-        _revoke(lakebase, approval_id)
-    assert refused.value.kind == {"delivered": "delivered", "outcome": "outcome_recorded"}[ledger]
+
+
+@pytest.mark.parametrize("ledger", ["delivered", "outcome"])
+def test_the_queue_version_moves_on_delivery_status_and_crm_outcomes(
+    conn_kwargs: dict[str, str], ledger: str
+) -> None:
+    """states-09 on the real statement: the two ledgers the lifecycle sync
+    carries into the queue now move the version by themselves."""
+
+    lakebase = _service(conn_kwargs)
+    approval_id = _decide(conn_kwargs, LEAD_A, "approve")
+    before = queue_version_from_row(lakebase.fetchone(QUEUE_VERSION_SQL))
+    assert queue_version_from_row(lakebase.fetchone(QUEUE_VERSION_SQL)) == before
+    _record_outreach(conn_kwargs, ledger, approval_id)
+    assert queue_version_from_row(lakebase.fetchone(QUEUE_VERSION_SQL)) != before
