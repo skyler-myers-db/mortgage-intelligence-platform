@@ -723,7 +723,7 @@ export interface ResponseSchemas {
     copy_hash: string | null;
     correlation_id: string | null;
     created_at: string;
-    decision: "approved" | "rejected" | "held";
+    decision: "approved" | "rejected" | "held" | "revoked";
     event_type: string;
     evidence_assets: string[];
     evidence_ids: string[];
@@ -1695,6 +1695,17 @@ export interface ResponseSchemas {
     approval_id: string;
     audit_event_id: string;
     rejected: boolean;
+  };
+  /** The revoke row and what it superseded. */
+  OutreachRevokeResponse: {
+    /** The revoke decision row. */
+    approval_id: string;
+    audit_event_id: string;
+    /** The not-yet-worked lead assignment the revoke released, if there was one. */
+    released_assignment_id: string | null;
+    revoked: boolean;
+    /** The approval it superseded. */
+    revoked_approval_id: string;
   };
   /** One validated, deterministic step of a composed plan. */
   PlanStep: {
@@ -2687,6 +2698,16 @@ export interface RequestSchemas {
     rationale_code: "out_of_footprint" | "do_not_call" | "opt_out" | "fair_lending_review" | "low_intent" | "data_quality" | "other_with_text";
     request_id?: string | null;
     variant_name?: string | null;
+  };
+  /** POST /outreach/revoke: one borrower's current approval, with a reason. */
+  OutreachRevokeRequest: {
+    /** The approval being revoked: it must still be the borrower's current decision. */
+    approval_id: string;
+    borrower_id: string;
+    /** Why the approval is revoked: required, without personal details. */
+    rationale: string;
+    /** Client idempotency key; a retry with the same key replays the stored answer. */
+    request_id: string;
   };
   PortfolioCreateRequest: {
     channel_cascade?: { [key: string]: unknown }[];
@@ -4204,6 +4225,13 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['OutreachRejectRequest'];
     ok: ResponseSchemas['OutreachRejectResponse'];
+  };
+  "POST /api/v1/outreach/revoke": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['OutreachRevokeRequest'];
+    ok: ResponseSchemas['OutreachRevokeResponse'];
   };
   "POST /api/v1/portfolio/campaign-recommendation": {
     pathParams: Record<string, never>;

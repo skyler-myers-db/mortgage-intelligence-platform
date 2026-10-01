@@ -52,6 +52,7 @@ export const AUDIT_EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   OUTREACH_APPROVE: 'Outreach approved (legacy code)',
   OUTREACH_HOLD: 'Outreach held',
   OUTREACH_REJECT: 'Outreach rejected',
+  OUTREACH_REVOKE: 'Outreach approval revoked',
   PORTFOLIO_CREATE: 'Portfolio created',
   PROPERTY_LOOKUP: 'Property looked up',
   RECOMMEND_OFFER: 'Offer recommended',

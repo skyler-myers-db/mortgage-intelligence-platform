@@ -5114,7 +5114,8 @@
             "enum": [
               "approved",
               "rejected",
-              "held"
+              "held",
+              "revoked"
             ],
             "title": "Decision",
             "type": "string"
@@ -12589,6 +12590,87 @@
           "audit_event_id"
         ],
         "title": "OutreachRejectResponse",
+        "type": "object"
+      },
+      "OutreachRevokeRequest": {
+        "additionalProperties": false,
+        "description": "POST /outreach/revoke: one borrower's current approval, with a reason.",
+        "properties": {
+          "approval_id": {
+            "description": "The approval being revoked: it must still be the borrower's current decision.",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "rationale": {
+            "description": "Why the approval is revoked: required, without personal details.",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Client idempotency key; a retry with the same key replays the stored answer.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "approval_id",
+          "rationale",
+          "request_id"
+        ],
+        "title": "OutreachRevokeRequest",
+        "type": "object"
+      },
+      "OutreachRevokeResponse": {
+        "description": "The revoke row and what it superseded.",
+        "properties": {
+          "approval_id": {
+            "description": "The revoke decision row.",
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "released_assignment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The not-yet-worked lead assignment the revoke released, if there was one.",
+            "title": "Released Assignment Id"
+          },
+          "revoked": {
+            "title": "Revoked",
+            "type": "boolean"
+          },
+          "revoked_approval_id": {
+            "description": "The approval it superseded.",
+            "title": "Revoked Approval Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revoked",
+          "approval_id",
+          "revoked_approval_id",
+          "audit_event_id"
+        ],
+        "title": "OutreachRevokeResponse",
         "type": "object"
       },
       "PlanStep": {
@@ -25753,6 +25835,58 @@
         ]
       }
     },
+    "/api/outreach/revoke": {
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_outreach_revoke_revoke_outreach",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutreachRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutreachRevokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Outreach",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
     "/api/portfolio": {
       "get": {
         "deprecated": true,
@@ -35950,6 +36084,57 @@
           }
         },
         "summary": "Reject Outreach",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
+    "/api/v1/outreach/revoke": {
+      "post": {
+        "operationId": "post_api_v1_outreach_revoke_revoke_outreach",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutreachRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutreachRevokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Outreach",
         "tags": [
           "outreach"
         ]

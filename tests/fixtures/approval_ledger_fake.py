@@ -19,8 +19,18 @@ from typing import Any
 from uuid import uuid4
 
 from backend.services import approval_request_sql as sql
+from backend.services import outreach_revoke
 from backend.services.audit_lakebase_store import _INSERT_SQL as AUDIT_INSERT_SQL
 from backend.services.lakebase import LakebaseError
+from backend.services.outreach_decision_commit import (
+    _APPROVAL_FINALIZE,
+    _APPROVAL_INSERT_RETURNING,
+    _APPROVAL_LOOKUP_BY_REQUEST_ID,
+)
+from backend.services.outreach_decision_ordering import (
+    BORROWER_DECISION_LOCK,
+    LATEST_BORROWER_DECISION,
+)
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 _STATEMENTS: dict[str, str] = {
@@ -29,6 +39,19 @@ _STATEMENTS: dict[str, str] = {
     if name.isupper() and isinstance(value, str) and value.lstrip().startswith(("SELECT", "UPDATE", "INSERT"))
 }
 _STATEMENTS[AUDIT_INSERT_SQL] = "INSERT_AUDIT"
+_STATEMENTS.update(
+    {
+        BORROWER_DECISION_LOCK: "DECISION_LOCK",
+        LATEST_BORROWER_DECISION: "LATEST_DECISION",
+        _APPROVAL_LOOKUP_BY_REQUEST_ID: "APPROVAL_BY_REQUEST_ID",
+        _APPROVAL_INSERT_RETURNING: "INSERT_APPROVAL",
+        _APPROVAL_FINALIZE: "FINALIZE_APPROVAL",
+        outreach_revoke.APPROVAL_ROW: "APPROVAL_ROW",
+        outreach_revoke.OUTREACH_SINCE_APPROVAL: "OUTREACH_SINCE_APPROVAL",
+        outreach_revoke.ACTIVE_ASSIGNMENT_FOR_UPDATE: "ACTIVE_ASSIGNMENT",
+        outreach_revoke.RELEASE_ASSIGNMENT: "RELEASE_ASSIGNMENT",
+    }
+)
 
 
 class _Result:
@@ -59,6 +82,11 @@ class FakeApprovalLedger:
         # Called with the candidate ids before INSERT_OPEN_ITEMS runs; a test
         # uses it to model a concurrent request that just took a borrower.
         self.before_insert_items: Callable[[list[str]], None] | None = None
+        # The outreach ledgers a revoke consults.
+        self.dispositions: list[dict[str, Any]] = []
+        self.outcomes: list[dict[str, Any]] = []
+        self.outbox: list[dict[str, Any]] = []
+        self.assignments: dict[str, dict[str, Any]] = {}
 
     # -- seeding helpers ----------------------------------------------------
     def add_decision(
@@ -85,6 +113,10 @@ class FakeApprovalLedger:
             "campaign_id": None,
             "channel": "email",
             "offer_code": "refi",
+            "request_id": None,
+            "actor_email": "pat.approver@summit.example",
+            "decision_payload_hash": None,
+            "decision_response": None,
             **extra,
         }
         self.approvals.append(row)
@@ -135,11 +167,13 @@ class FakeApprovalLedger:
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
-        snapshot = copy.deepcopy((self.batches, self.items, self.approvals, self.audits))
+        tables = ("batches", "items", "approvals", "audits", "assignments")
+        snapshot = copy.deepcopy([getattr(self, name) for name in tables])
         try:
             yield self
         except BaseException:
-            self.batches, self.items, self.approvals, self.audits = snapshot
+            for name, value in zip(tables, snapshot, strict=True):
+                setattr(self, name, value)
             raise
 
     def _run(self, statement: str, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -310,3 +344,79 @@ class FakeApprovalLedger:
             self.items[key].update(status="expired", closed_at=self.now)
             out.append({"batch_id": key[0]})
         return out
+
+    # -- the approvals and outreach statements a revoke sends --------------------
+    def add_assignment(self, borrower_id: str, status: str = "assigned") -> str:
+        assignment_id = str(uuid4())
+        self.assignments[assignment_id] = {
+            "assignment_id": assignment_id, "borrower_id": borrower_id, "status": status, "released_at": None,
+        }
+        return assignment_id
+
+    def _sql_decision_lock(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        return []
+
+    def _sql_latest_decision(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        latest = self._latest([row for row in self.approvals if row["borrower_id"] == params["borrower_id"]])
+        return [{"approval_id": str(latest["approval_id"]), "action": latest["action"]}] if latest else []
+
+    def _sql_approval_by_request_id(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.approvals if row.get("request_id") == params["request_id"]][:1]
+
+    def _sql_approval_row(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            dict(row)
+            for row in self.approvals
+            if str(row["approval_id"]) == params["approval_id"] and row["borrower_id"] == params["borrower_id"]
+        ]
+
+    def _sql_outreach_since_approval(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        def since(rows: list[dict[str, Any]]) -> int:
+            return sum(
+                1
+                for row in rows
+                if row["borrower_id"] == params["borrower_id"] and row["occurred_at"] >= params["decided_at"]
+            )
+
+        deliveries = sum(
+            1 for row in self.outbox if row["approval_id"] == params["approval_id"] and row["status"] == "delivered"
+        )
+        return [{"dispositions": since(self.dispositions), "outcomes": since(self.outcomes), "deliveries": deliveries}]
+
+    def _sql_active_assignment(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {"assignment_id": row["assignment_id"], "status": row["status"]}
+            for row in self.assignments.values()
+            if row["borrower_id"] == params["borrower_id"] and row["released_at"] is None
+        ]
+
+    def _sql_release_assignment(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        row = self.assignments.get(params["assignment_id"])
+        if row is None or row["released_at"] is not None:
+            return []
+        row["released_at"] = self.now
+        return [{"assignment_id": row["assignment_id"]}]
+
+    def _sql_insert_approval(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        if any(row.get("request_id") == params["request_id"] for row in self.approvals):
+            return []
+        self.approvals.append(
+            {
+                **params,
+                # clock_timestamp(): strictly after every earlier decision.
+                "decided_at": self.now + timedelta(microseconds=len(self.approvals) + 1),
+                "audit_event_id": None,
+                "decision_response": None,
+            }
+        )
+        return [{"approval_id": params["approval_id"]}]
+
+    def _sql_finalize_approval(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        for row in self.approvals:
+            if str(row["approval_id"]) == params["approval_id"]:
+                if row["decision_response"] is not None or row["audit_event_id"] is not None:
+                    return []
+                row["decision_response"] = json.loads(params["decision_response"])
+                row["audit_event_id"] = params["audit_event_id"]
+                return [{"approval_id": row["approval_id"]}]
+        return []

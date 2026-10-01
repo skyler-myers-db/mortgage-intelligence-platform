@@ -234,7 +234,7 @@ export interface ActorAuditEventPage {
   next_cursor: string | null;
 }
 
-export type DecisionOutcome = 'approved' | 'rejected' | 'held';
+export type DecisionOutcome = 'approved' | 'rejected' | 'held' | 'revoked';
 
 /**
  * Decision receipt: the approver's read-back of the Lakebase audit row their

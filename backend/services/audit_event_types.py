@@ -34,6 +34,7 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "LEAD_OUTCOME_RECORDED",
         "OUTREACH_APPROVE",
         "OUTREACH_REJECT",
+        "OUTREACH_REVOKE",
         "PORTFOLIO_CREATE",
         "PROPERTY_LOOKUP",
         "RECOMMEND_OFFER",

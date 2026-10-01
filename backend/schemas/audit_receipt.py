@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-DecisionOutcome = Literal["approved", "rejected", "held"]
+DecisionOutcome = Literal["approved", "rejected", "held", "revoked"]
 
 
 class DecisionReceipt(BaseModel):

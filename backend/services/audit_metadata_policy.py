@@ -216,6 +216,10 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "skipped_count",
         "withdrawn_count",
         "skipped_by_reason",
+        # OUTREACH_REVOKE (backend/api/outreach_revoke.py): the approval the
+        # revoke superseded and the not-yet-worked assignment it released.
+        "revoked_approval_id",
+        "released_assignment_id",
         # SAVE_QUEUE_VIEW / DELETE_QUEUE_VIEW (backend/api/workspace.py): the
         # server-issued view id only. The view's name and params never reach
         # the ledger; filter_fingerprint (above) is their SHA-256.
@@ -478,6 +482,8 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "growth_agent_run_id",
         "genie_job_id",
         "approval_request_batch_id",
+        "revoked_approval_id",
+        "released_assignment_id",
     }
 )
 _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(

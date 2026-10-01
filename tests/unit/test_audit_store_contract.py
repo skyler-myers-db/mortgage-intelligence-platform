@@ -234,6 +234,8 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # transactions (tests/unit/test_approval_requests_api.py).
     "request_outreach_approval": ("create_approval_request(",),
     "withdraw_outreach_approval_request": ("withdraw_approval_request(",),
+    # OUTREACH_REVOKE is written with the revoke row in one transaction.
+    "revoke_outreach": ("revoke_approval(",),
     "stage_activation": ("store.stage_borrower(", "_assert_activation_eligible("),
 }
 
