@@ -126,7 +126,8 @@ test.describe('the shell resumes a turn before the first open (genie-02 item 2)'
     release();
     await expect(toggle).toHaveClass(/is-genie-running/, STAGE_WAIT);
     await expect(fab).toHaveClass(/is-genie-running/);
-    await expect(toggle).toHaveAttribute('aria-describedby', 'genie-launcher-status');
+    // One id among the description ids: the Topbar Tooltip (critic-08) adds its own.
+    await expect(toggle).toHaveAttribute('aria-describedby', /(^|\s)genie-launcher-status(\s|$)/);
     await expect(page.locator('#genie-launcher-status')).toHaveText('Genie is still working on your question.');
 
     job.next();
