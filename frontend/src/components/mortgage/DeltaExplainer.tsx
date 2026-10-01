@@ -10,7 +10,13 @@ import { queryKeys } from '../../lib/queryKeys';
 import { formatDate } from '../../lib/time';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
 import type { HomeSummaryAttributionResponse } from '../../types/homeAttribution';
-import { waterfallDomain, waterfallSteps, type WaterfallStep } from './deltaExplainer.model';
+import {
+  ATTRIBUTION_MAX_LOOKBACK_DAYS,
+  waterfallDomain,
+  waterfallSteps,
+  withinAttributionWindow,
+  type WaterfallStep,
+} from './deltaExplainer.model';
 import './DeltaExplainer.css';
 
 /**
@@ -37,26 +43,35 @@ const CHART_WIDTH = 400;
 const BAR_HEIGHT = 12;
 
 export default function DeltaExplainer({ explainer }: { explainer: DeltaExplainerInput }) {
+  // The route refuses a baseline older than its lookback (a 422): never ask.
+  const answerable = withinAttributionWindow(explainer.baselineDate);
   const query = useWarmingUpRetry<Fresh<HomeSummaryAttributionResponse>>(
     (signal) => homeAttributionApi.homeSummaryAttribution(explainer.measure, explainer.baselineDate, signal),
-    { queryKey: queryKeys.homeSummaryAttribution(explainer.measure, explainer.baselineDate) },
+    { queryKey: queryKeys.homeSummaryAttribution(explainer.measure, explainer.baselineDate), enabled: answerable },
   );
   return (
     <section className="source-card delta-explainer" aria-label="Where the change came from" data-testid="delta-explainer">
       <div className="eyebrow mb-2">Where the change came from</div>
-      <AsyncState
-        query={query}
-        subject="The change breakdown"
-        loading={<div className="skeleton delta-explainer__skeleton" aria-hidden="true" />}
-        isEmpty={(fresh) => fresh.data.total_change === null}
-        empty={(
-          <p className="body flush">
-            No daily funnel snapshot covers this period yet, so the change cannot be broken down by state.
-          </p>
-        )}
-      >
-        {(fresh) => <Breakdown response={fresh.data} lastGoodAt={fresh.lastGoodAt} liveDisplay={explainer.liveDisplay} />}
-      </AsyncState>
+      {answerable ? (
+        <AsyncState
+          query={query}
+          subject="The change breakdown"
+          loading={<div className="skeleton delta-explainer__skeleton" aria-hidden="true" />}
+          isEmpty={(fresh) => fresh.data.total_change === null}
+          empty={(
+            <p className="body flush">
+              No daily funnel snapshot covers this period yet, so the change cannot be broken down by state.
+            </p>
+          )}
+        >
+          {(fresh) => <Breakdown response={fresh.data} lastGoodAt={fresh.lastGoodAt} liveDisplay={explainer.liveDisplay} />}
+        </AsyncState>
+      ) : (
+        <p className="body flush" data-testid="delta-explainer-too-old">
+          The change is broken down by state for a baseline from the last {ATTRIBUTION_MAX_LOOKBACK_DAYS} days; your
+          baseline ({formatDate(explainer.baselineDate)}) is older.
+        </p>
+      )}
     </section>
   );
 }

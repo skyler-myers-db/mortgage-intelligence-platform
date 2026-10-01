@@ -1,11 +1,6 @@
 import type { DrawerSource } from '../components/AppContext';
 import type { HomeSummaryHighlight } from '../types';
-import {
-  DELTA_EXPLAINER_MAX_LOOKBACK_DAYS,
-  isDeltaExplainerMeasure,
-  withinDeltaExplainerWindow,
-  type DeltaExplainerDrawerSource,
-} from './deltaExplainerSource';
+import { isDeltaExplainerMeasure, type DeltaExplainerDrawerSource } from './deltaExplainerSource';
 import { DRAWER_SOURCES } from './drawerSourceRegistry';
 import { formatCount, ratePct, signedBpsLabel } from './formatters';
 import type { RateMoveSinceVisit } from './homeAnswer';
@@ -29,15 +24,14 @@ const HOME_SUMMARY_LINEAGE_FAMILY: Record<string, string> = {
  * Evidence for one "since your last login" number, citing both snapshots.
  * A delta of a measure the funnel snapshots attribute per state (wow-ai-3)
  * also carries the Delta Explainer (lib/deltaExplainerSource), anchored on
- * the baseline KPI snapshot's date; competitor liens, and a baseline older
- * than the server's attribution lookback, say why they have none.
+ * the baseline KPI snapshot's date; competitor liens say why they have none.
  */
 export function loginSummaryDrawerSource(
   highlight: Pick<
     HomeSummaryHighlight,
     'measure' | 'label' | 'display' | 'current' | 'baseline' | 'delta' | 'delta_pct'
   >,
-  opts: { previousVisitAt: string | null; baselineSnapshotAt?: string | null; status?: string; now?: number } = {
+  opts: { previousVisitAt: string | null; baselineSnapshotAt?: string | null; status?: string } = {
     previousVisitAt: null,
   },
 ): DrawerSource | DeltaExplainerDrawerSource {
@@ -75,16 +69,7 @@ export function loginSummaryDrawerSource(
     });
   }
   const baselineDate = opts.status === 'delta' && hasBaseline ? utcDate(opts.baselineSnapshotAt) : null;
-  const supported = baselineDate !== null && isDeltaExplainerMeasure(highlight.measure);
-  const explainable = supported && withinDeltaExplainerWindow(baselineDate, opts.now);
-  if (supported && !explainable) {
-    signals.push({
-      label: 'Per-state attribution',
-      source: 'mip.gold.funnel_snapshot_daily',
-      value: `not available for a baseline older than ${DELTA_EXPLAINER_MAX_LOOKBACK_DAYS} days`,
-    });
-  }
-  const explainer = explainable && isDeltaExplainerMeasure(highlight.measure)
+  const explainer = baselineDate && isDeltaExplainerMeasure(highlight.measure)
     ? { deltaExplainer: { measure: highlight.measure, baselineDate, liveDisplay: highlight.display } }
     : {};
   return {

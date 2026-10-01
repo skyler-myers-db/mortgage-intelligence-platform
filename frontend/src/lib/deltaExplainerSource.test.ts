@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { HomeSummaryHighlight } from '../types';
-import { deltaExplainerOf, isDeltaExplainerMeasure, withinDeltaExplainerWindow } from './deltaExplainerSource';
+import { deltaExplainerOf, isDeltaExplainerMeasure } from './deltaExplainerSource';
 import { loginSummaryDrawerSource } from './loginSummaryDrawerSource';
 
 const highlight = (measure: string, overrides: Partial<HomeSummaryHighlight> = {}): HomeSummaryHighlight => ({
@@ -19,14 +19,7 @@ const highlight = (measure: string, overrides: Partial<HomeSummaryHighlight> = {
   ...overrides,
 });
 
-const NOW = Date.parse('2026-10-01T12:00:00Z');
-const DAY = 86_400_000;
-const DELTA = {
-  previousVisitAt: '2026-09-09T14:30:00Z',
-  baselineSnapshotAt: '2026-09-09T06:00:00Z',
-  status: 'delta',
-  now: NOW,
-};
+const DELTA = { previousVisitAt: '2026-09-09T14:30:00Z', baselineSnapshotAt: '2026-09-09T06:00:00Z', status: 'delta' };
 
 describe('deltaExplainerSource', () => {
   it('knows the four measures the funnel snapshots attribute per state', () => {
@@ -66,31 +59,6 @@ describe('deltaExplainerSource', () => {
       source: 'mip.gold.funnel_snapshot_daily',
       value: 'not snapshotted for this measure',
     });
-  });
-
-  it("attaches none to a baseline older than the server's 400-day lookback (a 422), and says why", () => {
-    // The route answers a baseline older than 400 days with a 422, which the
-    // drawer could only render as "could not load".
-    const baselineAt = Date.parse('2026-09-09T00:00:00Z');
-    const old = loginSummaryDrawerSource(highlight('refi_economics_screen'), { ...DELTA, now: baselineAt + 401 * DAY });
-    expect(deltaExplainerOf(old)).toBeNull();
-    expect(old.signals).toContainEqual({
-      label: 'Per-state attribution',
-      source: 'mip.gold.funnel_snapshot_daily',
-      value: 'not available for a baseline older than 400 days',
-    });
-    // The last day the route still answers.
-    const edge = loginSummaryDrawerSource(highlight('refi_economics_screen'), { ...DELTA, now: baselineAt + 400 * DAY + 23 * 3_600_000 });
-    expect(deltaExplainerOf(edge)?.baselineDate).toBe('2026-09-09');
-    expect(edge.signals?.some((signal) => signal.label === 'Per-state attribution')).toBe(false);
-  });
-
-  it('the lookback window counts whole UTC days, as the route does', () => {
-    const today = Date.parse('2026-10-01T23:59:00Z');
-    expect(withinDeltaExplainerWindow('2026-10-01', today)).toBe(true);
-    expect(withinDeltaExplainerWindow('2025-08-27', today)).toBe(true); // 400 days
-    expect(withinDeltaExplainerWindow('2025-08-26', today)).toBe(false); // 401 days
-    expect(withinDeltaExplainerWindow('not-a-date', today)).toBe(false);
   });
 
   it('rejects a malformed explainer rather than reading an unknown measure or date', () => {

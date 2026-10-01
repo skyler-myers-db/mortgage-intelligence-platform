@@ -32,23 +32,6 @@ export function isDeltaExplainerMeasure(measure: string): measure is HomeAttribu
   return (DELTA_EXPLAINER_MEASURES as ReadonlySet<string>).has(measure);
 }
 
-/** How far back the server breaks a change down (backend/api/home.py
- *  ATTRIBUTION_MAX_LOOKBACK_DAYS; test_home_attribution.py pins the parity). */
-export const DELTA_EXPLAINER_MAX_LOOKBACK_DAYS = 400;
-const DAY_MS = 86_400_000;
-
-/**
- * Whether the server will break down a change since `baselineDate`
- * (YYYY-MM-DD, UTC), counted in whole UTC days as the route counts them: a
- * baseline older than its lookback is a 422, which the drawer could only
- * render as "could not load".
- */
-export function withinDeltaExplainerWindow(baselineDate: string, now: number = Date.now()): boolean {
-  const at = Date.parse(`${baselineDate}T00:00:00Z`);
-  const today = Date.parse(`${new Date(now).toISOString().slice(0, 10)}T00:00:00Z`);
-  return Number.isFinite(at) && today - at <= DELTA_EXPLAINER_MAX_LOOKBACK_DAYS * DAY_MS;
-}
-
 /** The explainer a drawer source carries, or null for every other source. */
 export function deltaExplainerOf(source: DrawerSource | null | undefined): DeltaExplainer | null {
   const explainer = (source as Partial<DeltaExplainerDrawerSource> | null | undefined)?.deltaExplainer;

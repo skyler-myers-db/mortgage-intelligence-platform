@@ -285,11 +285,11 @@ def test_a_future_or_too_old_baseline_is_a_422(days: int) -> None:
     assert response.json()["detail"] == home_api.ATTRIBUTION_BASELINE_DETAIL
 
 
-def test_the_client_attaches_the_explainer_only_inside_the_route_lookback() -> None:
-    """The Home drawer source skips a baseline the route would 422 (lib/deltaExplainerSource.ts)."""
-    source = (Path(__file__).resolve().parents[2] / "frontend/src/lib/deltaExplainerSource.ts").read_text()
-    match = re.search(r"export const DELTA_EXPLAINER_MAX_LOOKBACK_DAYS = (\d+);", source)
-    assert match, "frontend/src/lib/deltaExplainerSource.ts declares DELTA_EXPLAINER_MAX_LOOKBACK_DAYS"
+def test_the_client_never_asks_outside_the_route_lookback() -> None:
+    """The drawer's explainer skips a baseline the route would 422 (deltaExplainer.model.ts)."""
+    model = Path(__file__).resolve().parents[2] / "frontend/src/components/mortgage/deltaExplainer.model.ts"
+    match = re.search(r"export const ATTRIBUTION_MAX_LOOKBACK_DAYS = (\d+);", model.read_text())
+    assert match, "deltaExplainer.model.ts declares ATTRIBUTION_MAX_LOOKBACK_DAYS"
     assert int(match.group(1)) == home_api.ATTRIBUTION_MAX_LOOKBACK_DAYS
 
 

@@ -7,6 +7,23 @@
  */
 import type { HomeAttributionState, HomeSummaryAttributionResponse } from '../../types/homeAttribution';
 
+/** How far back the route breaks a change down (backend/api/home.py
+ *  ATTRIBUTION_MAX_LOOKBACK_DAYS; test_home_attribution.py pins the parity). */
+export const ATTRIBUTION_MAX_LOOKBACK_DAYS = 400;
+const DAY_MS = 86_400_000;
+
+/**
+ * Whether the route will break down a change since `baselineDate`
+ * (YYYY-MM-DD, UTC), counted in whole UTC days as the route counts them. A
+ * baseline older than its lookback is a 422, which could only render as
+ * "could not load", so the explainer says why instead and never asks.
+ */
+export function withinAttributionWindow(baselineDate: string, now: number = Date.now()): boolean {
+  const at = Date.parse(`${baselineDate}T00:00:00Z`);
+  const today = Date.parse(`${new Date(now).toISOString().slice(0, 10)}T00:00:00Z`);
+  return Number.isFinite(at) && today - at <= ATTRIBUTION_MAX_LOOKBACK_DAYS * DAY_MS;
+}
+
 /** States drawn as their own bar; the rest share "Other states". */
 export const TOP_STATE_BARS = 6;
 export const OTHER_STATES_LABEL = 'Other states';

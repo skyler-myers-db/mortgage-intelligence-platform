@@ -19,12 +19,14 @@ import { readFileSync } from 'node:fs';
 import { createMipQueryClient } from '../../lib/queryClient';
 import type { HomeSummaryAttributionResponse } from '../../types/homeAttribution';
 import DeltaExplainer from './DeltaExplainer';
-import { OTHER_STATES_LABEL, UNATTRIBUTED_LABEL, waterfallSteps } from './deltaExplainer.model';
+import { OTHER_STATES_LABEL, UNATTRIBUTED_LABEL, waterfallSteps, withinAttributionWindow } from './deltaExplainer.model';
 
 declare const process: { cwd(): string };
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const fetchMock = vi.fn();
+/** The tests' today: the baselines below sit inside (or, on purpose, outside) the route's lookback. */
+const TODAY = Date.parse('2026-10-01T12:00:00Z');
 
 const STATES = [
   ['TX', 400, 520], ['FL', 310, 360], ['IL', 300, 280], ['CA', 500, 530], ['AZ', 90, 100], ['GA', 70, 75], ['OH', 60, 62], ['WA', 40, 41],
@@ -65,6 +67,8 @@ describe('DeltaExplainer', () => {
   let root: Root;
 
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(TODAY);
     vi.stubGlobal('fetch', fetchMock);
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
@@ -75,14 +79,15 @@ describe('DeltaExplainer', () => {
     document.body.innerHTML = '';
     fetchMock.mockReset();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
-  async function render(): Promise<void> {
+  async function render(baselineDate = '2026-09-01'): Promise<void> {
     await act(async () => {
       root.render(
         <QueryClientProvider client={createMipQueryClient()}>
           <MemoryRouter>
-            <DeltaExplainer explainer={{ measure: 'refi_economics_screen', baselineDate: '2026-09-01', liveDisplay: '+2,250' }} />
+            <DeltaExplainer explainer={{ measure: 'refi_economics_screen', baselineDate, liveDisplay: '+2,250' }} />
           </MemoryRouter>
         </QueryClientProvider>,
       );
@@ -160,6 +165,28 @@ describe('DeltaExplainer', () => {
     respond(body(), { 'X-Data-Last-Good-At': '2026-09-30T08:00:00Z' });
     await render();
     expect(document.querySelector('[data-testid="stale-data-note"] time')?.getAttribute('dateTime')).toBe('2026-09-30T08:00:00.000Z');
+  });
+
+  it("never asks for a baseline older than the route's 400-day lookback (a 422), and says why", async () => {
+    respond(body());
+    await render('2025-08-26'); // 401 days before TODAY
+    expect(fetchMock, 'no attribution read the route would refuse').not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="delta-explainer-too-old"]')?.textContent?.replace(/\s+/g, ' ')).toBe(
+      'The change is broken down by state for a baseline from the last 400 days; your baseline (Aug 26, 2025) is older.',
+    );
+    expect(text()).not.toContain('could not load');
+    expect(document.querySelector('[data-testid="delta-explainer-waterfall"]')).toBeNull();
+  });
+
+  it('asks on the last day the route still answers, counting whole UTC days as the route does', async () => {
+    expect(withinAttributionWindow('2026-10-01', Date.parse('2026-10-01T23:59:00Z'))).toBe(true);
+    expect(withinAttributionWindow('2025-08-27', Date.parse('2026-10-01T23:59:00Z'))).toBe(true); // 400 days
+    expect(withinAttributionWindow('2025-08-26', Date.parse('2026-10-01T00:01:00Z'))).toBe(false); // 401 days
+    expect(withinAttributionWindow('not-a-date', TODAY)).toBe(false);
+    respond(body({ requested_baseline_date: '2025-08-27' }));
+    await render('2025-08-27');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-testid="delta-explainer-too-old"]')).toBeNull();
   });
 
   it('paints increases in the data ink and decreases in the tertiary ink, never an alarm hue', async () => {
