@@ -24,6 +24,7 @@ import psycopg
 import pytest
 
 from jobs import kpi_snapshot, lakebase_migrate
+from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
@@ -49,14 +50,17 @@ def conn_kwargs() -> Iterator[dict[str, str]]:
 
 def _apply(conn_kwargs: dict[str, str], schema_sql: str) -> None:
     pre_seed, post_seed = lakebase_migrate._split_schema_sql(schema_sql)
-    lakebase_migrate._run_transaction(
-        (pre_seed, _SEED, post_seed),
-        conn_kwargs,
-        app_role="lakebase-schema-upgrade-test-role",
-        verify_outreach_integrity=True,
-        allow_absent_managed_event_triggers=True,
-        allow_absent_provider_schema=True,
-    )
+    # A prefix replay runs against the contract of its own era: the
+    # approval-request block appended later adds triggers and routines.
+    with contract_as_of(schema_sql):
+        lakebase_migrate._run_transaction(
+            (pre_seed, _SEED, post_seed),
+            conn_kwargs,
+            app_role="lakebase-schema-upgrade-test-role",
+            verify_outreach_integrity=True,
+            allow_absent_managed_event_triggers=True,
+            allow_absent_provider_schema=True,
+        )
 
 
 def _columns(conn: psycopg.Connection[Any]) -> dict[str, tuple[str, str]]:
