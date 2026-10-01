@@ -276,7 +276,7 @@ test('(7) 500 loaded of 2,340: the scope line, and the campaign link carries the
   await page.getByTestId('lead-select-all').check();
 
   const scope = page.getByTestId('lead-bulk-scope');
-  await expect(scope).toContainText(/All [\d,]+ loaded borrowers are selected\./);
+  await expect(scope).toContainText(/All [\d,]+ selectable borrowers shown here are selected\./);
   await expect(scope).toContainText('2,340 match these filters; bulk actions apply only to borrowers shown here.');
   const link = scope.getByTestId('lead-bulk-campaign-handoff');
   await expect(link).toHaveText('Build a campaign from these filters');

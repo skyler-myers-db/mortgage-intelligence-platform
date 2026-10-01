@@ -204,7 +204,7 @@ describe('LeadTable range selection and the on-screen selection', () => {
       selectAll();
       // Row 4 is rejected and not selectable: every selectable row is selected.
       expect(scope()?.textContent).toContain(
-        'All 5 loaded borrowers are selected. 2,340 match these filters; bulk actions apply only to borrowers shown here.',
+        'All 5 selectable borrowers shown here are selected. 2,340 match these filters; bulk actions apply only to borrowers shown here.',
       );
       const link = await handoffLink();
       expect(link.textContent).toBe('Build a campaign from these filters');
