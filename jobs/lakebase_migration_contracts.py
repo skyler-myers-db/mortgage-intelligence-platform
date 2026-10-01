@@ -47,6 +47,8 @@ _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     "genie_feedback_requests": ("SELECT", "INSERT", "UPDATE"),
     "genie_refusal_reports": ("SELECT", "INSERT", "UPDATE"),
     "genie_completion_jobs": ("SELECT", "INSERT", "UPDATE"),
+    # Saved Lead Queue views: deletes are soft (deleted_at), so no DELETE.
+    "saved_views": ("SELECT", "INSERT", "UPDATE"),
 }
 
 _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {

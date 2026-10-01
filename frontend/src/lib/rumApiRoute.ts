@@ -35,6 +35,7 @@ export const API_ROUTE_SEGMENTS = [
   'receipt',
   'recommend', 'refusal-report', 'reject', 'rollups', 'rules', 'rum', 'run',
   'runs',
+  'saved-views',
   'run-due', 'run-due-all', 'sales', 'search', 'segments', 'session', 'sessions',
   'settings', 'signals', 'sources', 'stage', 'standup', 'start', 'state-rollups',
   'status', 'submit', 'summary', 'team', 'telemetry', 'workflows', 'workspace',

@@ -162,6 +162,12 @@ async function installMockApi(
       await fulfillJson(route, { saved_leads: [], saved_drafts: [] });
       return;
     }
+    // Wave 5a (filters): opening a Lead Queue filter menu reads its
+    // audit-free facet counts; an empty count set keeps the menu as-is.
+    if (path === '/api/leads/facets') {
+      await fulfillJson(route, { dimension: url.searchParams.get('dimension') ?? 'state', total_matching: 0, buckets: [] });
+      return;
+    }
     if (path === '/api/config/options') {
       await fulfillJson(route, {
         lender_name: 'Summit Mortgage',

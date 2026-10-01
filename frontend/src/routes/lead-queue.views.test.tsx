@@ -102,6 +102,24 @@ describe('LeadQueueViews (rendered)', () => {
     expect(pills()[0].getAttribute('aria-current')).toBe('true');
   });
 
+  it('puts a collapsed Saved views pill after the presets and before Copy link', () => {
+    mount('state=IL', true);
+    const row = container.querySelector('[aria-label="Queue presets"]')!;
+    const controls = [...row.querySelectorAll('a.filter, button')].map(
+      (element) => element.getAttribute('data-testid') ?? element.textContent,
+    );
+    expect(controls).toEqual([
+      'lead-queue-preset-all', 'lead-queue-preset-pending', 'lead-queue-preset-aged', 'lead-queue-preset-mine',
+      'lead-queue-saved-views', 'lead-queue-copy-link',
+    ]);
+    const trigger = row.querySelector<HTMLButtonElement>('[data-testid="lead-queue-saved-views"]')!;
+    expect(trigger.className).toBe('filter lead-queue-views__saved');
+    expect(trigger.getAttribute('aria-label')).toBe('Saved views');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(trigger.getAttribute('aria-controls')).toBeNull();
+    expect(trigger.querySelector('svg')).not.toBeNull();
+  });
+
   it('offers Copy link as a ghost button', () => {
     const onCopyLink = mount('', true);
     const button = container.querySelector<HTMLButtonElement>('[data-testid="lead-queue-copy-link"]');

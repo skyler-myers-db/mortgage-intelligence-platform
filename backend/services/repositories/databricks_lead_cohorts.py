@@ -86,6 +86,10 @@ class LeadCohortFilters:
     min_opportunity_score: int | None = None
     min_rate_spread_bps: float | None = None
     min_heloc_propensity_score: float | None = None
+    # Public inclusive ceilings from GET /leads (never set on a Genie cohort,
+    # whose reviewed vocabulary has floors only): see numeric_ceiling_clause.
+    max_opportunity_score: int | None = None
+    max_rate_spread_bps: float | None = None
     approval_status: str | None = None
     outreach_status: str | None = None
     aged_days: int | None = None
@@ -93,6 +97,41 @@ class LeadCohortFilters:
     @property
     def needs_lifecycle_snapshot(self) -> bool:
         return bool(self.approval_status or self.outreach_status or self.aged_days is not None)
+
+
+def numeric_ceiling_clause(
+    *,
+    max_opportunity_score: float | None = None,
+    max_rate_spread_bps: float | None = None,
+) -> tuple[str, dict[str, object]]:
+    """Return the public `<=` ceilings a Lead Queue URL can set.
+
+    The partner of ``numeric_floor_clause`` (whose `>=` floors a cohort and
+    the public minimums share): one builder feeds the ranked list, the count
+    and the identity proof, so the rows and the totals always apply the same
+    ceiling. Values are bound parameters, never interpolated. The columns live
+    on ``gold.borrower_360``, so any caller using them takes the geo path. A
+    NULL ``rate_spread_bps`` fails ``<=`` in SQL, so a borrower with no spread
+    never matches a spread bound (the floors behave the same way).
+    """
+
+    clauses: list[str] = []
+    params: dict[str, object] = {}
+    for name, column, value in (
+        ("public_max_opportunity_score", "b.opportunity_score", max_opportunity_score),
+        ("public_max_rate_spread_bps", "b.rate_spread_bps", max_rate_spread_bps),
+    ):
+        if value is None:
+            continue
+        clauses.append(f"AND {column} <= :{name}")
+        params[name] = value
+    return " ".join(clauses), params
+
+
+def numeric_bound_clause(*parts: str) -> str:
+    """Join the portfolio, floor and ceiling clauses with single spaces."""
+
+    return " ".join(part for part in parts if part)
 
 
 class LeadCohortQueries(LeadCohortQuerySupport):
@@ -349,6 +388,10 @@ LEFT JOIN ranked ON TRUE
             min_rate_spread_bps=filters.min_rate_spread_bps,
             min_heloc_propensity_score=filters.min_heloc_propensity_score,
         )
+        ceiling_clause, ceiling_params = numeric_ceiling_clause(
+            max_opportunity_score=filters.max_opportunity_score,
+            max_rate_spread_bps=filters.max_rate_spread_bps,
+        )
         if "target_lender_ref" in portfolio_params:
             lender_clause = ""
             lender_params = {}
@@ -374,11 +417,13 @@ LEFT JOIN ranked ON TRUE
             or lender_clause
             or portfolio_clause
             or replay_clause
+            or ceiling_clause
         ):
             params: dict[str, object] = dict(segment_params)
             params.update(lender_params)
             params.update(portfolio_params)
             params.update(replay_params)
+            params.update(ceiling_params)
             params.update(lifecycle_params_geo)
             sql = self._COUNT_BY_GEO_SQL_TEMPLATE.format(
                 aggregate_select=geo_projection,
@@ -413,7 +458,7 @@ LEFT JOIN ranked ON TRUE
                 segment_clause=f"AND {segment_clause}" if segment_clause else "",
                 funnel_stage_clause=funnel_stage_clause,
                 lender_clause=lender_clause,
-                portfolio_clause=f"{portfolio_clause} {replay_clause}".strip(),
+                portfolio_clause=numeric_bound_clause(portfolio_clause, replay_clause, ceiling_clause),
                 lifecycle_clause=lifecycle_clause_geo,
                 freshness_clause=freshness_clause,
             )

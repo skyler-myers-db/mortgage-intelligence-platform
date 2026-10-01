@@ -18,6 +18,25 @@ must carry actor, action, entity, payload, timestamp, and request identifiers.
 If Lakebase is unavailable, the API must return an error and leave the UI in a
 pending or failed state; it must not claim success.
 
+### Lead Queue filter reads
+
+- `GET /api/leads` still writes exactly one `VIEW_LEADS` row per served read.
+  The row now also records the public score and spread bounds: the effective
+  `min_opportunity_score` / `min_rate_spread_bps` floors (a Genie cohort's or
+  the URL's) and, when set, `max_opportunity_score` / `max_rate_spread_bps`.
+  A bound beside a Genie cohort or a Growth Agent handoff is refused (422).
+- `GET /api/leads/count`, `GET /api/leads/facets` and
+  `GET /api/workspace/saved-views` are audit-free: they run the same
+  authorization as the ranked list (admin gate, assignee visibility, cohort
+  replay) but return totals or the actor's own views only, never resolve the
+  audit store, and write no row. The Lead Queue reads facet counts only when a
+  person opens a filter menu, and the saved views only when the panel opens.
+- Saving and deleting a view write `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` in
+  the same Lakebase statement as the change (deletes are soft). The audit
+  metadata carries the view id, the SHA-256 of its canonical params and the
+  request id, never the view name or the params. The name passes the same
+  public-text policy as a campaign name and a refusal never echoes it.
+
 ## Source Truth
 
 Numbers shown to reviewers must trace to Unity Catalog tables, functions, or

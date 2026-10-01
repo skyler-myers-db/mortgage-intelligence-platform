@@ -281,14 +281,78 @@ function sanitizePortfolioCriteria(
   return Object.keys(criteria).length > 0 ? criteria : undefined;
 }
 
+/**
+ * Public score and rate-spread bounds (audit tables-06, wow-stage-1). Plain
+ * `GET /api/leads` params the server validates to the same inclusive ranges
+ * (0..100 score, signed -1000..5000 bps spread). They ride the portfolio
+ * criteria record, which the leads client serializes key by key, so the
+ * request, its query key, the export fingerprint and Copy link all carry
+ * them without a Lead Queue route change.
+ */
+export const LEAD_BOUND_FILTER_KEYS = [
+  'min_opportunity_score',
+  'max_opportunity_score',
+  'min_rate_spread_bps',
+  'max_rate_spread_bps',
+] as const;
+export type LeadBoundFilterKey = (typeof LEAD_BOUND_FILTER_KEYS)[number];
+export type LeadBoundDimension = 'opportunity_score' | 'rate_spread_bps';
+
+export const LEAD_BOUND_LIMITS: Readonly<Record<LeadBoundDimension, { min: number; max: number }>> = {
+  opportunity_score: { min: 0, max: 100 },
+  rate_spread_bps: { min: -1000, max: 5000 },
+};
+
+export function leadBoundDimension(key: LeadBoundFilterKey): LeadBoundDimension {
+  return key.endsWith('opportunity_score') ? 'opportunity_score' : 'rate_spread_bps';
+}
+
+/** A whole number inside the key's range, or undefined. */
+export function parseLeadBound(key: LeadBoundFilterKey, raw: string | null | undefined): number | undefined {
+  const text = raw?.trim() ?? '';
+  if (!/^-?\d{1,5}$/.test(text)) return undefined;
+  const value = Number(text);
+  const { min, max } = LEAD_BOUND_LIMITS[leadBoundDimension(key)];
+  return value >= min && value <= max ? value : undefined;
+}
+
+/** The valid bounds in `raw`; an inverted pair drops both of its keys. */
+function sanitizeLeadBounds(raw: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const bounds: Record<string, string> = {};
+  for (const dimension of ['opportunity_score', 'rate_spread_bps'] as const) {
+    const low = parseLeadBound(`min_${dimension}`, raw[`min_${dimension}`]);
+    const high = parseLeadBound(`max_${dimension}`, raw[`max_${dimension}`]);
+    if (low !== undefined && high !== undefined && low > high) continue;
+    if (low !== undefined) bounds[`min_${dimension}`] = String(low);
+    if (high !== undefined) bounds[`max_${dimension}`] = String(high);
+  }
+  return bounds;
+}
+
+/**
+ * A Genie cohort replays its own thresholds and a Growth Agent handoff is
+ * signed for its filters: the server refuses a bound beside either, so the
+ * queue never sends one.
+ */
+export function leadBoundsBlocked(sp: URLSearchParams): boolean {
+  return Boolean(sp.get('cohort_id')?.trim())
+    || GROWTH_AGENT_PROOF_PARAMS.some((key) => Boolean(sp.get(key)?.trim()));
+}
+
 export function parsePortfolioCriteria(
   sp: URLSearchParams,
   allowedLenderRefs: readonly string[],
 ): Record<string, string> | undefined {
-  return sanitizePortfolioCriteria(
-    Object.fromEntries(PORTFOLIO_FILTER_KEYS.map((key) => [key, sp.get(key) ?? undefined])),
-    allowedLenderRefs,
-  );
+  const criteria = {
+    ...sanitizePortfolioCriteria(
+      Object.fromEntries(PORTFOLIO_FILTER_KEYS.map((key) => [key, sp.get(key) ?? undefined])),
+      allowedLenderRefs,
+    ),
+    ...(leadBoundsBlocked(sp)
+      ? {}
+      : sanitizeLeadBounds(Object.fromEntries(LEAD_BOUND_FILTER_KEYS.map((key) => [key, sp.get(key) ?? undefined])))),
+  };
+  return Object.keys(criteria).length > 0 ? criteria : undefined;
 }
 
 const PORTFOLIO_FILTER_LABELS: Record<string, string> = {
@@ -382,7 +446,12 @@ function leadQueueFilterParams(input: LeadQueueExportFiltersInput): URLSearchPar
     const value = safePortfolioCriteria?.[key];
     if (value) params.set(key, value);
   }
-  if (input.cohortId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.cohortId)) {
+  const bounds = input.cohortId ? {} : sanitizeLeadBounds(input.portfolioCriteria ?? {});
+  for (const key of LEAD_BOUND_FILTER_KEYS) {
+    const value = bounds[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  if (input.cohortId &&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.cohortId)) {
     params.set('cohort_id', input.cohortId);
   }
   return params;
@@ -417,7 +486,7 @@ export function isAssignedToMe(value: string | null | undefined): boolean {
 const KNOWN_QUEUE_PARAMS: readonly string[] = [
   'segment', 'segment_codes', 'segment_mode', 'state', 'zip', 'states', 'zips', 'cities',
   'borrower_ids', 'county', 'counties', 'approval_status', 'outreach_status', 'assigned_to',
-  'aged_days', 'funnel_stage', 'cohort_id', ...PORTFOLIO_FILTER_KEYS,
+  'aged_days', 'funnel_stage', 'cohort_id', ...PORTFOLIO_FILTER_KEYS, ...LEAD_BOUND_FILTER_KEYS,
   'sort', 'dir', 'row', 'view', 'campaign_id', 'variant_name', ...GROWTH_AGENT_PROOF_PARAMS,
 ];
 

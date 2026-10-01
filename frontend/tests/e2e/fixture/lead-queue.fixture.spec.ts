@@ -454,7 +454,8 @@ async function pointerPickTopVisibleState(page: Page, menu: Locator): Promise<{ 
     if (!option) throw new Error('no option in view');
     const box = option.getBoundingClientRect();
     return {
-      text: option.textContent?.trim() ?? '',
+      // The label only: an opened menu may add an aria-hidden option count (W5a).
+      text: option.firstChild?.textContent?.trim() ?? '',
       x: box.left + box.width / 2,
       y: box.top + box.height / 2,
       offset: box.top - top,

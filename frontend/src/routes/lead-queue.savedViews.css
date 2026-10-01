@@ -1,0 +1,52 @@
+/* ============================================================
+   SAVED VIEWS PANEL (W5a; audit tables-09 phase 2, flow-08 slice 1).
+   deviation:lead-queue-saved-views. The lazy panel's own sheet: it loads
+   with lead-queue.savedViews.tsx on the first open, never with the route
+   or the shell. A `.filter-menu` surface (design_files/index.html:822-838
+   pill family). Its surface and status line live in
+   lead-queue.filterTools.css, so the placeholder shown while this chunk
+   loads is already placed. Tokens only.
+   ============================================================ */
+.lead-queue-saved-views__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lead-queue-saved-views__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.lead-queue-saved-views__link {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+.lead-queue-saved-views__link:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+.lead-queue-saved-views__item .filter__remove[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: progress;
+}
+.lead-queue-saved-views__form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  padding-block-start: var(--sp-2);
+  border-block-start: 1px solid var(--line-1);
+}
+.lead-queue-saved-views__form .field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+}
+.lead-queue-saved-views__form .form-input { flex: none; inline-size: 100%; }
+.lead-queue-saved-views__form .btn { flex-shrink: 0; }

@@ -1,0 +1,80 @@
+/* ============================================================
+   LEAD QUEUE FILTER TOOLS (W5a; audit tables-06, tables-09 phase 2).
+   Loaded with the lazy lead-queue route chunk, never the shell. Tokens
+   only. Three surfaces, each named by its deviation token in
+   docs/prototype-deviations.md:
+     deviation:filter-menu-facet-counts   a count beside each option
+     deviation:lead-queue-range-filters   score / spread inputs
+     deviation:lead-queue-saved-views     the Saved views trigger
+   ============================================================ */
+
+/* Option counts: a quiet mono figure at the row's end, before the check. */
+.filter-menu__count {
+  margin-inline-start: auto;
+  padding-inline-start: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.filter-menu__count + svg { margin-inline-start: var(--sp-2); }
+.filter-menu__item.is-selected .filter-menu__count { color: inherit; }
+
+/* Score and rate-spread bounds: one wrapping row of labelled inputs at the
+   foot of the More filters panel. */
+.lead-queue-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-3) var(--sp-4);
+  flex-basis: 100%;
+}
+.lead-queue-range__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  inline-size: calc(var(--sp-16) * 3);
+  min-inline-size: 0;
+}
+.lead-queue-range__field .form-input { flex: none; inline-size: 100%; }
+.lead-queue-range__field .form-input:disabled { opacity: 0.6; cursor: not-allowed; }
+.lead-queue-range__hint { flex-basis: 100%; }
+
+/* Saved views trigger: a `.filter` pill in the presets row, anchoring its
+   panel. The short label keeps the row on one line where the hero is too
+   narrow for it (the queue's own narrow breakpoint, lead-queue.css); at
+   1440x900 the full label fits with the Console open or closed. */
+.lead-queue-views__saved-root { position: relative; flex-shrink: 0; }
+.lead-queue-views__saved { gap: var(--sp-1); }
+.lead-queue-views__saved-short { display: none; }
+@container main (max-width: 640px) {
+  .lead-queue-views__saved-long { display: none; }
+  .lead-queue-views__saved-short { display: inline; }
+}
+
+/* The Saved views panel surface: a `.filter-menu` anchored to the pill's
+   end edge (the presets row sits at the hero's right). Here, not in the
+   panel's lazy sheet, so the loading placeholder is placed too. */
+.filter-menu.lead-queue-saved-views {
+  left: auto;
+  right: 0;
+  inline-size: calc(var(--sp-16) * 5);
+  max-inline-size: calc(100vw - var(--sp-8));
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  text-align: start;
+  white-space: normal;
+}
+.lead-queue-saved-views__status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}

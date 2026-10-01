@@ -15,6 +15,12 @@ import type {
   SegmentCode,
 } from '../../../../src/types';
 import type { QueueVersionBody } from '../../../../src/lib/queueVersion';
+import type {
+  LeadCountResponse,
+  LeadFacetDimension,
+  LeadFacetsResponse,
+  SavedViewListResponse,
+} from '../../../../src/types/leadFilters';
 import type { ContractSample } from '../contractSamples';
 import { fixture, json, type FixtureEntry, type FixtureReply, type FixtureRequest } from '../mockApi';
 import { LEADS, borrowerById } from './borrowers';
@@ -124,6 +130,50 @@ function borrowerOr404<T>(borrowerId: string, build: (borrower: Borrower360) => 
   return json<T>(build(borrower));
 }
 
+const FACET_DIMENSIONS: readonly LeadFacetDimension[] = ['state', 'segment', 'product', 'approval'];
+/** The PRODUCT menu labels and the offer codes each counts (PORTFOLIO_PRODUCT_CODES). */
+const PRODUCT_FACETS: ReadonlyArray<readonly [label: string, codes: readonly string[]]> = [
+  ['Refi', ['refi', 'refi_plus_heloc']],
+  ['HELOC', ['heloc', 'refi_plus_heloc']],
+  ['Cash-out', ['cash_out']],
+  ['Purchase', ['purchase']],
+  ['Retention', ['retention']],
+];
+
+function tally(values: readonly string[]): Array<{ value: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return [...counts].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+}
+
+/**
+ * GET /api/leads/facets (W5a, audit tables-06), computed from the fixture
+ * population with every filter the client sent (it already dropped the
+ * dimension's own). Audit-free, like the real endpoint.
+ */
+export function leadFacets(query: URLSearchParams): FixtureReply<LeadFacetsResponse | NotFoundBody> {
+  const dimension = query.get('dimension') as LeadFacetDimension | null;
+  if (!dimension || !FACET_DIMENSIONS.includes(dimension)) {
+    return json<NotFoundBody>({ detail: 'dimension must be state, segment, product or approval' }, { status: 422 });
+  }
+  const leads = filterLeads(query);
+  if (dimension === 'state' || dimension === 'approval') {
+    const buckets = tally(leads.map((lead) => (dimension === 'state' ? lead.state : lead.approval_status ?? 'pending')));
+    return json<LeadFacetsResponse>({
+      dimension,
+      total_matching: buckets.reduce((sum, bucket) => sum + bucket.count, 0),
+      buckets,
+    });
+  }
+  const buckets = dimension === 'segment'
+    ? tally(leads.flatMap((lead) => lead.segment_codes))
+    : PRODUCT_FACETS.map(([label, codes]) => ({
+      value: label,
+      count: leads.filter((lead) => codes.includes(lead.recommended_offer_code ?? '')).length,
+    }));
+  return json<LeadFacetsResponse>({ dimension, total_matching: leads.length, buckets });
+}
+
 /**
  * The audit-free Lead Queue change signal (audit states-09): a constant
  * version by default, so the queue shows "Fetched …"; a spec that proves
@@ -148,6 +198,12 @@ export function contractSamples(): ContractSample[] {
 export const leadFixtures: FixtureEntry[] = [
   fixture('GET', '/api/leads', leadsPage),
   fixture('GET', '/api/workspace/queue-version', () => json<QueueVersionBody>(QUEUE_VERSION)),
+  // W5a: the audit-free aggregates and the (empty) saved views. A spec that
+  // saves or deletes a view registers its own handlers.
+  fixture('GET', '/api/leads/count', ({ query }) =>
+    json<LeadCountResponse>({ total_matching: totalMatching(query, filterLeads(query).length) })),
+  fixture('GET', '/api/leads/facets', ({ query }) => leadFacets(query)),
+  fixture('GET', '/api/workspace/saved-views', () => json<SavedViewListResponse>({ saved_views: [] })),
   fixture('GET', '/api/borrowers/search', ({ query }) => {
     const needle = (query.get('q') ?? '').trim().toLowerCase();
     const hits = LEADS.filter((lead) =>

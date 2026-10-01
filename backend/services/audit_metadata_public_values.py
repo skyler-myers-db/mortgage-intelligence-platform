@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from backend.schemas.common import (
+    PUBLIC_UUID_PATTERN,
     contains_pii_marker,
     validate_internal_staff_email,
     validate_public_audit_identifier_or_none,
@@ -79,6 +80,13 @@ _REVIEW_MODES: frozenset[str] = frozenset(
     {"individual", "triage", "bulk_sample", "bulk_cohort", "undeclared"}
 )
 _MAX_DRAFT_AGE_SECONDS = 315_360_000
+
+# (ceiling key, the reviewed floor whose range it shares). GET /leads records
+# its public max_* bounds on VIEW_LEADS beside the min_* floors.
+_PUBLIC_CEILING_FLOOR_TWINS: tuple[tuple[str, str], ...] = (
+    ("max_opportunity_score", "min_opportunity_score"),
+    ("max_rate_spread_bps", "min_rate_spread_bps"),
+)
 
 
 def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
@@ -328,6 +336,16 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                     field,
                     f"must be an integer {numeric_filter_range_text(numeric_field)}",
                 )
+    for ceiling_field, floor_twin in _PUBLIC_CEILING_FLOOR_TWINS:
+        # A public Lead Queue ceiling spans exactly its floor twin's range.
+        for field, ceiling in _metadata_values_for(metadata, {ceiling_field}):
+            if ceiling is None:
+                continue
+            if not is_reviewed_numeric_floor(floor_twin, ceiling):
+                raise AuditMetadataValueViolation(
+                    field,
+                    f"must be an integer {numeric_filter_range_text(floor_twin)}",
+                )
     for field, ttl_s in _metadata_values_for(metadata, {"ttl_s"}):
         if not isinstance(ttl_s, int) or isinstance(ttl_s, bool) or ttl_s < 0 or ttl_s > 300:
             raise AuditMetadataValueViolation(field, "must be an integer between 0 and 300")
@@ -486,6 +504,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     ):
         if value is not None and re.fullmatch(r"[0-9a-f]{64}", str(value)) is None:
             raise AuditMetadataValueViolation(field, "must be a SHA-256 hex digest")
+    for field, value in _metadata_values_for(metadata, {"saved_view_id"}):
+        if value is not None and PUBLIC_UUID_PATTERN.fullmatch(str(value)) is None:
+            raise AuditMetadataValueViolation(field, "must be a server-issued saved view id")
     for field, value in _metadata_values_for(metadata, {"workflow_id"}):
         if value is not None and str(value) not in _GROWTH_AGENT_WORKFLOWS:
             raise AuditMetadataValueViolation(field, "must be a governed growth-agent workflow id")

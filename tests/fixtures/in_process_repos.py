@@ -607,6 +607,8 @@ class InProcessMockLeadRepository:
         aged_days: int | None = None,
         min_opportunity_score: int | None = None,
         min_rate_spread_bps: float | None = None,
+        max_opportunity_score: int | None = None,
+        max_rate_spread_bps: float | None = None,
     ) -> list[LeadSummary]:
         _ = (portfolio_id, cohort_id)
         leads = [LeadSummary(**b.model_dump()) for b in mock_data.BORROWERS]
@@ -622,6 +624,16 @@ class InProcessMockLeadRepository:
                 for lead in leads
                 if lead.rate_spread_bps is not None
                 and lead.rate_spread_bps >= min_rate_spread_bps
+            ]
+        # The public Lead Queue ceilings (W5a): a NULL spread never matches.
+        if max_opportunity_score is not None:
+            leads = [lead for lead in leads if lead.opportunity_score <= max_opportunity_score]
+        if max_rate_spread_bps is not None:
+            leads = [
+                lead
+                for lead in leads
+                if lead.rate_spread_bps is not None
+                and lead.rate_spread_bps <= max_rate_spread_bps
             ]
         if approval_status:
             leads = [lead for lead in leads if lead.approval_status == approval_status]
@@ -735,6 +747,8 @@ class InProcessMockLeadRepository:
         aged_days: int | None = None,
         min_opportunity_score: int | None = None,
         min_rate_spread_bps: float | None = None,
+        max_opportunity_score: int | None = None,
+        max_rate_spread_bps: float | None = None,
     ) -> int:
         _ = limit
         return len(self.list(
@@ -760,6 +774,8 @@ class InProcessMockLeadRepository:
             aged_days=aged_days,
             min_opportunity_score=min_opportunity_score,
             min_rate_spread_bps=min_rate_spread_bps,
+            max_opportunity_score=max_opportunity_score,
+            max_rate_spread_bps=max_rate_spread_bps,
         ))
 
     def is_campaign_treatment_member(

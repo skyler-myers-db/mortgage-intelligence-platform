@@ -9793,6 +9793,22 @@
         "title": "LeadAssignment",
         "type": "object"
       },
+      "LeadCountResponse": {
+        "description": "The number of borrowers the Lead Queue filters match.",
+        "properties": {
+          "total_matching": {
+            "description": "Borrowers matching the filters, the same total GET /leads reports as X-Total-Matching.",
+            "minimum": 0.0,
+            "title": "Total Matching",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_matching"
+        ],
+        "title": "LeadCountResponse",
+        "type": "object"
+      },
       "LeadExportReceipt": {
         "description": "The ledger entry the download waits for.",
         "properties": {
@@ -9906,6 +9922,65 @@
           "borrower_ids_sha256"
         ],
         "title": "LeadExportReceiptRequest",
+        "type": "object"
+      },
+      "LeadFacetBucket": {
+        "description": "One option of a Lead Queue filter menu and how many borrowers it holds.",
+        "properties": {
+          "count": {
+            "description": "Borrowers matching every other filter and this option.",
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "value": {
+            "description": "A closed-vocabulary option: a USPS code, a segment code, a product label or an approval state.",
+            "maxLength": 32,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "count"
+        ],
+        "title": "LeadFacetBucket",
+        "type": "object"
+      },
+      "LeadFacetsResponse": {
+        "description": "Counts for one filter dimension, with that dimension's own filter dropped.",
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/LeadFacetBucket"
+            },
+            "maxItems": 64,
+            "title": "Buckets",
+            "type": "array"
+          },
+          "dimension": {
+            "enum": [
+              "state",
+              "segment",
+              "product",
+              "approval"
+            ],
+            "title": "Dimension",
+            "type": "string"
+          },
+          "total_matching": {
+            "description": "Borrowers matching every filter except this dimension's own.",
+            "minimum": 0.0,
+            "title": "Total Matching",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dimension",
+          "total_matching",
+          "buckets"
+        ],
+        "title": "LeadFacetsResponse",
         "type": "object"
       },
       "LeadOutcome": {
@@ -14475,6 +14550,118 @@
           "borrower_id"
         ],
         "title": "SavedLeadInput",
+        "type": "object"
+      },
+      "SavedView": {
+        "description": "One saved Lead Queue view the actor owns.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "description": "Canonical Lead Queue query string, without a leading question mark.",
+            "title": "Params",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "view_id": {
+            "description": "Server-issued view id (UUID).",
+            "title": "View Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view_id",
+          "name",
+          "params",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SavedView",
+        "type": "object"
+      },
+      "SavedViewCreateRequest": {
+        "additionalProperties": false,
+        "description": "POST /workspace/saved-views: name the current Lead Queue view.",
+        "properties": {
+          "name": {
+            "description": "A short label for the view, without personal details.",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "description": "The Lead Queue query string: its filters, sort and column preset only.",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Params",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "params"
+        ],
+        "title": "SavedViewCreateRequest",
+        "type": "object"
+      },
+      "SavedViewListResponse": {
+        "description": "The actor's saved Lead Queue views, most recently updated first.",
+        "properties": {
+          "saved_views": {
+            "items": {
+              "$ref": "#/components/schemas/SavedView"
+            },
+            "maxItems": 25,
+            "title": "Saved Views",
+            "type": "array"
+          }
+        },
+        "required": [
+          "saved_views"
+        ],
+        "title": "SavedViewListResponse",
+        "type": "object"
+      },
+      "SavedViewMutationResponse": {
+        "description": "What a save or a delete wrote, including its audit row.",
+        "properties": {
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "view_id": {
+            "title": "View Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "view_id"
+        ],
+        "title": "SavedViewMutationResponse",
         "type": "object"
       },
       "ScoreBucket": {
@@ -21957,6 +22144,86 @@
             }
           },
           {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          },
+          {
             "description": "Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N \u2014 refine filters'.",
             "in": "query",
             "name": "limit",
@@ -21998,6 +22265,769 @@
           }
         },
         "summary": "List Leads",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/leads/count": {
+      "get": {
+        "deprecated": true,
+        "description": "Audit-free total for the Lead Queue filters (wow-power-6, wow-power-2).\n\nThe same authorization preamble, filters, \"Eligible only\" default and\nshort-TTL repository cache as the ranked list's X-Total-Matching. No\nborrower is shown, so no VIEW_LEADS row is written and the audit store is\nnever resolved. A Growth Agent handoff binds ranked rows, so it is never\nread here.",
+        "operationId": "get_api_leads_count_count_leads",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "segment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
+          },
+          {
+            "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "portfolio_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Portfolio Id"
+            }
+          },
+          {
+            "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+              "title": "Zip"
+            }
+          },
+          {
+            "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+            "in": "query",
+            "name": "county",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+              "title": "County"
+            }
+          },
+          {
+            "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "zips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+              "title": "Zips"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "counties",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+              "title": "Counties"
+            }
+          },
+          {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
+            }
+          },
+          {
+            "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+            "in": "query",
+            "name": "borrower_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+              "title": "Borrower Ids"
+            }
+          },
+          {
+            "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder geography label to replay the built population.",
+            "in": "query",
+            "name": "geography",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder geography label to replay the built population.",
+              "title": "Geography"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder occupancy filter.",
+            "in": "query",
+            "name": "occupancy",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder occupancy filter.",
+              "title": "Occupancy"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lien-status filter.",
+            "in": "query",
+            "name": "lien_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lien-status filter.",
+              "title": "Lien Status"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lender-relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lender-relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder product filter.",
+            "in": "query",
+            "name": "product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder product filter.",
+              "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder display equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder display equity threshold.",
+              "title": "Min Equity Pct Label"
+            }
+          },
+          {
+            "description": "Optional numeric Portfolio Builder equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional numeric Portfolio Builder equity threshold.",
+              "title": "Min Equity Pct"
+            }
+          },
+          {
+            "description": "Optional owner-link bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "owner_link",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional owner-link bucket from Segment Intelligence.",
+              "title": "Owner Link"
+            }
+          },
+          {
+            "description": "Optional purchase-intent bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "purchase_intent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional purchase-intent bucket from Segment Intelligence.",
+              "title": "Purchase Intent"
+            }
+          },
+          {
+            "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+            "in": "query",
+            "name": "marketing_eligibility",
+            "required": false,
+            "schema": {
+              "default": "Eligible only",
+              "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+              "maxLength": 32,
+              "title": "Marketing Eligibility",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+            "in": "query",
+            "name": "consent_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+              "title": "Consent Status"
+            }
+          },
+          {
+            "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+            "in": "query",
+            "name": "recency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+              "title": "Recency"
+            }
+          },
+          {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Sales workflow approval state filter.",
+            "in": "query",
+            "name": "approval_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow approval state filter.",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "hold",
+                "any"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sales workflow outreach state filter.",
+            "in": "query",
+            "name": "outreach_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow outreach state filter.",
+              "enum": [
+                "none",
+                "queued",
+                "actioned",
+                "sent",
+                "bounced",
+                "replied",
+                "any"
+              ],
+              "title": "Outreach Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Internal LO email assigned to the lead.",
+            "in": "query",
+            "name": "assigned_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Internal LO email assigned to the lead.",
+              "title": "Assigned To"
+            }
+          },
+          {
+            "description": "Only approved leads aged at least this many days with no outreach.",
+            "in": "query",
+            "name": "aged_days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only approved leads aged at least this many days with no outreach.",
+              "title": "Aged Days"
+            }
+          },
+          {
+            "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+            "in": "query",
+            "name": "cohort_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+              "title": "Cohort Id"
+            }
+          },
+          {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Count Leads",
         "tags": [
           "leads"
         ]
@@ -22051,6 +23081,786 @@
           }
         },
         "summary": "Create Lead Export Receipt",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/leads/facets": {
+      "get": {
+        "deprecated": true,
+        "description": "Audit-free option counts for one Lead Queue filter menu (tables-06).\n\nThe dimension's own filter is dropped, every other filter resolves\nexactly as the ranked list resolves it, and the buckets are closed\nvocabularies. Fetched only when a user opens that menu.",
+        "operationId": "get_api_leads_facets_lead_facets",
+        "parameters": [
+          {
+            "description": "The filter menu to count: state, segment, product or approval.",
+            "in": "query",
+            "name": "dimension",
+            "required": true,
+            "schema": {
+              "description": "The filter menu to count: state, segment, product or approval.",
+              "enum": [
+                "state",
+                "segment",
+                "product",
+                "approval"
+              ],
+              "title": "Dimension",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "segment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
+          },
+          {
+            "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "portfolio_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Portfolio Id"
+            }
+          },
+          {
+            "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+              "title": "Zip"
+            }
+          },
+          {
+            "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+            "in": "query",
+            "name": "county",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+              "title": "County"
+            }
+          },
+          {
+            "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "zips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+              "title": "Zips"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "counties",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+              "title": "Counties"
+            }
+          },
+          {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
+            }
+          },
+          {
+            "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+            "in": "query",
+            "name": "borrower_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+              "title": "Borrower Ids"
+            }
+          },
+          {
+            "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder geography label to replay the built population.",
+            "in": "query",
+            "name": "geography",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder geography label to replay the built population.",
+              "title": "Geography"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder occupancy filter.",
+            "in": "query",
+            "name": "occupancy",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder occupancy filter.",
+              "title": "Occupancy"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lien-status filter.",
+            "in": "query",
+            "name": "lien_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lien-status filter.",
+              "title": "Lien Status"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lender-relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lender-relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder product filter.",
+            "in": "query",
+            "name": "product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder product filter.",
+              "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder display equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder display equity threshold.",
+              "title": "Min Equity Pct Label"
+            }
+          },
+          {
+            "description": "Optional numeric Portfolio Builder equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional numeric Portfolio Builder equity threshold.",
+              "title": "Min Equity Pct"
+            }
+          },
+          {
+            "description": "Optional owner-link bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "owner_link",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional owner-link bucket from Segment Intelligence.",
+              "title": "Owner Link"
+            }
+          },
+          {
+            "description": "Optional purchase-intent bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "purchase_intent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional purchase-intent bucket from Segment Intelligence.",
+              "title": "Purchase Intent"
+            }
+          },
+          {
+            "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+            "in": "query",
+            "name": "marketing_eligibility",
+            "required": false,
+            "schema": {
+              "default": "Eligible only",
+              "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+              "maxLength": 32,
+              "title": "Marketing Eligibility",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+            "in": "query",
+            "name": "consent_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+              "title": "Consent Status"
+            }
+          },
+          {
+            "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+            "in": "query",
+            "name": "recency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+              "title": "Recency"
+            }
+          },
+          {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Sales workflow approval state filter.",
+            "in": "query",
+            "name": "approval_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow approval state filter.",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "hold",
+                "any"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sales workflow outreach state filter.",
+            "in": "query",
+            "name": "outreach_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow outreach state filter.",
+              "enum": [
+                "none",
+                "queued",
+                "actioned",
+                "sent",
+                "bounced",
+                "replied",
+                "any"
+              ],
+              "title": "Outreach Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Internal LO email assigned to the lead.",
+            "in": "query",
+            "name": "assigned_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Internal LO email assigned to the lead.",
+              "title": "Assigned To"
+            }
+          },
+          {
+            "description": "Only approved leads aged at least this many days with no outreach.",
+            "in": "query",
+            "name": "aged_days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only approved leads aged at least this many days with no outreach.",
+              "title": "Aged Days"
+            }
+          },
+          {
+            "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+            "in": "query",
+            "name": "cohort_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+              "title": "Cohort Id"
+            }
+          },
+          {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadFacetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lead Facets",
         "tags": [
           "leads"
         ]
@@ -30200,6 +32010,86 @@
             }
           },
           {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          },
+          {
             "description": "Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N \u2014 refine filters'.",
             "in": "query",
             "name": "limit",
@@ -30241,6 +32131,768 @@
           }
         },
         "summary": "List Leads",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/v1/leads/count": {
+      "get": {
+        "description": "Audit-free total for the Lead Queue filters (wow-power-6, wow-power-2).\n\nThe same authorization preamble, filters, \"Eligible only\" default and\nshort-TTL repository cache as the ranked list's X-Total-Matching. No\nborrower is shown, so no VIEW_LEADS row is written and the audit store is\nnever resolved. A Growth Agent handoff binds ranked rows, so it is never\nread here.",
+        "operationId": "get_api_v1_leads_count_count_leads",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "segment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
+          },
+          {
+            "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "portfolio_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Portfolio Id"
+            }
+          },
+          {
+            "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+              "title": "Zip"
+            }
+          },
+          {
+            "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+            "in": "query",
+            "name": "county",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+              "title": "County"
+            }
+          },
+          {
+            "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "zips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+              "title": "Zips"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "counties",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+              "title": "Counties"
+            }
+          },
+          {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
+            }
+          },
+          {
+            "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+            "in": "query",
+            "name": "borrower_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+              "title": "Borrower Ids"
+            }
+          },
+          {
+            "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder geography label to replay the built population.",
+            "in": "query",
+            "name": "geography",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder geography label to replay the built population.",
+              "title": "Geography"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder occupancy filter.",
+            "in": "query",
+            "name": "occupancy",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder occupancy filter.",
+              "title": "Occupancy"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lien-status filter.",
+            "in": "query",
+            "name": "lien_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lien-status filter.",
+              "title": "Lien Status"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lender-relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lender-relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder product filter.",
+            "in": "query",
+            "name": "product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder product filter.",
+              "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder display equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder display equity threshold.",
+              "title": "Min Equity Pct Label"
+            }
+          },
+          {
+            "description": "Optional numeric Portfolio Builder equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional numeric Portfolio Builder equity threshold.",
+              "title": "Min Equity Pct"
+            }
+          },
+          {
+            "description": "Optional owner-link bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "owner_link",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional owner-link bucket from Segment Intelligence.",
+              "title": "Owner Link"
+            }
+          },
+          {
+            "description": "Optional purchase-intent bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "purchase_intent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional purchase-intent bucket from Segment Intelligence.",
+              "title": "Purchase Intent"
+            }
+          },
+          {
+            "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+            "in": "query",
+            "name": "marketing_eligibility",
+            "required": false,
+            "schema": {
+              "default": "Eligible only",
+              "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+              "maxLength": 32,
+              "title": "Marketing Eligibility",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+            "in": "query",
+            "name": "consent_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+              "title": "Consent Status"
+            }
+          },
+          {
+            "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+            "in": "query",
+            "name": "recency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+              "title": "Recency"
+            }
+          },
+          {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Sales workflow approval state filter.",
+            "in": "query",
+            "name": "approval_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow approval state filter.",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "hold",
+                "any"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sales workflow outreach state filter.",
+            "in": "query",
+            "name": "outreach_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow outreach state filter.",
+              "enum": [
+                "none",
+                "queued",
+                "actioned",
+                "sent",
+                "bounced",
+                "replied",
+                "any"
+              ],
+              "title": "Outreach Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Internal LO email assigned to the lead.",
+            "in": "query",
+            "name": "assigned_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Internal LO email assigned to the lead.",
+              "title": "Assigned To"
+            }
+          },
+          {
+            "description": "Only approved leads aged at least this many days with no outreach.",
+            "in": "query",
+            "name": "aged_days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only approved leads aged at least this many days with no outreach.",
+              "title": "Aged Days"
+            }
+          },
+          {
+            "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+            "in": "query",
+            "name": "cohort_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+              "title": "Cohort Id"
+            }
+          },
+          {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Count Leads",
         "tags": [
           "leads"
         ]
@@ -30293,6 +32945,785 @@
           }
         },
         "summary": "Create Lead Export Receipt",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/v1/leads/facets": {
+      "get": {
+        "description": "Audit-free option counts for one Lead Queue filter menu (tables-06).\n\nThe dimension's own filter is dropped, every other filter resolves\nexactly as the ranked list resolves it, and the buckets are closed\nvocabularies. Fetched only when a user opens that menu.",
+        "operationId": "get_api_v1_leads_facets_lead_facets",
+        "parameters": [
+          {
+            "description": "The filter menu to count: state, segment, product or approval.",
+            "in": "query",
+            "name": "dimension",
+            "required": true,
+            "schema": {
+              "description": "The filter menu to count: state, segment, product or approval.",
+              "enum": [
+                "state",
+                "segment",
+                "product",
+                "approval"
+              ],
+              "title": "Dimension",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "segment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
+          },
+          {
+            "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "portfolio_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Portfolio Id"
+            }
+          },
+          {
+            "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+              "title": "Zip"
+            }
+          },
+          {
+            "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+            "in": "query",
+            "name": "county",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+              "title": "County"
+            }
+          },
+          {
+            "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "zips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+              "title": "Zips"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "counties",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+              "title": "Counties"
+            }
+          },
+          {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
+            }
+          },
+          {
+            "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+            "in": "query",
+            "name": "borrower_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+              "title": "Borrower Ids"
+            }
+          },
+          {
+            "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder geography label to replay the built population.",
+            "in": "query",
+            "name": "geography",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder geography label to replay the built population.",
+              "title": "Geography"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder occupancy filter.",
+            "in": "query",
+            "name": "occupancy",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder occupancy filter.",
+              "title": "Occupancy"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lien-status filter.",
+            "in": "query",
+            "name": "lien_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lien-status filter.",
+              "title": "Lien Status"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lender-relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lender-relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder product filter.",
+            "in": "query",
+            "name": "product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder product filter.",
+              "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder display equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder display equity threshold.",
+              "title": "Min Equity Pct Label"
+            }
+          },
+          {
+            "description": "Optional numeric Portfolio Builder equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional numeric Portfolio Builder equity threshold.",
+              "title": "Min Equity Pct"
+            }
+          },
+          {
+            "description": "Optional owner-link bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "owner_link",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional owner-link bucket from Segment Intelligence.",
+              "title": "Owner Link"
+            }
+          },
+          {
+            "description": "Optional purchase-intent bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "purchase_intent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional purchase-intent bucket from Segment Intelligence.",
+              "title": "Purchase Intent"
+            }
+          },
+          {
+            "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+            "in": "query",
+            "name": "marketing_eligibility",
+            "required": false,
+            "schema": {
+              "default": "Eligible only",
+              "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+              "maxLength": 32,
+              "title": "Marketing Eligibility",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+            "in": "query",
+            "name": "consent_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+              "title": "Consent Status"
+            }
+          },
+          {
+            "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+            "in": "query",
+            "name": "recency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+              "title": "Recency"
+            }
+          },
+          {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Sales workflow approval state filter.",
+            "in": "query",
+            "name": "approval_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow approval state filter.",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "hold",
+                "any"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sales workflow outreach state filter.",
+            "in": "query",
+            "name": "outreach_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow outreach state filter.",
+              "enum": [
+                "none",
+                "queued",
+                "actioned",
+                "sent",
+                "bounced",
+                "replied",
+                "any"
+              ],
+              "title": "Outreach Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Internal LO email assigned to the lead.",
+            "in": "query",
+            "name": "assigned_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Internal LO email assigned to the lead.",
+              "title": "Assigned To"
+            }
+          },
+          {
+            "description": "Only approved leads aged at least this many days with no outreach.",
+            "in": "query",
+            "name": "aged_days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only approved leads aged at least this many days with no outreach.",
+              "title": "Aged Days"
+            }
+          },
+          {
+            "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+            "in": "query",
+            "name": "cohort_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+              "title": "Cohort Id"
+            }
+          },
+          {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadFacetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lead Facets",
         "tags": [
           "leads"
         ]
@@ -32479,6 +35910,122 @@
         ]
       }
     },
+    "/api/v1/workspace/saved-views": {
+      "get": {
+        "description": "The actor's saved Lead Queue views (tables-09 phase 2). Audit-free.\n\nFetched only when the Lead Queue's Saved views panel is first opened, and\nserved apart from WorkspaceState so the workspace read stays unchanged.",
+        "operationId": "get_api_v1_workspace_saved_views_list_saved_views",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Saved Views",
+        "tags": [
+          "workspace"
+        ]
+      },
+      "post": {
+        "description": "Name the current Lead Queue view; writes SAVE_QUEUE_VIEW in the same statement.",
+        "operationId": "post_api_v1_workspace_saved_views_create_saved_view",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Saved View",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/v1/workspace/saved-views/{view_id}": {
+      "delete": {
+        "description": "Soft-delete one of the actor's views; writes DELETE_QUEUE_VIEW in the same statement.\n\n404 when the view is absent, already deleted, or another actor's: the\nanswer never confirms that someone else's view exists.",
+        "operationId": "delete_api_v1_workspace_saved_views_view_id_delete_saved_view",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "view_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "View Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Saved View",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/api/workspace": {
       "get": {
         "deprecated": true,
@@ -32742,6 +36289,125 @@
           }
         },
         "summary": "Read Queue Version",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/saved-views": {
+      "get": {
+        "deprecated": true,
+        "description": "The actor's saved Lead Queue views (tables-09 phase 2). Audit-free.\n\nFetched only when the Lead Queue's Saved views panel is first opened, and\nserved apart from WorkspaceState so the workspace read stays unchanged.",
+        "operationId": "get_api_workspace_saved_views_list_saved_views",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Saved Views",
+        "tags": [
+          "workspace"
+        ]
+      },
+      "post": {
+        "deprecated": true,
+        "description": "Name the current Lead Queue view; writes SAVE_QUEUE_VIEW in the same statement.",
+        "operationId": "post_api_workspace_saved_views_create_saved_view",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Saved View",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/saved-views/{view_id}": {
+      "delete": {
+        "deprecated": true,
+        "description": "Soft-delete one of the actor's views; writes DELETE_QUEUE_VIEW in the same statement.\n\n404 when the view is absent, already deleted, or another actor's: the\nanswer never confirms that someone else's view exists.",
+        "operationId": "delete_api_workspace_saved_views_view_id_delete_saved_view",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "view_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "View Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Saved View",
         "tags": [
           "workspace"
         ]
