@@ -458,6 +458,26 @@ def test_a_local_api_path_url_binds_its_cast(tmp_path: Path) -> None:
     assert all(s.bound and s.operation == "GET /api/v1/health" for s in sites), [s.errors for s in sites]
 
 
+def test_a_schema_name_binds_alone_only_from_a_coverage_file(tmp_path: Path) -> None:
+    module = (
+        "import type { Borrower360 as Covered } from './types';\n"
+        "interface Borrower360 { phantom: string }\n"
+        "export const api = {\n"
+        "  local: (id: string) => getJson<Borrower360>(`/api/borrowers/${id}`),\n"
+        "  covered: (id: string) => getJson<Covered>(`/api/borrowers/${id}`),\n"
+        "};\n"
+    )
+    project = _tree(tmp_path, {"route.ts": module, "types.ts": TYPES_MODULE})
+
+    sites = wire_raw.find_sites(project, OPS, [tmp_path / "route.ts"])
+    wire.bind_sites(project, sites, OPS, [])
+    by_name = {site.name: site for site in sites}
+
+    assert by_name["covered"].bound
+    assert not by_name["local"].bound
+    assert "is not bound to GET /api/v1/borrowers/{borrower_id}" in by_name["local"].errors[0]
+
+
 def test_site_keys_name_the_enclosing_property_with_an_ordinal(planted: dict[str, wire.Site]) -> None:
     assert planted["borrower:transport"].key.endswith("client.ts:borrower:1")
     assert planted["annotated:cast"].key.endswith("client.ts:annotated:2")

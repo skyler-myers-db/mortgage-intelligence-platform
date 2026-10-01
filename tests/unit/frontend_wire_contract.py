@@ -614,6 +614,7 @@ def bind_sites(
 ) -> None:
     """Append a binding error to every site whose type arguments are not bound."""
 
+    covered = covered_declarations(project)
     index: dict[tuple[str, tuple[str, str]], set[tuple[str, str]]] = {}
     for pair in pairs:
         index.setdefault((pair.side, pair.hand), set()).add((pair.wire, pair.key))
@@ -629,11 +630,11 @@ def bind_sites(
                 site.errors.append(f"expected {expected} type argument(s), found {len(site.type_args)}")
                 continue
         response = site.type_args[0]
-        error = _bind_response(project, path, response, op, index)
+        error = _bind_response(project, path, response, op, index, covered)
         if error:
             site.errors.append(error)
         if site.kind == "transport" and site.helper in BODY_HELPERS:
-            error = _bind_body(project, path, site.type_args[1], op, index)
+            error = _bind_body(project, path, site.type_args[1], op, index, covered)
             if error:
                 site.errors.append(error)
 
@@ -654,13 +655,14 @@ def _bind_response(
     arg: str,
     op: Operation,
     index: dict[tuple[str, tuple[str, str]], set[tuple[str, str]]],
+    covered: set[tuple[str, str]],
 ) -> str | None:
     found = _declared(project, path, arg)
     if isinstance(found, str):
         return f"T: {found}"
     hand, is_array = found
     single = op.single_ok()
-    if single is not None and single == (hand[1], is_array):
+    if single is not None and single == (hand[1], is_array) and hand in covered:
         return None
     paired = index.get(("response", hand), set())
     if not is_array and ("ApiOk", op.key) in paired:
@@ -676,6 +678,7 @@ def _bind_body(
     arg: str,
     op: Operation,
     index: dict[tuple[str, tuple[str, str]], set[tuple[str, str]]],
+    covered: set[tuple[str, str]],
 ) -> str | None:
     found = _declared(project, path, arg)
     if isinstance(found, str):
@@ -684,7 +687,7 @@ def _bind_body(
     body = op.single_body()
     if is_array:
         return f"B: {arg} is an array"
-    if body is not None and body == hand[1]:
+    if body is not None and body == hand[1] and hand in covered:
         return None
     paired = index.get(("request", hand), set())
     if ("ApiBody", op.key) in paired or (body is not None and ("ApiRequest", body) in paired):
@@ -706,6 +709,22 @@ def coverage_files(src: Path = SRC) -> list[Path]:
         for path in files
         if path.name != "api.gen.ts" and ".check." not in path.name and ".test." not in path.name
     ]
+
+
+def covered_declarations(project: Project) -> set[tuple[str, str]]:
+    """(module rel, name) of every exported type in a coverage file.
+
+    Only these may bind by name alone: test (1) gives each schema-named one a
+    pair, so a same-named local interface elsewhere (a route) still needs one.
+    """
+
+    return {
+        (rel_path(path), name)
+        for path in coverage_files(project.src)
+        if path.is_file()
+        for name, exported in project.module(path).declarations().items()
+        if exported
+    }
 
 
 def schema_named(project: Project, responses: set[str], requests: set[str]) -> list[tuple[str, str, str]]:
