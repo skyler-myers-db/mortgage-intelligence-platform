@@ -42,6 +42,17 @@ regexes = [
   # NAME, not a credential; the hyphenated-versioned string trips the
   # generic-api-key entropy heuristic.
   '''mip-genie-conversation-v\d+''',
+  # Opaque browser actor discriminator (backend/services/actor_identity.py
+  # actor_cache_key): `actor_` + 16 hex chars of an HMAC over the forwarded
+  # identity under a per-process secret. It is served in the /health and
+  # /session response bodies so the browser can scope its storage; it is a
+  # one-way bucket id, not a credential, and grants nothing on its own.
+  # tests/unit/test_actor_identity.py pins one as its golden key.
+  '''^actor_[0-9a-f]{16}$''',
+  # The fixed golden-key fixture secret tests/unit/test_actor_identity.py
+  # must use to pin actor_cache_key's derivation byte for byte. A test-only
+  # literal that never configures any running process.
+  '''^test-secret-0123456789abcdef$''',
 ]
 
 # Paths where noisy-but-safe strings live. The design_files/ prototypes
