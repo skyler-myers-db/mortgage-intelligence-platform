@@ -14,8 +14,8 @@
  *
  * The pinned-focus guard (WebKit 26, manual check 2026-09-30): a focus on a
  * control in the pinned Approval column must not leave the table scrolled
- * to its end. The engine's scroll and its scroll events are emulated here
- * (happy-dom has no layout), on either side of the focus events; the
+ * to its end. The engine's scroll is emulated here (happy-dom has no
+ * layout), on either side of the focus events; the
  * rendered proof in both engines is
  * approval-core-pinned-focus.cross-engine.fixture.spec.ts, and the
  * lead-queue.fixture.spec.ts ZERO_PIN_MARGIN twin in Chromium.
@@ -209,18 +209,81 @@ describe('useTableScrollClearance', () => {
       expect(wrap().scrollLeft).toBe(100);
     });
 
-    it('an engine that scrolls before the focus events (Chromium without the margin): the recorded offset wins', async () => {
+    it('a script scroll whose scroll event has not landed yet is the offset kept, never an older recorded one (Linux CI)', async () => {
       mountPinned();
-      wrap().scrollLeft = 40;
-      wrap().dispatchEvent(new Event('scroll'));
+      // W5a CI, Linux WebKit and Chromium: scrollLeft set, no scroll event
+      // dispatched before the focus, and the engine does not scroll at all.
+      wrap().scrollLeft = 142;
       act(() => {
-        // The reveal lands first; its scroll event would come a frame later.
-        wrap().scrollLeft = 284;
         button('approve').dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
       });
-      expect(wrap().scrollLeft, 'the engine scrolled').toBe(284);
       await flushMicrotasks();
-      expect(wrap().scrollLeft).toBe(40);
+      act(() => frames.shift()?.(0));
+      expect(wrap().scrollLeft, 'the guard never moves the table itself').toBe(142);
+    });
+
+    it('a press long before the focus is not its offset: the focus-time offset is', async () => {
+      mountPinned();
+      wrap().scrollLeft = 30;
+      const stale = new PointerEvent('pointerdown', { bubbles: true });
+      Object.defineProperty(stale, 'timeStamp', { value: 0 });
+      button('approve').dispatchEvent(stale);
+      wrap().scrollLeft = 142;
+      const focus = new FocusEvent('focusin', { bubbles: true });
+      Object.defineProperty(focus, 'timeStamp', { value: 5_000 });
+      act(() => {
+        button('approve').dispatchEvent(focus);
+      });
+      await flushMicrotasks();
+      act(() => frames.shift()?.(0));
+      expect(wrap().scrollLeft).toBe(142);
+    });
+
+    it('a reveal that lands after the frame is restored on its scroll event; a wheel in between ends the watch', async () => {
+      mountPinned();
+      wrap().scrollLeft = 60;
+      act(() => {
+        button('approve').dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      });
+      await flushMicrotasks();
+      act(() => frames.shift()?.(0));
+      // WebKit's late reveal, then its scroll event.
+      wrap().scrollLeft = 284;
+      act(() => {
+        wrap().dispatchEvent(new Event('scroll'));
+      });
+      expect(wrap().scrollLeft).toBe(60);
+
+      act(() => {
+        button('approve').dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      });
+      await flushMicrotasks();
+      act(() => frames.shift()?.(0));
+      act(() => {
+        wrap().dispatchEvent(new WheelEvent('wheel', { bubbles: true }));
+      });
+      wrap().scrollLeft = 200;
+      act(() => {
+        wrap().dispatchEvent(new Event('scroll'));
+      });
+      expect(wrap().scrollLeft, 'the reader\'s own scroll stands').toBe(200);
+    });
+
+    it('the watch ends a frame after the restore frame: a later script scroll stands', async () => {
+      mountPinned();
+      wrap().scrollLeft = 142;
+      act(() => {
+        button('approve').dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      });
+      await flushMicrotasks();
+      act(() => frames.shift()?.(0));
+      act(() => frames.shift()?.(0));
+      // The next check's own script scroll (the CI walks): never put back.
+      wrap().scrollLeft = 0;
+      act(() => {
+        wrap().dispatchEvent(new Event('scroll'));
+      });
+      expect(wrap().scrollLeft).toBe(0);
     });
 
     it('keeps the engine scroll when the control would not be fully in view at the restored offset', async () => {

@@ -666,7 +666,7 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
     expect(idInView, 'the row\'s borrower id is still inside the scrollport').toBe(true);
   });
 
-  test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end, and the guard puts it back', async ({ app, mockApi, page }) => {
+  test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end (the margin is what keeps Chromium still)', async ({ app, mockApi, page }) => {
     registerQueueLayoutLeads(mockApi);
     await app.gotoRoute('/lead-queue');
     await app.openConsole();
@@ -687,7 +687,11 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
         return { synchronous, settled: wrap.scrollLeft };
       });
       expect(offsets.synchronous, 'the scroller\'s inline-end padding "reveals" a control already in view').toBeGreaterThan(overflow - 2);
-      expect(offsets.settled, 'the pinned-focus guard restored the offset').toBeLessThanOrEqual(1);
+      // Chromium reveals inside focus(), before the focus events, so the
+      // pinned-focus guard (which keeps the focus-time offset, never a
+      // recorded one: stale on Linux) leaves this scroll: the margin, not
+      // the guard, is Chromium's protection.
+      expect(offsets.settled, 'the scroll stands without the margin').toBeGreaterThan(overflow - 2);
     }
   });
 

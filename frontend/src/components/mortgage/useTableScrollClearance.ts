@@ -14,6 +14,9 @@ function fullyInside(control: Element, wrap: HTMLElement): boolean {
   return box.left >= left - 1 && box.right <= left + wrap.clientWidth + 1;
 }
 
+/** How long a key or pointer press stays the offset of the focus it causes. */
+const PRESS_WINDOW_MS = 500;
+
 /**
  * WebKit 26 scrolls `.tbl-wrap` to its inline end when a control in the
  * pinned Approval column takes focus (element.focus() moved scrollLeft
@@ -22,52 +25,79 @@ function fullyInside(control: Element, wrap: HTMLElement): boolean {
  * id then slid out of sight. Chromium does not while LeadTable.css's
  * scroll-margin holds, so there this is a no-op.
  *
- * The scroller's offset is recorded when it attaches, on its passive scroll
- * events (which an engine dispatches in a later frame, so a reveal scroll
- * made during a focus is not recorded yet when the focus events run) and on
- * a key or pointer press inside it (capture), which precede a focus the
- * reader causes. On a focusin inside the pinned cell, that recorded offset
- * is the one before the focus, on either side of the focus events the
- * engine scrolls: WebKit scrolls after them, Chromium (with the margin
- * gone) before them. It is restored twice: in a microtask (a programmatic
- * focus() has scrolled by the time its caller's task ends) and in the next
- * animation frame (a Tab or a click focus scrolls after the focus events).
- * Each restore runs only if the offset moved, and is kept only if the
- * control is still fully inside the scrollport at the restored offset;
- * otherwise the engine's scroll stands. A horizontal scroll made by script
- * in the same frame as a pinned focus, with no scroll event or press
- * between, would be undone; nothing in the app scrolls the table
- * horizontally. No style is written; the listeners go with the table
+ * The offset to keep is the one the reader had before the focus: the offset
+ * at a key or pointer press inside the table (capture) within the last
+ * PRESS_WINDOW_MS, which precedes a focus the reader causes even when an
+ * engine reveals before the focus events; otherwise the offset at the
+ * focusin itself, because WebKit reveals after the focus events. It is never
+ * an offset recorded from scroll events: the W5a integration's CI run showed
+ * Linux WebKit and Chromium dispatch a script scroll's event after a focus
+ * made two frames later, so a recorded offset could be stale, and the guard
+ * then moved the table itself (scrollLeft 142 -> 0, no engine scroll at all).
+ *
+ * It is restored in a microtask (a programmatic focus() has scrolled by the
+ * time its caller's task ends), in the next animation frame (a Tab or a
+ * click focus scrolls after the focus events) and on the first scroll event
+ * up to the frame after that one (WebKit's reveal can land after the restore
+ * frame); a key or pointer press, a wheel or a touch in between is the
+ * reader moving the table, and ends the watch, as does the frame after.
+ * Each restore runs only
+ * if the offset moved, and is kept only if the control is still fully
+ * inside the scrollport at the restored offset; otherwise the engine's
+ * scroll stands. No style is written; the listeners go with the table
  * (attached from useTableScrollClearance's effect).
  *
  * @returns the detach.
  */
 function guardPinnedFocusScroll(wrap: HTMLElement): () => void {
-  let last = wrap.scrollLeft;
+  let pressed: { at: number; offset: number } | null = null;
+  let watching: { control: Element; before: number } | null = null;
   let frame = 0;
-  const record = () => {
-    last = wrap.scrollLeft;
+  const onPress = (event: Event) => {
+    watching = null;
+    pressed = { at: event.timeStamp, offset: wrap.scrollLeft };
+  };
+  const onIntent = () => {
+    watching = null;
   };
   const restore = (control: Element, before: number) => {
     const moved = wrap.scrollLeft;
     if (Math.abs(moved - before) <= 1) return;
     wrap.scrollLeft = before;
     if (!fullyInside(control, wrap)) wrap.scrollLeft = moved;
-    record();
+  };
+  const onScroll = () => {
+    const watch = watching;
+    if (!watch) return;
+    watching = null;
+    restore(watch.control, watch.before);
   };
   const onFocusIn = (event: Event) => {
     const control = event.target instanceof Element ? event.target : null;
+    const press = pressed;
+    pressed = null;
+    watching = null;
     if (!control?.closest(PINNED_CELL)) return;
-    const before = last;
+    const before = press && event.timeStamp - press.at <= PRESS_WINDOW_MS ? press.offset : wrap.scrollLeft;
+    const watch = { control, before };
+    watching = watch;
     queueMicrotask(() => restore(control, before));
     window.cancelAnimationFrame(frame);
-    frame = window.requestAnimationFrame(() => restore(control, before));
+    frame = window.requestAnimationFrame(() => {
+      restore(control, before);
+      // The reveal's scroll event lands by the next frame at the latest.
+      window.requestAnimationFrame(() => {
+        if (watching === watch) watching = null;
+      });
+    });
   };
-  // [type, listener, capture]; the scroll listener is passive.
+  // [type, listener, capture]; all passive.
   const listeners: Array<[string, (event: Event) => void, boolean]> = [
-    ['scroll', record, false],
-    ['keydown', record, true],
-    ['pointerdown', record, true],
+    ['keydown', onPress, true],
+    ['pointerdown', onPress, true],
+    ['wheel', onIntent, true],
+    ['touchstart', onIntent, true],
+    ['scroll', onScroll, false],
     ['focusin', onFocusIn, false],
   ];
   for (const [type, listener, capture] of listeners) wrap.addEventListener(type, listener, { capture, passive: true });
