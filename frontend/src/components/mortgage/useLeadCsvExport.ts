@@ -122,7 +122,7 @@ export function useLeadCsvExport() {
   }, [state, noticeHeld]);
 
   async function exportCsv({
-    plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount = plan.rows.length,
+    plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount,
   }: LeadCsvExportRequest): Promise<void> {
     if (inflight.current || plan.rows.length === 0) return;
     // Placeholder rows belong to the previous filters: never declare them
@@ -151,7 +151,7 @@ export function useLeadCsvExport() {
         rowCount: plan.rows.length,
         notice: describeLeadCsvExport(plan, rowOrder),
         receipt,
-        truncatedOf: loadedExportTruncatedOf(plan.scope, matching, loadedCount),
+        truncatedOf: loadedExportTruncatedOf(plan.scope, matching, loadedCount ?? plan.rows.length),
       });
     } catch (error) {
       if (isAbortError(error)) {
