@@ -912,6 +912,12 @@ export interface ResponseSchemas {
     outcome: "cancelled" | "recorded" | "ended";
     status: ResponseSchemas['GenieJobStatus'];
   };
+  /** How many of the shipped prose's figures were verified, and which. */
+  GenieClaimsSummary: {
+    items: ResponseSchemas['GenieVerifiedClaim'][];
+    total: number;
+    verified: number;
+  };
   /**
    * Where the governed completion of one live Genie turn is (audit genie-01).
    *
@@ -927,6 +933,14 @@ export interface ResponseSchemas {
    * before its governed record existed. ``typical_seconds`` (audit genie-01)
    * is the recent median completion time of this job's class (deep or
    * single), only while the job still runs and only with enough samples.
+   *
+   * Verified sections (audit genie-01 phase 1b), only while the job runs and
+   * no cancel was requested: ``verified_sections`` counts the deep sweep's
+   * sub-analyses that passed their own checks so far, ``sections_rev`` is
+   * their revision, and ``revealed_sections`` carries them, in plan order,
+   * once the count reaches the sweep's three-section floor and only when
+   * the revision differs from the one the poll sent. Each was audited before
+   * it was stored; none carries actions. A terminal job never carries them.
    */
   GenieCompletionJobStatus: {
     error_hint: string | null;
@@ -936,11 +950,14 @@ export interface ResponseSchemas {
     parts_done: number | null;
     parts_planned: number | null;
     response: ResponseSchemas['GenieMessageResponse'] | null;
+    revealed_sections: ResponseSchemas['GenieAnswerSection'][] | null;
+    sections_rev: number | null;
     stage: ResponseSchemas['GenieJobStage'];
     stage_label: string;
     status: ResponseSchemas['GenieJobStatus'];
     terminal: boolean;
     typical_seconds: number | null;
+    verified_sections: number | null;
   };
   GenieDataFreshness: {
     asset: string;
@@ -1015,6 +1032,7 @@ export interface ResponseSchemas {
     terminal: boolean;
   };
   GenieProof: {
+    claims: ResponseSchemas['GenieClaimsSummary'] | null;
     conversation_id: string | null;
     data_freshness: ResponseSchemas['GenieDataFreshness'][];
     elapsed_ms: number | null;
@@ -1087,6 +1105,21 @@ export interface ResponseSchemas {
     progress_token: string | null;
     question_hash: string | null;
     response: ResponseSchemas['GenieMessageResponse'] | null;
+  };
+  /**
+   * One figure in the shipped prose that the claims verifier proved against
+   * the returned rows (audit genie-10 phase 1). ``derivation`` says how: a
+   * value a reader can find in one returned cell, a figure derived from the
+   * rows (a total, average, share or change), or a stated threshold the
+   * returned values satisfy. ``section`` names the deep-research section the
+   * figure belongs to; None is the summary or a single-turn answer. An
+   * unsupported figure is never listed: its prose is withheld instead.
+   */
+  GenieVerifiedClaim: {
+    derivation: "returned_value" | "derived_from_rows" | "bound";
+    kind: "currency" | "percent" | "bps" | "number";
+    section: string | null;
+    token: string;
   };
   GenieVisualizationSpec: {
     kind: string;
@@ -2463,7 +2496,8 @@ export interface RequestSchemas {
    *
    * ``question`` is hash-checked against the progress token exactly as on
    * complete, and is how the answer gets its question back: the stored job
-   * result never holds it.
+   * result never holds it. ``sections_rev`` is the revision of the verified
+   * sections the poller already holds; the same revision is not re-sent.
    */
   GenieCompletionJobStatusRequest: {
     conversation_id: string;
@@ -2471,6 +2505,7 @@ export interface RequestSchemas {
     message_id: string;
     progress_token: string;
     question: string;
+    sections_rev?: number | null;
   };
   GenieFeedbackRequest: {
     comment?: string | null;
