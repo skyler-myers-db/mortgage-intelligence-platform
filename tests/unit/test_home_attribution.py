@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -282,6 +283,22 @@ def test_a_future_or_too_old_baseline_is_a_422(days: int) -> None:
     response = TestClient(app).get(f"/api/v1/home/summary/attribution?measure=high_opportunity&baseline={baseline}")
     assert response.status_code == 422
     assert response.json()["detail"] == home_api.ATTRIBUTION_BASELINE_DETAIL
+
+
+def test_the_client_attaches_the_explainer_only_inside_the_route_lookback() -> None:
+    """The Home drawer source skips a baseline the route would 422 (lib/deltaExplainerSource.ts)."""
+    source = (Path(__file__).resolve().parents[2] / "frontend/src/lib/deltaExplainerSource.ts").read_text()
+    match = re.search(r"export const DELTA_EXPLAINER_MAX_LOOKBACK_DAYS = (\d+);", source)
+    assert match, "frontend/src/lib/deltaExplainerSource.ts declares DELTA_EXPLAINER_MAX_LOOKBACK_DAYS"
+    assert int(match.group(1)) == home_api.ATTRIBUTION_MAX_LOOKBACK_DAYS
+
+
+@pytest.mark.parametrize("days", [0, 400])
+def test_a_baseline_inside_the_lookback_is_answered(days: int) -> None:
+    _install(_service(_FakeSql()))
+    baseline = (datetime.now(UTC).date() - timedelta(days=days)).isoformat()
+    response = TestClient(app).get(f"/api/v1/home/summary/attribution?measure=high_opportunity&baseline={baseline}")
+    assert response.status_code == 200
 
 
 def test_an_unknown_measure_is_a_422() -> None:
