@@ -54,12 +54,15 @@ def _series_block() -> str:
     return _SCHEMA[start : _SCHEMA.index(end_marker, start) + len(end_marker)]
 
 
-def test_the_series_block_is_the_last_block_and_is_versioned_once() -> None:
+def test_the_series_block_is_versioned_once_and_closes_on_its_own_version_row() -> None:
     block = _series_block()
     assert _SCHEMA.count(_MARKER) == 1
     assert block.count("INSERT INTO mip_app.schema_migrations") == 1
-    assert "'2026_10_01_growth_agent_watchlist_series'" in block
-    assert block.rstrip().endswith("ON CONFLICT (version) DO NOTHING;")
+    # The block's last statement is ITS version row, so the bound above never
+    # stops at another block's ON CONFLICT row or swallows a later block.
+    statements = [s.strip() for s in re.sub(r"--[^\n]*", "", block).split(";") if s.strip()]
+    assert statements[-1].startswith("INSERT INTO mip_app.schema_migrations")
+    assert "'2026_10_01_growth_agent_watchlist_series'" in statements[-1]
 
 
 def test_the_series_block_never_updates_a_run_and_adds_no_object() -> None:
