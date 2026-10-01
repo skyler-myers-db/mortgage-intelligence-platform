@@ -79,7 +79,13 @@ async function consoleOverflow(page: Page): Promise<number> {
 async function settledScrollLeftAfterPinnedFocus(page: Page, borrowerId: string, start: number): Promise<number[]> {
   const ends: number[] = [];
   for (const id of [`lead-approve-${borrowerId}`, `lead-reject-${borrowerId}`]) {
-    await tableWrap(page).evaluate((wrap, left) => { wrap.scrollLeft = left; }, start);
+    // Let the scroller's own scroll event land before the focus, as a person's
+    // scroll would: useTableScrollClearance records the offset there, and a
+    // script scroll in the same frame as a pinned focus is its documented residual.
+    await tableWrap(page).evaluate(async (wrap, left) => {
+      wrap.scrollLeft = left;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }, start);
     await focusAndSettle(page, page.getByTestId(id));
     ends.push(await tableWrap(page).evaluate((wrap) => wrap.scrollLeft));
   }
@@ -196,10 +202,17 @@ test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
           .filter((el) => el.getClientRects().length > 0 && el !== document.activeElement)
           .at(-1);
         if (!control) throw new Error('precondition: a control in the dialog');
-        scroller.scrollTop += control.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 4;
-        await frames();
-        const port = scroller.getBoundingClientRect();
-        const box = control.getBoundingClientRect();
+        // WebKit can still be settling the dialog's layout after `room` lands
+        // (a later frame moves the control), so re-place until it holds.
+        let port = scroller.getBoundingClientRect();
+        let box = control.getBoundingClientRect();
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          scroller.scrollTop += box.top - port.top - 4;
+          await frames();
+          port = scroller.getBoundingClientRect();
+          box = control.getBoundingClientRect();
+          if (box.top >= port.top && box.bottom <= port.bottom && box.top - port.top < 20) break;
+        }
         const before = scroller.scrollTop;
         control.focus();
         await frames();
