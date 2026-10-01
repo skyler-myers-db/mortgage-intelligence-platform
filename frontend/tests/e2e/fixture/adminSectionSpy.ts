@@ -1,7 +1,9 @@
 /**
  * Administration's section-nav scroll-spy on the rendered build (audit
- * critic-09, fix round): the link marked aria-current="location" is the
- * section a scroll or a followed link actually lands. Shared by
+ * critic-09, fix rounds): the link marked aria-current="location" is the
+ * section a scroll or a followed link actually lands, and a followed
+ * section gives the marker back to position once the user scrolls it off
+ * its landing (fix round 2). Shared by
  * audit-ledger-presenter.fixture.spec.ts (c) and
  * admin-section-nav.cross-engine.fixture.spec.ts (WebKit too, where the admin
  * chunk's stylesheet applied after mount and moved the landing line).

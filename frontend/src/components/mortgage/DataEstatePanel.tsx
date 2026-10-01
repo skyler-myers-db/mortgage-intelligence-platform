@@ -290,7 +290,7 @@ function AssetDetail({
 
 export function DataEstatePanelSkeleton() {
   return (
-    <div className="surface data-estate" id={DATA_ESTATE_ANCHOR_ID} aria-busy="true" role="status">
+    <div className="surface data-estate" id={DATA_ESTATE_ANCHOR_ID} tabIndex={-1} aria-busy="true" role="status">
       <div className="surface__hdr surface__hdr--split">
         <div className="surface__hdr-main">
           <div className="surface__icon">

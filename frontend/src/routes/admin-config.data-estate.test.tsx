@@ -103,10 +103,10 @@ async function settle(): Promise<void> {
   });
 }
 
-function renderAdmin(): void {
+function renderAdmin(entry = '/admin-config'): void {
   root.render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/admin-config']}>
+      <MemoryRouter initialEntries={[entry]}>
         <AdminConfig />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -152,6 +152,21 @@ describe('AdminConfig data estate relocation', () => {
     expect(document.body.textContent).toContain('Data estate under the hood');
     // The resolved (non-busy) panel is not on screen yet.
     expect(document.querySelector('.data-estate:not([aria-busy="true"])')).toBeNull();
+  });
+
+  it('focuses the skeleton for a cold #data-estate link while the proof surface loads (critic-09)', async () => {
+    // Every section root the section nav links to takes focus; the skeleton
+    // carries the section id first, so it must be focusable too.
+    apiMocks.dataEstate.mockReturnValueOnce(new Promise(() => {}));
+
+    await act(async () => {
+      renderAdmin('/admin-config#data-estate');
+    });
+
+    const skeleton = document.getElementById('data-estate');
+    expect(skeleton?.getAttribute('aria-busy')).toBe('true');
+    expect(skeleton?.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement).toBe(skeleton);
   });
 
   it('renders the resolved data-estate proof panel above the data source readiness card', async () => {
