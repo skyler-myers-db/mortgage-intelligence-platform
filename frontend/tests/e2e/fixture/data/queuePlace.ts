@@ -30,6 +30,7 @@ export const LO_SESSION: SessionResponse = {
   can_access_admin: false,
   can_approve: true,
   actor_email: LO_EMAIL,
+  actor_cache_key: null,
 };
 
 function rankedPage(rows: readonly LeadSummary[], query: URLSearchParams): FixtureReply<LeadSummary[]> {

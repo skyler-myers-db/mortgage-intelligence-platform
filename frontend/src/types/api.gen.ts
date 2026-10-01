@@ -1972,6 +1972,8 @@ export interface ResponseSchemas {
     source_status: "connected" | "not_connected" | "not_licensed";
   };
   SessionResponse: {
+    /** Opaque per-actor browser-cache discriminator: the same keyed hash of the forwarded identity that the authenticated health body carries, so the browser can seed its actor-scoped storage gate before the first health probe. Not reversible to the identity and never sent to telemetry. Null exactly when actor_email is. */
+    actor_cache_key: string | null;
     /** A readable label for the caller's own forwarded identity, derived from the same header as actor_email and nothing else (no directory lookup): an email's local part with dot, underscore or hyphen separated letter words read as capitalised words (jane.doe@... -> 'Jane Doe'), else the local part verbatim; a non-email identity verbatim. Null exactly when actor_email is. */
     actor_display_name: string | null;
     /** The caller's own identity as forwarded by the trusted Databricks Apps edge (X-Forwarded-Email, else X-Forwarded-User): the name an approval's audit row is recorded under. Null when the edge forwarded none or forwarded headers are not trusted; never a configured default actor. */
