@@ -1374,6 +1374,11 @@ export interface ResponseSchemas {
     status: "assigned" | "contact_drafted" | "approved" | "actioned" | "outcome_recorded";
     strategy: "manual" | "round_robin" | "score_balanced";
   };
+  /** The number of borrowers the Lead Queue filters match. */
+  LeadCountResponse: {
+    /** Borrowers matching the filters, the same total GET /leads reports as X-Total-Matching. */
+    total_matching: number;
+  };
   /** The ledger entry the download waits for. */
   LeadExportReceipt: {
     actor: string;
@@ -1385,6 +1390,20 @@ export interface ResponseSchemas {
     recorded_at: string;
     row_count: number;
     scope: "selected" | "loaded";
+  };
+  /** One option of a Lead Queue filter menu and how many borrowers it holds. */
+  LeadFacetBucket: {
+    /** Borrowers matching every other filter and this option. */
+    count: number;
+    /** A closed-vocabulary option: a USPS code, a segment code, a product label or an approval state. */
+    value: string;
+  };
+  /** Counts for one filter dimension, with that dimension's own filter dropped. */
+  LeadFacetsResponse: {
+    buckets: ResponseSchemas['LeadFacetBucket'][];
+    dimension: "state" | "segment" | "product" | "approval";
+    /** Borrowers matching every filter except this dimension's own. */
+    total_matching: number;
   };
   LeadOutcome: {
     assigned_to_email: string | null;
@@ -1922,6 +1941,26 @@ export interface ResponseSchemas {
     state: string | null;
     updated_at: string;
     zip: string | null;
+  };
+  /** One saved Lead Queue view the actor owns. */
+  SavedView: {
+    created_at: string;
+    name: string;
+    /** Canonical Lead Queue query string, without a leading question mark. */
+    params: string;
+    updated_at: string;
+    /** Server-issued view id (UUID). */
+    view_id: string;
+  };
+  /** The actor's saved Lead Queue views, most recently updated first. */
+  SavedViewListResponse: {
+    saved_views: ResponseSchemas['SavedView'][];
+  };
+  /** What a save or a delete wrote, including its audit row. */
+  SavedViewMutationResponse: {
+    audit_event_id: string | null;
+    ok: boolean;
+    view_id: string;
   };
   ScoreBucket: {
     borrower_count: number;
@@ -2608,6 +2647,13 @@ export interface RequestSchemas {
     state?: string | null;
     zip?: string | null;
   };
+  /** POST /workspace/saved-views: name the current Lead Queue view. */
+  SavedViewCreateRequest: {
+    /** A short label for the view, without personal details. */
+    name: string;
+    /** The Lead Queue query string: its filters, sort and column preset only. */
+    params: string;
+  };
 }
 
 export type ApiResponse<K extends keyof ResponseSchemas> = ResponseSchemas[K];
@@ -2633,6 +2679,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['WorkspaceMutationResponse'];
+  };
+  "DELETE /api/v1/workspace/saved-views/{view_id}": {
+    pathParams: {
+      view_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['SavedViewMutationResponse'];
   };
   "GET /api/v1/activation/destinations": {
     pathParams: Record<string, never>;
@@ -3310,12 +3365,190 @@ export interface ApiOperations {
       cohort_id?: string | null;
       /** Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count. */
       funnel_stage?: "addressable" | "in_the_money" | "high_opportunity" | "offer_recommended" | "approved" | "actioned" | null;
+      /** Optional inclusive lower bound on the opportunity score. */
+      min_opportunity_score?: number | null;
+      /** Optional inclusive upper bound on the opportunity score. */
+      max_opportunity_score?: number | null;
+      /** Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
+      min_rate_spread_bps?: number | null;
+      /** Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
+      max_rate_spread_bps?: number | null;
       /** Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N — refine filters'. */
       limit?: number;
     };
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['LeadSummary'][];
+  };
+  "GET /api/v1/leads/count": {
+    pathParams: Record<string, never>;
+    query: {
+      segment?: string | null;
+      /** Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active. */
+      segment_codes?: string | null;
+      /** any = segment arrays overlap; all = borrower contains every selected segment code. */
+      segment_mode?: string;
+      portfolio_id?: string | null;
+      /** Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count. */
+      state?: string | null;
+      /** Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter. */
+      zip?: string | null;
+      /** Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort. */
+      county?: string | null;
+      /** Optional comma-separated USPS states for Genie-generated cohort actions. */
+      states?: string | null;
+      /** Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions. */
+      zips?: string | null;
+      /** Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions. */
+      counties?: string | null;
+      /** Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population. */
+      cities?: string | null;
+      /** Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions. */
+      borrower_ids?: string | null;
+      /** Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A. */
+      target_lender_ref?: string | null;
+      /** Optional Portfolio Builder geography label to replay the built population. */
+      geography?: string | null;
+      /** Optional Portfolio Builder occupancy filter. */
+      occupancy?: string | null;
+      /** Optional Portfolio Builder lien-status filter. */
+      lien_status?: string | null;
+      /** Optional Portfolio Builder lender-relationship filter. */
+      lender_relationship?: string | null;
+      /** Optional Portfolio Builder product filter. */
+      product?: string | null;
+      /** Optional loan product-type filter. */
+      loan_product?: string | null;
+      /** Optional origination-channel filter. */
+      origination_channel?: string | null;
+      /** Optional Portfolio Builder display equity threshold. */
+      min_equity_pct_label?: string | null;
+      /** Optional numeric Portfolio Builder equity threshold. */
+      min_equity_pct?: number | null;
+      /** Optional owner-link bucket from Segment Intelligence. */
+      owner_link?: string | null;
+      /** Optional purchase-intent bucket from Segment Intelligence. */
+      purchase_intent?: string | null;
+      /** Contactability gate. Defaults to Eligible only for fail-closed campaign/export use. */
+      marketing_eligibility?: string;
+      /** Optional consent filter: Opt-in, Opt-out, Unknown, Any. */
+      consent_status?: string | null;
+      /** Optional touch-recency filter: Untouched 30d/60d/90d or Any. */
+      recency?: string | null;
+      /** Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable. */
+      include_suppressed_for_analytics?: boolean;
+      /** Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query. */
+      include_identity_proof?: boolean;
+      /** Sales workflow approval state filter. */
+      approval_status?: "pending" | "approved" | "rejected" | "hold" | "any";
+      /** Sales workflow outreach state filter. */
+      outreach_status?: "none" | "queued" | "actioned" | "sent" | "bounced" | "replied" | "any";
+      /** Internal LO email assigned to the lead. */
+      assigned_to?: string | null;
+      /** Only approved leads aged at least this many days with no outreach. */
+      aged_days?: number | null;
+      /** Optional Lakebase persisted cohort id produced by a governed Genie action. */
+      cohort_id?: string | null;
+      /** Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count. */
+      funnel_stage?: "addressable" | "in_the_money" | "high_opportunity" | "offer_recommended" | "approved" | "actioned" | null;
+      /** Optional inclusive lower bound on the opportunity score. */
+      min_opportunity_score?: number | null;
+      /** Optional inclusive upper bound on the opportunity score. */
+      max_opportunity_score?: number | null;
+      /** Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
+      min_rate_spread_bps?: number | null;
+      /** Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
+      max_rate_spread_bps?: number | null;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['LeadCountResponse'];
+  };
+  "GET /api/v1/leads/facets": {
+    pathParams: Record<string, never>;
+    query: {
+      /** The filter menu to count: state, segment, product or approval. */
+      dimension: "state" | "segment" | "product" | "approval";
+      segment?: string | null;
+      /** Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active. */
+      segment_codes?: string | null;
+      /** any = segment arrays overlap; all = borrower contains every selected segment code. */
+      segment_mode?: string;
+      portfolio_id?: string | null;
+      /** Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count. */
+      state?: string | null;
+      /** Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter. */
+      zip?: string | null;
+      /** Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort. */
+      county?: string | null;
+      /** Optional comma-separated USPS states for Genie-generated cohort actions. */
+      states?: string | null;
+      /** Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions. */
+      zips?: string | null;
+      /** Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions. */
+      counties?: string | null;
+      /** Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population. */
+      cities?: string | null;
+      /** Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions. */
+      borrower_ids?: string | null;
+      /** Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A. */
+      target_lender_ref?: string | null;
+      /** Optional Portfolio Builder geography label to replay the built population. */
+      geography?: string | null;
+      /** Optional Portfolio Builder occupancy filter. */
+      occupancy?: string | null;
+      /** Optional Portfolio Builder lien-status filter. */
+      lien_status?: string | null;
+      /** Optional Portfolio Builder lender-relationship filter. */
+      lender_relationship?: string | null;
+      /** Optional Portfolio Builder product filter. */
+      product?: string | null;
+      /** Optional loan product-type filter. */
+      loan_product?: string | null;
+      /** Optional origination-channel filter. */
+      origination_channel?: string | null;
+      /** Optional Portfolio Builder display equity threshold. */
+      min_equity_pct_label?: string | null;
+      /** Optional numeric Portfolio Builder equity threshold. */
+      min_equity_pct?: number | null;
+      /** Optional owner-link bucket from Segment Intelligence. */
+      owner_link?: string | null;
+      /** Optional purchase-intent bucket from Segment Intelligence. */
+      purchase_intent?: string | null;
+      /** Contactability gate. Defaults to Eligible only for fail-closed campaign/export use. */
+      marketing_eligibility?: string;
+      /** Optional consent filter: Opt-in, Opt-out, Unknown, Any. */
+      consent_status?: string | null;
+      /** Optional touch-recency filter: Untouched 30d/60d/90d or Any. */
+      recency?: string | null;
+      /** Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable. */
+      include_suppressed_for_analytics?: boolean;
+      /** Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query. */
+      include_identity_proof?: boolean;
+      /** Sales workflow approval state filter. */
+      approval_status?: "pending" | "approved" | "rejected" | "hold" | "any";
+      /** Sales workflow outreach state filter. */
+      outreach_status?: "none" | "queued" | "actioned" | "sent" | "bounced" | "replied" | "any";
+      /** Internal LO email assigned to the lead. */
+      assigned_to?: string | null;
+      /** Only approved leads aged at least this many days with no outreach. */
+      aged_days?: number | null;
+      /** Optional Lakebase persisted cohort id produced by a governed Genie action. */
+      cohort_id?: string | null;
+      /** Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count. */
+      funnel_stage?: "addressable" | "in_the_money" | "high_opportunity" | "offer_recommended" | "approved" | "actioned" | null;
+      /** Optional inclusive lower bound on the opportunity score. */
+      min_opportunity_score?: number | null;
+      /** Optional inclusive upper bound on the opportunity score. */
+      max_opportunity_score?: number | null;
+      /** Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
+      min_rate_spread_bps?: number | null;
+      /** Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
+      max_rate_spread_bps?: number | null;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['LeadFacetsResponse'];
   };
   "GET /api/v1/leads/{borrower_id}/assignment": {
     pathParams: {
@@ -3475,6 +3708,13 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['QueueVersionResponse'];
+  };
+  "GET /api/v1/workspace/saved-views": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['SavedViewListResponse'];
   };
   "PATCH /api/v1/campaigns/{campaign_id}": {
     pathParams: {
@@ -3805,6 +4045,13 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['RumBatch'];
     ok: ResponseSchemas['RumAcceptedResponse'];
+  };
+  "POST /api/v1/workspace/saved-views": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['SavedViewCreateRequest'];
+    ok: ResponseSchemas['SavedViewMutationResponse'];
   };
   "PUT /api/v1/admin/rules": {
     pathParams: Record<string, never>;
