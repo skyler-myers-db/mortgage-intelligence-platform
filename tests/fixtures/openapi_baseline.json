@@ -8798,6 +8798,54 @@
         "title": "GrowthAgentRunSummary",
         "type": "object"
       },
+      "GrowthAgentRunWatchlistRequest": {
+        "additionalProperties": false,
+        "description": "Save the run the lender saw as a watchlist, bound to its result hash.",
+        "properties": {
+          "cadence": {
+            "default": "daily",
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "monitor_name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Name"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "tool_result_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Tool Result Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_result_hash"
+        ],
+        "title": "GrowthAgentRunWatchlistRequest",
+        "type": "object"
+      },
       "GrowthAgentSchedulerStatus": {
         "additionalProperties": false,
         "description": "Whether scheduled watchlist runs are on, and why the App knows.",
@@ -20879,6 +20927,77 @@
         ]
       }
     },
+    "/api/growth-agent/runs/{run_id}/monitors": {
+      "post": {
+        "deprecated": true,
+        "description": "Save the run the lender saw as a watchlist, with no re-plan.\n\nThe posted ``tool_result_hash`` must match the stored run; the watchlist is\nbuilt from the run's stored workflow, criteria and route, and one\n``GROWTH_AGENT_MONITOR_SAVE`` audit row is written (a replay writes none).",
+        "operationId": "post_api_growth_agent_runs_run_id_monitors_save_growth_agent_run_watchlist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunWatchlistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentMonitor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No run with this id belongs to the caller."
+          },
+          "409": {
+            "description": "The run did not complete, is unaudited, or changed since it was shown."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Run Watchlist",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/growth-agent/workflows/{workflow_id}/run": {
       "post": {
         "deprecated": true,
@@ -28860,6 +28979,76 @@
           }
         },
         "summary": "List Growth Agent Runs",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/runs/{run_id}/monitors": {
+      "post": {
+        "description": "Save the run the lender saw as a watchlist, with no re-plan.\n\nThe posted ``tool_result_hash`` must match the stored run; the watchlist is\nbuilt from the run's stored workflow, criteria and route, and one\n``GROWTH_AGENT_MONITOR_SAVE`` audit row is written (a replay writes none).",
+        "operationId": "post_api_v1_growth_agent_runs_run_id_monitors_save_growth_agent_run_watchlist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunWatchlistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentMonitor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No run with this id belongs to the caller."
+          },
+          "409": {
+            "description": "The run did not complete, is unaudited, or changed since it was shown."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Run Watchlist",
         "tags": [
           "growth-agent"
         ]

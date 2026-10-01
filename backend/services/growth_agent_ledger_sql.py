@@ -44,6 +44,18 @@ WHERE actor_email = %(actor_email)s
 LIMIT 1
 """
 
+# Audit 2026-09-21 genie-09 part 1: Save as watchlist reads the run the lender
+# saw, by (actor, run_id), and saves exactly its stored workflow, criteria and
+# route. No planner, metric read or composer is involved.
+RUN_SELECT_FOR_SAVE_SQL = """
+SELECT run_id, workflow_id, workflow_title, status, criteria, actionable_total,
+       route, source_assets, tool_result_hash, audit_event_id
+FROM mip_app.growth_agent_runs
+WHERE actor_email = %(actor_email)s
+  AND run_id = %(run_id)s
+LIMIT 1
+"""
+
 # Audit 2026-09-21 genie-09 part 2: the caller's own runs, newest first.
 # Served by idx_growth_agent_runs_actor_created (actor_email, created_at DESC).
 # It never selects criteria or route: a stored route can carry an expiring,
@@ -124,6 +136,16 @@ LIMIT 1
 # upsert conflicts on, resolved inside the run's transaction before INSERT.
 MONITOR_ID_BY_KEY_SQL = """
 SELECT monitor_id
+FROM mip_app.growth_agent_monitors
+WHERE actor_email = %(actor_email)s
+  AND workflow_id = %(workflow_id)s
+  AND name = %(name)s
+LIMIT 1
+"""
+
+MONITOR_SELECT_BY_KEY_SQL = """
+SELECT monitor_id, workflow_id, name, cadence, status, criteria, route,
+       actionable_total, source_assets, last_run_id, created_at, updated_at
 FROM mip_app.growth_agent_monitors
 WHERE actor_email = %(actor_email)s
   AND workflow_id = %(workflow_id)s

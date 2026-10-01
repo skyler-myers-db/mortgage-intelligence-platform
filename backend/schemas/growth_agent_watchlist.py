@@ -24,12 +24,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.growth_agent import (
     GrowthAgentCadence,
     GrowthAgentSchedulerState,
     GrowthAgentWorkflowId,
+    validate_growth_agent_monitor_name,
 )
 
 GrowthAgentSchedulerReason = Literal["job_schedule", "no_schedule", "not_configured", "lookup_failed"]
@@ -80,10 +82,34 @@ class GrowthAgentWatchlistSummaryResponse(BaseModel):
     watchlists: list[GrowthAgentWatchlistBriefing]
 
 
+class GrowthAgentRunWatchlistRequest(BaseModel):
+    """Save the run the lender saw as a watchlist, bound to its result hash."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    tool_result_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cadence: GrowthAgentCadence = "daily"
+    monitor_name: str | None = Field(default=None, max_length=80)
+    request_id: str | None = None
+
+    @field_validator("monitor_name")
+    @classmethod
+    def _monitor_name(cls, value: str | None) -> str | None:
+        return validate_growth_agent_monitor_name(value)
+
+    @field_validator("request_id")
+    @classmethod
+    def _request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_public_opaque_id(value)
+
+
 __all__ = [
     "DEFAULT_WATCHLIST_SUMMARY_LIMIT",
     "MAX_SPARKLINE_POINTS",
     "MAX_WATCHLIST_SUMMARY_LIMIT",
+    "GrowthAgentRunWatchlistRequest",
     "GrowthAgentSchedulerReason",
     "GrowthAgentSchedulerState",
     "GrowthAgentSchedulerStatus",

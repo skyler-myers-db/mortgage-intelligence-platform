@@ -231,6 +231,15 @@ class _FakeLakebaseClient:
                 ):
                     return dict(row)
             return None
+        if "FROM mip_app.growth_agent_runs" in sql and "run_id = %(run_id)s" in sql:
+            # RUN_SELECT_FOR_SAVE_SQL: the caller's own run by id (status
+            # defaults to 'completed', as the column does).
+            for row in self.runs:
+                if row.get("actor_email") == params.get("actor_email") and str(row.get("run_id")) == str(
+                    params.get("run_id")
+                ):
+                    return {"status": "completed", **row}
+            return None
         if "FROM mip_app.growth_agent_runs" in sql and "WHERE actor_email" in sql:
             if self.miss_next_run_select:
                 self.miss_next_run_select = False
@@ -241,14 +250,14 @@ class _FakeLakebaseClient:
                 ) == params.get("request_id"):
                     return dict(row)
             return None
-        if "SELECT monitor_id\nFROM mip_app.growth_agent_monitors" in sql and "name" in params:
-            # MONITOR_ID_BY_KEY_SQL: a save_monitor run joins the series of the
-            # watchlist with the same (actor, workflow, name) key.
+        if sql.lstrip().startswith("SELECT") and "FROM mip_app.growth_agent_monitors" in sql and "name" in params:
+            # MONITOR_ID_BY_KEY_SQL / MONITOR_SELECT_BY_KEY_SQL: the watchlist
+            # with the same (actor, workflow, name) key.
             for row in self.monitors:
                 if (row.get("actor_email"), row.get("workflow_id"), row.get("name")) == (
                     params.get("actor_email"), params.get("workflow_id"), params.get("name"),
                 ):
-                    return {"monitor_id": row["monitor_id"]}
+                    return dict(row)
             return None
         if "FROM mip_app.growth_agent_monitors" in sql and "last_run_id" in params:
             for row in self.monitors:

@@ -10,8 +10,10 @@ Behavior is unchanged and pinned by the compose tests in
 Audit 2026-09-21 ``critic-01`` / ``genie-09`` / ``wow-ai-4``: compose signs
 every composed plan (``plan_digest``) and never runs it; ``POST
 /growth-agent/agent/plan/execute`` runs exactly that reviewed plan; ``GET
-/growth-agent/runs`` lists the caller's own reviewed-workflow runs; and ``GET
-/growth-agent/monitors/summary`` briefs the caller's saved watchlists. They
+/growth-agent/runs`` lists the caller's own reviewed-workflow runs; ``POST
+/growth-agent/runs/{run_id}/monitors`` saves exactly one of those runs as a
+watchlist; and ``GET /growth-agent/monitors/summary`` briefs the caller's
+saved watchlists. They
 mount here because ``backend/api`` modules may not import each other and this
 router is already registered.
 """
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -28,10 +31,12 @@ from backend.schemas.agent_plan import (
     ComposePlanResponse,
     ExecutePlanRequest,
 )
+from backend.schemas.growth_agent import GrowthAgentMonitor
 from backend.schemas.growth_agent_run_history import GrowthAgentRunSummary
 from backend.schemas.growth_agent_watchlist import (
     DEFAULT_WATCHLIST_SUMMARY_LIMIT,
     MAX_WATCHLIST_SUMMARY_LIMIT,
+    GrowthAgentRunWatchlistRequest,
     GrowthAgentWatchlistSummaryResponse,
 )
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
@@ -50,6 +55,7 @@ from backend.services.growth_agent_run_history import (
     MAX_RUN_LIST_LIMIT,
     list_runs,
 )
+from backend.services.growth_agent_run_watchlist import save_run_as_watchlist
 from backend.services.growth_agent_scheduler import growth_agent_scheduler_status
 from backend.services.growth_agent_watchlist_summary import watchlist_summary
 from backend.services.growth_agent_workflows import WORKFLOWS as _WORKFLOWS
@@ -203,6 +209,32 @@ def list_growth_agent_runs(
     """
 
     return list_runs(lakebase, actor=resolve_actor(request), limit=limit)
+
+
+@router.post(
+    "/runs/{run_id}/monitors",
+    response_model=GrowthAgentMonitor,
+    responses={
+        **JSON_CONTENT_TYPE_RESPONSE,
+        404: {"description": "No run with this id belongs to the caller."},
+        409: {"description": "The run did not complete, is unaudited, or changed since it was shown."},
+    },
+)
+def save_growth_agent_run_watchlist(
+    run_id: UUID,
+    payload: GrowthAgentRunWatchlistRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+    lakebase: LakebaseDep,
+) -> GrowthAgentMonitor:
+    """Save the run the lender saw as a watchlist, with no re-plan.
+
+    The posted ``tool_result_hash`` must match the stored run; the watchlist is
+    built from the run's stored workflow, criteria and route, and one
+    ``GROWTH_AGENT_MONITOR_SAVE`` audit row is written (a replay writes none).
+    """
+
+    return save_run_as_watchlist(lakebase, actor=resolve_actor(request), run_id=run_id, payload=payload)
 
 
 @router.get("/monitors/summary", response_model=GrowthAgentWatchlistSummaryResponse)
