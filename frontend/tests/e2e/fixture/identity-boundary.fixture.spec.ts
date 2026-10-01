@@ -11,15 +11,20 @@
  * /api/session seed and /api/health, both served from ONE shared actor
  * variable (data/shell.ts serveActor).
  *
+ * A Genie surface that mounts while both observations are still in flight
+ * reads the stored conversation id as null (the gate is pending); it re-reads
+ * the id when the gate opens, so the owner's next question continues it.
+ *
  * Page 1's own reaction to the flip belongs to D-identity-review-a3 (W5b).
  */
 import type { Page } from '@playwright/test';
-import type { GenieStartResult, HomeSummary, PortfolioPreview } from '../../../src/types';
+import type { HealthPayload } from '../../../src/lib/apiTypes';
+import type { GenieStartResult, HomeSummary, PortfolioPreview, SessionResponse } from '../../../src/types';
 import { AppDriver } from './app';
 import { expectAxeClean, KNOWN_VIOLATIONS } from './axe';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { CONTACTABLE_PORTFOLIO_PREVIEW, HOME_SUMMARY, PORTFOLIO_PREVIEW } from './data/portfolio';
-import { FIXTURE_ACTOR_A, FIXTURE_ACTOR_B, serveActor } from './data/shell';
+import { FIXTURE_ACTOR_A, FIXTURE_ACTOR_B, HEALTH_OK, SESSION, serveActor } from './data/shell';
 import { json, type ApiCall, type FixtureRequest, type MockApi } from './mockApi';
 import { seedOwnedStorage } from './ownedStorage';
 import { expect, test } from './test';
@@ -116,6 +121,37 @@ test.describe('a new tab after an actor change (D-identity-review-b)', () => {
     await expect.poll(() => submits.length).toBe(1);
     expect(submits[0]).toBe(A_CONVERSATION);
     await tab.page.close();
+  });
+});
+
+test.describe('a Genie surface mounted while the actor gate is pending (D-identity-review-b)', () => {
+  test("/ask-genie mounted while the actor reads are held continues A's conversation once the gate opens", async ({ app, page, mockApi }) => {
+    const submits = recordSubmits(mockApi);
+    await seedOwnedStorage(page, FIXTURE_ACTOR_A, { local: { [CONVERSATION_KEY]: A_CONVERSATION } });
+    // Hold both trusted observations, so the route mounts with the gate
+    // pending and its first read of the stored id returns null.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockApi.register('GET', '/api/session', async () => {
+      await held;
+      return json<SessionResponse>({ ...SESSION, actor_cache_key: FIXTURE_ACTOR_A });
+    });
+    mockApi.register('GET', '/api/health', async () => {
+      await held;
+      return json<HealthPayload>({ ...HEALTH_OK, actor_cache_key: FIXTURE_ACTOR_A });
+    });
+    await page.goto('/ask-genie', { waitUntil: 'domcontentloaded' });
+    const composer = page.locator('#main-content').getByRole('textbox', { name: 'Ask Genie — question' });
+    await expect(composer, 'the route mounted while the gate was pending').toBeVisible();
+
+    release();
+    await app.settle();
+    await composer.fill(GENIE_QUESTION);
+    await composer.press('Enter');
+    await expect.poll(() => submits.length).toBe(1);
+    expect(submits[0], "A's first question after the gate opened continues A's conversation").toBe(A_CONVERSATION);
   });
 });
 
