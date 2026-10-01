@@ -468,7 +468,8 @@ export function USChoroplethMap({
         // Escape hides an open card and stops there, so the same keypress
         // never also closes a menu that listens on window. With no card, at
         // the ZIP level (map or table) it backs out one level, a history push
-        // like the US crumb; at the national level it passes through.
+        // like the US crumb; at the national level it passes through
+        // (dataviz-10, deviation:map-escape-and-populated-roving).
         onKeyDown={(event) => {
           if (event.key !== 'Escape') return;
           if (hovered !== null) {
