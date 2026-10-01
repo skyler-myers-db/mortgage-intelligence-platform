@@ -27,6 +27,8 @@ export const rerunGrowthAgentMonitor = vi.fn();
 export const createGrowthAgentMonitorNotificationDrafts = vi.fn();
 export const composeMortgageGrowthAgentPlan = vi.fn();
 export const executeComposedGrowthAgentPlan = vi.fn();
+export const growthAgentRuns = vi.fn();
+export const saveGrowthAgentRunWatchlist = vi.fn();
 export const navigate = vi.fn();
 export const setDrawer = vi.fn();
 export const refreshWorkspace = vi.fn();
@@ -53,6 +55,19 @@ vi.mock('../lib/api', async (importOriginal) => ({
     executeComposedGrowthAgentPlan: (...args: unknown[]) => executeComposedGrowthAgentPlan(...args),
   },
 }));
+
+// The run-ledger client is its own module (not spread into `api`); replace
+// only its two calls so the route never reaches the network.
+vi.mock('../lib/apiClients/growthAgentRuns', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/apiClients/growthAgentRuns')>();
+  return {
+    ...actual,
+    growthAgentRunsApi: {
+      growthAgentRuns: (...args: unknown[]) => growthAgentRuns(...args),
+      saveGrowthAgentRunWatchlist: (...args: unknown[]) => saveGrowthAgentRunWatchlist(...args),
+    },
+  };
+});
 
 vi.mock('../components/AppContext', () => ({
   useApp: () => ({
@@ -223,6 +238,7 @@ export function registerGrowthAgentRoutePanelHooks() {
     genieAction.mockResolvedValue(null);
     runGrowthAgentWorkflow.mockResolvedValue(RUN);
     runMortgageGrowthAgent.mockResolvedValue(RUN);
+    growthAgentRuns.mockResolvedValue([]);
     rerunGrowthAgentMonitor.mockResolvedValue({
       ...RUN,
       planner_label: 'Saved watchlist runner',

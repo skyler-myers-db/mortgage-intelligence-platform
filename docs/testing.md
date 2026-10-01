@@ -61,6 +61,15 @@ docker rm -f mip-pg-$USER
 
 `-n 0` is required, and the two suites must never run concurrently: both `DROP SCHEMA mip_app CASCADE` and recreate it in the same database. Point the DSN only at a throwaway database.
 
+### Growth Agent trust (wave 5)
+
+Audit 2026-09-21 `critic-01`, `genie-09` part 1, `flow-08` slice 2 and `wow-ai-4` (backend):
+
+- **Refusal batteries run on the reviewed-plan path.** `POST /api/growth-agent/agent/compose` no longer executes (`execute: true` is a 422 naming the retirement), so the 26 battery sites post through `post_growth_execute(client, objective, *, headers, states=None)` in `tests/unit/growth_refusal_contract.py`, which posts the objective to `POST /api/growth-agent/agent/plan/execute` with a minimal schema-valid plan and an unsigned digest. Each battery keeps its own assertions. `refusal_signature(response)` compares a guard refusal on its `refusal_reason` (and asserts the audit row) and a non-guard 422 on its fixed detail; `tests/unit/test_growth_agent_execute_parity.py` pins a 13-objective sample of the corpus plus the retirement.
+- **The battery corpus.** Set `MIP_EXECUTE_PARITY_CORPUS=/path/in/your/scratchpad/corpus.jsonl` and the helper appends every objective it posts (JSONL). Unset means no write; never commit the file. The tree-swap differential replays that corpus against a FULL `git archive` of the base and the branch with `python -P` and diffs `{sha256(objective)[:16]: [status, refusal_reason]}` per path; the diff must be empty.
+- **Watchlist series migration.** `tests/integration/test_growth_agent_runs_postgres.py` (a DSN suite) applies the `-- Growth Agent watchlist series ---` block TWICE through `lakebase_migrate._run_transaction` from the schema just before it, then pins the columns, foreign keys, partial index, seed backfill and one `schema_migrations` row, proves `growth_agent_runs` stays append-only (an UPDATE of `monitor_id` is 42501) and runs `WATCHLIST_SUMMARY_SQL` over seed, tagged, failed, one-off and other-actor runs. Locally, revoke PUBLIC on schema `public` first as CI does, or `test_lakebase_schema_upgrade.py::test_real_postgres_isolates_app_and_verifier_acl` fails on the default PostgreSQL grant.
+- **Rendered layer.** `frontend/tests/e2e/fixture/growth-agent-trust.w5.fixture.spec.ts` (data in `data/growthAgentTrust.ts`: `registerRunWatchlistSave`, `homeWithScheduler`) proves focus on Run while pending and on Compose again / the diff summary / the Execution trace after, the objective lock, the hint geometry at 1440 and 768 px, Save as watchlist posting exactly `{tool_result_hash, cadence}` with one `/agent/run`, the three scheduled-run states, and axe in both themes.
+
 ## E2E tests
 
 Playwright path:

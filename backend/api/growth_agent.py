@@ -51,6 +51,9 @@ from backend.services.growth_agent_ledger_sql import (
     DUE_MONITOR_LIST_SQL as _DUE_MONITOR_LIST_SQL,
 )
 from backend.services.growth_agent_ledger_sql import (
+    MONITOR_ID_BY_KEY_SQL as _MONITOR_ID_BY_KEY_SQL,
+)
+from backend.services.growth_agent_ledger_sql import (
     MONITOR_REFRESH_BY_ID_SQL as _MONITOR_REFRESH_BY_ID_SQL,
 )
 from backend.services.growth_agent_ledger_sql import (
@@ -112,6 +115,7 @@ from backend.services.growth_agent_runtime import (
 from backend.services.growth_agent_runtime import (
     tool_steps as _tool_steps,
 )
+from backend.services.growth_agent_scheduler import growth_agent_scheduler_status
 from backend.services.growth_agent_workflows import (
     WORKFLOWS as _WORKFLOWS,
 )
@@ -154,6 +158,7 @@ def growth_agent_home(
         workflows=[workflow.schema() for workflow in _WORKFLOWS.values()],
         monitors=list_monitors(lakebase, actor=actor),
         capabilities=public_capability_rows(live_statuses=live_statuses),
+        scheduler_state=growth_agent_scheduler_status().state,
     )
 
 
@@ -652,10 +657,16 @@ def _run_workflow(
     source_assets = list(workflow.source_assets)
     try:
         with lakebase.transaction() as conn:
+            # wow-ai-4: a watchlist run joins its series; a re-save of an existing name joins it too.
+            series_key = None if monitor_id_override or not payload.save_monitor else _txn_fetchone(
+                conn, _MONITOR_ID_BY_KEY_SQL,
+                {"actor_email": actor, "workflow_id": workflow.id, "name": payload.monitor_name or workflow.title},
+            )
             run_row = _txn_fetchone(
                 conn,
                 _RUN_INSERT_SQL,
                 {
+                    "monitor_id": monitor_id_override or (str(series_key["monitor_id"]) if series_key else None),
                     "actor_email": actor,
                     "request_id": request_id,
                     "workflow_id": workflow.id,

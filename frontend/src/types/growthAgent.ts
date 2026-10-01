@@ -239,10 +239,77 @@ export interface GrowthAgentCapabilityRow {
   detail: string;
 }
 
+/**
+ * Whether scheduled watchlist runs are on (audit 2026-09-21 `flow-08`): read
+ * from the scheduler job's schedule, never assumed. `unavailable` when the job
+ * is not bound to the App or the read failed.
+ */
+export type GrowthAgentSchedulerState = 'active' | 'paused' | 'unavailable';
+
+export interface GrowthAgentSchedulerStatus {
+  state: GrowthAgentSchedulerState;
+  reason: 'job_schedule' | 'no_schedule' | 'not_configured' | 'lookup_failed';
+}
+
 export interface GrowthAgentHomeResponse {
   workflows: GrowthAgentWorkflow[];
   monitors: GrowthAgentMonitor[];
   capabilities?: GrowthAgentCapabilityRow[];
+  /** Optional for older bodies: a missing field means `unavailable`. */
+  scheduler_state?: GrowthAgentSchedulerState;
+}
+
+/**
+ * `GET /api/growth-agent/runs` (audit 2026-09-21 `genie-09`): one of the
+ * caller's own reviewed-workflow runs. Never the route, criteria or actor.
+ */
+export interface GrowthAgentRunSummary {
+  run_id: string;
+  workflow_id: GrowthAgentWorkflowId;
+  workflow_title: string;
+  status: 'completed' | 'failed';
+  broad_total: number;
+  actionable_total: number;
+  actionable_avg_score: number | null;
+  source_assets: string[];
+  audit_event_id: string | null;
+  created_at: string | null;
+  /** The saved watchlist this run refreshed; null for a one-off or seed run. */
+  monitor_id: string | null;
+}
+
+/** `POST /api/growth-agent/runs/{run_id}/monitors`: save exactly the run shown. */
+export interface GrowthAgentRunWatchlistRequest {
+  tool_result_hash: string;
+  cadence?: GrowthAgentCadence;
+  monitor_name?: string | null;
+  request_id?: string | null;
+}
+
+/** One saved watchlist with its run-over-run change (audit `wow-ai-4`). */
+export interface GrowthAgentWatchlistBriefing {
+  monitor_id: string;
+  workflow_id: GrowthAgentWorkflowId;
+  name: string;
+  cadence: GrowthAgentCadence;
+  status: 'active' | 'paused' | 'disabled';
+  run_count: number;
+  last_run_at: string | null;
+  previous_run_at: string | null;
+  actionable_total: number | null;
+  previous_actionable_total: number | null;
+  actionable_delta: number | null;
+  actionable_avg_score: number | null;
+  previous_actionable_avg_score: number | null;
+  avg_score_delta: number | null;
+  /** Oldest to newest, at most 8. */
+  recent_actionable_totals: number[];
+}
+
+/** `GET /api/growth-agent/monitors/summary`. */
+export interface GrowthAgentWatchlistSummaryResponse {
+  scheduler: GrowthAgentSchedulerStatus;
+  watchlists: GrowthAgentWatchlistBriefing[];
 }
 
 export interface GrowthAgentDueMonitorRunResponse {

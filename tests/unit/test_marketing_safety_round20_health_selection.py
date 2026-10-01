@@ -29,6 +29,7 @@ from tests.unit.growth_refusal_contract import (
     GROWTH_REFUSAL_MESSAGE_RE,
     assert_refusal_isolation,
     assert_refused_with_audit,
+    post_growth_execute,
 )
 
 _DISCLOSURE = MagicMock(
@@ -192,7 +193,7 @@ def test_protected_health_selection_rejects_both_growth_request_contracts(
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
-        ComposePlanRequest(objective=objective, execute=True)
+        ComposePlanRequest(objective=objective)
 
 
 @pytest.mark.parametrize("objective", _PROTECTED_HEALTH_SELECTIONS)
@@ -216,10 +217,8 @@ def test_protected_health_selection_stops_before_planners_models_or_writes(
         json={"prompt": objective, "save_monitor": True, "cadence": "daily"},
         headers={"X-Forwarded-Email": "operator@example.com"},
     )
-    compose_response = client.post(
-        "/api/growth-agent/agent/compose",
-        json={"objective": objective, "execute": True},
-        headers={"X-Forwarded-Email": "operator@example.com"},
+    compose_response = post_growth_execute(
+        client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
     )
 
     assert_refused_with_audit(run_response)

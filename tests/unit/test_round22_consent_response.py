@@ -29,6 +29,7 @@ from tests.unit.growth_refusal_contract import (
     GROWTH_REFUSAL_MESSAGE_RE,
     assert_only_refusal_audit_writes,
     assert_refused_with_audit,
+    post_growth_execute,
 )
 
 _DISCLOSURE = MagicMock(
@@ -269,10 +270,8 @@ def test_round22_growth_endpoints_stop_before_planner_model_or_writes(
             json={"prompt": objective, "save_monitor": True, "cadence": "daily"},
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": objective, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
         )
     finally:
         app.dependency_overrides.pop(get_sql_client, None)

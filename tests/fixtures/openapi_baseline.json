@@ -4086,10 +4086,11 @@
       },
       "ComposePlanRequest": {
         "additionalProperties": false,
-        "description": "Ask the co-pilot to compose (and optionally execute) a governed plan.",
+        "description": "Ask the co-pilot to compose a governed plan for the lender to review.\n\nCompose never runs the plan: the reviewed plan runs only through\n``POST /growth-agent/agent/plan/execute`` with the compose response's\ndigest. ``execute`` is a retired, tolerant field: false or absent is\naccepted, true is a 422 (``EXECUTE_RETIRED_DETAIL``).",
         "properties": {
           "execute": {
             "default": false,
+            "description": "Retired: compose never executes; run a reviewed plan with POST /api/v1/growth-agent/agent/plan/execute.",
             "title": "Execute",
             "type": "boolean"
           },
@@ -8169,6 +8170,16 @@
             "title": "Monitors",
             "type": "array"
           },
+          "scheduler_state": {
+            "default": "unavailable",
+            "enum": [
+              "active",
+              "paused",
+              "unavailable"
+            ],
+            "title": "Scheduler State",
+            "type": "string"
+          },
           "workflows": {
             "items": {
               "$ref": "#/components/schemas/GrowthAgentWorkflow"
@@ -8965,6 +8976,17 @@
             ],
             "title": "Created At"
           },
+          "monitor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Id"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -9013,6 +9035,85 @@
           "actionable_total"
         ],
         "title": "GrowthAgentRunSummary",
+        "type": "object"
+      },
+      "GrowthAgentRunWatchlistRequest": {
+        "additionalProperties": false,
+        "description": "Save the run the lender saw as a watchlist, bound to its result hash.",
+        "properties": {
+          "cadence": {
+            "default": "daily",
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "monitor_name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Name"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "tool_result_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Tool Result Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_result_hash"
+        ],
+        "title": "GrowthAgentRunWatchlistRequest",
+        "type": "object"
+      },
+      "GrowthAgentSchedulerStatus": {
+        "additionalProperties": false,
+        "description": "Whether scheduled watchlist runs are on, and why the App knows.",
+        "properties": {
+          "reason": {
+            "enum": [
+              "job_schedule",
+              "no_schedule",
+              "not_configured",
+              "lookup_failed"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "reason"
+        ],
+        "title": "GrowthAgentSchedulerStatus",
         "type": "object"
       },
       "GrowthAgentToolStep": {
@@ -9074,6 +9175,189 @@
           "detail"
         ],
         "title": "GrowthAgentToolStep",
+        "type": "object"
+      },
+      "GrowthAgentWatchlistBriefing": {
+        "additionalProperties": false,
+        "description": "One saved watchlist with its run-over-run change from the ledger.",
+        "properties": {
+          "actionable_avg_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Avg Score"
+          },
+          "actionable_delta": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Delta"
+          },
+          "actionable_total": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Total"
+          },
+          "avg_score_delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Score Delta"
+          },
+          "cadence": {
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "monitor_id": {
+            "title": "Monitor Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "previous_actionable_avg_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Actionable Avg Score"
+          },
+          "previous_actionable_total": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Actionable Total"
+          },
+          "previous_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Run At"
+          },
+          "recent_actionable_totals": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 8,
+            "title": "Recent Actionable Totals",
+            "type": "array"
+          },
+          "run_count": {
+            "minimum": 0.0,
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "workflow_id": {
+            "enum": [
+              "daily_refi_brief",
+              "borrower_dossier_review",
+              "listing_watch",
+              "competitor_recapture_monitor",
+              "high_equity_heloc_watch",
+              "branch_capacity_review",
+              "source_freshness_sentinel",
+              "custom_segment_watch",
+              "live_analysis"
+            ],
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "monitor_id",
+          "workflow_id",
+          "name",
+          "cadence",
+          "status",
+          "run_count"
+        ],
+        "title": "GrowthAgentWatchlistBriefing",
+        "type": "object"
+      },
+      "GrowthAgentWatchlistSummaryResponse": {
+        "additionalProperties": false,
+        "description": "The caller's saved watchlists as briefings, with the scheduler state.",
+        "properties": {
+          "scheduler": {
+            "$ref": "#/components/schemas/GrowthAgentSchedulerStatus"
+          },
+          "watchlists": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentWatchlistBriefing"
+            },
+            "title": "Watchlists",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scheduler",
+          "watchlists"
+        ],
+        "title": "GrowthAgentWatchlistSummaryResponse",
         "type": "object"
       },
       "GrowthAgentWorkflow": {
@@ -20995,7 +21279,7 @@
     "/api/growth-agent/agent/compose": {
       "post": {
         "deprecated": true,
-        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, then \u2014 when\n``execute`` is set \u2014 runs the validated steps deterministically with the\nexisting per-step audit and approval rails. Every composed response is\nlabelled ``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
+        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, and returns it\nsigned and unexecuted for the lender to review. It never runs a step: the\nreviewed plan runs only through ``/agent/plan/execute``, and the retired\n``execute: true`` flag is a 422. Every composed response is labelled\n``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
         "operationId": "post_api_growth_agent_agent_compose_compose_mortgage_growth_agent_plan",
         "requestBody": {
           "content": {
@@ -21338,6 +21622,53 @@
         ]
       }
     },
+    "/api/growth-agent/monitors/summary": {
+      "get": {
+        "deprecated": true,
+        "description": "Brief the caller's saved watchlists: latest run, change since the previous run.\n\nRead-only Lakebase app state plus the cached scheduler state: it writes no\naudit row, starts no run and reads no Unity Catalog table. Each briefing\nomits the stored route, criteria and actor.",
+        "operationId": "get_api_growth_agent_monitors_summary_growth_agent_watchlist_summary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentWatchlistSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Watchlist Summary",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/growth-agent/monitors/{monitor_id}/notification-drafts": {
       "post": {
         "deprecated": true,
@@ -21518,6 +21849,77 @@
           }
         },
         "summary": "List Growth Agent Runs",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/runs/{run_id}/monitors": {
+      "post": {
+        "deprecated": true,
+        "description": "Save the run the lender saw as a watchlist, with no re-plan.\n\nThe posted ``tool_result_hash`` must match the stored run; the watchlist is\nbuilt from the run's stored workflow, criteria and route, and one\n``GROWTH_AGENT_MONITOR_SAVE`` audit row is written (a replay writes none).",
+        "operationId": "post_api_growth_agent_runs_run_id_monitors_save_growth_agent_run_watchlist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunWatchlistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentMonitor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No run with this id belongs to the caller."
+          },
+          "409": {
+            "description": "The run did not complete, is unaudited, or changed since it was shown."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Run Watchlist",
         "tags": [
           "growth-agent"
         ]
@@ -30897,7 +31299,7 @@
     },
     "/api/v1/growth-agent/agent/compose": {
       "post": {
-        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, then \u2014 when\n``execute`` is set \u2014 runs the validated steps deterministically with the\nexisting per-step audit and approval rails. Every composed response is\nlabelled ``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
+        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, and returns it\nsigned and unexecuted for the lender to review. It never runs a step: the\nreviewed plan runs only through ``/agent/plan/execute``, and the retired\n``execute: true`` flag is a 422. Every composed response is labelled\n``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
         "operationId": "post_api_v1_growth_agent_agent_compose_compose_mortgage_growth_agent_plan",
         "requestBody": {
           "content": {
@@ -31234,6 +31636,52 @@
         ]
       }
     },
+    "/api/v1/growth-agent/monitors/summary": {
+      "get": {
+        "description": "Brief the caller's saved watchlists: latest run, change since the previous run.\n\nRead-only Lakebase app state plus the cached scheduler state: it writes no\naudit row, starts no run and reads no Unity Catalog table. Each briefing\nomits the stored route, criteria and actor.",
+        "operationId": "get_api_v1_growth_agent_monitors_summary_growth_agent_watchlist_summary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentWatchlistSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Watchlist Summary",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/v1/growth-agent/monitors/{monitor_id}/notification-drafts": {
       "post": {
         "description": "Create Slack/Teams review drafts for a saved watchlist's latest run.",
@@ -31411,6 +31859,76 @@
           }
         },
         "summary": "List Growth Agent Runs",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/runs/{run_id}/monitors": {
+      "post": {
+        "description": "Save the run the lender saw as a watchlist, with no re-plan.\n\nThe posted ``tool_result_hash`` must match the stored run; the watchlist is\nbuilt from the run's stored workflow, criteria and route, and one\n``GROWTH_AGENT_MONITOR_SAVE`` audit row is written (a replay writes none).",
+        "operationId": "post_api_v1_growth_agent_runs_run_id_monitors_save_growth_agent_run_watchlist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunWatchlistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentMonitor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No run with this id belongs to the caller."
+          },
+          "409": {
+            "description": "The run did not complete, is unaudited, or changed since it was shown."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Run Watchlist",
         "tags": [
           "growth-agent"
         ]

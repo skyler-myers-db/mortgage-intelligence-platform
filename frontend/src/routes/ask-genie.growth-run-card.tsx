@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { formatNumber } from '../lib/formatters';
@@ -6,7 +6,9 @@ import {
   DATABRICKS_AGENT_RESPONSES_LABEL,
   publicAgentResponsesText,
 } from '../lib/agentLabels';
+import { isSavableGrowthRun } from './ask-genie.growth-run-save';
 import type {
+  GrowthAgentCadence,
   GrowthAgentGovernanceChip,
   GrowthAgentPolicyCheck,
   GrowthAgentRunResponse,
@@ -136,16 +138,85 @@ function policyStatusVariant(status: GrowthAgentPolicyCheck['status']): 'success
   return 'warning';
 }
 
+/** Save as watchlist for the run this card shows (audit 2026-09-21 genie-09 part 1). */
+export interface GrowthRunSaveControls {
+  cadence: GrowthAgentCadence;
+  pending: boolean;
+  /** The saved watchlist's name, once the server answered. */
+  savedName: string | null;
+  errorMessage: string | null;
+  onSave: () => void;
+}
+
+/**
+ * deviation:growth-agent-run-save: a ghost action and its outcome under the
+ * run's metrics. It saves exactly this run; nothing runs again, nothing is sent.
+ * Offered only for a ledger-backed reviewed-workflow run (`isSavableGrowthRun`):
+ * a live-analysis answer or a run that already refreshed a watchlist renders no
+ * row at all. When the save lands, the button the user pressed is replaced by
+ * the confirmation, so focus moves to it (only after this row's own click).
+ */
+function GrowthRunSaveRow({ run, save }: { run: GrowthAgentRunResponse; save: GrowthRunSaveControls }) {
+  const hintId = useId();
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const savedHere = useRef(false);
+  useEffect(() => {
+    if (!save.savedName || !savedHere.current) return;
+    savedHere.current = false;
+    statusRef.current?.focus();
+  }, [save.savedName]);
+  const offer = (run.monitor === null || run.monitor === undefined) && isSavableGrowthRun(run);
+  if (!offer && !save.savedName && !save.errorMessage) return null;
+  return (
+    <div className="growth-agent-run__save">
+      {offer && !save.savedName && (
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="bell"
+            onClick={() => {
+              if (save.pending) return;
+              savedHere.current = true;
+              save.onSave();
+            }}
+            aria-disabled={save.pending || undefined}
+            aria-describedby={hintId}
+          >
+            {save.pending ? 'Saving…' : 'Save as watchlist'}
+          </Button>
+          <p id={hintId} className="growth-agent__hint growth-agent-run__save-note">
+            Saves this run&apos;s reviewed workflow and filters as a watchlist with the{' '}
+            {save.cadence === 'weekly' ? 'Weekly' : 'Daily'} review interval. Nothing runs again and nothing is sent.
+          </p>
+        </>
+      )}
+      {save.savedName && (
+        <p ref={statusRef} tabIndex={-1} className="growth-agent-run__save-note" role="status">
+          Saved as watchlist “{save.savedName}”. Find it under Saved monitors.
+        </p>
+      )}
+      {save.errorMessage && (
+        <p className="status-callout status-callout--danger growth-agent-run__save-note" role="alert">
+          {save.errorMessage}
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface GrowthAgentRunCardProps {
   run: GrowthAgentRunResponse;
   onOpenRoute: (route: string) => void;
   renderSourceAssetChip: (asset: string) => ReactNode;
+  save?: GrowthRunSaveControls;
 }
 
 export function GrowthAgentRunCard({
   run,
   onOpenRoute,
   renderSourceAssetChip,
+  save,
 }: GrowthAgentRunCardProps) {
   const cohortProofAttached = hasGrowthAgentCohortProof(run);
   return (
@@ -225,6 +296,7 @@ export function GrowthAgentRunCard({
           <strong>{run.actionable_avg_score ?? '—'}</strong>
         </div>
       </div>
+      {save && <GrowthRunSaveRow run={run} save={save} />}
       <div className="growth-agent-run__body">
         <div className="growth-agent-run__section">
           <div className="eyebrow">Tool timeline</div>

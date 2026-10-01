@@ -2,6 +2,8 @@ import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { humanizeAssetMentions } from '../lib/assetLabels';
 import type { GrowthAgentCadence, GrowthAgentSegmentMode } from '../types';
+import type { GrowthAgentSchedulerState } from '../types/growthAgent';
+import './ask-genie.growth-agent.css';
 import { GrowthAgentRunSlot } from './ask-genie.growth-agent-run-slot';
 import type { GrowthAgentWorkspace } from './ask-genie.growth-agent-state';
 import {
@@ -9,6 +11,16 @@ import {
   renderSourceAssetChip,
   workflowIcon,
 } from './ask-genie.growth-agent.helpers';
+
+/**
+ * The review-interval hint, from the scheduler job's real state (flow-08
+ * slice 2). deviation:growth-agent-scheduled-run-status
+ */
+const INTERVAL_HINT: Record<GrowthAgentSchedulerState, string> = {
+  active: 'Saved watchlists refresh on the scheduled run and create review drafts only. Nothing is sent.',
+  paused: 'Scheduled runs are off. Saved watchlists refresh only when you run them.',
+  unavailable: 'Scheduled-run status could not be read. Run a saved watchlist to refresh it.',
+};
 
 interface GrowthAgentPanelProps {
   agent: GrowthAgentWorkspace;
@@ -29,6 +41,12 @@ interface GrowthAgentPanelProps {
  * Audit 2026-09-21 `critic-01` / `genie-09` part 1: the command bar has one
  * primary action and no one-shot 'Execute plan'. Compose only drafts a plan;
  * the composed plan card holds 'Run this plan', which runs that exact plan.
+ * There is no 'Save reviewed watchlist' here: it re-planned and saved a run
+ * the lender never saw. A run is saved from its own card instead.
+ *
+ * While a reviewed plan runs, every input that would clear the feedback is
+ * disabled (`locked`), so the answer cannot be dropped while the server
+ * still executes and audits it.
  *
  * `aria-busy` marks only the workflow cards, never the whole surface: a busy
  * subtree holds its live-region announcements until it settles, and the run
@@ -42,11 +60,11 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
     growthAgentPending,
     growthAgentPendingAction,
     promptAgentPending,
-    promptAgentPendingAction,
     composePending,
     customAgentPendingAction,
     customSegments,
   } = agent;
+  const locked = agent.planExecution.pending;
 
   return (
     <div className="surface growth-agent">
@@ -69,6 +87,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
                 className="route-textarea growth-agent-command__prompt"
                 aria-label="Mortgage Growth Agent prompt"
                 value={agent.agentPrompt}
+                disabled={locked}
                 onChange={(event) => {
                   agent.setAgentPrompt(event.target.value);
                   agent.clearGrowthAgentFeedback();
@@ -79,39 +98,34 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
               </span>
             </label>
           </div>
-          <div className="growth-agent-command__actions">
-            <Button
-              variant="primary"
-              size="sm"
-              icon="sparkle"
-              onClick={() => agent.runMortgageGrowthAgentPrompt(false)}
-              disabled={agentBusy || stateParsePreview.invalid.length > 0}
-            >
-              {promptAgentPending && promptAgentPendingAction === 'run' ? 'Planning…' : 'Plan reviewed workflow'}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="bell"
-              onClick={() => agent.runMortgageGrowthAgentPrompt(true)}
-              disabled={agentBusy || stateParsePreview.invalid.length > 0}
-            >
-              {promptAgentPending && promptAgentPendingAction === 'save' ? 'Saving…' : 'Save reviewed watchlist'}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="sparkle"
-              onClick={() => agent.composeGrowthAgentPlan()}
-              disabled={agentBusy || stateParsePreview.invalid.length > 0}
-            >
-              {composePending === 'compose' ? 'Composing…' : 'Compose plan'}
-            </Button>
+          {/* deviation:growth-agent-command-side: the hint sits under the buttons in column 2. */}
+          <div className="growth-agent-command__side">
+            <div className="growth-agent-command__actions">
+              <Button
+                variant="primary"
+                size="sm"
+                icon="sparkle"
+                onClick={() => agent.runMortgageGrowthAgentPrompt()}
+                disabled={agentBusy || stateParsePreview.invalid.length > 0}
+              >
+                {promptAgentPending ? 'Planning…' : 'Plan reviewed workflow'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="sparkle"
+                onClick={() => agent.composeGrowthAgentPlan()}
+                disabled={agentBusy || stateParsePreview.invalid.length > 0}
+              >
+                {composePending === 'compose' ? 'Composing…' : 'Compose plan'}
+              </Button>
+            </div>
+            <p className="growth-agent__hint growth-agent-command__hint">
+              Plan reviewed workflow picks one reviewed workflow and counts eligible borrowers; save the result as a
+              watchlist from its card. Compose plan drafts a multi-step plan from reviewed tools; you review each step
+              before anything runs.
+            </p>
           </div>
-          <p className="growth-agent__hint">
-            Plan reviewed workflow picks one reviewed workflow and counts eligible borrowers. Compose plan drafts a
-            multi-step plan from reviewed tools; you review each step before anything runs.
-          </p>
         </section>
 
         <div className="growth-agent__controls">
@@ -122,6 +136,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
               aria-label="Growth Agent state scope"
               placeholder="All states or IL, TX, CA"
               value={agent.agentStateText}
+              disabled={locked}
               onChange={(event) => {
                 const nextValue = event.target.value;
                 agent.setAgentStateText(nextValue);
@@ -142,6 +157,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
                   className="form-input"
                   aria-label="Growth Agent review interval"
                   value={agent.agentCadence}
+                  disabled={locked}
               onChange={(event) => {
                 agent.setAgentCadence(event.target.value as GrowthAgentCadence);
                 agent.clearGrowthAgentFeedback();
@@ -150,7 +166,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
                   <option value="daily">Daily interval</option>
                   <option value="weekly">Weekly interval</option>
                 </select>
-                <span className="growth-agent__hint">Saved watchlists stay paused until an admin turns on scheduled runs.</span>
+                <span className="growth-agent__hint">{INTERVAL_HINT[agent.schedulerState]}</span>
           </label>
         </div>
 
@@ -240,6 +256,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
                     type="button"
                     className={`filter ${selected ? 'is-active' : ''}`}
                     aria-pressed={selected}
+                    disabled={locked}
                     onClick={() => agent.toggleCustomSegment(segment.code)}
                   >
                     <span className="filter__value">{segment.label}</span>
@@ -253,6 +270,7 @@ export function GrowthAgentPanel({ agent, onOpenRoute }: GrowthAgentPanelProps) 
                 className="form-input"
                 aria-label="Custom Growth Agent segment logic"
                 value={agent.customMode}
+                disabled={locked}
                 onChange={(event) => {
                   agent.setCustomMode(event.target.value as GrowthAgentSegmentMode);
                   agent.clearGrowthAgentFeedback();

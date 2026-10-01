@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -32,6 +33,7 @@ from backend.services.growth_agent_drafts import create_notification_drafts
 from backend.services.growth_agent_workflows import custom_workflow
 from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.unit.growth_refusal_contract import post_growth_execute
 
 
 def _handoff_token(route: str) -> str:
@@ -158,6 +160,21 @@ class _FakeConn:
         return _ExecuteResult(self.lakebase.handle_execute(sql, params or {}))
 
 
+_ACTOR_SCOPE_RE = re.compile(r"WHERE\s+actor_email\s*=\s*%\(actor_email\)s")
+
+
+def _actor_visible(sql: str, row: dict[str, Any], params: dict[str, Any]) -> bool:
+    """Whether ``row`` passes the statement's OWN actor predicate.
+
+    The fake filters by actor only when the SQL text carries
+    ``WHERE actor_email = %(actor_email)s``, as PostgreSQL would, so a
+    statement that loses its actor scope reads other actors' rows here too
+    (audit 2026-09-21 genie-09 part 1: the cross-actor proof lives in the SQL).
+    """
+
+    return not _ACTOR_SCOPE_RE.search(sql) or row.get("actor_email") == params.get("actor_email")
+
+
 class _FakeLakebaseClient:
     def __init__(self) -> None:
         self.executes: list[tuple[str, dict[str, Any]]] = []
@@ -230,6 +247,13 @@ class _FakeLakebaseClient:
                 ):
                     return dict(row)
             return None
+        if "FROM mip_app.growth_agent_runs" in sql and "run_id = %(run_id)s" in sql:
+            # RUN_SELECT_FOR_SAVE_SQL: the caller's own run by id (status
+            # defaults to 'completed', as the column does).
+            for row in self.runs:
+                if _actor_visible(sql, row, params) and str(row.get("run_id")) == str(params.get("run_id")):
+                    return {"status": "completed", **row}
+            return None
         if "FROM mip_app.growth_agent_runs" in sql and "WHERE actor_email" in sql:
             if self.miss_next_run_select:
                 self.miss_next_run_select = False
@@ -238,6 +262,15 @@ class _FakeLakebaseClient:
                 if row.get("actor_email") == params.get("actor_email") and row.get(
                     "request_id"
                 ) == params.get("request_id"):
+                    return dict(row)
+            return None
+        if sql.lstrip().startswith("SELECT") and "FROM mip_app.growth_agent_monitors" in sql and "name" in params:
+            # MONITOR_ID_BY_KEY_SQL / MONITOR_SELECT_BY_KEY_SQL: the watchlist
+            # with the same (actor, workflow, name) key.
+            for row in self.monitors:
+                if _actor_visible(sql, row, params) and (row.get("workflow_id"), row.get("name")) == (
+                    params.get("workflow_id"), params.get("name"),
+                ):
                     return dict(row)
             return None
         if "FROM mip_app.growth_agent_monitors" in sql and "last_run_id" in params:
@@ -393,6 +426,7 @@ class _FakeLakebaseClient:
                 "actionable_total": params["actionable_total"],
                 "source_assets": params["source_assets"],
                 "last_run_id": params["last_run_id"],
+                "seed_run_id": params["last_run_id"],
                 "created_at": now,
                 "updated_at": now,
             }
@@ -3168,57 +3202,6 @@ def test_compose_returns_plan_without_execution(monkeypatch: pytest.MonkeyPatch)
     assert payload["plan"]["steps"][0]["tool"] == "fn_build_cohort"
 
 
-def test_compose_executes_read_plan_and_records_trace(monkeypatch: pytest.MonkeyPatch) -> None:
-    outcome = _composed_outcome(
-        steps=[
-            PlanStep(step_id="step-1", tool="fn_build_cohort", params={}, rationale="broad"),
-            PlanStep(step_id="step-2", tool="fn_segment_counts", params={}, rationale="gate"),
-        ],
-        requires_approval=False,
-    )
-    lakebase = _FakeLakebaseClient()
-    response = _compose(
-        monkeypatch,
-        outcome,
-        body={"objective": "Compose a refi growth plan for review.", "execute": True},
-        lakebase=lakebase,
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "composed"
-    assert payload["executed"] is True
-    assert payload["plan_id"]
-    assert [step["status"] for step in payload["trace"]] == ["completed", "completed"]
-    # Two per-step audit rows + one compose summary row landed in Lakebase.
-    assert len(payload["audit_event_ids"]) == 3
-    audit_actions = {
-        json.loads(row.get("metadata", "{}")).get("action") for row in lakebase.audit_events
-    }
-    assert "growth_agent.plan_step" in audit_actions
-    assert "growth_agent.compose" in audit_actions
-
-
-def test_compose_execution_stops_at_approval_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    outcome = _composed_outcome(
-        steps=[
-            PlanStep(step_id="step-1", tool="fn_build_cohort", params={}, rationale="broad"),
-            PlanStep(step_id="step-2", tool="fn_lead_queue_url", params={"segment_codes": ["itm"]}),
-        ],
-        requires_approval=True,
-    )
-    response = _compose(
-        monkeypatch,
-        outcome,
-        body={"objective": "Compose a lead queue handoff plan.", "execute": True},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["approval_required"] is True
-    assert payload["approval_gate_step_id"] == "step-2"
-    assert payload["trace"][-1]["status"] == "review_required"
-    assert payload["trace"][-1]["approval_gate"] is True
-
-
 def test_compose_degrades_and_offers_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     outcome = ComposeOutcome(
         status="degraded",
@@ -3229,7 +3212,7 @@ def test_compose_degrades_and_offers_catalog(monkeypatch: pytest.MonkeyPatch) ->
     response = _compose(
         monkeypatch,
         outcome,
-        body={"objective": "Compose a refi growth plan for review.", "execute": True},
+        body={"objective": "Compose a refi growth plan for review."},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -3248,7 +3231,7 @@ def test_compose_invalid_plan_has_no_canned_fallback(monkeypatch: pytest.MonkeyP
     response = _compose(
         monkeypatch,
         outcome,
-        body={"objective": "Compose a refi growth plan for review.", "execute": True},
+        body={"objective": "Compose a refi growth plan for review."},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -3335,10 +3318,8 @@ def test_uncommon_lowercase_name_rejection_precedes_run_and_compose_side_effects
             },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": objective, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
         )
     finally:
         _clear_overrides()
@@ -3401,10 +3382,8 @@ def test_round16_shared_growth_semantics_precede_both_planners_and_stores(
             json=run_body,
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": objective, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
         )
     finally:
         _clear_overrides()

@@ -32,6 +32,13 @@ MAX_RATIONALE_LEN = 300
 # ``params`` object from growing without limit.
 MAX_POSTED_PLAN_JSON_BYTES = 16 * 1024
 PLAN_DIGEST_PATTERN = r"^v1\.[A-Za-z0-9_-]{1,32}\.[0-9]{10}\.[A-Za-z0-9_-]{43}$"
+# Audit 2026-09-21 critic-01: compose never executes. The request field stays
+# for one deprecation release (removing a request property is a breaking
+# OpenAPI change), accepts false or absent, and refuses true with this text.
+EXECUTE_RETIRED_DETAIL = (
+    "execute is retired: compose returns a plan for review; "
+    "run it with POST /api/v1/growth-agent/agent/plan/execute"
+)
 
 
 def _clean_state_codes(values: list[str]) -> list[str]:
@@ -50,12 +57,24 @@ def _clean_state_codes(values: list[str]) -> list[str]:
 
 
 class ComposePlanRequest(BaseModel):
-    """Ask the co-pilot to compose (and optionally execute) a governed plan."""
+    """Ask the co-pilot to compose a governed plan for the lender to review.
+
+    Compose never runs the plan: the reviewed plan runs only through
+    ``POST /growth-agent/agent/plan/execute`` with the compose response's
+    digest. ``execute`` is a retired, tolerant field: false or absent is
+    accepted, true is a 422 (``EXECUTE_RETIRED_DETAIL``).
+    """
 
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     objective: str = Field(min_length=3, max_length=500)
-    execute: bool = False
+    execute: bool = Field(
+        default=False,
+        description=(
+            "Retired: compose never executes; run a reviewed plan with "
+            "POST /api/v1/growth-agent/agent/plan/execute."
+        ),
+    )
     states: list[str] = Field(default_factory=list, max_length=20)
     request_id: str | None = None
 
@@ -63,6 +82,13 @@ class ComposePlanRequest(BaseModel):
     @classmethod
     def _objective(cls, value: str) -> str:
         return assert_reviewed_growth_objective(value)
+
+    @field_validator("execute")
+    @classmethod
+    def _execute_retired(cls, value: bool) -> bool:
+        if value:
+            raise ValueError(EXECUTE_RETIRED_DETAIL)
+        return value
 
     @field_validator("states")
     @classmethod
@@ -222,6 +248,7 @@ class ExecutePlanRequest(BaseModel):
 
 
 __all__ = [
+    "EXECUTE_RETIRED_DETAIL",
     "MAX_PLAN_STEPS",
     "MAX_POSTED_PLAN_JSON_BYTES",
     "MAX_RATIONALE_LEN",

@@ -30,6 +30,7 @@ from tests.unit.growth_refusal_contract import (
     GROWTH_REFUSAL_MESSAGE_RE,
     assert_only_refusal_audit_writes,
     assert_refused_with_audit,
+    post_growth_execute,
 )
 
 _UNSAFE_AUDIENCE_DECISIONS = (
@@ -166,7 +167,7 @@ def test_audience_decisions_fail_every_body_and_objective_boundary(unsafe_text: 
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=unsafe_text)
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
-        ComposePlanRequest(objective=unsafe_text, execute=True)
+        ComposePlanRequest(objective=unsafe_text)
 
 
 @pytest.mark.parametrize("unsafe_text", _UNSAFE_SUBJECT_DECISIONS)
@@ -305,10 +306,8 @@ def test_audience_decisions_stop_before_planners_sql_or_storage(
             json={"prompt": unsafe_text, "save_monitor": True, "cadence": "daily"},
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": unsafe_text, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, unsafe_text, headers={"X-Forwarded-Email": "operator@example.com"}
         )
     finally:
         app.dependency_overrides.pop(get_sql_client, None)

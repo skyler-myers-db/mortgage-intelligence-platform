@@ -284,11 +284,16 @@ describe('ComposePlanCard', () => {
     );
   });
 
-  it('holds the result until the server answers: pending is Running…, disabled and announced', () => {
-    renderResponse(COMPOSED_SIGNED, runControls({ pending: true }));
+  it('holds the result until the server answers: pending is Running…, aria-disabled and announced', () => {
+    const run = runControls({ pending: true });
+    renderResponse(COMPOSED_SIGNED, run);
     const button = runButton(container);
     expect(button?.textContent).toBe('Running…');
-    expect(button?.disabled).toBe(true);
+    // Focusable while pending (critic-01): aria-disabled, not native disabled; the click is ignored.
+    expect(button?.disabled).toBe(false);
+    expect(button?.getAttribute('aria-disabled')).toBe('true');
+    act(() => button?.click());
+    expect(run.onRun).not.toHaveBeenCalled();
     expect(container.querySelector('[role="status"]')?.textContent).toBe('Running the plan you reviewed.');
     expect(container.textContent).not.toContain('Execution trace');
   });

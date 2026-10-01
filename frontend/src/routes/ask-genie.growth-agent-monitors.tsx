@@ -63,6 +63,7 @@ export function GrowthAgentMonitorsPanel({ agent, onOpenRoute, onOpenWorkflows }
         )}
         <SavedGrowthAgentMonitors
           monitors={monitors}
+          schedulerState={agent.schedulerState}
           monitorPending={agent.monitorPending}
           draftPending={agent.monitorDraftPending}
           actionsDisabled={agent.agentBusy}
