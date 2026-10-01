@@ -12,6 +12,11 @@
  * reopen within 60 s is served from cache; a filter change while the menu is
  * closed reads nothing. The count is aria-hidden and wired to its option by
  * aria-describedby, so the option's accessible NAME stays its label.
+ *
+ * A borrower list (?borrower_ids=) is never counted: counts over named
+ * borrowers would read their attributes without the VIEW_LEADS row the list
+ * writes, so the server refuses them (BORROWER_LIST_LIST_ONLY_DETAIL) and the
+ * menus show their labels only.
  */
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -73,13 +78,14 @@ export function FilterFacetsProvider({ children }: { children: ReactNode }) {
     leadQueueLenderRefs(configOptions.data?.target_lender_refs),
     actorEmail,
   );
+  const borrowerList = (request.geo?.borrowerIds?.length ?? 0) > 0;
   const facetQuery = dimension === null ? '' : leadFacetsQuery(dimension, request);
   const query = useQuery({
     // Keyed on the exact facet query (own filter already dropped), so a
     // change to the dimension's own filter reuses the cached counts.
     queryKey: queryKeys.leadFacets(dimension ?? '', [facetQuery]),
     queryFn: ({ signal }) => fetchLeadFacets(dimension ?? 'state', request, signal),
-    enabled: dimension !== null && !unresolved,
+    enabled: dimension !== null && !unresolved && !borrowerList,
     staleTime: FACET_STALE_MS,
   });
   const source: FilterFacetSource = {
@@ -88,7 +94,7 @@ export function FilterFacetsProvider({ children }: { children: ReactNode }) {
     },
     counts: (label): FilterFacetCounts | null => {
       const counted = FACET_LABEL_DIMENSIONS[label];
-      if (!counted || label !== openLabel || unresolved) return null;
+      if (!counted || label !== openLabel || unresolved || borrowerList) return null;
       const data = query.data;
       if (query.isError && !data) return { status: 'error', countFor: () => null };
       if (!data) return { status: 'loading', countFor: () => null };

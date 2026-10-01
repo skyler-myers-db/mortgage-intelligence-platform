@@ -108,6 +108,8 @@ export interface OutreachDraftResult {
   borrower_id: string;
   campaign_id?: string | null;
   variant_name?: string | null;
+  /** The campaign treatment this draft was bound to; null exactly when campaign_id is. */
+  campaign_treatment_fingerprint?: string | null;
   offer_code: string;
   channel: 'email' | 'sms' | 'direct_mail';
   subject?: string | null;

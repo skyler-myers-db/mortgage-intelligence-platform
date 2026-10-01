@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.services.lead_cohort_replay as cohort_replay
-from backend.api.leads import IDENTITY_PROOF_LIST_ONLY_DETAIL
+from backend.api.leads import BORROWER_LIST_LIST_ONLY_DETAIL, IDENTITY_PROOF_LIST_ONLY_DETAIL
 from backend.main import app
 from backend.schemas.lead_facets import LeadFacetCounts
 from backend.services.audit_store import get_audit_store
@@ -167,6 +167,37 @@ def test_the_identity_proof_is_list_only(
     response = TestClient(app).get(path, params={"include_identity_proof": "true", **extra}, headers=ADMIN)
     assert response.status_code == 422
     assert response.json() == {"detail": IDENTITY_PROOF_LIST_ONLY_DETAIL}
+
+
+@pytest.mark.parametrize(
+    ("path", "extra"),
+    [("/api/leads/count", {}), ("/api/leads/facets", {"dimension": "state"}), ("/api/leads/facets", {"dimension": "approval"})],
+)
+def test_a_borrower_list_is_list_only_and_reads_nothing(
+    wired: tuple[_CountRepo, _FacetRepo, _AuditProbe], path: str, extra: dict[str, str]
+) -> None:
+    """A count or facet over named borrowers is an unaudited per-borrower read.
+
+    Facet buckets reveal approval, state and segment, and a count bounded by
+    score or spread binary-searches a score, so these aggregates refuse
+    borrower_ids before any repository read; the audited GET /leads is the
+    only way to read named borrowers.
+    """
+    count_repo, facet_repo, probe = wired
+    response = TestClient(app).get(
+        path,
+        params={"borrower_ids": "B-0123456789ABC", "min_opportunity_score": "80", **extra},
+        headers=ADMIN,
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": BORROWER_LIST_LIST_ONLY_DETAIL}
+    assert count_repo.calls == []
+    assert facet_repo.calls == []
+
+
+def test_a_blank_borrower_list_is_no_borrower_list(wired: tuple[_CountRepo, _FacetRepo, _AuditProbe]) -> None:
+    response = TestClient(app).get("/api/leads/count", params={"segment": "itm", "borrower_ids": "  "}, headers=USER)
+    assert response.status_code == 200
 
 
 def test_count_never_reads_a_growth_agent_handoff(wired: tuple[_CountRepo, _FacetRepo, _AuditProbe]) -> None:

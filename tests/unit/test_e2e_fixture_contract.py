@@ -328,7 +328,6 @@ KNOWN_OMISSIONS: dict[str, dict[str, str]] = {
     ),
     "registry:GET /api/leads": _omission("leads", _per_item(24, _LEAD_SUMMARY_OMITTED)),
     "registry:GET /api/session": _omission("session", "actor_display_name,role_labels"),
-    "registry:POST /api/outreach/draft": _omission("outreach", "campaign_treatment_fingerprint"),
     "registry:POST /api/portfolio/preview": _omission("portfolio", "offers_available"),
 }
 

@@ -66,6 +66,7 @@ export function outreachDraftFor(request: FixtureRequest): OutreachDraftResult {
     borrower_id: borrower.borrower_id,
     campaign_id: null,
     variant_name: null,
+    campaign_treatment_fingerprint: null,
     offer_code: borrower.recommended_offer_code ?? 'refi',
     channel,
     subject: channel === 'email' ? 'A quick review of your mortgage options' : null,

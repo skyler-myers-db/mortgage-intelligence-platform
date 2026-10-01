@@ -27,6 +27,7 @@ from backend.schemas.lead_query import (
     DEFAULT_LEAD_LIMIT,
     MAX_LEAD_LIMIT,
     LeadLimitDep,
+    LeadQueryParams,
     LeadQueryParamsDep,
 )
 from backend.services.audit_store import AuditStore, get_audit_store
@@ -69,6 +70,17 @@ FacetDimensionParam = Annotated[
 ]
 
 IDENTITY_PROOF_LIST_ONLY_DETAIL = "include_identity_proof applies to GET /leads only"
+# A count or facet over named borrowers reads their attributes without the
+# VIEW_LEADS row the ranked list writes: a per-borrower read must be the
+# audited list, so the audit-free aggregates refuse a borrower list.
+BORROWER_LIST_LIST_ONLY_DETAIL = "borrower_ids applies to GET /leads only: a read of named borrowers is audited"
+
+
+def _refuse_list_only_params(params: LeadQueryParams) -> None:
+    if params.include_identity_proof:
+        raise HTTPException(status_code=422, detail=IDENTITY_PROOF_LIST_ONLY_DETAIL)
+    if params.borrower_ids and params.borrower_ids.strip():
+        raise HTTPException(status_code=422, detail=BORROWER_LIST_LIST_ONLY_DETAIL)
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
@@ -253,8 +265,7 @@ def count_leads(
     read here.
     """
 
-    if params.include_identity_proof:
-        raise HTTPException(status_code=422, detail=IDENTITY_PROOF_LIST_ONLY_DETAIL)
+    _refuse_list_only_params(params)
     resolved = resolve_lead_query(request, sales_state, params, growth_handoff=None)
     if resolved.assignment_empty:
         return LeadCountResponse(total_matching=0)
@@ -276,8 +287,7 @@ def lead_facets(
     vocabularies. Fetched only when a user opens that menu.
     """
 
-    if params.include_identity_proof:
-        raise HTTPException(status_code=422, detail=IDENTITY_PROOF_LIST_ONLY_DETAIL)
+    _refuse_list_only_params(params)
     params = without_facet_dimension(params, dimension)
     resolved = resolve_lead_query(request, sales_state, params, growth_handoff=None)
     if resolved.assignment_empty:

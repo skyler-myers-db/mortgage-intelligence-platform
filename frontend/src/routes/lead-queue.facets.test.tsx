@@ -122,6 +122,15 @@ describe('Lead Queue facet counts', () => {
     expect(facetCalls).toHaveLength(1);
   });
 
+  it('never counts a borrower list: the menu opens with labels only and reads nothing', async () => {
+    await mountAt('?borrower_ids=B-0123456789ABC,B-0123456789ABD&segment=itm');
+    await toggle('STATE');
+    expect(listbox()).not.toBeNull();
+    expect(facetCalls).toEqual([]);
+    expect(listbox()!.getAttribute('aria-busy')).not.toBe('true');
+    expect(listbox()!.querySelector('[aria-hidden="true"].filter-menu__count, .filter-menu__count')).toBeNull();
+  });
+
   it('never reads for an uncounted menu, and a change while closed reads nothing', async () => {
     await mountAt('');
     await toggle('RELATIONSHIP');
