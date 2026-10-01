@@ -9,6 +9,7 @@ already masked before API egress.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from datetime import UTC
@@ -30,14 +31,21 @@ from backend.schemas.lead_query import (
     LeadQueryParams,
     LeadQueryParamsDep,
 )
+from backend.services.approval_requests import (
+    ApprovalRequestForbidden,
+    ApprovalRequestNotFound,
+    open_borrower_ids_for_queue,
+)
 from backend.services.audit_store import AuditStore, get_audit_store
-from backend.services.lakebase import LakebaseError
+from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.lead_query_resolution import (
     resolve_lead_query,
     view_leads_audit_payload,
     without_facet_dimension,
 )
 from backend.services.observability import emit
+from backend.services.rbac import can_access_approver, require_authenticated_actor
 from backend.services.repositories import LeadRepository, get_lead_repository
 from backend.services.repositories.databricks_lead_cohorts import (
     GrowthAgentHandoffStale,
@@ -74,6 +82,12 @@ IDENTITY_PROOF_LIST_ONLY_DETAIL = "include_identity_proof applies to GET /leads 
 # VIEW_LEADS row the ranked list writes: a per-borrower read must be the
 # audited list, so the audit-free aggregates refuse a borrower list.
 BORROWER_LIST_LIST_ONLY_DETAIL = "borrower_ids applies to GET /leads only: a read of named borrowers is audited"
+REQUEST_SCOPE_LIST_ONLY_DETAIL = (
+    "approval_request_batch applies to GET /leads only: a read of named borrowers is audited"
+)
+REQUEST_SCOPE_COMBINATION_DETAIL = (
+    "approval_request_batch cannot be combined with cohort_id, borrower_ids or growth_handoff"
+)
 
 
 def _refuse_list_only_params(params: LeadQueryParams) -> None:
@@ -81,6 +95,40 @@ def _refuse_list_only_params(params: LeadQueryParams) -> None:
         raise HTTPException(status_code=422, detail=IDENTITY_PROOF_LIST_ONLY_DETAIL)
     if params.borrower_ids and params.borrower_ids.strip():
         raise HTTPException(status_code=422, detail=BORROWER_LIST_LIST_ONLY_DETAIL)
+    if params.approval_request_batch is not None:
+        raise HTTPException(status_code=422, detail=REQUEST_SCOPE_LIST_ONLY_DETAIL)
+
+
+def _approval_request_scope(request: Request, params: LeadQueryParams) -> list[str]:
+    """The open borrowers of the named approval request (maker-checker, flow-02).
+
+    Lakebase is resolved here, never as a route dependency, so the Lead Queue
+    never fails on Lakebase configuration when no request is named.
+    """
+
+    batch_id = str(params.approval_request_batch)
+    if (
+        params.cohort_id
+        or (params.borrower_ids and params.borrower_ids.strip())
+        or request.query_params.getlist("growth_handoff")
+    ):
+        raise HTTPException(status_code=422, detail=REQUEST_SCOPE_COMBINATION_DETAIL)
+    actor = require_authenticated_actor(request)
+    try:
+        return open_borrower_ids_for_queue(
+            get_lakebase_client(),
+            batch_id=batch_id,
+            actor=actor,
+            is_approver=can_access_approver(request),
+        )
+    except ApprovalRequestNotFound as exc:
+        raise HTTPException(status_code=404, detail="Approval request not found") from exc
+    except ApprovalRequestForbidden as exc:
+        raise HTTPException(
+            status_code=403, detail="Only approvers and the requester can open this approval request."
+        ) from exc
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
@@ -137,6 +185,15 @@ def list_leads(
     params: LeadQueryParamsDep,
     limit: LeadLimitDep,
 ) -> list[LeadSummary]:
+    request_batch = params.approval_request_batch
+    if request_batch is not None:
+        open_ids = _approval_request_scope(request, params)
+        if not open_ids:
+            # Never an empty borrower_ids: it parses to None, the whole queue.
+            response.headers["X-Total-Matching"] = "0"
+            response.headers["X-Returned-Rows"] = "0"
+            return []
+        params = dataclasses.replace(params, borrower_ids=",".join(open_ids))
     resolved = resolve_lead_query(
         request,
         sales_state,
@@ -233,6 +290,8 @@ def list_leads(
     if len(leads) >= limit:
         response.headers["X-Truncated-At"] = str(limit)
     audit_payload = view_leads_audit_payload(resolved, leads, limit=limit)
+    if request_batch is not None:
+        audit_payload["approval_request_batch_id"] = request_batch
     segment = resolved.segment
     parsed_segments = resolved.segment_codes
     background.add_task(

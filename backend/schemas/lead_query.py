@@ -1,6 +1,6 @@
 """Query-parameter contract for ``GET /api/leads``.
 
-The Lead Queue accepts 39 query parameters -- geography drill-downs,
+The Lead Queue accepts 40 query parameters -- geography drill-downs,
 Portfolio Builder replays, sales-workflow state, the governed Genie
 cohort handoff, and the public opportunity-score / rate-spread bounds. Declaring them inline left the router's signature ~290
 lines long, which buried the ten lines of logic underneath it.
@@ -25,6 +25,7 @@ from typing import Annotated, Literal
 
 from fastapi import Depends, Query
 
+from backend.schemas.common import PUBLIC_UUID_PATTERN
 from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
 
 # Kept in sync with DatabricksLeadRepository.{DEFAULT_LIMIT, MAX_LIMIT}.
@@ -410,6 +411,22 @@ MaxRateSpreadBpsParam = Annotated[
     ),
 ]
 
+# Maker-checker scope (audit flow-02, 12.4 #10): the open borrowers of one
+# approval request. GET /leads only: the aggregates refuse it (a read of named
+# borrowers is audited), and the list refuses it beside a cohort, a borrower
+# list or a Growth Agent handoff.
+ApprovalRequestBatchParam = Annotated[
+    str | None,
+    Query(
+        alias="approval_request_batch",
+        pattern=PUBLIC_UUID_PATTERN.pattern,
+        description=(
+            "Optional approval request id: the list shows that request's open "
+            "borrowers (approvers, or the requester). GET /leads only."
+        ),
+    ),
+]
+
 LimitParam = Annotated[
     int,
     Query(
@@ -485,6 +502,7 @@ class LeadQueryParams:
     max_opportunity_score: int | None = None
     min_rate_spread_bps: int | None = None
     max_rate_spread_bps: int | None = None
+    approval_request_batch: str | None = None
 
     def public_bounds(self) -> dict[str, int]:
         """The score and spread bounds this request set, keyed by wire name."""
@@ -541,6 +559,7 @@ def lead_query_params(
     max_opportunity_score: MaxOpportunityScoreParam = None,
     min_rate_spread_bps: MinRateSpreadBpsParam = None,
     max_rate_spread_bps: MaxRateSpreadBpsParam = None,
+    approval_request_batch: ApprovalRequestBatchParam = None,
 ) -> LeadQueryParams:
     """FastAPI dependency: the Lead Queue filter parameters, in wire order.
 
@@ -590,6 +609,7 @@ def lead_query_params(
         max_opportunity_score=max_opportunity_score,
         min_rate_spread_bps=min_rate_spread_bps,
         max_rate_spread_bps=max_rate_spread_bps,
+        approval_request_batch=approval_request_batch,
     )
 
 

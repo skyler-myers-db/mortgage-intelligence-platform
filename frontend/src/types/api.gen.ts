@@ -3521,6 +3521,8 @@ export interface ApiOperations {
       min_rate_spread_bps?: number | null;
       /** Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
       max_rate_spread_bps?: number | null;
+      /** Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only. */
+      approval_request_batch?: string | null;
       /** Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N — refine filters'. */
       limit?: number;
     };
@@ -3607,6 +3609,8 @@ export interface ApiOperations {
       min_rate_spread_bps?: number | null;
       /** Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
       max_rate_spread_bps?: number | null;
+      /** Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only. */
+      approval_request_batch?: string | null;
     };
     headers: Record<string, never>;
     body: never;
@@ -3693,6 +3697,8 @@ export interface ApiOperations {
       min_rate_spread_bps?: number | null;
       /** Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
       max_rate_spread_bps?: number | null;
+      /** Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only. */
+      approval_request_batch?: string | null;
     };
     headers: Record<string, never>;
     body: never;

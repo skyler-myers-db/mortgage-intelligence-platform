@@ -23070,6 +23070,25 @@
             }
           },
           {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
+            }
+          },
+          {
             "description": "Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N \u2014 refine filters'.",
             "in": "query",
             "name": "limit",
@@ -23848,6 +23867,25 @@
               ],
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
             }
           }
         ],
@@ -24681,6 +24719,25 @@
               ],
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
             }
           }
         ],
@@ -33236,6 +33293,25 @@
             }
           },
           {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
+            }
+          },
+          {
             "description": "Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N \u2014 refine filters'.",
             "in": "query",
             "name": "limit",
@@ -34013,6 +34089,25 @@
               ],
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
             }
           }
         ],
@@ -34844,6 +34939,25 @@
               ],
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
             }
           }
         ],
