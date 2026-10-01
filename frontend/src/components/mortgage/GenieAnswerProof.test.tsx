@@ -5,7 +5,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { GenieAnswer as GenieAnswerShape } from '../../types';
+import type { GenieAnswer as GenieAnswerShape, GenieClaimsSummary } from '../../types';
 import { GenieProofPanel } from './GenieAnswerProof';
 
 function payload(elapsedMs: number | null): GenieAnswerShape {
@@ -100,5 +100,68 @@ describe('GenieProofPanel', () => {
     expect(container.textContent).not.toContain('Unsafe trace');
     expect(container.textContent).not.toContain('jane@example.com');
     expect(container.textContent).not.toContain('123 Main St.');
+  });
+});
+
+describe('GenieProofPanel: figures verified against the rows (genie-10 phase 1)', () => {
+  // deviation:genie-figures-verified (pinned here)
+  let container: HTMLDivElement;
+  let root: Root;
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  const withClaims = (claims: GenieClaimsSummary | null): GenieAnswerShape => {
+    const base = payload(12);
+    return { ...base, proof: { ...base.proof, claims } } as GenieAnswerShape;
+  };
+  const render = (value: GenieAnswerShape) =>
+    act(() => root.render(<GenieProofPanel payload={value} onOpenSource={() => undefined} />));
+  const metrics = () =>
+    Array.from(container.querySelectorAll('.genie-proof__metric')).map((m) => m.querySelector('.eyebrow')?.textContent);
+
+  it('shows the count and every figure grouped under the summary and each section', () => {
+    render(
+      withClaims({
+        verified: 3,
+        total: 3,
+        items: [
+          { token: '48,396', kind: 'number', derivation: 'returned_value', section: null },
+          { token: '$1.2M', kind: 'currency', derivation: 'derived_from_rows', section: 'Market size' },
+          { token: '80%', kind: 'percent', derivation: 'bound', section: 'Market size' },
+        ],
+      }),
+    );
+
+    expect(metrics()).toContain('Figures');
+    expect(container.textContent).toContain('3 of 3 verified against the returned rows');
+    const groups = Array.from(container.querySelectorAll('.genie-claims__group'));
+    expect(groups.map((g) => g.querySelector('.genie-claims__group-title')?.textContent)).toEqual(['Summary', 'Market size']);
+    const items = Array.from(container.querySelectorAll('.genie-claims__item')).map((item) => item.textContent);
+    expect(items).toEqual([
+      '48,396Count or valueMatches a returned value',
+      '$1.2MAmountDerived from the returned rows (a total, average, share or change)',
+      '80%PercentA threshold the returned values satisfy',
+    ]);
+  });
+
+  it('shows no group heading on a single-turn answer', () => {
+    render(withClaims({ verified: 1, total: 1, items: [{ token: '123', kind: 'number', derivation: 'returned_value' }] }));
+
+    expect(container.querySelector('.genie-claims__group-title')).toBeNull();
+    expect(container.querySelectorAll('.genie-claims__item')).toHaveLength(1);
+  });
+
+  it.each([null, { verified: 0, total: 0, items: [] }])('renders nothing for claims %j (older answers included)', (claims) => {
+    render(withClaims(claims));
+
+    expect(metrics()).not.toContain('Figures');
+    expect(container.querySelector('.genie-claims')).toBeNull();
   });
 });

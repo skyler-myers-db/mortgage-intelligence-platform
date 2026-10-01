@@ -1,0 +1,44 @@
+/* Verified figures in the Genie proof drawer (audit genie-10 phase 1).
+   deviation:genie-figures-verified. Lazy: loaded with the proof panel. */
+.genie-claims__group + .genie-claims__group {
+  margin-top: var(--sp-3);
+}
+.genie-claims__group-title {
+  color: var(--text-1);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  margin-top: var(--sp-2);
+}
+.genie-claims__list {
+  list-style: none;
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+}
+.genie-claims__item {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, auto) minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--line-1);
+  font-size: var(--fs-11);
+  color: var(--text-2);
+}
+.genie-claims__token {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.genie-claims__kind {
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.genie-claims__derivation {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .genie-claims__item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
