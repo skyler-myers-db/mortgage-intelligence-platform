@@ -96,6 +96,12 @@ def _stale_probe(_request: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
+def _stale_then_failed_probe(_request: Request) -> Response:
+    """A read was marked stale, then the request failed: a non-2xx never carries the age."""
+    record_stale_error(_OLDER)
+    return JSONResponse({"detail": "Warehouse unavailable"}, status_code=503)
+
+
 def _executor_stale_probe(_request: Request) -> Response:
     """A stale serve inside a plain executor thread never reaches the request."""
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -122,6 +128,7 @@ def client() -> Iterator[TestClient]:
         Route("/api/v1/pytest-timing-async", _async_probe),
         Route("/api/v1/pytest-timing-clients", _client_recorder_probe),
         Route("/api/v1/pytest-timing-stale", _stale_probe),
+        Route("/api/v1/pytest-timing-stale-503", _stale_then_failed_probe),
         Route("/api/v1/pytest-timing-executor-stale", _executor_stale_probe),
         Route("/pytest-timing-page", _page_probe),
     ]
@@ -235,3 +242,13 @@ def test_executor_threads_record_no_last_good_marker(client: TestClient) -> None
 
     assert response.status_code == 200
     assert LAST_GOOD_HEADER.lower() not in response.headers
+
+
+def test_no_last_good_header_on_a_non_2xx_even_when_marked(client: TestClient) -> None:
+    """The 2xx-only belt (W5a ruling, delivery-06): the client ignores the header off 2xx too."""
+    response = client.get("/api/v1/pytest-timing-stale-503")
+
+    assert response.status_code == 503
+    assert LAST_GOOD_HEADER.lower() not in response.headers
+    # Server-Timing still rides every /api response.
+    assert "server-timing" in response.headers
