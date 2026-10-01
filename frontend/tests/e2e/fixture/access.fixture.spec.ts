@@ -55,6 +55,20 @@ test.describe('a non-admin session', () => {
     expect(mockApi.calls.filter((call) => /^\/api\/admin\//.test(call.path))).toEqual([]);
   });
 
+  test('a read-only auditor session reaches the audit ledger but still gets the admin 403 (D-audit-reads-c3)', async ({ app, mockApi, page }) => {
+    mockApi.register<SessionResponse>('GET', '/api/session', () => ({
+      body: { ...NON_ADMIN, can_approve: false, can_read_audit: true, role_labels: ['Auditor'] },
+    }));
+    await app.gotoRoute('/audit-ledger');
+    await expect(page.locator('#main-content h1')).toHaveText('Audit ledger');
+    await expect(page.getByTestId('audit-ledger-access-denied')).toHaveCount(0);
+
+    await app.gotoRoute('/admin-config');
+    const denied = page.getByTestId('admin-access-denied');
+    await expect(denied.getByTestId('access-denied-role')).toContainText('Required role: Administrator.');
+    expect(mockApi.calls.filter((call) => /^\/api(\/v\d+)?\/admin\//.test(call.path))).toEqual([]);
+  });
+
   test('an admin session keeps the asset link', async ({ app }) => {
     await app.gotoRoute('/');
     const drawer = await app.openEvidenceDrawer();

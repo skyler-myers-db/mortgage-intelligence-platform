@@ -31,6 +31,7 @@ const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
   'lead-queue': ['filter-menu', 'expanded-row', 'read-failed'],
   home: ['degraded'],
   'segment-intelligence': ['read-failed'],
+  'admin-config': ['run-dialog-open'],
 };
 const ACCENT_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail']);
 const SWEPT_ACCENTS: readonly AxeAccent[] = ['teal', 'navy', 'red'];

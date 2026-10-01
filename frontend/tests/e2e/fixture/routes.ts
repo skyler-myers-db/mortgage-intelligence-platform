@@ -46,6 +46,8 @@ export const FIXTURE_ROUTES: readonly FixtureRoute[] = [
   { name: 'analytics-approval-funnel', path: '/analytics?view=approval-funnel' },
   { name: 'analytics-sales-ops', path: '/analytics?view=sales-ops' },
   { name: 'admin-config', path: '/admin-config', populated: 'fixture-v1', product: true },
+  // The audit ledger (D-audit-reads-c3): an actor from the ledger page fixture.
+  { name: 'audit-ledger', path: '/audit-ledger', populated: 'analyst@summit.example', product: true },
   { name: 'glossary', path: '/glossary' },
   { name: 'asset-detail', path: `/data-estate/assets/${PRIMARY_ASSET_KEY}`, populated: 'mip.gold.borrower_360' },
   { name: 'not-found', path: '/this-route-does-not-exist' },

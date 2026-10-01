@@ -28,6 +28,7 @@ import { PRIMARY_BORROWER } from './data/borrowers';
 import { crashTheEvidenceDrawer, holdChunk, retireChunk, spendStaleChunkReload } from './data/errorTelemetry';
 import { registerGenieTurn } from './data/genieTurn';
 import { registerDraftEcho, registerHeldDecision } from './data/queueKeyboard';
+import { SESSION } from './data/shell';
 import type { Hygiene } from './hygiene';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
@@ -172,6 +173,10 @@ const SURFACES: readonly Surface[] = [
   {
     name: 'borrower offer mock',
     route: `/offer-orchestrator/${ID}`,
+    // A demo affordance: shown only in presenter mode (D-shell-deviations-e1).
+    prepare: ({ mockApi }) => {
+      mockApi.register('GET', '/api/session', () => json({ ...SESSION, presenter_mode: true }));
+    },
     open: async ({ page }) => {
       const opener = page.getByTestId('preview-borrower-offer');
       await opener.click();
