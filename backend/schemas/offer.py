@@ -256,6 +256,13 @@ _INDIVIDUAL_REVIEW_MODES: frozenset[str] = frozenset({"individual", "triage"})
 _CONSENT_REJECT_CODES: frozenset[str] = frozenset({"do_not_call", "opt_out"})
 
 
+def validate_unbound_request_link(batch_id: str | None, campaign_id: str | None) -> None:
+    """An approval request covers unbound queues only (v1), so a link never rides a binding."""
+
+    if batch_id is not None and campaign_id is not None:
+        raise ValueError("approval_request_batch_id cannot be combined with a campaign binding")
+
+
 class OutreachDraft(BaseModel):
     generation_id: str = Field(min_length=1, max_length=64)
     response_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -396,6 +403,14 @@ class OutreachApproveRequest(BaseModel):
     # are intentionally not coupled.
     assigned_to_email: str | None = Field(default=None, max_length=120)
     follow_up_in_days: int | None = Field(default=None, ge=1, le=30)
+    # Maker-checker link (audit flow-02, report 12.4 #10): the approval
+    # request this decision answers. Verified open, and not raised by this
+    # approver, before the decision is written; recorded on the APPROVE row.
+    approval_request_batch_id: str | None = Field(
+        default=None,
+        pattern=PUBLIC_UUID_PATTERN,
+        description="The open approval request this decision answers (unbound queues only).",
+    )
 
     @field_validator("borrower_id")
     @classmethod
@@ -466,6 +481,7 @@ class OutreachApproveRequest(BaseModel):
             isinstance(value, str) and value.strip() for value in proof
         ):
             raise ValueError("review_mode requires the generated draft proof")
+        validate_unbound_request_link(self.approval_request_batch_id, self.campaign_id)
         return self
 
 
@@ -516,6 +532,12 @@ class OutreachRejectRequest(BaseModel):
     # of the run carries the same opaque id, the same reason and the same
     # required shared note, so the ledger can regroup the run.
     bulk_id: str | None = Field(default=None, max_length=64)
+    # Maker-checker link -- see ``OutreachApproveRequest.approval_request_batch_id``.
+    approval_request_batch_id: str | None = Field(
+        default=None,
+        pattern=PUBLIC_UUID_PATTERN,
+        description="The open approval request this decision answers (unbound queues only).",
+    )
 
     @field_validator("borrower_id")
     @classmethod
@@ -562,6 +584,7 @@ class OutreachRejectRequest(BaseModel):
             raise ValueError("bulk rejections require a shared note")
         if self.bulk_id is not None and self.rationale_code in _CONSENT_REJECT_CODES:
             raise ValueError("consent reasons cannot be applied in bulk")
+        validate_unbound_request_link(self.approval_request_batch_id, self.campaign_id)
         return self
 
 

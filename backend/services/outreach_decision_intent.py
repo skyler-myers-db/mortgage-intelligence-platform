@@ -150,6 +150,10 @@ def _approval_decision_intent(
     # intents written before the review_mode ledger.
     if payload.review_mode is not None:
         intent["review_mode"] = payload.review_mode
+    # Likewise the maker-checker link (audit flow-02): only a linked decision
+    # carries it, so every unlinked intent keeps its bytes.
+    if payload.approval_request_batch_id is not None:
+        intent["approval_request_batch_id"] = payload.approval_request_batch_id
     return _canonical_intent(intent)
 
 
@@ -189,6 +193,8 @@ def _reject_decision_intent(
     # (and its derived fallback request id) stays byte-identical.
     if payload.bulk_id is not None:
         intent["bulk_id"] = payload.bulk_id
+    if payload.approval_request_batch_id is not None:
+        intent["approval_request_batch_id"] = payload.approval_request_batch_id
     return _canonical_intent(intent)
 
 
@@ -278,6 +284,7 @@ def _approve_intent_matches_payload(
         "assigned_to_email": payload.assigned_to_email,
         "follow_up_in_days": payload.follow_up_in_days,
         "review_mode": payload.review_mode,
+        "approval_request_batch_id": payload.approval_request_batch_id,
     }
     treatment_fingerprint = intent.get("campaign_treatment_fingerprint")
     campaign_owner_email = intent.get("campaign_owner_email")
@@ -322,6 +329,7 @@ def _reject_intent_matches_payload(
         "rationale_code": payload.rationale_code,
         "rationale": safe_rationale,
         "bulk_id": payload.bulk_id,
+        "approval_request_batch_id": payload.approval_request_batch_id,
     }
     treatment_fingerprint = intent.get("campaign_treatment_fingerprint")
     campaign_owner_email = intent.get("campaign_owner_email")

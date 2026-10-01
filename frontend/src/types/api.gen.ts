@@ -2637,6 +2637,8 @@ export interface RequestSchemas {
   };
   OutreachApproveRequest: {
     actor?: string;
+    /** The open approval request this decision answers (unbound queues only). */
+    approval_request_batch_id?: string | null;
     assigned_to_email?: string | null;
     borrower_id: string;
     bulk_id?: string | null;
@@ -2673,6 +2675,8 @@ export interface RequestSchemas {
    */
   OutreachRejectRequest: {
     actor?: string;
+    /** The open approval request this decision answers (unbound queues only). */
+    approval_request_batch_id?: string | null;
     borrower_id: string;
     bulk_id?: string | null;
     campaign_id?: string | null;
