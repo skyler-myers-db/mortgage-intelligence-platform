@@ -1980,6 +1980,36 @@ export interface ResponseSchemas {
     segment_name: string;
     state: string;
   };
+  /** Borrowers carrying EXACTLY these core segment codes (and no other core code). */
+  SegmentCombination: {
+    /** Borrowers in gold.borrower_360 carrying exactly this set. */
+    addressable: number;
+    /** The contact-eligible subset of addressable (live eligibility predicate, clamped to addressable). None means not reported, never zero. */
+    contactable: number | null;
+    /** The exact set of core segment codes, distinct and in core order. */
+    segment_codes: ("itm" | "listed" | "permit" | "investor" | "equity" | "retention" | "second_lien_itm" | "heloc_draw_to_payback" | "home_equity_history" | "refi_propensity" | "itm_on_related_property" | "payoff_loss_leads" | "permit_activity")[];
+    /** Number of codes in segment_codes. */
+    signal_count: number;
+  };
+  /** Evidence manifest for the signal stack. */
+  SegmentCombinationProvenance: {
+    /** Where the live contactable subset comes from. */
+    contactable_source: string;
+    note: string;
+    /** Refresh anchor of the gold rows. */
+    refreshed_at: string | null;
+    /** The precomputed gold table the exact rows come from. */
+    source: string;
+  };
+  SegmentCombinationResponse: {
+    /** False until the gold refresh has built mip.gold.segment_combination_rollup. */
+    built: boolean;
+    /** Exact combinations, largest addressable first, then by combination key. */
+    combinations: ResponseSchemas['SegmentCombination'][];
+    /** The six core segment codes the rows are drawn from, in core order. */
+    core_codes: ("itm" | "listed" | "permit" | "investor" | "equity" | "retention" | "second_lien_itm" | "heloc_draw_to_payback" | "home_equity_history" | "refi_propensity" | "itm_on_related_property" | "payoff_loss_leads" | "permit_activity")[];
+    provenance: ResponseSchemas['SegmentCombinationProvenance'];
+  };
   SegmentMetricRow: {
     segment_code: "itm" | "listed" | "permit" | "investor" | "equity" | "retention" | "second_lien_itm" | "heloc_draw_to_payback" | "home_equity_history" | "refi_propensity" | "itm_on_related_property" | "payoff_loss_leads" | "permit_activity";
     segment_name: string;
@@ -3687,6 +3717,13 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['SegmentSummary'][];
+  };
+  "GET /api/v1/segments/combinations": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['SegmentCombinationResponse'];
   };
   "GET /api/v1/session": {
     pathParams: Record<string, never>;
