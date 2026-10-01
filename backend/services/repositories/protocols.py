@@ -57,6 +57,7 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.schemas.proof import BorrowerProof
+from backend.schemas.segment_combinations import SegmentCombinationResponse
 
 
 @runtime_checkable
@@ -514,4 +515,19 @@ class RateSensitivityRepository(Protocol):
     """
 
     def rate_sensitivity(self) -> RateSensitivityResponse:
+        ...
+
+
+@runtime_checkable
+class SegmentCombinationRepository(Protocol):
+    """Signal stack read model (audit wow-stage-5).
+
+    Backing: ``mip.gold.segment_combination_rollup`` -- one row per non-empty
+    exact set of the six core segment codes, precomputed by the gold refresh
+    job -- LEFT JOINed in one statement to a live contactable aggregate keyed
+    the same way. Whole book, audit-neutral; a missing table is
+    ``built=False``, never a 503.
+    """
+
+    def combinations(self) -> SegmentCombinationResponse:
         ...

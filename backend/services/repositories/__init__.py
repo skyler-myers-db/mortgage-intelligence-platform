@@ -16,6 +16,7 @@ from backend.services.repositories.factory import (
     get_portfolio_repository,
     get_rate_sensitivity_repository,
     get_rate_window_repository,
+    get_segment_combination_repository,
     get_segment_repository,
 )
 from backend.services.repositories.protocols import (
@@ -29,6 +30,7 @@ from backend.services.repositories.protocols import (
     PortfolioRepository,
     RateSensitivityRepository,
     RateWindowRepository,
+    SegmentCombinationRepository,
     SegmentRepository,
 )
 
@@ -43,6 +45,7 @@ __all__ = [
     "PortfolioRepository",
     "RateSensitivityRepository",
     "RateWindowRepository",
+    "SegmentCombinationRepository",
     "SegmentRepository",
     "get_analytics_repository",
     "get_borrower_repository",
@@ -54,5 +57,6 @@ __all__ = [
     "get_portfolio_repository",
     "get_rate_sensitivity_repository",
     "get_rate_window_repository",
+    "get_segment_combination_repository",
     "get_segment_repository",
 ]

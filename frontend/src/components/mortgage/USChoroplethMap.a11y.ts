@@ -11,11 +11,18 @@
  *    element's box instead of the pointer.
  */
 import type { KeyboardEvent } from 'react';
+import { formatCount, formatNumber } from '../../lib/formatters';
 
-/** Attribute every roving map unit (state path, ZIP tile button) carries. */
+/** Attribute every map unit (state path, ZIP tile) carries. */
 export const MAP_UNIT_ATTR = 'data-map-unit';
 
-const fmt = (value: number) => value.toLocaleString('en-US');
+/**
+ * Attribute a unit with borrowers in the selection carries (state:
+ * addressable > 0; ZIP: addressable_borrowers > 0; never the fill value).
+ * Only these are roving stops and controls (dataviz-10, WCAG 2.1.1).
+ * deviation:map-escape-and-populated-roving.
+ */
+export const MAP_POPULATED_ATTR = 'data-populated';
 
 export interface UnitFacts {
   count: number | null;
@@ -27,10 +34,10 @@ export interface UnitFacts {
 
 /** "N marketable borrowers, average opportunity score S, top segment X[, U unattended leads]". */
 function describeFacts(facts: UnitFacts, noun: string): string {
-  const parts = [facts.count !== null ? `${fmt(facts.count)} ${noun}` : `${noun}: unknown`];
-  if (facts.avgScore !== null) parts.push(`average opportunity score ${fmt(facts.avgScore)}`);
+  const parts = [facts.count !== null ? `${formatCount(facts.count)} ${noun}` : `${noun}: unknown`];
+  if (facts.avgScore !== null) parts.push(`average opportunity score ${formatNumber(facts.avgScore)}`);
   if (facts.topSegment) parts.push(`top segment ${facts.topSegment}`);
-  if (typeof facts.unattended === 'number') parts.push(`${fmt(facts.unattended)} unattended leads`);
+  if (typeof facts.unattended === 'number') parts.push(`${formatCount(facts.unattended)} unattended leads`);
   return parts.join(', ');
 }
 
@@ -61,9 +68,11 @@ export function zipAriaLabel(zip: string, facts: UnitFacts): string {
 }
 
 /**
- * Arrow keys / Home / End move focus between the `[data-map-unit]` elements
- * inside the handler's element, wrapping at the ends. Anything else (Enter,
- * Space, Tab, Escape) is left to the unit's own handlers and the browser.
+ * Arrow keys / Home / End move focus between the populated
+ * `[data-map-unit][data-populated]` elements inside the handler's element,
+ * wrapping at the ends; Home / End go to the first / last populated unit.
+ * Anything else (Enter, Space, Tab, Escape) is left to the unit's own
+ * handlers and the browser.
  */
 export function moveRovingFocus(event: KeyboardEvent<Element>): void {
   const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown'
@@ -72,7 +81,7 @@ export function moveRovingFocus(event: KeyboardEvent<Element>): void {
       ? -1
       : 0;
   if (direction === 0 && event.key !== 'Home' && event.key !== 'End') return;
-  const units = [...event.currentTarget.querySelectorAll<HTMLElement | SVGElement>(`[${MAP_UNIT_ATTR}]`)];
+  const units = [...event.currentTarget.querySelectorAll<HTMLElement | SVGElement>(`[${MAP_UNIT_ATTR}][${MAP_POPULATED_ATTR}]`)];
   const current = units.findIndex((unit) => unit === event.target);
   if (current < 0 || units.length === 0) return;
   event.preventDefault();
@@ -82,6 +91,14 @@ export function moveRovingFocus(event: KeyboardEvent<Element>): void {
       ? units.length - 1
       : (current + direction + units.length) % units.length;
   units[next]?.focus();
+}
+
+/** The state stage's description: how many drawn states the keys skip (none: no note). */
+export function skippedStatesNote(count: number): string {
+  const one = count === 1;
+  return `${one ? '1 state has' : `${formatCount(count)} states have`} no borrowers in this selection and ${
+    one ? 'is' : 'are'
+  } skipped; the table view lists them.`;
 }
 
 /** Where the hover card anchors for a focused unit: top centre of its box, in client coordinates. */
@@ -133,7 +150,7 @@ export function drillExitOriginatedInMap(lastFocused: Element | null, mapRoot: E
  * rollup that resolves late never pulls focus away from where the user
  * moved it. Returns whether `target` now has focus.
  */
-export function claimDrillFocus(target: HTMLElement | null, interim: Element | null = null): boolean {
+export function claimDrillFocus(target: HTMLElement | SVGElement | null, interim: Element | null = null): boolean {
   if (!target) return false;
   const doc = target.ownerDocument;
   const active = doc.activeElement;

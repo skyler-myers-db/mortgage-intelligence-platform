@@ -101,6 +101,17 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     ),
     _descriptor(
         "gold",
+        "segment_combination_rollup",
+        title="Gold Segment Combination Rollup",
+        description=(
+            "Signal stack: one row per exact set of the six core segments a "
+            "borrower carries (at most 63 rows), with the addressable count per "
+            "set. Rebuilt by the gold refresh; contactable counts are joined live "
+            "by the endpoint, never stored."
+        ),
+    ),
+    _descriptor(
+        "gold",
         "borrower_dossier",
         title="Gold Borrower Dossier",
         description="Pre-joined borrower dossier used by proof, offer, and 360 read paths.",

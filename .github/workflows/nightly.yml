@@ -399,6 +399,11 @@ jobs:
         run: pytest tests/integration/test_segment_count_parity.py -q --tb=short
       - name: Module 0 segment intersection parity
         run: pytest tests/integration/test_segment_intersection_parity.py -q --tb=short
+      - name: Module 0 segment combination parity
+        # The signal stack's exact core-segment rows (wow-stage-5): coverage,
+        # per-code and inclusive-set sums against the Lead Queue's
+        # segment_mode=all predicate, and the live contactable join.
+        run: pytest tests/integration/test_segment_combination_parity.py -q --tb=short
       - name: Module 0 gold data-truth invariants
         run: pytest tests/integration/test_gold_data_truth.py -q --tb=short
       - name: Module 0 geography rollup reconciliation

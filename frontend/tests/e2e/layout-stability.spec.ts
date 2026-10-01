@@ -214,6 +214,20 @@ async function installMockApi(
       });
       return;
     }
+    // Wave 5a (geo-foundation, wow-stage-5): Segment Intelligence's signal
+    // stack reads the whole-book exact combinations on load.
+    if (path === '/api/segments/combinations') {
+      await fulfillJson(route, {
+        built: true,
+        core_codes: ['itm', 'listed', 'permit', 'investor', 'equity', 'retention'],
+        combinations: [
+          { segment_codes: ['itm', 'equity'], signal_count: 2, addressable: 120, contactable: 15 },
+          { segment_codes: ['itm', 'equity', 'retention'], signal_count: 3, addressable: 40, contactable: 6 },
+        ],
+        provenance: { source: 'mip.gold.segment_combination_rollup', contactable_source: 'live', refreshed_at: '2026-07-14 12:00:00', note: 'layout fixture' },
+      });
+      return;
+    }
     if (path === '/api/segments') {
       const selected = (url.searchParams.get('segment_codes') ?? '').split(',').filter(Boolean);
       const allMode = url.searchParams.get('segment_mode') === 'all';

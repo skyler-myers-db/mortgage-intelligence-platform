@@ -61,6 +61,8 @@ vi.mock('./USStateMapData', () => ({
       locations: [
         { id: 'il', name: 'Illinois', path: 'M0,0L20,0L20,20Z' },
         { id: 'tx', name: 'Texas', path: 'M30,30L50,30L50,50Z' },
+        // No rollup: drawn, never a roving stop, whatever the fill paints.
+        { id: 'wy', name: 'Wyoming', path: 'M60,60L80,60L80,80Z' },
       ],
     }),
 }));
@@ -166,7 +168,7 @@ describe('USChoroplethMap rate scenario', () => {
 
     await act(async () => button('Rate scenario')?.click());
     const lever = () => document.querySelector('.map-legend__lever')?.textContent ?? '';
-    await until(() => lever().includes('Rate scenarios could not load. Showing borrower counts.'));
+    await until(() => lever().includes('The rate scenario control could not load. Showing borrower counts.'));
     // The grid would paint IL 3 / TX 2 and total 1,000: none of it shows.
     await settle();
     expect([cls('il'), cls('tx')]).toEqual(borrowerClasses);
@@ -187,4 +189,197 @@ describe('USChoroplethMap rate scenario', () => {
     expect(mocks.rateSensitivity).not.toHaveBeenCalled();
     expect(document.querySelector('.map-legend__lever')).toBeNull();
   });
+
+  it('keeps the roving set to populated states across a rate-step scrub and an overlay toggle (dataviz-10)', async () => {
+    // The grid and the overlay both paint Wyoming, which has no borrowers in
+    // the selection: the fill moves, the keyboard set does not.
+    mocks.rateSensitivity.mockResolvedValue({
+      ...GRID,
+      states: [...GRID.states, { state: 'WY', addressable: 50, rate_movable: 40, in_the_money: [40, 30, 20, 10, 5, 4, 3, 2, 1] }],
+    });
+    mocks.assignmentOverlay.mockResolvedValue({
+      level: 'state', state: null, county_fips: null, total_leads: 30, total_assigned: 10, total_unattended: 20,
+      lead_definition: 'score >= 50',
+      units: [
+        { unit_id: 'IL', lead_count: 10, assigned_count: 5, unattended_count: 5, covering_officer_count: 1, covering_officers: [] },
+        { unit_id: 'WY', lead_count: 20, assigned_count: 5, unattended_count: 15, covering_officer_count: 1, covering_officers: [] },
+      ],
+    });
+    const rovingSet = () => [...document.querySelectorAll('[data-map-unit][data-populated]')].map((el) => el.getAttribute('data-map-unit'));
+    await act(async () => root.render(<Providers><USChoroplethMap /></Providers>));
+    await until(() => cls('il') === '4');
+    expect(rovingSet()).toEqual(['il', 'tx']);
+
+    await act(async () => button('Rate scenario')?.click());
+    const range = await (async () => {
+      await until(() => document.querySelector('input[type="range"]') !== null);
+      return document.querySelector<HTMLInputElement>('input[type="range"]') as HTMLInputElement;
+    })();
+    expect(cls('wy')).not.toBe('0');
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    for (const step of ['-100', '50', '100']) {
+      await act(async () => {
+        setValue?.call(range, step);
+        range.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await settle();
+      expect(rovingSet()).toEqual(['il', 'tx']);
+    }
+
+    await act(async () => button('Unattended leads')?.click());
+    await until(() => document.querySelector('.map-legend__value')?.textContent === '20');
+    expect(cls('wy')).toBe('4');
+    expect(rovingSet()).toEqual(['il', 'tx']);
+    expect(document.querySelector('path[data-map-unit="wy"]')?.getAttribute('role')).toBe('img');
+  });
+
+  it('lists the whole book: the table footer equals the legend in all three modes, PR and VI included (wow-stage-1)', async () => {
+    mocks.stateRollups.mockResolvedValue({
+      ...rollups(9_000, 1_000),
+      rollups: [...rollups(9_000, 1_000).rollups, { state: 'PR', addressable: 300, in_the_money: 1, top_tier_opportunities: 1, avg_score: 60 }],
+    });
+    mocks.rateSensitivity.mockResolvedValue({
+      ...GRID,
+      states: [...GRID.states, { state: 'VI', addressable: 20, rate_movable: 10, in_the_money: [9, 9, 8, 8, 7, 6, 5, 4, 3] }],
+    });
+    mocks.assignmentOverlay.mockResolvedValue({
+      level: 'state', state: null, county_fips: null, total_leads: 40, total_assigned: 18, total_unattended: 22,
+      lead_definition: 'score >= 50',
+      units: [
+        { unit_id: 'IL', lead_count: 10, assigned_count: 5, unattended_count: 5, covering_officer_count: 1, covering_officers: [] },
+        { unit_id: 'WY', lead_count: 25, assigned_count: 10, unattended_count: 15, covering_officer_count: 1, covering_officers: [] },
+        { unit_id: 'PR', lead_count: 5, assigned_count: 3, unattended_count: 2, covering_officer_count: 0, covering_officers: [] },
+      ],
+    });
+    const legendValue = () => document.querySelector('.map-legend__value')?.textContent;
+    const legendCaption = () => document.querySelector('.map-legend__caption')?.textContent ?? '';
+    const groupHeaders = () => [...document.querySelectorAll('tr.map-table__group th')].map((th) => th.textContent);
+    const footer = (testId: string) => document.querySelector(`[data-testid="${testId}"]`)?.textContent;
+    await act(async () => root.render(<Providers><USChoroplethMap /></Providers>));
+    await until(() => cls('il') === '4');
+    const viewAsTable = [...document.querySelectorAll('button')].find((b) => b.textContent === 'View as table');
+    await act(async () => viewAsTable?.click());
+    await until(() => footer('map-table-total') !== undefined);
+
+    // Borrowers: the not-drawn group counts; Total (3) = IL, TX + PR.
+    expect(legendValue()).toBe('10,300');
+    expect(footer('map-table-total')).toBe('10,300');
+    expect(document.querySelector('tfoot th')?.textContent).toBe('Total (3)');
+    expect(groupHeaders()).toEqual(['Not drawn on the map (1)', 'No borrowers in this selection (1)']);
+    const pr = document.querySelector('tr[data-map-row="pr"]');
+    expect(pr?.querySelector('th')?.textContent).toBe('PR');
+    expect(pr?.querySelector('button')).toBeNull();
+    expect(pr?.querySelector('.map-table__swatch')?.classList.contains('lvl-0')).toBe(true);
+    expect(legendCaption()).toContain('Includes 300 in PR (not drawn on the map)');
+
+    // Rate: the grid's VI joins the group; the extra footer is the grid total.
+    await act(async () => button('Rate scenario')?.click());
+    await until(() => footer('map-table-extra-total') !== undefined && legendValue() !== '—');
+    expect(legendValue()).toBe('1,007');
+    expect(footer('map-table-extra-total')).toBe('1,007');
+    expect(groupHeaders()).toEqual(['Not drawn on the map (2)', 'No borrowers in this selection (1)']);
+    expect(legendCaption()).toContain('Includes 7 in PR, VI (not drawn on the map)');
+
+    // Unattended: the overlay is segment-agnostic, so the empty group's
+    // Wyoming counts; the extra footer is the overlay's total_unattended.
+    await act(async () => button('Unattended leads')?.click());
+    await until(() => legendValue() === '22');
+    await until(() => footer('map-table-extra-total') === '22');
+    expect(legendCaption()).toContain('Includes 2 in PR (not drawn on the map)');
+  });
 });
+
+/**
+ * The colouring and step from the route (D-dataviz-geo-d2 2(iii),
+ * deviation:map-mode-url): a link is a request, never a read the mode does
+ * not allow, and a scrub commits once.
+ */
+describe('USChoroplethMap mode and step from the URL', () => {
+  let root: Root;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    client = createMipQueryClient();
+    mocks.stateRollups.mockResolvedValue(rollups(9_000, 1_000));
+    mocks.rateSensitivity.mockResolvedValue(GRID);
+    mocks.assignmentOverlay.mockResolvedValue({
+      level: 'state', state: null, county_fips: null, total_leads: 10, total_assigned: 5, total_unattended: 5,
+      lead_definition: 'score >= 50',
+      units: [{ unit_id: 'IL', lead_count: 10, assigned_count: 5, unattended_count: 5, covering_officer_count: 1, covering_officers: [] }],
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  type MapProps = Parameters<typeof USChoroplethMap>[0];
+  const renderMap = (props: MapProps) => act(async () => root.render(<Providers><USChoroplethMap {...props} /></Providers>));
+  const range = () => document.querySelector<HTMLInputElement>('input[type="range"]');
+
+  it('a rate link under a segment filter falls back to borrowers with no rate read', async () => {
+    await renderMap({ mode: 'rate', step: -50, segmentFilter: ['itm'] });
+    await until(() => cls('il') === '4');
+    await settle();
+    expect(button('Borrowers')?.getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.rateSensitivity).not.toHaveBeenCalled();
+    expect(document.querySelector('.map-legend__lever')).toBeNull();
+  });
+
+  it('an unattended link issues only the overlay read', async () => {
+    await renderMap({ mode: 'unattended' });
+    await until(() => document.querySelector('.map-legend__value')?.textContent === '5');
+    expect(mocks.assignmentOverlay).toHaveBeenCalledTimes(1);
+    expect(mocks.rateSensitivity).not.toHaveBeenCalled();
+  });
+
+  it('a rate link opens at its step after one read, and an off-grid step snaps with one commit', async () => {
+    const commits: number[] = [];
+    await renderMap({ mode: 'rate', step: -50, onStepCommit: (step) => commits.push(step) });
+    await until(() => range()?.value === '-50' && document.querySelector('.map-legend__value')?.textContent === '1,500');
+    expect(mocks.rateSensitivity).toHaveBeenCalledTimes(1);
+    expect(commits).toEqual([]);
+
+    // Back / Forward: a new step prop moves the thumb and the fill.
+    await renderMap({ mode: 'rate', step: 25, onStepCommit: (step) => commits.push(step) });
+    await until(() => range()?.value === '25' && document.querySelector('.map-legend__value')?.textContent === '750');
+    // A step between grid points snaps to the nearest (ties lower) and the URL follows once.
+    await renderMap({ mode: 'rate', step: -60, onStepCommit: (step) => commits.push(step) });
+    await until(() => range()?.value === '-50');
+    await settle();
+    expect(commits).toEqual([-50]);
+    expect(mocks.rateSensitivity).toHaveBeenCalledTimes(1);
+  });
+
+  it('a scrub (pointerdown, five inputs, pointerup) commits exactly once', async () => {
+    const commits: number[] = [];
+    await renderMap({ mode: 'rate', step: 0, onStepCommit: (step) => commits.push(step) });
+    await until(() => range() !== null);
+    const input = range() as HTMLInputElement;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+    for (const value of ['-25', '-50', '-75', '-100', '-75']) {
+      await act(async () => {
+        setValue?.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+    expect(commits).toEqual([]);
+    await act(async () => input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })));
+    expect(commits).toEqual([-75]);
+  });
+
+  it('a picked colouring goes to the route, which owns it', async () => {
+    const modes: string[] = [];
+    await renderMap({ mode: 'borrowers', onModeChange: (mode) => modes.push(mode) });
+    await until(() => cls('il') === '4');
+    await act(async () => button('Unattended leads')?.click());
+    expect(modes).toEqual(['unattended']);
+    // Still borrowers until the route says otherwise.
+    expect(button('Borrowers')?.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+

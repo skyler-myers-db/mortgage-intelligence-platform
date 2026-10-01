@@ -21,6 +21,11 @@
  * warming (one line in the WarmingUpBlock's words, whose live region steps
  * aside when the DegradedBanner tells the story), failed (Retry), or not
  * built. The map keeps the borrower fill meanwhile.
+ *
+ * A step is COMMITTED (`onStepCommit`, which writes the route's
+ * `rate_step` with a replace, deviation:map-mode-url) on pointerup, on keyup
+ * of a key that moves the range, and on "Reset to today" (0); never per
+ * input event, so a scrub is one history-free URL write, not dozens.
  */
 import { useId } from 'react';
 import type { RateLeverInputs } from './USChoroplethMapLegend';
@@ -57,19 +62,32 @@ export default function RateScenarioControl({ rate }: { rate: RateLeverInputs })
       </div>
     );
   }
-  return index ? <RateLever index={index} step={rate.step} onStepChange={rate.onStepChange} scope={rate.scope} /> : null;
+  return index ? (
+    <RateLever
+      index={index}
+      step={rate.step}
+      onStepChange={rate.onStepChange}
+      onStepCommit={rate.onStepCommit}
+      scope={rate.scope}
+    />
+  ) : null;
 }
+
+/** Keys that move a range input (and so commit the step on keyup). */
+const COMMIT_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End']);
 
 interface RateLeverProps {
   index: RateScenarioIndex;
   /** The thumb's step in bps (the undeferred user input). */
   step: number;
   onStepChange: (step: number) => void;
+  /** A committed step (pointerup, a moving key, Reset). */
+  onStepCommit?: (step: number) => void;
   /** The drilled state, when the legend recounts one state; null for the whole book. */
   scope: { id: string; name: string } | null;
 }
 
-function RateLever({ index, step, onStepChange, scope }: RateLeverProps) {
+function RateLever({ index, step, onStepChange, onStepCommit, scope }: RateLeverProps) {
   const inputId = useId();
   const { steps, response } = index;
   const stride = steps.length > 1 ? steps[1] - steps[0] : 1;
@@ -95,11 +113,22 @@ function RateLever({ index, step, onStepChange, scope }: RateLeverProps) {
           value={step}
           aria-valuetext={sentence ? scenarioValueText(sentence) : undefined}
           onChange={(event) => onStepChange(nearestStep(steps, Number(event.currentTarget.value)))}
+          onPointerUp={(event) => onStepCommit?.(nearestStep(steps, Number(event.currentTarget.value)))}
+          onKeyUp={(event) => {
+            if (COMMIT_KEYS.has(event.key)) onStepCommit?.(nearestStep(steps, Number(event.currentTarget.value)));
+          }}
         />
         <output className="rate-lever__output" htmlFor={inputId}>
           {rate !== null ? ratePct(rate) : '—'}
         </output>
-        <button type="button" className="btn btn--ghost btn--sm rate-lever__reset" onClick={() => onStepChange(0)}>
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm rate-lever__reset"
+          onClick={() => {
+            onStepChange(0);
+            onStepCommit?.(0);
+          }}
+        >
           Reset to today
         </button>
       </div>

@@ -152,12 +152,16 @@ interface Read {
   errorUpdatedAt: number | null;
 }
 
-const reads = vi.hoisted(() => ({ segments: null as unknown as Read, leads: null as unknown as Read }));
+const reads = vi.hoisted(() => ({
+  segments: null as unknown as Read,
+  leads: null as unknown as Read,
+  combinations: null as unknown as Read,
+}));
 const tableProps = vi.hoisted(() => ({ current: null as null | { exportContext?: LeadExportContext; headerStatus?: unknown } }));
 
 vi.mock('../lib/useWarmingUpRetry', () => ({
   useWarmingUpRetry: (_fetcher: unknown, opts: { queryKey: readonly unknown[] }) => (
-    opts.queryKey[1] === 'segments' ? reads.segments : reads.leads
+    opts.queryKey[1] !== 'segments' ? reads.leads : opts.queryKey[2] === 'combinations' ? reads.combinations : reads.segments
   ),
 }));
 vi.mock('../lib/configOptionsQuery', () => {
@@ -169,6 +173,11 @@ vi.mock('../components/FootprintProvider', () => {
   return { useFootprint: () => STABLE };
 });
 vi.mock('../components/HealthProvider', () => ({ useOptionalHealth: () => null }));
+// The signal stack's evidence chip reads the shell's drawer context.
+vi.mock('../components/AppContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../components/AppContext')>()),
+  useApp: () => ({ setDrawer: () => undefined, showEvidence: true, showConfidence: true }),
+}));
 vi.mock('../components/mortgage/USChoroplethMap', () => ({ USChoroplethMap: () => null }));
 vi.mock('../components/mortgage/SegmentCard', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../components/mortgage/SegmentCard')>()),
@@ -195,6 +204,12 @@ const SEGMENT = {
   code: 'itm', name: 'In the Money', count: 12, contactable: 10, share_pct: 1, avg_score: 80, evidence_ids: [],
 };
 const LEAD = { borrower_id: 'B-0123456789ABC', segment_codes: ['itm'] };
+const COMBINATIONS = {
+  built: true,
+  core_codes: ['itm', 'listed', 'permit', 'investor', 'equity', 'retention'],
+  combinations: [{ segment_codes: ['itm', 'permit', 'equity'], signal_count: 3, addressable: 520, contactable: 61 }],
+  provenance: { source: 'mip.gold.segment_combination_rollup', contactable_source: 'live', refreshed_at: null, note: 'n' },
+};
 
 function read(overrides: Partial<Read> = {}): Read {
   return {
@@ -227,6 +242,7 @@ describe('Segment Intelligence rendered states', () => {
     root = createRoot(document.getElementById('root') as HTMLElement);
     reads.segments = read({ data: [SEGMENT] });
     reads.leads = read({ data: leadsPage([LEAD]) });
+    reads.combinations = read({ data: COMBINATIONS });
     tableProps.current = null;
   });
 
@@ -318,4 +334,17 @@ describe('Segment Intelligence rendered states', () => {
     await mount();
     expect(tableProps.current?.exportContext?.exportBlockedReason).toBe('Export waits for the rows of the current filters');
   });
+
+  it('places the signal stack between the segment cards and the filter row (wow-stage-5)', async () => {
+    await mount();
+    const stack = document.querySelector('section.signal-stack');
+    const grid = document.querySelector('.seg-grid');
+    const filters = document.querySelector('.filter-row');
+    expect(stack?.textContent).toContain('520 borrowers fire three or more signals at once.');
+    expect(grid && stack && grid.compareDocumentPosition(stack) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(stack && filters && stack.compareDocumentPosition(filters) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(grid?.nextElementSibling).toBe(stack);
+    expect(stack?.nextElementSibling).toBe(filters);
+  });
 });
+

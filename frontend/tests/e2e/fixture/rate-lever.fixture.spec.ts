@@ -41,6 +41,22 @@ const RATE_PATH = '/api/geo/rate-sensitivity';
 const BOUNDARY_SURFACE = '[data-testid="error-surface"]';
 /** The control's hashed chunk files (script and stylesheet), as a retired build answers them. */
 const CONTROL_CHUNK = /\/assets\/RateScenarioControl-[^/]+\.(js|css)$/;
+/**
+ * Rate Lever #58: the browser's 404 line for the retired control chunk ONLY.
+ * hygiene.ts reports a console error as `${text} (${url})`, so the pattern
+ * requires the CONTROL_CHUNK URL at the end; any other failed load (an API
+ * read, another chunk) still fails the test.
+ */
+const CONTROL_CHUNK_LOAD_FAILURE = /Failed to load resource.*\/assets\/RateScenarioControl-[^/]+\.(?:js|css)\)$/;
+// The narrowed allowance must reject a failed API read and accept the chunk's own line.
+for (const [line, allowed] of [
+  ['Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1/assets/RateScenarioControl-AbC12.js)', true],
+  ['Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1/assets/RateScenarioControl-AbC12.css)', true],
+  ['Failed to load resource: the server responded with a status of 500 (Internal Server Error) (http://127.0.0.1/api/leads)', false],
+  ['Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1/assets/LeadTable-AbC12.js)', false],
+] as const) {
+  if (CONTROL_CHUNK_LOAD_FAILURE.test(line) !== allowed) throw new Error(`CONTROL_CHUNK_LOAD_FAILURE misclassifies: ${line}`);
+}
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
 const COUNT = new Intl.NumberFormat('en-US');
 
@@ -332,7 +348,7 @@ test.describe('Rate Lever on the geography hero', () => {
     // The retired chunk logs the browser's own 404 line and the app's
     // message-free preload report; both are the behaviour under test. A
     // speculative warm that rejected unhandled would fail the pageerror check.
-    hygiene.allow('console.error', /Failed to load resource/);
+    hygiene.allow('console.error', CONTROL_CHUNK_LOAD_FAILURE);
     hygiene.allow('console.error', /\[mip\] client error/);
     await page.route(CONTROL_CHUNK, (route) =>
       route.fulfill({ status: 404, contentType: 'text/plain', body: 'retired chunk (fixture)' }),
@@ -345,7 +361,7 @@ test.describe('Rate Lever on the geography hero', () => {
 
     await colouring(page, 'Rate scenario').click();
     const lever = page.locator('.map-legend__lever');
-    await expect(lever).toContainText('Rate scenarios could not load. Showing borrower counts.');
+    await expect(lever).toContainText('The rate scenario control could not load. Showing borrower counts.');
     await expect(lever.getByRole('button', { name: 'Reload' })).toBeVisible();
     await expect(scenarioLabel(page)).toBeVisible();
     await expect(slider(page)).toHaveCount(0);
@@ -378,7 +394,7 @@ test.describe('Rate Lever on the geography hero', () => {
   });
 
   test('(r) on a wide map the legend moves under the stage at once, and stays there when the chunk fails', async ({ app, hygiene, page }) => {
-    hygiene.allow('console.error', /Failed to load resource/);
+    hygiene.allow('console.error', CONTROL_CHUNK_LOAD_FAILURE);
     hygiene.allow('console.error', /\[mip\] client error/);
     let release: () => void = () => undefined;
     const held = new Promise<void>((resolve) => {
@@ -404,7 +420,7 @@ test.describe('Rate Lever on the geography hero', () => {
     expect(await underStage(), 'while the control chunk is in flight').toBe(true);
     release();
     // ...and none when it never does.
-    await expect(page.locator('.map-legend__lever')).toContainText('Rate scenarios could not load. Showing borrower counts.');
+    await expect(page.locator('.map-legend__lever')).toContainText('The rate scenario control could not load. Showing borrower counts.');
     expect(await underStage(), 'after the control chunk failed').toBe(true);
     await expect(page.locator(BOUNDARY_SURFACE)).toHaveCount(0);
   });

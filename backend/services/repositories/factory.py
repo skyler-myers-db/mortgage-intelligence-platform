@@ -26,6 +26,7 @@ from backend.services.repositories.protocols import (
     PortfolioRepository,
     RateSensitivityRepository,
     RateWindowRepository,
+    SegmentCombinationRepository,
     SegmentRepository,
 )
 
@@ -44,6 +45,7 @@ _GENIE_REPO: GenieAnswerRepository | None = None
 _GEO_REPO: GeoRepository | None = None
 _RATE_WINDOW_REPO: RateWindowRepository | None = None
 _RATE_SENSITIVITY_REPO: RateSensitivityRepository | None = None
+_SEGMENT_COMBINATION_REPO: SegmentCombinationRepository | None = None
 _LOCK = Lock()
 
 
@@ -262,6 +264,27 @@ def get_rate_sensitivity_repository() -> RateSensitivityRepository:
         return _RATE_SENSITIVITY_REPO
 
 
+def get_segment_combination_repository() -> SegmentCombinationRepository:
+    """Return the Databricks-backed signal stack repository (audit wow-stage-5).
+
+    Used by ``/api/segments/combinations`` to read the precomputed
+    ``mip.gold.segment_combination_rollup`` exact combinations plus the live
+    contactable subset, through the geography rollups' gold-cache posture.
+    """
+    global _SEGMENT_COMBINATION_REPO
+    if _SEGMENT_COMBINATION_REPO is not None:
+        return _SEGMENT_COMBINATION_REPO
+    from backend.services.databricks_sql import get_sql_client
+    from backend.services.repositories.databricks_segment_combinations import (
+        DatabricksSegmentCombinationRepository,
+    )
+
+    with _LOCK:
+        if _SEGMENT_COMBINATION_REPO is None:
+            _SEGMENT_COMBINATION_REPO = DatabricksSegmentCombinationRepository(get_sql_client())
+        return _SEGMENT_COMBINATION_REPO
+
+
 def get_genie_answer_repository() -> GenieAnswerRepository:
     """Return the live Genie repository backed by the real Mortgage
     Lead Intelligence space.
@@ -298,7 +321,7 @@ def _reset_singletons_for_tests() -> None:
     global _PORTFOLIO_REPO, _ANALYTICS_REPO, _SEGMENT_REPO, _LEAD_REPO
     global _BORROWER_REPO
     global _OFFER_REPO, _OUTREACH_REPO, _GENIE_REPO, _GEO_REPO, _RATE_WINDOW_REPO
-    global _RATE_SENSITIVITY_REPO, _LEAD_FACET_REPO
+    global _RATE_SENSITIVITY_REPO, _LEAD_FACET_REPO, _SEGMENT_COMBINATION_REPO
     with _LOCK:
         _PORTFOLIO_REPO = None
         _ANALYTICS_REPO = None
@@ -312,3 +335,4 @@ def _reset_singletons_for_tests() -> None:
         _RATE_WINDOW_REPO = None
         _RATE_SENSITIVITY_REPO = None
         _LEAD_FACET_REPO = None
+        _SEGMENT_COMBINATION_REPO = None

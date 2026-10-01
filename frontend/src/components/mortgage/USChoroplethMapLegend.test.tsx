@@ -70,6 +70,33 @@ describe('USChoroplethMapLegend break row', () => {
     expect(breaks.map((b) => b.text)).toEqual(['1.3K', '5.4K', '12.1K']);
     expect(breaks.map((b) => b.title)).toEqual(['1,343', '5,370', '12,083']);
   });
+
+  it('says what the whole-book total includes off the map (wow-stage-1)', () => {
+    act(() => {
+      root.render(
+        <USChoroplethMapLegend
+          overlayOn={false}
+          overlayData={null}
+          overlayLoading={false}
+          overlayError={null}
+          totalCount={10_300}
+          scale={buildChoroplethScale([9_000, 1_000])}
+          offMapNote="Includes 300 in PR (not drawn on the map)"
+          segmentCaption="marketable population"
+        />,
+      );
+    });
+    expect(document.querySelector('.map-legend__caption')?.textContent).toContain(
+      'marketable population · square-root scale · Includes 300 in PR (not drawn on the map)',
+    );
+  });
+
+  it('says Escape backs out a level in the keyboard hint (dataviz-10)', () => {
+    renderLegend([3, 2, 1]);
+    expect(document.querySelector('.map-legend__hint')?.textContent?.replace(/\s+/g, ' ')).toBe(
+      'Arrow keys move · Enter or Space drills in · Esc hides the card, then goes back up a level',
+    );
+  });
 });
 
 const GRID: RateSensitivityResponse = {
@@ -166,7 +193,10 @@ describe('USChoroplethMapLegend in rate mode', () => {
   it('says a control chunk that failed to load could not load, with Reload, and draws no number', async () => {
     const out = await renderRate({ ...base, read: read({ data: GRID }), control: null, controlFailed: true });
     expect(out.label).toEqual(['Scenario, not a forecast']);
-    expect(out.lever).toContain('Rate scenarios could not load. Showing borrower counts.');
+    // Rate Lever #57: the chunk's failure is not the read's ('Rate scenarios
+    // could not load.', with Retry, in the control).
+    expect(out.lever).toContain('The rate scenario control could not load. Showing borrower counts.');
+    expect(out.lever).not.toContain('Rate scenarios could not load');
     expect(out.total).toBe('—');
     expect(out.slider).toBeNull();
     const reload = [...document.querySelectorAll('.map-legend__lever button')].map((button) => button.textContent);

@@ -3,6 +3,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { useMapSelectionParams } from '../components/mortgage/useMapSelectionParams';
+import { useMapModeParams } from '../components/mortgage/useMapModeParams';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
 import { HomeAnswerBand } from '../components/mortgage/HomeAnswerBand';
 import { Chip } from '../components/Primitives';
@@ -69,6 +70,8 @@ export default function Home() {
   // so normal loading is visually distinct from a genuinely unknown value.
   const { lender, canAccessAdmin } = useApp();
   const [mapSelection, setMapSelection] = useMapSelectionParams();
+  // The map's colouring and Rate Lever step, in the URL too (?map_mode=&rate_step=).
+  const mapMode = useMapModeParams();
   const previewQuery = useWarmingUpRetry<PortfolioPreview>(
     requestHomePortfolioPreview,
     { queryKey: homeQueries.homePreview.queryKey() },
@@ -233,6 +236,10 @@ export default function Home() {
             height={520}
             selection={mapSelection}
             onSelectionChange={setMapSelection}
+            mode={mapMode.mode}
+            step={mapMode.step}
+            onModeChange={mapMode.setMode}
+            onStepCommit={mapMode.setStep}
           />
           <div className="home-side">
             {/* States BOTH numbers — contactable of whole-book — because its

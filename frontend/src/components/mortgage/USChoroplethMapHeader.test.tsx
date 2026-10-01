@@ -133,3 +133,76 @@ describe('USChoroplethMapHeader colouring toggle', () => {
     expect(buttons[0].getAttribute('aria-pressed')).toBe('true');
   });
 });
+
+/**
+ * dataviz-10: Escape out of the ZIP level asks the state stage to take focus
+ * back; while that request is pending the crumb leaves focus alone (the
+ * national stage may still be loading), and without one it still lands on
+ * the crumb for a drill the map ended.
+ */
+describe('USChoroplethMapHeader drill-exit focus', () => {
+  let root: Root;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div class="map-wrap"><div id="root"></div><button id="tile">ZIP 77002</button></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+  });
+
+  function renderHeader(drilled: boolean, drillExitFocusPending: boolean) {
+    act(() =>
+      root.render(
+        <USChoroplethMapHeader
+          drilled={drilled}
+          drillStateUC={drilled ? 'TX' : ''}
+          drillStateName={drilled ? 'Texas' : ''}
+          onBackToUs={() => undefined}
+          drillExitFocusPending={drillExitFocusPending}
+          coverageZipCount={412}
+          drillHint
+          zipUnassigned={0}
+          mode="borrowers"
+          setMode={() => undefined}
+          rateAvailable
+          view="map"
+          setView={() => undefined}
+          campaignPrefillPath={null}
+          onStartCampaign={() => undefined}
+        />,
+      ),
+    );
+  }
+
+  /** A focused tile inside the map that the drill exit removes. */
+  function focusAndRemoveTile() {
+    const tile = document.getElementById('tile') as HTMLButtonElement;
+    act(() => tile.focus());
+    // Keep it in the map for the containment check, but drop its focus as
+    // the drill's unmount does.
+    act(() => tile.blur());
+  }
+
+  const crumb = () => document.querySelector<HTMLButtonElement>('.map-crumbs__trail button');
+
+  it('leaves focus to the state stage while an Escape focus request is pending', () => {
+    renderHeader(true, false);
+    focusAndRemoveTile();
+    renderHeader(false, true);
+    expect(document.activeElement).toBe(document.body);
+    // The request answered: the crumb does not take focus afterwards either.
+    renderHeader(false, false);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('lands on the crumb when the map ends the drill with no request', () => {
+    renderHeader(true, false);
+    focusAndRemoveTile();
+    renderHeader(false, false);
+    expect(document.activeElement).toBe(crumb());
+  });
+});
+

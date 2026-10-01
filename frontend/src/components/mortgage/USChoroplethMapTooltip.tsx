@@ -1,152 +1,46 @@
+import { useLayoutEffect, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import type { HoverState } from './USChoroplethMap.utils';
-import { formatCount } from '../../lib/formatters';
+import type { MapCard } from './USChoroplethMap.hover';
+import { MapTipBody } from './USChoroplethMapTipBody';
 
 /**
- * Floating map hover card. BEM block: `map-tip`.
+ * Floating map hover card. BEM block: `map-tip` (prototype
+ * design_files/Module 0 Prototype.html ~L1875-1878); its content is
+ * MapTipBody.
  *
- * DESIGN-CONTRACT DEVIATION (called out per CLAUDE.md "deviations must be
- * called out"): the prototype's `map-tip` block in
- * `design_files/Module 0 Prototype.html` (see `.map-tip__name` /
- * `.map-tip__row` / `.v`, ~lines 1875-1878 of that file) only documents a
- * name + flat label/value rows. This component extends that vocabulary with
- * `map-tip__kpis` / `map-tip__kpi` / `map-tip__kpi-label` / `map-tip__kpi-value`
- * (a two-up infographic KPI grid) and `map-tip__seg` / `map-tip__seg-label` /
- * `map-tip__seg-value` (a top-segment row). The extension is intentional —
- * the real product surfaces richer per-region facts (marketable borrowers,
- * avg. opportunity score, top segment) than the prototype sketch. All of
- * these extended classes have backing CSS in
- * `frontend/src/design-system/components.css` (`.map-tip__kpi*` and
- * `.map-tip__seg*`) and use design tokens only — no class was invented
- * without a matching rule. Do NOT rename back to the prototype's flatter
- * vocabulary; that would drop the KPI grid styling.
+ * deviation:map-tip-top-layer (audit css-03 / runtime-07, D-dataviz-geo-d1).
+ * The prototype's tip is an absolutely positioned div inside the map. Ours is
+ * still portaled to document.body (`.map-wrap { overflow: hidden }` would
+ * clip it), and is now a `popover="manual"` element promoted to the top
+ * layer, so the floating Genie panel, the drawer and any other overlay never
+ * cover it and a modal dialog's inert backdrop does not swallow it (the
+ * EvidenceHoverCard pattern). It is mounted only while a card exists. Before
+ * paint, each time the hovered unit changes, the tip is placed FIRST, then
+ * promoted, so it never paints at the previous unit's point. Pointer moves
+ * never render this component: useMapHover writes `left` / `top` on the
+ * element in a frame. Without the Popover API the element stays a fixed,
+ * z-indexed div (08-map.css keeps the fallback).
  */
 
 interface USChoroplethMapTooltipProps {
-  hover: HoverState;
+  card: MapCard;
+  /** The hovered unit (`level:id`): the tip is re-placed when it changes. */
+  unitKey: string;
+  tipRef: RefObject<HTMLDivElement | null>;
+  placeTip: (element: HTMLElement) => void;
   activeSegNames: Set<string> | null;
 }
 
-export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMapTooltipProps) {
+export function USChoroplethMapTooltip({ card, unitKey, tipRef, placeTip, activeSegNames }: USChoroplethMapTooltipProps) {
+  useLayoutEffect(() => {
+    const tip = tipRef.current;
+    if (!tip) return;
+    placeTip(tip);
+    if (tip.showPopover && !tip.matches(':popover-open')) tip.showPopover();
+  }, [placeTip, tipRef, unitKey]);
   return createPortal(
-    <div
-      className="map-tip"
-      style={{
-        position: 'fixed',
-        left: Math.max(160, Math.min(window.innerWidth - 160, hover.x)),
-        top: hover.y - 4,
-      }}
-    >
-      <div className="map-tip__name">{hover.name}</div>
-      <div className="map-tip__kpis">
-        <div className="map-tip__kpi">
-          <div className="map-tip__kpi-label">Marketable borrowers</div>
-          <div className="map-tip__kpi-value">
-            {hover.count !== null ? formatCount(hover.count) : '—'}
-          </div>
-        </div>
-        <div className="map-tip__kpi">
-          <div className="map-tip__kpi-label">Avg. opportunity score</div>
-          <div className="map-tip__kpi-value">
-            {hover.avgScore !== null ? hover.avgScore : '—'}
-          </div>
-        </div>
-      </div>
-      {/* Addressable-vs-contactable reconciliation, stated on the tile
-          before the click. The KPI above is the addressable population;
-          the Lead Queue this tile links to applies the contact-eligibility
-          predicate, so it shows a strict subset — live 2026-08-11, IL was
-          76,711 of 1,851,040 (24x). Clicking a big number and landing on a
-          small one reads as a broken link unless the tile says so. Same
-          idiom as `.zip-tiles__reconcile` on the ZIP drill; reuses the
-          existing muted compact row, no new CSS. */}
-      {/* Only when there is a gap to state. Segment Intelligence defaults
-          Contactability to "Eligible only", which restricts the universe the
-          filtered rollup counts over -- so contactable EQUALS addressable on
-          every tile and this row rendered "76,711 of 76,711" with no user
-          action at all. SegmentCard got this guard; its sibling carrying the
-          identical disclosure did not (adversarial review 2026-08-11). */}
-      {typeof hover.contactable === 'number' &&
-        hover.count !== null &&
-        hover.contactable < hover.count && (
-        <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
-          <span>Contactable</span>
-          <span className="v num map-tip__value--small">
-            {formatCount(hover.contactable)} of {formatCount(hover.count)}
-          </span>
-        </div>
-      )}
-      {hover.topSegment && (
-        <div className="map-tip__seg">
-          <span className="map-tip__seg-label">Top segment</span>
-          <span className="map-tip__seg-value">{hover.topSegment}</span>
-        </div>
-      )}
-      {/* Drill-gap disclosure. The ZIP layer is keyed on a 5-digit ZIP and
-          the share does not carry one for every property, so this state's
-          ZIP tiles will sum BELOW the marketable count above. Disclosed on
-          the state hover — before the drill — so the shortfall is expected
-          rather than discovered. Reuses the existing muted compact row; no
-          new CSS. */}
-      {typeof hover.zipUnassigned === 'number' && hover.zipUnassigned > 0 && (
-        <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
-          <span>ZIP coverage</span>
-          <span className="v map-tip__value--small">
-            {formatCount(hover.zipUnassigned)} borrowers without ZIP assignment
-          </span>
-        </div>
-      )}
-      {hover.overlay && (
-        <div className="map-tip__overlay">
-          <div className="map-tip__row map-tip__row--compact">
-            <span>Leads</span>
-            <span className="v num map-tip__value--small">
-              {hover.overlay.leadCount !== null ? formatCount(hover.overlay.leadCount) : '—'}
-            </span>
-          </div>
-          <div className="map-tip__row map-tip__row--compact">
-            <span>Assigned</span>
-            <span className="v num map-tip__value--small">
-              {hover.overlay.assignedCount !== null ? formatCount(hover.overlay.assignedCount) : '—'}
-            </span>
-          </div>
-          <div className="map-tip__row map-tip__row--compact">
-            <span>Unattended</span>
-            <span className="v num map-tip__value--small">
-              {hover.overlay.unattendedCount !== null ? formatCount(hover.overlay.unattendedCount) : '—'}
-            </span>
-          </div>
-          <div className="map-tip__row map-tip__row--compact">
-            <span>LO coverage</span>
-            <span className="v num map-tip__value--small">
-              {hover.overlay.coveringOfficerCount !== null
-                ? formatCount(hover.overlay.coveringOfficerCount)
-                : '—'}
-            </span>
-          </div>
-          {hover.overlay.coveringOfficers && hover.overlay.coveringOfficers.length > 0 && (
-            <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
-              <span className="v map-tip__value--small">
-                {hover.overlay.coveringOfficers.join(', ')}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-      {activeSegNames !== null && (
-        <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
-          <span>Filter</span>
-          <span className="v map-tip__value--small">
-            filtered by {Array.from(activeSegNames).join(', ')}
-          </span>
-        </div>
-      )}
-      <div className="map-tip__row map-tip__row--compact">
-        <span>Source</span>
-        <span className="v mono map-tip__value--small">
-          {hover.sourceHint ?? 'mip.gold'}
-        </span>
-      </div>
+    <div className="map-tip" popover="manual" ref={tipRef}>
+      <MapTipBody card={card} activeSegNames={activeSegNames} />
     </div>,
     document.body,
   );
