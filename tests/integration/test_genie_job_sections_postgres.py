@@ -1,4 +1,4 @@
-"""Real-PostgreSQL contract of the 2026_10_02 verified-sections migration.
+"""Real-PostgreSQL contract of the 2026_10_01_genie_job_sections verified-sections migration.
 
 Audit 2026-09-21 ``genie-01`` phase 1b with ruling R1. The governed
 migration is applied TWICE through ``lakebase_migrate._run_transaction`` (the
@@ -145,7 +145,7 @@ def test_the_migration_is_idempotent_and_its_check_is_named_in_the_catalog(pg: _
     assert "pg_column_size(sections_json) <= 8388608" in by_name["genie_completion_jobs_sections_size_chk"]
     assert sum(1 for name in by_name if "sections" in name) == 1, "applied twice, one CHECK"
     versions = pg.fetchone(
-        "SELECT count(*) AS n FROM mip_app.schema_migrations WHERE version = '2026_10_02_genie_job_sections'"
+        "SELECT count(*) AS n FROM mip_app.schema_migrations WHERE version = '2026_10_01_genie_job_sections'"
     )
     assert versions == {"n": 1}
     assert pg.fetchone(jobs._PROBE_SQL) == {"present": True}

@@ -4067,7 +4067,7 @@ COMMENT ON COLUMN mip_app.genie_completion_jobs.sections_json IS
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_02_genie_job_sections',
+    '2026_10_01_genie_job_sections',
     'Genie completion-job verified sections: nullable sections_json with a named 8 MiB pg_column_size CHECK, NULLed at every terminal state'
 )
 ON CONFLICT (version) DO NOTHING;

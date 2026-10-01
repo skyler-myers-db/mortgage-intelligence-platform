@@ -668,7 +668,7 @@ answer, SQL, or exception text; ids are the job UUID only:
 | `genie_job_durations_failed` | WARNING, at most once a minute per process | `error_type` | The typical-duration aggregate (audit `genie-01`) could not be read. The status poll simply carries no `typical_seconds`; the miss is cached for 60 s. |
 | `genie_job_section_write_failed` | WARNING, at most once a minute per process | `error_type` | Audit `genie-01` phase 1b: a verified-sections write (its `GENIE_SECTION_REVEALED` audit rows and the `sections_json` UPDATE share one transaction) failed. Fail closed: the sections that write would have revealed stay withheld until the final answer; the answer itself is unaffected. |
 | `genie_job_sections_skipped` | WARNING, once per job | `reason` too_large, `sections`, `job_id` | The verified-sections payload of a running deep job exceeded 4 MiB, so nothing was written or audited for it; the recorded answer is unaffected. |
-| `genie_jobs_table_absent`, 2026_10_02 column | WARNING, once per absence | — | Also logged when the table lacks `sections_json` (the App promoted ahead of the 2026_10_02 migration): the App completes inline exactly as without the table, so no job statement can fail on the column. |
+| `genie_jobs_table_absent`, 2026_10_01_genie_job_sections column | WARNING, once per absence | — | Also logged when the table lacks `sections_json` (the App promoted ahead of the 2026_10_01_genie_job_sections migration): the App completes inline exactly as without the table, so no job statement can fail on the column. |
 
 Leases and expiry. Postgres `now()` is the only clock. A job is leased to its
 process for 45 s; one daemon thread per process renews its own queued and

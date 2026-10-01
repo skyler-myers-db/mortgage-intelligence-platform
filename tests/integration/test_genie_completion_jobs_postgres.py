@@ -369,7 +369,7 @@ def test_the_probe_requires_the_cancel_columns(pg: _PgLakebase) -> None:
 
 
 def test_the_probe_requires_the_sections_column(pg: _PgLakebase) -> None:
-    # genie-01 phase 1b: an App promoted ahead of the 2026_10_02 migration
+    # genie-01 phase 1b: an App promoted ahead of the 2026_10_01_genie_job_sections migration
     # completes inline instead of 503ing every job statement.
     assert pg.fetchone(jobs._PROBE_SQL) == {"present": True}
     pg.sql("ALTER TABLE mip_app.genie_completion_jobs DROP COLUMN sections_json")

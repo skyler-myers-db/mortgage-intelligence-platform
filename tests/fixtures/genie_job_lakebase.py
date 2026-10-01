@@ -61,7 +61,7 @@ class FakeJobLakebase:
         self.jobs_table = jobs_table
         #: False: the table exists without its 2026_09_25 columns.
         self.cancel_columns = cancel_columns
-        #: False: the table exists without the 2026_10_02 sections_json.
+        #: False: the table exists without the 2026_10_01_genie_job_sections sections_json.
         self.sections_column = sections_column
         self.sections_writes: list[dict[str, Any]] = []
         # Starts at the wall clock: job expiry is minted from the progress

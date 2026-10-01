@@ -90,7 +90,7 @@ _COLUMNS = """job_id::text AS job_id, status, stage, parts_done, parts_planned,
        cancel_requested_at IS NOT NULL AS cancel_requested,
        recorded_at IS NOT NULL AS recorded, deep, now() AS db_now"""
 
-# Present only with the 2026_09_25 columns and the 2026_10_02 sections_json
+# Present only with the 2026_09_25 columns and the 2026_10_01_genie_job_sections sections_json
 # too: an App promoted ahead of either migration completes inline instead of
 # 503ing every job statement.
 _PROBE_SQL = """

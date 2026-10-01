@@ -217,7 +217,7 @@ def test_every_schema_table_has_a_reviewed_privilege_entry() -> None:
     assert created == set(lakebase_migrate._APP_ROLE_TABLE_PRIVILEGES)
 
 
-# ------------------------------- 2026_10_02 verified sections (genie-01 1b)
+# ------------------------------- 2026_10_01_genie_job_sections verified sections (genie-01 1b)
 
 
 def _sections_block() -> str:
@@ -254,7 +254,7 @@ def test_the_sections_migration_adds_one_nullable_jsonb_column_with_a_named_size
     assert "NULLed at every terminal state" in comments[0]
     assert re.search(
         r"INSERT INTO mip_app\.schema_migrations \(version, description\)\s+VALUES \(\s+"
-        r"'2026_10_02_genie_job_sections',",
+        r"'2026_10_01_genie_job_sections',",
         block,
     )
     assert "'sections_json'" in jobs._PROBE_SQL and ") = 4 AS present" in jobs._PROBE_SQL
