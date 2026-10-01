@@ -52,8 +52,9 @@ export function setSingleKeyShortcutsEnabled(enabled: boolean): void {
   notify();
 }
 
-/** Drop the cached value so mounted shortcuts re-read the map (the map
- *  itself is never cleared: each actor keeps their own entry). */
+/** Drop the cached value so mounted shortcuts re-read the map (tests; the
+ *  store drops it itself on every gate event). The map itself is never
+ *  cleared: each actor keeps their own entry. */
 export function clearSingleKeyShortcutsPreference(): void {
   cached = null;
   notify();

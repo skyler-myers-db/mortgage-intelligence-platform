@@ -118,7 +118,8 @@ export function unpinInsight(id: string): void {
   update((pins) => pins.filter((p) => p.id !== id));
 }
 
-/** Remove every pin (the actor gate removes the key itself on a change). */
+/** Remove every pin (tests). Production never calls it: the actor gate
+ *  removes the key itself on an actor change. */
 export function clearPinnedInsights(): void {
   update(() => null);
 }
