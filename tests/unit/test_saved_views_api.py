@@ -19,7 +19,10 @@ from backend.main import app
 from backend.schemas.saved_views import SavedView, SavedViewMutationResponse
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError
-from backend.services.saved_view_params import SAVED_VIEW_PARAMS_REFUSED, canonical_saved_view_params
+from backend.services.saved_view_params import (
+    SAVED_VIEW_PARAMS_REFUSED,
+    canonical_saved_view_params,
+)
 from backend.services.saved_view_store import (
     SAVED_VIEW_LIMIT,
     SavedViewConflict,
