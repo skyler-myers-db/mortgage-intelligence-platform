@@ -131,7 +131,8 @@ export function EvidenceChip({
   onClick,
   title,
 }: PropsWithChildren<{ source?: DrawerSource; onClick?: () => void; title?: string }>) {
-  const { setDrawer, showEvidence } = useApp();
+  // Keyed read (runtime-05): a drawer open or a row expand elsewhere does not re-render every chip.
+  const { setDrawer, showEvidence } = useApp('setDrawer', 'showEvidence');
   // Hooks must run before any early return; the hover card is a no-op
   // (returns null) when there is no source, so this is safe.
   const { anchorRef, anchorHandlers, hoverCard } = useEvidenceHoverCard(source);

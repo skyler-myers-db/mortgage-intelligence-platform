@@ -1,10 +1,12 @@
 import {
   createContext,
+  use,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
   type Dispatch,
   type PropsWithChildren,
   type SetStateAction,
@@ -37,6 +39,7 @@ import {
   type ThemePreference,
 } from '../lib/themePreference';
 import { changeTheme } from '../lib/themeTransition';
+import { AppStoreContext, createAppStore, type AppStoreKey } from './appStore';
 import type {
   ConfigOptions,
   SavedDraft,
@@ -58,6 +61,17 @@ import type {
  * them and takes over live changes (Console, OS scheme flips). Nothing is
  * stored on mount: only an explicit pick persists, with its choice marker
  * (a first visit boots dark and stays unstored; 2026-09-30, report 12.4 #4).
+ *
+ * Narrow reads (audit runtime-05): the evidence / confidence toggles, the
+ * drawer, the approvals and the last borrower live in a selector store
+ * (./appStore). `useApp()` returns the whole facade exactly as before and
+ * re-renders on any change; `useApp('setDrawer', 'showEvidence')` returns
+ * just those keys and re-renders only when one of them changes. A non-store
+ * key is a type error, and a test's `vi.mock` of useApp ignores the keys, so
+ * every mock keeps working. On it now: EvidenceChip and ConfidenceMeter
+ * (Primitives.tsx, ConfidenceMeter.tsx). Next (W5c): LeadTable and
+ * LeadTableRow (w5-lead-queue-paging), RouteNav's lastBorrowerId
+ * (w5-shell-nav-followups).
  */
 
 export type { Accent, Density, Theme, ThemePreference };
@@ -219,8 +233,8 @@ export function AppProvider({ children }: PropsWithChildren) {
   // to settle: an options answer that lands first cannot install what the
   // session would have vetoed. A failed session check falls back to options.
   const rumEnabled = !sessionQuery.isPending && shouldInstallRum(configOptionsQuery.data, sessionQuery.data);
-  const [showEvidence, setShowEvidence] = useState(true);
-  const [showConfidence, setShowConfidence] = useState(true);
+  const [store] = useState(createAppStore);
+  const app = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   // Console is opt-in so the first demo viewport uses the full prototype
   // layout. Presenter preference persists across reloads via localStorage
   // (same pattern as theme/accent/density).
@@ -228,10 +242,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     readStoredBool(CONSOLE_OPEN_STORAGE_KEY, false),
   );
   const [recentActivityFocusRequest, setRecentActivityFocusRequest] = useState(0);
-  const [drawer, setDrawer] = useState<DrawerSource | null>(null);
   const [genieOpen, setGenieOpen] = useState(false);
-  const [approvals, setApprovals] = useState<Record<string, 'approved' | 'rejected'>>({});
-  const [lastBorrowerIdState, setLastBorrowerIdState] = useState<string | null>(null);
   const [savedLeads, setSavedLeads] = useState<Record<string, SavedLead>>({});
   const [savedDrafts, setSavedDrafts] = useState<Record<string, SavedDraft>>({});
   const [workspaceStatus, setWorkspaceStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -360,30 +371,23 @@ export function AppProvider({ children }: PropsWithChildren) {
   const acknowledgeRecentActivityFocus = useCallback(() => {
     setRecentActivityFocusRequest(0);
   }, []);
-  const setApproval = useCallback((borrowerId: string, state: 'approved' | 'rejected') => {
-    setApprovals((cur) => ({ ...cur, [borrowerId]: state }));
-  }, []);
-  const setLastBorrowerId = useCallback((borrowerId: string | null) => {
-    const next = borrowerId?.trim();
-    setLastBorrowerIdState(next && next.length > 0 ? next : null);
-  }, []);
   const clearActorScopedState = useCallback(() => {
     resetActorScopedAppState({
-      setApprovals,
-      setDrawer,
+      setApprovals: (action) => store.update('approvals', action),
+      setDrawer: (action) => store.update('drawer', action),
       setGenieOpen,
-      setLastBorrowerIdState,
+      setLastBorrowerIdState: (action) => store.update('lastBorrowerId', action),
       setSavedLeads,
       setSavedDrafts,
       setWorkspaceStatus,
       setWorkspaceError,
       setWorkspaceReloadToken,
     });
-  }, []);
+  }, [store]);
   const saveLead = useCallback((lead: SavedLeadInput) => {
     if (!lead.borrower_id) return;
     const now = new Date().toISOString();
-    setLastBorrowerIdState(lead.borrower_id);
+    store.getSnapshot().setLastBorrowerId(lead.borrower_id);
     let prior: SavedLead | undefined;
     setSavedLeads((cur) => {
       prior = cur[lead.borrower_id];
@@ -415,7 +419,7 @@ export function AppProvider({ children }: PropsWithChildren) {
             : "Couldn't save lead.",
         );
       });
-  }, []);
+  }, [store]);
   const removeSavedLead = useCallback((borrowerId: string) => {
     let prior: SavedLead | undefined;
     setSavedLeads((cur) => {
@@ -450,7 +454,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     ) {
       throw new Error('A borrower and audited draft proof are required.');
     }
-    setLastBorrowerIdState(draft.borrower_id);
+    store.getSnapshot().setLastBorrowerId(draft.borrower_id);
     try {
       const saved = await api.saveWorkspaceDraft(draft);
       setSavedDrafts((cur) => ({
@@ -469,7 +473,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       );
       throw err;
     }
-  }, []);
+  }, [store]);
   const removeSavedDraft = useCallback((borrowerId: string, channel: SavedDraft['channel'] = 'email') => {
     let prior: SavedDraft | undefined;
     const key = draftKey(borrowerId, channel);
@@ -509,15 +513,15 @@ export function AppProvider({ children }: PropsWithChildren) {
       canApprove,
       actorEmail,
       sessionStatus,
-      showEvidence, setShowEvidence,
-      showConfidence, setShowConfidence,
+      showEvidence: app.showEvidence, setShowEvidence: app.setShowEvidence,
+      showConfidence: app.showConfidence, setShowConfidence: app.setShowConfidence,
       consoleOpen, setConsoleOpen,
       recentActivityFocusRequest, openConsoleRecentActivity, acknowledgeRecentActivityFocus,
-      drawer, setDrawer,
+      drawer: app.drawer, setDrawer: app.setDrawer,
       genieOpen, setGenieOpen,
-      approvals, setApproval,
-      lastBorrowerId: lastBorrowerIdState,
-      setLastBorrowerId,
+      approvals: app.approvals, setApproval: app.setApproval,
+      lastBorrowerId: app.lastBorrowerId,
+      setLastBorrowerId: app.setLastBorrowerId,
       clearActorScopedState,
       savedLeads,
       saveLead,
@@ -533,21 +537,41 @@ export function AppProvider({ children }: PropsWithChildren) {
     [
       theme, setTheme, themePreference, setThemePreference, accent, setAccent, density, setDensity,
       lender, canAccessAdmin, canApprove, actorEmail, sessionStatus,
-      showEvidence, showConfidence, consoleOpen, setConsoleOpen,
+      app, consoleOpen, setConsoleOpen,
       recentActivityFocusRequest, openConsoleRecentActivity, acknowledgeRecentActivityFocus,
-      drawer, genieOpen, approvals, setApproval,
-      lastBorrowerIdState, setLastBorrowerId, clearActorScopedState,
+      genieOpen, clearActorScopedState,
       savedLeads, saveLead, removeSavedLead, isLeadSaved,
       savedDrafts, saveDraft, removeSavedDraft,
       workspaceStatus, workspaceError, refreshWorkspace,
     ]
   );
 
-  return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
+  return (
+    <AppStoreContext.Provider value={store}>
+      <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
+    </AppStoreContext.Provider>
+  );
 }
 
-export function useApp(): AppCtxValue {
-  const v = useContext(AppCtx);
+const NO_KEYS: readonly AppStoreKey[] = [];
+
+/**
+ * The app context. With no argument: the whole facade, re-rendering on any
+ * change. With store keys: just those (see the header), re-rendering only
+ * when one of them changes.
+ */
+// The no-argument overload is declared last, so ReturnType<typeof useApp>
+// (used by tests) stays the full facade.
+export function useApp<K extends AppStoreKey>(...keys: [K, ...K[]]): Pick<AppCtxValue, K>;
+export function useApp(): AppCtxValue;
+export function useApp(...keys: AppStoreKey[]): AppCtxValue | Pick<AppCtxValue, AppStoreKey> {
+  const store = useContext(AppStoreContext);
+  if (!store) throw new Error('useApp must be used inside <AppProvider>');
+  const read = () => store.pick(keys.length > 0 ? keys : NO_KEYS);
+  // The same read serves server rendering (AppShell's static-markup tests).
+  const picked = useSyncExternalStore(store.subscribe, read, read);
+  if (keys.length > 0) return picked;
+  const v = use(AppCtx);
   if (!v) throw new Error('useApp must be used inside <AppProvider>');
   return v;
 }
