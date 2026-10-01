@@ -16,6 +16,9 @@
  *  - a 409 offers "Review draft again";
  *  - a loan officer's session shows no Triage entry and ?mode=triage is
  *    stripped; Copy link never carries the mode;
+ *  - a filter change while the deck is open never re-snapshots it: the deck
+ *    stays mounted on the placeholder rows (GET /api/leads?state=TX held)
+ *    and the settled rows only drop cards (brief 6.4);
  *  - axe is clean on the deck with the draft on screen, both themes: the
  *    draft copy is its own scroll region with no tabindex (the oxlint
  *    ratchet bans one), reachable through its evidence chips
@@ -24,11 +27,12 @@
 import type { Page } from '@playwright/test';
 import type { SessionResponse } from '../../../src/types';
 import { LEADS } from './data/borrowers';
+import { leadFixtures } from './data/leads';
 import { SESSION } from './data/shell';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { RequestGate } from './data/decisionReceipt';
 import { registerTriageWrites, triageDraft, triageGeneration } from './data/triage';
-import { json, type MockApi } from './mockApi';
+import { json, type FixtureRequest, type MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
@@ -43,6 +47,19 @@ async function enterDeck(page: Page): Promise<void> {
   await page.getByTestId('lead-triage-enter').click();
   await expect(page.getByTestId('triage-deck')).toBeVisible();
   await expect(heading(page)).toBeFocused();
+}
+
+/** The default GET /api/leads, holding the `?state=<code>` page until released. */
+function holdLeadsForState(mockApi: MockApi, code: string): RequestGate {
+  const defaultLeads = leadFixtures.find((entry) => entry.method === 'GET' && entry.pattern === '/api/leads');
+  if (!defaultLeads) throw new Error('the default GET /api/leads fixture is missing');
+  const gate = new RequestGate();
+  mockApi.register('GET', '/api/leads', async (request: FixtureRequest) => {
+    const states = [request.query.get('state'), ...(request.query.get('states')?.split(',') ?? [])];
+    if (states.includes(code)) await gate.hold();
+    return defaultLeads.handler(request);
+  });
+  return gate;
 }
 
 function draftCalls(mockApi: MockApi): number {
@@ -102,6 +119,9 @@ for (const theme of FIXTURE_THEMES) {
         await expect(heading(page)).toBeFocused();
         // J x3 skipped cards 1-3; K and Skip revisited card 3.
         await expect(page.getByTestId('triage-progress')).toContainText('Approved 1 · Rejected 0 · Skipped 3');
+        await expect(page.getByTestId('triage-last-receipt')).toContainText(`Approved ${card} · audit`);
+        await app.settle();
+        const exitMark = markNaturalLoad(mockApi);
 
         await page.keyboard.press('Escape');
         await expect(page.getByTestId('triage-deck')).toHaveCount(0);
@@ -111,6 +131,7 @@ for (const theme of FIXTURE_THEMES) {
         expect(draftCalls(mockApi), 'the ?row= restore drafts nothing').toBe(1);
         expect(writes.approvals).toHaveLength(1);
         await app.settle();
+        expectNoAuditedReadSince(mockApi, exitMark, 'Esc and the ?row= restore');
       });
     });
   }
@@ -190,6 +211,47 @@ test.describe('Triage deck decisions', () => {
     await expect(position(page)).toHaveText(`Borrower 1 of ${CARDS.length}`);
     await redraft.click();
     await expect.poll(() => writes.drafts.length).toBe(2);
+  });
+
+  test('a filter change never re-snapshots the deck: it stays on the placeholder rows, then only drops cards', async ({ app, mockApi, page }) => {
+    registerTriageWrites(mockApi);
+    await app.gotoRoute('/lead-queue');
+    await enterDeck(page);
+    await page.keyboard.press('a');
+    await expect(page.locator('[data-testid="lead-approve-review"][data-review-phase="ready"]')).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(position(page)).toHaveText(`Borrower 2 of ${CARDS.length}`);
+    await page.keyboard.press('j');
+    await expect(position(page)).toHaveText(`Borrower 3 of ${CARDS.length}`);
+    const progress = page.getByTestId('triage-progress');
+    const receipt = page.getByTestId('triage-last-receipt');
+    await expect(progress).toContainText('Approved 1 · Rejected 0 · Skipped 1');
+    await expect(receipt).toContainText(`Approved ${CARDS[0]} · audit`);
+
+    // STATE=TX while its GET /api/leads is held: the table holds placeholder rows.
+    const held = holdLeadsForState(mockApi, 'TX');
+    const menu = await app.openFilterMenu('STATE');
+    await menu.getByRole('option', { name: 'TX', exact: true }).click();
+    await expect.poll(() => held.received, 'the TX page was asked for').toBe(true);
+    await expect(page).toHaveURL(/[?&]mode=triage(&|$)/);
+    await expect(page.getByTestId('triage-deck'), 'placeholder rows never unmount the deck').toBeVisible();
+    await expect(page.getByTestId('triage-deck-loading')).toHaveCount(0);
+    await expect(progress).toContainText('Approved 1 · Rejected 0 · Skipped 1');
+    held.release();
+
+    // Settled: the TX rows hold one pending card; the approved card stays counted.
+    const texas = CARDS.filter((id) => LEADS.find((lead) => lead.borrower_id === id)?.state === 'TX');
+    expect(texas, 'the fixture has one pending TX card').toHaveLength(1);
+    await expect(position(page)).toHaveText('Borrower 2 of 2');
+    await expect(page.locator(`[data-testid="triage-card-${texas[0]}"]`)).toBeVisible();
+    await expect(progress).toContainText('Approved 1 · Rejected 0 · Skipped 0');
+    await expect(receipt).toContainText(`Approved ${CARDS[0]} · audit`);
+    // Previous (K; focus sits in the STATE filter, outside the deck, where
+    // the letter keys are inert): the approved card, out of the loaded rows
+    // now, still shows its outcome.
+    await page.getByTestId('triage-back').click();
+    await expect(position(page)).toHaveText('Borrower 1 of 2');
+    await expect(page.locator(`[data-testid="triage-card-${CARDS[0]}"] [data-testid="triage-outcome"]`)).toBeVisible();
   });
 
   test('Copy link never carries the deck', async ({ app, page }) => {
