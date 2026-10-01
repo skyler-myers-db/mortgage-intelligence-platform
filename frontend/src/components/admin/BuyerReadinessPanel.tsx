@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
+import { usePresenterMode } from '../../lib/sessionQuery';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
 import type {
   ActivationDestination,
@@ -45,7 +46,7 @@ function destinationSummary(
       value: 'Unknown',
       status: 'registry unavailable',
       tone: 'warning',
-      detail: 'Registry unavailable. Do not claim live CRM/Salesforce delivery.',
+      detail: 'Destination registry unavailable; CRM/Salesforce delivery is unverified until it responds.',
     };
   }
   if (loading) {
@@ -54,7 +55,7 @@ function destinationSummary(
       value: 'Checking',
       status: 'probing registry',
       tone: 'neutral',
-      detail: 'Reading destinations. Delivery claims stay unverified.',
+      detail: 'Reading destinations; delivery is unverified until they load.',
     };
   }
   const rows = destinations ?? [];
@@ -68,7 +69,7 @@ function destinationSummary(
       value: 'Connected destination',
       status: 'connected',
       tone: 'success',
-      detail: 'Salesforce destination is connected; claim delivery only when Activation / outreach shows delivered rows.',
+      detail: 'Salesforce destination connected; delivery is confirmed only where Activation / outreach shows delivered rows.',
     };
   }
   if (dryRun.length > 0 || connected.length > 0) {
@@ -77,7 +78,7 @@ function destinationSummary(
       value: connected.length > 0 ? `${connected.length} connected destination${connected.length === 1 ? '' : 's'}` : 'Dry run only',
       status: connected.length > 0 ? 'partially connected' : 'dry run',
       tone: connected.length > 0 ? 'success' : 'warning',
-      detail: 'Claim live delivery only for connected destinations with delivered rows.',
+      detail: 'Delivery is confirmed only for connected destinations with delivered rows.',
     };
   }
   return {
@@ -100,7 +101,7 @@ function outboxSummary(
       value: 'Unknown',
       status: 'unverified',
       tone: 'warning',
-      detail: 'Outbox unavailable. Treat delivery and staging claims as unverified.',
+      detail: 'Outbox unavailable; delivery and staging status is unverified until it recovers.',
     };
   }
   if (loading) {
@@ -109,7 +110,7 @@ function outboxSummary(
       value: 'Checking',
       status: 'probing outbox',
       tone: 'neutral',
-      detail: 'Reading activation rows before delivery claims.',
+      detail: 'Reading activation rows.',
     };
   }
   const outbox = rows ?? [];
@@ -131,7 +132,7 @@ function sourceSummary(sources: SourceSummary[] | undefined, loading = false, er
       value: 'Unavailable',
       status: 'reconnecting',
       tone: 'warning',
-      detail: 'Retry before making source-coverage claims.',
+      detail: 'Source readiness unavailable; coverage is unverified until it recovers.',
     };
   }
   if (loading || !sources) {
@@ -155,6 +156,29 @@ function sourceSummary(sources: SourceSummary[] | undefined, loading = false, er
   };
 }
 
+/**
+ * Presenter mode (D-shell-deviations-e1): whether this deployment shows the
+ * demo-only affordances. The OFF detail names only the PROTOTYPE borrower
+ * view until the roadmap rail slots are gated too (D-shell-deviations-e2).
+ */
+function presenterModeSummary(presenterMode: boolean): ReadinessItem {
+  return presenterMode
+    ? {
+        label: 'Presenter mode',
+        value: 'On',
+        status: 'demo affordances visible',
+        tone: 'warning',
+        detail: 'Roadmap rail slots and the PROTOTYPE borrower view are visible to every user. Demo workspaces only.',
+      }
+    : {
+        label: 'Presenter mode',
+        value: 'Off',
+        status: 'customer mode',
+        tone: 'success',
+        detail: 'The PROTOTYPE borrower view is hidden.',
+      };
+}
+
 export function buyerReadinessItems(
   activation: ActivationSummary | null | undefined,
   sources: SourceSummary[] | undefined,
@@ -162,6 +186,7 @@ export function buyerReadinessItems(
   sourcesError = false,
   activationError = false,
   activationLoading = false,
+  presenterMode = false,
 ): ReadinessItem[] {
   return [
     destinationSummary(activation?.destinations, activationError, activationLoading),
@@ -172,33 +197,35 @@ export function buyerReadinessItems(
       value: 'Deterministic rules',
       status: 'not trained ML',
       tone: 'neutral',
-      detail: 'Governed SQL/Python rules plus Cotality propensity. Do not call them a trained MIP ML model.',
+      detail: 'Governed SQL and Python rules plus Cotality propensity; not a trained machine-learning model.',
     },
     {
       label: 'Custom segments',
       value: 'Governed cohorts',
       status: 'configured only',
       tone: 'neutral',
-      detail: 'Do not claim arbitrary named segment authoring unless a customer segment is configured.',
+      detail: 'Named segments come from governed cohorts; arbitrary segment authoring is available only when a customer segment is configured.',
     },
     {
       label: 'Compliance posture',
       value: 'Governed controls',
-      status: 'no certification claim',
+      status: 'no certification',
       tone: 'neutral',
-      detail: 'UC, Lakebase audit, redaction, disclosures, and approvals are controls. Do not claim HITRUST or certification.',
+      detail: 'Controls: Unity Catalog governance, Lakebase audit, redaction, disclosures and approvals. No third-party certification such as HITRUST is claimed.',
     },
     {
       label: 'Audit coverage',
       value: 'Decision ledger',
-      status: 'key actions audited',
+      status: 'decisions and borrower reads audited',
       tone: 'success',
-      detail: 'Approvals, staging, outcomes, and governed Genie actions are audited. Do not claim every click.',
+      detail: 'Audited: approve, hold and reject decisions; dispositions, assignments and outcomes; staging and exports; Genie questions and governed Genie actions; property lookups; and borrower-level reads (ranked lead lists with their filters, Borrower 360 dossiers and proof, offer recommendations, outreach drafts). Not audited: navigation and aggregate dashboards.',
     },
+    presenterModeSummary(presenterMode),
   ];
 }
 
 export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesError = false }: BuyerReadinessPanelProps) {
+  const presenterMode = usePresenterMode();
   const {
     data,
     warmingUp,
@@ -215,8 +242,9 @@ export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesEr
       sourcesError,
       Boolean(error),
       data === null && !error,
+      presenterMode,
     ),
-    [data, error, sources, sourcesError, sourcesLoading],
+    [data, error, presenterMode, sources, sourcesError, sourcesLoading],
   );
   const attention = items.filter((item) => item.tone === 'warning' || item.tone === 'danger').length;
 
@@ -224,7 +252,7 @@ export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesEr
     <div className="surface mt-grid" id="buyer-readiness" tabIndex={-1}>
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <SurfaceTitle>Buyer readiness</SurfaceTitle>
+          <SurfaceTitle>Deployment readiness</SurfaceTitle>
           <div className="muted fs-12">
             Live, staged, or customer-configured.
           </div>
@@ -234,13 +262,13 @@ export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesEr
         </Chip>
       </div>
       <div className="surface__body surface__body--stack-sm">
-        {warmingUp && <WarmingUpBlock state={warmingUp} title="Buyer readiness loading" compact />}
+        {warmingUp && <WarmingUpBlock state={warmingUp} title="Deployment readiness loading" compact />}
         {error && !warmingUp && (
           <div className="muted body fs-12">
-            Activation status unavailable; connector claims are unverified.
+            Activation status unavailable; connector delivery is unverified.
           </div>
         )}
-        <div className="admin-rollups" role="region" aria-label="Buyer readiness claim boundaries">
+        <div className="admin-rollups" role="region" aria-label="Deployment readiness boundaries">
           <div className="admin-rollups__grid admin-rollups__grid--wide">
             {items.map((item) => (
               <div key={item.label} className="admin-rollup admin-rollup--readiness">
@@ -255,7 +283,7 @@ export function BuyerReadinessPanel({ sources, sourcesLoading = false, sourcesEr
           </div>
         </div>
         <div className="muted fs-12">
-          Safe claims: governed staging, deterministic scoring, human approval, source readiness, and audited decisions.
+          Governed today: staging, deterministic scoring, human approval, source readiness and audited decisions.
         </div>
       </div>
     </div>

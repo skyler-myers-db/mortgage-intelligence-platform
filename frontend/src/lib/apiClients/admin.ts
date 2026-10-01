@@ -39,7 +39,7 @@ export const adminApi = {
     getJson<T>('/api/admin/operations', signal),
 
   /**
-   * DAIS-2026 capability snapshot — honest per-capability provisioning
+   * Capability snapshot — honest per-capability provisioning
    * status. Drives the admin "Agentic capability readiness" panel. Rows
    * that aren't `claimable` render as roadmap, never as integrated.
    */
