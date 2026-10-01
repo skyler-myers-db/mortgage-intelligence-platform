@@ -73,6 +73,46 @@ def test_the_perf_budget_step_is_unconditional() -> None:
     assert "continue-on-error" not in perf, "perf-budget is calibrated on the reference runner and gates"
 
 
+def test_the_perf_calibration_is_uploaded_after_the_perf_step() -> None:
+    """Audit runtime-09 / quality-08: every perf run's calibration JSON is an artifact."""
+    steps = _jobs()["e2e-fixture"]["steps"]
+    perf = _step_index(steps, PERF_STEP_RUN)
+    upload = next(i for i, step in enumerate(steps) if step.get("name") == "Upload the perf calibration")
+    assert upload == perf + 1, "the upload follows the perf step"
+    step = steps[upload]
+    assert step["if"] == "always()"
+    assert str(step["uses"]).startswith("actions/upload-artifact@")
+    assert step["with"] == {
+        "name": "perf-calibration-${{ github.run_id }}-${{ github.run_attempt }}",
+        "path": "frontend/test-results/perf/calibration/*.json",
+        "if-no-files-found": "warn",
+        "retention-days": 30,
+    }
+
+
+def test_the_budget_step_writes_the_per_chunk_json() -> None:
+    """Audit quality-08: the gating budget run also writes the per-chunk report."""
+    steps = _jobs()["frontend-tests"]["steps"]
+    budget = steps[_step_index(steps, "npm --prefix frontend run budget")]
+    assert budget["run"] == "npm --prefix frontend run budget -- --json ../frontend-budget.json"
+    assert "continue-on-error" not in budget and "if" not in budget
+
+
+def test_the_bundle_delta_job_is_informational_and_token_free() -> None:
+    """Audit quality-08: head vs merge-base in the step summary; the gates stay in frontend-tests."""
+    job = _jobs()["bundle-delta"]
+    assert job["if"] == "github.event_name == 'pull_request'"
+    assert job["steps"][0]["with"]["fetch-depth"] == 0
+    text = yaml.safe_dump(job)
+    assert "secrets." not in text and "GITHUB_TOKEN" not in text, "no token: fork PRs get the same summary"
+    runs = [str(step.get("run", "")) for step in job["steps"]]
+    assert any("git merge-base HEAD" in run and "git worktree add" in run for run in runs)
+    base = next(run for run in runs if "--dist ../bundle-base/frontend/dist" in run)
+    assert "--report-only" in base and "--build-meta ../bundle-base/frontend/build-meta" in base and "--json ../bundle-base.json" in base
+    assert any(run.startswith("node tools/check_frontend_budgets.mjs --report-only --base ../bundle-base.json") for run in runs)
+    assert all("continue-on-error" not in step for step in job["steps"])
+
+
 def _playwright_perf_spec() -> re.Pattern[str]:
     config = (FRONTEND / "playwright.config.ts").read_text(encoding="utf-8")
     literal = re.search(r"^(?:export )?const PERF_SPEC = /(.+)/;$", config, re.MULTILINE)
@@ -201,3 +241,58 @@ def test_the_parse_job_runs_the_whole_layout_stability_spec() -> None:
     assert f"E2E_LAYOUT_MOCK=1 npx playwright test {LAYOUT_STABILITY_SPEC} --workers=1" in lines
     assert "--grep" not in step["run"], "every layout-stability test runs, not a --grep subset"
     assert "if" not in step and "continue-on-error" not in step
+
+
+# --- Cross-engine projects (manual check 2026-09-30, a11y-10 item 4, css-06 item 3)
+
+
+def _playwright_regex(name: str) -> re.Pattern[str]:
+    config = (FRONTEND / "playwright.config.ts").read_text(encoding="utf-8")
+    literal = re.search(rf"^export const {name} = /(.+)/;$", config, re.MULTILINE)
+    assert literal, f"playwright.config.ts exports {name} as a regex literal"
+    return re.compile(literal.group(1))
+
+
+def test_the_cross_engine_job_installs_webkit_and_firefox_and_gates() -> None:
+    job = _jobs()["e2e-cross-engine"]
+    assert job["name"] == "e2e (fixture, WebKit + Firefox forced colors)"
+    assert job["runs-on"] == "ubuntu-latest"
+    assert "continue-on-error" not in job
+    steps = job["steps"]
+    install = steps[_step_index(steps, "npx playwright install --with-deps webkit firefox")]
+    assert install["working-directory"] == "frontend"
+    run = steps[_step_index(steps, "npm --prefix frontend run e2e:fixture:ci")]
+    assert run["env"]["MIP_CROSS_ENGINE"] == "1"
+    assert run["env"]["E2E_FIXTURE_WORKERS"] == "2"
+    assert all("continue-on-error" not in step for step in steps)
+    assert "secrets." not in yaml.safe_dump(job), "the cross-engine job is credential-free"
+
+
+def test_only_the_cross_engine_job_sets_mip_cross_engine() -> None:
+    for name, job in _jobs().items():
+        if name == "e2e-cross-engine":
+            continue
+        assert "MIP_CROSS_ENGINE" not in yaml.safe_dump(job), f"{name} must not set MIP_CROSS_ENGINE"
+
+
+def test_the_engine_projects_collect_exactly_their_specs() -> None:
+    webkit, firefox, engine_only = (
+        _playwright_regex(name) for name in ("WEBKIT_SPEC", "FIREFOX_FORCED_SPEC", "ENGINE_ONLY_SPEC")
+    )
+    fixture = "frontend/tests/e2e/fixture/"
+    cases = {
+        "queue-clearance.cross-engine.fixture.spec.ts": (True, False, False),
+        "genie-pagehide.cross-engine.fixture.spec.ts": (True, True, False),
+        "pinned-focus.webkit.fixture.spec.ts": (True, False, True),
+        "forced-colors.firefox.fixture.spec.ts": (False, True, True),
+        "lead-queue.fixture.spec.ts": (False, False, False),
+        "visual.fixture.spec.ts": (False, False, False),
+    }
+    for spec, (in_webkit, in_firefox, ignored_in_chromium) in cases.items():
+        path = fixture + spec
+        assert bool(webkit.search(path)) is in_webkit, spec
+        assert bool(firefox.search(path)) is in_firefox, spec
+        assert bool(engine_only.search(path)) is ignored_in_chromium, spec
+    # The shipped cross-engine specs are committed.
+    for spec in ("queue-clearance.cross-engine", "forced-colors.firefox", "genie-pagehide.cross-engine"):
+        assert (FRONTEND / "tests" / "e2e" / "fixture" / f"{spec}.fixture.spec.ts").is_file(), spec

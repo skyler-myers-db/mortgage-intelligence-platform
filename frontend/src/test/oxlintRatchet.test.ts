@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // @ts-expect-error Frontend app types exclude Node globals; this test writes probe files under Vitest only.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 // @ts-expect-error Same: the probe directory lives in the OS temp dir.
 import { tmpdir } from 'node:os';
 // @ts-expect-error The oxlint ratchet (tools/) is a Node ESM script consumed by CI and this test only.
@@ -47,10 +47,14 @@ const validateConfig = tool.validateConfig as (config: unknown, installed?: stri
 const enabledRules = tool.enabledRules as (config: Config) => string[];
 const parseOutput = tool.parseOxlintOutput as (stdout: string, expectedRules: number) => { fileCount: number; ruleCount: number };
 const aggregate = tool.aggregate as (diagnostics: Diagnostic[], where: { cwd: string; root: string }) => { measured: Files };
-const findSuppressions = tool.findSuppressions as (sources: Array<{ file: string; text: string }>) => Suppression[];
+const findSuppressions = tool.findSuppressions as (sources: Array<{ file: string; text: string }>, a11yRules?: string[]) => Suppression[];
 const formatVerdict = tool.formatVerdict as (verdict: Verdict) => string[];
 const ruleTotals = tool.ruleTotals as (files: Files) => Record<string, number>;
-const runOxlint = tool.runOxlint as (options: { targets: string[]; cwd: string; root: string; config?: string }) => Run;
+const runOxlint = tool.runOxlint as (options: { targets: string[]; cwd: string; root: string; config?: string; expected?: string[] }) => Run;
+const expectedLintFiles = tool.expectedLintFiles as (relPaths: string[]) => string[];
+const ignoredByConfig = tool.ignoredByConfig as (rel: string) => boolean;
+const scopeFiles = tool.scopeFiles as () => string[];
+const FRONTEND_DIR = tool.FRONTEND_DIR as string;
 const installedRules = tool.installedRules as () => string[];
 const installedVersion = tool.installedVersion as () => string;
 const read = readFileSync as (file: string | URL, encoding: 'utf8') => string;
@@ -267,6 +271,54 @@ describe('a real run of the pinned oxlint with the committed config', () => {
     const suppressed = `export function Probe() {\n  // ${ES_DISABLE}-next-line\n  return <img src="x.png" />;\n}\n`;
     expect(lint(suppressed).measured).toEqual({});
     expect(findSuppressions([{ file: 'probe.tsx', text: suppressed }])).toHaveLength(1);
+  }, OXLINT_TIMEOUT_MS);
+
+  it('honours an eslint-disable naming a BARE jsx-a11y rule, and the scan flags it; a non-jsx rule stays allowed', () => {
+    const bare = `export function Probe() {\n  // ${ES_DISABLE}-next-line alt-text\n  return <img src="x.png" />;\n}\n`;
+    expect(lint(bare).measured, 'oxlint honours the bare rule name').toEqual({});
+    const rules = enabledRules(config);
+    expect(findSuppressions([{ file: 'probe.tsx', text: bare }], rules)).toHaveLength(1);
+    expect(findSuppressions([{ file: 'probe.tsx', text: bare }]), 'non-vacuity: without the rule names it passed').toHaveLength(0);
+    const other = `// ${ES_DISABLE}-next-line react-hooks/exhaustive-deps, no-console -- reason\n`;
+    expect(findSuppressions([{ file: 'probe.tsx', text: other }], rules)).toEqual([]);
+  }, OXLINT_TIMEOUT_MS);
+
+  it('fails closed when an ignore file drops a file from the run, naming it', () => {
+    // The real path: macOS's /var/folders is a symlink, and oxlint resolves an
+    // absolute config's ignorePatterns against the real one.
+    const scoped = (realpathSync as (target: string) => string)((mkdtempSync as (prefix: string) => string)(`${(tmpdir as () => string)()}/oxlint-count-`));
+    try {
+      (mkdirSync as (target: string, options: { recursive: boolean }) => void)(`${scoped}/src/sub`, { recursive: true });
+      write(`${scoped}/src/a.tsx`, 'export const A = 1;\n');
+      write(`${scoped}/src/sub/b.tsx`, 'export const B = 1;\n');
+      write(`${scoped}/src/sub/c.tsx`, 'export const C = 1;\n');
+      write(`${scoped}/src/sub/d.test.tsx`, 'export const T = 1;\n');
+      // As the real gate runs it: cwd = the config's directory, target src.
+      const expected = expectedLintFiles(['src/a.tsx', 'src/sub/d.test.tsx', 'src/sub/b.tsx', 'src/sub/c.tsx', 'src/notes.md']);
+      expect(expected).toEqual(['src/a.tsx', 'src/sub/b.tsx', 'src/sub/c.tsx']);
+      write(`${scoped}/.oxlintrc.json`, JSON.stringify(config));
+      const run = (): Run => runOxlint({ targets: ['src'], cwd: scoped, root: scoped, config: `${scoped}/.oxlintrc.json`, expected });
+      expect(run().fileCount, 'control: the counts agree').toBe(3);
+
+      write(`${scoped}/src/sub/.gitignore`, 'b.tsx\n');
+      expect(run).toThrow(/oxlint linted 2 file\(s\); the tool enumerates 3[\s\S]*skipped: src\/sub\/b\.tsx/);
+      (rmSync as (target: string) => void)(`${scoped}/src/sub/.gitignore`);
+
+      write(`${scoped}/.eslintignore`, 'src/sub/c.tsx\n');
+      expect(run).toThrow(/oxlint linted 2 file\(s\)[\s\S]*skipped: src\/sub\/c\.tsx/);
+    } finally {
+      (rmSync as (target: string, options: { recursive: boolean; force: boolean }) => void)(scoped, { recursive: true, force: true });
+    }
+  }, OXLINT_TIMEOUT_MS);
+
+  it('mirrors the config\'s four ignorePatterns exactly, and the real scope agrees with the run', () => {
+    expect(config.ignorePatterns).toEqual(['**/*.test.ts', '**/*.test.tsx', 'src/test/**', 'src/mocks/**']);
+    expect(['src/a.test.ts', 'src/b/c.test.tsx', 'src/test/x.ts', 'src/mocks/y.ts'].map(ignoredByConfig)).toEqual([true, true, true, true]);
+    expect(['src/a.ts', 'src/testing/x.ts', 'src/a.test.mts', 'src/mocksx.ts'].map(ignoredByConfig)).toEqual([false, false, false, false]);
+    const files = scopeFiles();
+    expect(files.length, 'non-vacuity: the scope enumerates the tree').toBeGreaterThan(300);
+    expect(files.some((file) => file.endsWith('.d.ts')), 'a declaration file is linted and counted').toBe(true);
+    expect(runOxlint({ targets: ['src'], cwd: FRONTEND_DIR, root: FRONTEND_DIR, expected: files }).fileCount).toBe(files.length);
   }, OXLINT_TIMEOUT_MS);
 
   it('fails closed on a config error', () => {

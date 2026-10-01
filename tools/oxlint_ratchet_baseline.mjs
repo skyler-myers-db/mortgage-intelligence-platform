@@ -19,6 +19,8 @@ export const CATEGORIES = ['correctness', 'nursery', 'pedantic', 'perf', 'restri
 // config-level disable is banned like a directive.
 export const CONFIG_KEYS = ['$schema', 'categories', 'ignorePatterns', 'plugins', 'rules'];
 export const IGNORE_PATTERNS = ['**/*.test.ts', '**/*.test.tsx', 'src/test/**', 'src/mocks/**'];
+/** The extensions oxlint lints: .js .mjs .cjs .jsx .ts .mts .cts .tsx. */
+export const LINTABLE = /\.(?:[cm]?js|jsx|[cm]?ts|tsx)$/;
 export const BASELINE_FIELDS = ['oxlintVersion', 'config', 'scope', 'policy', 'files'];
 export const CONFIG_REL = 'frontend/.oxlintrc.json';
 export const SCOPE_REL = 'frontend/src';
@@ -106,13 +108,44 @@ export function aggregate(diagnostics, { cwd, root }) {
   return { measured, lines };
 }
 
-/** Banned suppression directives in `[{file, text}]`, as `{file, line, directive}`. */
-export function findSuppressions(sources) {
+/**
+ * Whether a frontend-relative POSIX path matches one of IGNORE_PATTERNS (kept
+ * exactly equal to them: validateConfig pins the config's list, and
+ * oxlintRatchet.test.ts pins this mirror).
+ */
+export function ignoredByConfig(rel) {
+  return /\.test\.tsx?$/.test(rel) || rel.startsWith('src/test/') || rel.startsWith('src/mocks/');
+}
+
+/** The files a run over `relPaths` (relative to the lint cwd) must lint: lintable, not config-ignored. */
+export function expectedLintFiles(relPaths) {
+  return relPaths.map(posix).filter((rel) => LINTABLE.test(rel) && !ignoredByConfig(rel)).sort();
+}
+
+/**
+ * oxlint also honours ignore FILES (a nested .gitignore, frontend/.eslintignore)
+ * that the config validation cannot see, so a run must lint exactly the files
+ * the tool enumerates. Any difference fails closed, naming what was skipped.
+ */
+export function fileCountProblems(expected, linted, skipped = []) {
+  if (linted === expected.length) return [];
+  return [
+    `oxlint linted ${linted} file(s); the tool enumerates ${expected.length} under ${SCOPE_REL} minus the config's ignorePatterns`
+      + ' (an ignore file such as a nested .gitignore or frontend/.eslintignore dropped files from the gate)',
+    ...(skipped.length > 0 ? skipped.map((file) => `  skipped: ${file}`) : ['  skipped: (not identified; compare the ignore files in scope)']),
+  ];
+}
+
+/** Banned suppression directives in `[{file, text}]`, as `{file, line, directive}`. `a11yRules` are the config's rule names. */
+export function findSuppressions(sources, a11yRules = []) {
   const found = [];
+  // oxlint honours a BARE jsx-a11y rule name in an eslint directive too (`alt-text`).
+  const bare = new Set(a11yRules.map((rule) => rule.replace(/^jsx-a11y\//, '')));
   for (const { file, text } of sources) {
     for (const match of text.matchAll(DIRECTIVE)) {
       const rules = match[2].split('*/')[0].split(/\s--\s/)[0].trim();
-      if (match[1] === 'oxlint' || rules === '' || rules.includes('jsx-a11y/')) {
+      const namesBare = rules.split(/[\s,]+/).some((rule) => bare.has(rule));
+      if (match[1] === 'oxlint' || rules === '' || rules.includes('jsx-a11y/') || namesBare) {
         found.push({ file, line: text.slice(0, match.index).split('\n').length, directive: match[0].trim() });
       }
     }

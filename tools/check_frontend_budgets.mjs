@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
-import { readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { initialClosure, routeClosures, staleManifestProblems } from './build_manifest.mjs';
+// quality-08: targets, the per-chunk JSON and the step summary (main() only).
+import { chunkReport, evaluateTargets, loadTargets, parseBudgetFlags, summaryTable } from './frontend_budget_report.mjs';
 
 // The manifest maths, re-exported so a test (or another tool) can import the
 // budget gate's exact definitions from one place.
@@ -12,7 +14,6 @@ export { initialClosure, routeClosures, staleManifestProblems };
 
 const repoRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const distDir = path.join(repoRoot, 'frontend', 'dist');
-const assetsDir = path.join(distDir, 'assets');
 const buildMetaDir = path.join(repoRoot, 'frontend', 'build-meta');
 
 const KiB = 1024;
@@ -685,8 +686,8 @@ export function vendorChunkProblems(manifest, initial, chunkModules = null, lazy
   return problems;
 }
 
-function readBuildMeta(file) {
-  const abs = path.join(buildMetaDir, file);
+function readBuildMeta(file, dir = buildMetaDir) {
+  const abs = path.join(dir, file);
   try {
     return JSON.parse(readFileSync(abs, 'utf8'));
   } catch (err) {
@@ -697,17 +698,25 @@ function readBuildMeta(file) {
   }
 }
 
-function main() {
+function main(argv = process.argv.slice(2)) {
+  // Flags (quality-08): --json <path> writes the per-chunk report; --base
+  // <json> adds base and delta columns to the step summary; --report-only
+  // never fails on a gate (the bundle-delta job's base build); --dist and
+  // --build-meta point at another build (default: this tree's).
+  const options = parseBudgetFlags(argv, { distDir, buildMetaDir });
+  const dist = path.resolve(options.distDir);
+  const assets = path.join(dist, 'assets');
   let files;
   try {
-    files = readdirSync(assetsDir);
+    files = readdirSync(assets);
   } catch (err) {
-    console.error(`Frontend budget check requires a built Vite dist at ${assetsDir}.`);
+    console.error(`Frontend budget check requires a built Vite dist at ${assets}.`);
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
-  const manifest = readBuildMeta('build-manifest.json');
-  const chunkModules = readBuildMeta('build-modules.json');
+  const targets = loadTargets(path.join(repoRoot, 'tools', 'frontend_budget_targets.json'));
+  const manifest = readBuildMeta('build-manifest.json', path.resolve(options.buildMetaDir));
+  const chunkModules = readBuildMeta('build-modules.json', path.resolve(options.buildMetaDir));
 
   const overages = [];
   const failIf = (condition, message) => {
@@ -718,7 +727,7 @@ function main() {
 
   const sizes = new Map();
   const sizeOf = (file) => {
-    if (!sizes.has(file)) sizes.set(file, { file, ...measureBuffer(readFileSync(path.join(distDir, file))) });
+    if (!sizes.has(file)) sizes.set(file, { file, ...measureBuffer(readFileSync(path.join(dist, file))) });
     return sizes.get(file);
   };
   const present = new Set(distChunks);
@@ -730,12 +739,13 @@ function main() {
   const js = distChunks.filter((f) => f.endsWith('.js'));
   const totalJs = sumSizes(js, sizeOf);
   const lazy = largestPerDimension(js.filter((f) => !initial.js.includes(f)).map(sizeOf));
-  const routes = Object.entries(routeClosures(manifest, initial)).map(([key, closure]) => ({
+  const closures = routeClosures(manifest, initial);
+  const routes = Object.entries(closures).map(([key, closure]) => ({
     key,
     ...sumSizes(measurable([...closure.js, ...closure.css]), sizeOf),
   }));
   const fonts = files.filter((f) => /\.(woff2?|ttf|otf)$/.test(f));
-  const fontBytes = fonts.reduce((sum, f) => sum + readFileSync(path.join(assetsDir, f)).length, 0);
+  const fontBytes = fonts.reduce((sum, f) => sum + readFileSync(path.join(assets, f)).length, 0);
 
   const gate = (label, actual, budget) => failIf(actual > budget, `${label} is ${bytes(actual)} > ${bytes(budget)}`);
   gate('initial JS br', initialJs.brBytes, budgets.initialJsBrBytes);
@@ -786,10 +796,37 @@ function main() {
   );
   console.log(`  fonts: ${fonts.length} files, ${bytes(fontBytes)}`);
 
+  const report = {
+    actuals: {
+      initialJsBr: initialJs.brBytes,
+      initialCssBr: initialCss.brBytes,
+      totalJsBr: totalJs.brBytes,
+      routes: Object.fromEntries(routes.map((route) => [route.key, route.brBytes])),
+    },
+    chunks: chunkReport(
+      distChunks.map(sizeOf),
+      [...initial.js, ...initial.css],
+      Object.fromEntries(Object.entries(closures).map(([key, closure]) => [key, [...closure.js, ...closure.css]])),
+    ),
+  };
+  overages.push(...evaluateTargets(report.actuals, targets, new Date().toISOString().slice(0, 10)));
+  if (options.json) writeFileSync(options.json, `${JSON.stringify(report, null, 2)}\n`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    const gates = {
+      initialJsBr: budgets.initialJsBrBytes,
+      initialCssBr: budgets.initialCssBrBytes,
+      totalJsBr: budgets.totalJsBrBytes,
+      ...Object.fromEntries(Object.entries(budgets.routes).map(([key, value]) => [`routes.${key}`, value])),
+    };
+    const base = options.base ? JSON.parse(readFileSync(options.base, 'utf8')) : null;
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryTable(report, gates, targets, base));
+  }
+
   if (overages.length > 0) {
-    console.error('\nFrontend budget check failed:');
+    console.error(`\nFrontend budget check ${options.reportOnly ? 'found (report-only)' : 'failed'}:`);
     for (const overage of overages) console.error(`  - ${overage}`);
-    process.exit(1);
+    if (!options.reportOnly) process.exit(1);
+    return;
   }
   console.log('Frontend budget check passed.');
 }

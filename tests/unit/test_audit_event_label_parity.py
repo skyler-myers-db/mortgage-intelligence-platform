@@ -48,3 +48,13 @@ def test_every_decision_receipt_code_has_an_explorer_label() -> None:
 def test_explorer_labels_are_unique_per_code() -> None:
     labels = list(_labels().values())
     assert len(labels) == len(set(labels))
+
+
+def test_no_view_offer_event_exists() -> None:
+    """Ruling D-audit-reads-b (audit delivery-08): the Offer keeps its own
+    audited reads; RECOMMEND_OFFER is the approval-surface open record, so no
+    VIEW_OFFER event type is server-owned or labelled in the explorer."""
+
+    assert "RECOMMEND_OFFER" in SERVER_OWNED_AUDIT_EVENT_TYPES, "non-vacuity: the open record is server-owned"
+    assert "VIEW_OFFER" not in SERVER_OWNED_AUDIT_EVENT_TYPES
+    assert "VIEW_OFFER" not in _labels()

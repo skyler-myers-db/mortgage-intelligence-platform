@@ -29,13 +29,18 @@
  *
  *   [interaction-budget] j=… expand=… keystroke=… ms
  *
- * REPORT-ONLY. The only assertions are non-vacuity: the Event Timing
- * observer is supported, and each interaction changed the DOM (the cursor
- * moved, the row expanded, the textarea holds the typed text). Ceilings
- * (runner median x 1.2, rounded up to 10 ms) are set only after three CI
- * reference-runner runs, by a later commit against the perf step.
+ * GATING MECHANISM (runtime-09): INTERACTION_CEILINGS_MS holds one ceiling
+ * per interaction set, each null (report-only) until the integrator sets it.
+ * The report test gates every non-null median (`<= ceiling`) and logs
+ * `gating: ...` or `report-only`; the non-vacuity assertions always run (the
+ * Event Timing observer is supported, and each interaction changed the DOM:
+ * the cursor moved, the row expanded, the textarea holds the typed text).
+ * Every run writes calibration/interaction-budget.json (medians, samples and
+ * the CI run's sha / run id / attempt / runner, numbers only), which the
+ * e2e-fixture job uploads as perf-calibration-<run id>-<attempt>.
  */
 import type { Page } from '@playwright/test';
+import { writeCalibration } from './calibration';
 import { LEAD_QUEUE_500, registerLeadQueue, registerRejectRecorder } from './data/leadQueue';
 import { expect, test } from './test';
 
@@ -46,6 +51,21 @@ const TYPED = 'governance hold note';
 const EVENT_THRESHOLD_MS = 16;
 
 type InteractionName = 'j' | 'expand' | 'keystroke';
+
+/**
+ * Median ceilings in ms, null = report-only. Set ONLY by the integrator, from
+ * three reference-runner runs of one sha (tools/perf_ceilings.mjs: median of
+ * the per-run medians x 1.2, rounded up to 10 ms), and ratcheted down, never
+ * up. Record the runs here when a ceiling is set:
+ *   runs: <run id / attempt>, <run id / attempt>, <run id / attempt>
+ *   sha:  <sha>
+ *   medians (j / expand / keystroke): <ms> / <ms> / <ms>
+ */
+const INTERACTION_CEILINGS_MS: Readonly<Record<InteractionName, number | null>> = {
+  j: null,
+  expand: null,
+  keystroke: null,
+};
 
 interface EventProbe {
   supported: boolean;
@@ -174,14 +194,20 @@ test.describe('lab interaction budget: the 500-row Lead Queue (runtime-09, repor
     });
   }
 
-  test('report the medians (no ceiling until three reference-runner runs)', async ({}, testInfo) => {
+  test('report the medians and gate every metric with a ceiling', async ({}, testInfo) => {
     expect(samples, 'every sample ran').toHaveLength(SAMPLES);
-    const result = {
+    const result: Record<InteractionName, number> = {
       j: median(samples.map((sample) => sample.j)),
       expand: median(samples.map((sample) => sample.expand)),
       keystroke: median(samples.map((sample) => sample.keystroke)),
     };
     console.log(`[interaction-budget] j=${format(result.j)} expand=${format(result.expand)} keystroke=${format(result.keystroke)} ms`);
+    writeCalibration(testInfo, 'interaction-budget', { spec: 'interaction-budget', medians: result, samples });
+    const gated = (Object.keys(INTERACTION_CEILINGS_MS) as InteractionName[]).filter((name) => INTERACTION_CEILINGS_MS[name] !== null);
+    console.log(`[interaction-budget] ${gated.length ? `gating: ${gated.map((name) => `${name}<=${INTERACTION_CEILINGS_MS[name]}`).join(' ')}` : 'report-only'}`);
+    for (const name of gated) {
+      expect.soft(result[name], `${name} median within its ${INTERACTION_CEILINGS_MS[name]} ms ceiling`).toBeLessThanOrEqual(INTERACTION_CEILINGS_MS[name] ?? 0);
+    }
     await testInfo.attach('interaction-budget.json', {
       body: JSON.stringify({ medians: result, samples }, null, 2),
       contentType: 'application/json',

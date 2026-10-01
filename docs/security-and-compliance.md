@@ -32,3 +32,39 @@ Genie answers are allowed to drive app actions only when the action payload is
 derived from trusted answer rows or source filters and the user confirms the
 action. The destination route must preserve those filters, and the action must
 be audited.
+
+## Read-audit semantics by surface
+
+Which read writes which audit event, and how the write behaves when Lakebase
+is unavailable. "Background, fail-open" means the row is written after the
+response by a FastAPI background task and a failure is logged as
+`audit.dropped` without failing the read; "fail-closed" means the endpoint
+returns 503 when the audit write fails. This table lists only what is on
+main; each later item (D-audit-reads-a, c1, c2, c3, d) edits its own row in
+the pull request that ships the behaviour, never earlier.
+
+| Surface | Event | When | Write mode |
+| --- | --- | --- | --- |
+| Lead Queue list (`leads.list_leads`) | `VIEW_LEADS` | once per served `GET /leads` | background, fail-open (`audit.dropped`) |
+| Borrower 360 open (`borrowers.get_borrower`) | `VIEW_BORROWER` | once per served `GET /borrowers/{id}` | background, fail-open |
+| Proof drawer (`borrowers.get_borrower_proof`) | `VIEW_BORROWER_PROOF` | once per served `GET /borrowers/{id}/proof` | background, fail-open |
+| Offer open (the approval surface) | `VIEW_BORROWER` | its own `GET /borrowers/{id}` (the Offer never reuses the Borrower 360 cache entry) | background, fail-open |
+| Offer open (the approval surface) | `RECOMMEND_OFFER` | once per `POST /offers/recommend` (`offers.recommend_offer`): the approval-surface open record, carrying offer code, confidence, thresholds, `decision_inputs`, source freshness, evidence ids and subject CLIP | synchronous, fail-closed (503) |
+| Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`) | committed in the same transaction as the draft row, fail-closed |
+| Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof |
+| Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
+| Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
+| Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
+| Admin ledger explorer (`audit.list_events`, `audit.list_event_page`, `audit.audit_rollups`) | none | every read | audit-free until D-audit-reads-c3 ships `VIEW_AUDIT_LEDGER` |
+
+**Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
+keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`
+is the approval-surface open record: it is written only by
+`backend/api/offers.py`, synchronously and fail-closed, so the ledger records
+from the server's own read what the approver saw. Sharing the Borrower 360
+cache would make that a client claim the server cannot verify and give one
+user action two ledger shapes. Pins: `tests/unit/test_audit_event_label_parity.py`
+(no `VIEW_OFFER` in the server-owned set or the explorer labels),
+`tests/unit/test_offers_router.py` (a single `RECOMMEND_OFFER` emitter) and
+`frontend/src/routes/offer-orchestrator.recommendCaller.test.ts` (a single
+`recommendOffer` caller).

@@ -1,4 +1,6 @@
+import ast
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -409,3 +411,60 @@ def test_recommend_offer_audit_captures_decision_inputs() -> None:
     assert set(metadata["decision_inputs"]) == set(DECISION_INPUT_KEYS)
     expected = mock_population.BORROWER_OFFER_INPUTS["B-48291"]
     assert metadata["decision_inputs"] == decision_inputs_from_offer_inputs(expected)
+
+
+# --- Ruling D-audit-reads-b: RECOMMEND_OFFER has a single emitter -------------
+
+
+def _event_type_emissions(source: str, event_type: str) -> int:
+    """Calls passing ``event_type=<literal>`` and dicts keyed ``"event_type": <literal>``.
+
+    Type sets, comments, docstrings and backpressure notes are not emitters.
+    """
+    count = 0
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            count += sum(
+                1
+                for keyword in node.keywords
+                if keyword.arg == "event_type"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value == event_type
+            )
+        elif isinstance(node, ast.Dict):
+            count += sum(
+                1
+                for key, value in zip(node.keys, node.values, strict=True)
+                if isinstance(key, ast.Constant)
+                and key.value == "event_type"
+                and isinstance(value, ast.Constant)
+                and value.value == event_type
+            )
+    return count
+
+
+def test_recommend_offer_is_emitted_only_by_the_offers_router() -> None:
+    """The approval-surface open record (ruling D-audit-reads-b, audit
+    delivery-08) is written only by backend/api/offers.py, so no other
+    surface can quietly blur what the approver saw."""
+    root = Path(__file__).resolve().parents[2]
+    emitters = {
+        path.relative_to(root).as_posix(): count
+        for path in sorted((root / "backend").rglob("*.py"))
+        if "__pycache__" not in path.parts
+        and (count := _event_type_emissions(path.read_text(encoding="utf-8"), "RECOMMEND_OFFER"))
+    }
+    assert set(emitters) == {"backend/api/offers.py"}, emitters
+    assert emitters["backend/api/offers.py"] >= 1
+
+
+def test_the_emitter_scan_ignores_type_sets_and_docstrings() -> None:
+    planted = '''
+"""RECOMMEND_OFFER is documented here."""
+KNOWN = frozenset({"RECOMMEND_OFFER"})
+# event_type="RECOMMEND_OFFER" in a comment
+audit.write(event_type="RECOMMEND_OFFER")
+row = {"event_type": "RECOMMEND_OFFER", "action": "x"}
+other = {"event_type": "VIEW_BORROWER"}
+'''
+    assert _event_type_emissions(planted, "RECOMMEND_OFFER") == 2

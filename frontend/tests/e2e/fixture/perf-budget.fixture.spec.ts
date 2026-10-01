@@ -18,7 +18,12 @@
  * 5 Mbps up, and the CPU is throttled 4x. LCP is the last
  * largest-contentful-paint entry (buffered observer, no input happens); TBT
  * sums (duration - 50 ms) over the long tasks that start before LCP + 5 s.
- * The median of three samples per route is gated.
+ * CLS is the largest session window of layout-shift entries without recent
+ * input (windows split at a 1 s gap and capped at 5 s), over the same span.
+ * The median of three samples per route is gated for every metric whose
+ * ceiling is set; a null ceiling is report-only (Borrower 360 and every CLS,
+ * until the integrator sets them from reference-runner calibration). Each
+ * route writes calibration/<route>-lab-vitals.json (fixture/calibration.ts).
  *
  * `vite preview` compresses with gzip on the fly rather than serving the
  * build's brotli siblings, and the harness answers the API and the HTML
@@ -26,6 +31,8 @@
  * for asset delivery, not a field measurement.
  */
 import type { Page } from '@playwright/test';
+import { writeCalibration } from './calibration';
+import { PRIMARY_BORROWER } from './data/borrowers';
 import { expect, test } from './test';
 
 const PERF_ENABLED = process.env.MIP_PERF === '1';
@@ -35,7 +42,10 @@ const TBT_WINDOW_AFTER_LCP_MS = 5_000;
 const ROUTES = [
   { name: 'home', path: '/' },
   { name: 'lead-queue', path: '/lead-queue' },
+  { name: 'borrower-360', path: `/borrower-360/${PRIMARY_BORROWER.borrower_id}` },
 ] as const;
+const CLS_SESSION_GAP_MS = 1_000;
+const CLS_SESSION_CAP_MS = 5_000;
 type RouteName = (typeof ROUTES)[number]['name'];
 
 /**
@@ -65,20 +75,34 @@ type RouteName = (typeof ROUTES)[number]['name'];
  * LCP ceiling already equals its runner median x 1.2 (2220 -> 2700). Every
  * run prints its medians ([lab-vitals]) so the next ratchet (down only) has
  * runner data.
+ *
+ * Wave 5 (quality-08 / runtime-09 mechanism): Borrower 360 and every route's
+ * CLS are measured report-only (null) until the integrator sets them from
+ * three reference-runner calibration artifacts with tools/perf_ceilings.mjs
+ * (proposed CLS ceiling: 0.1, the "good" threshold); the home and lead-queue
+ * LCP / TBT ceilings above are unchanged.
  */
-const CEILINGS: Readonly<Record<RouteName, { lcpMs: number; tbtMs: number }>> = {
-  home: { lcpMs: 2_600, tbtMs: 600 },
-  'lead-queue': { lcpMs: 2_700, tbtMs: 1_200 },
+interface Ceilings {
+  lcpMs: number | null;
+  tbtMs: number | null;
+  cls: number | null;
+}
+const CEILINGS: Readonly<Record<RouteName, Ceilings>> = {
+  home: { lcpMs: 2_600, tbtMs: 600, cls: null },
+  'lead-queue': { lcpMs: 2_700, tbtMs: 1_200, cls: null },
+  'borrower-360': { lcpMs: null, tbtMs: null, cls: null },
 };
 
 interface Vitals {
   lcpMs: number;
   tbtMs: number;
+  cls: number;
 }
 
 interface PerfProbe {
   lcp: number;
   longTasks: Array<{ start: number; duration: number }>;
+  shifts: Array<{ start: number; value: number }>;
 }
 
 declare global {
@@ -87,7 +111,7 @@ declare global {
   }
 }
 
-const samples: Record<RouteName, Vitals[]> = { home: [], 'lead-queue': [] };
+const samples: Record<RouteName, Vitals[]> = { home: [], 'lead-queue': [], 'borrower-360': [] };
 
 async function throttle(page: Page): Promise<void> {
   const cdp = await page.context().newCDPSession(page);
@@ -104,7 +128,7 @@ async function throttle(page: Page): Promise<void> {
 
 async function observeVitals(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const probe: PerfProbe = { lcp: 0, longTasks: [] };
+    const probe: PerfProbe = { lcp: 0, longTasks: [], shifts: [] };
     window.__mipPerfProbe = probe;
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) probe.lcp = entry.startTime;
@@ -112,6 +136,11 @@ async function observeVitals(page: Page): Promise<void> {
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) probe.longTasks.push({ start: entry.startTime, duration: entry.duration });
     }).observe({ type: 'longtask', buffered: true });
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as Array<PerformanceEntry & { value: number; hadRecentInput: boolean }>) {
+        if (!entry.hadRecentInput) probe.shifts.push({ start: entry.startTime, value: entry.value });
+      }
+    }).observe({ type: 'layout-shift', buffered: true });
   });
 }
 
@@ -124,14 +153,29 @@ async function readVitals(page: Page): Promise<Vitals> {
     TBT_WINDOW_AFTER_LCP_MS,
     { polling: 250, timeout: 30_000 },
   );
-  return page.evaluate((windowMs) => {
+  return page.evaluate(({ windowMs, gapMs, capMs }) => {
     const probe = window.__mipPerfProbe as PerfProbe;
     const end = probe.lcp + windowMs;
     const tbtMs = probe.longTasks
       .filter((task) => task.start < end)
       .reduce((sum, task) => sum + Math.max(0, task.duration - 50), 0);
-    return { lcpMs: probe.lcp, tbtMs };
-  }, TBT_WINDOW_AFTER_LCP_MS);
+    // Session windows: a shift more than gapMs after the previous one, or
+    // past capMs from the window's first, starts a new window; CLS is the largest.
+    let cls = 0;
+    let windowValue = 0;
+    let windowStart = Number.NEGATIVE_INFINITY;
+    let previous = Number.NEGATIVE_INFINITY;
+    for (const shift of probe.shifts.filter((entry) => entry.start < end).sort((a, b) => a.start - b.start)) {
+      if (shift.start - previous > gapMs || shift.start - windowStart > capMs) {
+        windowValue = 0;
+        windowStart = shift.start;
+      }
+      windowValue += shift.value;
+      previous = shift.start;
+      cls = Math.max(cls, windowValue);
+    }
+    return { lcpMs: probe.lcp, tbtMs, cls };
+  }, { windowMs: TBT_WINDOW_AFTER_LCP_MS, gapMs: CLS_SESSION_GAP_MS, capMs: CLS_SESSION_CAP_MS });
 }
 
 function median(values: number[]): number {
@@ -155,26 +199,32 @@ test.describe('lab performance: throttled cold loads (bundle-08)', () => {
       });
     }
 
-    test(`${route.name} median LCP and TBT stay under their ceilings`, async ({}, testInfo) => {
+    test(`${route.name} median LCP, TBT and CLS stay under their set ceilings`, async ({}, testInfo) => {
       const taken = samples[route.name];
       expect(taken, 'every cold sample ran').toHaveLength(SAMPLES);
-      const result = {
+      const medians: Vitals = {
         lcpMs: median(taken.map((sample) => sample.lcpMs)),
         tbtMs: median(taken.map((sample) => sample.tbtMs)),
-        samples: taken,
+        cls: median(taken.map((sample) => sample.cls)),
       };
+      const result = { ...medians, samples: taken };
       // The runner's own numbers, in the job log even when the step passes.
       console.log(`[lab-vitals] ${route.name} ${JSON.stringify(result)}`);
       await testInfo.attach(`${route.name}-lab-vitals.json`, {
         body: JSON.stringify(result, null, 2),
         contentType: 'application/json',
       });
-      expect(result.lcpMs, `${route.name} median LCP (${JSON.stringify(taken)})`).toBeLessThanOrEqual(
-        CEILINGS[route.name].lcpMs,
-      );
-      expect(result.tbtMs, `${route.name} median TBT (${JSON.stringify(taken)})`).toBeLessThanOrEqual(
-        CEILINGS[route.name].tbtMs,
-      );
+      writeCalibration(testInfo, `${route.name}-lab-vitals`, {
+        spec: 'perf-budget',
+        medians: { ...medians },
+        samples: taken.map((sample) => ({ ...sample })),
+      });
+      const ceilings = CEILINGS[route.name];
+      const gated = (Object.keys(ceilings) as Array<keyof Ceilings>).filter((metric) => ceilings[metric] !== null);
+      console.log(`[lab-vitals] ${route.name} ${gated.length ? `gating: ${gated.map((metric) => `${metric}<=${ceilings[metric]}`).join(' ')}` : 'report-only'}`);
+      for (const metric of gated) {
+        expect(medians[metric], `${route.name} median ${metric} (${JSON.stringify(taken)})`).toBeLessThanOrEqual(ceilings[metric] ?? 0);
+      }
     });
   }
 });

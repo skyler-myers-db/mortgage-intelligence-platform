@@ -45,7 +45,7 @@ function stripCssComments(css: string): string {
 /**
  * Custom properties a non-test .ts/.tsx under src sets: a quoted `'--x'`
  * (an inline `style` key) or `setProperty('--x', ...)`. Test files, the
- * test helpers and the Storybook/test fixtures are not the app.
+ * test helpers and the unit-test or fixture-spec fixtures are not the app.
  */
 function tsxCustomPropertySetters(): Set<string> {
   const src = join(process.cwd(), 'src');

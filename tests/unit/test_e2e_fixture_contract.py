@@ -20,7 +20,12 @@ the model validators (score-band canon, governed identifiers, name-shaped
 text, vocabularies). A non-2xx sample must still resolve to a route but is not
 validated against a model. A 2xx body may also carry no key its model does
 not declare (the w3-api-contract carryover): the model drops such a key, so
-the UI could be built on a field the real wire never sends. Every body must
+the UI could be built on a field the real wire never sends. Nor may it omit a
+key the real server sends (quality-09 item 2): FastAPI serializes every
+declared field, so ``omitted_keys`` dumps the validated body the way the
+route itself serializes it (its own response_model flags; a declared raw 202
+in full) and reports what the served body lacks; the partial bodies found
+when the check landed sit in the shrink-only KNOWN_OMISSIONS. Every body must
 also stay synthetic: masked borrower ids, ``.example`` email domains and the
 Summit Mortgage sample lender.
 
@@ -71,6 +76,261 @@ KNOWN_DRIFT: dict[str, dict[str, str]] = {}
 # exactly its keys (test below). Shape: {"finding", "owner", "recorded",
 # "why", "keys"}, where "keys" is the extras' dotted paths, comma-joined.
 KNOWN_EXTRAS: dict[str, dict[str, str]] = {}
+
+
+def _per_item(count: int, keys: str, overrides: dict[int, str] | None = None) -> str:
+    """Comma-joined ``[i].key`` paths for ``count`` list items omitting ``keys``
+    (``overrides`` gives an item its own list)."""
+    chosen = overrides or {}
+    return ",".join(
+        f"[{index}].{key}" for index in range(count) for key in chosen.get(index, keys).split(",")
+    )
+
+
+_LEAD_SUMMARY_OMITTED = (
+    "approved_at,outreach_at,is_former_customer,is_competitor_lien,second_pos_amount,"
+    "has_permit,listing_status_category,listing_status_description,listing_date,"
+    "listing_status_date,listing_price,listing_days_on_market,listing_service,"
+    "heloc_propensity_score,heloc_propensity_run_date,refi_propensity_score,"
+    "refi_propensity_run_date,has_refi_propensity_trigger,current_lender_ref,"
+    "last_touch_at,eligible_recontact_at,dnc,assigned_to_email,assigned_to_label,"
+    "assigned_at,assignment_expires_at,assignment_status,assignment_id,"
+    "latest_disposition_outcome,latest_disposition_at,latest_callback_at,aging_days"
+)
+_BORROWER_360_OMITTED = (
+    "current_lien_balance_low,current_lien_balance_high,ltv_basis_is_unreliable,"
+    "situs_cbsa_code,first_pos_loan_type,is_absentee,is_corporate_owner,"
+    "has_first_party_relationship,first_party_relationship_depth,"
+    "first_party_recent_interactions,first_party_recent_application,"
+    "first_party_synthetic_demo"
+)
+_QUEUE_LAYOUT_ITEM_2 = (
+    "approved_at,outreach_at,is_former_customer,is_competitor_lien,second_pos_amount,"
+    "has_permit,listing_status_category,listing_status_description,listing_date,"
+    "listing_status_date,listing_price,listing_days_on_market,listing_service,"
+    "heloc_propensity_score,heloc_propensity_run_date,refi_propensity_score,"
+    "refi_propensity_run_date,has_refi_propensity_trigger,current_lender_ref,"
+    "last_touch_at,eligible_recontact_at,assigned_at,assignment_expires_at,assignment_id,"
+    "latest_callback_at"
+)
+
+
+_OMISSION_WHY = {
+    "leads": (
+        "LeadSummary rows predate the assignment, listing, propensity and disposition "
+        "columns; the real server sends each (null or its default)"
+    ),
+    "b360": (
+        "the Borrower 360 body predates the LeadSummary columns and the lien-band, "
+        "CBSA, owner-type and first-party fields the real server always sends"
+    ),
+    "genie": (
+        "Genie answer and refusal builders leave optional response fields out; the real"
+        " server serializes every one (null, [] or its default)"
+    ),
+    "session": (
+        "session bodies leave capability and display fields to an implied default; the "
+        "real server always sends them"
+    ),
+    "portfolio": (
+        "portfolio bodies predate offers_available / household_summary; the real server"
+        " always sends them"
+    ),
+    "lifecycle": (
+        "lifecycle bodies leave the decision ids and timestamps out instead of sending "
+        "null"
+    ),
+    "admin": (
+        "admin, data-estate and asset-metadata bodies predate checked_at, "
+        "synthetic_demo, catalog_explorer_url and redacted"
+    ),
+    "proof": (
+        "proof body predates fair_lending_note, databricks_sql_url and margins"
+    ),
+    "outreach": (
+        "outreach draft body predates campaign_treatment_fingerprint"
+    ),
+    "genie_jobs": (
+        "job-status bodies leave typical_seconds and the finished answer's optional "
+        "fields out; the real server sends each (null or [])"
+    ),
+}
+
+
+def _omission(domain: str, keys: str) -> dict[str, str]:
+    return {
+        "finding": "quality-09 item 2",
+        "owner": "w5-wire-types",
+        "recorded": "2026-09-30",
+        "why": _OMISSION_WHY[domain],
+        "keys": keys,
+    }
+
+
+_REFUSED_SUBMIT_OMITTED = (
+    "completion_jobs,response.summary,response.sections,response.message_id,"
+    "response.elapsed_ms,response.sql_query,response.proof.sql_query,"
+    "response.proof.data_freshness,response.proof.reasoning_trace,response.proof.message_id,"
+    "response.proof.elapsed_ms,response.proof.generated_at,response.visualization,"
+    "response.actions,response.metric_value,response.native_visualization,"
+    "response.reasoning_trace,response.genie_status"
+)
+_REFUSED_TURN_OMITTED = (
+    "summary,sections,message_id,elapsed_ms,sql_query,proof.sql_query,proof.data_freshness,"
+    "proof.reasoning_trace,proof.message_id,proof.elapsed_ms,proof.generated_at,visualization,"
+    "actions,metric_value,native_visualization,reasoning_trace,genie_status"
+)
+
+# 2xx samples that OMIT keys the real server always sends (quality-09 item 2),
+# keyed by exported source. SHRINK-ONLY: populated once when the check landed
+# (2026-09-30) from `node tools/export_e2e_fixtures.mjs --out <file>`; each
+# entry must still reproduce exactly its keys (test below), so it is only
+# ever narrowed or removed, never added or widened: a new partial body is
+# completed in its fixture. Shape: {"finding", "owner", "recorded", "why",
+# "keys"}, where "keys" is the omitted dotted paths, comma-joined. The
+# domain's P3 PR (w5-wire-types, D-api-types-a4 part a4-ii) types its served
+# bodies with the generated presence view and deletes its entries.
+KNOWN_OMISSIONS: dict[str, dict[str, str]] = {
+    "contractSamples.ts:CONTACTABLE_PORTFOLIO_PREVIEW": _omission("portfolio", "offers_available"),
+    "contractSamples.ts:LIVE_SHAPED_HOME_PREVIEW": _omission("portfolio", "offers_available"),
+    "contractSamples.ts:MAX_HOME_PREVIEW": _omission("portfolio", "offers_available"),
+    "contractSamples.ts:QUEUE_LAYOUT_LEADS": _omission(
+        "leads",
+        _per_item(24, _LEAD_SUMMARY_OMITTED, {2: _QUEUE_LAYOUT_ITEM_2}),
+    ),
+    "contractSamples.ts:SIGNED_IN_APPROVER": _omission("session", "lender_name,rum_enabled"),
+    "contractSamples.ts:decidedLifecycle(approved)": _omission("lifecycle", "outreach_at"),
+    "contractSamples.ts:decidedLifecycle(rejected)": _omission("lifecycle", "outreach_at"),
+    "contractSamples.ts:genieAnswerFixture()": _omission(
+        "genie",
+        (
+            "summary,sections,visualization.series,native_visualization,reasoning_trace,"
+            "refusal_reason,refusal_report_hash"
+        ),
+    ),
+    "contractSamples.ts:genieDeepAnswerFixture()": _omission(
+        "genie",
+        (
+            "sections[0].visualization.series,sections[0].visualization.reason,"
+            "sections[0].narrative_withheld,sections[1].visualization.series,"
+            "sections[1].visualization.reason,sections[1].narrative_withheld,visualization.series,"
+            "native_visualization,reasoning_trace,refusal_reason,refusal_report_hash"
+        ),
+    ),
+    "contractSamples.ts:portfolioCreated()": _omission("portfolio", "household_summary"),
+    "contractSamples.ts:refusedSubmit(instruction_override)": _omission(
+        "genie",
+        _REFUSED_SUBMIT_OMITTED,
+    ),
+    "contractSamples.ts:refusedSubmit(out_of_scope)": _omission("genie", _REFUSED_SUBMIT_OMITTED),
+    "contractSamples.ts:refusedSubmit(output_policy)": _omission("genie", _REFUSED_SUBMIT_OMITTED),
+    "contractSamples.ts:refusedSubmit(outreach_instruction)": _omission(
+        "genie",
+        _REFUSED_SUBMIT_OMITTED,
+    ),
+    "contractSamples.ts:refusedSubmit(pii_request)": _omission("genie", _REFUSED_SUBMIT_OMITTED),
+    "contractSamples.ts:refusedSubmit(protected_class)": _omission(
+        "genie",
+        _REFUSED_SUBMIT_OMITTED,
+    ),
+    "contractSamples.ts:refusedSubmit(scope_bypass)": _omission("genie", _REFUSED_SUBMIT_OMITTED),
+    "contractSamples.ts:refusedSubmit(unknown)": _omission("genie", _REFUSED_SUBMIT_OMITTED),
+    "contractSamples.ts:refusedSubmit(unreviewed_criterion)": _omission(
+        "genie",
+        _REFUSED_SUBMIT_OMITTED,
+    ),
+    "contractSamples.ts:refusedTurn(instruction_override)": _omission(
+        "genie",
+        _REFUSED_TURN_OMITTED,
+    ),
+    "contractSamples.ts:refusedTurn(out_of_scope)": _omission("genie", _REFUSED_TURN_OMITTED),
+    "contractSamples.ts:refusedTurn(output_policy)": _omission("genie", _REFUSED_TURN_OMITTED),
+    "contractSamples.ts:refusedTurn(outreach_instruction)": _omission(
+        "genie",
+        _REFUSED_TURN_OMITTED,
+    ),
+    "contractSamples.ts:refusedTurn(pii_request)": _omission("genie", _REFUSED_TURN_OMITTED),
+    "contractSamples.ts:refusedTurn(protected_class)": _omission("genie", _REFUSED_TURN_OMITTED),
+    "contractSamples.ts:refusedTurn(scope_bypass)": _omission("genie", _REFUSED_TURN_OMITTED),
+    "contractSamples.ts:refusedTurn(unknown)": _omission("genie", _REFUSED_TURN_OMITTED),
+    "contractSamples.ts:refusedTurn(unreviewed_criterion)": _omission(
+        "genie",
+        _REFUSED_TURN_OMITTED,
+    ),
+    "contractSamples.ts:registerGenieTurn submit": _omission("genie", "completion_jobs"),
+    "data/genie.ts:genieSessionDetail(GENIE_LINK_HEX_ID)": _omission(
+        "genie",
+        (
+            "turns[0].response.summary,turns[0].response.sections,turns[0].response.elapsed_ms,"
+            "turns[0].response.question_hash,turns[0].response.sql_query,turns[0].response.row_count,"
+            "turns[0].response.proof,turns[0].response.visualization,turns[0].response.actions,"
+            "turns[0].response.metric_value,turns[0].response.table_rows,"
+            "turns[0].response.native_visualization,turns[0].response.reasoning_trace,"
+            "turns[0].response.refusal_reason,turns[0].response.refusal_report_hash"
+        ),
+    ),
+    "data/genieJobs.ts:data/genieJobs.ts": _omission(
+        "genie_jobs",
+        (
+            "typical_seconds,response.summary,response.sections,response.visualization.series,"
+            "response.native_visualization,response.reasoning_trace,response.refusal_reason,"
+            "response.refusal_report_hash"
+        ),
+    ),
+    "data/genieReading.ts:data/genieReading.ts": _omission(
+        "genie",
+        (
+            "summary,sections,native_visualization,reasoning_trace,refusal_reason,refusal_report_hash,"
+            "sections[0].narrative_withheld,sections[1].narrative_withheld,"
+            "sections[2].narrative_withheld,sections[3].narrative_withheld,"
+            "sections[4].narrative_withheld,visualization.series"
+        ),
+    ),
+    "data/queuePlace.ts:data/queuePlace.ts#LO_SESSION": _omission(
+        "session",
+        "actor_display_name,role_labels,lender_name,rum_enabled",
+    ),
+    "registry:GET /api/admin/assets/:assetKey/metadata": _omission(
+        "admin",
+        "columns[0].redacted,columns[1].redacted,columns[2].redacted,columns[3].redacted",
+    ),
+    "registry:GET /api/admin/sources": _omission(
+        "admin",
+        _per_item(7, "checked_at,synthetic_demo"),
+    ),
+    "registry:GET /api/borrowers/:id": _omission(
+        "b360",
+        _LEAD_SUMMARY_OMITTED + "," + _BORROWER_360_OMITTED,
+    ),
+    "registry:GET /api/borrowers/:id/lifecycle": _omission(
+        "lifecycle",
+        "approval_id,audit_event_id,approved_at,outreach_at",
+    ),
+    "registry:GET /api/borrowers/:id/proof": _omission(
+        "proof",
+        (
+            "score_components[0].fair_lending_note,score_components[1].fair_lending_note,"
+            "score_components[2].fair_lending_note,score_components[3].fair_lending_note,"
+            "reproduce[0].databricks_sql_url,margins"
+        ),
+    ),
+    "registry:GET /api/borrowers/search": _omission("leads", _per_item(8, _LEAD_SUMMARY_OMITTED)),
+    "registry:GET /api/data-estate": _omission(
+        "admin",
+        (
+            "lanes[0].assets[0].catalog_explorer_url,lanes[0].assets[0].synthetic_demo,"
+            "lanes[0].assets[1].catalog_explorer_url,lanes[0].assets[1].synthetic_demo,"
+            "lanes[1].assets[0].catalog_explorer_url,lanes[1].assets[0].synthetic_demo,"
+            "lanes[2].assets[0].catalog_explorer_url,lanes[2].assets[0].synthetic_demo,"
+            "lanes[2].assets[1].catalog_explorer_url,lanes[2].assets[1].synthetic_demo,"
+            "lanes[3].assets[0].catalog_explorer_url"
+        ),
+    ),
+    "registry:GET /api/leads": _omission("leads", _per_item(24, _LEAD_SUMMARY_OMITTED)),
+    "registry:GET /api/session": _omission("session", "actor_display_name,role_labels"),
+    "registry:POST /api/outreach/draft": _omission("outreach", "campaign_treatment_fingerprint"),
+    "registry:POST /api/portfolio/preview": _omission("portfolio", "offers_available"),
+}
 
 
 class ContractError(LookupError):
@@ -193,6 +453,67 @@ def undeclared_keys(body: Any, model: Any) -> list[str]:
     return _extra_paths(body, by_alias, by_name, "")
 
 
+def _served_by_route_model(route: APIRoute, status: int) -> bool:
+    """True when ``status`` is serialized through the route's own response_model
+    (``response_model_for`` did not take ``route.responses[status]['model']``)."""
+    declared = route.responses.get(status) or route.responses.get(str(status)) or {}
+    return not (isinstance(declared, dict) and declared.get("model") is not None)
+
+
+def _missing_paths(body: Any, dumped: Any, path: str) -> list[str]:
+    """Dotted paths the server's dump carries and ``body`` does not.
+
+    Lists are zipped by index. A ``dict[str, X]`` field's dump has exactly
+    the body's keys (it was validated from the body), so its keys are never
+    reported, only walked.
+    """
+    if isinstance(dumped, dict) and isinstance(body, dict):
+        missing: list[str] = []
+        for key, child in dumped.items():
+            where = f"{path}.{key}" if path else str(key)
+            if key not in body:
+                missing.append(where)
+                continue
+            missing.extend(_missing_paths(body[key], child, where))
+        return missing
+    if isinstance(dumped, list) and isinstance(body, list):
+        return [
+            item
+            for index, (child, dumped_child) in enumerate(zip(body, dumped, strict=False))
+            for item in _missing_paths(child, dumped_child, f"{path}[{index}]")
+        ]
+    return []
+
+
+def omitted_keys(body: Any, model: Any, route: APIRoute, status: int) -> list[str]:
+    """Dotted paths the real server would send for this route and status but ``body`` omits.
+
+    The dump mirrors the route's own serialization (quality-09 item 2): a status
+    served through the route's response_model uses the route's flags (by_alias,
+    exclude_unset, exclude_defaults, exclude_none, include, exclude), so the
+    /health exclude_unset route reports nothing a body left unset; a declared
+    raw status (the genie 202) is dumped in full by alias, which
+    test_api_types_generated.py (c) proves is what the server sends.
+    ``exclude=True`` fields are never dumped and so never reported.
+    """
+    adapter = _adapter(model)
+    validated = adapter.validate_json(json.dumps(body))
+    if _served_by_route_model(route, status):
+        dumped = adapter.dump_python(
+            validated,
+            mode="json",
+            by_alias=route.response_model_by_alias,
+            exclude_unset=route.response_model_exclude_unset,
+            exclude_defaults=route.response_model_exclude_defaults,
+            exclude_none=route.response_model_exclude_none,
+            include=route.response_model_include,
+            exclude=route.response_model_exclude,
+        )
+    else:
+        dumped = adapter.dump_python(validated, mode="json", by_alias=True)
+    return _missing_paths(body, dumped, "")
+
+
 def contract_problems(sample: dict[str, Any], routes: list[APIRoute] | None = None) -> list[str]:
     """Why ``sample`` breaks the contract; empty when it holds (or is non-2xx)."""
     method, path, status = sample["method"], sample["path"], int(sample["status"])
@@ -223,6 +544,15 @@ def contract_problems(sample: dict[str, Any], routes: list[APIRoute] | None = No
         problems.append(
             f"{where}: {getattr(model, '__name__', model)} does not declare {', '.join(unknown)}"
             " (the real response drops it)"
+        )
+    known_omitted = KNOWN_OMISSIONS.get(sample["source"], {}).get("keys", "").split(",")
+    omitted = [
+        item for item in omitted_keys(sample["body"], model, route, status) if item not in known_omitted
+    ]
+    if omitted:
+        problems.append(
+            f"{where}: {getattr(model, '__name__', model)} omits {', '.join(omitted)}"
+            " (the real server always sends them)"
         )
     return problems
 
@@ -300,6 +630,29 @@ def test_known_drift_is_shrink_only(samples: list[dict[str, Any]]) -> None:
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry["recorded"]), source
         assert source in by_source, f"KNOWN_DRIFT names {source!r}, which the exporter no longer emits"
         assert contract_problems(by_source[source]), f"KNOWN_DRIFT {source!r} no longer reproduces: remove it"
+
+
+def _sample_omissions(sample: dict[str, Any]) -> list[str]:
+    status = int(sample["status"])
+    if not 200 <= status < 300:
+        return []
+    route = resolve_route(sample["method"], sample["path"])
+    return omitted_keys(sample["body"], response_model_for(route, status), route, status)
+
+
+def test_known_omissions_is_shrink_only(samples: list[dict[str, Any]]) -> None:
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for sample in samples:
+        by_source.setdefault(sample["source"], []).append(sample)
+    for source, entry in KNOWN_OMISSIONS.items():
+        assert {"finding", "owner", "recorded", "why", "keys"} <= entry.keys(), source
+        assert entry["finding"] == "quality-09 item 2", source
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry["recorded"]), source
+        assert source in by_source, f"KNOWN_OMISSIONS names {source!r}, which the exporter no longer emits"
+        reproduced = list(dict.fromkeys(path for sample in by_source[source] for path in _sample_omissions(sample)))
+        assert reproduced == entry["keys"].split(","), (
+            f"KNOWN_OMISSIONS {source!r} no longer reproduces exactly its keys: narrow or remove it"
+        )
 
 
 def test_known_extras_is_shrink_only(samples: list[dict[str, Any]]) -> None:
@@ -423,6 +776,7 @@ def test_dispatch_order_resolves_the_static_segment_first() -> None:
 
 class _JobReceipt(BaseModel):
     job_id: str
+    state: str = "queued"
 
 
 class _Answer(BaseModel):
@@ -449,12 +803,83 @@ def test_a_non_default_2xx_status_validates_against_its_declared_model() -> None
     route = _declared_202_route()
     base = {"source": "non-vacuity", "method": "POST", "pattern": "/api/non-vacuity/jobs", "path": "/api/non-vacuity/jobs", "query": ""}
 
-    assert contract_problems({**base, "status": 202, "body": {"job_id": "j-1"}}, [route]) == []
+    assert contract_problems({**base, "status": 202, "body": {"job_id": "j-1", "state": "queued"}}, [route]) == []
     assert contract_problems({**base, "status": 200, "body": {"answer": "ok"}}, [route]) == []
     wrong_model = contract_problems({**base, "status": 202, "body": {"answer": "ok"}}, [route])
     assert any("fails _JobReceipt" in problem and "job_id" in problem for problem in wrong_model)
     undeclared = contract_problems({**base, "status": 203, "body": {"job_id": "j-1"}}, [route])
     assert any("status 203 is not declared" in problem for problem in undeclared)
+
+
+def test_a_declared_202_body_missing_a_defaulted_key_is_rejected() -> None:
+    """A declared raw status is dumped in full by alias: the genie 202 sends every field."""
+    route = _declared_202_route()
+    base = {"source": "non-vacuity", "method": "POST", "pattern": "/api/non-vacuity/jobs", "path": "/api/non-vacuity/jobs", "query": ""}
+    assert contract_problems({**base, "status": 202, "body": {"job_id": "j-1"}}, [route]) == [
+        "non-vacuity [POST /api/non-vacuity/jobs -> 202]: _JobReceipt omits state"
+        " (the real server always sends them)"
+    ]
+
+
+# --- Non-vacuity: served 2xx bodies are complete (quality-09 item 2) ---------
+
+
+def test_the_validator_rejects_a_top_level_omission() -> None:
+    sample = {**_valid_session_sample(), "body": {}}
+    assert contract_problems(sample) == [
+        "non-vacuity [GET /api/genie/sessions -> 200]: GenieSessionListResponse omits sessions"
+        " (the real server always sends them)"
+    ]
+
+
+def test_the_validator_rejects_an_omission_inside_a_list_item() -> None:
+    sample = _valid_session_sample()
+    del sample["body"]["sessions"][0]["title"]
+    assert any("omits sessions[0].title" in problem for problem in contract_problems(sample))
+
+
+def _synthetic_route(model: Any) -> APIRoute:
+    router = APIRouter()
+
+    @router.get(f"/api/{API_VERSION}/non-vacuity/model", response_model=model)
+    def _served() -> None:  # pragma: no cover - never served
+        return None
+
+    route = router.routes[0]
+    assert isinstance(route, APIRoute)
+    return route
+
+
+def test_an_exclude_unset_route_reports_nothing_a_body_left_unset() -> None:
+    route = resolve_route("GET", "/api/health")
+    assert route.response_model_exclude_unset, "non-vacuity: /health is serialized with exclude_unset"
+    model = response_model_for(route, 200)
+    body = {"status": "ok", "mode": "live"}
+    assert omitted_keys(body, model, route, 200) == []
+    unflagged = omitted_keys(body, model, _synthetic_route(model), 200)
+    assert "dependencies" in unflagged, "control: the same body on an unflagged route omits keys"
+
+
+class _Labels(BaseModel):
+    labels: dict[str, str]
+
+
+def test_a_dict_field_with_arbitrary_keys_omits_nothing() -> None:
+    route = _synthetic_route(_Labels)
+    assert omitted_keys({"labels": {"a": "1", "any-new-key": "2"}}, _Labels, route, 200) == []
+    assert omitted_keys({"labels": {}}, _Labels, route, 200) == []
+
+
+def test_an_excluded_field_is_never_reported(samples: list[dict[str, Any]]) -> None:
+    from backend.schemas.lead import LeadSummary
+
+    assert LeadSummary.model_fields["row_refreshed_at"].exclude is True, "non-vacuity: the field is exclude=True"
+    leads = next(sample for sample in samples if sample["source"] == "registry:GET /api/leads")
+    row = {key: value for key, value in leads["body"][0].items() if key != "row_refreshed_at"}
+    route = resolve_route("GET", "/api/leads")
+    omitted = omitted_keys([row], response_model_for(route, 200), route, 200)
+    assert omitted, "non-vacuity: the served row omits other keys"
+    assert not any(path.endswith("row_refreshed_at") for path in omitted)
 
 
 def test_a_route_without_a_response_model_fails_closed() -> None:

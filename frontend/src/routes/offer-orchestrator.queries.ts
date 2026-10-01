@@ -2,7 +2,10 @@
  * The Offer Orchestrator's reads on the query layer (2026-09-21 audit
  * runtime-06 (a)(f), delivery-08 L slice, states-03 item 2, runtime-03).
  *
- * AUDIT PARITY is the contract. Every open of this approval surface writes
+ * AUDIT PARITY is the contract (ruled in wave 5, D-audit-reads-b: the Offer
+ * keeps its own audited read, there is no VIEW_OFFER, and RECOMMEND_OFFER is
+ * the approval-surface open record; docs/security-and-compliance.md "Read-audit
+ * semantics by surface"). Every open of this approval surface writes
  * VIEW_BORROWER (GET /borrowers/{id}), RECOMMEND_OFFER (POST /offers/recommend)
  * and DRAFT_OUTREACH (POST /outreach/draft), exactly as the effect this module
  * replaced did (it re-read all four on every open, re-open, channel switch,

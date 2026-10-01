@@ -9,7 +9,7 @@
  *
  * Kept tiny and React-free on purpose: the shell (GenieDock, the command
  * palette) imports it into the initial chunk, and a KPI card rendered without
- * the app provider (unit tests, Storybook) can still carry an entry point.
+ * the app provider (a unit test or fixture spec) can still carry an entry point.
  * The reviewed templates live in `genieContext.ts`, which only lazy route
  * chunks import.
  *
