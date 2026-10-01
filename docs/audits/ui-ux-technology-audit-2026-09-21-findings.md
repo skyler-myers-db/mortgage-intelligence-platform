@@ -93,6 +93,8 @@ Companion to [ui-ux-technology-audit-2026-09-21.md](ui-ux-technology-audit-2026-
 - **Tech:** d3-scale 4.0.2, d3-shape 3.2.0, d3-array 3.2.4 (ISC, stable, tree-shakeable, loaded only in chart chunks; npm-verified).
 - **Verifier:** makeTicks and GenieLineChart read as described (silent 24-point slice, unpadded r=3 dots at the viewBox edge, no y-axis or tooltip). The components.css citation is branch-local; main split the CSS. d3-scale drags in d3-interpolate, d3-color, d3-format and d3-time for a one-line linear map.
 
+**Wave-5 status.** W5b (2026-10-01): the Genie charts are on the chart kit (w5-genie-verified-reveal; see dataviz-05).
+
 ### `stack-07` TypeScript and ESLint run below their free strictness ceiling, and 9,492 lines of Playwright specs are never typechecked or linted
 
 `medium` · `upgrade` · effort `M` · corrected
@@ -133,6 +135,8 @@ Companion to [ui-ux-technology-audit-2026-09-21.md](ui-ux-technology-audit-2026-
 - **Tech:** TypeScript 7.0.2 native compiler has been stable since 2026-07-08, but typescript-eslint 8.70.1 peers typescript <6.1.0 (npm-verified). @typescript/typescript6 6.0.2. Renovate (stable).
 - **Verifier:** npm audit reproduces 2 moderate dev-only vitest advisories (fix 4.1.11); every cited version verified via npm view. But Renovate's bot branches contradict modernization-todo.md:158-161, which removed Dependabot deliberately, and my full typecheck took 37 s, not 2m14s, so the TypeScript 7 dual toolchain buys little.
 - **Constraint conflict:** Persistent bot branches violate the documented 'main is the only persistent branch' repo contract and trip the all-refs gitleaks scan; update automation is an owner decision.
+
+**Wave-5 status.** W5b (2026-10-01): the non-major batch landed (w5-wire-contract-deps): TanStack Query 5.104.0 in lockstep, vite 8.3.2, eslint 10.11.0 and typescript-eslint 8.71.0, with web-vitals 6.2.2 and stylelint 17.16.0 added and gitleaks at 8.30.1. The integrator held @tanstack/react-virtual 3.14.13 and happy-dom 20.14.5 on the installed-tree gates (dated in supply-chain-audit.md); TypeScript 7, vitest 5, @babel/core 8, Playwright and oxlint 1.86 stay held.
 
 ### `stack-v1` API types are hand-written (~1,750 lines) although a pinned OpenAPI baseline is already committed
 
@@ -269,6 +273,8 @@ I did not evaluate the CSS architecture of components.css, preload hints or the 
 - **Tech:** Existing lib/routePreloaders.ts plus TanStack Query `prefetchQuery`. Speculation Rules do not apply: verified MPA-only and not Baseline, and inline rules would be blocked by this CSP.
 - **Verifier:** Verified preloadRouteForPath is called only at RouteNav.tsx:82-83, the idle preloader covers 4 routes, no prefetchQuery exists, and the LeadRowPreview/LeadTable links are plain. Cited palette path is wrong (components/command/, not layout/). Chunk sizes unverifiable; Speculation Rules reasoning holds.
 
+**Wave-5 status.** W5b (2026-10-01): item 2 delivered (w5-theme-white-label).
+
 ### `bundle-04` Click-gated surfaces ship in the shell: EvidenceDrawer body, registry prose and the Cmd-K dialog
 
 `low` · `upgrade` · effort `L` · corrected
@@ -373,6 +379,8 @@ I did not evaluate the CSS architecture of components.css, preload hints or the 
 - **Verifier:** Opened all four sites: panel unmounts when closed, unmount aborts, poll loop stops, route ask is a signal-consuming query. Token is actor-bound with 15-minute expiry, so resume is feasible. Two 600-850-line surfaces plus reset semantics make this L, not M.
 - **Constraint conflict:** None, provided the actor-boundary reset still aborts the turn and clears the persisted progress token (fail-closed identity boundary stays).
 
+**Wave-5 status.** W5b (2026-10-01): the wave-3 remainder is closed (w5-identity-reset): a reload during the complete call shows the interrupted note in WebKit as in Chromium, and the cross-engine fixme is lifted for both engines. Firefox's proof is the PR's e2e-cross-engine job; if it is red, the fixme narrows to Firefox (owner W5c w5-genie-stop-context).
+
 ### `runtime-02` Lead Queue query key omits `cities`: two city cohorts share one cache entry
 
 `high` · `defect` · effort `S` · confirmed
@@ -404,6 +412,8 @@ I did not evaluate the CSS architecture of components.css, preload hints or the 
 - **Verifier:** Reproduced 12 effect fetches in 9 files, zero useMutation, unused keys, the TODO, and all states flipping to is-loading per toggle. Backend never cancels warehouse statements on disconnect, so abort saves browser work only. Optimistic approve conflicts with the approval gate.
 - **Constraint conflict:** Optimistic cache updates for approve/reject would show an approval before the Lakebase audit row exists; the approval-gate and audit posture require pessimistic confirmation on those actions.
 
+**Wave-5 status.** W5b (2026-10-01): one roster key, queryKeys.salesRoster() / useSalesRoster, for Lead Queue, Sales ops and Offer (w5-lead-triage-export).
+
 ### `runtime-04` LeadTable has had neither compiler nor manual memoization since 2026-05-18
 
 `medium` · `defect` · effort `L` · corrected
@@ -424,6 +434,8 @@ I did not evaluate the CSS architecture of components.css, preload hints or the 
 - **Tech:** React 19 useSyncExternalStore selector stores or zustand 5 (about 1 KB, stable); TanStack Query structural sharing + select.
 - **Verifier:** Single memoized 34-field value and 24 useApp files confirmed; EvidenceChip and ConfidenceMeter subscribe per row. Compiled consumers absorb most fan-out, so cost concentrates in the uncompiled ones. 39 test files mock AppContext; the health tick re-renders only Topbar and AppShell.
 
+**Wave-5 status.** W5b (2026-10-01): the selector store (components/appStore.ts) and the keyed useApp(...) overload are built; EvidenceChip and ConfidenceMeter moved (w5-theme-white-label). LeadTable and LeadTableRow move in W5c w5-lead-queue-paging, RouteNav in W5c w5-shell-nav-followups.
+
 ### `runtime-08` No scroll reset, scroll restoration or list-state restore across navigation
 
 `medium` · `gap` · effort `M` · confirmed
@@ -433,6 +445,8 @@ I did not evaluate the CSS architecture of components.css, preload hints or the 
 - **Recommendation:** Add useMainScrollRestoration keyed by location.key (sessionStorage; reset to 0 on PUSH, restore on POP) and feed the table's saved offset to the virtualizer initialOffset. Put sort key and expanded borrower in search params. Option: keep Lead Queue alive under Activity mode hidden while a borrower route is open.
 - **Tech:** React Router 8 useLocation/useNavigationType; TanStack Virtual initialOffset/scrollToOffset; React 19.2 Activity (stable).
 - **Verifier:** `.main` is the persistent overflow scroller, BrowserRouter is declarative (no ScrollRestoration), and my search found no reset or restore. LeadTable sort, expanded row and selection are local useState and the route remounts per pathname key. The table's own 520px scroller also needs restoring.
+
+**Wave-5 status.** W5b (2026-10-01): the useWarmingUpRetry focus fix landed (w5-audit-ledger-presenter); the Lead Queue Activity keep-alive and the leads refetchOnMount default go to W5c w5-lead-queue-paging (pre-taken cut 1).
 
 ### `runtime-09` Field and lab telemetry cannot catch an interaction regression
 
@@ -918,6 +932,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** session.py:11-21 returns can_approve; frontend SessionResponse (types/workspace.ts:37-39) omits it; grep can_approve/canApprove/approver gating in src: 0. app.tsx:55 redirects silently. rbac.py reads X-Forwarded-Email. Topbar has no identity element. Medium/M is reasonable.
 - **Constraint conflict:** None, provided the displayed identity is only the actor's own forwarded email and stays out of RUM payloads (telemetry schema scrubs emails).
 
+**Wave-5 status.** W5b (2026-10-01): the request backend landed with flow-02 (w5-approval-ledger-api); the UI is W5d w5-lq-requests-binding.
+
 ### `shell-07` Two competing global searches: topbar results are keyboard-unreachable, and the Cmd-K palette covers only routes and live borrower rows, with substring matching and no domain synonyms, recents or Genie handoff
 
 `medium` · `upgrade` · effort `M` · corrected
@@ -928,6 +944,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** Keep the hand-rolled accessible combobox; fuzzysort 4.0.2 (npm verified) or a 40-line scorer; one useBorrowerSearch on TanStack Query with keepPreviousData and useDeferredValue; aria-keyshortcuts.
 - **Verifier:** Probe: ArrowDown in topbar search does nothing, Tab closes results; 'refi' returns zero actions. But the palette already merges live borrower/ZIP rows in a second 'Borrowers' group (CommandPalette.tsx:34-36,139-141,272), so 'no entities' and 'one group' are wrong.
 - **Constraint conflict:** Genie handoff must use the existing fail-closed prompt guard path; no bypass.
+
+**Wave-5 status.** W5b (2026-10-01): item 4 delivered (w5-theme-white-label): the palette hides its empty state while a borrower search runs or has failed, and its status lines speak from one live region outside the listbox. Read-only auditors find 'Audit ledger' in Cmd-K (integrator).
 
 ### `shell-08` Five hand-kept route tables drift: nav and palette disagree on icons and names, tab title never changes, route changes are silent to assistive tech, nav chips show default link underlines
 
@@ -1059,6 +1077,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** WAI-ARIA APG roving-tabindex/grid pattern; @tanstack/react-virtual scrollToIndex; aria-keyshortcuts. No new dependency.
 - **Verifier:** Verified: only A/R/Shift+A, expanded row required, no arrows/J/K/scrollToIndex, five to seven tab stops per row. Correction: hotkeys are window-level with only an input guard, so more single-key shortcuts need focus scoping (WCAG 2.1.4); a role=grid/roving rewrite is unnecessary risk.
 
+**Wave-5 status.** W5b (2026-10-01): Triage Mode landed with wow-power-1 (w5-lead-triage-export).
+
 ### `tables-04` About five rows visible: 86px stacked-chip rows in a 520px scroller; density tokens are masked by content height
 
 `high` · `upgrade` · effort `M` · corrected
@@ -1092,6 +1112,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** Verified: exportCsv serialises `leads` not sortedLeads/selection, label counts pre-gate rows, no export route or audit event. Nuance: the list read is already audited with rendered_borrower_ids (leads.py:594-604), and code comments deliberately decline a server export (LeadTable.tsx:798-805).
 - **Constraint conflict:** Streaming 'All matching' widens egress from the 500 on-screen rows to the whole cohort and reverses an explicit in-code decision not to add a server export; owner decision, not a default.
 
+**Wave-5 status.** W5b (2026-10-01): step 2 declined on the merits (wave-5 ruling 2026-09-30); the loaded-rows export states its scope in the label ('Export k loaded'), the hashed file (# matching_rows, # contact_policy) and the LEAD_EXPORT receipt (matching_row_count), with no-stream pins (w5-lead-triage-export).
+
 ### `tables-v1` Lead Queue query key omits the city filter, so city drill-downs can show the wrong cohort
 
 `high` · `defect` · effort `S` · verifier-added
@@ -1120,6 +1142,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** @tanstack/react-table 9.2.4 (npm latest, verified 2026-09-21; v9 is React Compiler-safe and tree-shakable). It is headless, so prototype BEM is untouched.
 - **Verifier:** No column management and 'use no memo' at :76 verified; react-table 9.2.4 is npm latest (9.0.0 stable 2026-08-04, compiler-compatible per TanStack docs). But the opt-out stems from useVirtualizer (:151-154) and a ref written during render; Table v9 alone won't lift it.
 - **Constraint conflict:** A column menu is additive to the prototype (not in design_files); acceptable if rendered with existing `.tbl`/`.filter-menu` BEM and declared.
+
+**Wave-5 status.** W5b (2026-10-01): step 2 (column visibility, the HIDE pill, ?hide= and the Review preset) is deferred to W5c w5-lead-queue-paging (pre-taken cut).
 
 ### `tables-07` Bulk operations: no shift-range or select-all-matching, phantom selection after filter change, no progress or cancel
 
@@ -1185,7 +1209,7 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 
 ---
 
-**Wave-5 status.** W5a (2026-10-01): admin-gated, audit-free explorer facets and count, and an AUDIT_EXPORT receipt. The Auditor role and VIEW_AUDIT_LEDGER surfaces go to W5b w5-audit-ledger-presenter, the explorer UX to W5d w5-print-glossary-sales-manager.
+**Wave-5 status.** W5a (2026-10-01): admin-gated, audit-free explorer facets and count, and an AUDIT_EXPORT receipt. The Auditor role and VIEW_AUDIT_LEDGER surfaces go to W5b w5-audit-ledger-presenter, the explorer UX to W5d w5-print-glossary-sales-manager. W5b (2026-10-01): facets and count moved behind the ledger reader gate and are recorded as VIEW_AUDIT_LEDGER surfaces (w5-audit-ledger-presenter); the explorer UX for facets, count and the export receipt stays with W5d w5-print-glossary-sales-manager.
 
 ## Data visualization and geography (`dataviz`) — grade C+
 
@@ -1254,6 +1278,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** Shared SVG kit; optional @observablehq/plot 0.6.17 (npm-verified; emits inline styles, permitted by the current `style-src 'unsafe-inline'`) as its own lazy chunk.
 - **Verifier:** Line chart confirmed axis-less, hover-less, silently sliced to 24; bar values bypass formatCell. Overstated: the map has a numeric top-6 legend and table cells already drill through lib/genieCellLinks.ts. M only holds if not blocked on the L-sized kit.
 - **Constraint conflict:** Observable Plot option: its default look is not the prototype's and must be restyled to tokens, and its d3 dependency weight must pass tools/check_frontend_budgets.mjs. Owner decision, lazy chunk only.
+
+**Wave-5 status.** W5b (2026-10-01): the Genie half landed (w5-genie-verified-reveal): line and bar charts on the chart kit with nice-tick axes, gridlines, readouts, units and bar drill links with the contact-eligible disclosure. The GenieMapChart readout and legend links and the line-chart drill go to W5d w5-css-cascade.
 
 ### `dataviz-08` 'Why now' is never visualized: no portfolio time series, and the FRED rate feed is never charted
 
@@ -1371,6 +1397,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** Verified genieAsk.ts:113-123, databricks_genie.py:345-352, the sweep budget comments :128-133 and progress label :66; no deep/ETA copy exists in the frontend. But the sweep aborts below a 3-section floor (sweep.py:716), so streamed sections could vanish, and job-ifying the audited completion tail is XL.
 - **Constraint conflict:** Incremental sections must not bypass the section floor or the rows-before-prose output policy. The job table needs a Lakebase migration reachable from deploy.sh.
 
+**Wave-5 status.** W5b (2026-10-01): phase 1b landed (w5-genie-verified-reveal): a deep-sweep section is stored on its job only after its own output-policy scan and claims verification, and only once its GENIE_SECTION_REVEALED audit row commits in the same transaction (ruling R1, fail-closed); /message/status shows verified sections as Partial research from the 3-section floor; RUN_GENIE and action tokens stay at the single recorded_at commit point, and revealed sections are withdrawn at any non-success end (migration 2026_10_01_genie_job_sections).
+
 ### `genie-02` Closing the panel or pressing Esc anywhere silently destroys the in-flight turn and the question
 
 `high` · `defect` · effort `M` · corrected
@@ -1380,6 +1408,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Recommendation:** Mount GenieChat on first open and never unmount it, so closing no longer aborts the turn. The prototype CSS `.genie:not(.is-open)` and the component's own `is-hidden` FAB already support this; drop AppShell's duplicate FAB. Add a running ring and an 'answer ready' badge on `.genie__fab` as a documented BEM extension. Add one dismiss stack shared by useFocusTrap consumers and the panel so only the top layer consumes Escape; CloseWatcher stays a progressive enhancement. Add a module store only if turns must survive leaving /ask-genie.
 - **Tech:** React 19 useSyncExternalStore; CloseWatcher (Chrome 126, Firefox 149, no Safari; verified, not Baseline); FAB badge is a documented BEM extension of the prototype's `.genie__fab`.
 - **Verifier:** AppShell.tsx:217 conditional mount, the unmount abort at GenieChat.tsx:98-103, the in-flight persist gate :181-183, and two uncoordinated window Escape listeners all verified. CloseWatcher shipped in Firefox 149; Safari has none. components.css:2519 already supports a mounted-but-closed panel, so keep-mounted beats a new store.
+
+**Wave-5 status.** W5b (2026-10-01): a2 complete and a3 built (w5-identity-reset): a closed gate re-arms the turn resume; a proven mid-session actor change resets the document to '/' with a one-time notice and a 30 s loop hold; a cross-tab stamp change suspends the tab until a health recheck; PRIVATE_LOCAL reads and writes are refused under a foreign stamp. a4 (actor binding), the residual windows (1) and (3) and the local-area over-clear go to W5d w5-lq-requests-binding.
 
 ### `genie-03` No Stop, Regenerate, Edit-and-resend or recall; controls lock for up to five minutes
 
@@ -1423,6 +1453,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** navigator.clipboard.writeText (Baseline); Blob CSV download; existing @tanstack/react-virtual 3.13; `.genie-answer__toolbar` as a documented BEM extension; export event through the existing audit store.
 - **Verifier:** Verified: caps at logic.ts:8-9, the silent column slice at sections.tsx:54, the inert '+N more rows', the false chart caption (MAX_BARS 12 vs table 10), no SQL copy, and an empty clipboard/csv grep. LeadTable.csv.ts already has injection-safe CSV escaping to reuse. The full toolbar plus sort and chart switching is L.
 
+**Wave-5 status.** W5b (2026-10-01): the Lead Queue export half of the honesty contract landed with tables-08 (w5-lead-triage-export).
+
 ### `genie-10` Clickable proof for every number: link verified claims in Genie's prose to the rows that support them
 
 `high` · `wow` · effort `XL` · corrected
@@ -1432,6 +1464,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Recommendation:** Phase 1 (M): the verifier returns the verified and total claim counts; show an 'N of N figures verified' badge and list each figure with its derivation in the proof drawer. Phase 2: refactor the support values into a provenance map (cell, row count, sum, share) and resolve ambiguous matches by a fixed priority. The UI locates each figure by its raw token in the shipped text, not by offsets. Highlight direct cell matches only. Withheld figures stay withheld.
 - **Tech:** Pydantic claims model on GenieMessageResponse; span-aware rendering in the markdown layer; reuse the existing evidence hover-card; no new dependency.
 - **Verifier:** numeric.py:107-138 returns only unsupported labels. Support is a set[float] of tolerance variants (:264-330) with no provenance, so claims[] needs a set-to-map refactor across six call sites in a fail-closed module. Offsets drift after rewrites, and genie-07's library swap would complicate span rendering.
+
+**Wave-5 status.** W5b (2026-10-01): phase 1 landed (w5-genie-verified-reveal): an 'N of N verified' figure count and a per-figure derivation list in the proof drawer; verdicts unchanged (tree-swap hash).
 
 ### `genie-07` Hand-rolled markdown renderer collapses numbered lists and prints headings and tables raw
 
@@ -1462,6 +1496,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Recommendation:** Lead with the conversation: put the composer and thread first and move the workflows to an 'Automate' tab via a search param. This is an owner decision, since the route is titled 'Mortgage growth co-pilot'. Collapse the four CTAs into Plan, review card, Execute. Add a GET runs endpoint over the growth-agent ledger for history. Show an honest indeterminate state while running. Add step-by-step progress only if the server emits real step events through genie-01's job and poll.
 - **Tech:** Search-param tab state (react-router 8); reuse `.growth-agent-timeline` with pending states; GET runs endpoint over backend/services/growth_agent_ledger_sql.py.
 - **Verifier:** The growth-agent surface at ask-genie.tsx:526 precedes AskGenieAnswerPanel (:800); four CTAs at :553-590; feedback is label-only; growth_agent.py has no runs-list route. The prototype defines no /ask-genie page, so there is no contract conflict. Agent runs are single blocking POSTs, so a step-by-step timeline needs real server events.
+
+**Wave-5 status.** W5b (2026-10-01): parts 3 (the Workflows run history) and 4 (per-step progress) go to W5c w5-zcta-watchlist; part 1 landed in W5a.
 
 ### `genie-v1` Elapsed-seconds ticker sits inside the role=status live region, so the whole progress card is re-announced every second
 
@@ -1665,6 +1701,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 
 ---
 
+**Wave-5 status.** W5b (2026-10-01): the WebKit data-at-block-start fallback for the sticky header clearance (w5-lead-triage-export).
+
 ## Loading, error, empty, degraded and feedback states (`states`) — grade C+
 
 **Auditor:** The transient-failure handling is strong: typed 503 reasons, the warm-up block, debounced health polling, keep-previous-data refresh regions and the Genie stage rail. But basics a Linear- or Stripe-class app takes for granted are missing. There are no error boundaries, no session-expiry or offline handling, no notification layer, no unsaved-work guard and no frontend error reporting.
@@ -1710,6 +1748,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** TanStack Query v5 refetchQueries with a predicate, plus the existing HealthProvider context. No new dependency.
 - **Verifier:** Reproduced: banner copy at DegradedBanner.tsx:182, sole recovery effect at home.tsx:108-111, no refetchQueries anywhere; useWarmingUpRetry stops after six attempts. An unfiltered refetchQueries also refetches unmounted errored queries, writing VIEW_* audit rows. The all-route callout change makes this M.
 
+**Wave-5 status.** W5b (2026-10-01): Portfolio Builder is on AsyncStatus (w5-portfolio-forms).
+
 ### `states-05` No unsaved-changes guard on route leave or tab close
 
 `high` · `gap` · effort `L` · corrected
@@ -1741,6 +1781,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** Internal refactor using a TypeScript discriminated union. Pairs with the react-error-boundary FallbackComponent. No new dependency.
 - **Verifier:** Reproduced: lead-queue.filters.ts:400 and analytics.charts.tsx:97 print error.message; api.ts falls back to status text or 'Failed to fetch'; save uses a bare catch; components/ui has no shared async-state; correlation id shows only in WarmingUpBlock. Visible only on failure: medium. Eleven-route adoption is L.
 
+**Wave-5 status.** W5b (2026-10-01): Portfolio Builder reads failures through describeApiError copy and AsyncStatus (w5-portfolio-forms; portfolio-builder.tsx:209 retired), and Home's pending Retry landed (w5-home-geo-lever).
+
 ### `states-07` No notification layer and no undo; success and failure feedback is scattered across five ad hoc patterns
 
 `medium` · `gap` · effort `L` · corrected
@@ -1752,6 +1794,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** Reproduced: no toast files, no .toast in CSS or design_files, five ad hoc feedback patterns, zero useMutation. Popover API Baseline January 2025 verified on MDN; sonner 2.0.8 verified on npm. Migrating every write (LeadTable latches, tagged outcomes) to useMutation makes this L.
 - **Constraint conflict:** Departs from the prototype, which defines no transient-feedback pattern; acceptable only as a declared extension built from the existing token and BEM vocabulary, not sonner's default look.
 
+**Wave-5 status.** W5b (2026-10-01): the shell toast platform (w5-identity-reset): one action per toast that runs once, a Retry-After countdown on the shared RetryClock and an info tone. Item 1 (assignment release, LEAD_UNASSIGN and Undo) moved to W5d w5-palette-offer-sales-loop (w5-approval-ledger-api cut 1). The decision toast's View receipt (with its auditor link), the bulk result banner and the approve, reject and bulk-review 429 countdowns go to W5c w5-lead-queue-paging.
+
 ### `states-08` Long waits lack progress, time and a way out: bulk approve, Genie turns, 429 cooldowns and warm-up
 
 `medium` · `gap` · effort `M` · corrected
@@ -1762,6 +1806,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** Native progress element and AbortController (Baseline widely available). The existing GenieProgress ElapsedTicker. The backend already sends retry_after_seconds (backend/services/backpressure.py:263-270).
 - **Verifier:** Reproduced: 'Approving…' only (LeadTable.tsx:1199), chunks of 3, no Genie stop control, Retry-After slept silently (api.ts:831) and dropped from ApiError, attempt-only WarmingUpBlock. But aborting in-flight approve POSTs is documented as audit-ambiguous (R5-21), and four surfaces make this M.
 
+**Wave-5 status.** W5b (2026-10-01): the toast region holds Retry aria-disabled with a seconds countdown while a 429's Retry-After runs (w5-identity-reset). The mutation surfaces adopt it in W5c w5-lead-queue-paging and W5d w5-palette-offer-sales-loop.
+
 ### `states-09` Views go stale without saying so: no fetched-at stamp, no refresh control, no change signal for a multi-approver queue
 
 `medium` · `gap` · effort `M` · corrected
@@ -1771,6 +1817,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Recommendation:** Keep 'Fetched Nm ago · Refresh' from dataUpdatedAt in surface__hdr with Intl.RelativeTimeFormat. For the change signal, add a dedicated authenticated, non-audited, short-TTL-cached endpoint (for example /api/v1/leads/queue-version returning max approval updated_at), polled about every 60s only while Lead Queue is mounted and the tab is visible. Show a 'Queue changed, refresh' pill rather than auto-refetching audited reads.
 - **Tech:** TanStack Query dataUpdatedAt. Intl.RelativeTimeFormat (Baseline widely available). One added field on the existing FastAPI health payload.
 - **Verifier:** Reproduced: focus refetch disabled (queryClient.ts:18), one refetchInterval (admin panel), no dataUpdatedAt, one Refresh button, Home chip is gold-table time. But /api/health is deliberately minimal and probe-cheap (health.py R6-09 docstring); tenant approval state does not belong there.
+
+**Wave-5 status.** W5b (2026-10-01): an approvals.decided_at index and a queue version that folds outreach delivery status and lead outcomes (w5-approval-ledger-api); keyed lifecycle and outcome writes with a mountedAt filter close the own-write false positives (w5-lead-triage-export); Home shows its data age and the stale marker (w5-home-geo-lever).
 
 ### `states-10` Skeleton craft: no show-delay or minimum duration, generic placeholders for full dashboards, the KPI row unmounted during warm-up, paint-bound shimmer
 
@@ -1856,6 +1904,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** session.py returns can_approve; workspace.ts omits it; grep can_approve in frontend/src = 0; Topbar has no identity. Worse: /outreach/draft is not approver-gated, so a non-approver's click writes a DRAFT_OUTREACH audit row before the 403. 'Request approval' adds a table and endpoint: M.
 - **Constraint conflict:** The prototype topbar has no identity/avatar element (grep avatar in design_files matches only .genie__avatar); the identity chip is an additive departure that must be justified in the commit.
 
+**Wave-5 status.** W5b (2026-10-01): the maker-checker backend is built (w5-approval-ledger-api): migration 2026_10_01_approval_requests; POST and GET /outreach/approval-requests and withdraw; a verified decision link with server-refused self-approval; /leads?approval_request_batch. Every attempt that reaches classification is audited, and a zero-eligible one writes APPROVAL_REQUEST_REFUSED and answers a counts-only 409 (ruling R1). Client plumbing goes to W5c w5-lead-queue-paging and the UI to W5d w5-lq-requests-binding, which sends `rationale`, not `note`.
+
 ### `flow-03` Approval can be blind: row, hotkey and bulk approve never show the copy being approved, and give no receipt
 
 `high` · `gap` · effort `M` · corrected
@@ -1866,6 +1916,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** Native `<dialog>` (Baseline widely available) with the existing hooks/useFocusTrap.ts; receipt via the existing aria-live region or sonner 2.0.8 (npm-verified); approve already returns audit_event_id, so no backend change.
 - **Verifier:** LeadTable.tsx:255-289 drafts then approves without rendering the copy; hotkey A (777-780) does the same; grep audit_event_id = 0; offer-orchestrator.tsx:809 is plain text. Bulk does show an ok/fail toast, just no audit id. Queue hard-codes channel 'email'. sonner is a styled kit.
 - **Constraint conflict:** sonner ships its own visual style; under the design contract only an unstyled/headless use is acceptable, and the existing in-house toast already covers it.
+
+**Wave-5 status.** W5b (2026-10-01): Triage Mode landed with wow-power-1 (w5-lead-triage-export).
 
 ### `flow-04` The audit trail is admin-only, buried, not deep-linkable, and absent from the borrower dossier
 
@@ -1878,6 +1930,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** app.tsx gates /admin-config; Console shows only my-events; AdminAuditExplorer keeps filters in useState with no export. Borrower 360 and Offer render no decision history (lifecycle feeds status only). Backend /audit/events already accepts actor, since, until. Endpoint plus route plus CSV plus timelines is L.
 - **Constraint conflict:** Non-admin audit visibility moves an intentional RBAC boundary (home.tsx comment: 'Audit exploration is admin-only'; /audit/events is admin-gated); needs an owner governance decision, not just UI work.
 
+**Wave-5 status.** W5b (2026-10-01): the ledger moved to /audit-ledger for administrators and the new read-only Auditor role (MIP_AUDITOR_*); every served ledger read and every cross-actor receipt read writes VIEW_AUDIT_LEDGER (w5-audit-ledger-presenter). The borrower decision history goes to W5c w5-dossier-decisions.
+
 ### `flow-05` Home asks 'who, why now, what offer' but answers with four population counts and three competing primary CTAs
 
 `high` · `gap` · effort `M` · confirmed
@@ -1887,6 +1941,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Recommendation:** Replace 'Your book today' with an answer band. WHO: the top five ranked borrowers (score, city, segment chip). WHY NOW: the leading triggers since last login (rate move, new listings, maturing liens). WHAT OFFER: an offer-mix bar. Each deep-links to a filtered queue. Keep one primary CTA, 'Review today's top leads'; demote Build a portfolio.
 - **Tech:** Existing api.leads(limit 5), homeSummary highlights and offer counts from gold; hand-rolled SVG bar on prototype tokens; React 19.3 stable `<ViewTransition>` (released 2026-09-09, web-verified) for card-to-dossier continuity.
 - **Verifier:** Viewed the 1440 Home capture and home.tsx: last-login count deltas, four count KPIs, a prose card restating them, approval banner; no borrower, trigger or offer; three btn--primary (149, 293, 314). The prototype's own main screen carries BorrowerTable, so the fix aligns. React 19.3.0 verified; app is on 19.2.8.
+
+**Wave-5 status.** W5b (2026-10-01): WHY NOW events on Home (w5-home-geo-lever): the rate move since the last visit, and listing and competitor-lien deltas through migration 2026_10_01_kpi_snapshot_event_measures; offers_recommended replaces offers_available for an exact queue destination.
 
 ### `flow-06` Evidence drawer is a data-catalog panel, not proof of the number the user clicked
 
@@ -2002,6 +2058,8 @@ Sources:
 
 ---
 
+**Wave-5 status.** W5b (2026-10-01): the backend is built (w5-approval-ledger-api): POST /outreach/revoke, approver-only with a required rationale, written as OUTREACH_REVOKE beside an unchanged approve row. The revoke UI and a revoked marker in the funnel's recent approvals go to W5d w5-lq-requests-binding.
+
 ## Motion, micro-interactions and perceived polish (`motion`) — grade C+
 
 **Auditor:** The motion culture is sound: reduced-motion coverage, one-shot entrances, 16 of 19 keyframes compositor-only, and ambient effects deliberately removed. Against a Linear or Stripe bar it still falls short. No overlay has a working exit animation, there is exactly one `:active` rule in the CSS, there are no view or shared-element transitions, an undefined easing token silently disables three transitions, and the flagship sparkline draw completes in about 60ms of its 700ms.
@@ -2096,6 +2154,8 @@ Inventory of `components.css`:
 - **Tech:** React 19.3 ViewTransition; optional `@number-flow/react` 0.6.2 (React 19 peer, verified via npm view); CSS `@starting-style` (Baseline 2024).
 - **Verifier:** Every cited line reproduces; no spinner, toast region or Button loading prop exists. But NumberFlow is rolling digits, which components.css:816-818 explicitly declined; scaleX squashes the fill's rounded end; and it touches the 1,261-line LeadTable with roughly 20 test files.
 - **Constraint conflict:** `@number-flow/react` conflicts with a recorded owner decision (components.css:816-818: 'Deliberately NOT a number-rolling count-up ... not a casino ticker'). All additions are additive to the prototype.
+
+**Wave-5 status.** W5b (2026-10-01): slice 2, the Button loading prop (aria-busy plus aria-disabled, focus kept), is built (w5-theme-white-label); its consumers (Confirm approval, bulk Approve, row Reject) are W5c.
 
 ### `motion-v1` No scroll reset or restoration on navigation: the persistent `.main` scroller keeps its offset across routes
 
@@ -2299,6 +2359,8 @@ The live Databricks deployment was not inspected.
 - **Verifier:** Mostly reproduces: ConfigOptions (actually types/geo.ts:1, not types.ts:645) exposes only lender_name; four fixed swatches; Entrada marks hard-wired; zero raw hex verified. But this is speculative sales value, not a UX deficit, and it conflicts with the sample-lender naming rule and the prototype palette.
 - **Constraint conflict:** CLAUDE.md forbids real customer names in the demo (sample lender Summit Mortgage) and the design contract fixes the accent palette to the prototype's four swatches; CSP img-src 'self' requires a same-origin logo reachable from deploy.sh.
 
+**Wave-5 status.** W5b (2026-10-01): white-label built (D-theme-nav-d, w5-theme-white-label): an optional deploy-time lender mark, accepted only when its sha256, media type and size match a reviewed registry entry bound to the (lender, NMLS) identity, validated at preflight and shown only when the session lender equals the build lender; a tenant-default theme and accent for users who have not chosen. Declined: arbitrary brand colours, a product rename and the mark on borrower-facing, export, email or print surfaces (report 12.4 #9).
+
 ### `responsive-v1` Console and floating Genie panel collide on the same right-edge anchor when both are open
 
 `medium` · `defect` · effort `S` · verifier-added
@@ -2391,6 +2453,8 @@ The live Databricks deployment was not inspected.
 - **Verifier:** Reproduced: ci.yml runs three tests of 138 counted; nine specs (2,401 lines) appear in no workflow; gh shows last live success 2026-06-16, 07-29 cancelled. Cross-runner sharding is overkill, and the auto-live trigger contradicts nightly.yml's documented cost posture.
 - **Constraint conflict:** nightly.yml:3-7 deliberately keeps live validation unscheduled to avoid Databricks meter burn; auto-running it after deploys is an owner cost decision, and the local piecewise deploy path would not fire a workflow_run trigger anyway.
 
+**Wave-5 status.** W5b (2026-10-01): item 3, the fail-closed live-validation release gate, is built (w5-wire-contract-deps: tools/live_validation_gate.py and the prod-readiness gate); its bootstrap run with the maintainer is pending.
+
 ### `quality-04` Hand-written API types have drifted from the backend; codegen from the committed OpenAPI baseline never landed
 
 `high` · `defect` · effort `L` · corrected
@@ -2400,6 +2464,8 @@ The live Databricks deployment was not inspected.
 - **Recommendation:** First (S, immediately): render an explicit unknown when ltv is null and surface the ltv_basis_is_unreliable caveat in Borrower 360. Then (M): generate types from tests/fixtures/openapi_baseline.json with @hey-api/openapi-ts pinned exact into frontend/src/api/generated, re-export legacy names from types.ts, and add a regenerate-and-git-diff CI step. Caveat: Pydantic defaults make 64 of Borrower360's 87 properties optional in the schema, so plan a response-side 'required' transform or the generated types will be looser than the wire. Typing lib/api.ts (2,195 lines) per operation is a separate L migration.
 - **Tech:** @hey-api/openapi-ts 0.99.0 (peers TypeScript >=6; pre-1.0, pin exact). openapi-typescript 7.13.0 peers typescript ^5.x and conflicts with the repo's TS 6.0.3 (both verified via npm view).
 - **Verifier:** Reproduced every drift: lead.py:248 ltv int|None vs types.ts number; borrower-360.tsx:379 prints `${b.ltv}%` whenever avm_value>0, so 'null%' is reachable; can_approve unused in frontend; last_activity_at nullable. Baseline has 200 of 201 typed operations. Full api.ts typing is L.
+
+**Wave-5 status.** W5b (2026-10-01): P1 landed (w5-wire-contract-deps): per-domain wire-contract check files, a static binding pytest over every frontend network call site, named request bodies and responses, `// wire:` raw-site annotations and 29 dated drift entries tagged to their W5c/W5d owners.
 
 ### `quality-05` Axe scans never cover open overlays, ignore moderate violations, and run only on demand
 
@@ -2442,6 +2508,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** Playwright CDPSession Emulation.setCPUThrottlingRate + web-vitals 6.2.2; actions/github-script; sonda 0.14 or rollup-plugin-visualizer 7.1 treemap artifact. @lhci/cli 0.15.1 unpublished since 2025-06: skip.
 - **Verifier:** Reproduced: written policy is 'current actual + ~5%'; initial JS re-baselined 256.60 to 396.40 KiB; route budgets are 4-7 s loadEventEnd, live-only; ci.yml:105 only logs. Sticky PR comments need pull-requests:write and fail on forks, against ci.yml's fork-parity policy.
 - **Constraint conflict:** ci.yml:8-9 requires fork PRs to behave identically with no secrets; a GITHUB_TOKEN sticky comment needs pull-requests: write and fails on fork PRs.
+
+**Wave-5 status.** W5b (2026-10-01): the bundle treemap moved to W5d w5-test-harness-deps-report (pre-taken cut).
 
 ### `quality-09` E2E API mocks are hand-rolled per spec and never validated against the OpenAPI contract
 
@@ -2525,7 +2593,7 @@ The live Databricks deployment was not inspected.
 - **Tech:** Existing StaleWhileRevalidateCache.get_or_refresh; snapshot-versioned cache keys; no new dependency.
 - **Verifier:** All cited call sites use hard-expiry get_or_set; the SWR cache is health-only. Two flaws: mip-swr has three workers shared with the three health probes (resilience.py:594), and preview embeds live approval counts with no mutation invalidation anywhere.
 
-**Wave-5 status.** W5a (2026-10-01): one footprint snapshot per decision (Genie guards and config options), the segment list on stale-while-error with X-Data-Last-Good-At and fail-closed readiness gates, SCHEMA_NOT_FOUND and UNRESOLVED_ROUTINE fail fast. The client half goes to W5b w5-home-geo-lever, the gold snapshot id in cache keys to W5c w5-field-vitals, cross-process lifecycle observation to W5b w5-home-geo-lever.
+**Wave-5 status.** W5a (2026-10-01): one footprint snapshot per decision (Genie guards and config options), the segment list on stale-while-error with X-Data-Last-Good-At and fail-closed readiness gates, SCHEMA_NOT_FOUND and UNRESOLVED_ROUTINE fail fast. The client half goes to W5b w5-home-geo-lever, the gold snapshot id in cache keys to W5c w5-field-vitals, cross-process lifecycle observation to W5b w5-home-geo-lever. W5b (2026-10-01): the client half landed (w5-home-geo-lever): the retained-value note on Segments and the map legend, with X-Data-Last-Good-At ignored on non-2xx and a 2xx-only server belt. Cross-process lifecycle observation moved to W5c w5-field-vitals with lifecycle_run_watch.py and job_trigger.py.
 
 ### `delivery-01` Routine serverless resume trips the red Degraded pill and Reconnecting banner (3 s binary health budget); the Home hero collapses only on real retryable 503s
 
@@ -2568,6 +2636,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** fastapi.sse.EventSourceResponse (FastAPI >=0.135; 15 s keep-alive); Starlette 1.3.1 GZip skips event-stream (verified); fetch + ReadableStream client. Genie Agent-mode SSE API is Public Preview (docs verified).
 - **Verifier:** Poll loop, blocking complete and absent streaming reproduce; fastapi.sse imports on 0.136.1 and Starlette 1.3.1 GZip skips event-stream. But onProgress already renders stage, SQL and an elapsed ticker, and Databricks documents 1-5 s Genie polling, so 500 ms is out of guidance.
 
+**Wave-5 status.** W5b (2026-10-01): the admin SSE probe and tools/databricks/sse_ingress_spike.py landed (w5-genie-verified-reveal); the spike runs against the deployed W5b app, then the job-events stream is built or polling stays (W5c w5-genie-stop-context).
+
 ### `delivery-05` No persisted query cache: every reload, new tab and next-morning visit starts from empty skeletons
 
 `medium` · `gap` · effort `M` · corrected
@@ -2578,6 +2648,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** @tanstack/react-query-persist-client and query-sync-storage-persister 5.103.2 (npm view, Sept 2026; stable v5 API).
 - **Verifier:** No persister anywhere; actor clearing exists. But sessionStorage is per-tab, so it cannot fix the stated new-tab or next-morning cases, only reload. persist-client 5.103.2 peers on react-query ^5.103.2 while the repo pins 5.100.10 (npm view).
 - **Constraint conflict:** Shared-machine actor isolation (actorScopedBrowserState.ts) argues against localStorage; choosing it is an owner decision. Restored data is real cached UC data, not a mock, but must be labelled with its snapshot time.
+
+**Wave-5 status.** W5b (2026-10-01): Home shows the restored data age (FetchedAt) and a stale marker when a refresh fails over restored data (w5-home-geo-lever, ruling R1), and a read that failed before the lazy snapshot restore landed is never hydrated (queryPersist.restoreRace.test.ts and home-geo-lever.fixture.spec.ts). The persisted analytics.* keys get their age in W5d w5-css-cascade.
 
 ### `delivery-07` Lender label and Admin tab swap in after first paint because a settings constant rides on the warehouse-backed options call
 
@@ -2705,6 +2777,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** New GET asset-summary endpoint under AuthenticatedActorDep (the pattern in backend/api/lineage.py:25); reuse the AssetFreshness type; TanStack Query key beside assetMetadata.
 - **Verifier:** All four sites verified: ungated link at EvidenceDrawer.tsx:641, AdminDep at assets.py:29, 403 dead-end at asset.tsx:83-95, 'Admin-only freshness' label. Drawer proof and lineage still work for non-admins. Admin-only metadata was deliberate (:186), so exposing freshness is an owner decision.
 
+**Wave-5 status.** W5b (2026-10-01): the read-only Auditor role is built (D-audit-reads-c3, w5-audit-ledger-presenter); freshness for every user goes to W5c w5-evidence-drawer.
+
 ### `critic-01` Growth Agent 'Execute plan' runs a freshly composed plan the user never saw; the reviewed plan is discarded
 
 `medium` · `defect` · effort `M` · corrected
@@ -2725,6 +2799,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** :user-invalid (Baseline since 2023); field-sizing: content (Baseline newly available June 2026, verified); Intl.NumberFormat; optionally react-hook-form 7.88.0 (npm-verified) for campaign setup only.
 - **Verifier:** Verified clamp-on-blur with no message, readOnly fields sharing .form-input, outline:none, no :read-only/:disabled/:invalid rules, one aria-invalid hit. The label does say 'Holdout % (0-50)'. 39 native controls across 17 files, so scope the primitive to campaign setup first. npm versions verified.
 
+**Wave-5 status.** W5b (2026-10-01): delivered for Portfolio Builder (w5-portfolio-forms): $ and % affixes, readouts for read-only values, :read-only / :disabled / :user-invalid states, Field on every native control and a rounding notice. Offer numerics stay in W5d.
+
 ### `critic-05` Vendor demo scaffolding ships inside the customer product
 
 `medium` · `defect` · effort `M` · corrected
@@ -2735,6 +2811,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** Settings flag (for example MIP_PRESENTER_MODE) in app.yaml and the .env.local template, surfaced through /api/config/options; no new infrastructure.
 - **Verifier:** All four sites verified verbatim. BuyerReadinessPanel and CapabilityPanel sit behind the admin guard, so exposure is admin-only; the PROTOTYPE borrower mock is reachable by any approver. No presenter flag exists (grep). Flag plus settings, app.yaml, deploy payload, config endpoint and tests is M.
 
+**Wave-5 status.** W5b (2026-10-01): MIP_PRESENTER_MODE is built (refused for -t prod; the Offer's PROTOTYPE borrower preview is gated and lazy; the vendor copy reads Deployment readiness) (w5-audit-ledger-presenter). The rail M1-M4 slot gating and the OFF copy go to W5c w5-shell-nav-followups.
+
 ### `critic-06` Assignment lifecycle control reads as a status, and the outcome picker has no cancel
 
 `medium` · `defect` · effort `M` · corrected
@@ -2744,6 +2822,8 @@ The live Databricks deployment was not inspected.
 - **Recommendation:** Use a verb-first label ('Mark approved') with a compact stepper showing position. Give the outcome picker Cancel, Esc and a confirm step. Keep the three server outcomes; do not borrow the LOS ledger vocabulary. Prefer explicit confirm over a delayed-commit undo for an audited write. Popover plus anchor positioning (Baseline January 2026) with a fixed-position fallback.
 - **Tech:** Popover API (popover=auto, Baseline in all engines) plus CSS anchor positioning (supported across engines in 2026 per web search; fixed-position fallback); TanStack useMutation with a delayed commit.
 - **Verifier:** Verified the next-state ghost label and the no-cancel outcome buttons. The 'five ledger categories' claim is a misread: that card is the imported, read-only LOS outcome ledger (sales-ops.tsx:259); officer outcomes are a separate three-value server Literal (loan_officer.py:40).
+
+**Wave-5 status.** W5b (2026-10-01): item (d), the lifecycle stepper, is built (w5-lead-triage-export).
 
 ### `critic-07` No help menu, onboarding, glossary search or support path (glossary terms already have hover definitions)
 
@@ -2776,6 +2856,8 @@ The live Databricks deployment was not inspected.
 - **Recommendation:** Add a sticky section nav with scroll-spy (or nested routes) and a status summary row on top. Put Run behind a native dialog naming the job, last run and downstream effect, with a required reason chosen from the four server enum values. Free-text reasons need a schema change and an audit-redaction review first.
 - **Tech:** React Router nested routes or IntersectionObserver scroll-spy; native dialog.showModal(); the existing reason field on the admin run-operation request.
 - **Verifier:** Nine stacked panels, three handled hashes, the 3,512px screenshot and hard-coded confirm:true / reason all verified. But the server reason is a closed four-value Literal (backend/schemas/admin.py:111), so free text would 422; a per-job cooldown already exists.
+
+**Wave-5 status.** W5b (2026-10-01): Administration gains a status row and a section nav with scroll-spy, and Run sits behind a confirm dialog with a required server reason (w5-audit-ledger-presenter).
 
 ### `critic-10` Sales manager view is four static cards: fixed windows, top-three officers, no workload view
 
@@ -2824,6 +2906,8 @@ The live Databricks deployment was not inspected.
 - **Problem:** Holdout, budget, channel costs, send window and an applied recommendation vanish when the user follows a link or opens the queue, with no warning. Filters survive in the URL, so the loss looks random.
 - **Recommendation:** Persist the draft setup per actor in sessionStorage through the existing actor-scoped registry (lib/actorScopedBrowserState.ts). Restore it on return with a 'Draft restored' chip and a Reset action. With the declarative BrowserRouter (main.tsx:16), prefer restore over navigation blocking; add beforeunload only while the draft is dirty.
 - **Tech:** sessionStorage plus ACTOR_SCOPED_SESSION_STORAGE_KEYS; optionally Lakebase workspace state (backend/api/workspace.py) for cross-device drafts.
+
+**Wave-5 status.** W5b (2026-10-01): delivered (w5-portfolio-forms): a per-actor, per-tab session draft of the campaign setup with a 'Draft restored' chip and Reset.
 
 ### `critic-12` Icon set renders sub-pixel strokes at its most common sizes and reuses glyphs for unrelated meanings
 
@@ -2887,6 +2971,8 @@ The live Databricks deployment was not inspected.
 - **Risk:** Seal must never show when proof.trusted is false. 'Unity Catalog recomputed' overclaims: arithmetic is Python parity over UC rows. Five hues need text labels. One extra warehouse query per dossier.
 - **Already exists?** No — Partly. Payload and long-form maths exist: backend/schemas/proof.py:32-39 (weight, weighted_points); live recomputation and mismatch gaps at backend/services/repositories/databricks_borrower_proof.py:346-425 (origin/main); rendered only inside frontend/src/components/mortgage/BorrowerProofDrawer.tsx:167-200 behind the drawer (query enabled only on open, :49-54). No spine anywhere: ScoreBadge.tsx:8-20 is dot + number; grep for spine|anatomy|breakdown in frontend/src returns nothing. Delta = the visual, the seal, the prefetch.
 
+**Wave-5 status.** W5b (2026-10-01): the queue-row score spines are deferred to W5c w5-lead-queue-paging (the lane's line cap; integrator-confirmed against correction C2).
+
 ### `wow-stage-1` The Rate Lever: live rate-scenario scrubber on the geography hero (merges wow-ai-2's dial)
 
 `build-now` · wow 9.5 · feasibility 7 · effort `L` · lens: wow-stage
@@ -2896,6 +2982,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** Native input[type=range] + React useDeferredValue; fifty state paths recolour fine through React, so skip the outside-React custom-property trick. CSS @property count tween is Baseline Newly available (2024-07) with instant fallback. No new dependency. The slider is a documented extension beyond the prototype, built from tokens.
 - **Risk:** bround half-even makes bin-shifting inexact for odd steps (eighth-point coupons land on .5 bps). Gated/NULL-rate rows must be excluded. Misread as forecast. Cohort handoff needs a new max-spread bound.
 - **Already exists?** No — No. grep scenario|what-if|rate.?sensitiv over frontend/src, backend, sql hits only the ROI projector (frontend/src/routes/portfolio-builder.components.tsx, backend/schemas/portfolio.py). Inputs exist: borrower_360 carries market_rate_fraction and min_spread_bps_applied (sql/transformations/gold_borrower_360.sql:472-493, :787, :1273); the map already has a two-button 'Map coloring' group (USChoroplethMap.tsx:578 on main). Live spread domain is p50 0 / p99 122 bps against a 75 bps default threshold (backend/schemas/genie_numeric_filters.py:32-37), so a rate move visibly changes the book. The prototype has no slider (grep of design_files).
+
+**Wave-5 status.** W5b (2026-10-01): the remainder landed (w5-home-geo-lever): scenario rows in the rate-mode hover card, the aria suffix, the 'Largest in-the-money gains/drops' line and the map cohort handoff; the diverging ramp is not adopted (deviation:diverging-ramp).
 
 ### `wow-stage-3` Decision receipt: the approval moment ends in the real Lakebase ledger row
 
@@ -2917,6 +3005,8 @@ The live Databricks deployment was not inspected.
 - **Risk:** Bundle schedules ship PAUSED (databricks.yml:878), so snapshot history may have gaps on a fresh workspace: verify live first and show the nearest-snapshot note. Accounting, not causation.
 - **Already exists?** No — No. SummaryNumber opens a generic source drawer only (frontend/src/components/mortgage/LastLoginSummary.tsx:59-84 on main). The needed grain already exists: mip.gold.funnel_snapshot_daily is (snapshot_date, state, segment_code) with '_ALL' rollups, MERGEd per scoring refresh (sql/transformations/gold_funnel_snapshot_daily.sql:4-17), and is already read by backend/api/geo.py and backend/services/repositories/databricks_analytics.py:232.
 
+**Wave-5 status.** W5b (2026-10-01): the Delta Explainer in the evidence drawer (w5-home-geo-lever); per-state competitor-lien attribution waits on a gold column (W5c w5-zcta-watchlist).
+
 ### `wow-ai-1` 'What would change this?' deterministic margins (delta after merging the bar into wow-stage-2)
 
 `build-next` · wow 8 · feasibility 7 · effort `M` · lens: wow-ai
@@ -2936,6 +3026,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** React 19.2 <Activity> (stable; repo on 19.2.8) keeps the virtualised queue mounted, but the @tanstack/react-virtual list must re-measure on reveal; useOptimistic for the tray; TanStack prefetchQuery for the next dossiers (GET only). No new dependency. Sequence after the keymap registry (wow-power-4).
 - **Risk:** Every card viewed is an audited draft generation, including skips. Commit must bind to the draft shown and handle a stale draft proof. Rubber-stamping optics: record time-per-decision.
 - **Already exists?** No — Partly. No triage surface (grep triage|useOptimistic|<Activity over frontend/src: none). The extraction the proposal asks for is already done on main: approveLead and bulkApprove live in frontend/src/components/mortgage/useLeadApprovalActions.ts:121 and :346, hotkeys in useLeadTableHotkeys.ts. Confirmed gap: approveLead calls api.draftOutreach then api.approve with draft_subject/draft_body and the copy is never rendered (useLeadApprovalActions.ts:150-185); LeadRowPreview.tsx contains no draft.
+
+**Wave-5 status.** W5b (2026-10-01): Triage deck at /lead-queue?mode=triage (w5-lead-triage-export): approver-only and lazy, one borrower at a time; it writes only on A (the draft), Confirm (APPROVE with review_mode triage) and R.
 
 ### `wow-power-6` Filter omnibox: type the cohort, see the count before Enter (merges wow-ai-6)
 
@@ -2997,6 +3089,8 @@ The live Databricks deployment was not inspected.
 - **Risk:** Chords collide with screen-reader and browser keys: scope strictly, keep everything switchable off. Cmd-K verbs must call the same guarded handlers, never a parallel approval path.
 - **Already exists?** No — No registry or overlay. Seven independent window keydown listeners verified on main: components/command/CommandPalette.tsx:95, components/layout/Topbar.tsx:206, components/mortgage/GenieChat.tsx:199, components/mortgage/useLeadTableHotkeys.ts:37 (moved out of LeadTable.tsx by the file-size split), components/ui/FilterSelect.tsx:43, hooks/useFocusTrap.ts:82, routes/analytics.sections.tsx:389. CommandTarget has only 'route' and 'command' kinds (components/command/commandActions.ts:12-14).
 
+**Wave-5 status.** W5b (2026-10-01): Triage Mode landed with wow-power-1 (w5-lead-triage-export).
+
 ### `wow-power-2` 'More like this': pattern cohorts from a single decision
 
 `build-next` · wow 6 · feasibility 7 · effort `M` · lens: wow-power
@@ -3006,6 +3100,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** Deterministic rule over reviewed filter vocabulary, deliberately not embeddings or an LLM; TanStack Query keyed by the pattern. No new library.
 - **Risk:** Similarity must never use sub-state geography or demographic proxies. 'One decision becomes thirty' is the sentence a compliance buyer fears: keep each approval individual.
 - **Already exists?** No — No. Building blocks exist: the lead repository already accepts min_opportunity_score and min_rate_spread_bps through cohort replay (backend/api/leads.py:283-298, :393-396) and X-Total-Matching gives true counts (:495). There is no public min/max score query parameter and no /leads/count route.
+
+**Wave-5 status.** W5b (2026-10-01): 'More like this' stays deferred to W5c w5-lead-queue-paging; W5b built only the ?mode=triage deep link its 'Open as Triage deck' needs.
 
 ### `wow-ai-4` Watchlists that brief you: run-over-run diffs and new-entrant cohorts on Home
 
@@ -3017,6 +3113,8 @@ The live Databricks deployment was not inspected.
 - **Risk:** With the scheduler paused by default the briefing is stale on every fresh deploy: show run age and the paused state honestly. Membership snapshots grow: cap and expire. One card, never toasts.
 - **Already exists?** No — No Home watchlist surface (grep watchlist|monitor in frontend/src/routes/home.tsx: none). 'scheduler paused' is hard-coded at frontend/src/routes/ask-genie.saved-monitors.tsx:42. Runs store counts and averages (lakebase/schema.sql:2395-2400) but carry no monitor_id (schema.sql:2376-2412); monitors hold last_run_id only (backend/services/growth_agent_ledger_sql.py:85-92), so the claimed 'Phase 1 needs no schema change' does not hold. The scheduler ships PAUSED (databricks.yml:969-980), as does every bundle schedule (:870-878).
 
+**Wave-5 status.** W5b (2026-10-01): Home watchlist briefings (w5-home-geo-lever); the series link record for runs saved into an existing watchlist and new-entrant replay go to W5c w5-zcta-watchlist.
+
 ### `wow-ai-5` Living Genie tiles: pin an answer and keep it alive
 
 `prototype-first` · wow 8 · feasibility 4.5 · effort `L` · lens: wow-ai
@@ -3026,6 +3124,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** Genie 'Execute message attachment SQL query' endpoint (listed in the Databricks API reference and the CLI as execute-message-attachment-query; verified 2026-09-21; only valid while the message is EXECUTING_QUERY or COMPLETED); TanStack Query staleTime tied to the gold refresh stamp; existing retry and circuit breaker in backend/services/resilience.py.
 - **Risk:** The answer-side guard scan is already superlinear per answer; six tiles multiply it. Conversation retention and the calling identity are unmeasured. Every refresh is warehouse spend. Must not become a dashboard builder.
 - **Already exists?** No — Static pins exist: frontend/src/lib/pinnedInsights.ts (actor-scoped localStorage, MAX_PINS 6, 220-char summary, trusted-source denylist) and components/mortgage/PinnedInsights.tsx on Home (routes/home.tsx:207). query_attachment_id is already captured (backend/services/genie_client.py:112, :367-369); no execute-query call exists anywhere in backend (grep). Delta = server store + live re-execution + guards on refresh.
+
+**Wave-5 status.** W5b (2026-10-01): the offline spike tooling (tools/genie_tiles_spike.py) landed (w5-wire-contract-deps), and offline criterion 1 fails as measured; the --live probe and any build go to W5c w5-genie-stop-context.
 
 ### `wow-ai-2` Rate-trigger watchlist ('Watch this level'), delta after merging the dial into wow-stage-1
 
@@ -3046,6 +3146,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** BroadcastChannel (Baseline widely available), Screen Wake Lock (newly available 2024-05) and Fullscreen are not blocked by the Permissions-Policy at backend/main.py:509-511 (geolocation, camera, microphone only), but none is needed for the salvage. Document Picture-in-Picture is not in Safari.
 - **Risk:** Shipping talk-track claim boundaries inside the customer bundle is a packaging smell. A warm Genie turn is a real audited, billable query: keep it explicit and human-triggered.
 - **Already exists?** No — Partly. Readiness data already exists in Admin: frontend/src/components/admin/PlatformCapabilitiesPanel.tsx, BuyerReadinessPanel.tsx, DataOperationsPanel.tsx, plus startup warm hooks (backend/main.py:135-191). No presenter or stage mode (grep presenter|boardroom|BroadcastChannel|wakeLock: comments only). Health probes deliberately do not warm billable dependencies (backend/api/health.py:33). Only data-density / data-console attributes exist (AppContext.tsx:226, :239; tokens.css:289-297).
+
+**Wave-5 status.** W5b (2026-10-01): the presenter flag only (w5-audit-ledger-presenter); Boardroom mode stays rejected and the readiness-check salvage is not built.
 
 ### `wow-ai-6` Intent bar: server-side sentence-to-filters parse (delta after merging into wow-power-6)
 
