@@ -119,6 +119,37 @@ export function receiptChannelLabel(channel: string): string {
   return CHANNEL_LABELS[channel] ?? channel.replace(/_/g, ' ');
 }
 
+/**
+ * The receipt's review line (audit flow-03; deviation:receipt-review-mode-line):
+ * how the approver saw the copy the row certifies, read back from the
+ * ledger's review_mode, or the bulk rejection run a reject belonged to.
+ * Null when the row records neither (no line is shown).
+ */
+export function receiptReviewLine(receipt: {
+  decision: DecisionOutcome;
+  review_mode: string | null;
+  bulk_id: string | null;
+}): string | null {
+  const run = receipt.bulk_id ? ` ${receipt.bulk_id.slice(0, 8)}` : '';
+  if (receipt.decision === 'rejected') {
+    return receipt.bulk_id ? `Bulk rejection${run} · shared note recorded` : null;
+  }
+  switch (receipt.review_mode) {
+    case 'individual':
+      return 'Copy shown to the approver before approval';
+    case 'triage':
+      return 'Copy shown to the approver before approval (Triage)';
+    case 'bulk_sample':
+      return `Bulk run${run} · this borrower's copy was previewed`;
+    case 'bulk_cohort':
+      return `Bulk run${run} · approved under the shared rationale; copy not individually shown`;
+    case 'undeclared':
+      return 'Review mode not recorded (earlier client)';
+    default:
+      return null;
+  }
+}
+
 export function humanizeReasonCode(code: string): string {
   const known = REJECT_REASONS.find((reason) => reason.code === code);
   return known ? known.label : code.replace(/_/g, ' ');

@@ -73,6 +73,13 @@ from backend.services.audit_metadata_value_policy import (
 )
 from backend.services.pii_redaction import normalize_public_lender_ref
 
+# The APPROVE row's review_mode: the four a client may declare plus the
+# server-only 'undeclared' for a client older than the review ledger.
+_REVIEW_MODES: frozenset[str] = frozenset(
+    {"individual", "triage", "bulk_sample", "bulk_cohort", "undeclared"}
+)
+_MAX_DRAFT_AGE_SECONDS = 315_360_000
+
 
 def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     """Validate reviewed free-ish values that have their own public policy."""
@@ -446,6 +453,20 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"export_scope"}):
         if value is not None and str(value) not in {"selected", "loaded"}:
             raise AuditMetadataValueViolation(field, "must be a governed lead export scope")
+    # APPROVE review ledger (audit flow-03): a closed review-mode token, and
+    # the draft's age as a bounded whole number of seconds (at most 10 years).
+    for field, value in _metadata_values_for(metadata, {"review_mode"}):
+        if value is not None and str(value) not in _REVIEW_MODES:
+            raise AuditMetadataValueViolation(field, "must be a governed review mode")
+    for field, value in _metadata_values_for(metadata, {"draft_age_seconds"}):
+        if value is None:
+            continue
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= _MAX_DRAFT_AGE_SECONDS
+        ):
+            raise AuditMetadataValueViolation(field, "must be a bounded whole number of seconds")
     for field, value in _metadata_values_for(metadata, {"exported_row_count"}):
         if value is None:
             continue

@@ -10,6 +10,12 @@
  * again" after a 500 replays the same request_id; the bulk loop keeps at
  * most 3 POSTs in flight and one per borrower; an unmount-aborted run is
  * stashed and flashed on the next mount; a double reject sends one POST.
+ *
+ * A run starts only once its gate previewed a sample of every offer in it
+ * (D-approval-flow-a1): the previewed rows are approved with that copy
+ * (review_mode 'bulk_sample'), the rest under the shared rationale
+ * ('bulk_cohort'), and an unsampled row whose drafted offer the gate never
+ * showed is refused before its approve POST (the in-run offer check).
  */
 
 import { QueryClient } from '@tanstack/react-query';
@@ -35,6 +41,9 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 import { ApiError } from '../../lib/api';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { useLeadApprovalActions } from './useLeadApprovalActions';
+import { bulkCanaryNotice } from './LeadBulkRunStatus.copy';
+import { runBulkApprove, runBulkReject } from './leadBulkDecisions';
+import type { BulkRunsChunk } from './useLeadApprovalActions';
 
 const IDS = Array.from({ length: 7 }, (_, index) => `B-AAAAAAAAAAAA${index + 1}`);
 const BORROWER = IDS[0];
@@ -66,8 +75,15 @@ function draft(generationId: string): OutreachDraftResult {
   } as OutreachDraftResult;
 }
 
+/** The gate's preview: one sample of the run's one offer (refi), on the LAST row. */
+function lastRowSample(): ReadonlyMap<string, OutreachDraftResult> {
+  return new Map([[IDS[6], draft('gen-sample')]]);
+}
+
 type Actions = ReturnType<typeof useLeadApprovalActions>;
 let actions: Actions | null = null;
+/** The lazy bulk chunk as the harness sees it; a test may unload it. */
+let bulkChunk: BulkRunsChunk | null = { runBulkApprove, runBulkReject };
 const setApproval = vi.fn();
 
 function Harness({ client }: { client: QueryClient }) {
@@ -83,6 +99,7 @@ function Harness({ client }: { client: QueryClient }) {
     campaignBindingBlocked: false,
     canApprove: true,
     tableWrapRef,
+    bulkRuns: () => bulkChunk,
   });
   useEffect(() => {
     actions = current;
@@ -141,6 +158,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     client.clear();
     actions = null;
     harnessLeads = LEADS;
+    bulkChunk = { runBulkApprove, runBulkReject };
   });
 
   function mount() {
@@ -223,15 +241,25 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     mount();
     act(() => actions!.toggleSelectAll());
     await act(async () => {
-      await actions!.bulkApprove(undefined, 'Q3 refinance push');
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
 
     expect(maxInFlight).toBe(3);
     const approvedIds = apiMocks.approve.mock.calls.map((call) => call[0] as string);
     expect([...approvedIds].sort()).toEqual([...IDS].sort());
-    const bodies = apiMocks.approve.mock.calls.map((call) => call[1] as { bulk_id: string; request_id: string });
+    const bodies = apiMocks.approve.mock.calls.map((call) => call[1] as {
+      bulk_id: string; request_id: string; review_mode: string; bulk_rationale: string; draft_generation_id: string;
+    });
     expect(new Set(bodies.map((body) => body.bulk_id)).size).toBe(1);
     expect(new Set(bodies.map((body) => body.request_id)).size).toBe(IDS.length);
+    expect(new Set(bodies.map((body) => body.bulk_rationale))).toEqual(new Set(['Q3 refinance push']));
+    // The previewed row certifies its sample; the others the shared rationale.
+    const modeById = new Map(apiMocks.approve.mock.calls.map((call) => [call[0] as string, (call[1] as { review_mode: string }).review_mode]));
+    expect(modeById.get(IDS[6])).toBe('bulk_sample');
+    expect(IDS.slice(0, 6).map((id) => modeById.get(id))).toEqual(Array(6).fill('bulk_cohort'));
+    expect(bodies.find((body) => body.review_mode === 'bulk_sample')?.draft_generation_id).toBe('gen-sample');
+    // Only the six unsampled rows drafted in the run.
+    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(6);
     // A finished run reports through the run's result; the static toast is
     // only the unmount stash (R5-21).
     expect(actions!.bulkRun.result).toMatchObject({ ok: 7, failed: [], skipped: [], notStarted: [], stopped: false });
@@ -239,7 +267,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(actions!.selectionCount).toBe(0);
   });
 
-  it('Stop after this batch: exactly one batch is sent, nothing is aborted, the rest stay selected and undrafted', async () => {
+  it('Stop after this batch: the canary and one batch are sent, nothing is aborted, the rest stay selected and undrafted', async () => {
     const held: Array<() => void> = [];
     const signals: AbortSignal[] = [];
     apiMocks.approve.mockImplementation((_id: string, _body: unknown, signal?: AbortSignal) => {
@@ -253,11 +281,17 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     act(() => actions!.toggleSelectAll());
     let run: Promise<boolean> = Promise.resolve(false);
     await act(async () => {
-      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
+      run = actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
     await flush();
-    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
-    expect(actions!.bulkRun.progress).toMatchObject({ total: 7, settled: 0 });
+    // The canary goes alone; the fan-out waits for its ok.
+    expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      held.splice(0).forEach((release) => release());
+    });
+    await flush();
+    expect(apiMocks.approve).toHaveBeenCalledTimes(4);
+    expect(actions!.bulkRun.progress).toMatchObject({ total: 7, settled: 1 });
 
     act(() => actions!.bulkRun.requestStop());
     await act(async () => {
@@ -266,11 +300,11 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     });
     await flush();
 
-    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
-    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(3);
+    expect(apiMocks.approve).toHaveBeenCalledTimes(4);
+    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(4);
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
-    expect(actions!.bulkRun.result?.notStarted).toEqual(IDS.slice(3));
-    expect([...actions!.selectedIds].sort()).toEqual(IDS.slice(3));
+    expect(actions!.bulkRun.result?.notStarted).toEqual(IDS.slice(4));
+    expect([...actions!.selectedIds].sort()).toEqual(IDS.slice(4));
     // One invalidation for the whole run, not one per row.
     expect(leadInvalidations(invalidate)).toBe(1);
   });
@@ -282,7 +316,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     mount();
     act(() => actions!.toggleSelectAll());
     await act(async () => {
-      await actions!.bulkApprove(undefined, 'Q3 refinance push');
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
 
     expect(actions!.bulkRun.result?.failed).toEqual([
@@ -302,7 +336,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     act(() => actions!.toggleSelectAll());
     let run: Promise<boolean> = Promise.resolve(false);
     await act(async () => {
-      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
+      run = actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
     await flush();
     // A refetch lands mid-run with different evidence for a row not sent yet.
@@ -332,27 +366,139 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     act(() => actions!.toggleSelectAll());
     let run: Promise<boolean> | null = null;
     await act(async () => {
-      run = actions!.bulkApprove(undefined, 'Q3 refinance push');
+      run = actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
     });
     await flush();
-    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
+    expect(apiMocks.approve, 'the canary').toHaveBeenCalledTimes(1);
 
     act(() => root.unmount());
     await act(async () => {
       await run;
     });
-    // The first chunk was cut mid-flight, the rest never started.
-    expect(apiMocks.approve).toHaveBeenCalledTimes(3);
+    // The canary was cut mid-flight, the rest never started.
+    expect(apiMocks.approve).toHaveBeenCalledTimes(1);
     expect(JSON.parse(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled') ?? '{}'))
-      .toEqual(expect.objectContaining({ ok: 0, aborted: 7 }));
+      .toEqual(expect.objectContaining({ ok: 0, aborted: 7, kind: 'approve' }));
 
     actions = null;
     root = createRoot(container);
     mount();
-    expect(actions!.bulkToast).toEqual({ ok: 0, fail: 0, network: 0, aborted: 7 });
+    expect(actions!.bulkToast).toEqual({ ok: 0, fail: 0, network: 0, aborted: 7, kind: 'approve' });
     // Aborted rows are audit-ambiguous: nothing is re-selected for a retry.
     expect(actions!.selectionCount).toBe(0);
     expect(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled')).toBeNull();
+  });
+
+  it('refuses a run whose samples miss an offer: the gate reopens, nothing is drafted or sent', async () => {
+    harnessLeads = LEADS.map((row) => (row.borrower_id === IDS[2]
+      ? { ...row, recommended_offer_code: 'heloc' } as LeadSummary
+      : row));
+    mount();
+    act(() => actions!.toggleSelectAll());
+    let started: boolean | undefined;
+    await act(async () => {
+      // The preview showed refi only; the selection also holds a HELOC row.
+      started = await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(started).toBe(false);
+    expect(actions!.bulkRationaleOpen).toBe(true);
+    expect(apiMocks.draftOutreach).not.toHaveBeenCalled();
+    expect(apiMocks.approve).not.toHaveBeenCalled();
+    expect(actions!.bulkRun.result).toBeNull();
+  });
+
+  it('fails closed without the bulk chunk: a covered run drafts and sends nothing; the gate still opens', async () => {
+    bulkChunk = null;
+    mount();
+    act(() => actions!.toggleSelectAll());
+    let started: boolean | undefined;
+    await act(async () => {
+      started = await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(started).toBe(false);
+    expect(actions!.bulkRationaleOpen, 'the gate opens; it renders once the chunk loads').toBe(true);
+    expect(apiMocks.draftOutreach).not.toHaveBeenCalled();
+    expect(apiMocks.approve).not.toHaveBeenCalled();
+    expect(actions!.bulkRun.result).toBeNull();
+    expect(actions!.bulkRun.isRunning()).toBe(false);
+  });
+
+  it('runs once every offer has a sample, and each sampled row certifies its own sample', async () => {
+    harnessLeads = LEADS.map((row) => (row.borrower_id === IDS[2]
+      ? { ...row, recommended_offer_code: 'heloc' } as LeadSummary
+      : row));
+    mount();
+    act(() => actions!.toggleSelectAll());
+    const samples = new Map([
+      [IDS[6], draft('gen-sample-refi')],
+      [IDS[2], { ...draft('gen-sample-heloc'), offer_code: 'heloc' } as OutreachDraftResult],
+    ]);
+    act(() => actions!.openBulkRationale());
+    let settled: boolean | undefined;
+    await act(async () => {
+      settled = await actions!.bulkApprove(samples, 'Q3 refinance push');
+    });
+
+    expect(settled).toBe(true);
+    expect(actions!.bulkRationaleOpen, 'a settled run closes its gate').toBe(false);
+    expect(apiMocks.approve).toHaveBeenCalledTimes(IDS.length);
+    const byId = new Map(apiMocks.approve.mock.calls.map((call) => [call[0] as string, call[1] as {
+      review_mode: string; draft_generation_id: string;
+    }]));
+    expect(byId.get(IDS[2])).toEqual(expect.objectContaining({ review_mode: 'bulk_sample', draft_generation_id: 'gen-sample-heloc' }));
+    expect(byId.get(IDS[6])).toEqual(expect.objectContaining({ review_mode: 'bulk_sample', draft_generation_id: 'gen-sample-refi' }));
+  });
+
+  it('refuses an unsampled row whose drafted offer the preview never showed; it stays selected', async () => {
+    apiMocks.draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(
+      borrowerId === IDS[3] ? { ...draft(`gen-${borrowerId}`), offer_code: 'cash_out' } : draft(`gen-${borrowerId}`),
+    ));
+    mount();
+    act(() => actions!.toggleSelectAll());
+    await act(async () => {
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(apiMocks.approve.mock.calls.map((call) => call[0])).not.toContain(IDS[3]);
+    expect(actions!.bulkRun.result?.failed).toEqual([
+      { borrowerId: IDS[3], outcome: 'backend', message: 'Offer changed since preview — review individually' },
+    ]);
+    expect([...actions!.selectedIds]).toEqual([IDS[3]]);
+    expect(getToasts()).toEqual([]);
+  });
+
+  it('a canary refusal sends nothing else, keeps every row selected and reopens the gate with the reason', async () => {
+    apiMocks.approve.mockRejectedValueOnce(
+      new ApiError('bulk_rationale failed the governed text policy', { path: '/api/outreach/approve', status: 422 }),
+    );
+    mount();
+    act(() => actions!.toggleSelectAll());
+    let settled: boolean | undefined;
+    await act(async () => {
+      settled = await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(settled, 'the toolbar keeps its rationale').toBe(false);
+    expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+    expect(actions!.bulkRun.result?.canary).toEqual({
+      borrowerId: IDS[0], message: 'bulk_rationale failed the governed text policy',
+    });
+    expect(actions!.bulkRationaleOpen).toBe(true);
+    expect(actions!.bulkRunCanary).toEqual({
+      borrowerId: IDS[0], message: 'bulk_rationale failed the governed text policy',
+    });
+    expect(bulkCanaryNotice(actions!.bulkRunCanary!)).toBe(
+      `Nothing else was sent: ${IDS[0]} was refused: bulk_rationale failed the governed text policy`,
+    );
+    expect([...actions!.selectedIds].sort()).toEqual([...IDS].sort());
+  });
+
+  it('flashes a cut-short reject run as rejected', () => {
+    window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 2, aborted: 1, kind: 'reject', ts: Date.now() }));
+    mount();
+    expect(actions!.bulkToast).toEqual({ ok: 2, fail: 0, network: 0, aborted: 1, kind: 'reject' });
   });
 
   it('clears a flashed run with nothing aborted after 4 s, and keeps an aborted one until it is resolved', () => {
@@ -360,7 +506,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     try {
       window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 3, aborted: 0, ts: Date.now() }));
       mount();
-      expect(actions!.bulkToast).toEqual({ ok: 3, fail: 0, network: 0, aborted: 0 });
+      expect(actions!.bulkToast).toEqual({ ok: 3, fail: 0, network: 0, aborted: 0, kind: 'approve' });
       act(() => vi.advanceTimersByTime(4000));
       expect(actions!.bulkToast, 'nothing is ambiguous: no dismiss control needed').toBeNull();
 
@@ -368,7 +514,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
       window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 1, aborted: 2, ts: Date.now() }));
       remount();
       act(() => vi.advanceTimersByTime(60_000));
-      expect(actions!.bulkToast).toEqual({ ok: 1, fail: 0, network: 0, aborted: 2 });
+      expect(actions!.bulkToast).toEqual({ ok: 1, fail: 0, network: 0, aborted: 2, kind: 'approve' });
     } finally {
       vi.useRealTimers();
     }

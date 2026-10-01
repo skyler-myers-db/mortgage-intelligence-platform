@@ -72,6 +72,8 @@ function ledger(decision: 'approved' | 'rejected' = 'approved'): DecisionReceipt
     rationale_code: decision === 'rejected' ? 'low_intent' : null,
     copy_generation_id: null,
     copy_hash: null,
+    review_mode: null,
+    bulk_id: null,
     approver: 'ledger.approver@summit.example',
     request_id: '33333333-3333-4333-8333-333333333333',
     correlation_id: 'corr-ledger-0001',

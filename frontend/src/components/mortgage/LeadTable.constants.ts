@@ -41,6 +41,13 @@ export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 551;
 export const LEAD_ROW_OVERSCAN = 5;
 export const LEAD_VIRTUALIZATION_THRESHOLD = 120;
 
+/**
+ * Rejection reasons that record the borrower's own consent (Do Not Call,
+ * Opt-out): one reviewer applies them per borrower, never to a bulk
+ * selection under one shared note. The server refuses them with a bulk_id.
+ */
+export const CONSENT_REJECT_CODES: readonly RejectReasonCode[] = ['do_not_call', 'opt_out'];
+
 export const REJECT_REASONS: { code: RejectReasonCode; label: string }[] = [
   { code: 'low_intent', label: 'Low intent' },
   { code: 'do_not_call', label: 'Do Not Call' },

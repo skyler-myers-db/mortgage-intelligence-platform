@@ -244,6 +244,17 @@ class OfferRecommendRequest(BaseModel):
 
 OutreachChannel = Literal["email", "sms", "direct_mail"]
 
+# How an approver saw the copy an approval certifies. 'undeclared' is
+# server-only (written for a client that sent no review_mode) and is never
+# accepted from a request body.
+ReviewMode = Literal["individual", "triage", "bulk_sample", "bulk_cohort"]
+_BULK_REVIEW_MODES: frozenset[str] = frozenset({"bulk_sample", "bulk_cohort"})
+_INDIVIDUAL_REVIEW_MODES: frozenset[str] = frozenset({"individual", "triage"})
+
+# Rejection reasons that record a borrower's consent; one reviewer applies
+# them per borrower, never to a bulk selection under one shared note.
+_CONSENT_REJECT_CODES: frozenset[str] = frozenset({"do_not_call", "opt_out"})
+
 
 class OutreachDraft(BaseModel):
     generation_id: str = Field(min_length=1, max_length=64)
@@ -336,6 +347,13 @@ class OutreachApproveRequest(BaseModel):
     rationale: str | None = Field(default=None, max_length=500)
     bulk_id: str | None = Field(default=None, max_length=64)
     bulk_rationale: str | None = Field(default=None, max_length=500)
+    # How the approver saw the copy this approval certifies (audit flow-03 /
+    # states-06, D-approval-flow-a1): on screen for this borrower
+    # (individual, triage), previewed as a bulk sample (bulk_sample), or
+    # approved under a bulk run's shared rationale without being shown
+    # (bulk_cohort). Omitted by a client older than the review_mode ledger;
+    # the APPROVE row then records the server-only token 'undeclared'.
+    review_mode: ReviewMode | None = None
     # Governance approval boundary: the endpoint requires the final
     # approver-visible draft body to include the configured tenant
     # disclosure before writing the decision. The schema keeps this
@@ -437,6 +455,17 @@ class OutreachApproveRequest(BaseModel):
                 "draft_generation_id, draft_response_hash, and "
                 "draft_source_refreshed_at must be supplied together"
             )
+        # The rationale validator has already turned blank text into None.
+        if self.bulk_id is not None and self.bulk_rationale is None:
+            raise ValueError("bulk approvals require a shared rationale")
+        if self.review_mode in _BULK_REVIEW_MODES and self.bulk_id is None:
+            raise ValueError("bulk review modes require bulk_id")
+        if self.review_mode in _INDIVIDUAL_REVIEW_MODES and self.bulk_id is not None:
+            raise ValueError("individual review modes cannot carry bulk_id")
+        if self.review_mode is not None and not all(
+            isinstance(value, str) and value.strip() for value in proof
+        ):
+            raise ValueError("review_mode requires the generated draft proof")
         return self
 
 
@@ -483,13 +512,17 @@ class OutreachRejectRequest(BaseModel):
     # R5-01 idempotency key -- see ``OutreachApproveRequest.request_id``.
     # Reject carries the same retry-safety contract as approve.
     request_id: str | None = Field(default=None, max_length=64)
+    # One bulk rejection run (audit tables-07, D-approval-flow-d): every row
+    # of the run carries the same opaque id, the same reason and the same
+    # required shared note, so the ledger can regroup the run.
+    bulk_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("borrower_id")
     @classmethod
     def _borrower_id_is_public_safe(cls, value: str) -> str:
         return validate_public_borrower_id(value)
 
-    @field_validator("request_id")
+    @field_validator("request_id", "bulk_id")
     @classmethod
     def _opaque_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:
@@ -525,6 +558,10 @@ class OutreachRejectRequest(BaseModel):
         validate_complete_campaign_binding(self.campaign_id, self.variant_name)
         if self.rationale_code == "other_with_text" and not (self.rationale or "").strip():
             raise ValueError("other_with_text requires a rationale")
+        if self.bulk_id is not None and self.rationale is None:
+            raise ValueError("bulk rejections require a shared note")
+        if self.bulk_id is not None and self.rationale_code in _CONSENT_REJECT_CODES:
+            raise ValueError("consent reasons cannot be applied in bulk")
         return self
 
 

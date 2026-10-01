@@ -157,6 +157,8 @@ function ledgerReceipt(auditEventId: string): DecisionReceiptPayload {
     rationale_code: null,
     copy_generation_id: null,
     copy_hash: null,
+    review_mode: null,
+    bulk_id: null,
     approver: 'ledger.approver@summit.example',
     request_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
     correlation_id: 'corr-ledger-0001',

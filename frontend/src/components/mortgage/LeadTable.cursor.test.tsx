@@ -56,6 +56,15 @@ vi.mock('../../lib/api', () => ({
 
 import { LeadTable } from './LeadTable';
 
+/** The reject panel has no default reason (D-approval-flow-d item 13): pick one. */
+function chooseReason(form: Element, code = 'low_intent') {
+  const select = form.querySelector<HTMLSelectElement>('[data-testid="lead-reject-reason"]')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, code);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 const IDS = ['B-CURSOR0000001', 'B-CURSOR0000002', 'B-CURSOR0000003', 'B-CURSOR0000004'];
 
 function lead(borrowerId: string, approvalStatus: LeadSummary['approval_status'] = 'pending'): LeadSummary {
@@ -214,12 +223,26 @@ describe('LeadTable keyboard row cursor', () => {
     expect(panel?.textContent).toContain(IDS[0]);
 
     const form = panel as HTMLFormElement;
+    // No default reason: a submit without one focuses Reason and sends nothing.
+    const reason = form.querySelector<HTMLSelectElement>('[data-testid="lead-reject-reason"]')!;
+    expect(reason.value).toBe('');
+    expect(form.querySelector('[data-testid="lead-reject-confirm"]')?.getAttribute('aria-disabled')).toBe('true');
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => {
+      form.requestSubmit();
+    });
+    await flush();
+    expect(reject).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(reason);
+
+    chooseReason(form, 'data_quality');
+    expect(form.querySelector('[data-testid="lead-reject-confirm"]')?.getAttribute('aria-disabled')).toBeNull();
     await act(async () => {
       form.requestSubmit();
     });
     await flush();
 
-    expect(reject).toHaveBeenCalledWith(IDS[0], expect.objectContaining({ rationale_code: 'low_intent' }));
+    expect(reject).toHaveBeenCalledWith(IDS[0], expect.objectContaining({ rationale_code: 'data_quality' }));
     // IDS[1] is already approved: the cursor lands on the next PENDING row.
     expect(cursorRow()?.getAttribute('data-borrower-row')).toBe(IDS[2]);
   });

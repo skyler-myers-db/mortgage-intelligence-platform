@@ -665,15 +665,28 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
     expect(idInView, 'the row\'s borrower id is still inside the scrollport').toBe(true);
   });
 
-  test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end', async ({ app, mockApi, page }) => {
+  test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end, and the guard puts it back', async ({ app, mockApi, page }) => {
     registerQueueLayoutLeads(mockApi);
     await app.gotoRoute('/lead-queue');
     await app.openConsole();
     await page.addStyleTag({ content: ZERO_PIN_MARGIN });
     const overflow = await tableWrap(page).evaluate((wrap) => wrap.scrollWidth - wrap.clientWidth);
     expect(overflow).toBeGreaterThan(40);
-    for (const end of await scrollLeftAfterPinnedFocus(page, ELIGIBLE, 0)) {
-      expect(end, 'the scroller\'s inline-end padding "reveals" a control already in view').toBeGreaterThan(overflow - 2);
+    for (const testId of [`lead-approve-${ELIGIBLE}`, `lead-reject-${ELIGIBLE}`]) {
+      // One evaluate: the synchronous read sees the engine's scroll before
+      // the pinned-focus guard's microtask (useTableScrollClearance) runs.
+      const offsets = await page.getByTestId(testId).evaluate(async (control) => {
+        const wrap = control.closest<HTMLElement>('.tbl-wrap');
+        if (!wrap) throw new Error('the control is not in the table scroller');
+        wrap.scrollLeft = 0;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        (control as HTMLElement).focus();
+        const synchronous = wrap.scrollLeft;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return { synchronous, settled: wrap.scrollLeft };
+      });
+      expect(offsets.synchronous, 'the scroller\'s inline-end padding "reveals" a control already in view').toBeGreaterThan(overflow - 2);
+      expect(offsets.settled, 'the pinned-focus guard restored the offset').toBeLessThanOrEqual(1);
     }
   });
 
@@ -813,6 +826,8 @@ test.describe('(h) single-row failures raise a shell toast', () => {
     const recorder = registerRejectRecorder(mockApi, { failIds: [ELIGIBLE] });
     await app.gotoRoute('/lead-queue');
     await page.getByTestId(`lead-reject-${ELIGIBLE}`).click();
+    // No default reason (D-approval-flow-d item 13): the reviewer picks one.
+    await page.getByTestId('lead-reject-reason').selectOption('low_intent');
     await page.getByRole('button', { name: 'Confirm reject' }).click();
 
     const toast = page.locator('.toast[role="alert"]');

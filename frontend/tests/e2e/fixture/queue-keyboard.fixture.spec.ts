@@ -287,6 +287,8 @@ test.describe('approve review', () => {
     await expect(confirm).toBeFocused();
 
     await page.getByTestId(`lead-reject-${target.borrower_id}`).click();
+    // No default reason (D-approval-flow-d item 13): the reviewer picks one.
+    await page.locator('.decision-panel').getByRole('combobox', { name: 'Reason' }).selectOption('low_intent');
     await page.locator('.decision-panel').getByRole('button', { name: 'Confirm reject' }).click();
     await expect.poll(() => held.rejectGate.received, 'the reject POST left the browser').toBe(true);
 
@@ -454,8 +456,11 @@ test.describe('keyboard reject', () => {
     await expect(scrollRegion(page), 'Cancel hands focus back to the table').toBeFocused();
     expect(held.rejectGate.received).toBe(false);
 
-    // Confirm reject by keyboard: Reason -> Rationale note -> Cancel -> Confirm reject.
+    // Confirm reject by keyboard: pick a reason (there is no default), then
+    // Reason -> Rationale note -> Cancel -> Confirm reject.
     await page.keyboard.press('r');
+    await expect(reason).toBeFocused();
+    await reason.selectOption('low_intent');
     await expect(reason).toBeFocused();
     for (let step = 0; step < 3; step += 1) await page.keyboard.press('Tab');
     await expect(panel.getByRole('button', { name: 'Confirm reject' })).toBeFocused();
@@ -496,13 +501,15 @@ test.describe('bulk gate and Cmd-K verbs', () => {
     expect(counted.map(Number).reduce((sum, count) => sum + count, 0)).toBe(4);
     expect(echo.calls, 'opening the gate drafts nothing').toEqual([]);
 
+    // Stratified samples (D-approval-flow-a1): these four rows carry four
+    // offers, so one sample each.
     const preview = review.getByTestId('lead-bulk-preview-samples');
-    await expect(preview).toHaveText('Preview 3 sample drafts');
-    await expect(review).toContainText('Generates 3 audited drafts');
+    await expect(preview).toHaveText('Preview 4 sample drafts (one per offer)');
+    await expect(review).toContainText('Generates 4 audited drafts');
     await preview.click();
-    await expect(review.locator('[data-testid="lead-bulk-samples"] li')).toHaveCount(3);
+    await expect(review.locator('[data-testid="lead-bulk-samples"] li')).toHaveCount(4);
     await expect(review.locator('[data-testid="lead-bulk-samples"] li').first()).toContainText(reviewSubject(pending[0].borrower_id));
-    expect(echo.calls).toEqual(pending.slice(0, 3).map((lead) => lead.borrower_id));
+    expect(echo.calls).toEqual(pending.map((lead) => lead.borrower_id));
     expect(held.approveGate.received, 'nothing approves without the rationale and the button').toBe(false);
   });
 

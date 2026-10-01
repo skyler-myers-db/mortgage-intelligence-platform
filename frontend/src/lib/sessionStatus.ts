@@ -23,8 +23,9 @@
  * `bulk_approval` (audit tables-07 / states-08, #8): a Lead Queue bulk approve
  * the session ended part-way through, where some rows WERE recorded and the
  * rest were not, so the dialog cannot say "your approval was not recorded".
+ * `bulk_rejection` is the same for a bulk Reject run (tables-07).
  */
-export type UnrecordedWrite = 'approval' | 'rejection' | 'change' | 'bulk_approval';
+export type UnrecordedWrite = 'approval' | 'rejection' | 'change' | 'bulk_approval' | 'bulk_rejection';
 
 export interface SessionStatusSnapshot {
   expired: boolean;
@@ -67,6 +68,7 @@ const PRECEDENCE: Record<UnrecordedWrite, number> = {
   rejection: 2,
   approval: 3,
   bulk_approval: 4,
+  bulk_rejection: 4,
 };
 
 /**

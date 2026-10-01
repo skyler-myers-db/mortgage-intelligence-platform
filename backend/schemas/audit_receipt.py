@@ -31,6 +31,11 @@ class DecisionReceipt(BaseModel):
     rationale_code: str | None = None
     copy_generation_id: str | None = None
     copy_hash: str | None = None
+    # How the approver saw the certified copy (a closed token: individual,
+    # triage, bulk_sample, bulk_cohort, or undeclared for an older client),
+    # and the opaque id of the bulk run the decision belonged to.
+    review_mode: str | None = None
+    bulk_id: str | None = None
     approver: str
     request_id: str | None = None
     correlation_id: str | None = None

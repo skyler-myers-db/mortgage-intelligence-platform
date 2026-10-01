@@ -1,12 +1,13 @@
 /**
  * @vitest-environment happy-dom
  *
- * A bulk run when the lazy bulk chunk cannot load (audit states-07 item 2;
- * w3-queue-place #9c). The chunk ships the run's progress line (with the
- * only Stop) and its result; with it gone, a run on the wire showed nothing
- * and could not be stopped. The LeadTable chunk now renders a static
- * fallback: "Approving k of N" with Stop, then the run's one-sentence
- * summary with Dismiss.
+ * Bulk approve when the lazy bulk chunk cannot load (audit states-07 item 2;
+ * w3-queue-place #9c; D-approval-flow-a1 E4). The chunk ships the gate's
+ * sampler (and the run's progress line and result). A run now starts only
+ * once the gate previewed a sample of every offer, so with the chunk gone
+ * nothing can be approved in bulk: the toolbar says so, Approve stays
+ * aria-disabled (fail closed) and no draft or approve is sent. The static
+ * run fallback (LeadBulkRunFallback) stays for a run already on the wire.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -56,6 +57,10 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 }));
 
 import { LeadTable } from './LeadTable';
+import { LeadBulkRunProgressFallback, LeadBulkRunResultFallback } from './LeadBulkRunFallback';
+import { LeadBulkRunProgress, LeadBulkRunResult } from './LeadBulkRunStatus';
+import { LeadTableBulkToast } from './LeadTableBulkActions';
+import type { BulkRunResult } from './useLeadBulkRun';
 
 const IDS = Array.from({ length: 6 }, (_, index) => `B-CHUNKFALLBK0${index + 1}`);
 
@@ -138,28 +143,96 @@ describe('LeadTable bulk run when the bulk chunk failed to load', () => {
     });
   }
 
-  it('still shows k of N with a working Stop, then the summary with Dismiss', async () => {
+  it('fails closed: says the bulk review could not load, keeps Approve aria-disabled and sends nothing', async () => {
     act(() => q<HTMLInputElement>('[data-testid="lead-select-all"]')!.click());
     act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-approve"]')!.click());
+    await vi.waitFor(async () => {
+      await flush(1);
+      expect(q('[data-testid="lead-bulk-chunk-failed"]')).not.toBeNull();
+    }, { timeout: 15_000 });
+    expect(q('[data-testid="lead-bulk-chunk-failed"]')?.textContent).toBe(
+      'The bulk review could not load, so nothing can be approved or rejected in bulk. Reload the page.',
+    );
     typeInto(q<HTMLInputElement>('.bulk-actions__rationale input')!, 'Q3 retention sweep');
-    act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-approve"]')!.click());
-    await flush();
+    const approveButton = q<HTMLButtonElement>('[data-testid="lead-bulk-approve"]')!;
+    expect(approveButton.getAttribute('aria-disabled')).toBe('true');
+    expect(approveButton.disabled, 'aria-disabled, never native disabled').toBe(false);
 
-    expect(approve).toHaveBeenCalledTimes(3);
-    const fallback = q('[data-testid="lead-bulk-run-fallback"]');
-    expect(fallback, 'the static progress line').not.toBeNull();
-    expect(fallback?.textContent).toContain('Approving 0 of 6');
-
-    act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-stop"]')!.click());
-    expect(q('[data-testid="lead-bulk-stop"]')?.textContent).toBe('Stopping after this batch…');
-    await act(async () => {
-      held.splice(0).forEach((release) => release());
-    });
+    act(() => approveButton.click());
     await flush(5);
 
-    expect(approve, 'Stop held: nothing after the batch on the wire').toHaveBeenCalledTimes(3);
-    expect(q('[data-testid="lead-bulk-result"]')?.textContent).toContain('3 of 6 approved, 3 not started. Stopped.');
-    act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-result-dismiss"]')!.click());
-    expect(q('[data-testid="lead-bulk-result"]')).toBeNull();
+    expect(draftOutreach).not.toHaveBeenCalled();
+    expect(approve).not.toHaveBeenCalled();
+    expect(held).toEqual([]);
+    expect(q('[data-testid="lead-bulk-run-fallback"]')).toBeNull();
   }, 30_000);
+});
+
+/**
+ * The run lines name the run's kind (tables-07): the fallback said
+ * "Approving" for every run, and a bulk Reject run would have read as one.
+ * Rendered directly: a run is only on the wire with the chunk loaded.
+ */
+describe('bulk run lines name the run kind', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  const rejectResult: BulkRunResult = {
+    kind: 'reject',
+    total: 3,
+    ok: 2,
+    failed: [],
+    skipped: [],
+    notStarted: ['B-CHUNKFALLBK03'],
+    stopped: true,
+    sessionEnded: false,
+    canary: null,
+  };
+
+  it('the static fallback says Rejecting and rejected for a reject run', () => {
+    act(() => root.render(
+      <>
+        <LeadBulkRunProgressFallback
+          progress={{ kind: 'reject', total: 3, settled: 1, stopRequested: false, minutesLeft: 1 }}
+          onStop={() => undefined}
+        />
+        <LeadBulkRunResultFallback result={rejectResult} onDismiss={() => undefined} />
+      </>,
+    ));
+    expect(container.querySelector('[data-testid="lead-bulk-run-fallback"]')?.textContent).toContain('Rejecting 1 of 3');
+    expect(container.querySelector('[data-testid="lead-bulk-result"]')?.textContent).toContain('2 of 3 rejected, 1 not started. Stopped.');
+  });
+
+  it('the lazy progress line and report say Rejecting and ask for a new reason and note', () => {
+    act(() => root.render(
+      <>
+        <LeadBulkRunProgress
+          progress={{ kind: 'reject', total: 3, settled: 1, stopRequested: false, minutesLeft: 1 }}
+          onStop={() => undefined}
+        />
+        <LeadBulkRunResult result={rejectResult} onDismiss={() => undefined} />
+      </>,
+    ));
+    expect(container.querySelector('.bulk-actions__run .bulk-actions__label')?.textContent).toBe('Rejecting 1 of 3');
+    expect(container.querySelector('progress')?.getAttribute('aria-label')).toBe('Rejecting selected borrowers');
+    expect(container.querySelector('[data-outcome="not_started"]')?.textContent).toContain('with its own reason and note');
+  });
+
+  it('the unmount flash says rejected for a cut-short reject run', () => {
+    act(() => root.render(
+      <LeadTableBulkToast toast={{ ok: 2, fail: 0, network: 0, aborted: 1, kind: 'reject' }} onReviewRecentActivity={() => undefined} />,
+    ));
+    expect(container.querySelector('[data-testid="lead-bulk-toast"]')?.textContent).toContain('2 rejected');
+  });
 });

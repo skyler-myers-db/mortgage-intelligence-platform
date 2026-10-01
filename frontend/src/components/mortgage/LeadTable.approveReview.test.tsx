@@ -15,8 +15,10 @@
  *    "View receipt" and the cursor advances to the next pending row.
  *  - A collapsed row reviews in a native modal <dialog>.
  *  - Bulk keeps its required rationale gate, adds count by offer, and drafts
- *    samples only behind "Preview N sample drafts"; the sampled rows are
- *    approved with exactly the previewed drafts.
+ *    stratified samples (one per offer) only behind "Preview k sample drafts
+ *    (one per offer)"; the sampled rows are approved with exactly the
+ *    previewed drafts (review_mode 'bulk_sample'), the rest under the shared
+ *    rationale ('bulk_cohort').
  *  - The Cmd-K selection verbs are published with the table's own handlers.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -378,7 +380,7 @@ describe('LeadTable approve review', () => {
       });
     }
 
-    it('opens with count by offer, drafts nothing until "Preview N sample drafts", then reuses those drafts', async () => {
+    it('opens with count by offer, drafts nothing until "Preview k sample drafts (one per offer)", then reuses those drafts', async () => {
       select(IDS);
       act(() => bulkApprove().click());
       // The gate's review is its own lazy chunk.
@@ -393,13 +395,14 @@ describe('LeadTable approve review', () => {
       expect(counts).toEqual(['Refinance review 2', 'Home-equity line review 1', 'Next-home purchase loan 1']);
       expect(draftOutreach).not.toHaveBeenCalled();
       const preview = gate.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-preview-samples"]')!;
-      expect(preview.textContent).toBe('Preview 3 sample drafts');
+      expect(preview.textContent).toBe('Preview 3 sample drafts (one per offer)');
       expect(gate.textContent).toContain('Generates 3 audited drafts');
 
       act(() => preview.click());
       await flush();
       await flush();
-      expect(draftOutreach).toHaveBeenCalledTimes(3);
+      // Stratified: the first row of each of the three offers, not the first three rows.
+      expect(draftOutreach.mock.calls.map((call) => call[0])).toEqual([IDS[0], IDS[1], IDS[3]]);
       const samples = gate.querySelectorAll('[data-testid="lead-bulk-samples"] li');
       expect(samples).toHaveLength(3);
       expect(samples[0].textContent).toContain(draftFor(IDS[0]).subject);
@@ -414,11 +417,18 @@ describe('LeadTable approve review', () => {
       // Only the unsampled row drafted again; the sampled rows bind the
       // exact drafts that were shown.
       expect(draftOutreach).toHaveBeenCalledTimes(4);
-      expect(draftOutreach).toHaveBeenLastCalledWith(IDS[3], 'email', expect.any(AbortSignal));
+      expect(draftOutreach).toHaveBeenLastCalledWith(IDS[2], 'email', expect.any(AbortSignal));
       expect(approve).toHaveBeenCalledWith(IDS[0], expect.objectContaining({
         draft_generation_id: `gen-${IDS[0]}`,
         bulk_rationale: 'Q3 sweep',
+        review_mode: 'bulk_sample',
       }), expect.any(AbortSignal));
+      expect(approve).toHaveBeenCalledWith(IDS[2], expect.objectContaining({
+        bulk_rationale: 'Q3 sweep',
+        review_mode: 'bulk_cohort',
+      }), expect.any(AbortSignal));
+      const bulkIds = new Set(approve.mock.calls.map((call) => (call[1] as { bulk_id: string }).bulk_id));
+      expect(bulkIds.size).toBe(1);
     });
 
     it('Shift+A and the Cmd-K verb open the same gate and never submit it', async () => {

@@ -67,6 +67,8 @@ export interface RejectBody {
   request_id?: string;
   rationale_code?: string;
   rationale?: string | null;
+  /** One bulk rejection run's id (tables-07); null for a single rejection. */
+  bulk_id?: string | null;
 }
 
 export interface RejectRecorderOptions {

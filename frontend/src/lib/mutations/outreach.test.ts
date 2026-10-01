@@ -42,6 +42,7 @@ import {
   decisionFailure,
   draftForApproval,
   isDecisionPending,
+  OfferNotPreviewedError,
   outreachMutationKeys,
   useApproveLead,
   usePendingDecisions,
@@ -79,6 +80,7 @@ function approveVars(overrides: Partial<ApproveLeadVariables> = {}): ApproveLead
     rationale: null,
     bulkId: null,
     bulkRationale: null,
+    reviewMode: 'individual',
     ...overrides,
   };
 }
@@ -93,6 +95,7 @@ function rejectVars(overrides: Partial<RejectLeadVariables> = {}): RejectLeadVar
     campaignBinding: null,
     evidenceIds: ['ev-2'],
     offerCode: 'refi',
+    bulkId: null,
     ...overrides,
   };
 }
@@ -272,6 +275,7 @@ describe('request bodies', () => {
         draft_generation_id: 'gen-1',
         draft_subject: 'Your governed mortgage review',
         offer_code: 'refi',
+        review_mode: 'individual',
       }),
       undefined,
     );
@@ -280,12 +284,16 @@ describe('request bodies', () => {
   it('drafts an unsampled bulk row inside the mutation', async () => {
     const latest = mountHook(() => useApproveLead(client));
     await act(async () => {
-      await latest().mutateAsync(approveVars({ reviewedDraft: null, bulkId: 'bulk-1', bulkRationale: 'Q3 refi' }));
+      await latest().mutateAsync(approveVars({
+        reviewedDraft: null, bulkId: 'bulk-1', bulkRationale: 'Q3 refi', reviewMode: 'bulk_cohort',
+      }));
     });
     expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(1);
     expect(apiMocks.approve).toHaveBeenCalledWith(
       BORROWER,
-      expect.objectContaining({ bulk_id: 'bulk-1', bulk_rationale: 'Q3 refi', request_id: 'req-approve-1' }),
+      expect.objectContaining({
+        bulk_id: 'bulk-1', bulk_rationale: 'Q3 refi', request_id: 'req-approve-1', review_mode: 'bulk_cohort',
+      }),
       undefined,
     );
   });
@@ -297,7 +305,83 @@ describe('request bodies', () => {
     });
     expect(apiMocks.reject).toHaveBeenCalledWith(
       OTHER,
-      expect.objectContaining({ rationale_code: 'do_not_call', rationale: 'Asked not to be called', request_id: 'req-reject-1' }),
+      expect.objectContaining({
+        rationale_code: 'do_not_call', rationale: 'Asked not to be called', request_id: 'req-reject-1', bulk_id: null,
+      }),
+    );
+  });
+
+  it('sends a bulk rejection row with its bulk_id and signal, and skips its invalidation', async () => {
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const ctrl = new AbortController();
+    const latest = mountHook(() => useRejectLead(client));
+    await act(async () => {
+      await latest().mutateAsync(rejectVars({
+        rationale: 'Q3 sweep', bulkId: 'bulk-r1', signal: ctrl.signal, suppressInvalidation: true,
+      }));
+    });
+    expect(apiMocks.reject).toHaveBeenCalledWith(
+      OTHER,
+      expect.objectContaining({ bulk_id: 'bulk-r1', rationale: 'Q3 sweep' }),
+      ctrl.signal,
+    );
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+});
+
+describe('the in-run offer check (a bulk row the gate never previewed)', () => {
+  it('drafts, refuses and sends no approve when the drafted offer was not previewed', async () => {
+    apiMocks.draftOutreach.mockResolvedValue({ ...DRAFT, offer_code: 'heloc' });
+    const latest = mountHook(() => useApproveLead(client));
+    let caught: unknown = null;
+    await act(async () => {
+      await latest().mutateAsync(approveVars({
+        reviewedDraft: null,
+        bulkId: 'bulk-1',
+        bulkRationale: 'Q3 refi',
+        reviewMode: 'bulk_cohort',
+        coveredOfferCodes: new Set(['refi']),
+      })).catch((err: unknown) => {
+        caught = err;
+      });
+    });
+    expect(caught).toBeInstanceOf(OfferNotPreviewedError);
+    expect((caught as OfferNotPreviewedError).offerCode).toBe('heloc');
+    // The DRAFT_OUTREACH row is honest (a draft was generated); no approve.
+    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(1);
+    expect(apiMocks.approve).not.toHaveBeenCalled();
+  });
+
+  it('approves an unsampled row whose drafted offer the samples showed', async () => {
+    const latest = mountHook(() => useApproveLead(client));
+    await act(async () => {
+      await latest().mutateAsync(approveVars({
+        reviewedDraft: null,
+        bulkId: 'bulk-1',
+        bulkRationale: 'Q3 refi',
+        reviewMode: 'bulk_cohort',
+        coveredOfferCodes: new Set(['refi']),
+      }));
+    });
+    expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+  });
+
+  it('never checks a previewed row: its copy is the sample the gate showed', async () => {
+    const latest = mountHook(() => useApproveLead(client));
+    await act(async () => {
+      await latest().mutateAsync(approveVars({
+        reviewedDraft: { ...DRAFT, offer_code: 'heloc' },
+        bulkId: 'bulk-1',
+        bulkRationale: 'Q3 refi',
+        reviewMode: 'bulk_sample',
+        coveredOfferCodes: new Set(['refi']),
+      }));
+    });
+    expect(apiMocks.draftOutreach).not.toHaveBeenCalled();
+    expect(apiMocks.approve).toHaveBeenCalledWith(
+      BORROWER,
+      expect.objectContaining({ review_mode: 'bulk_sample', draft_generation_id: 'gen-1' }),
+      undefined,
     );
   });
 });

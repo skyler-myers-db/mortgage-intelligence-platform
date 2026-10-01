@@ -76,6 +76,8 @@ const RECEIPT: DecisionReceiptPayload = {
   rationale_code: null,
   copy_generation_id: null,
   copy_hash: null,
+  review_mode: null,
+  bulk_id: null,
   approver: 'ledger.approver@summit.example',
   request_id: 'req-1',
   correlation_id: 'corr-1',

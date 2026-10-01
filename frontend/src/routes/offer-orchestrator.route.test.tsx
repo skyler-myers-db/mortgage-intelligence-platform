@@ -199,6 +199,8 @@ function ledgerReceipt(auditEventId: string): DecisionReceiptPayload {
     rationale_code: rejected ? 'low_intent' : null,
     copy_generation_id: rejected ? null : 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     copy_hash: rejected ? null : 'ledger-hash-'.padEnd(64, 'b'),
+    review_mode: rejected ? null : 'individual',
+    bulk_id: null,
     approver: 'ledger.approver@summit.example',
     request_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
     correlation_id: 'corr-ledger-0001',

@@ -361,6 +361,22 @@
 .bulk-actions__assignee select {
   min-width: 11rem;
 }
+/* deviation:bulk-scope-handoff (audit tables-07 / tables-02): with every
+   loaded row selected and more matching, the toolbar says bulk actions apply
+   only to the rows shown, on its own full-width line, and links to a
+   campaign built from the filters. Not in design_files (no select-all-matching). */
+.bulk-actions:has(> .bulk-actions__scope) { flex-wrap: wrap; }
+.bulk-actions__scope {
+  flex: 1 0 100%;
+  order: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
 .bulk-actions__toast { font-size: var(--fs-12); }
 .bulk-actions__toast--ok { color: var(--signal-success); }
 .bulk-actions__toast--warn { color: var(--signal-warning-ink); }

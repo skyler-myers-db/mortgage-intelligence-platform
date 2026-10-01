@@ -1,13 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router';
-import { Icon } from '../Icon';
-import { Button, SurfaceTitle } from '../Primitives';
+import { useSearchParams } from 'react-router';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
-import { auditEventHref } from '../../lib/auditLinks';
-import { formatCount } from '../../lib/formatters';
 import { queryKeys } from '../../lib/queryKeys';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import { planLeadCsvExport } from './LeadTable.csv';
@@ -18,12 +14,12 @@ import { sortValue, verifiedCampaignBinding } from './LeadTable.logic';
 import { LeadTableBody } from './LeadTableBody';
 import { useStableRowCallbacks } from './LeadTable.rowCallbacks';
 import { LeadTableHead } from './LeadTableHead';
-import { LeadTableViewControl } from './LeadTableViewControl';
+import { LeadTableHeader } from './LeadTableHeader';
+import { LeadTableFooter } from './LeadTableFooter';
 import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
 import { LeadBulkRunProgressFallback, LeadBulkRunResultFallback } from './LeadBulkRunFallback';
 import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
-import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyboardHint';
 import { LEAD_TABLE_KEYS } from './LeadTable.keymap';
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
 import { useLeadSalesActions } from './useLeadSalesActions';
@@ -85,8 +81,16 @@ const BULK_REVIEW_CHUNK = lazyModule(() => import('./LeadBulkApproveReview'));
  * selection". Bulk approve loops `api.approve()` per selected lead in chunks
  * of 3 to keep one audit row per approval (matching the single-row flow),
  * behind a required shared rationale; the gate shows the count by offer and
- * drafts samples only on "Preview 3 sample drafts". Shift+A and the Cmd-K
- * verb open that same gate; one selected row opens its own review instead.
+ * drafts stratified samples (one per offer) only on "Preview k sample drafts
+ * (one per offer)", and Approve arms only once every offer in the run has
+ * one. Each APPROVE row records its review_mode: 'bulk_sample' for a row
+ * whose previewed copy is what it certifies, 'bulk_cohort' for a row
+ * approved under the shared rationale without its copy being shown. Shift+A
+ * and the Cmd-K verb open that same gate; one selected row opens its own
+ * review instead. "Reject N" (Shift+R, the Cmd-K verb) opens the bulk reject
+ * gate: one reason (no default) and a required shared note for every row,
+ * one OUTREACH_REJECT row each under one bulk id (tables-07); one selected
+ * row opens its own reject panel.
  */
 
 function ignoreScrollToIndex(): void {
@@ -109,6 +113,7 @@ export function LeadTable({
   onExpandedChange,
   restoreScroll = false,
   headerStatus,
+  campaignHandoff = null,
 }: LeadTableProps) {
   // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
   // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
@@ -248,6 +253,7 @@ export function LeadTable({
     campaignBindingBlocked,
     canApprove: approverGate === null,
     tableWrapRef,
+    bulkRuns: BULK_REVIEW_CHUNK.current,
   });
 
   /**
@@ -262,6 +268,9 @@ export function LeadTable({
   const assigneeRef = useRef<HTMLSelectElement | null>(null);
   const sampleDraftsRef = useRef<ReadonlyMap<string, OutreachDraftResult>>(new Map());
   const [samplesShown, setSamplesShown] = useState(false);
+  // The gate's coverage: every offer in the run has a previewed sample. Set
+  // by the gate only when it changes (never per keystroke), it arms Approve.
+  const [samplesCoverAllOffers, setSamplesCoverAllOffers] = useState(false);
   const flow = useLeadTableKeyboardFlow({
     sortedLeads,
     leadsById,
@@ -290,6 +299,7 @@ export function LeadTable({
     onCampaignBindingChange: () => {
       sampleDraftsRef.current = new Map();
       setSamplesShown(false);
+      setSamplesCoverAllOffers(false);
     },
   });
   const { review } = flow;
@@ -326,7 +336,7 @@ export function LeadTable({
   // The bulk chunk also carries a run's progress and report (tables-07).
   const bulkChunk = useLazyModule(
     BULK_REVIEW_CHUNK,
-    approval.selectionCount > 1 || approval.bulkApproving || bulkRun.result !== null,
+    approval.selectionCount > 1 || approval.headerCheckboxState.checked || approval.bulkApproving || bulkRun.result !== null,
   );
   // The module cache is the truth: after one failed chunk load this hook's
   // state stays failed, yet the next Approve re-imports the chunk and drafts
@@ -344,6 +354,8 @@ export function LeadTable({
   const DecisionToast = reviewModule?.LeadTableDecisionToast;
   const bulkModule = bulkChunk.module ?? BULK_REVIEW_CHUNK.current();
   const BulkReview = bulkModule?.LeadBulkApproveReview;
+  const BulkRejectGate = bulkModule?.LeadBulkRejectGate;
+  const BulkCampaignHandoff = bulkModule?.LeadBulkCampaignHandoff;
   const BulkRunProgress = bulkModule?.LeadBulkRunProgress;
   const BulkRunResult = bulkModule?.LeadBulkRunResult;
   const reviewProps = openReview && {
@@ -413,7 +425,6 @@ export function LeadTable({
     ? 'selected'
     : csvExportCount === 1 ? 'lead' : 'leads';
   const { state: exportState, exportCsv: runExport } = useLeadCsvExport();
-  const exporting = exportState.status === 'pending';
   const exportBlockedReason = exportContext?.exportBlockedReason ?? null;
   function exportCsv() {
     if (csvExportCount === 0 || exportBlockedReason) return;
@@ -440,73 +451,21 @@ export function LeadTable({
     // components.css; the inline override was both unnecessary and the
     // proximate cause of the shift the user reported.
     <div className="surface">
-      <div className="surface__hdr surface__hdr--split">
-        <div className="surface__hdr-main">
-          <div className="surface__icon">
-            <Icon name="user" size={14} />
-          </div>
-          <div>
-            {/* The view's freshness sits beside the title, not in the action
-                row: there it squeezed the keyboard hint onto a second line
-                and pushed the 480px scroller past the fold at 1440x900. */}
-            {headerStatus ? (
-              <div className="inline-flex">
-                <SurfaceTitle>Ranked borrowers</SurfaceTitle>
-                {headerStatus}
-              </div>
-            ) : (
-              <SurfaceTitle>Ranked borrowers</SurfaceTitle>
-            )}
-            <div className="muted fs-12">
-              {/* Keycaps are `<kbd>` (prototype-parity P2); the header's
-                  "Keyboard shortcuts" button and `?` list every key. */}
-              <LeadTableKeyboardHint singleKeysOn={singleKeysOn} approverActive={approverGate === null} />
-              {approverGate === null && actorEmail && (
-                <> Approving as <span className="mono" data-testid="lead-approving-as">{actorEmail}</span>.</>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="lead-table__header-actions">
-          <LeadTableShortcutsButton singleKeysOn={singleKeysOn} />
-          {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
-          {exportState.status === 'done' && (
-            <span className="muted fs-12" data-testid="lead-export-receipt">
-              Exported {formatCount(exportState.rowCount)} {exportState.rowCount === 1 ? 'row' : 'rows'}
-              {' · audit '}
-              {canAccessAdmin ? (
-                <Link className="mono" to={auditEventHref(exportState.receipt.audit_event_id)}>
-                  {exportState.receipt.audit_event_id}
-                </Link>
-              ) : (
-                <span className="mono">{exportState.receipt.audit_event_id}</span>
-              )}
-            </span>
-          )}
-          <Button
-            size="sm"
-            icon={exporting ? undefined : 'export'}
-            onClick={exportCsv}
-            // Pending and blocked are aria-disabled, never native `disabled`:
-            // a focused button that turns disabled drops keyboard focus to
-            // <body>. useLeadCsvExport ignores the click in both states.
-            disabled={csvExportCount === 0}
-            aria-disabled={exporting || exportBlockedReason !== null || undefined}
-            aria-busy={exporting || undefined}
-            data-testid="lead-export"
-            aria-label={exporting
-              ? 'Recording the export in the audit ledger'
-              : `Export ${formatCount(csvExportCount)} ${csvExportNoun} as CSV`}
-            title={exportBlockedReason ?? (csvExportCount === 0 && csvExport.excluded > 0
-              ? 'Every row in scope is excluded by the marketing-eligibility gate'
-              : undefined)}
-          >
-            {exporting
-              ? 'Recording export…'
-              : `Export ${formatCount(csvExportCount)} ${csvExportNoun}`}
-          </Button>
-        </div>
-      </div>
+      <LeadTableHeader
+        headerStatus={headerStatus}
+        singleKeysOn={singleKeysOn}
+        approverActive={approverGate === null}
+        actorEmail={actorEmail}
+        view={view}
+        onViewChange={onViewChange}
+        exportState={exportState}
+        canAccessAdmin={canAccessAdmin}
+        csvExportCount={csvExportCount}
+        csvExportNoun={csvExportNoun}
+        csvExportExcluded={csvExport.excluded}
+        exportBlockedReason={exportBlockedReason}
+        onExport={exportCsv}
+      />
       <LeadTableStatusChips
         growthAgentVerification={growthAgentVerification}
         campaignBindingState={campaignBindingState}
@@ -680,6 +639,24 @@ export function LeadTable({
           shortcutsLive={singleKeysOn}
           samplesShown={samplesShown}
           runKind={bulkRun.progress?.kind ?? null}
+          samplesCoverAllOffers={samplesCoverAllOffers}
+          runNotice={approval.bulkRunCanary && bulkModule ? bulkModule.bulkCanaryNotice(approval.bulkRunCanary) : null}
+          allLoadedSelected={approval.headerCheckboxState.checked}
+          loadedCount={leads.length}
+          totalMatching={totalMatching}
+          campaignHandoff={campaignHandoff && BulkCampaignHandoff ? <BulkCampaignHandoff handoff={campaignHandoff} /> : null}
+          bulkRejectOpen={approval.bulkRejectOpen}
+          onOpenBulkReject={flow.bulkRejectFromToolbar}
+          bulkRejectBtnRef={approval.bulkRejectBtnRef}
+          rejectGate={BulkRejectGate ? (
+            <BulkRejectGate
+              leads={flow.eligibleSelectedIds().map((id) => leadsById.get(id)).filter((lead) => lead !== undefined)}
+              onReject={approval.bulkReject}
+              reasonRef={approval.bulkRejectReasonRef}
+              running={approval.bulkApproving}
+            />
+          ) : null}
+          bulkChunkFailed={bulkChunk.failed && !bulkModule}
           runStatus={!bulkRun.progress
             ? null
             : BulkRunProgress
@@ -697,6 +674,7 @@ export function LeadTable({
                 sampleDraftsRef.current = drafts;
                 setSamplesShown(drafts.size > 0);
               }}
+              onCoverageChange={(coverage) => setSamplesCoverAllOffers(coverage.complete)}
             />
           ) : null}
         />
@@ -713,34 +691,14 @@ export function LeadTable({
           }}
         />
       )}
-      <div className="surface__ft">
-        Showing {formatCount(leads.length)} ranked borrower{leads.length === 1 ? '' : 's'}
-        {totalMatching !== null && <>{' '}of {formatCount(totalMatching)} total matching filters</>}
-        {truncatedAt !== null && totalMatching !== null && totalMatching > leads.length && (
-          <span className="muted"> · capped at {formatCount(truncatedAt)}</span>
-        )}
-        {/* Audit tables-02: sorting reorders only the rows already loaded
-            (the server returns the top-ranked window) and nothing said so;
-            no header could reach toggleSort('rank') either. */}
-        {sortKey !== 'rank' && (
-          <>
-            <span data-testid="lead-sort-scope">
-              · sorted within the loaded {formatCount(sortedLeads.length)}
-              {totalMatching !== null && totalMatching > sortedLeads.length
-                ? `, not across all ${formatCount(totalMatching)} matching`
-                : ''}
-            </span>
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={() => toggleSort('rank')}
-              data-testid="lead-sort-reset"
-            >
-              Reset to rank
-            </button>
-          </>
-        )}
-      </div>
+      <LeadTableFooter
+        loadedCount={leads.length}
+        totalMatching={totalMatching}
+        truncatedAt={truncatedAt}
+        sortKey={sortKey}
+        sortedCount={sortedLeads.length}
+        onResetSort={() => toggleSort('rank')}
+      />
     </div>
   );
 }

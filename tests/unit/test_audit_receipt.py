@@ -76,6 +76,8 @@ EXPECTED_RECEIPT_FIELDS = frozenset(
         "rationale_code",
         "copy_generation_id",
         "copy_hash",
+        "review_mode",
+        "bulk_id",
         "approver",
         "request_id",
         "correlation_id",
@@ -397,3 +399,106 @@ def test_explorer_pins_one_ledger_row_by_event_id_and_refuses_a_malformed_id() -
     )
     assert malformed.status_code == 422
     assert malformed.json()["detail"] == "invalid event_id"
+
+
+# -- The review ledger on the receipt (audit flow-03, tables-07) -------------------------
+
+_BULK_RUN_ID = "44444444-4444-4444-8444-444444444444"
+
+
+def _decision_event(event_type: str, action: str, **payload: Any) -> AuditEvent:
+    return AuditEvent(
+        event_id=f"evt-{uuid4().hex[:12]}",
+        actor=ALICE,
+        action=action,
+        entity_type="approval",
+        entity_id=str(uuid4()),
+        payload_json={"borrower_id": "B-48291", "offer_code": "heloc", **payload},
+        evidence_ids=["ev-1"],
+        created_at=datetime.now(UTC).isoformat(),
+        event_type=event_type,
+    )
+
+
+@pytest.mark.parametrize(
+    "mode", ["individual", "triage", "bulk_sample", "bulk_cohort", "undeclared"]
+)
+def test_approve_receipt_projects_the_review_mode_and_bulk_id(mode: str) -> None:
+    receipt = build_decision_receipt(
+        _decision_event("APPROVE", "outreach.approve", review_mode=mode, bulk_id=_BULK_RUN_ID)
+    )
+
+    assert receipt is not None
+    assert receipt.review_mode == mode
+    assert receipt.bulk_id == _BULK_RUN_ID
+
+
+def test_reject_receipt_projects_its_bulk_id_and_no_review_mode() -> None:
+    receipt = build_decision_receipt(
+        _decision_event(
+            "OUTREACH_REJECT",
+            "outreach.reject",
+            rationale_code="low_intent",
+            bulk_id=_BULK_RUN_ID,
+        )
+    )
+
+    assert receipt is not None
+    assert receipt.decision == "rejected"
+    assert receipt.bulk_id == _BULK_RUN_ID
+    assert receipt.review_mode is None
+
+
+@pytest.mark.parametrize(
+    ("review_mode", "bulk_id"),
+    [
+        ("blind", "call 312-555-0100"),
+        ("INDIVIDUAL", "alice.approver@summit.example"),
+        (True, 42),
+        ("", ""),
+    ],
+)
+def test_a_foreign_review_mode_or_a_bad_bulk_id_is_not_projected(
+    review_mode: object, bulk_id: object
+) -> None:
+    receipt = build_decision_receipt(
+        _decision_event("APPROVE", "outreach.approve", review_mode=review_mode, bulk_id=bulk_id)
+    )
+
+    assert receipt is not None
+    assert receipt.review_mode is None
+    assert receipt.bulk_id is None
+    assert "312-555-0100" not in receipt.model_dump_json()
+
+
+def test_a_legacy_approve_reads_back_as_undeclared() -> None:
+    approved = _approve(ALICE_WRITE)
+
+    receipt = _receipt(approved["audit_event_id"], ALICE_READ).json()
+
+    assert receipt["review_mode"] == "undeclared"
+    assert receipt["bulk_id"] is None
+
+
+def test_reject_receipts_derive_heloc_propensity_assets_from_decision_inputs(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    triggered = build_decision_receipt(
+        _decision_event(
+            "OUTREACH_REJECT",
+            "outreach.reject",
+            rationale_code="low_intent",
+            decision_inputs={"has_heloc_propensity_trigger": True},
+        )
+    )
+    assert triggered is not None
+    assert triggered.evidence_assets == decision_evidence_assets(
+        "heloc", has_heloc_propensity_trigger=True
+    )
+    assert triggered.evidence_assets != decision_evidence_assets("heloc")
+
+    rejected = _reject(ALICE_WRITE)
+    (row,) = audit_store.list(limit=10, event_id=rejected["audit_event_id"])
+    assert (row.payload_json or {}).get("decision_inputs"), (
+        "every OUTREACH_REJECT row now stores the decision inputs the receipt derives from"
+    )

@@ -1044,9 +1044,14 @@ def test_campaign_approval_idempotency_rejects_each_governed_payload_mismatch(
         side_effect=AssertionError("payload mismatch queried mutable UC borrower")
     )
     monkeypatch.setattr(repo, "find_borrower", borrower_fetch)
+    changed: dict[str, object] = {field: changed_value}
+    if field == "bulk_id":
+        # A bulk approval must carry its shared rationale (a schema rule since
+        # the review_mode ledger), so the bulk_id mismatch sends one too.
+        changed["bulk_rationale"] = "A governed bulk rationale"
     conflict = client.post(
         "/api/outreach/approve",
-        json={**request_payload, field: changed_value},
+        json={**request_payload, **changed},
         headers=headers,
     )
 

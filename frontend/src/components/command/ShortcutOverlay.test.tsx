@@ -14,6 +14,7 @@ import { installLocalStorage } from '../../test/installLocalStorage';
 import { OPEN_SHORTCUTS_EVENT, openShortcutOverlay, registerKeyBinding } from '../../lib/keymap';
 import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { ShortcutOverlayHost } from './ShortcutOverlayHost';
+import { leadTableHotkeys } from '../mortgage/LeadTable.keymap';
 
 // The sheet is its own lazy chunk: transform it once up front, so the host's
 // dynamic import resolves in a few microtasks rather than racing a loaded
@@ -83,6 +84,45 @@ describe('ShortcutOverlay', () => {
     // The sheet's own `?` binding is listed with the rest.
     expect(panel.textContent).toContain('Show keyboard shortcuts');
     expect(panel.querySelector('[data-testid="shortcut-sheet-off"]')).toBeNull();
+  });
+
+  it('lists Shift+A and Shift+R on one row, so the table group does not scroll (tables-07)', async () => {
+    const openBulkGate = vi.fn();
+    const openBulkRejectGate = vi.fn();
+    const hotkeys = leadTableHotkeys({
+      approverActive: true,
+      move: vi.fn(),
+      toggleCursorRow: () => false,
+      toggleSelectCursorRow: vi.fn(),
+      extendSelectionToCursor: vi.fn(),
+      reviewCursorRow: vi.fn(),
+      rejectCursorRow: vi.fn(),
+      openBulkGate,
+      openBulkRejectGate,
+    });
+    for (const hotkey of hotkeys) {
+      offs.push(registerKeyBinding({
+        id: `sheet-${hotkey.id}`,
+        scope: 'lead-queue',
+        keys: hotkey.keys,
+        description: hotkey.description,
+        run: (event) => hotkey.run(event, null),
+      }));
+    }
+    act(() => openShortcutOverlay());
+    const panel = await waitForSheet();
+    const bulk = [...panel.querySelectorAll('.cmdk__row')].filter((row) => row.textContent?.includes('selected borrowers'));
+    expect(bulk).toHaveLength(1);
+    expect(bulk[0].textContent).toContain('Approve or reject the selected borrowers');
+    const keys = [...bulk[0].querySelectorAll('kbd')].map((kbd) => kbd.textContent).join(' ');
+    expect(keys).toContain('A');
+    expect(keys).toContain('R');
+
+    const bulkHotkey = hotkeys.find((hotkey) => hotkey.id === 'bulk-approve')!;
+    bulkHotkey.run(new KeyboardEvent('keydown', { key: 'R', shiftKey: true }), null);
+    expect(openBulkRejectGate).toHaveBeenCalledTimes(1);
+    bulkHotkey.run(new KeyboardEvent('keydown', { key: 'A', shiftKey: true }), null);
+    expect(openBulkGate).toHaveBeenCalledTimes(1);
   });
 
   it('opens on ? and closes on Escape', async () => {

@@ -99,6 +99,15 @@ vi.mock('../../lib/api', () => ({
 
 import { LeadTable } from './LeadTable';
 
+/** The reject panel has no default reason (D-approval-flow-d item 13): pick one. */
+function chooseReason(form: Element, code = 'low_intent') {
+  const select = form.querySelector<HTMLSelectElement>('[data-testid="lead-reject-reason"]')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, code);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 // The review is a lazy chunk: transform it up front.
 beforeAll(async () => {
   await import('./LeadApproveReview');
@@ -322,6 +331,7 @@ describe('LeadTable: a decision on the wire locks its row\'s review, across a re
     mount();
     act(() => rejectButton(IDS[0])!.click());
     const panel = container.querySelector<HTMLFormElement>('.decision-panel')!;
+    chooseReason(panel);
     await act(async () => {
       panel.requestSubmit();
     });
@@ -358,6 +368,7 @@ describe('LeadTable: a decision on the wire locks its row\'s review, across a re
     await waitForReview(IDS[0]);
 
     act(() => rejectButton(IDS[0])!.click());
+    chooseReason(container.querySelector<HTMLFormElement>('.decision-panel')!);
     await act(async () => {
       container.querySelector<HTMLFormElement>('.decision-panel')!.requestSubmit();
     });

@@ -1,4 +1,4 @@
-import { useState, type RefObject } from 'react';
+import { useRef, useState, type RefObject } from 'react';
 import type { CallDisposition, SalesTeamMember } from '../../types';
 import { Button, SurfaceTitle } from '../Primitives';
 import { DISPOSITION_OPTIONS, REJECT_REASONS } from './LeadTable.constants';
@@ -11,6 +11,12 @@ import type { LeadDispositionPayload } from './useLeadSalesActions';
  * and the table mounts a form keyed by its borrower id, so a new row always
  * starts clean. The table keeps only which row's form is open and the
  * submit callback.
+ *
+ * The reject form has no default reason (audit tables-07, D-approval-flow-d
+ * item 13, Lead Queue half): it starts on "Choose a reason", Confirm reject
+ * stays aria-disabled until one is picked, and a submit without one moves
+ * focus to Reason and sends nothing. A default ('Low intent') used to be
+ * recorded for a reviewer who never chose it.
  */
 export function LeadRejectPanel({
   borrowerId,
@@ -25,13 +31,19 @@ export function LeadRejectPanel({
   /** The Reason field, which takes focus when the panel opens (tables-03). */
   reasonRef?: RefObject<HTMLSelectElement | null>;
 }) {
-  const [reasonCode, setReasonCode] = useState<RejectReasonCode>('low_intent');
+  const [reasonCode, setReasonCode] = useState<RejectReasonCode | ''>('');
   const [rationale, setRationale] = useState('');
+  const localReasonRef = useRef<HTMLSelectElement | null>(null);
+  const selectRef = reasonRef ?? localReasonRef;
   return (
     <form
       className="decision-panel decision-panel--inline"
       onSubmit={(e) => {
         e.preventDefault();
+        if (reasonCode === '') {
+          selectRef.current?.focus();
+          return;
+        }
         onSubmit(reasonCode, rationale);
       }}
     >
@@ -44,10 +56,12 @@ export function LeadRejectPanel({
       <label className="decision-panel__field">
         <span className="field__label">Reason</span>
         <select
-          ref={reasonRef}
+          ref={selectRef}
           value={reasonCode}
-          onChange={(e) => setReasonCode(e.target.value as RejectReasonCode)}
+          onChange={(e) => setReasonCode(e.target.value as RejectReasonCode | '')}
+          data-testid="lead-reject-reason"
         >
+          <option value="">Choose a reason</option>
           {REJECT_REASONS.map((reason) => (
             <option key={reason.code} value={reason.code}>{reason.label}</option>
           ))}
@@ -77,6 +91,10 @@ export function LeadRejectPanel({
           size="sm"
           icon="cross"
           disabled={reasonCode === 'other_with_text' && rationale.trim().length === 0}
+          // aria-disabled, never native `disabled`, until a reason is picked:
+          // the submit then moves focus to Reason instead of sending.
+          aria-disabled={reasonCode === '' || undefined}
+          data-testid="lead-reject-confirm"
         >
           Confirm reject
         </Button>
