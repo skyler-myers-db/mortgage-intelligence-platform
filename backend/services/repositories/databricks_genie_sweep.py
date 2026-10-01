@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from backend.services.genie_answers import (
     GenieAnswerSection,
+    GenieClaimsSummary,
     GenieMessageResponse,
     GenieProof,
     GenieReasoningStep,
@@ -346,6 +347,42 @@ def _live_follow_ups(sections: list[tuple[str, GenieMessageResponse]]) -> list[s
     return merged[:4] if merged else default_follow_up_questions()
 
 
+def _sweep_claims(
+    question: str,
+    sections: list[tuple[str, GenieMessageResponse]],
+    titles: dict[str, str | None],
+    synthesis: str | None,
+) -> GenieClaimsSummary | None:
+    """genie-10 phase 1: the shipped summary's verified figures plus each
+    shipped section's own sub-turn figures, relabelled with its title."""
+
+    from backend.services.repositories.databricks_genie_numeric import (
+        check_numeric_claims,
+        claims_summary,
+    )
+
+    parts: list[GenieClaimsSummary] = []
+    if synthesis:
+        combined_rows = [row for _, resp in sections for row in (resp.table_rows or [])]
+        summary = claims_summary(check_numeric_claims(synthesis, combined_rows, question))
+        if summary is not None:
+            parts.append(summary)
+    for sub_question, response in sections:
+        own = response.proof.claims if response.proof is not None else None
+        if own is not None:
+            title = (titles.get(sub_question) or sub_question)[:200]
+            items = [item.model_copy(update={"section": title}) for item in own.items]
+            parts.append(own.model_copy(update={"items": items}))
+    total = sum(part.total for part in parts)
+    if total == 0:
+        return None
+    return GenieClaimsSummary(
+        verified=min(sum(part.verified for part in parts), 500),
+        total=min(total, 500),
+        items=[item for part in parts for item in part.items][:40],
+    )
+
+
 def _labeled_sql(sections: list[tuple[str, GenieMessageResponse]]) -> str | None:
     parts: list[str] = []
     for title, response in sections:
@@ -622,6 +659,7 @@ def run_planned_sweep(
         generated_at=anchor.proof.generated_at if anchor.proof is not None else None,
         sql_query=_labeled_sql(sections),
         reasoning_trace=trace,
+        claims=_sweep_claims(question, sections, titles, synthesis),
     )
     return GenieMessageResponse(
         conversation_id=anchor.conversation_id or "",

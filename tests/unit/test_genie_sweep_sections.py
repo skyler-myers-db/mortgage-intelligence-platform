@@ -132,3 +132,29 @@ def test_the_final_response_is_identical_with_and_without_a_sink() -> None:
     left["proof"].pop("elapsed_ms"), right["proof"].pop("elapsed_ms")
     assert left == right
 
+
+def test_the_sweep_proof_counts_the_summary_and_each_section_figures() -> None:
+    from backend.services.genie_answers import GenieClaimsSummary, GenieVerifiedClaim
+
+    class _ClaimRepo(_Repo):
+        def ask_raw(self, prompt: str) -> str | None:
+            if "executive synthesis" in prompt:
+                return "Illinois leads with 48,396 borrowers; act there first."
+            return super().ask_raw(prompt)
+
+        def respond(self, question: str, conversation_id: str | None = None, *,
+                    allow_sweep: bool = True, poll_timeout_s: int | None = None) -> GenieMessageResponse:
+            response = super().respond(question, allow_sweep=allow_sweep, poll_timeout_s=poll_timeout_s)
+            own = GenieClaimsSummary(verified=1, total=1, items=[
+                GenieVerifiedClaim(token="10,914", kind="number", derivation="returned_value")])
+            assert response.proof is not None
+            response.proof = response.proof.model_copy(update={"claims": own})
+            return response
+
+    result = sweep.run_planned_sweep(_ClaimRepo(), _QUESTION)  # type: ignore[arg-type]
+
+    assert result is not None and result.proof is not None and result.proof.claims is not None
+    claims = result.proof.claims
+    assert (claims.verified, claims.total) == (6, 6)
+    assert claims.items[0].section is None and claims.items[0].token == "48,396"
+    assert [item.section for item in claims.items[1:]] == [section.title for section in result.sections]
