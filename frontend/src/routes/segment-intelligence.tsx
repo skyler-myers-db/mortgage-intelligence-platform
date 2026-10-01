@@ -627,7 +627,7 @@ export default function SegmentIntelligence() {
             }}
             headerStatus={(
               <>
-                <LazyStaleDataNote lastGoodAt={staleAt} />
+                <LazyStaleDataNote lastGoodAt={staleAt} compact />
                 <FetchedAt
                   at={leadsQueryState.dataUpdatedAt}
                   subject="ranked borrowers"

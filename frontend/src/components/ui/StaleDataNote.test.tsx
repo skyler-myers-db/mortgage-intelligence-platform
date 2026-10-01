@@ -57,6 +57,18 @@ describe('StaleDataNote', () => {
     expect(text).not.toContain('ago');
   });
 
+  it('beside a header, keeps the age and the failure visible on one line and reads the rest', () => {
+    act(() => root.render(<StaleDataNote lastGoodAt="2026-10-01T09:00:00Z" compact />));
+    const el = note();
+    expect(el?.getAttribute('role')).toBe('status');
+    expect(el?.className).toBe('chip chip--warning stale-note stale-note--compact');
+    expect(el?.querySelector('.chip__label')?.textContent).toBe('Refresh failed; counts from 3 hours ago.');
+    expect(el?.querySelector('.sr-only')?.textContent).toBe(
+      ' The counts update on a later refresh once the warehouse responds.',
+    );
+    expect(el?.querySelector('time')?.getAttribute('dateTime')).toBe('2026-10-01T09:00:00.000Z');
+  });
+
   it('never offers a refresh of its own', () => {
     render('2026-10-01T09:00:00Z');
     expect(note()?.textContent).not.toMatch(/refresh to try again/i);

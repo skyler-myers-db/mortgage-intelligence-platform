@@ -10,7 +10,7 @@ import { lazyModule, useLazyModule } from '../mortgage/useLazyModule';
  */
 const STALE_DATA_NOTE = lazyModule(() => import('./StaleDataNote'));
 
-export function LazyStaleDataNote({ lastGoodAt }: { lastGoodAt: string | number | null }) {
+export function LazyStaleDataNote({ lastGoodAt, compact = false }: { lastGoodAt: string | number | null; compact?: boolean }) {
   const Note = useLazyModule(STALE_DATA_NOTE, lastGoodAt !== null).module?.StaleDataNote ?? null;
-  return lastGoodAt !== null && Note ? <Note lastGoodAt={lastGoodAt} /> : null;
+  return lastGoodAt !== null && Note ? <Note lastGoodAt={lastGoodAt} compact={compact} /> : null;
 }

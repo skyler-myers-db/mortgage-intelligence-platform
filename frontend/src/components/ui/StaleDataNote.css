@@ -18,3 +18,15 @@
   margin-block-start: var(--sp-1);
   max-inline-size: calc(var(--sp-16) * 5);
 }
+/* Beside a header (Segment Intelligence's ranked table, next to FetchedAt):
+   one chip-high line that gives way before its neighbours, so the header
+   row never grows; the visible label ellipsizes, the full sentence stays in
+   the status's text. */
+.stale-note--compact {
+  white-space: nowrap;
+  overflow: hidden;
+  flex: 0 1 auto;
+  margin-inline-start: var(--sp-3);
+}
+.inline-flex:has(> .stale-note--compact) { max-inline-size: 100%; }
+.inline-flex:has(> .stale-note--compact) > :not(.stale-note--compact) { flex: none; }
