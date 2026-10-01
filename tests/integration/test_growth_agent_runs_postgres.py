@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -25,6 +26,8 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+from backend.services.growth_agent_ledger_sql import WATCHLIST_SUMMARY_SQL
+from backend.services.growth_agent_watchlist_summary import briefings_from_rows
 from jobs import lakebase_migrate
 
 pytestmark = pytest.mark.integration
@@ -197,6 +200,64 @@ def test_runs_stay_append_only_and_monitor_id_is_written_only_at_insert(
             monitor_id=str(uuid4()),
         )
     assert orphan.value.sqlstate == "23503"
+
+
+def test_the_watchlist_summary_sql_reads_the_series_with_lag_deltas(conn_kwargs: dict[str, str]) -> None:
+    seed_run, monitor_id = _upgraded_with_a_saved_watchlist(conn_kwargs)
+    with psycopg.connect(**conn_kwargs) as conn:
+        insert_run(conn, actionable_total=44, avg_score=72.0, created_at="2026-09-21T09:00:00Z", monitor_id=monitor_id)
+        # A failed refresh is not part of the series.
+        insert_run(
+            conn,
+            actionable_total=0,
+            avg_score=None,
+            created_at="2026-09-21T12:00:00Z",
+            status="failed",
+            monitor_id=monitor_id,
+        )
+        latest = insert_run(
+            conn, actionable_total=52, avg_score=74.26, created_at="2026-09-22T09:00:00Z", monitor_id=monitor_id
+        )
+        # A one-off run and another actor's run never join the series.
+        insert_run(conn, actionable_total=999, avg_score=99.0, created_at="2026-09-23T09:00:00Z")
+        insert_run(
+            conn,
+            actionable_total=7,
+            avg_score=60.0,
+            created_at="2026-09-23T10:00:00Z",
+            actor="someone.else@example.com",
+        )
+        conn.execute(
+            "UPDATE mip_app.growth_agent_monitors SET last_run_id = %s WHERE monitor_id = %s",
+            (latest, monitor_id),
+        )
+        empty = _insert_monitor_named(conn, "Daily refi brief - TX")
+
+    with psycopg.connect(**conn_kwargs, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            WATCHLIST_SUMMARY_SQL, {"actor_email": _ACTOR, "limit": 20, "points": 8}
+        ).fetchall()
+    briefings = {briefing.monitor_id: briefing for briefing in briefings_from_rows(rows)}
+
+    series = briefings[monitor_id]
+    assert series.run_count == 3
+    assert (series.actionable_total, series.previous_actionable_total, series.actionable_delta) == (52, 44, 8)
+    assert series.avg_score_delta == 2.3
+    assert series.recent_actionable_totals == [40, 44, 52]
+    assert series.previous_run_at == datetime(2026, 9, 21, 9, 0, tzinfo=UTC)
+    assert series.last_run_at == datetime(2026, 9, 22, 9, 0, tzinfo=UTC)
+    assert briefings[empty].run_count == 0 and briefings[empty].recent_actionable_totals == []
+    assert seed_run  # the seed (untagged, pre-series) run is the first point
+
+
+def _insert_monitor_named(conn: psycopg.Connection[Any], name: str) -> str:
+    row = conn.execute(
+        "INSERT INTO mip_app.growth_agent_monitors (actor_email, workflow_id, name, cadence, route) "
+        "VALUES (%s, 'daily_refi_brief', %s, 'weekly', '/lead-queue') RETURNING monitor_id",
+        (_ACTOR, name),
+    ).fetchone()
+    assert row is not None
+    return str(row[0])
 
 
 def test_the_runs_trigger_contract_is_unchanged(conn_kwargs: dict[str, str]) -> None:

@@ -7,12 +7,14 @@ INSERT INTO mip_app.growth_agent_runs (
   avg_rate_spread_bps, avg_equity_pct, route, source_assets,
   tool_steps, policy_checks
   , trace_id, tool_result_hash, specialist_agent, agent_evidence, governance_chips
+  , monitor_id
 ) VALUES (
   %(actor_email)s, %(request_id)s, %(workflow_id)s, %(workflow_title)s, %(criteria)s::jsonb,
   %(broad_total)s, %(actionable_total)s, %(broad_avg_score)s, %(actionable_avg_score)s,
   %(avg_rate_spread_bps)s, %(avg_equity_pct)s, %(route)s, %(source_assets)s,
   %(tool_steps)s::jsonb, %(policy_checks)s::jsonb
   , %(trace_id)s, %(tool_result_hash)s, %(specialist_agent)s, %(agent_evidence)s::jsonb, %(governance_chips)s::jsonb
+  , %(monitor_id)s
 )
 ON CONFLICT (actor_email, request_id) WHERE request_id IS NOT NULL DO NOTHING
 RETURNING run_id, workflow_id, criteria, broad_total, actionable_total,
@@ -48,22 +50,26 @@ LIMIT 1
 # actor-bound Lead Queue handoff proof.
 RUN_LIST_SQL = """
 SELECT run_id, workflow_id, workflow_title, status, broad_total, actionable_total,
-       actionable_avg_score, source_assets, audit_event_id, created_at
+       actionable_avg_score, source_assets, audit_event_id, created_at, monitor_id
 FROM mip_app.growth_agent_runs
 WHERE actor_email = %(actor_email)s
 ORDER BY created_at DESC, run_id DESC
 LIMIT %(limit)s
 """
 
+# seed_run_id (2026_10_01 watchlist series): the run a watchlist was first
+# saved from. Written on INSERT, kept on conflict; MONITOR_REFRESH_BY_ID_SQL
+# never touches it.
 MONITOR_UPSERT_SQL = """
 INSERT INTO mip_app.growth_agent_monitors (
   actor_email, workflow_id, name, cadence, criteria, route,
-  actionable_total, source_assets, last_run_id, updated_at
+  actionable_total, source_assets, last_run_id, seed_run_id, updated_at
 ) VALUES (
   %(actor_email)s, %(workflow_id)s, %(name)s, %(cadence)s, %(criteria)s::jsonb, %(route)s,
-  %(actionable_total)s, %(source_assets)s, %(last_run_id)s, now()
+  %(actionable_total)s, %(source_assets)s, %(last_run_id)s, %(last_run_id)s, now()
 )
 ON CONFLICT (actor_email, workflow_id, name) DO UPDATE SET
+  seed_run_id = COALESCE(mip_app.growth_agent_monitors.seed_run_id, EXCLUDED.seed_run_id),
   cadence = EXCLUDED.cadence,
   criteria = EXCLUDED.criteria,
   route = EXCLUDED.route,
@@ -111,6 +117,17 @@ FROM mip_app.growth_agent_monitors
 WHERE actor_email = %(actor_email)s
   AND last_run_id = %(last_run_id)s
 ORDER BY updated_at DESC
+LIMIT 1
+"""
+
+# A save_monitor run joins an existing watchlist's series: the same key the
+# upsert conflicts on, resolved inside the run's transaction before INSERT.
+MONITOR_ID_BY_KEY_SQL = """
+SELECT monitor_id
+FROM mip_app.growth_agent_monitors
+WHERE actor_email = %(actor_email)s
+  AND workflow_id = %(workflow_id)s
+  AND name = %(name)s
 LIMIT 1
 """
 
@@ -224,4 +241,43 @@ WHERE draft_id = %(draft_id)s
 RETURNING draft_id, actor_email, monitor_id, run_id, channel, title, body,
           generation_mode, generator_label, strategy_summary, status, request_id,
           intent_payload, intent_hash, audit_event_id, created_at, updated_at
+"""
+
+# Audit 2026-09-21 wow-ai-4: the caller's watchlists with their run series,
+# newest-updated first. A series is the actor's COMPLETED runs tagged with the
+# monitor, plus its seed and last run (runs saved before monitor_id tagging).
+# LAG gives each run its predecessor; recency <= 8 feeds the sparkline and
+# recency = 1 is the briefing's latest run. A watchlist with no completed run
+# comes back once with NULL run columns. It never selects route, criteria or
+# actor: a stored route can carry an expiring, actor-bound handoff proof.
+WATCHLIST_SUMMARY_SQL = """
+WITH watchlists AS (
+  SELECT monitor_id, workflow_id, name, cadence, status, seed_run_id, last_run_id, updated_at
+  FROM mip_app.growth_agent_monitors
+  WHERE actor_email = %(actor_email)s
+  ORDER BY updated_at DESC, monitor_id
+  LIMIT %(limit)s
+),
+series AS (
+  SELECT w.monitor_id, r.created_at AS run_at, r.actionable_total, r.actionable_avg_score,
+         LAG(r.created_at) OVER ordered AS previous_run_at,
+         LAG(r.actionable_total) OVER ordered AS previous_actionable_total,
+         LAG(r.actionable_avg_score) OVER ordered AS previous_actionable_avg_score,
+         ROW_NUMBER() OVER (PARTITION BY w.monitor_id ORDER BY r.created_at DESC, r.run_id DESC) AS recency,
+         COUNT(*) OVER (PARTITION BY w.monitor_id) AS run_count
+  FROM watchlists AS w
+  JOIN mip_app.growth_agent_runs AS r
+    ON r.actor_email = %(actor_email)s
+   AND r.status = 'completed'
+   AND (r.monitor_id = w.monitor_id OR r.run_id = w.seed_run_id OR r.run_id = w.last_run_id)
+  WINDOW ordered AS (PARTITION BY w.monitor_id ORDER BY r.created_at, r.run_id)
+)
+SELECT w.monitor_id, w.workflow_id, w.name, w.cadence, w.status,
+       s.recency, s.run_count, s.run_at, s.actionable_total, s.actionable_avg_score,
+       s.previous_run_at, s.previous_actionable_total, s.previous_actionable_avg_score
+FROM watchlists AS w
+LEFT JOIN series AS s
+  ON s.monitor_id = w.monitor_id
+ AND s.recency <= %(points)s
+ORDER BY w.updated_at DESC, w.monitor_id, s.recency ASC
 """

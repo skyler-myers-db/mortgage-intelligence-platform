@@ -8737,6 +8737,17 @@
             ],
             "title": "Created At"
           },
+          "monitor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Id"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -8785,6 +8796,37 @@
           "actionable_total"
         ],
         "title": "GrowthAgentRunSummary",
+        "type": "object"
+      },
+      "GrowthAgentSchedulerStatus": {
+        "additionalProperties": false,
+        "description": "Whether scheduled watchlist runs are on, and why the App knows.",
+        "properties": {
+          "reason": {
+            "enum": [
+              "job_schedule",
+              "no_schedule",
+              "not_configured",
+              "lookup_failed"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "reason"
+        ],
+        "title": "GrowthAgentSchedulerStatus",
         "type": "object"
       },
       "GrowthAgentToolStep": {
@@ -8846,6 +8888,189 @@
           "detail"
         ],
         "title": "GrowthAgentToolStep",
+        "type": "object"
+      },
+      "GrowthAgentWatchlistBriefing": {
+        "additionalProperties": false,
+        "description": "One saved watchlist with its run-over-run change from the ledger.",
+        "properties": {
+          "actionable_avg_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Avg Score"
+          },
+          "actionable_delta": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Delta"
+          },
+          "actionable_total": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Total"
+          },
+          "avg_score_delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Score Delta"
+          },
+          "cadence": {
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "monitor_id": {
+            "title": "Monitor Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "previous_actionable_avg_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Actionable Avg Score"
+          },
+          "previous_actionable_total": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Actionable Total"
+          },
+          "previous_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Run At"
+          },
+          "recent_actionable_totals": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 8,
+            "title": "Recent Actionable Totals",
+            "type": "array"
+          },
+          "run_count": {
+            "minimum": 0.0,
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "workflow_id": {
+            "enum": [
+              "daily_refi_brief",
+              "borrower_dossier_review",
+              "listing_watch",
+              "competitor_recapture_monitor",
+              "high_equity_heloc_watch",
+              "branch_capacity_review",
+              "source_freshness_sentinel",
+              "custom_segment_watch",
+              "live_analysis"
+            ],
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "monitor_id",
+          "workflow_id",
+          "name",
+          "cadence",
+          "status",
+          "run_count"
+        ],
+        "title": "GrowthAgentWatchlistBriefing",
+        "type": "object"
+      },
+      "GrowthAgentWatchlistSummaryResponse": {
+        "additionalProperties": false,
+        "description": "The caller's saved watchlists as briefings, with the scheduler state.",
+        "properties": {
+          "scheduler": {
+            "$ref": "#/components/schemas/GrowthAgentSchedulerStatus"
+          },
+          "watchlists": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentWatchlistBriefing"
+            },
+            "title": "Watchlists",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scheduler",
+          "watchlists"
+        ],
+        "title": "GrowthAgentWatchlistSummaryResponse",
         "type": "object"
       },
       "GrowthAgentWorkflow": {
@@ -20422,6 +20647,53 @@
         ]
       }
     },
+    "/api/growth-agent/monitors/summary": {
+      "get": {
+        "deprecated": true,
+        "description": "Brief the caller's saved watchlists: latest run, change since the previous run.\n\nRead-only Lakebase app state plus the cached scheduler state: it writes no\naudit row, starts no run and reads no Unity Catalog table. Each briefing\nomits the stored route, criteria and actor.",
+        "operationId": "get_api_growth_agent_monitors_summary_growth_agent_watchlist_summary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentWatchlistSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Watchlist Summary",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/growth-agent/monitors/{monitor_id}/notification-drafts": {
       "post": {
         "deprecated": true,
@@ -28360,6 +28632,52 @@
           }
         },
         "summary": "Run Due Growth Agent Monitors All Actors",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/monitors/summary": {
+      "get": {
+        "description": "Brief the caller's saved watchlists: latest run, change since the previous run.\n\nRead-only Lakebase app state plus the cached scheduler state: it writes no\naudit row, starts no run and reads no Unity Catalog table. Each briefing\nomits the stored route, criteria and actor.",
+        "operationId": "get_api_v1_growth_agent_monitors_summary_growth_agent_watchlist_summary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentWatchlistSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Watchlist Summary",
         "tags": [
           "growth-agent"
         ]

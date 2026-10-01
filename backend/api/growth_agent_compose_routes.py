@@ -7,12 +7,13 @@ Behavior is unchanged and pinned by the compose tests in
 ``POST /api/growth-agent/agent/compose`` because both routers share the
 ``/growth-agent`` prefix.
 
-Audit 2026-09-21 ``critic-01`` / ``genie-09``: compose signs every composed
-plan (``plan_digest``) and never runs it; ``POST
-/growth-agent/agent/plan/execute`` runs exactly that reviewed plan, and ``GET
-/growth-agent/runs`` lists the caller's own reviewed-workflow runs. They mount
-here because ``backend/api`` modules may not import each other and this router
-is already registered.
+Audit 2026-09-21 ``critic-01`` / ``genie-09`` / ``wow-ai-4``: compose signs
+every composed plan (``plan_digest``) and never runs it; ``POST
+/growth-agent/agent/plan/execute`` runs exactly that reviewed plan; ``GET
+/growth-agent/runs`` lists the caller's own reviewed-workflow runs; and ``GET
+/growth-agent/monitors/summary`` briefs the caller's saved watchlists. They
+mount here because ``backend/api`` modules may not import each other and this
+router is already registered.
 """
 
 from __future__ import annotations
@@ -28,6 +29,11 @@ from backend.schemas.agent_plan import (
     ExecutePlanRequest,
 )
 from backend.schemas.growth_agent_run_history import GrowthAgentRunSummary
+from backend.schemas.growth_agent_watchlist import (
+    DEFAULT_WATCHLIST_SUMMARY_LIMIT,
+    MAX_WATCHLIST_SUMMARY_LIMIT,
+    GrowthAgentWatchlistSummaryResponse,
+)
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
@@ -44,6 +50,8 @@ from backend.services.growth_agent_run_history import (
     MAX_RUN_LIST_LIMIT,
     list_runs,
 )
+from backend.services.growth_agent_scheduler import growth_agent_scheduler_status
+from backend.services.growth_agent_watchlist_summary import watchlist_summary
 from backend.services.growth_agent_workflows import WORKFLOWS as _WORKFLOWS
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, get_lakebase_client
@@ -195,3 +203,24 @@ def list_growth_agent_runs(
     """
 
     return list_runs(lakebase, actor=resolve_actor(request), limit=limit)
+
+
+@router.get("/monitors/summary", response_model=GrowthAgentWatchlistSummaryResponse)
+def growth_agent_watchlist_summary(
+    request: Request,
+    lakebase: LakebaseDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_WATCHLIST_SUMMARY_LIMIT)] = DEFAULT_WATCHLIST_SUMMARY_LIMIT,
+) -> GrowthAgentWatchlistSummaryResponse:
+    """Brief the caller's saved watchlists: latest run, change since the previous run.
+
+    Read-only Lakebase app state plus the cached scheduler state: it writes no
+    audit row, starts no run and reads no Unity Catalog table. Each briefing
+    omits the stored route, criteria and actor.
+    """
+
+    return watchlist_summary(
+        lakebase,
+        actor=resolve_actor(request),
+        limit=limit,
+        scheduler=growth_agent_scheduler_status(),
+    )

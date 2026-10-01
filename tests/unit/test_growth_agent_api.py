@@ -241,6 +241,15 @@ class _FakeLakebaseClient:
                 ) == params.get("request_id"):
                     return dict(row)
             return None
+        if "SELECT monitor_id\nFROM mip_app.growth_agent_monitors" in sql and "name" in params:
+            # MONITOR_ID_BY_KEY_SQL: a save_monitor run joins the series of the
+            # watchlist with the same (actor, workflow, name) key.
+            for row in self.monitors:
+                if (row.get("actor_email"), row.get("workflow_id"), row.get("name")) == (
+                    params.get("actor_email"), params.get("workflow_id"), params.get("name"),
+                ):
+                    return {"monitor_id": row["monitor_id"]}
+            return None
         if "FROM mip_app.growth_agent_monitors" in sql and "last_run_id" in params:
             for row in self.monitors:
                 if row.get("actor_email") == params.get("actor_email") and str(
@@ -394,6 +403,7 @@ class _FakeLakebaseClient:
                 "actionable_total": params["actionable_total"],
                 "source_assets": params["source_assets"],
                 "last_run_id": params["last_run_id"],
+                "seed_run_id": params["last_run_id"],
                 "created_at": now,
                 "updated_at": now,
             }

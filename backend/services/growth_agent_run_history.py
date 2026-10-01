@@ -52,6 +52,7 @@ def run_summary_from_row(row: dict[str, Any]) -> GrowthAgentRunSummary:
         source_assets=[str(asset) for asset in (row.get("source_assets") or [])],
         audit_event_id=str(audit_event_id) if audit_event_id else None,
         created_at=row.get("created_at"),
+        monitor_id=str(row["monitor_id"]) if row.get("monitor_id") else None,
     )
 
 

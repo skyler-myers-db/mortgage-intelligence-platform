@@ -21,13 +21,22 @@ that module, so declaring the Literal here would be a circular import.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from backend.schemas.growth_agent import GrowthAgentSchedulerState
+from backend.schemas.growth_agent import (
+    GrowthAgentCadence,
+    GrowthAgentSchedulerState,
+    GrowthAgentWorkflowId,
+)
 
 GrowthAgentSchedulerReason = Literal["job_schedule", "no_schedule", "not_configured", "lookup_failed"]
+
+MAX_SPARKLINE_POINTS = 8
+DEFAULT_WATCHLIST_SUMMARY_LIMIT = 20
+MAX_WATCHLIST_SUMMARY_LIMIT = 50
 
 
 class GrowthAgentSchedulerStatus(BaseModel):
@@ -39,8 +48,45 @@ class GrowthAgentSchedulerStatus(BaseModel):
     reason: GrowthAgentSchedulerReason
 
 
+class GrowthAgentWatchlistBriefing(BaseModel):
+    """One saved watchlist with its run-over-run change from the ledger."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    monitor_id: str
+    workflow_id: GrowthAgentWorkflowId
+    name: str
+    cadence: GrowthAgentCadence
+    status: Literal["active", "paused", "disabled"]
+    run_count: int = Field(ge=0)
+    last_run_at: datetime | None = None
+    previous_run_at: datetime | None = None
+    actionable_total: int | None = Field(default=None, ge=0)
+    previous_actionable_total: int | None = Field(default=None, ge=0)
+    actionable_delta: int | None = None
+    actionable_avg_score: float | None = None
+    previous_actionable_avg_score: float | None = None
+    avg_score_delta: float | None = None
+    # Oldest to newest, at most MAX_SPARKLINE_POINTS completed runs.
+    recent_actionable_totals: list[int] = Field(default_factory=list, max_length=MAX_SPARKLINE_POINTS)
+
+
+class GrowthAgentWatchlistSummaryResponse(BaseModel):
+    """The caller's saved watchlists as briefings, with the scheduler state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scheduler: GrowthAgentSchedulerStatus
+    watchlists: list[GrowthAgentWatchlistBriefing]
+
+
 __all__ = [
+    "DEFAULT_WATCHLIST_SUMMARY_LIMIT",
+    "MAX_SPARKLINE_POINTS",
+    "MAX_WATCHLIST_SUMMARY_LIMIT",
     "GrowthAgentSchedulerReason",
     "GrowthAgentSchedulerState",
     "GrowthAgentSchedulerStatus",
+    "GrowthAgentWatchlistBriefing",
+    "GrowthAgentWatchlistSummaryResponse",
 ]
