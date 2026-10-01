@@ -134,6 +134,8 @@ const VIEW_TRANSITION_NAMES = new Set(['mip-route-enter', 'mip-route-exit']);
 const WEB_LOCK_HEADS = new Set(['mip-genie-turn:']);
 /** components/ui/tooltipController.ts: the shared tooltip popup's DOM id, not a storage key. */
 const DOM_IDS = new Set(['mip-tooltip']);
+/** The build-written `<meta name>`s (responsive-10; lib/themePreference.ts, tenantAppearancePlugin.ts, theme-boot.js), not storage keys. */
+const META_NAMES = new Set(['mip-default-theme', 'mip-default-accent', 'mip-lender-mark', 'mip-lender-mark-lender']);
 
 const PRIVILEGED_CLASSES: ReadonlySet<KeyClass> = new Set([
   'PRIVATE_LOCAL',
@@ -296,7 +298,7 @@ function mipLiteral(node: ts.Node): string | null {
 }
 
 function isReviewedNonKey(node: ts.Node, text: string): boolean {
-  if (UC_NAME.test(text) || VIEW_TRANSITION_NAMES.has(text) || DOM_IDS.has(text) || text.endsWith('.csv')) return true;
+  if (UC_NAME.test(text) || VIEW_TRANSITION_NAMES.has(text) || DOM_IDS.has(text) || META_NAMES.has(text) || text.endsWith('.csv')) return true;
   if (!ts.isTemplateHead(node)) return false;
   if (WEB_LOCK_HEADS.has(text)) return true;
   const template = node.parent as ts.TemplateExpression;

@@ -1,10 +1,14 @@
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { bootModulePlugin } from "./src/lib/bootModulePlugin.ts";
 import { shellSkeleton } from "./src/lib/shellSkeleton.ts";
+import { tenantAppearancePlugin, type StagedLenderMark } from "./src/lib/tenantAppearancePlugin.ts";
 
 /** Written beside the build manifest; postbuild moves both to build-meta/. */
 const CHUNK_MODULES_FILE = "build-modules.json";
@@ -127,6 +131,22 @@ function preloadWebfonts(): Plugin {
   };
 }
 
+/**
+ * The lender mark tools/branding/lender_mark.py staged for this build
+ * (responsive-10), hashed here so the plugin can refuse a stage that is not
+ * the file preflight validated. Resolved from this file, not the cwd.
+ */
+function stagedLenderMark(): StagedLenderMark | null {
+  const stage = path.join(path.dirname(fileURLToPath(import.meta.url)), ".branding-stage");
+  for (const ext of ["png", "webp"] as const) {
+    const file = path.join(stage, `lender-mark.${ext}`);
+    if (!existsSync(file)) continue;
+    const bytes = readFileSync(file);
+    return { ext, bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
+  }
+  return null;
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -137,6 +157,16 @@ export default defineConfig({
     preloadWebfonts(),
     bootModulePlugin(),
     shellSkeleton(),
+    // Deploy-time tenant defaults and the reviewed lender mark (responsive-10):
+    // scripts/deploy.sh exports these after preflight; empty means the product
+    // defaults and no mark, so a plain build is unchanged.
+    tenantAppearancePlugin({
+      theme: process.env.MIP_DEFAULT_THEME,
+      accent: process.env.MIP_DEFAULT_ACCENT,
+      markSha256: process.env.MIP_LENDER_MARK_SHA256,
+      lenderName: process.env.MIP_LENDER_NAME,
+      stagedMark: stagedLenderMark(),
+    }),
   ],
   build: {
     // The chunk graph tools/check_frontend_budgets.mjs measures (initial and

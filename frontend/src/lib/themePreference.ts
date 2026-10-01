@@ -54,6 +54,48 @@ export const DEFAULT_THEME_PREFERENCE: ThemePreference = 'dark';
 export const DEFAULT_ACCENT: Accent = 'bright';
 export const DEFAULT_DENSITY: Density = 'comfortable';
 
+/**
+ * Deploy-time tenant defaults and lender mark (audit responsive-10, 12.4 #9;
+ * deviation:tenant-default-appearance, deviation:lender-mark). The build
+ * writes these metas only off the product defaults (lib/tenantAppearancePlugin),
+ * before the theme-boot.js tag; theme-boot.js mirrors the two default names.
+ * A tenant default applies only to a user with no explicit choice: the stored
+ * choice rules come first, then the meta, then DEFAULT_*.
+ */
+export const TENANT_THEME_META = 'mip-default-theme';
+export const TENANT_ACCENT_META = 'mip-default-accent';
+export const LENDER_MARK_META = 'mip-lender-mark';
+export const LENDER_MARK_LENDER_META = 'mip-lender-mark-lender';
+const LENDER_MARK_URL = /^\/branding\/lender-mark\.(png|webp)\?v=[0-9a-f]{8}$/;
+
+function metaContent(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  return document.querySelector(`meta[name="${name}"]`)?.getAttribute('content') ?? null;
+}
+
+/** The tenant-default theme the build carries, else the product default. */
+export function tenantDefaultTheme(): ThemePreference {
+  const raw = metaContent(TENANT_THEME_META);
+  return raw !== null && (THEME_PREFERENCES as readonly string[]).includes(raw) ? (raw as ThemePreference) : DEFAULT_THEME_PREFERENCE;
+}
+
+/** The tenant-default accent the build carries, else the product default. */
+export function tenantDefaultAccent(): Accent {
+  const raw = metaContent(TENANT_ACCENT_META);
+  return raw !== null && (ACCENTS as readonly string[]).includes(raw) ? (raw as Accent) : DEFAULT_ACCENT;
+}
+
+/** The lender the build's mark was validated for, or null. */
+export function lenderMarkLender(): string | null {
+  return metaContent(LENDER_MARK_LENDER_META)?.trim() || null;
+}
+
+/** The build's same-origin lender mark URL, only in its exact emitted shape and with its lender. */
+export function lenderMarkUrl(): string | null {
+  const url = metaContent(LENDER_MARK_META);
+  return url !== null && LENDER_MARK_URL.test(url) && lenderMarkLender() !== null ? url : null;
+}
+
 export const DARK_SCHEME_QUERY = '(prefers-color-scheme: dark)';
 /** The token `<meta name="theme-color">` mirrors: the page background. */
 export const THEME_COLOR_TOKEN = '--bg-0';

@@ -17,9 +17,7 @@ import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
 import { sessionQueryOptions } from '../lib/sessionQuery';
 import {
-  DEFAULT_ACCENT,
   DEFAULT_DENSITY,
-  DEFAULT_THEME_PREFERENCE,
   DENSITIES,
   CONSOLE_OPEN_STORAGE_KEY,
   DENSITY_STORAGE_KEY,
@@ -33,6 +31,8 @@ import {
   subscribeSystemTheme,
   syncThemeColorMeta,
   systemPrefersDark,
+  tenantDefaultAccent,
+  tenantDefaultTheme,
   type Accent,
   type Density,
   type Theme,
@@ -210,12 +210,14 @@ function mapDraftsByBorrowerChannel(items: SavedDraft[]): Record<string, SavedDr
 }
 
 export function AppProvider({ children }: PropsWithChildren) {
+  // An explicit stored choice wins; then the deploy's tenant default (a meta
+  // the build writes, responsive-10); then the product default.
   const [themePreference, setThemePreferenceState] = useState<ThemePreference>(() =>
-    readThemePreference(DEFAULT_THEME_PREFERENCE),
+    readThemePreference(tenantDefaultTheme()),
   );
   const [systemDark, setSystemDark] = useState<boolean>(() => systemPrefersDark());
   const theme = resolveTheme(themePreference, systemDark);
-  const [accent, setAccentState] = useState<Accent>(() => readAccentPreference(DEFAULT_ACCENT));
+  const [accent, setAccentState] = useState<Accent>(() => readAccentPreference(tenantDefaultAccent()));
   const [density, setDensityState] = useState<Density>(() =>
     readStoredChoice(DENSITY_STORAGE_KEY, DEFAULT_DENSITY, DENSITIES),
   );

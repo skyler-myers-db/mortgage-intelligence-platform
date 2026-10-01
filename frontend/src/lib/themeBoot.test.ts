@@ -35,9 +35,13 @@ import {
   THEME_COLOR_TOKEN,
   THEME_PREFERENCES,
   THEME_STORAGE_KEY,
+  TENANT_ACCENT_META,
+  TENANT_THEME_META,
   readAccentPreference,
   readThemePreference,
   resolveTheme,
+  tenantDefaultAccent,
+  tenantDefaultTheme,
 } from './themePreference';
 
 declare const process: { cwd(): string };
@@ -48,6 +52,8 @@ const indexHtml = readFileSync(join(process.cwd(), 'index.html'), 'utf8');
 interface BootScenario {
   stored: Record<string, string>;
   prefersDark: boolean | 'unavailable';
+  /** Build-written tenant defaults (responsive-10), as `<meta name content>` in <head>. */
+  metas?: Record<string, string>;
 }
 
 interface BootResult {
@@ -62,7 +68,8 @@ function runBoot(scenario: BootScenario): BootResult {
   for (const [key, value] of Object.entries(scenario.stored)) window.localStorage.setItem(key, value);
   const root = document.documentElement;
   for (const attr of ['data-theme', 'data-accent', 'data-density', 'data-console']) root.removeAttribute(attr);
-  document.head.innerHTML = '<meta name="theme-color" content="#000000">';
+  document.head.innerHTML = '<meta name="theme-color" content="#000000">'
+    + Object.entries(scenario.metas ?? {}).map(([name, content]) => `<meta name="${name}" content="${content}">`).join('');
   const original = window.matchMedia;
   if (scenario.prefersDark === 'unavailable') {
     Object.defineProperty(window, 'matchMedia', { value: undefined, configurable: true, writable: true });
@@ -199,6 +206,70 @@ describe('theme-boot.js mirrors lib/themePreference.ts', () => {
       prefersDark: false,
     });
     expect(result).toEqual({ theme: 'dark', accent: 'teal', density: 'compact', themeColor: '#04101F' });
+  });
+});
+
+/**
+ * Deploy-time tenant defaults (audit responsive-10, 12.4 #9): a build-written
+ * meta applies only to a user with no explicit choice, after W5a's marker
+ * rules and before the product default; anything outside the accepted lists
+ * is ignored. AppContext reads the same order through tenantDefault*().
+ */
+describe('theme-boot.js applies a tenant default only without an explicit choice', () => {
+  const navy = { [TENANT_ACCENT_META]: 'navy' };
+  const light = { [TENANT_THEME_META]: 'light' };
+
+  it('names the same metas as lib/themePreference.ts', () => {
+    expect(bootSource).toContain(`var TENANT_THEME_META = '${TENANT_THEME_META}';`);
+    expect(bootSource).toContain(`var TENANT_ACCENT_META = '${TENANT_ACCENT_META}';`);
+  });
+
+  it('a navy tenant accent: nothing stored or an unmarked bright -> navy; a marked bright or a stored teal wins', () => {
+    expect(runBoot({ stored: {}, prefersDark: true, metas: navy }).accent).toBe('navy');
+    expect(runBoot({ stored: { 'mip.accent': 'bright' }, prefersDark: true, metas: navy }).accent).toBe('navy');
+    expect(runBoot({ stored: { 'mip.accent': 'bright', 'mip.accentChosen': 'true' }, prefersDark: true, metas: navy }).accent).toBe('bright');
+    expect(runBoot({ stored: { 'mip.accent': 'teal' }, prefersDark: true, metas: navy }).accent).toBe('teal');
+  });
+
+  it('a light tenant theme: an unmarked dark -> light, a marked dark wins; system follows the OS', () => {
+    expect(runBoot({ stored: {}, prefersDark: true, metas: light })).toEqual({
+      theme: 'light', accent: 'bright', density: 'comfortable', themeColor: '#F4F7FA',
+    });
+    expect(runBoot({ stored: { 'mip.theme': 'dark' }, prefersDark: true, metas: light }).theme).toBe('light');
+    expect(runBoot({ stored: { 'mip.theme': 'dark', 'mip.themeChosen': 'true' }, prefersDark: false, metas: light }).theme).toBe('dark');
+    const system = { [TENANT_THEME_META]: 'system' };
+    expect(runBoot({ stored: {}, prefersDark: false, metas: system }).theme).toBe('light');
+    expect(runBoot({ stored: {}, prefersDark: true, metas: system }).theme).toBe('dark');
+  });
+
+  it('ignores a tenant meta outside the accepted values', () => {
+    const garbage = { [TENANT_THEME_META]: 'sepia', [TENANT_ACCENT_META]: 'magenta' };
+    expect(runBoot({ stored: {}, prefersDark: false, metas: garbage })).toEqual({
+      theme: 'dark', accent: 'bright', density: 'comfortable', themeColor: '#04101F',
+    });
+  });
+
+  it('lands exactly what AppContext reads with tenant metas, for every stored / marker combination', () => {
+    for (const metas of [light, navy, { ...light, ...navy }, { [TENANT_THEME_META]: 'system', [TENANT_ACCENT_META]: 'red' }]) {
+      for (const theme of [undefined, 'dark', 'light', 'system']) for (const themeMark of [undefined, 'true']) {
+        for (const accent of [undefined, 'bright', 'teal']) for (const accentMark of [undefined, 'true']) {
+          for (const prefersDark of [true, false]) {
+            const stored: Record<string, string> = {};
+            if (theme) stored[THEME_STORAGE_KEY] = theme;
+            if (themeMark) stored[THEME_CHOICE_KEY] = themeMark;
+            if (accent) stored[ACCENT_STORAGE_KEY] = accent;
+            if (accentMark) stored[ACCENT_CHOICE_KEY] = accentMark;
+            const booted = runBoot({ stored, prefersDark, metas });
+            // runBoot left the same storage and metas in place for the TS readers.
+            const expected = {
+              theme: resolveTheme(readThemePreference(tenantDefaultTheme()), prefersDark),
+              accent: readAccentPreference(tenantDefaultAccent()),
+            };
+            expect({ theme: booted.theme, accent: booted.accent }, JSON.stringify({ stored, prefersDark, metas })).toEqual(expected);
+          }
+        }
+      }
+    }
   });
 });
 

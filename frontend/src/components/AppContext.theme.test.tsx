@@ -138,6 +138,27 @@ describe('AppProvider theme preference', () => {
     expect(storedPreferences()).toEqual({});
   });
 
+  it('a deploy tenant default (light / navy) applies with nothing stored and writes nothing; a marked choice wins', async () => {
+    // responsive-10: the build writes these metas only off the product defaults.
+    document.head.insertAdjacentHTML('beforeend', '<meta name="mip-default-theme" content="light"><meta name="mip-default-accent" content="navy">');
+    installMatchMedia(true);
+    await mount();
+    expect(probe()).toBe('light/light');
+    expect(document.querySelector('[data-testid="look"]')?.textContent).toBe('navy/comfortable');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    expect(storedPreferences()).toEqual({});
+
+    act(() => root.unmount());
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    window.localStorage.setItem('mip.theme', 'dark');
+    window.localStorage.setItem('mip.themeChosen', 'true');
+    window.localStorage.setItem('mip.accent', 'bright');
+    window.localStorage.setItem('mip.accentChosen', 'true');
+    await mount();
+    expect(probe()).toBe('dark/dark');
+    expect(document.querySelector('[data-testid="look"]')?.textContent).toBe('bright/comfortable');
+  });
+
   it('a chosen System writes the preference and its marker, then follows OS flips', async () => {
     const media = installMatchMedia(false);
     await mount();

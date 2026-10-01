@@ -200,6 +200,44 @@ def test_both_shells_load_the_boot_watchdog_after_theme_boot_and_before_the_modu
         assert at < html.index('<script type="module"'), f"{shell}: before the module scripts"
 
 
+_TENANT_META = re.compile(r'<meta name="(mip-[a-z-]+)" content="([^"]*)">')
+
+
+def _expected_tenant_metas() -> dict[str, str]:
+    """The ``mip-*`` metas this checkout's environment asks the build for (responsive-10)."""
+    expected: dict[str, str] = {}
+    theme = os.environ.get("MIP_DEFAULT_THEME", "").strip()
+    accent = os.environ.get("MIP_DEFAULT_ACCENT", "").strip()
+    if theme and theme != "dark":
+        expected["mip-default-theme"] = theme
+    if accent and accent != "bright":
+        expected["mip-default-accent"] = accent
+    return expected
+
+
+def test_both_shells_carry_the_tenant_metas_before_theme_boot() -> None:
+    """Audit responsive-10 / 12.4 #9: the deploy-time tenant defaults reach both
+    shells identically, each at most once and before the theme-boot tag; a
+    default build carries none and no ``dist/branding``."""
+    _built_entry_chunk()
+    expected = _expected_tenant_metas()
+    marked = bool(os.environ.get("MIP_LENDER_MARK_SHA256", "").strip())
+    found_by_shell = []
+    for shell in ("index.html", "index.home.html"):
+        html = (DIST / shell).read_text(encoding="utf-8")
+        found = _TENANT_META.findall(html)
+        names = [name for name, _ in found]
+        assert len(names) == len(set(names)), f"{shell}: a tenant meta repeats"
+        boot = html.index('<script src="/theme-boot.js?v=')
+        for name, content in found:
+            assert html.index(f'<meta name="{name}" content="{content}">') < boot, f"{shell}: {name} after theme-boot"
+        found_by_shell.append(found)
+        assert {name: content for name, content in found if not name.startswith("mip-lender-mark")} == expected
+        assert any(name == "mip-lender-mark" for name in names) is marked
+    assert found_by_shell[0] == found_by_shell[1]
+    assert (DIST / "branding").exists() is marked
+
+
 _MODULEPRELOAD = re.compile(r'<link rel="modulepreload" crossorigin href="/(assets/[^"]+\.js)">')
 
 
