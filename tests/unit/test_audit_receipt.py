@@ -5,7 +5,8 @@ route wrote (through the in-process audit ledger), never echoed from the
 request. Pinned here:
 
 * actor isolation -- the approver reads their own receipt, another actor
-  gets 403, an admin reads any;
+  gets 403, an admin or a configured read-only auditor reads any
+  (D-audit-reads-c3);
 * 404 for an unknown, malformed or non-decision event id; 401 without an
   edge-authenticated identity;
 * the field allowlist -- a closed key set, so a new audit metadata column
@@ -13,7 +14,8 @@ request. Pinned here:
 * the evidence-asset registry the receipt cites equals the Offer
   Orchestrator's for every offer branch;
 * the Lakebase store filters by ``audit_id`` and never casts a non-UUID;
-* a receipt read appends no audit row.
+* an own receipt read appends no audit row; a served read of ANOTHER
+  actor's receipt appends exactly one ``VIEW_AUDIT_LEDGER`` row naming it.
 """
 
 from __future__ import annotations
@@ -183,18 +185,93 @@ def test_admin_reads_any_receipt_and_sees_the_stored_approver() -> None:
     assert response.json()["approver"] == ALICE
 
 
-def test_reading_a_receipt_writes_no_audit_row(audit_store: InMemoryAuditStore) -> None:
-    # The receipt is a pure read of the ledger: re-reading, or an admin
-    # reading it, must never append a row (no audit side effect on a read
-    # the UI issues after every decision).
+def _with_uuid_event_id(audit_store: InMemoryAuditStore, event_id: str) -> str:
+    """Give a stored row the UUID id Lakebase issues (the store's own are
+    ``evt-`` ids, which the opaque-id policy on ``read_audit_event_id`` refuses).
+    """
+    new_id = str(uuid4())
+    for index, event in enumerate(audit_store._events):
+        if event.event_id == event_id:
+            audit_store._events[index] = event.model_copy(update={"event_id": new_id})
+            return new_id
+    raise AssertionError(f"no stored row {event_id}")
+
+
+def _ledger_reads(audit_store: InMemoryAuditStore, *event_ids: str) -> list[AuditEvent]:
+    """VIEW_AUDIT_LEDGER rows naming these ids (the session store is shared)."""
+    return [
+        row
+        for row in audit_store.list(limit=100_000)
+        if row.event_type == "VIEW_AUDIT_LEDGER" and row.entity_id in event_ids
+    ]
+
+
+def test_reading_your_own_receipt_writes_no_audit_row(audit_store: InMemoryAuditStore) -> None:
+    # The actor's own receipt is the read the UI issues after every decision:
+    # re-reading it must never append a row.
     approved = _approve(ALICE_WRITE)
+    event_id = _with_uuid_event_id(audit_store, approved["audit_event_id"])
     rows_before = len(audit_store.list(limit=100_000))
 
-    assert _receipt(approved["audit_event_id"], ALICE_READ).status_code == 200
-    assert _receipt(approved["audit_event_id"], ALICE_READ).status_code == 200
-    assert _receipt(approved["audit_event_id"], CAROL_ADMIN).status_code == 200
+    assert _receipt(event_id, ALICE_READ).status_code == 200
+    assert _receipt(event_id, ALICE_READ).status_code == 200
 
     assert len(audit_store.list(limit=100_000)) == rows_before
+
+
+def test_an_admin_reading_another_actors_receipt_writes_one_ledger_read(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    approved = _approve(ALICE_WRITE)
+    event_id = _with_uuid_event_id(audit_store, approved["audit_event_id"])
+
+    assert _receipt(event_id, CAROL_ADMIN).status_code == 200
+
+    (row,) = _ledger_reads(audit_store, event_id)
+    assert row.actor == CAROL
+    assert (row.action, row.entity_type, row.entity_id) == ("view_audit_ledger", "audit_ledger", event_id)
+    assert row.payload_json == {
+        "ledger_surface": "receipt",
+        "has_cursor": False,
+        "returned_row_count": 1,
+        "read_audit_event_id": event_id,
+    }
+
+
+def test_an_auditor_reads_another_actors_receipt_and_the_read_is_recorded(
+    audit_store: InMemoryAuditStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    approved = _approve(ALICE_WRITE)
+    event_id = _with_uuid_event_id(audit_store, approved["audit_event_id"])
+    monkeypatch.setattr(settings, "auditor_emails", BOB)
+
+    response = _receipt(event_id, BOB_READ)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["approver"] == ALICE
+    (row,) = _ledger_reads(audit_store, event_id)
+    assert row.actor == BOB
+    assert row.payload_json["read_audit_event_id"] == event_id
+
+
+def test_a_refused_or_not_a_decision_receipt_writes_no_ledger_read(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    approved = _approve(ALICE_WRITE)
+    event_id = _with_uuid_event_id(audit_store, approved["audit_event_id"])
+    other = audit_store.write(
+        actor=ALICE,
+        action="view_leads",
+        entity_type="lead_list",
+        entity_id="queue",
+        event_type="VIEW_LEADS",
+    )
+    other_id = _with_uuid_event_id(audit_store, other.event_id)
+
+    assert _receipt(event_id, BOB_READ).status_code == 403
+    assert _receipt(other_id, CAROL_ADMIN).status_code == 404
+
+    assert _ledger_reads(audit_store, event_id, other_id) == []
 
 
 # A fixed, well-formed UUID no write ever issued: a ``uuid4()`` here would

@@ -1,11 +1,14 @@
 """Audit explorer backend (audit tables-10): facets, count and the export receipt.
 
-``GET /api/v1/audit/facets`` and ``GET /api/v1/audit/count`` are admin-gated,
-AUDIT-FREE reads of ``mip_app.action_audit``: they write no ledger row and run
-no INSERT. ``/count`` builds exactly the WHERE ``/events/page`` pages through
-(the shared ``audit_filter_clauses``). ``POST /api/v1/audit/export-receipt``
-verifies the explorer's declaration against the event ids it sends and writes
-exactly one server-owned ``AUDIT_EXPORT`` row with four metadata keys.
+``GET /api/v1/audit/facets`` and ``GET /api/v1/audit/count`` admit an
+administrator or a configured read-only auditor (D-audit-reads-c3) and are
+RECORDED reads of ``mip_app.action_audit``: each served read writes exactly
+one ``VIEW_AUDIT_LEDGER`` row through the audit store, while the ledger SQL
+itself stays INSERT-free. ``/count`` builds exactly the WHERE ``/events/page``
+pages through (the shared ``audit_filter_clauses``). ``POST
+/api/v1/audit/export-receipt`` (admin only) verifies the explorer's
+declaration against the event ids it sends and writes exactly one
+server-owned ``AUDIT_EXPORT`` row with four metadata keys.
 """
 
 from __future__ import annotations
@@ -159,14 +162,36 @@ def test_non_admins_are_refused(
     assert lakebase.statements == []
 
 
-@pytest.mark.parametrize("path", ["/api/v1/audit/facets", "/api/v1/audit/count"])
-def test_explorer_reads_are_audit_free(
-    path: str, audit_store: InMemoryAuditStore, lakebase: _RecordingLakebase
+@pytest.mark.parametrize(
+    ("path", "surface"),
+    [("/api/v1/audit/facets", "facets"), ("/api/v1/audit/count", "count")],
+)
+def test_explorer_facet_and_count_reads_write_exactly_one_view_audit_ledger_row(
+    path: str, surface: str, audit_store: InMemoryAuditStore, lakebase: _RecordingLakebase
 ) -> None:
+    """Reading the ledger is itself recorded; the ledger SQL stays INSERT-free."""
+
     response = client.get(path, headers=ADMIN_HEADERS)
 
     assert response.status_code == 200, response.text
-    assert audit_store.list(limit=10) == [], "a read must never write an audit row"
+    rows = audit_store.list(limit=10)
+    assert len(rows) == 1, "one served read writes exactly one row"
+    row = rows[0]
+    assert (row.event_type, row.action, row.entity_type) == (
+        "VIEW_AUDIT_LEDGER",
+        "view_audit_ledger",
+        "audit_ledger",
+    )
+    assert row.actor == ADMIN
+    assert row.payload_json["ledger_surface"] == surface
+    assert row.payload_json["has_cursor"] is False
+    assert re.fullmatch(r"[0-9a-f]{64}", row.payload_json["filter_fingerprint"])
+    assert set(row.payload_json) <= {
+        "ledger_surface",
+        "has_cursor",
+        "returned_row_count",
+        "filter_fingerprint",
+    }
     assert lakebase.statements, "the read reached the ledger"
     for sql, _params in lakebase.statements:
         assert "INSERT" not in sql.upper()
@@ -438,5 +463,8 @@ def test_the_deprecated_unversioned_alias_serves_the_same_route(
     response = client.request(method, path, json=_declaration(), headers=ADMIN_HEADERS)
 
     assert response.status_code == 200, response.text
-    expected_rows = 1 if method == "POST" else 0
-    assert len(audit_store.list(limit=10)) == expected_rows
+    # The POST writes its AUDIT_EXPORT receipt; each GET is a recorded
+    # VIEW_AUDIT_LEDGER read (D-audit-reads-c3).
+    rows = audit_store.list(limit=10)
+    assert len(rows) == 1
+    assert rows[0].event_type == ("AUDIT_EXPORT" if method == "POST" else "VIEW_AUDIT_LEDGER")

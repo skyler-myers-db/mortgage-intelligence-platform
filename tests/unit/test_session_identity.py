@@ -57,6 +57,7 @@ def test_session_identity_matches_the_actor_the_approver_gate_admits(
     assert body == {
         "can_access_admin": False,
         "can_approve": True,
+        "can_read_audit": False,
         "actor_email": _ACTOR,
         "actor_display_name": "Approver One",
         "role_labels": ["Approver"],
@@ -102,6 +103,7 @@ def test_session_ignores_forwarded_identity_when_the_edge_is_untrusted(
     assert body == {
         "can_access_admin": False,
         "can_approve": False,
+        "can_read_audit": False,
         "actor_email": None,
         "actor_display_name": None,
         "role_labels": [],

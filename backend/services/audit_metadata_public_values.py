@@ -58,6 +58,7 @@ from backend.services.audit_metadata_policy import (
     _RESULT_FILTER_NUMERIC_BOUNDS,
     _SALES_DISPOSITION_OUTCOMES,
     _SALES_STRATEGIES,
+    LEDGER_SURFACES,
     AuditMetadataValueViolation,
     _metadata_values_for,
 )
@@ -647,3 +648,19 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                 ) from exc
             if not isinstance(count, int) or count < 0 or count > 500:
                 raise AuditMetadataValueViolation(field, "must contain bounded integer counts")
+    # VIEW_AUDIT_LEDGER (D-audit-reads-c3): a closed surface token, a real
+    # boolean and a bounded count. read_audit_event_id takes the opaque-id
+    # rule above and filter_fingerprint the SHA-256 rule.
+    for field, value in _metadata_values_for(metadata, {"ledger_surface"}):
+        if value is not None and str(value) not in LEDGER_SURFACES:
+            raise AuditMetadataValueViolation(field, "must be a governed ledger surface")
+    for field, value in _metadata_values_for(metadata, {"has_cursor"}):
+        if value is not None and not isinstance(value, bool):
+            raise AuditMetadataValueViolation(field, "must be a boolean")
+    for field, value in _metadata_values_for(metadata, {"returned_row_count"}):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc

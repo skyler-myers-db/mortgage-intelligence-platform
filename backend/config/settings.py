@@ -420,6 +420,16 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("MIP_APPROVER_IDENTITIES", "APPROVER_IDENTITIES"),
     )
+    # Read-only Auditor role (D-audit-reads-c3): exact identities/emails may read
+    # the full audit ledger; no deployed group path; empty admits nobody.
+    auditor_emails: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIP_AUDITOR_EMAILS", "AUDITOR_EMAILS"),
+    )
+    auditor_identities: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIP_AUDITOR_IDENTITIES", "AUDITOR_IDENTITIES"),
+    )
 
     # R5-09 trust boundary. Databricks Apps is the authoritative
     # identity edge: it strips inbound ``X-Forwarded-*`` headers and
