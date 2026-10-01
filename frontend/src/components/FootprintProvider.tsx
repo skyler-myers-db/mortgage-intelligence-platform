@@ -48,7 +48,7 @@ export interface FootprintState {
 }
 
 /** Response shape from `GET /api/config/footprint`. */
-interface FootprintPayload {
+export interface FootprintPayload {
   states: FootprintState[];
   geography_scope?: GeographyScopePayload | null;
   using_fallback?: boolean;

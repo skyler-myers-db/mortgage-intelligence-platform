@@ -22,7 +22,7 @@ export interface GenieJobTurn {
 /** The ids a cancel names; never the question. */
 export type GenieCancelTurn = Omit<GenieJobTurn, 'question'>;
 
-interface GenieCancelBody {
+export interface GenieCancelBody {
   conversation_id: string;
   message_id: string;
   progress_token: string;
@@ -46,11 +46,21 @@ function turnBody(turn: GenieJobTurn): GenieJobTurnBody {
   };
 }
 
+export interface GenieCompleteAsyncJobBody extends GenieJobTurnBody {
+  respond_async: true;
+}
+
+export interface GenieCompletionJobStatusRequest extends GenieJobTurnBody {
+  job_id: string;
+}
+
+export type GenieCompleteAsyncResult = GenieCompletionJobStatus | GenieResult;
+
 export const genieJobsApi = {
   /** 202 + the job's status; an older server ignores `respond_async` and
    *  answers 200 with the governed answer itself. */
   genieCompleteAsync: (turn: GenieJobTurn, signal?: AbortSignal) =>
-    postJson<GenieCompletionJobStatus | GenieResult, GenieJobTurnBody & { respond_async: true }>(
+    postJson<GenieCompleteAsyncResult, GenieCompleteAsyncJobBody>(
       '/api/genie/message/complete',
       { ...turnBody(turn), respond_async: true },
       signal,
@@ -58,7 +68,7 @@ export const genieJobsApi = {
 
   /** One poll of the caller's own job (a POST: the token never lands in a URL). */
   genieJobStatus: (turn: GenieJobTurn, jobId: string, signal?: AbortSignal) =>
-    postJson<GenieCompletionJobStatus, GenieJobTurnBody & { job_id: string }>(
+    postJson<GenieCompletionJobStatus, GenieCompletionJobStatusRequest>(
       '/api/genie/message/status',
       { ...turnBody(turn), job_id: jobId },
       signal,

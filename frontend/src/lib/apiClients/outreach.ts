@@ -9,6 +9,52 @@
 import type { ApproveResult, RejectResult, OutreachDraftResult, ReviewMode } from '../apiTypes';
 import { _newRequestId, postJson } from '../apiTransport';
 
+/** The `/api/outreach/approve` body as the client sends it. */
+export interface OutreachApproveRequest {
+  borrower_id: string;
+  actor: string;
+  offer_code?: string | null;
+  evidence_ids?: string[];
+  draft_subject?: string | null;
+  draft_body?: string | null;
+  draft_generation_id?: string | null;
+  draft_response_hash?: string | null;
+  draft_source_refreshed_at?: string | null;
+  rationale?: string | null;
+  bulk_id?: string | null;
+  bulk_rationale?: string | null;
+  review_mode?: ReviewMode | null;
+  channel?: 'email' | 'sms' | 'direct_mail';
+  campaign_id?: string | null;
+  variant_name?: string | null;
+  assigned_to_email?: string | null;
+  follow_up_in_days?: number | null;
+  request_id: string;
+}
+
+/** The `/api/outreach/reject` body as the client sends it. */
+export interface OutreachRejectRequest {
+  borrower_id: string;
+  actor: string;
+  offer_code?: string | null;
+  evidence_ids?: string[];
+  rationale_code: string;
+  rationale?: string | null;
+  channel?: 'email' | 'sms' | 'direct_mail';
+  campaign_id?: string | null;
+  variant_name?: string | null;
+  bulk_id?: string | null;
+  request_id: string;
+}
+
+/** The `/api/outreach/draft` body. */
+export interface OutreachDraftRequest {
+  borrower_id: string;
+  channel: 'email' | 'sms' | 'direct_mail';
+  campaign_id: string | null;
+  variant_name: string | null;
+}
+
 export const outreachApi = {
   approve: (
     borrower_id: string,
@@ -40,30 +86,7 @@ export const outreachApi = {
     } = {},
     signal?: AbortSignal,
   ) =>
-    postJson<
-      ApproveResult,
-      {
-        borrower_id: string;
-        actor: string;
-        offer_code?: string | null;
-        evidence_ids?: string[];
-        draft_subject?: string | null;
-        draft_body?: string | null;
-        draft_generation_id?: string | null;
-        draft_response_hash?: string | null;
-        draft_source_refreshed_at?: string | null;
-        rationale?: string | null;
-        bulk_id?: string | null;
-        bulk_rationale?: string | null;
-        review_mode?: ReviewMode | null;
-        channel?: 'email' | 'sms' | 'direct_mail';
-        campaign_id?: string | null;
-        variant_name?: string | null;
-        assigned_to_email?: string | null;
-        follow_up_in_days?: number | null;
-        request_id: string;
-      }
-    >(
+    postJson<ApproveResult, OutreachApproveRequest>(
       '/api/outreach/approve',
       {
         borrower_id,
@@ -120,22 +143,7 @@ export const outreachApi = {
     },
     signal?: AbortSignal,
   ) =>
-    postJson<
-      RejectResult,
-      {
-        borrower_id: string;
-        actor: string;
-        offer_code?: string | null;
-        evidence_ids?: string[];
-        rationale_code: string;
-        rationale?: string | null;
-        channel?: 'email' | 'sms' | 'direct_mail';
-        campaign_id?: string | null;
-        variant_name?: string | null;
-        bulk_id?: string | null;
-        request_id: string;
-      }
-    >(
+    postJson<RejectResult, OutreachRejectRequest>(
       '/api/outreach/reject',
       {
         borrower_id,
@@ -166,12 +174,7 @@ export const outreachApi = {
     signal?: AbortSignal,
     campaign?: { campaign_id: string; variant_name: string },
   ) =>
-    postJson<OutreachDraftResult, {
-      borrower_id: string;
-      channel: 'email' | 'sms' | 'direct_mail';
-      campaign_id: string | null;
-      variant_name: string | null;
-    }>(
+    postJson<OutreachDraftResult, OutreachDraftRequest>(
       '/api/outreach/draft',
       {
         borrower_id,

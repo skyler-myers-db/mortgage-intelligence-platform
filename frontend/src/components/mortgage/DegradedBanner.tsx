@@ -51,8 +51,6 @@ export { degradedDependency };
 export interface HealthPayload {
   status?: 'ok' | 'degraded';
   mode?: string;
-  warehouse_id?: string | null;
-  app_env?: string;
   /** `resuming` (a serverless warehouse waking from auto-stop) is not an
    *  outage and never produces a banner; the topbar pill shows it calmly. */
   dependencies?: Record<string, 'up' | 'down' | 'resuming'>;
