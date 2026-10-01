@@ -8,12 +8,12 @@
  * 1440x900. Every clearance test has its non-vacuity twin (the same walk with
  * the clearance's CSS zeroed finds a covered stop).
  *
- * WebKit known defect (manual check 2026-09-30): element.focus() on a pinned
- * (position: sticky, inline-end) Approve / Reject scrolls .tbl-wrap to its
- * end (scrollLeft 0 -> 284 with the Console open), which the pinned
- * controls' scroll-margin stops in Chromium. The fix belongs to
- * w5-approval-core (useTableScrollClearance.ts); the invariance test carries
- * a WebKit fixme naming it, which the integrator lifts at that lane's merge.
+ * WebKit defect found by the 2026-09-30 manual check: element.focus() on a
+ * pinned (position: sticky, inline-end) Approve / Reject scrolled .tbl-wrap
+ * to its end (scrollLeft 0 -> 284 with the Console open); the pinned
+ * controls' scroll-margin stops it only in Chromium. w5-approval-core's guard
+ * in useTableScrollClearance.ts restores the offset after WebKit's reveal,
+ * and the invariance test below now runs in both engines.
  */
 import type { Locator, Page } from '@playwright/test';
 import { LEADS, PRIMARY_BORROWER } from './data/borrowers';
@@ -38,8 +38,6 @@ import {
 import { expect, test } from './test';
 
 const ELIGIBLE = PRIMARY_BORROWER.borrower_id;
-const PINNED_FOCUS_FIXME =
-  'w5-approval-core · manual-check-2026-09-30 WebKit pinned-focus scroll: focus() on a pinned Approve/Reject scrolls .tbl-wrap to its end (scrollLeft 0 -> 284)';
 
 async function expand(page: Page, borrowerId: string): Promise<void> {
   const toggle = page.getByRole('button', { name: `Toggle preview for lead ${borrowerId}` });
@@ -342,8 +340,7 @@ test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
     });
   }
 
-  test('a focus on a pinned Approve or Reject leaves the table\'s scrollLeft where it was, Console open', async ({ app, browserName, mockApi, page }) => {
-    test.fixme(browserName === 'webkit', PINNED_FOCUS_FIXME);
+  test('a focus on a pinned Approve or Reject leaves the table\'s scrollLeft where it was, Console open', async ({ app, mockApi, page }) => {
     registerQueueLayoutLeads(mockApi);
     await app.gotoRoute('/lead-queue');
     await app.openConsole();
