@@ -167,6 +167,24 @@ async function expectAuditRowMatchesGrowthRun(
   }
 }
 
+/** One GROWTH_AGENT_MONITOR_SAVE row for exactly this run, with its hash. */
+async function expectAuditRowMatchesWatchlistSave(
+  request: APIRequestContext,
+  run: GrowthAgentRunResponse,
+): Promise<void> {
+  const resp = await request.get(`${API_URL}/api/audit/events?limit=100&event_type=GROWTH_AGENT_MONITOR_SAVE`, {
+    headers: ADMIN_AUTH_HEADERS,
+  });
+  expect(resp.status(), 'GET /api/audit/events for watchlist saves returned non-200').toBe(200);
+  const rows = (await resp.json()) as AuditRow[];
+  const matches = rows.filter((item) => item.payload_json?.run_id === run.run_id);
+  expect(matches, `no GROWTH_AGENT_MONITOR_SAVE row for run ${run.run_id}`).toHaveLength(1);
+  const payload = matches[0].payload_json ?? {};
+  expect(payload.workflow_id).toBe(run.workflow.id);
+  expect(payload.tool_result_hash).toBe(run.tool_result_hash);
+  expect(payload.actionable_total).toBe(run.actionable_total);
+}
+
 async function agentOrchestratorIsClaimable(request: APIRequestContext): Promise<boolean> {
   if (EXPECT_AGENT_FRAMEWORK) {
     return true;
@@ -502,25 +520,33 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   await expectLeadQueueHandoffMatchesActionableTotal(request, run);
   await expectAuditRowMatchesGrowthRun(request, run);
 
-  await page
-    .getByLabel('Mortgage Growth Agent prompt')
-    .fill('Find prime refinance opportunities for a branch manager monitor.');
-  const promptSavePromise = page.waitForResponse((response) =>
+  // Save as watchlist (audit 2026-09-21 genie-09 part 1): saves exactly the run
+  // shown, bound to its tool_result_hash. Nothing plans or runs again.
+  let agentRunPostsAfterSave = 0;
+  page.on('request', (sent) => {
+    if (sent.method() === 'POST' && /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(sent.url())) {
+      agentRunPostsAfterSave += 1;
+    }
+  });
+  const savePromise = page.waitForResponse((response) =>
     response.request().method() === 'POST' &&
-    /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(response.url()),
+    response.url().includes(`/growth-agent/runs/${encodeURIComponent(run.run_id)}/monitors`),
     { timeout: 90_000 },
   );
-  await page.getByRole('button', { name: 'Save reviewed watchlist' }).click();
-  const promptSaveResponse = await promptSavePromise;
-  expect(promptSaveResponse.status(), 'prompt-routed Growth Agent save returned non-200').toBe(200);
-  const savedRun = (await promptSaveResponse.json()) as GrowthAgentRunResponse;
-  expectReviewedPlanningEvidence(savedRun, { expectAgentFramework });
-  expect(savedRun.monitor?.name).toContain('Mortgage Growth Agent');
-  expect(savedRun.monitor?.actionable_total).toBe(savedRun.actionable_total);
-  expect(savedRun.monitor?.name.toLowerCase()).not.toContain('find prime refinance');
-  await expect(page.getByLabel('Saved Growth Agent watchlists')).toContainText(savedRun.monitor?.name ?? '');
-  await expectLeadQueueHandoffMatchesActionableTotal(request, savedRun);
-  await expectAuditRowMatchesGrowthRun(request, savedRun);
+  await page.getByLabel('Latest Growth Agent run').getByRole('button', { name: 'Save as watchlist' }).click();
+  const saveResponse = await savePromise;
+  expect(saveResponse.status(), 'Save as watchlist returned non-200').toBe(200);
+  const savedMonitor = (await saveResponse.json()) as GrowthAgentMonitorResponse;
+  expect(savedMonitor.last_run_id).toBe(run.run_id);
+  expect(savedMonitor.workflow_id).toBe(run.workflow.id);
+  expect(savedMonitor.criteria).toEqual(run.criteria);
+  expect(savedMonitor.actionable_total).toBe(run.actionable_total);
+  expect(agentRunPostsAfterSave, 'Save as watchlist must not plan or run again').toBe(0);
+  await expect(page.getByLabel('Latest Growth Agent run').getByRole('status')).toContainText(
+    `Saved as watchlist “${savedMonitor.name}”`,
+  );
+  await expectAuditRowMatchesWatchlistSave(request, run);
+  const savedRun = { ...run, monitor: savedMonitor };
 
   const monitorsResponse = await request.get(`${API_URL}/api/growth-agent/monitors`, {
     headers: AUTH_HEADERS,
@@ -528,7 +554,7 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   expect(monitorsResponse.status(), 'Growth Agent monitors route returned non-200').toBe(200);
   const monitors = (await monitorsResponse.json()) as GrowthAgentMonitorResponse[];
   const persistedMonitor = monitors.find((monitor) =>
-    monitor.last_run_id === savedRun.run_id || monitor.name === savedRun.monitor?.name,
+    monitor.last_run_id === savedRun.run_id && monitor.name === savedRun.monitor.name,
   );
   expect(persistedMonitor, 'saved prompt monitor was not returned by monitor list').toBeTruthy();
   const persistedText = JSON.stringify(persistedMonitor).toLowerCase();

@@ -62,7 +62,8 @@ test.describe('the plan the user reviewed is the plan that runs', () => {
     expect(posts(mockApi, EXECUTE_PATTERN)).toBe(0);
 
     const actions = commandBar(page).getByRole('button');
-    await expect(actions).toHaveText(['Plan reviewed workflow', 'Save reviewed watchlist', 'Compose plan']);
+    // genie-09 part 1 (wave 5): no re-planning Save in the command bar; a run is saved from its card.
+    await expect(actions).toHaveText(['Plan reviewed workflow', 'Compose plan']);
     await expect(commandBar(page).locator('.btn--primary')).toHaveCount(1);
 
     await compose(page);

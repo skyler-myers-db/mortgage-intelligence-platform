@@ -12,7 +12,10 @@ import {
   workflowIcon,
 } from './ask-genie.growth-agent.helpers';
 
-/** The review-interval hint, from the scheduler job's real state (flow-08 slice 2). */
+/**
+ * The review-interval hint, from the scheduler job's real state (flow-08
+ * slice 2). deviation:growth-agent-scheduled-run-status
+ */
 const INTERVAL_HINT: Record<GrowthAgentSchedulerState, string> = {
   active: 'Saved watchlists refresh on the scheduled run and create review drafts only. Nothing is sent.',
   paused: 'Scheduled runs are off. Saved watchlists refresh only when you run them.',
