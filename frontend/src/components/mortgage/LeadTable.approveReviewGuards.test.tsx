@@ -126,13 +126,14 @@ beforeAll(async () => {
 const IDS = ['B-GUARD00000001', 'B-GUARD00000002', 'B-GUARD00000003', 'B-GUARD00000004'];
 const CAMPAIGN = '33333333-3333-4333-8333-333333333333';
 
-function draftFor(borrowerId: string) {
+/** A ready draft; it shows the row's own offer (a refi row never gets a HELOC sample). */
+function draftFor(borrowerId: string, offerCode = 'refi') {
   return {
     generation_id: `gen-${borrowerId}`,
     response_hash: `hash-${borrowerId}`,
     source_refreshed_at: '2026-07-13T12:00:00Z',
     borrower_id: borrowerId,
-    offer_code: 'refi',
+    offer_code: offerCode,
     channel: 'email',
     subject: `A quick review of your options (${borrowerId})`,
     body: `Hello,\n\nA loan officer can walk you through the numbers for ${borrowerId}.`,
@@ -456,6 +457,9 @@ describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOU
 
     it('a selection change that adds an uncovered offer disarms Approve; "Preview 1 more sample" drafts that one row', async () => {
       const rows = [lead(IDS[0]), lead(IDS[1]), { ...lead(IDS[2]), recommended_offer_code: 'heloc', recommended_offer: 'HELOC' } as LeadSummary, lead(IDS[3])];
+      draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(
+        draftFor(borrowerId, borrowerId === IDS[2] ? 'heloc' : 'refi'),
+      ));
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
       const router = createMemoryRouter([
         { path: '/lead-queue', element: <LeadTable leads={rows} /> },

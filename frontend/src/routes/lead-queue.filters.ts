@@ -451,7 +451,7 @@ function leadQueueFilterParams(input: LeadQueueExportFiltersInput): URLSearchPar
     const value = bounds[key];
     if (value !== undefined) params.set(key, value);
   }
-  if (input.cohortId &&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.cohortId)) {
+  if (input.cohortId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.cohortId)) {
     params.set('cohort_id', input.cohortId);
   }
   return params;

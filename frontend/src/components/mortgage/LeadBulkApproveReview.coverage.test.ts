@@ -83,6 +83,30 @@ describe('bulkSampleCoverage', () => {
     expect(bulkSampleCoverage(run.slice(0, 1), drafts).complete).toBe(true);
   });
 
+  it('an offer is covered only when a previewed draft showed it, not by its row having a sample', () => {
+    // B-1 is a HELOC row whose ready sample showed a refi offer: HELOC was never previewed.
+    const run = rows(['refi', 'heloc', 'heloc']);
+    const drafts = new Map([['B-0', draft('refi')], ['B-1', draft('refi')]]);
+    expect(bulkSampleCoverage(run, drafts)).toEqual({
+      complete: false,
+      missingOfferCodes: ['heloc'],
+      missingSampleIds: ['B-1'],
+    });
+    // A draft with no offer_code shows its row's own offer.
+    const fallback = new Map([['B-0', draft(null)], ['B-2', draft(null)]]);
+    expect(bulkSampleCoverage(run, fallback).complete).toBe(true);
+  });
+
+  it('missing offers and their first rows keep table order', () => {
+    const run = rows(['purchase', 'refi', 'heloc', 'purchase', 'heloc']);
+    const drafts = new Map([['B-1', draft('refi')]]);
+    expect(bulkSampleCoverage(run, drafts)).toEqual({
+      complete: false,
+      missingOfferCodes: ['purchase', 'heloc'],
+      missingSampleIds: ['B-0', 'B-2'],
+    });
+  });
+
   it('a sample of a row no longer in the run covers nothing', () => {
     const drafts = new Map([['B-9', draft('refi')]]);
     expect(bulkSampleCoverage(rows(['refi']), drafts).complete).toBe(false);

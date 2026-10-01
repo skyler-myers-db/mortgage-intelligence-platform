@@ -26,6 +26,7 @@ import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
 import { useTableScrollClearance } from './useTableScrollClearance';
+import { useBulkCanaryNotice } from './useBulkCanaryNotice';
 import { useLeadTableScroll, type LeadTableVirtualScroll } from './useLeadTableScroll';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
@@ -358,6 +359,14 @@ export function LeadTable({
   const BulkCampaignHandoff = bulkModule?.LeadBulkCampaignHandoff;
   const BulkRunProgress = bulkModule?.LeadBulkRunProgress;
   const BulkRunResult = bulkModule?.LeadBulkRunResult;
+  // The canary line belongs to its run's selection and gate (W5a ruling R2).
+  const canaryShown = useBulkCanaryNotice({
+    canary: approval.bulkRunCanary,
+    selectedIds: approval.selectedIds,
+    runKind: bulkRun.result?.kind ?? null,
+    approveGateOpen: approval.bulkRationaleOpen,
+    rejectGateOpen: approval.bulkRejectOpen,
+  });
   const reviewProps = openReview && {
     review: openReview,
     actorEmail,
@@ -640,7 +649,7 @@ export function LeadTable({
           samplesShown={samplesShown}
           runKind={bulkRun.progress?.kind ?? null}
           samplesCoverAllOffers={samplesCoverAllOffers}
-          runNotice={approval.bulkRunCanary && bulkModule ? bulkModule.bulkCanaryNotice(approval.bulkRunCanary) : null}
+          runNotice={canaryShown && bulkModule ? bulkModule.bulkCanaryNotice(canaryShown) : null}
           allLoadedSelected={approval.headerCheckboxState.checked}
           loadedCount={leads.length}
           totalMatching={totalMatching}
