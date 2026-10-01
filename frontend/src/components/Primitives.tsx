@@ -13,7 +13,7 @@ export type { FreshnessBucket };
 /**
  * What leads a chip's label: a prototype glyph by name, or (`leading`) a
  * rendered node in its place, e.g. the Console tenant chip's LenderMark
- * (responsive-10). Never both.
+ * (responsive-10; deviation:lender-mark). Never both.
  */
 type ChipLead = { icon?: IconName; leading?: never } | { icon?: never; leading?: ReactNode };
 

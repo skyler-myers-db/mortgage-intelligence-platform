@@ -161,6 +161,24 @@ def test_deployment_doc_pins_the_prebuilt_app_source_contract() -> None:
         assert 'docs/deployment.md "App source contract"' in surface
 
 
+def test_deployment_doc_documents_the_optional_lender_co_branding() -> None:
+    """Audit responsive-10 / 12.4 #9: the three .env.local controls, the
+    never-commit rule and the fail-safe; the derived hash is not an operator
+    control, so it is not pinned as one."""
+    deployment = _read(ROOT / "docs" / "deployment.md")
+    section = deployment[deployment.index("## Lender co-branding (optional)") : deployment.index("## Resources")]
+    for required in (
+        "MIP_LENDER_MARK_FILE",
+        "MIP_DEFAULT_THEME",
+        "MIP_DEFAULT_ACCENT",
+        "Never commit the image",
+        "backend/schemas/lender_branding.py",
+        "a plain `npm run build` without the preflight exports ships the\nproduct defaults and no mark",
+    ):
+        assert required in section, required
+    assert "never set by an operator" in section
+
+
 def test_otlp_operator_docs_use_the_same_governed_target() -> None:
     for relative in (
         "docs/observability.md",
