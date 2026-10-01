@@ -50,6 +50,8 @@ def test_each_support_class_gets_its_derivation(text: str, token: str, derivatio
     [
         ({"period": "2026-09-30"}, "derived_from_rows"),
         ({"refreshed_at": "2026-09-30 04:00:00"}, "derived_from_rows"),
+        # A date-named column whose cells are not ISO-shaped.
+        ({"refreshed_at": "Sep 30, 2026"}, "derived_from_rows"),
         ({"property_id": "P2026"}, "derived_from_rows"),
         # Control: a number inside a free-text cell is still one a reader finds.
         ({"note": "2,026 borrowers in scope"}, "returned_value"),
