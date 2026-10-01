@@ -273,18 +273,20 @@ test.describe('identity boundary', () => {
   });
 
   test('(8c) a 401 closes the actor gate: the turn leaves the screen, its record stays for the same actor only', async ({ app, page, mockApi }) => {
-    const { actor, healthCalls } = await turnInFlight(page, app, mockApi);
+    const { actor, turn, healthCalls } = await turnInFlight(page, app, mockApi);
     const lift = app.degrade('/api/health', { status: 401, body: {} });
     await nextProbe(page, healthCalls, 8_000);
-    // The W5a nobody bridge: the live turn and the thread are cleared from
+    // D-identity-review-a2: the live turn and the thread are cleared from
     // memory, but the gate is closed, so the record's removal is dropped.
     await expect(thread(page).locator('.genie__msg--user')).toHaveCount(0);
     expect(await inFlightRecord(page), 'kept for the same actor').not.toBeNull();
 
     lift();
+    const pollsBeforeReload = turn.progressPolls;
     await page.reload({ waitUntil: 'domcontentloaded' });
     await app.settle();
     await keeps(page, 'the same actor reloads: the turn resumes');
+    await expect.poll(() => turn.progressPolls, { message: 'the resumed turn polls again', timeout: 15_000 }).toBeGreaterThan(pollsBeforeReload);
 
     actor.key = FIXTURE_ACTOR_B;
     await page.reload({ waitUntil: 'domcontentloaded' });
