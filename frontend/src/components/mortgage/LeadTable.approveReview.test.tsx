@@ -79,13 +79,16 @@ beforeAll(async () => {
 
 const IDS = ['B-REVIEW0000001', 'B-REVIEW0000002', 'B-REVIEW0000003', 'B-REVIEW0000004'];
 
+/** The rows' own offers: a sample shows its row's offer (never refi copy for a HELOC row). */
+const OFFER_BY_ID: Record<string, string> = { [IDS[1]]: 'heloc', [IDS[3]]: 'purchase' };
+
 function draftFor(borrowerId: string) {
   return {
     generation_id: `gen-${borrowerId}`,
     response_hash: `hash-${borrowerId}`,
     source_refreshed_at: '2026-07-13T12:00:00Z',
     borrower_id: borrowerId,
-    offer_code: 'refi',
+    offer_code: OFFER_BY_ID[borrowerId] ?? 'refi',
     channel: 'email',
     subject: `A quick review of your options (${borrowerId})`,
     body: `Hello,\n\nA loan officer can walk you through the numbers for ${borrowerId}.`,
