@@ -43,9 +43,6 @@ The frontend's degraded banner auto-retries until ``status == "ok"``.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import secrets
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -53,6 +50,7 @@ from fastapi import APIRouter, Request
 from backend.agents.gateway_contract import gateway_runtime_binding_hash
 from backend.config.settings import looks_like_databricks_app_deploy, settings
 from backend.schemas.health import AdminHealthResponse, HealthResponse
+from backend.services.actor_identity import actor_cache_key, forwarded_identity
 from backend.services.asset_metadata_utils import workspace_origin
 from backend.services.audit_store import get_fallback_identity_count
 from backend.services.campaign_treatment_runtime import (
@@ -75,8 +73,6 @@ from backend.services.observability import (
 from backend.services.rbac import AdminDep
 
 router = APIRouter()
-
-_PROCESS_ACTOR_CACHE_SECRET = secrets.token_urlsafe(32)
 
 
 def _agent_gateway_binding_sha256() -> str | None:
@@ -118,36 +114,6 @@ def _agent_gateway_binding_sha256() -> str | None:
         proxy_caller_credential_id=proxy_credential_id,
         proxy_caller_secret_reference=proxy_secret_reference,
     )
-
-
-def _actor_cache_key(actor_email: str) -> str:
-    """Return a non-reversible actor/session discriminator for browser caches."""
-
-    configured_secret = settings.mip_genie_action_secret_current or settings.mip_genie_action_secret
-    secret = configured_secret.get_secret_value().strip() if configured_secret else ""
-    if not secret:
-        secret = _PROCESS_ACTOR_CACHE_SECRET
-    digest = hmac.new(
-        secret.encode("utf-8"),
-        actor_email.strip().lower().encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()[:16]
-    return f"actor_{digest}"
-
-
-def _trusted_health_actor(request: Request) -> str | None:
-    """Return forwarded actor identity only when this edge is trusted.
-
-    Health cannot call `resolve_actor()` directly because anonymous load
-    balancer probes are expected and must not increment the audit fallback
-    counter. The trust-boundary behavior still has to match audit writes:
-    when forwarded headers are not trusted, spoofed client headers are
-    ignored and the caller receives the minimal health body.
-    """
-
-    if not settings.trust_forwarded_headers:
-        return None
-    return request.headers.get("X-Forwarded-Email") or request.headers.get("X-Forwarded-User")
 
 
 def _apply_browser_forced_degraded(
@@ -231,7 +197,7 @@ def _diagnostic_body(
         # The browser never receives the actor email, but can still clear
         # QueryClient data if Databricks Apps swaps the workspace identity
         # within the same browser session.
-        "actor_cache_key": _actor_cache_key(actor_email),
+        "actor_cache_key": actor_cache_key(actor_email),
         # Validated workspace origin so admin surfaces can deep-link UC
         # assets exactly like the authenticated browser body does.
         **(
@@ -317,7 +283,8 @@ def health(request: Request) -> dict[str, Any]:
     so the LB probe contract (degraded != unhealthy) is preserved.
     """
     # Anonymous caller (LB / external probe): minimal body only. Use the
-    # same trust boundary as audit actor resolution without calling
+    # same trust boundary as audit actor resolution (the shared
+    # backend/services/actor_identity.forwarded_identity) without calling
     # resolve_actor(), so routine probes never bump the fallback counter
     # and untrusted proxy deployments cannot spoof diagnostic access.
     #
@@ -326,7 +293,7 @@ def health(request: Request) -> dict[str, Any]:
     # scanner can keep the SQL warehouse/Lakebase/Genie path hot forever.
     # Authenticated browsers and /api/admin/health still get full dependency
     # truth for the degraded-state UI.
-    actor_email = _trusted_health_actor(request)
+    actor_email = forwarded_identity(request)
     authenticated = bool(actor_email)
     if not authenticated:
         # Keys stay exactly {status, mode} (R6-09 reconnaissance contract),
@@ -357,7 +324,7 @@ def health(request: Request) -> dict[str, Any]:
         # workspace users without exposing admin-only diagnostics such as
         # warehouse ids, app_env, log exporter posture, or fallback counters.
         "circuit_breakers": breakers,
-        "actor_cache_key": _actor_cache_key(actor_email or ""),
+        "actor_cache_key": actor_cache_key(actor_email or ""),
     }
     # Workspace origin (scheme+host only, validated) so the UI can deep-link
     # cited Unity Catalog assets to the Catalog Explorer. Authenticated body

@@ -1,16 +1,20 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type PropsWithChildren,
+  type SetStateAction,
 } from 'react';
-import { QueryClientContext } from '@tanstack/react-query';
+import { QueryClientContext, hashKey, type QueryClient } from '@tanstack/react-query';
 import { api, type HealthPayload } from '../lib/api';
 import type { HealthHint } from '../lib/apiTypes';
-import type { ActorIdentity } from '../lib/healthTrust';
+import { sessionActorObservation, type ActorIdentity } from '../lib/healthTrust';
+import { sessionQueryOptions } from '../lib/sessionQuery';
 import { normalizeWorkspaceHost } from '../lib/ucAssetLinks';
 import { INITIAL_CONNECTION, type ConnectionStatus } from './connectionState';
 import { startHealthPoll, type DebounceState } from './healthPoll';
@@ -74,10 +78,14 @@ interface HealthContextValue {
   /** `Date.now()` when the warehouse entered `resuming`; null otherwise. */
   warehouseResumingSince: number | null;
   /**
-   * The actor the last TRUSTED probe observed (lib/healthTrust): null until
-   * the first one. An unreachable or thrown probe never changes it; the
-   * object is replaced only when the key changes. The shell's actor boundary
-   * keys on this, never on `health.actor_cache_key`.
+   * The actor the last TRUSTED observation named (lib/healthTrust): null
+   * until the first one. Before the first trusted probe, the primed
+   * /api/session body may seed it once (a real session body with a
+   * well-formed or null `actor_cache_key`), so the actor gate opens without
+   * waiting for the poll; after that only health moves it. An unreachable or
+   * thrown probe never changes it; the object is replaced only when the key
+   * changes. The shell's actor boundary keys on this, never on
+   * `health.actor_cache_key`.
    */
   actorIdentity: ActorIdentity | null;
 }
@@ -101,6 +109,37 @@ export function computeDegraded(health: HealthPayload | null): boolean {
     if (state === 'open') return true;
   }
   return false;
+}
+
+/**
+ * Seed `actorIdentity` from the primed /api/session body: the cached data if
+ * the query already holds it, else the FIRST successful fetch of that key
+ * (then unsubscribe). Acts only while no trusted probe has been observed and
+ * never replaces an identity. Creates no observer and starts no fetch.
+ */
+function seedActorFromSession(
+  queryClient: QueryClient,
+  healthObserved: { readonly current: boolean },
+  setActorIdentity: Dispatch<SetStateAction<ActorIdentity | null>>,
+): (() => void) | undefined {
+  const { queryKey } = sessionQueryOptions();
+  const seed = (data: unknown) => {
+    if (healthObserved.current) return;
+    const seen = sessionActorObservation(data);
+    if (seen.trusted) setActorIdentity((prior) => prior ?? { key: seen.key });
+  };
+  const primed: unknown = queryClient.getQueryData(queryKey);
+  if (primed !== undefined) {
+    seed(primed);
+    return undefined;
+  }
+  const hash = hashKey(queryKey);
+  const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== 'updated' || event.query.queryHash !== hash || event.action.type !== 'success') return;
+    unsubscribe();
+    seed(event.action.data);
+  });
+  return unsubscribe;
 }
 
 interface HealthProviderProps {
@@ -175,6 +214,14 @@ export function HealthProvider({
     };
   }, []);
 
+  // The poll only calls this for a TRUSTED probe: from then on health alone
+  // says who the actor is, and the session seed below stands down.
+  const healthObservedRef = useRef(false);
+  const observeHealthActor = useCallback<Dispatch<SetStateAction<ActorIdentity | null>>>((next) => {
+    healthObservedRef.current = true;
+    setActorIdentity(next);
+  }, []);
+
   useEffect(
     () =>
       startHealthPoll({
@@ -195,10 +242,17 @@ export function HealthProvider({
         setUpdateAvailable,
         setConnection,
         setWarehouseResumingSince,
-        setActorIdentity,
+        setActorIdentity: observeHealthActor,
       }),
-    [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs, debounceUpMs, queryClient],
+    [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs, debounceUpMs, queryClient, observeHealthActor],
   );
+
+  // Session seed (D-identity-review-b): the boot-primed /api/session read,
+  // taken once, only before the first trusted probe. Never an observer or a
+  // fetch: the read already exists (main.tsx seedBootQueries, AppContext).
+  useEffect(() => (queryClient ? seedActorFromSession(queryClient, healthObservedRef, setActorIdentity) : undefined), [
+    queryClient,
+  ]);
 
   // Paused queries render their skeletons without the shimmer while the
   // browser is offline (the offline banner explains the wait); the rule keys

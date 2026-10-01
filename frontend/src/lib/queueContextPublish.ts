@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { asQueueContext, currentQueueContext, storeQueueContext, type QueueContext } from './queueContext';
+import { asQueueContext, updateQueueContext, type QueueContext } from './queueContext';
 
 /**
  * The Lead Queue's side of the queue context (audit 2026-09-21 `shell-04`):
@@ -15,13 +15,19 @@ function newEpoch(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-/** Record the queue the actor is looking at. Keeps the epoch of the session. */
+/**
+ * Record the queue the actor is looking at. An updater over the RAW stored
+ * context: the stored epoch survives for the same actor, and is new once the
+ * actor gate removed the key for a new one. Returns the published context
+ * (null while the gate is not open: the publish is queued or dropped).
+ */
 export function publishQueueContext(input: { search: string; label: string; ids: readonly string[] }): QueueContext | null {
-  const epoch = currentQueueContext()?.epoch ?? newEpoch();
-  const next = asQueueContext({ epoch, search: input.search, label: input.label, ids: [...input.ids] });
-  if (!next) return null;
-  storeQueueContext(next);
-  return next;
+  const out: { published: QueueContext | null } = { published: null };
+  updateQueueContext((stored) => {
+    out.published = asQueueContext({ epoch: stored?.epoch ?? newEpoch(), search: input.search, label: input.label, ids: [...input.ids] });
+    return out.published;
+  });
+  return out.published;
 }
 
 /** Publish the rendered queue whenever it settles (never placeholder rows). */

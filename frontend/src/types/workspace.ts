@@ -64,6 +64,13 @@ export interface SessionResponse {
   lender_name?: string | null;
   /** The opt-in RUM gate, the same settings value /config/options returns. */
   rum_enabled?: boolean | null;
+  /**
+   * Opaque per-actor browser-cache discriminator (the same key the
+   * authenticated health body carries): seeds the actor gate before the first
+   * health probe (lib/actorScope). Null exactly when actor_email is; absent
+   * from an older backend. Never send it to telemetry.
+   */
+  actor_cache_key?: string | null;
 }
 
 export interface WorkspaceMutationResult {

@@ -5,7 +5,7 @@
  */
 import type { ConfigOptions, SessionResponse, WorkspaceState } from '../../../../src/types';
 import type { ActorAuditEventPage, HealthPayload } from '../../../../src/lib/apiTypes';
-import { fixture, json, type FixtureEntry } from '../mockApi';
+import { fixture, json, type FixtureEntry, type MockApi } from '../mockApi';
 import { LEADS } from './borrowers';
 import { LENDER_NAME, SNAPSHOT_DATE, STATES } from './reference';
 
@@ -37,6 +37,15 @@ export const GEOGRAPHY_SCOPE: GeographyScope = {
     addressable_borrowers: state.addressable,
   })),
 };
+
+/**
+ * Well-formed fixture actor keys (`actor_` + 16 lowercase hex): the shell
+ * trusts a health or session key only in that shape (src/lib/healthTrust).
+ * Literals, not imports: this directory may not import runtime src. Same
+ * values as src/test/actorKeys.ts ACTOR_A / ACTOR_B.
+ */
+export const FIXTURE_ACTOR_A = 'actor_aaaaaaaaaaaaaaaa';
+export const FIXTURE_ACTOR_B = 'actor_bbbbbbbbbbbbbbbb';
 
 export const HEALTH_OK: HealthPayload = {
   status: 'ok',
@@ -74,7 +83,20 @@ export const SESSION: SessionResponse = {
   actor_email: 'approver@summit-mortgage.example',
   lender_name: LENDER_NAME,
   rum_enabled: false,
+  // Coherent with HEALTH_OK, which carries no key: the default fixture actor
+  // is '~nobody' to the actor gate (the session seed and every probe agree).
+  actor_cache_key: null,
 };
+
+/**
+ * One shared actor variable for a spec: GET /api/session and GET /api/health
+ * both report `key()` (null: nobody), read per request, so flipping the
+ * variable moves the next probe, the next page load and a new tab together.
+ */
+export function serveActor(mockApi: MockApi, key: () => string | null): void {
+  mockApi.register('GET', '/api/session', () => json<SessionResponse>({ ...SESSION, actor_cache_key: key() }));
+  mockApi.register('GET', '/api/health', () => json<HealthPayload>({ ...HEALTH_OK, actor_cache_key: key() ?? undefined }));
+}
 
 export const shellFixtures: FixtureEntry[] = [
   fixture('GET', '/api/session', () => json<SessionResponse>(SESSION)),

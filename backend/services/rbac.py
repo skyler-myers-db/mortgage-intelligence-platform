@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request
 
 from backend.config.settings import settings
+from backend.services.actor_identity import forwarded_identity
 from backend.services.audit_store import resolve_actor
 from backend.services.observability import emit
 
@@ -151,20 +152,17 @@ def require_authenticated_actor(request: Request) -> str:
     ``settings.default_actor`` or the untrusted-edge marker, and it never
     bumps the identity-fallback counter — that counter is a regression
     signal for audited writes missing the header inside an Apps deploy,
-    not an auth-failure count (same reasoning as
-    ``backend/api/health.py::_trusted_health_actor``).
+    not an auth-failure count (the same shared reader health uses,
+    ``backend/services/actor_identity.py``).
 
     With ``trust_forwarded_headers=False`` (non-Apps deploy,
     docs/security/GRANTS.md §11a) the caller identity is unknowable at
     this layer, so the gate fails closed instead of serving governed
     payloads to anonymous or header-spoofing callers.
     """
-    if settings.trust_forwarded_headers:
-        actor = request.headers.get("X-Forwarded-Email") or request.headers.get(
-            "X-Forwarded-User"
-        )
-        if actor:
-            return actor
+    actor = forwarded_identity(request)
+    if actor:
+        return actor
     emit(
         log,
         "authenticated_access_denied",

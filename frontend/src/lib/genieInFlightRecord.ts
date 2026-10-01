@@ -16,6 +16,7 @@
  * submit's 16-hex question label, validated on read, so a reload-resumed job
  * turn can still send its server cancel. Never the question itself.
  */
+import { readActorScoped, removeActorScoped, writeActorScoped } from './actorScope';
 import { GENIE_QUESTION_LABEL_RE, type GenieTurnIds } from './genieAsk';
 import { GENIE_IN_FLIGHT_TURN_KEY } from './genieConversation';
 import type { GenieTurnPhase, GenieTurnSurface } from './genieInFlightTurn';
@@ -87,14 +88,15 @@ function parseRecord(raw: string): PersistedTurnRecord | typeof LEGACY_RECORD | 
 }
 
 /** The persisted record, LEGACY_RECORD for a v:1 one, or null. A malformed
- *  record is removed; a legacy one is left for the caller to remove. */
+ *  record is removed; a legacy one is left for the caller to remove. Every
+ *  access goes through the actor gate (lib/actorScope): nothing is read
+ *  before the actor is known, and a removal while closed is dropped. */
 export function readRecord(): PersistedTurnRecord | typeof LEGACY_RECORD | null {
-  if (typeof window === 'undefined') return null;
+  const raw = readActorScoped('session', GENIE_IN_FLIGHT_TURN_KEY);
+  if (!raw) return null;
   try {
-    const raw = window.sessionStorage.getItem(GENIE_IN_FLIGHT_TURN_KEY);
-    if (!raw) return null;
     const record = parseRecord(raw);
-    if (!record) window.sessionStorage.removeItem(GENIE_IN_FLIGHT_TURN_KEY);
+    if (!record) removeRecord();
     return record;
   } catch {
     return null;
@@ -103,19 +105,9 @@ export function readRecord(): PersistedTurnRecord | typeof LEGACY_RECORD | null 
 
 /** Best effort: storage full or blocked means the turn runs in memory only. */
 export function writeRecord(record: PersistedTurnRecord): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.setItem(GENIE_IN_FLIGHT_TURN_KEY, JSON.stringify(record));
-  } catch {
-    // Quota exceeded / privacy mode: only the reload resume is lost.
-  }
+  writeActorScoped('session', GENIE_IN_FLIGHT_TURN_KEY, JSON.stringify(record));
 }
 
 export function removeRecord(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.removeItem(GENIE_IN_FLIGHT_TURN_KEY);
-  } catch {
-    // Storage unavailable: there is nothing to remove.
-  }
+  removeActorScoped('session', GENIE_IN_FLIGHT_TURN_KEY);
 }

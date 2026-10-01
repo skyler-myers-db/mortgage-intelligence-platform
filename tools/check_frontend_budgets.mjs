@@ -556,6 +556,12 @@ export const LAZY_ONLY_VENDOR_MODULES = [
   // The geography map's topology.
   'node_modules/topojson-client/',
   'node_modules/us-atlas/',
+  // The persisted aggregate cache (audit delivery-05, lib/queryPersist): the
+  // restore's hydrate and the persist-client core load only after the actor
+  // gate first opens (@tanstack/react-query-persist-client itself is a
+  // re-export barrel and renders no module).
+  'node_modules/@tanstack/query-core/build/modern/hydration.js',
+  'node_modules/@tanstack/query-persist-client-core/',
 ];
 
 const NODE_MODULES = 'node_modules/';

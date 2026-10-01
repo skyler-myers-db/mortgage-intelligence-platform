@@ -1,11 +1,11 @@
 """Minimal actor-session capabilities for fail-closed frontend navigation."""
 
-import re
-
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
+from backend.services.actor_identity import actor_cache_key, forwarded_identity
+from backend.services.identity_display import display_name_for
 from backend.services.rbac import can_access_admin, can_access_approver
 
 router = APIRouter(prefix="/session", tags=["session"])
@@ -17,12 +17,6 @@ router = APIRouter(prefix="/session", tags=["session"])
 ROLE_ADMINISTRATOR = "Administrator"
 ROLE_APPROVER = "Approver"
 ROLE_WORKSPACE_USER = "Workspace user"
-
-# ``jane.doe`` / ``jane_doe`` / ``jane-doe``: letters-only words joined by one
-# separator. Anything else (digits, a single token, other punctuation) is
-# shown verbatim rather than guessed at.
-_NAME_WORDS_RE = re.compile(r"[A-Za-z]+(?:[._-][A-Za-z]+)+")
-
 
 class SessionResponse(BaseModel):
     can_access_admin: bool
@@ -79,41 +73,16 @@ class SessionResponse(BaseModel):
             "returns (audit delivery-07)."
         ),
     )
-
-
-def _forwarded_actor(request: Request) -> str | None:
-    """Return the caller's own forwarded identity, or None.
-
-    Same headers, same precedence as ``audit_store.resolve_actor`` (which the
-    RBAC gates use), minus its fallbacks: the UI prints this as "Approving as
-    ...", so a configured ``default_actor`` or the untrusted-edge marker must
-    never be presented as the signed-in person. Reading the headers directly
-    also keeps this read off the identity-fallback counter, which is a
-    regression signal for audited WRITES. The value is returned to its owner
-    only and is never logged.
-    """
-    if not settings.trust_forwarded_headers:
-        return None
-    return (
-        request.headers.get("X-Forwarded-Email")
-        or request.headers.get("X-Forwarded-User")
-        or None
+    actor_cache_key: str | None = Field(
+        default=None,
+        description=(
+            "Opaque per-actor browser-cache discriminator: the same keyed hash "
+            "of the forwarded identity that the authenticated health body "
+            "carries, so the browser can seed its actor-scoped storage gate "
+            "before the first health probe. Not reversible to the identity "
+            "and never sent to telemetry. Null exactly when actor_email is."
+        ),
     )
-
-
-def display_name_for(identity: str | None) -> str | None:
-    """Readable label for a forwarded identity; derived, never looked up."""
-    if not identity:
-        return None
-    local, at, _domain = identity.partition("@")
-    if not at:
-        return identity
-    if not local:
-        return identity
-    if _NAME_WORDS_RE.fullmatch(local):
-        words = re.split(r"[._-]", local)
-        return " ".join(word[:1].upper() + word[1:] for word in words)
-    return local
 
 
 def role_labels_for(*, identity: str | None, admin: bool, approver: bool) -> list[str]:
@@ -134,7 +103,12 @@ def role_labels_for(*, identity: str | None, admin: bool, approver: bool) -> lis
 # docstring would become the OpenAPI operation description.)
 @router.get("", response_model=SessionResponse)
 async def get_session(request: Request) -> SessionResponse:
-    identity = _forwarded_actor(request)
+    # The shared resolver, minus resolve_actor's fallbacks: the UI prints this
+    # as "Approving as ...", so a configured default_actor or the
+    # untrusted-edge marker must never be presented as the signed-in person,
+    # and this read stays off the identity-fallback counter. Returned to its
+    # owner only; never logged.
+    identity = forwarded_identity(request)
     admin = can_access_admin(request)
     approver = can_access_approver(request)
     return SessionResponse(
@@ -145,4 +119,5 @@ async def get_session(request: Request) -> SessionResponse:
         role_labels=role_labels_for(identity=identity, admin=admin, approver=approver),
         lender_name=settings.mip_lender_name,
         rum_enabled=settings.mip_rum_enabled,
+        actor_cache_key=actor_cache_key(identity) if identity else None,
     )

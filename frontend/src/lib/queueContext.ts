@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { readActorScoped, subscribeActorScope, updateActorScoped } from './actorScope';
 
 /**
  * The canonical masked borrower id (CLAUDE.md naming rules), spelled here
@@ -21,11 +22,11 @@ export const QUEUE_MASKED_ID_RE = /^B-[0-9A-Z]{13}$/;
  *
  * Carriage: React Router Link state (per history entry, so Back / Forward keep
  * each dossier's own queue) with a sessionStorage fallback (reload, a link
- * opened without state). The storage key is actor-scoped
- * (lib/actorScopedBrowserState.ts) and every context carries the storage
- * `epoch`: clearing the key on an actor change also invalidates the copies
- * that history entries still hold, because a Link state is honoured only
- * while its epoch matches the stored one.
+ * opened without state). The storage key is a PRIVATE_SESSION key of
+ * lib/actorScope (read and written only through its gate) and every context
+ * carries the storage `epoch`: the gate removing the key on an actor change
+ * also invalidates the copies that history entries still hold, because a
+ * Link state is honoured only while its epoch matches the stored one.
  *
  * Only masked `B-` ids are kept; anything else is dropped on read and write.
  * Nothing here fetches: reading a context never opens (and never audits) a
@@ -74,10 +75,8 @@ export function asQueueContext(value: unknown): QueueContext | null {
   return { epoch, search, label: label.slice(0, MAX_LABEL_CHARS), ids: masked };
 }
 
-function readStored(): QueueContext | null {
-  if (typeof window === 'undefined') return null;
+function parseStored(raw: string | null): QueueContext | null {
   try {
-    const raw = window.sessionStorage.getItem(QUEUE_CONTEXT_STORAGE_KEY);
     return raw ? asQueueContext(JSON.parse(raw)) : null;
   } catch {
     return null;
@@ -90,7 +89,7 @@ let snapshot: QueueContext | null | undefined;
 const listeners = new Set<() => void>();
 
 function current(): QueueContext | null {
-  if (snapshot === undefined) snapshot = readStored();
+  if (snapshot === undefined) snapshot = parseStored(readActorScoped('session', QUEUE_CONTEXT_STORAGE_KEY));
   return snapshot;
 }
 
@@ -98,23 +97,35 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
+// Every actor-gate event drops the snapshot; it is re-read lazily.
+subscribeActorScope(() => {
+  snapshot = undefined;
+  emit();
+});
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
 
 /**
- * Make `next` the live context: this tab's snapshot and the stored fallback.
- * Only lib/queueContextPublish.ts calls it, with an already-validated context.
+ * Publish through an updater over the RAW stored context: `next` gets the
+ * stored context (null when none) and returns the new live one (null keeps
+ * the stored value). Applied now while the actor gate is open, replayed once
+ * it opens, dropped while closed. Only lib/queueContextPublish.ts calls it.
  */
-export function storeQueueContext(next: QueueContext): void {
-  snapshot = next;
-  try {
-    window.sessionStorage.setItem(QUEUE_CONTEXT_STORAGE_KEY, JSON.stringify(next));
-  } catch {
-    // Storage can be unavailable; the in-memory copy still serves this tab.
-  }
+export function updateQueueContext(next: (stored: QueueContext | null) => QueueContext | null): void {
+  updateActorScoped('session', QUEUE_CONTEXT_STORAGE_KEY, (raw) => {
+    const context = next(parseStored(raw));
+    return context ? JSON.stringify(context) : raw;
+  });
+  snapshot = undefined;
   emit();
+}
+
+/** Make an already-validated `next` the live context (through the gate). */
+export function storeQueueContext(next: QueueContext): void {
+  updateQueueContext(() => next);
 }
 
 /** The live context of this tab (the storage epoch writers keep). */
@@ -122,7 +133,7 @@ export function currentQueueContext(): QueueContext | null {
   return current();
 }
 
-/** Drop the in-memory copy (the actor-scoped clear removes the stored key). */
+/** Forget the in-memory copy until the next publish (tests). */
 export function clearQueueContext(): void {
   snapshot = null;
   emit();

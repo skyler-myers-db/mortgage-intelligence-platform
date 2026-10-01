@@ -1,4 +1,5 @@
 import { QueryClient } from '@tanstack/react-query';
+import { actorScopeStatus, subscribeActorScope } from './actorScope';
 import { isWarmingUpError } from './api';
 import { clientFailureReason } from './apiTransport';
 import { installOnlineManager } from './connectivity';
@@ -50,4 +51,31 @@ export function createMipQueryClient(): QueryClient {
       },
     },
   });
+}
+
+type QueryPersistModule = Pick<typeof import('./queryPersist'), 'startQueryPersistence'>;
+
+/**
+ * The persisted aggregate cache (audit delivery-05, lib/queryPersist): the
+ * only initial-JS part. The first time the actor gate (lib/actorScope) is
+ * open, or at once if it already is, the lazy module is imported and started,
+ * once per document; before that nothing is restored, so a snapshot never
+ * renders for an actor the gate has not confirmed. `load` is a test seam.
+ */
+export function installQueryPersistence(
+  queryClient: QueryClient,
+  load: () => Promise<QueryPersistModule> = () => import('./queryPersist'),
+): void {
+  let started = false;
+  let unsubscribe: (() => void) | null = null;
+  const start = () => {
+    if (started || actorScopeStatus() !== 'open') return;
+    started = true;
+    unsubscribe?.();
+    load()
+      .then((module) => module.startQueryPersistence(queryClient))
+      .catch(() => undefined);
+  };
+  unsubscribe = subscribeActorScope(start);
+  start();
 }

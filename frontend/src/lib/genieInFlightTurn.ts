@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import type { GenieAnswer as GenieAnswerShape } from '../types';
 import type { GenieCompletionJobStatus, GenieTurnProgress } from '../types/genieJobs';
 import { ApiError, isAbortError, isWarmingUpError, type GenieLiveProgress } from './api';
+import { actorScopeStatus, subscribeActorScope } from './actorScope';
 import {
   GenieLiveError,
   JOB_RESUME_WINDOW_MS,
@@ -201,6 +202,8 @@ let active: ActiveTurn | null = null;
 let controller: AbortController | null = null;
 let completeRequestedFor = -1;
 let resumeChecked = false;
+/** A resume asked for before the actor gate opened (runs on 'opened'). */
+let resumePending = false;
 let requestLock: GenieTurnLockRequester = browserGenieTurnLock;
 let lockOwner: number | null = null;
 let lockRelease: (() => void) | null = null;
@@ -630,10 +633,18 @@ export function stopGenieTurn(): string | null {
 /**
  * Resume a turn a reload interrupted. Runs once per page, from the first
  * resuming surface: the shell (GenieDock, via lib/genieLauncherSignal, when a
- * record exists), the panel or /ask-genie. Never at module evaluation.
+ * record exists), the panel or /ask-genie. Never at module evaluation. Before
+ * the actor gate (lib/actorScope) is open the record belongs to no one yet:
+ * the call is recorded once and runs on the first 'opened' event, after the
+ * gate removed another actor's record.
  */
 export function resumeGenieTurnFromSession(): void {
   if (resumeChecked) return;
+  if (actorScopeStatus() !== 'open') {
+    resumePending = true;
+    return;
+  }
+  resumePending = false;
   resumeChecked = true;
   if (snapshot.inFlight) return;
   const record = readRecord();
@@ -651,9 +662,10 @@ export function resumeGenieTurnFromSession(): void {
   const jobCompleting = record.phase === 'completing' && record.asyncComplete && age < JOB_RESUME_WINDOW_MS;
   if (!ids || !(polling || jobCompleting)) {
     removeRecord();
-    // Known residual (#3, wave 4): this note, like the other-tab note below
-    // and the transcript key, shows the persisted question with no server
-    // check, so it survives a reload across an actor change.
+    // Residual #3 (wave 4) is closed: this note, like the other-tab note
+    // below, shows the persisted question with no server check, but only
+    // after the actor gate opened for the record's owner (another actor's
+    // record is removed first), so it no longer survives an actor change.
     interrupt(interruptedReason(record.phase === 'completing' ? 'completing' : 'reload'), record.question);
     return;
   }
@@ -761,6 +773,10 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   window.addEventListener('pageshow', onPageShow);
 }
 
+subscribeActorScope(({ reason }) => {
+  if (reason === 'opened' && resumePending) resumeGenieTurnFromSession();
+});
+
 // ------------------------------------------------------------------- tests
 
 /** Test seam: happy-dom has no `navigator.locks`. Null restores the browser's. */
@@ -775,6 +791,7 @@ export function __resetGenieTurnStoreForTests(): void {
   lockOwner = null;
   completeRequestedFor = -1;
   resumeChecked = false;
+  resumePending = false;
   pageHidden = false;
   deferredFailure = null;
   requestLock = browserGenieTurnLock;

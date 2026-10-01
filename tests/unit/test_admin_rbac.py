@@ -17,6 +17,7 @@ from httpx import Response
 
 from backend.config.settings import settings
 from backend.main import app
+from backend.services.actor_identity import actor_cache_key
 from backend.services.audit_store import get_audit_store
 from backend.services.rbac import resolve_workflow_actor
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
@@ -101,12 +102,14 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
         "can_access_admin": True, "can_approve": True, "actor_email": None,
         "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
+        "actor_cache_key": None,
     }
     assert denied.status_code == 200
     assert denied.json() == {
         "can_access_admin": False, "can_approve": False, "actor_email": None,
         "actor_display_name": None, "role_labels": [],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
+        "actor_cache_key": None,
     }
     assert compat.status_code == 200
     assert compat.json() == admitted.json()
@@ -133,6 +136,7 @@ def test_session_and_admin_gate_share_email_allowlist_rule(
         "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name,
         "rum_enabled": settings.mip_rum_enabled,
+        "actor_cache_key": actor_cache_key("operator@example.com"),
     }
     assert admin.status_code == 200, admin.text
 
@@ -265,6 +269,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "can_access_admin": False, "can_approve": False, "actor_email": None,
         "actor_display_name": None, "role_labels": [],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
+        "actor_cache_key": None,
     }
 
     # Trust re-enabled -- same header admits again.
@@ -280,6 +285,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "can_access_admin": True, "can_approve": True, "actor_email": None,
         "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
+        "actor_cache_key": None,
     }
 
 
