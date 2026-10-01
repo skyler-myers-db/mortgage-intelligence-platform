@@ -180,6 +180,10 @@
   transition: fill var(--dur-fast) var(--ease), stroke var(--dur-fast) var(--ease);
 }
 [data-theme="light"] .map-region { stroke: color-mix(in oklab, var(--entrada-navy) 35%, transparent); }
+/* deviation:map-escape-and-populated-roving: a unit with no borrowers in the
+   selection is an image, not a control (dataviz-10). */
+.map-region:not([data-populated]),
+.zip-tile:not([data-populated]) { cursor: default; }
 /* Hover brighten: users reported the prior 1.2px accent stroke was easy
    to miss on dense map layers. Bump stroke weight, add a soft accent
    glow, and lift the hovered path into the stacking context so its

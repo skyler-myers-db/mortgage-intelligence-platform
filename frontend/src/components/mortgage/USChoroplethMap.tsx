@@ -20,9 +20,9 @@ import {
 import { USChoroplethMapHeader, type MapColorMode, type MapView } from './USChoroplethMapHeader';
 import { USChoroplethMapLegend } from './USChoroplethMapLegend';
 import { USChoroplethMapStates } from './USChoroplethMapStates';
-import { USChoroplethMapTable, type MapTableRow } from './USChoroplethMapTable';
+import { USChoroplethMapTable } from './USChoroplethMapTable';
 import { MapUnavailable } from './USChoroplethMapUnavailable';
-import { buildMapTableRows } from './USChoroplethMap.table';
+import { buildMapTableRows, type MapTableGroups } from './USChoroplethMap.table';
 import { campaignPrefillPath as buildCampaignPath } from './USChoroplethMap.campaign';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { buildMapCard } from './USChoroplethMap.hover';
@@ -315,27 +315,28 @@ export function USChoroplethMap({
   );
 
   const activateState = useCallback(
-    (location: UsaSvgMapLocation, hasFacts: boolean, moveFocus: boolean) => {
+    (location: UsaSvgMapLocation, populated: boolean, moveFocus: boolean) => {
+      // Only a state with borrowers in this selection activates (dataviz-10).
+      if (!populated) return;
       if (drillBehavior === 'navigate') {
-        // Home-page teaser → deep-link to the filtered queue, only for a
-        // state with data; clicking an unsupported state is a no-op.
-        if (hasFacts) navigate(leadQueuePath({ state: location.id.toUpperCase() }));
+        // Home-page teaser → deep-link to the filtered queue.
+        navigate(leadQueuePath({ state: location.id.toUpperCase() }));
         return;
       }
-      if (!footprintStates[location.id] && !hasFacts) return;
       // Straight to ZIPs — there is no honest county rung.
       setDrillFocusFor(moveFocus ? location.id.toUpperCase() : null);
       changeSelection({ state: location.id.toUpperCase(), county: null, zip: null });
     },
-    [changeSelection, drillBehavior, footprintStates, leadQueuePath, navigate],
+    [changeSelection, drillBehavior, leadQueuePath, navigate],
   );
 
   // Table rows for the level on screen: the numbers the map paints.
-  const tableRows = useMemo<MapTableRow[]>(
+  const tableGroups = useMemo<MapTableGroups>(
     () => buildMapTableRows({
       shownScenario, overlayActive, overlayByUnit, level, stateFacts, usaMap, scale, drillBehavior, activateState, zipFacts,
+      footprintStates,
     }),
-    [activateState, drillBehavior, level, overlayActive, overlayByUnit, scale, shownScenario, stateFacts, usaMap, zipFacts],
+    [activateState, drillBehavior, footprintStates, level, overlayActive, overlayByUnit, scale, shownScenario, stateFacts, usaMap, zipFacts],
   );
 
   // The card for the hovered unit, built once per unit (USChoroplethMap.hover).
@@ -380,7 +381,7 @@ export function USChoroplethMap({
           caption={level === 'state'
             ? `Marketable borrowers by state, ${segmentCaption}`
             : `Marketable borrowers by ZIP in ${drillStateName}, ${segmentCaption}`}
-          rows={tableRows}
+          groups={tableGroups}
           extraColumn={shownScenario
             ? `In the money at ${ratePct(shownScenario.ratePct)}`
             : overlayActive ? 'Unattended leads' : null}

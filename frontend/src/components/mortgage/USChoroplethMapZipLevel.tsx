@@ -48,6 +48,9 @@ interface USChoroplethMapZipLevelProps {
   onOpenStateQueue: () => void;
 }
 
+/** A ZIP with borrowers in the selection (never the fill value). */
+const zipPopulated = (rollup: ZipRollup) => (rollup.addressable_borrowers ?? 0) > 0;
+
 export function USChoroplethMapZipLevel({
   drillStateName,
   byZip,
@@ -66,10 +69,11 @@ export function USChoroplethMapZipLevel({
   // The densest ZIP_TILE_CAP, largest first (Pareto): the set the fill scale is built over.
   const visible = densestZips(byZip);
   const [activeZip, setActiveZip] = useState<string | null>(null);
-  const tabStopZip =
-    (activeZip && visible.some((rollup) => rollup.zip === activeZip) ? activeZip : null)
-    ?? (selectedZip && visible.some((rollup) => rollup.zip === selectedZip) ? selectedZip : null)
-    ?? visible[0]?.zip
+  // The roving stop among ZIPs with borrowers only (dataviz-10): a tile with
+  // none is an image, never a stop or a control.
+  const isStop = (zip: string | null) => visible.some((rollup) => zipPopulated(rollup) && rollup.zip === zip);
+  const tabStopZip = [activeZip, selectedZip].find(isStop)
+    ?? visible.find(zipPopulated)?.zip
     ?? null;
   const listRef = useRef<HTMLUListElement | null>(null);
   // One set of handlers on the <ul> (D-dataviz-geo-d1): no per-tile closures.
@@ -154,36 +158,53 @@ export function USChoroplethMapZipLevel({
         ]
           .filter(Boolean)
           .join(' ');
+        const tile = {
+          className: classes,
+          // Staggered "settle into the grid" entrance (Buyer-Wow #4):
+          // the stage cap keeps later tiles from lagging; CSS gates the
+          // animation behind prefers-reduced-motion.
+          style: { '--tile-i': Math.min(tileIndex, 24) } as CSSProperties,
+          'data-map-unit': rollup.zip,
+          'data-map-class': cls,
+          'aria-label': zipAriaLabel(rollup.zip, {
+            count,
+            avgScore,
+            topSegment,
+            unattended: overlayActive ? unattended : undefined,
+          }),
+        };
+        const content = (
+          <>
+            <span className="zip-tile__code">{rollup.zip}</span>
+            <span className="zip-tile__count">
+              {count !== null ? formatCount(count) : '—'}
+            </span>
+            {overlayActive && (
+              <span className="zip-tile__overlay">
+                {unattended !== null ? formatCount(unattended) : '—'} unattended
+              </span>
+            )}
+          </>
+        );
         return (
           <li key={rollup.zip} className="zip-tiles__item">
-            <button
-              type="button"
-              className={classes}
-              // Staggered "settle into the grid" entrance (Buyer-Wow #4):
-              // the stage cap keeps later tiles from lagging; CSS gates the
-              // animation behind prefers-reduced-motion.
-              style={{ '--tile-i': Math.min(tileIndex, 24) } as CSSProperties}
-              data-map-unit={rollup.zip}
-              data-map-class={cls}
-              tabIndex={rollup.zip === tabStopZip ? 0 : -1}
-              aria-label={zipAriaLabel(rollup.zip, {
-                count,
-                avgScore,
-                topSegment,
-                unattended: overlayActive ? unattended : undefined,
-              })}
-              onClick={() => onSelectZip(rollup.zip)}
-            >
-              <span className="zip-tile__code">{rollup.zip}</span>
-              <span className="zip-tile__count">
-                {count !== null ? formatCount(count) : '—'}
+            {zipPopulated(rollup) ? (
+              <button
+                type="button"
+                {...tile}
+                data-populated=""
+                tabIndex={rollup.zip === tabStopZip ? 0 : -1}
+                onClick={() => onSelectZip(rollup.zip)}
+              >
+                {content}
+              </button>
+            ) : (
+              // deviation:map-escape-and-populated-roving: no borrowers in
+              // this selection, so no control; the card still opens on hover.
+              <span role="img" {...tile}>
+                {content}
               </span>
-              {overlayActive && (
-                <span className="zip-tile__overlay">
-                  {unattended !== null ? formatCount(unattended) : '—'} unattended
-                </span>
-              )}
-            </button>
+            )}
           </li>
         );
       })}

@@ -270,7 +270,8 @@ describe('USChoroplethMap encoding, resilience and URL control (dataviz-02 / dat
     const toggle = [...document.querySelectorAll('button')].find((b) => b.textContent === 'View as table');
     await act(async () => toggle?.click());
     const table = await waitFor(() => document.querySelector('[data-testid="map-table"] table'));
-    const rows = [...table.querySelectorAll('tbody tr')];
+    // The populated group (the first <tbody>); Indiana is listed in its own group.
+    const rows = [...table.querySelectorAll('tbody:first-of-type tr')];
     expect(rows.map((r) => r.querySelector('th')?.textContent)).toEqual(['Illinois', 'California', 'Texas']);
     expect(table.querySelector('[data-testid="map-table-total"]')?.textContent).toBe(
       document.querySelector('.map-legend__value')?.textContent,
@@ -279,7 +280,7 @@ describe('USChoroplethMap encoding, resilience and URL control (dataviz-02 / dat
     expect(header?.getAttribute('aria-sort')).toBe('descending');
     await act(async () => header?.querySelector('button')?.click());
     expect(header?.getAttribute('aria-sort')).toBe('ascending');
-    expect([...table.querySelectorAll('tbody tr th')].map((th) => th.textContent)).toEqual(['Texas', 'California', 'Illinois']);
+    expect([...table.querySelectorAll('tbody:first-of-type tr th')].map((th) => th.textContent)).toEqual(['Texas', 'California', 'Illinois']);
     const back = [...document.querySelectorAll('button')].find((b) => b.textContent === 'View as map');
     await act(async () => back?.click());
     expect(document.querySelector('[data-testid="map-table"]')).toBeNull();
@@ -312,6 +313,145 @@ describe('USChoroplethMap encoding, resilience and URL control (dataviz-02 / dat
       expect(Number(tile.getAttribute('data-map-class')), tile.getAttribute('data-map-unit') ?? '').toBe(legendClass(count));
     }
     expect(document.querySelector('.map-legend__scale')?.textContent).toContain('quartiles over the 24 densest of 120 ZIPs');
+  });
+});
+
+describe('populated-only roving and activation (dataviz-10, WCAG 2.1.1)', () => {
+  let root: Root;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    apiMocks.stateRollups.mockResolvedValue(STATES);
+    apiMocks.zipRollups.mockResolvedValue(TX_ZIPS);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  async function renderMap(props: Parameters<typeof USChoroplethMap>[0] = {}) {
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap {...props} /></Providers>);
+    });
+    await waitFor(() => path('il')?.classList.contains('has-data'));
+  }
+  const key = (target: Element | null, name: string) =>
+    act(async () => {
+      target?.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true }));
+    });
+
+  it('walks populated states only, and Home / End go to the first / last populated state', async () => {
+    await renderMap();
+    // California, Illinois, Indiana (no borrowers), Texas.
+    expect([...document.querySelectorAll('path[data-populated]')].map((p) => p.getAttribute('data-map-unit')))
+      .toEqual(['ca', 'il', 'tx']);
+    await act(async () => path('il')?.focus());
+    await key(path('il'), 'ArrowRight');
+    expect(document.activeElement).toBe(path('tx'));
+    await key(path('tx'), 'ArrowLeft');
+    expect(document.activeElement).toBe(path('il'));
+    await key(path('il'), 'End');
+    expect(document.activeElement).toBe(path('tx'));
+    await key(path('tx'), 'ArrowRight');
+    expect(document.activeElement).toBe(path('ca'));
+    await key(path('ca'), 'Home');
+    expect(document.activeElement).toBe(path('ca'));
+  });
+
+  it('makes a state with no borrowers an image: no tab stop, no keys, and a click does nothing', async () => {
+    const changes: MapSelection[] = [];
+    await renderMap({ selection: EMPTY_MAP_SELECTION, onSelectionChange: (next) => changes.push(next) });
+    const indiana = path('in') as SVGPathElement;
+    // In the footprint (the fallback footprint lists every state), no rollup.
+    expect(indiana.getAttribute('role')).toBe('img');
+    expect(indiana.getAttribute('tabindex')).toBe('-1');
+    expect(indiana.hasAttribute('data-populated')).toBe(false);
+    expect(indiana.hasAttribute('aria-keyshortcuts')).toBe(false);
+    expect(indiana.getAttribute('aria-label')).toBe('Indiana: no borrower rollup');
+    await act(async () => indiana.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await key(indiana, 'Enter');
+    expect(changes).toEqual([]);
+    // It keeps its hover card.
+    await act(async () => {
+      indiana.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, clientX: 300, clientY: 200 }));
+    });
+    expect(document.querySelector('.map-tip__name')?.textContent).toBe('Indiana');
+    // A populated state still drills.
+    await act(async () => path('tx')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(changes).toEqual([{ state: 'TX', county: null, zip: null }]);
+  });
+
+  it('describes the skipped states to assistive technology, singular and plural, never while loading', async () => {
+    await renderMap();
+    const svg = document.querySelector('svg.map-svg-stage');
+    const note = () => document.getElementById(svg?.getAttribute('aria-describedby') ?? '')?.textContent;
+    expect(note()).toBe('1 state has no borrowers in this selection and is skipped; the table view lists them.');
+
+    act(() => root.unmount());
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    apiMocks.stateRollups.mockResolvedValue({ ...STATES, rollups: STATES.rollups.slice(0, 1) });
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap segmentFilter={['itm']} /></Providers>);
+    });
+    await waitFor(() => path('il')?.classList.contains('has-data'));
+    expect(document.getElementById(document.querySelector('svg.map-svg-stage')?.getAttribute('aria-describedby') ?? '')?.textContent)
+      .toBe('3 states have no borrowers in this selection and are skipped; the table view lists them.');
+  });
+
+  it('says nothing about skipped states while the rollups load, and has no tab stop then', async () => {
+    apiMocks.stateRollups.mockReturnValue(new Promise(() => undefined));
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap /></Providers>);
+    });
+    await waitFor(() => path('il')?.classList.contains('is-loading'));
+    expect(document.querySelector('svg.map-svg-stage')?.hasAttribute('aria-describedby')).toBe(false);
+    expect(document.querySelectorAll('path[tabindex="0"]')).toHaveLength(0);
+  });
+
+  it('lists the skipped states in their own table group, with why, outside the total', async () => {
+    await renderMap();
+    const toggle = [...document.querySelectorAll('button')].find((b) => b.textContent === 'View as table');
+    await act(async () => toggle?.click());
+    const table = await waitFor(() => document.querySelector('[data-testid="map-table"] table'));
+    const groups = [...table.querySelectorAll('tbody')];
+    expect(groups).toHaveLength(2);
+    const header = groups[1].querySelector('tr.map-table__group th');
+    expect(header?.getAttribute('scope')).toBe('colgroup');
+    expect(header?.textContent).toBe('No borrowers in this selection (1)');
+    const indiana = groups[1].querySelector('tr[data-map-row="in"]');
+    expect(indiana?.querySelector('th')?.textContent).toBe('Indiana');
+    expect(indiana?.querySelector('button')).toBeNull();
+    expect([...(indiana?.querySelectorAll('td.num') ?? [])].map((td) => td.textContent)).toEqual(['—', '—', '—']);
+    expect(indiana?.querySelector('td.map-table__note')?.textContent).toBe('No borrowers in this selection');
+    // Total (3): the populated group only, and it equals the legend.
+    expect(table.querySelector('tfoot th')?.textContent).toBe('Total (3)');
+    expect(table.querySelector('[data-testid="map-table-total"]')?.textContent).toBe(
+      document.querySelector('.map-legend__value')?.textContent,
+    );
+  });
+
+  it('makes a ZIP with no borrowers an image tile, never a stop', async () => {
+    apiMocks.zipRollups.mockResolvedValue({
+      ...TX_ZIPS,
+      rollups: [...TX_ZIPS.rollups, { zip: '77004', state: 'TX', addressable_borrowers: 0, avg_opportunity_score: 0, top_segment_code: null }],
+    });
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap selection={{ state: 'TX', county: null, zip: null }} /></Providers>);
+    });
+    const list = await waitFor(() => document.querySelector('ul.zip-tiles'));
+    const empty = list.querySelector('[data-map-unit="77004"]');
+    expect(empty?.tagName).toBe('SPAN');
+    expect(empty?.getAttribute('role')).toBe('img');
+    expect(empty?.hasAttribute('tabindex')).toBe(false);
+    expect(empty?.getAttribute('aria-label')).toBe('ZIP 77004: 0 borrowers, average opportunity score 0');
+    const buttons = [...list.querySelectorAll('button[data-populated]')];
+    expect(buttons.map((b) => b.getAttribute('data-map-unit'))).toEqual(['77002', '77003']);
+    await act(async () => (buttons[1] as HTMLElement).focus());
+    await key(buttons[1], 'ArrowRight');
+    expect(document.activeElement).toBe(buttons[0]);
   });
 });
 

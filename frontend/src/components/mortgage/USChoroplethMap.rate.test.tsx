@@ -61,6 +61,8 @@ vi.mock('./USStateMapData', () => ({
       locations: [
         { id: 'il', name: 'Illinois', path: 'M0,0L20,0L20,20Z' },
         { id: 'tx', name: 'Texas', path: 'M30,30L50,30L50,50Z' },
+        // No rollup: drawn, never a roving stop, whatever the fill paints.
+        { id: 'wy', name: 'Wyoming', path: 'M60,60L80,60L80,80Z' },
       ],
     }),
 }));
@@ -187,4 +189,48 @@ describe('USChoroplethMap rate scenario', () => {
     expect(mocks.rateSensitivity).not.toHaveBeenCalled();
     expect(document.querySelector('.map-legend__lever')).toBeNull();
   });
+
+  it('keeps the roving set to populated states across a rate-step scrub and an overlay toggle (dataviz-10)', async () => {
+    // The grid and the overlay both paint Wyoming, which has no borrowers in
+    // the selection: the fill moves, the keyboard set does not.
+    mocks.rateSensitivity.mockResolvedValue({
+      ...GRID,
+      states: [...GRID.states, { state: 'WY', addressable: 50, rate_movable: 40, in_the_money: [40, 30, 20, 10, 5, 4, 3, 2, 1] }],
+    });
+    mocks.assignmentOverlay.mockResolvedValue({
+      level: 'state', state: null, county_fips: null, total_leads: 30, total_assigned: 10, total_unattended: 20,
+      lead_definition: 'score >= 50',
+      units: [
+        { unit_id: 'IL', lead_count: 10, assigned_count: 5, unattended_count: 5, covering_officer_count: 1, covering_officers: [] },
+        { unit_id: 'WY', lead_count: 20, assigned_count: 5, unattended_count: 15, covering_officer_count: 1, covering_officers: [] },
+      ],
+    });
+    const rovingSet = () => [...document.querySelectorAll('[data-map-unit][data-populated]')].map((el) => el.getAttribute('data-map-unit'));
+    await act(async () => root.render(<Providers><USChoroplethMap /></Providers>));
+    await until(() => cls('il') === '4');
+    expect(rovingSet()).toEqual(['il', 'tx']);
+
+    await act(async () => button('Rate scenario')?.click());
+    const range = await (async () => {
+      await until(() => document.querySelector('input[type="range"]') !== null);
+      return document.querySelector<HTMLInputElement>('input[type="range"]') as HTMLInputElement;
+    })();
+    expect(cls('wy')).not.toBe('0');
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    for (const step of ['-100', '50', '100']) {
+      await act(async () => {
+        setValue?.call(range, step);
+        range.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await settle();
+      expect(rovingSet()).toEqual(['il', 'tx']);
+    }
+
+    await act(async () => button('Unattended leads')?.click());
+    await until(() => document.querySelector('.map-legend__value')?.textContent === '20');
+    expect(cls('wy')).toBe('4');
+    expect(rovingSet()).toEqual(['il', 'tx']);
+    expect(document.querySelector('path[data-map-unit="wy"]')?.getAttribute('role')).toBe('img');
+  });
 });
+

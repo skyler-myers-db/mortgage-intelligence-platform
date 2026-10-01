@@ -12,8 +12,16 @@
  */
 import type { KeyboardEvent } from 'react';
 
-/** Attribute every roving map unit (state path, ZIP tile button) carries. */
+/** Attribute every map unit (state path, ZIP tile) carries. */
 export const MAP_UNIT_ATTR = 'data-map-unit';
+
+/**
+ * Attribute a unit with borrowers in the selection carries (state:
+ * addressable > 0; ZIP: addressable_borrowers > 0; never the fill value).
+ * Only these are roving stops and controls (dataviz-10, WCAG 2.1.1).
+ * deviation:map-escape-and-populated-roving.
+ */
+export const MAP_POPULATED_ATTR = 'data-populated';
 
 const fmt = (value: number) => value.toLocaleString('en-US');
 
@@ -61,9 +69,11 @@ export function zipAriaLabel(zip: string, facts: UnitFacts): string {
 }
 
 /**
- * Arrow keys / Home / End move focus between the `[data-map-unit]` elements
- * inside the handler's element, wrapping at the ends. Anything else (Enter,
- * Space, Tab, Escape) is left to the unit's own handlers and the browser.
+ * Arrow keys / Home / End move focus between the populated
+ * `[data-map-unit][data-populated]` elements inside the handler's element,
+ * wrapping at the ends; Home / End go to the first / last populated unit.
+ * Anything else (Enter, Space, Tab, Escape) is left to the unit's own
+ * handlers and the browser.
  */
 export function moveRovingFocus(event: KeyboardEvent<Element>): void {
   const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown'
@@ -72,7 +82,7 @@ export function moveRovingFocus(event: KeyboardEvent<Element>): void {
       ? -1
       : 0;
   if (direction === 0 && event.key !== 'Home' && event.key !== 'End') return;
-  const units = [...event.currentTarget.querySelectorAll<HTMLElement | SVGElement>(`[${MAP_UNIT_ATTR}]`)];
+  const units = [...event.currentTarget.querySelectorAll<HTMLElement | SVGElement>(`[${MAP_UNIT_ATTR}][${MAP_POPULATED_ATTR}]`)];
   const current = units.findIndex((unit) => unit === event.target);
   if (current < 0 || units.length === 0) return;
   event.preventDefault();
@@ -82,6 +92,13 @@ export function moveRovingFocus(event: KeyboardEvent<Element>): void {
       ? units.length - 1
       : (current + direction + units.length) % units.length;
   units[next]?.focus();
+}
+
+/** The state stage's description: how many drawn states the keys skip (none: no note). */
+export function skippedStatesNote(count: number): string {
+  return count === 1
+    ? '1 state has no borrowers in this selection and is skipped; the table view lists them.'
+    : `${fmt(count)} states have no borrowers in this selection and are skipped; the table view lists them.`;
 }
 
 /** Where the hover card anchors for a focused unit: top centre of its box, in client coordinates. */

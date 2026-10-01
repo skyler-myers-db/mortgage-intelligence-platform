@@ -510,15 +510,17 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       await expect(page.locator('.map-legend__hint')).toBeVisible();
       expect(await legendCoverage(page, 'az')).toBe(0);
 
+      // The arrows walk populated states only (dataviz-10): Arizona's next
+      // stop is California, not Arkansas (no borrowers in the fixture book).
       await page.keyboard.press('ArrowRight');
-      await expect(page.locator('path[data-map-unit]:focus')).toHaveAttribute('data-map-unit', 'ar');
-      await expect(page.locator('.map-tip .map-tip__name')).toHaveText('Arkansas');
+      await expect(page.locator('path[data-map-unit]:focus')).toHaveAttribute('data-map-unit', 'ca');
+      await expect(page.locator('.map-tip .map-tip__name')).toHaveText('California');
       // The card sits over the focused state, not at the pointer (it
       // re-anchors on the frame after the focus scroll, so poll for it).
       await expect(async () => {
         const [card, shape] = await Promise.all([
           page.locator('.map-tip').boundingBox(),
-          page.locator('path[data-map-unit="ar"]').boundingBox(),
+          page.locator('path[data-map-unit="ca"]').boundingBox(),
         ]);
         if (!card || !shape) throw new Error('card or state not laid out');
         expect(Math.abs(card.x + card.width / 2 - (shape.x + shape.width / 2))).toBeLessThan(2);
@@ -526,7 +528,7 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       }).toPass();
 
       await expectAxeClean(page, { key: { route: 'map-encoding', state: 'state-focused' }, theme, known: {}, include: '.map-wrap' });
-      await expect(page.locator('.map-tip .map-tip__name')).toHaveText('Arkansas');
+      await expect(page.locator('.map-tip .map-tip__name')).toHaveText('California');
       await expectAxeClean(page, { key: { route: 'map-encoding', state: 'state-focused-card' }, theme, known: {}, include: '.map-tip' });
 
       // Escape hides the card and stops there, so the same keypress never also
@@ -551,13 +553,11 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       await expect(page.locator('.map-tip')).toHaveCount(0);
       // Shift+Tab comes back to the state the arrows left.
       await page.keyboard.press('Shift+Tab');
-      await expect(page.locator('path[data-map-unit]:focus')).toHaveAttribute('data-map-unit', 'ar');
+      await expect(page.locator('path[data-map-unit]:focus')).toHaveAttribute('data-map-unit', 'ca');
 
-      // Enter on a populated state drills and moves focus to its first ZIP.
+      // Home goes to the first populated state (Arizona, not Alabama); Enter
+      // on it drills and moves focus to its first ZIP.
       await page.keyboard.press('Home');
-      await expect(page.locator('path[data-map-unit]:focus')).toHaveAttribute('data-map-unit', 'al');
-      await page.keyboard.press('ArrowRight');
-      await page.keyboard.press('ArrowRight');
       await expect(page.locator('path[data-map-unit]:focus')).toHaveAttribute('data-map-unit', 'az');
       await page.keyboard.press('Enter');
       await expect(page).toHaveURL(/geo_state=AZ/);
@@ -582,7 +582,8 @@ test.describe('keyboard, screen reader and table access (a11y-04)', () => {
       const table = page.getByTestId('map-table').locator('table');
       await expect(table).toBeVisible();
       await expect(page.locator('svg.map-svg-stage')).toHaveCount(0);
-      const rows = table.locator('tbody tr');
+      // The populated group; the states with no borrowers follow in their own group.
+      const rows = table.locator('tbody').first().locator('tr');
       await expect(rows).toHaveCount(STATES.length);
       await expect(page.getByTestId('map-table-total')).toHaveText(legendTotal);
       // Sorted by count, largest first; the header says so.
