@@ -105,6 +105,8 @@ describe('every referenced custom property resolves (css-04 / motion-04)', () =>
   const TSX_SET = [
     '--bin-alpha', '--bin-h', '--bin-w', '--bin-x', '--bin-y',
     '--dot-x', '--dot-y', '--facet-share', '--hover-x', '--hover-y', '--rule-x', '--tick-pos',
+    // The Genie kit charts (dataviz-05): a bar's width and a point's position.
+    '--bar-w', '--point-x', '--point-y',
   ];
   /** Read with a fallback on purpose: TSX sets them on some elements only. */
   const TSX_SET_WITH_FALLBACK = [

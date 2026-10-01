@@ -136,6 +136,12 @@ const DATA_MARKS = [
   '.offer-mix',
   '.offer-mix__seg',
   '.offer-mix__swatch',
+  // The Genie kit charts (dataviz-05): bars and points in CanvasText on a
+  // Canvas track edged in CanvasText, and the line stroke.
+  '.genie-bars__bar',
+  '.genie-line__point',
+  '.genie-bars__track',
+  '.genie-line__path',
 ];
 
 describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
