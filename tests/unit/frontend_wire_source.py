@@ -324,11 +324,11 @@ class Project:
                 found = self.find_declaration(target, name, seen)
                 if found is not None:
                     return found
-        imported = module.imports().get(name)
-        if imported is not None and re.search(rf"\bexport\s+(?:type\s+)?\{{[^}}]*\b{re.escape(name)}\b", module.code):
-            target = self.resolve_specifier(path, imported[0])
+        via_import = module.imports().get(name)
+        if via_import is not None and re.search(rf"\bexport\s+(?:type\s+)?\{{[^}}]*\b{re.escape(name)}\b", module.code):
+            target = self.resolve_specifier(path, via_import[0])
             if target is not None:
-                return self.find_declaration(target, imported[1], seen)
+                return self.find_declaration(target, via_import[1], seen)
         return None
 
     def resolve_type(self, path: Path, name: str) -> tuple[Path, str] | None:

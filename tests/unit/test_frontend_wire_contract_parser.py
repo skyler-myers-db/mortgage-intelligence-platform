@@ -1,4 +1,5 @@
-"""Planted cases for the wire-contract parser (tests/unit/frontend_wire_contract.py).
+"""Planted cases for the wire-contract parser (tests/unit/frontend_wire_contract.py
+and tests/unit/frontend_wire_raw_sites.py).
 
 Every normalizer rule and every failure class of the binding pytest, on
 in-memory strings or a planted module tree, so a parser change that silently
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from tests.unit import frontend_wire_contract as wire
+from tests.unit import frontend_wire_raw_sites as wire_raw
 from tests.unit import frontend_wire_source as source
 
 API_GEN = """\
@@ -43,6 +45,14 @@ export interface ApiOperations {
   "POST /api/v1/offers/recommend": {
     body: RequestSchemas['OfferRecommendRequest'];
     ok: ResponseSchemas['OfferRecommendation'];
+  };
+  "GET /api/v1/telemetry/rum": {
+    body: never;
+    ok: ResponseSchemas['RumStatus'];
+  };
+  "POST /api/v1/telemetry/rum": {
+    body: RequestSchemas['RumBatch'];
+    ok: ResponseSchemas['RumAccepted'];
   };
   "GET /api/v1/x/{a}/y": {
     body: never;
@@ -279,7 +289,7 @@ export interface Health { status: string }
 def planted(tmp_path: Path) -> dict[str, wire.Site]:
     project = _tree(tmp_path, {"client.ts": SITE_MODULE, "types.ts": TYPES_MODULE})
     pairs = [wire.Pair("response", (str(tmp_path / "types.ts"), "Health"), "ApiResponse", "HealthResponse", "x")]
-    sites = wire.find_sites(project, OPS, [tmp_path / "client.ts"])
+    sites = wire_raw.find_sites(project, OPS, [tmp_path / "client.ts"])
     wire.bind_sites(project, sites, OPS, pairs)
     return {f"{site.name}:{site.kind}": site for site in sites}
 
@@ -298,7 +308,7 @@ def test_a_schema_named_type_argument_binds(planted: dict[str, wire.Site]) -> No
         ("generic:transport", "T does not resolve"),
         ("untyped:transport", "expected 1 type argument(s), found 0"),
         ("bare:raw", "without a `// wire:` annotation"),
-        ("mislabelled:raw", "but the literal resolves to"),
+        ("mislabelled:raw", "but the URL resolves to"),
         ("orphanCast:cast", "no annotated raw site"),
     ],
 )
@@ -316,6 +326,136 @@ def test_an_annotated_raw_site_binds_its_cast_through_a_pair(planted: dict[str, 
 
 def test_a_variable_url_fetch_is_not_a_wire_site(planted: dict[str, wire.Site]) -> None:
     assert "notApi:raw" not in planted
+
+
+# Every in-spec raw URL shape (review of the W5b lane: these were skipped).
+# Each shape is planted twice: `bare_<n>` without an annotation, which must be
+# a failing site, and `bound_<n>` with the right one, which must bind.
+RAW_SHAPES = {
+    "api_path_template": ("fetch(apiPath(`/borrowers/${id}`))", "GET /api/v1/borrowers/{borrower_id}"),
+    "backtick_api_template": ("fetch(`/api/borrowers/${id}`)", "GET /api/v1/borrowers/{borrower_id}"),
+    "api_path_const": ("fetch(apiPath(SEARCH))", "GET /api/v1/borrowers/search"),
+    "concatenated_query": ("fetch(apiPath('/health') + '?idle_s=' + idle)", "GET /api/v1/health"),
+    "template_wrapped_api_path": ("fetch(`${apiPath('/health')}?idle_s=${idle}`)", "GET /api/v1/health"),
+    "api_path_ternary": ("fetch(apiPath(id ? `/borrowers/${id}` : `/borrowers/${'x'}`))", "GET /api/v1/borrowers/{borrower_id}"),
+    "window_fetch": ("window.fetch(apiPath('/health'))", "GET /api/v1/health"),
+    "global_this_fetch": ("globalThis.fetch(apiPath('/health'), { signal })", "GET /api/v1/health"),
+    "self_fetch": ("self.fetch('/api/v1/health')", "GET /api/v1/health"),
+    "const_url": ("fetch(HEALTH_URL)", "GET /api/v1/health"),
+    "post_init": ("fetch(apiPath('/telemetry/rum'), { method: 'POST', body })", "POST /api/v1/telemetry/rum"),
+    "beacon": ("window.navigator.sendBeacon(apiPath('/telemetry/rum'), blob)", "POST /api/v1/telemetry/rum"),
+    "local_api_path": ("apiPath('/health')", "GET /api/v1/health"),
+}
+
+
+def _raw_module() -> str:
+    lines = [
+        "import { apiPath } from './apiPaths';",
+        "import { HEALTH_URL } from './paths';",
+        "const SEARCH = '/borrowers/search';",
+    ]
+    for name, (call, key) in RAW_SHAPES.items():
+        for prefix, annotation in (("bare", None), ("bound", key)):
+            lines.append(f"async function {prefix}_{name}(id: string, idle: number, signal: AbortSignal, blob: Blob, body: string) {{")
+            if annotation:
+                lines.append(f"  // wire: '{annotation}'")
+            lines.append(f"  const res = {call};")
+            lines.append("  return res;")
+            lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+@pytest.fixture()
+def raw_planted(tmp_path: Path) -> dict[str, list[wire.Site]]:
+    project = _tree(tmp_path, {"client.ts": _raw_module(), "paths.ts": "export const HEALTH_URL = '/api/health';\n"})
+    sites = wire_raw.find_sites(project, OPS, [tmp_path / "client.ts"])
+    grouped: dict[str, list[wire.Site]] = {}
+    for site in sites:
+        grouped.setdefault(site.name, []).append(site)
+    return grouped
+
+
+@pytest.mark.parametrize("name", sorted(RAW_SHAPES))
+def test_every_raw_url_shape_is_a_site_that_needs_its_annotation(raw_planted: dict[str, list[wire.Site]], name: str) -> None:
+    bare = raw_planted.get(f"bare_{name}", [])
+    bound = raw_planted.get(f"bound_{name}", [])
+
+    assert [s.kind for s in bare] == ["raw"], f"bare_{name}: the URL shape must be a raw site"
+    assert not bare[0].bound and "without a `// wire:` annotation" in bare[0].errors[0]
+    assert [s.kind for s in bound] == ["raw"] and bound[0].bound, bound[0].errors if bound else "no site"
+    assert bound[0].operation == RAW_SHAPES[name][1]
+
+
+UNRESOLVABLE = wire_raw.UNRESOLVABLE
+UNRESOLVABLE_URLS = {
+    "placeholder_inside_segment": ("fetch(apiPath(`/x/${a}-${b}`))", "GET /api/v1/health", UNRESOLVABLE),
+    "path_concatenation": ("fetch(apiPath('/borrowers/') + id)", "GET /api/v1/borrowers/{borrower_id}", UNRESOLVABLE),
+    "base_plus_path": ("fetch(apiPath(base + '/health'))", "GET /api/v1/health", UNRESOLVABLE),
+    "absolute_url": ("fetch(`${origin}/api/health`)", "GET /api/v1/health", UNRESOLVABLE),
+    "unknown_const": ("fetch(apiPath(NOT_A_CONST))", "GET /api/v1/health", UNRESOLVABLE),
+    "split_ternary": (
+        "fetch(flag ? apiPath('/health') : apiPath('/borrowers/search'))",
+        "GET /api/v1/health",
+        "but the URL resolves to ['GET /api/v1/borrowers/search', 'GET /api/v1/health']",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(UNRESOLVABLE_URLS))
+def test_an_unresolvable_raw_url_fails_even_when_annotated(tmp_path: Path, name: str) -> None:
+    call, key, message = UNRESOLVABLE_URLS[name]
+    module = f"import {{ apiPath }} from './apiPaths';\nasync function site(id: string) {{\n  // wire: '{key}'\n  return {call};\n}}\n"
+    project = _tree(tmp_path, {"client.ts": module})
+
+    sites = wire_raw.find_sites(project, OPS, [tmp_path / "client.ts"])
+
+    assert [s.kind for s in sites] == ["raw"], name
+    assert not sites[0].bound
+    assert any(message in error for error in sites[0].errors), sites[0].errors
+
+
+@pytest.mark.parametrize(
+    ("call", "annotation", "message"),
+    [
+        ("fetch(apiPath('/telemetry/rum'), { method: 'POST' })", "GET /api/v1/telemetry/rum", "the call sends POST"),
+        ("fetch(apiPath('/telemetry/rum'))", "POST /api/v1/telemetry/rum", "the call sends GET"),
+        ("navigator.sendBeacon(apiPath('/telemetry/rum'), blob)", "GET /api/v1/telemetry/rum", "the call sends POST"),
+        ("fetch(apiPath('/telemetry/rum'), init)", "GET /api/v1/telemetry/rum", "not an object literal"),
+        ("fetch(apiPath('/telemetry/rum'), { ...init })", "GET /api/v1/telemetry/rum", "a spread"),
+        ("fetch(apiPath('/telemetry/rum'), { method })", "GET /api/v1/telemetry/rum", "not a string literal"),
+    ],
+)
+def test_the_annotated_method_must_be_the_method_the_call_sends(
+    tmp_path: Path, call: str, annotation: str, message: str
+) -> None:
+    module = f"async function site() {{\n  // wire: '{annotation}'\n  return {call};\n}}\n"
+    project = _tree(tmp_path, {"client.ts": module})
+
+    sites = wire_raw.find_sites(project, OPS, [tmp_path / "client.ts"])
+
+    assert len(sites) == 1 and not sites[0].bound
+    assert any(message in error for error in sites[0].errors), sites[0].errors
+
+
+def test_a_local_api_path_url_binds_its_cast(tmp_path: Path) -> None:
+    module = (
+        "import type { Health } from './types';\n"
+        "async function read(): Promise<Health> {\n"
+        "  // wire: 'GET /api/v1/health'\n"
+        "  const url = apiPath('/health');\n"
+        "  const res = await fetch(url);\n"
+        "  return (await res.json()) as Health;\n"
+        "}\n"
+        "export function apiPath(path: string): string {\n  return path;\n}\n"
+    )
+    project = _tree(tmp_path, {"client.ts": module, "types.ts": TYPES_MODULE})
+    pairs = [wire.Pair("response", (str(tmp_path / "types.ts"), "Health"), "ApiResponse", "HealthResponse", "x")]
+
+    sites = wire_raw.find_sites(project, OPS, [tmp_path / "client.ts"])
+    wire.bind_sites(project, sites, OPS, pairs)
+
+    assert [(s.kind, s.helper) for s in sites] == [("raw", "apiPath"), ("cast", "json")]
+    assert all(s.bound and s.operation == "GET /api/v1/health" for s in sites), [s.errors for s in sites]
 
 
 def test_site_keys_name_the_enclosing_property_with_an_ordinal(planted: dict[str, wire.Site]) -> None:

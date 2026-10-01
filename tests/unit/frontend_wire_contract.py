@@ -7,7 +7,10 @@ tree works. It answers three questions for the wire-contract pytest:
 1. Which hand types are schema-named (a ResponseSchemas/RequestSchemas key)
    and therefore need a pair in a ``wireContract.<domain>.check.ts`` file.
 2. Which ApiOperations key every frontend network call site resolves to, and
-   whether its type arguments are bound to that operation's ``ok`` / ``body``.
+   whether its type arguments are bound to that operation's ``ok`` / ``body``
+   (transport calls here; raw fetch / sendBeacon / apiPath sites, their casts
+   and BOOT_READS in tests/unit/frontend_wire_raw_sites.py, whose
+   ``find_sites`` walks both).
 3. Which pairs the check files declare, resolved through their own imports.
 
 Schema keys come from tools.gen_api_types over the committed OpenAPI
@@ -20,7 +23,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -569,30 +572,9 @@ def scope_files(src: Path = SRC) -> list[Path]:
 
 
 _TRANSPORT_CALL = re.compile(r"(?<![\w$.])(getJson|getJsonWithHeaders|postJson|putJson|patchJson|deleteJson)\s*([<(])")
-_RAW_CALL = re.compile(r"(?<![\w$.])(fetch|navigator\.sendBeacon)\s*\(")
-_CAST = re.compile(r"\.json\(\)\s*\)?\s*as\s+([A-Za-z_$][\w$]*(?:\[\])?)")
 
 
-def find_sites(project: Project, operations: dict[str, Operation], files: Iterable[Path]) -> list[Site]:
-    sites: list[Site] = []
-    for path in files:
-        module = project.module(path)
-        if not re.search(r"getJson|postJson|putJson|patchJson|deleteJson|fetch|sendBeacon|BOOT_READS|\.json\(\)", module.code):
-            continue
-        spans = function_spans(module)
-        sites += list(_transport_sites(project, module, spans, operations))
-        sites += list(_raw_sites(project, module, spans, operations))
-    counts: dict[tuple[str, str], int] = {}
-    for site in sites:
-        if site.kind == "boot":
-            site.ordinal = 1
-            continue
-        counts[(site.file, site.name)] = counts.get((site.file, site.name), 0) + 1
-        site.ordinal = counts[(site.file, site.name)]
-    return sites
-
-
-def _transport_sites(
+def transport_sites(
     project: Project, module: Module, spans: list[Span], operations: dict[str, Operation]
 ) -> Iterator[Site]:
     code, kinds = module.code, module.kinds
@@ -617,78 +599,6 @@ def _transport_sites(
         except Unresolvable as exc:
             site.errors.append(f"path: {exc}")
         yield site
-
-
-def _annotation_above(module: Module, pos: int) -> tuple[str, str] | None:
-    lines = module.text.splitlines()
-    index = line_of(module.text, pos) - 2
-    if index < 0:
-        return None
-    m = WIRE_ANNOTATION.match(lines[index])
-    return (m.group(1), m.group(2)) if m else None
-
-
-def _raw_sites(project: Project, module: Module, spans: list[Span], operations: dict[str, Operation]) -> Iterator[Site]:
-    code, kinds = module.code, module.kinds
-    annotated: dict[int, str] = {}
-    for m in _RAW_CALL.finditer(code):
-        if kinds[m.start()] != "c":
-            continue
-        args, _ = parse_call_args(code, kinds, m.end() - 1)
-        url = args[0] if args else ""
-        api_call = re.fullmatch(r"apiPath\(\s*('[^']*'|\"[^\"]*\")\s*\)", url)
-        literal = _string_literal(url)
-        if api_call is None and not (literal and literal.startswith("/api/")):
-            continue
-        span = enclosing_span(spans, m.start())
-        site = Site(module.rel, line_of(code, m.start()), "raw", span.name if span else "<module>", helper=m.group(1))
-        raw_path = _string_literal(api_call.group(1)) if api_call else literal
-        site.operation = _check_annotation(module, m.start(), raw_path or "", operations, site.errors)
-        if site.operation and span is not None:
-            annotated[span.start] = site.operation
-        yield site
-    for m in _CAST.finditer(code):
-        if kinds[m.start()] != "c":
-            continue
-        span = enclosing_span(spans, m.start())
-        site = Site(module.rel, line_of(code, m.start()), "cast", span.name if span else "<module>", helper="json")
-        site.type_args = [m.group(1)]
-        site.operation = annotated.get(span.start) if span else None
-        if site.operation is None:
-            site.errors.append("cast: no annotated raw site in the same function")
-        yield site
-    boot = re.search(r"\bconst\s+BOOT_READS\s*=\s*\{", code)
-    if boot is not None:
-        end = match_bracket(code, kinds, boot.end() - 1)
-        block_start = boot.end()
-        for m in re.finditer(r"(?m)^\s*([A-Za-z_$][\w$]*)\s*:\s*\{\s*url:\s*'([^']*)'", code[block_start:end]):
-            pos = block_start + m.start(1)
-            site = Site(module.rel, line_of(code, pos), "boot", f"BOOT_READS.{m.group(1)}", helper="fetch")
-            site.operation = _check_annotation(module, pos, m.group(2), operations, site.errors)
-            yield site
-
-
-def _check_annotation(
-    module: Module, pos: int, raw_path: str, operations: dict[str, Operation], errors: list[str]
-) -> str | None:
-    annotation = _annotation_above(module, pos)
-    if annotation is None:
-        errors.append("raw site without a `// wire:` annotation on the line above")
-        return None
-    method, path = annotation
-    key = f"{method} {path}"
-    if key not in operations:
-        errors.append(f"annotation {key!r} is not an ApiOperations key")
-        return None
-    try:
-        resolved = match_operation(operations, method, normalize([("lit", raw_path)]))
-    except Unresolvable as exc:
-        errors.append(f"annotation path: {exc}")
-        return None
-    if resolved != key:
-        errors.append(f"annotation {key!r} but the literal resolves to {resolved!r}")
-        return None
-    return key
 
 
 # --------------------------------------------------------------------------

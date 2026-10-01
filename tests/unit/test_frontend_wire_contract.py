@@ -14,8 +14,10 @@ Decision D-api-types-a3 P1, static and without Node:
     wire-drift entry, and the check files hold nothing else that could hide
     a mismatch.
 
-The parser lives in tests/unit/frontend_wire_contract.py; its own rules are
-pinned by tests/unit/test_frontend_wire_contract_parser.py.
+The parser lives in tests/unit/frontend_wire_contract.py (paths, transport
+calls, binding, check files) and tests/unit/frontend_wire_raw_sites.py (raw
+sites, casts, BOOT_READS); its own rules are pinned by
+tests/unit/test_frontend_wire_contract_parser.py.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import re
 from functools import cache
 
 from tests.unit import frontend_wire_contract as wire
+from tests.unit import frontend_wire_raw_sites as wire_raw
 from tests.unit import frontend_wire_source as source
 
 # Shrink-only: an entry whose site now parses and binds (or no longer exists)
@@ -84,7 +87,7 @@ def _state() -> tuple[wire.Project, dict[str, wire.Operation], wire.CheckFiles, 
     project = wire.Project()
     operations = wire.parse_operations(wire.API_GEN.read_text(encoding="utf-8"))
     checks = wire.parse_check_files(project)
-    sites = wire.find_sites(project, operations, wire.scope_files())
+    sites = wire_raw.find_sites(project, operations, wire.scope_files())
     wire.bind_sites(project, sites, operations, checks.pairs)
     return project, operations, checks, tuple(sites)
 
