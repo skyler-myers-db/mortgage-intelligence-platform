@@ -113,10 +113,12 @@ export function flushRum(): void {
   queue = queue.slice(MAX_BATCH);
   const body = JSON.stringify({ events: batch });
   const blob = new Blob([body], { type: 'application/json' });
+  // wire: 'POST /api/v1/telemetry/rum'
   if (navigator.sendBeacon && navigator.sendBeacon(apiPath('/telemetry/rum'), blob)) {
     if (queue.length > 0) flushRum();
     return;
   }
+  // wire: 'POST /api/v1/telemetry/rum'
   void fetch(apiPath('/telemetry/rum'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

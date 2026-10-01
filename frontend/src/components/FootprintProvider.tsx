@@ -125,6 +125,7 @@ interface FootprintProviderProps {
 }
 
 export async function defaultFetchFootprint(signal?: AbortSignal): Promise<FootprintPayload> {
+  // wire: 'GET /api/v1/config/footprint'
   const res = await fetch(apiPath('/config/footprint'), { signal });
   if (!res.ok) throw new Error(`footprint fetch ${res.status}`);
   return (await res.json()) as FootprintPayload;

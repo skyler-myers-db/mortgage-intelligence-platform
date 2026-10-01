@@ -74,6 +74,7 @@ interface DegradedBannerProps {
 }
 
 async function defaultFetchHealth(): Promise<HealthPayload> {
+  // wire: 'GET /api/v1/health'
   const res = await fetch(apiPath('/health'));
   if (!res.ok) {
     // A non-2xx on /api/health is itself a degraded signal -- we
