@@ -281,6 +281,20 @@
   font-family: var(--font-mono);
   font-size: var(--fs-12);
 }
+/* The reviewed lender mark (responsive-10, 12.4 #9): in the topbar tenant
+   pill and the Console 'Configured tenant' chip, in place of the building
+   glyph, only on a co-branded build whose session lender matches. App-added
+   block, not a topbar__ element, because it renders in both places; a light
+   plate keeps any mark legible in either theme (deviation:lender-mark). */
+.lender-mark {
+  block-size: var(--sp-4);
+  inline-size: auto;
+  max-inline-size: var(--sp-8);
+  object-fit: contain;
+  border-radius: var(--r-sm);
+  padding: 1px;
+  background: var(--brand-mark-plate);
+}
 /* Below 89rem (1424px) the two side tracks can no longer both hold the
    actions cluster at max-content (it needs a 1412px viewport since the
    identity menu joined it), so the third track sizes to its content

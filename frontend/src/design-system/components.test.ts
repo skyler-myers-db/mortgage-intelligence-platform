@@ -833,4 +833,14 @@ describe('success CTA, loading button and lender mark (a11y-01 / motion-08 / res
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.btn__spinner\s*\{\s*animation:\s*none;\s*\}\s*\}/);
     expect(tokensCss()).toMatch(/:root \{ --dur-spin: 900ms; --ease-linear: linear; \}/);
   });
+
+  it('sizes the lender mark to the pill on a light plate, edged in forced colours', () => {
+    const css = designCss();
+    const mark = rule('.lender-mark');
+    expect(mark[0]?.replace(/\s+/g, ' ')).toBe(
+      'block-size: var(--sp-4); inline-size: auto; max-inline-size: var(--sp-8); object-fit: contain; border-radius: var(--r-sm); padding: 1px; background: var(--brand-mark-plate);',
+    );
+    expect(tokensCss()).toMatch(/:root \{ --brand-mark-plate: #FFFFFF; \}/);
+    expect(css).toMatch(/@media \(forced-colors: active\)\s*\{[\s\S]*?\.lender-mark\s*\{\s*background:\s*Canvas;\s*border:\s*1px solid CanvasText;\s*\}/);
+  });
 });

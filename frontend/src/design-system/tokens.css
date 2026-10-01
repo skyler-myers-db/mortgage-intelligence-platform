@@ -819,3 +819,10 @@ input[type="checkbox"] {
  * speed; the reduced-motion block stops it (deviation:button-loading).
  */
 :root { --dur-spin: 900ms; --ease-linear: linear; }
+
+/* ---------- Lender mark plate (responsive-10, 12.4 #9; W5b) ----------
+ * The backing behind a reviewed lender mark (.lender-mark): white in both
+ * themes, so a mark drawn for a light letterhead stays legible on the dark
+ * topbar (deviation:lender-mark).
+ */
+:root { --brand-mark-plate: #FFFFFF; }

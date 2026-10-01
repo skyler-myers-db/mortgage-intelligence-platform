@@ -10,20 +10,27 @@ import { freshnessBucket, FRESHNESS_LABEL, type FreshnessBucket } from './freshn
 export { freshnessBucket, FRESHNESS_LABEL };
 export type { FreshnessBucket };
 
+/**
+ * What leads a chip's label: a prototype glyph by name, or (`leading`) a
+ * rendered node in its place, e.g. the Console tenant chip's LenderMark
+ * (responsive-10). Never both.
+ */
+type ChipLead = { icon?: IconName; leading?: never } | { icon?: never; leading?: ReactNode };
+
 /** Chip — `.chip` + `.chip--success/warning/danger/neutral` */
 export function Chip({
   children,
   variant,
   icon,
+  leading,
   className,
   title,
   tooltip,
   tooltipShortcut,
   onRemove,
   removeLabel,
-}: PropsWithChildren<{
+}: PropsWithChildren<ChipLead & {
   variant?: 'success' | 'warning' | 'danger' | 'neutral';
-  icon?: IconName;
   className?: string;
   /**
    * Optional native `title` tooltip. Used by the "Refreshed …" chip to
@@ -51,7 +58,7 @@ export function Chip({
   const cls = ['chip', variant ? `chip--${variant}` : '', className ?? ''].filter(Boolean).join(' ');
   const chip = (
     <span className={cls} title={title}>
-      {icon && <Icon name={icon} size={10} />}
+      {leading ?? (icon && <Icon name={icon} size={10} />)}
       <span className="chip__label">{children}</span>
       {onRemove && (
         <button

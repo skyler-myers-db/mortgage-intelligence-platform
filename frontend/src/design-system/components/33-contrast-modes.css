@@ -90,6 +90,11 @@
     border: 1px solid CanvasText;
   }
   .map-label { forced-color-adjust: none; }
+  /* The lender mark's light plate is forced away; an edge keeps its box. */
+  .lender-mark {
+    background: Canvas;
+    border: 1px solid CanvasText;
+  }
   .topbar__pill .dot.dot {
     forced-color-adjust: none;
     background-color: CanvasText;

@@ -206,3 +206,20 @@ describe('Button loading', () => {
   });
 });
 
+/** responsive-10: the Console tenant chip leads with LenderMark through `leading`, in place of the icon. */
+describe('Chip leading', () => {
+  it('renders the leading node where the icon goes, before the label', async () => {
+    const { container } = await mount(
+      <>
+        <Chip variant="neutral" leading={<img className="lead-probe" alt="" />}>Fixture Test Lending</Chip>
+        <Chip variant="neutral" icon="building">Plain</Chip>
+      </>,
+    );
+    const [led, plain] = [...container.querySelectorAll('span.chip')];
+    expect(led?.firstElementChild?.className).toBe('lead-probe');
+    expect(led?.querySelector('svg')).toBeNull();
+    expect(led?.querySelector('.chip__label')?.textContent).toBe('Fixture Test Lending');
+    expect(plain?.firstElementChild?.tagName.toLowerCase()).toBe('svg');
+  });
+});
+

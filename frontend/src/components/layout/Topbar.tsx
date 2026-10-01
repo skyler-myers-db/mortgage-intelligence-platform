@@ -9,6 +9,7 @@ import { useHealth } from '../HealthProvider';
 import type { ConnectionStatus } from '../connectionState';
 import { Breadcrumbs } from './Breadcrumbs';
 import { IdentityMenu } from './IdentityMenu';
+import { LenderMark } from './LenderMark';
 import { useFootprint } from '../FootprintProvider';
 import { api, type HealthPayload } from '../../lib/api';
 import { hasOpenModal, registerKeyBinding } from '../../lib/keymap';
@@ -457,7 +458,7 @@ export function Topbar() {
           className="topbar__pill"
           aria-label={`Configured tenant: ${lender}`}
         >
-          <Icon name="building" size={12} />
+          <LenderMark iconSize={12} />
           <span className="topbar__pill-tenant">{lender}</span>
         </div>
       </Tooltip>
