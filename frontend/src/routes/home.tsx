@@ -13,6 +13,9 @@ import { Reveal } from '../components/fx/Reveal';
 import { homeQueries } from '../lib/homeQueries';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { AsyncStatus } from '../components/ui/AsyncState';
+import { FetchedAt } from '../components/ui/FetchedAt';
+import { StaleDataNote } from '../components/ui/StaleDataNote';
+import { isAbortError } from '../lib/apiTransport';
 import { useApp } from '../components/AppContext';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { signedPct } from '../lib/formatters';
@@ -45,6 +48,12 @@ function formatDelta(trend: KpiTrend | undefined): string | undefined {
   const pct = trend?.delta_pct;
   if (pct === null || pct === undefined) return undefined;
   return `${signedPct(pct)} ${trend?.comparison_label ?? 'vs prior snapshot'}`;
+}
+
+/** The oldest of the known instants (epoch ms), or null. */
+function oldest(instants: readonly (number | null)[]): number | null {
+  const known = instants.filter((at): at is number => typeof at === 'number' && Number.isFinite(at));
+  return known.length > 0 ? Math.min(...known) : null;
 }
 
 export function HomeDayZeroStatus({ canAccessAdmin }: { canAccessAdmin: boolean }) {
@@ -81,14 +90,25 @@ export default function Home() {
   // S4 "since your last login" summary: additive fetch — the KPI row above
   // owns the degraded-state story, so a warming/erroring summary simply
   // renders nothing rather than stacking a second callout.
-  const {
-    data: summary,
-    warmingUp: summaryWarming,
-    error: summaryError,
-  } = useWarmingUpRetry<HomeSummary>(requestHomeSummary, {
+  const summaryQuery = useWarmingUpRetry<HomeSummary>(requestHomeSummary, {
     queryKey: homeQueries.homeSummary.queryKey(),
   });
+  const { data: summary, warmingUp: summaryWarming, error: summaryError } = summaryQuery;
   const summaryLoading = !summary && !summaryError && !summaryWarming;
+
+  // The briefing's age (states-09; delivery-05 W5a ruling): the OLDEST fetch
+  // of the two hero reads, so a snapshot restored after a reload says how old
+  // it really is ("Fetched 3 h ago" while "Refreshing…") until the fresh
+  // reads land. Refresh re-reads both: neither writes an audit row.
+  const heroReads = [previewQuery, summaryQuery];
+  const fetchedAt = oldest(heroReads.map((query) => query.dataUpdatedAt));
+  // A refresh that failed over data still on screen: the data is not
+  // current, so Home says so once, with that data's age. (A restored value
+  // whose FIRST refresh fails is reset by lib/queryPersist instead and shows
+  // its warming or error state.)
+  const staleAt = oldest(heroReads
+    .filter((query) => query.data !== null && query.error !== null && !isAbortError(query.error))
+    .map((query) => query.dataUpdatedAt));
 
   const queued = preview?.high_intent_leads ?? null;
   const kpisLoading = preview === null && !previewError && !previewWarming;
@@ -127,6 +147,17 @@ export default function Home() {
               Refreshed <Timestamp value={preview?.data_refreshed_at} />
             </Chip>
           )}
+          {/* deviation:home-fetched-at: the briefing's own fetch age and
+              its one Refresh, beside the gold table's refresh time. */}
+          <FetchedAt
+            at={fetchedAt}
+            subject="today's briefing"
+            isFetching={previewQuery.isFetching || summaryQuery.isFetching}
+            onRefresh={() => {
+              previewQuery.manualRetry();
+              summaryQuery.manualRetry();
+            }}
+          />
           {/* Exactly one primary action on Home (2026-09-21 audit flow-05):
               the ranked queue the answer band previews. Building a portfolio
               comes after reviewing leads, so it moved to the side panel's
@@ -148,6 +179,7 @@ export default function Home() {
             recovery, healthRecovery.ts), and any other failure in red with
             the buyer-safe copy. A true outage promises no duration. */}
         <AsyncStatus query={previewQuery} subject="Portfolio KPIs" compact />
+        <StaleDataNote lastGoodAt={staleAt} />
         {isDayZero && (
           <HomeDayZeroStatus canAccessAdmin={canAccessAdmin} />
         )}

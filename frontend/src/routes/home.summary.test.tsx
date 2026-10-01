@@ -80,20 +80,38 @@ const SUMMARY: HomeSummary = {
   baseline_source: 'mip_app.kpi_snapshots',
 };
 
-// One mocked hook, two callers: route the result by react-query key so the
-// preview and the summary each see their own payload.
+// One mocked hook, several callers: route the result by react-query key so
+// the preview and the summary each see their own payload (and their own
+// fetch time, error and Refresh), and any other read on Home stays pending.
+interface HeroRead {
+  data: unknown;
+  warmingUp: null;
+  error: Error | null;
+  manualRetry: () => void;
+  isFetching: boolean;
+  isPlaceholderData: boolean;
+  dataUpdatedAt: number | null;
+  errorUpdatedAt: number | null;
+}
+const heroRead = (data: unknown, overrides: Partial<HeroRead> = {}): HeroRead => ({
+  data,
+  warmingUp: null,
+  error: null,
+  manualRetry: vi.fn(),
+  isFetching: false,
+  isPlaceholderData: false,
+  dataUpdatedAt: Date.parse('2026-10-01T09:00:00Z'),
+  errorUpdatedAt: null,
+  ...overrides,
+});
+const reads = vi.hoisted(() => ({ byKey: new Map<string, unknown>() }));
 vi.mock('../lib/useWarmingUpRetry', () => ({
   useWarmingUpRetry: (
     _fetcher: unknown,
     opts: { queryKey: readonly unknown[] },
-  ) => {
-    const key = opts.queryKey.join('.');
-    return {
-      data: key === 'mip.home.summary' ? SUMMARY : PREVIEW,
-      warmingUp: null,
-      error: null,
-      manualRetry: vi.fn(),
-    };
+  ) => reads.byKey.get(opts.queryKey.join('.')) ?? {
+    data: null, warmingUp: null, error: null, manualRetry: () => undefined, isFetching: true,
+    isPlaceholderData: false, dataUpdatedAt: null, errorUpdatedAt: null,
   },
 }));
 
@@ -119,6 +137,9 @@ vi.mock('../lib/api', async (importOriginal) => ({
 
 import Home from './home';
 
+const PREVIEW_KEY = 'mip.portfolio.preview.home';
+const SUMMARY_KEY = 'mip.home.summary';
+
 describe('Home renders the personalized last-login summary', () => {
   let root: Root;
   let container: HTMLElement;
@@ -128,6 +149,8 @@ describe('Home renders the personalized last-login summary', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     setDrawer.mockClear();
+    reads.byKey.set(PREVIEW_KEY, heroRead(PREVIEW));
+    reads.byKey.set(SUMMARY_KEY, heroRead(SUMMARY));
     act(() => {
       root.render(
         <MemoryRouter>
@@ -171,5 +194,61 @@ describe('Home renders the personalized last-login summary', () => {
     const signalSources = (source.signals ?? []).map((signal) => signal.source);
     expect(signalSources.some((s) => s.startsWith('kpi_snapshots.'))).toBe(true);
     expect(source.assetPath).toBe('mip.semantics.portfolio_headline_metric_view');
+  });
+
+  // states-09 / delivery-05 (the W5a ruling): the briefing says how old it
+  // is, a restored snapshot included, and one Refresh re-reads both reads.
+  function renderAgain() {
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <Home />
+        </MemoryRouter>,
+      );
+    });
+  }
+  const fetchedAt = () => container.querySelector('[data-testid="fetched-at"]');
+
+  it('shows the age of the OLDEST hero read in the hero, before the one primary action', () => {
+    const restoredAt = Date.parse('2026-10-01T06:00:00Z');
+    reads.byKey.set(SUMMARY_KEY, heroRead(SUMMARY, { dataUpdatedAt: restoredAt, isFetching: true }));
+    renderAgain();
+    const el = fetchedAt();
+    expect(el?.querySelector('time')?.getAttribute('dateTime')).toBe(new Date(restoredAt).toISOString());
+    // A restored value bridging its refresh: the true age plus "Refreshing…".
+    expect(el?.querySelector('button')?.textContent).toBe('Refreshing…');
+    const primary = container.querySelectorAll('.btn--primary');
+    expect(primary).toHaveLength(1);
+    expect(el && primary[0] && el.compareDocumentPosition(primary[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('Refresh re-reads both hero reads', () => {
+    const preview = heroRead(PREVIEW);
+    const summary = heroRead(SUMMARY);
+    reads.byKey.set(PREVIEW_KEY, preview);
+    reads.byKey.set(SUMMARY_KEY, summary);
+    renderAgain();
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Refresh today\'s briefing"]')?.click());
+    expect(preview.manualRetry).toHaveBeenCalledTimes(1);
+    expect(summary.manualRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a refresh that failed over the data on screen with that data\'s age, once', () => {
+    expect(container.querySelector('[data-testid="stale-data-note"]')).toBeNull();
+    const shownAt = Date.parse('2026-10-01T07:00:00Z');
+    reads.byKey.set(SUMMARY_KEY, heroRead(SUMMARY, { dataUpdatedAt: shownAt, error: new Error('refresh failed') }));
+    renderAgain();
+    const notes = container.querySelectorAll('[data-testid="stale-data-note"]');
+    expect(notes).toHaveLength(1);
+    expect(notes[0].querySelector('time')?.getAttribute('dateTime')).toBe(new Date(shownAt).toISOString());
+    expect(notes[0].closest('.home-stack')).not.toBeNull();
+    // The summary's values stay up under the note.
+    expect(container.querySelector('.login-summary')?.textContent).toContain('+2,250');
+  });
+
+  it('a failure with nothing on screen is not "stale": no note', () => {
+    reads.byKey.set(SUMMARY_KEY, heroRead(null, { error: new Error('down'), dataUpdatedAt: null }));
+    renderAgain();
+    expect(container.querySelector('[data-testid="stale-data-note"]')).toBeNull();
   });
 });

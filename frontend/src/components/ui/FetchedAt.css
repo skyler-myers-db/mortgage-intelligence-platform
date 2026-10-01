@@ -2,6 +2,7 @@
  * FetchedAt (audit 2026-09-21 states-09): the view's age and its Refresh,
  * beside a table header's title. Declared extension (design_files has no
  * freshness control); colocated, never in the initial stylesheet.
+ * deviation:home-fetched-at
  */
 .fetched-at {
   display: inline-flex;
