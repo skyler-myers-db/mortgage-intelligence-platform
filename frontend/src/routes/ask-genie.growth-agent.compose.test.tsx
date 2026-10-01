@@ -307,6 +307,32 @@ describe('Growth Agent compose, review, run', () => {
     expect(request).toEqual({ objective: OBJECTIVE, states: ['IL'], plan: RECOMPOSED.plan, plan_digest: DIGEST_B });
   });
 
+  it('a Compose again that fails leaves no focus claim for a later command-bar compose', async () => {
+    composeMortgageGrowthAgentPlan
+      .mockResolvedValueOnce(composed())
+      .mockRejectedValueOnce(new ApiError('The planner is unavailable.', { path: '/api/growth-agent/agent/compose', status: 503 }))
+      .mockResolvedValueOnce(RECOMPOSED);
+    executeComposedGrowthAgentPlan.mockRejectedValue(
+      new ApiError('The reviewed plan expired before it was run; compose it again.', {
+        path: '/api/growth-agent/agent/plan/execute',
+        status: 409,
+      }),
+    );
+    mount();
+    await composeFromCommandBar();
+    act(() => button(/^Run this plan$/).click());
+    await waitUntil(() => document.activeElement?.textContent === 'Compose again');
+
+    act(() => button(/^Compose again$/).click());
+    await waitUntil(() => composeMortgageGrowthAgentPlan.mock.calls.length === 2 && pendingCard() === null);
+    expect(card()).toBeNull();
+
+    act(() => button(/^Compose plan$/).click());
+    await waitUntil(() => card()?.textContent?.includes('fn_offer_compare') ?? false);
+    // Only the card that answers Compose again takes focus; this one answers the command bar.
+    expect(card()?.contains(document.activeElement)).toBe(false);
+  });
+
   it('editing the objective clears the card and the next compose is reviewed from scratch', async () => {
     composeMortgageGrowthAgentPlan.mockResolvedValueOnce(composed()).mockResolvedValueOnce(RECOMPOSED);
     mount();

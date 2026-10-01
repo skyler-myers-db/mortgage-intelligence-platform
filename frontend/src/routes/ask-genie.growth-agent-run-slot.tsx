@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { usePrefersReducedMotion } from '../lib/usePrefersReducedMotion';
 import { ComposePlanCard } from './ask-genie.compose-plan-card';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
@@ -80,8 +80,6 @@ export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRu
   const composePlan = agent.composePlan;
   const latestRun = agent.latestGrowthRun;
   const { runSave } = agent;
-  // Set by Compose again: the card that answers it takes focus once (critic-01).
-  const [focusNextCard, setFocusNextCard] = useState(false);
   const saveHere = latestRun !== null && runSave.runId === latestRun.run_id;
   return (
     <>
@@ -113,17 +111,15 @@ export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRu
           onOpenRoute={onOpenRoute}
           renderSourceAssetChip={renderSourceAssetChip}
           changes={agent.planChanges}
-          focusOnMount={focusNextCard}
-          onMountFocused={() => setFocusNextCard(false)}
+          focusOnMount={agent.focusComposedCard}
+          onMountFocused={agent.composedCardFocused}
           run={{
             pending: agent.planExecution.pending,
             conflict: agent.planExecution.conflict !== null,
             errorMessage: agent.planExecution.errorMessage,
             onRun: () => agent.executeComposedPlan(composePlan),
-            onComposeAgain: () => {
-              setFocusNextCard(true);
-              void agent.composeGrowthAgentPlan();
-            },
+            // The card that answers Compose again takes focus once (critic-01).
+            onComposeAgain: () => void agent.composeGrowthAgentPlan({ focusResult: true }),
           }}
         />
       )}

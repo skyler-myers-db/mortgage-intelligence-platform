@@ -111,6 +111,10 @@ export function useGrowthAgentWorkspace() {
   // (clearGrowthAgentFeedback leaves it), so a recompose is diffed against it.
   const [reviewedBaseline, setReviewedBaseline] = useState<{ plan: ComposedPlan; snapshot: GrowthAgentComposeSnapshot } | null>(null);
   const [planChanges, setPlanChanges] = useState<GrowthAgentPlanChanges | null>(null);
+  // critic-01: true only between a Compose again answer and its card taking
+  // focus. Set with that answer, never at the click, so a Compose again that
+  // fails or stops on invalid input leaves no claim for a later card.
+  const [focusComposedCard, setFocusComposedCard] = useState(false);
   const queryClient = useQueryClient();
   const planExecution = useComposedPlanExecution({
     onExecuted: (result, request) => setComposePlan((current) => mergeExecutedPlan(current, result, request)),
@@ -239,8 +243,10 @@ export function useGrowthAgentWorkspace() {
     );
   }
 
-  function composeGrowthAgentPlan(): Promise<void> {
+  /** `focusResult`: Compose again; the card that answers it takes focus once. */
+  function composeGrowthAgentPlan({ focusResult = false }: { focusResult?: boolean } = {}): Promise<void> {
     setRunOrigin('workflows');
+    setFocusComposedCard(false);
     const parsed = parseGrowthAgentStateInput(agentStateText);
     const objective = agentPrompt.trim();
     if (parsed.invalid.length > 0) {
@@ -270,6 +276,7 @@ export function useGrowthAgentWorkspace() {
       (result) => {
         setComposePlan(result);
         setComposeSnapshot(snapshot);
+        setFocusComposedCard(focusResult);
         // critic-01: a composed plan is diffed against the one the lender
         // reviewed, then becomes the new baseline. Degraded and invalid
         // answers show no diff and leave the baseline alone.
@@ -434,6 +441,8 @@ export function useGrowthAgentWorkspace() {
     composeSnapshot,
     planExecution,
     planChanges,
+    focusComposedCard,
+    composedCardFocused: () => setFocusComposedCard(false),
     runSave,
     schedulerState,
     runOrigin,
