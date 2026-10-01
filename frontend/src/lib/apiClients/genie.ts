@@ -44,10 +44,14 @@ export interface GenieCompleteAsyncRequest {
   question: string;
 }
 
-/** The `/api/genie/start` body; its wire schema is an untyped object or null. */
-export interface GenieStartBody {
+/**
+ * The `/api/genie/start` body; its wire schema is an untyped object or null.
+ * An object type alias, like the inline literal it replaces, so it keeps the
+ * implicit index signature an open `{ [key: string]: unknown }` body needs.
+ */
+export type GenieStartBody = {
   context: Record<string, never>;
-}
+};
 
 /** The `/api/genie/sessions` response: past conversations, newest first. */
 export interface GenieSessionListResponse {
