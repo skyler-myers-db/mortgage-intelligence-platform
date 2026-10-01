@@ -1,5 +1,6 @@
 /* Partial research inside the Genie progress card (audit genie-01 phase 1b).
-   deviation:genie-partial-research-reveal. Lazy: loaded with the reveal only. */
+   deviation:genie-partial-research-reveal. Loaded with the lazy genie-answer
+   chunk (GenieProgress imports the reveal statically), never the initial bundle. */
 .genie-reveal {
   display: flex;
   flex-direction: column;

@@ -8,8 +8,6 @@ import { ElapsedTicker } from '../ui/ElapsedTicker';
 
 const INDETERMINATE_LABEL = 'Waiting for Genie response';
 
-
-
 /**
  * Genie message statuses → human progress copy. Server-owned stage labels
  * (progress.stage_label) win when the live lifecycle is active; this map
