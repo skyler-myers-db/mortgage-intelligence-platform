@@ -20,14 +20,21 @@ export type WireContractPortfolio = [
   Expect<WireFits<CampaignRecommendationRequest, ApiRequest<'CampaignRecommendationRequest'>>>,
   // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: criteria is an open Record<string, unknown> but the wire PortfolioCriteria is a closed key set
   Expect<DeepNoPhantomKeys<CampaignRecommendationRequest, ApiRequest<'CampaignRecommendationRequest'>>>,
+  // The drift above masks the whole deep element; a new phantom at this level still fails here.
+  Expect<NoPhantomKeys<CampaignRecommendationRequest, ApiRequest<'CampaignRecommendationRequest'>>>,
   Expect<WireFits<CampaignStatusPatchRequest, ApiRequest<'CampaignStatusPatchRequest'>>>,
   Expect<DeepNoPhantomKeys<CampaignStatusPatchRequest, ApiRequest<'CampaignStatusPatchRequest'>>>,
   Expect<WireFits<PortfolioCreateRequest, ApiRequest<'PortfolioCreateRequest'>>>,
   // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: criteria and household_dedup are open Record<string, unknown> but PortfolioCriteria and HouseholdDedupConfig are closed key sets
   Expect<DeepNoPhantomKeys<PortfolioCreateRequest, ApiRequest<'PortfolioCreateRequest'>>>,
+  // The drift above masks the whole deep element; a new phantom at this level still fails here.
+  Expect<NoPhantomKeys<PortfolioCreateRequest, ApiRequest<'PortfolioCreateRequest'>>>,
   Expect<WireFits<PortfolioPreviewRequest, ApiRequest<'PortfolioPreviewRequest'>>>,
   // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: criteria and campaign_build_config.household_dedup are open Record<string, unknown> but PortfolioCriteria and HouseholdDedupConfig are closed key sets
   Expect<DeepNoPhantomKeys<PortfolioPreviewRequest, ApiRequest<'PortfolioPreviewRequest'>>>,
+  // The drift above masks the whole deep element; a new phantom at this level still fails here.
+  Expect<NoPhantomKeys<PortfolioPreviewRequest, ApiRequest<'PortfolioPreviewRequest'>>>,
+  Expect<NoPhantomKeys<PortfolioPreviewRequest['campaign_build_config'], ApiRequest<'CampaignBuildPreviewConfig'>>>,
   Expect<WireFits<ApiResponse<'CampaignListResponse'>, CampaignListResponse>>,
   Expect<NoPhantomKeys<CampaignListResponse, ApiResponse<'CampaignListResponse'>>>,
   Expect<WireFits<ApiResponse<'CampaignSummary'>, CampaignSummary>>,
