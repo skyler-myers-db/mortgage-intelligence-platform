@@ -3797,7 +3797,7 @@ CREATE INDEX IF NOT EXISTS idx_saved_views_actor_surface_updated
     ON mip_app.saved_views (actor_email, surface, updated_at DESC)
     WHERE deleted_at IS NULL;
 COMMENT ON TABLE mip_app.saved_views IS
-    'Actor-owned named Lead Queue filter views: a canonical share-grammar query string only, no borrower data; soft-deleted, audited on save and delete.';
+    'Actor-owned named Lead Queue filter views: a canonical share-grammar query string only (masked borrower ids at most, never PII); soft-deleted, audited on save and delete.';
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
