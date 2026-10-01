@@ -57,6 +57,21 @@ async function setConsole(page: Page, open: boolean): Promise<void> {
   else await expect(body).toBeHidden();
 }
 
+/**
+ * Each state is its own load: drop the tab's persisted aggregate snapshot
+ * (lib/queryPersist, 'mip.queryCache.v1') so a value a previous state served
+ * cannot be restored into this one.
+ */
+async function forgetPersistedAggregates(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    try {
+      window.sessionStorage.removeItem('mip.queryCache.v1');
+    } catch {
+      // about:blank before the first navigation has no storage.
+    }
+  });
+}
+
 type LeverState = 'warming' | 'failed' | 'not-built' | 'slider';
 const LEVER_STATES: readonly LeverState[] = ['warming', 'failed', 'not-built', 'slider'];
 
@@ -73,6 +88,7 @@ test.describe('measured lever slot (D-dataviz-geo-d2 2(iv))', () => {
             if (state === 'warming') restore = app.degrade(RATE_PATH, WAREHOUSE_WARMING_UP);
             if (state === 'failed') restore = app.degrade(RATE_PATH, { status: 500, body: { detail: 'fixture failure' } });
             mockApi.register('GET', RATE_PATH, () => ({ body: state === 'not-built' ? RATE_LEVER_NOT_BUILT : RATE_LEVER }));
+            await forgetPersistedAggregates(page);
             await app.gotoRoute(route);
             await setConsole(page, consoleOpen);
             if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TEXT_EMULATION });

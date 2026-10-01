@@ -188,6 +188,38 @@ describe('restore', () => {
     expect(reloaded.getQueryState(queryKeys.homeSummary())?.dataUpdatedAt).toBe(T0);
   });
 
+  async function restoredHomeSummary(): Promise<QueryClient> {
+    const first = client();
+    await persisting(first);
+    first.setQueryData(queryKeys.homeSummary(), { total: 12_480 });
+    await saveNow();
+    vi.setSystemTime(T0 + 60_000);
+    _resetQueryPersistenceForTests();
+    const reloaded = client();
+    await persisting(reloaded);
+    expect(reloaded.getQueryData(queryKeys.homeSummary()), 'precondition: restored').toEqual({ total: 12_480 });
+    return reloaded;
+  }
+
+  it('a restored value whose first refresh fails is reset, so the surface shows its real state (fail visibly)', async () => {
+    const reloaded = await restoredHomeSummary();
+    await reloaded
+      .fetchQuery({ queryKey: queryKeys.homeSummary(), queryFn: () => Promise.reject(new Error('warehouse warming up')) })
+      .catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reloaded.getQueryData(queryKeys.homeSummary()), 'the snapshot no longer masks the failure').toBeUndefined();
+  });
+
+  it('a restored value whose first refresh succeeds is settled: a later failure keeps the fresh data', async () => {
+    const reloaded = await restoredHomeSummary();
+    await reloaded.fetchQuery({ queryKey: queryKeys.homeSummary(), queryFn: () => Promise.resolve({ total: 12_481 }) });
+    await reloaded
+      .fetchQuery({ queryKey: queryKeys.homeSummary(), queryFn: () => Promise.reject(new Error('flap')), staleTime: 0 })
+      .catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reloaded.getQueryData(queryKeys.homeSummary())).toEqual({ total: 12_481 });
+  });
+
   it('a newer read wins over the restored snapshot (hydrate is newer-wins)', async () => {
     const first = client();
     await persisting(first);

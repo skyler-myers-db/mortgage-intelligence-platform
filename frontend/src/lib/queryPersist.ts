@@ -28,7 +28,11 @@ import { readActorScoped, removeActorScoped, writeActorScoped } from './actorSco
  *     persisted by design: whole-book counts with no ids.
  *   - Freshness: restored queries keep their dehydrated `dataUpdatedAt`, so
  *     a FetchedAt label shows the true age; hydrate is newer-wins, so a
- *     fresher read always replaces restored data. `maxAge` 24 h; the
+ *     fresher read always replaces restored data. A restored value only
+ *     bridges the load: if the first refresh of a restored query FAILS (a
+ *     warming warehouse's retry, an error), the query is reset, so the
+ *     surface shows its real warming or error state instead of a snapshot
+ *     that silently masks the failure (CLAUDE.md: fail visibly). `maxAge` 24 h; the
  *     buster is the hashed entry file name, which every chunk change
  *     re-hashes, so a deploy discards the snapshot.
  *   - Size: a snapshot over 256 KiB of JSON is not written (and the stale
@@ -121,6 +125,9 @@ function isPersistedClient(value: unknown): value is PersistedClient {
   );
 }
 
+/** Restored queries (hash -> restored dataUpdatedAt) until a refresh settles them. */
+const restoredAt = new Map<string, number>();
+
 /** A Persister over the actor gate: the only way this key is read or written. */
 export const actorScopedPersister: Persister = {
   persistClient(client) {
@@ -145,6 +152,7 @@ export const actorScopedPersister: Persister = {
     const queries = parsed.clientState.queries.filter(
       (query) => isPersistableQueryKey(query.queryKey) && !carriesMaskedId(query.state.data),
     );
+    for (const query of queries) restoredAt.set(query.queryHash, query.state.dataUpdatedAt);
     return { ...parsed, clientState: { mutations: [], queries } };
   },
   removeClient() {
@@ -153,6 +161,26 @@ export const actorScopedPersister: Persister = {
 };
 
 let started = false;
+
+
+/**
+ * A restored value bridges only the load. The first refresh outcome settles
+ * it: a success keeps the fresh data; a failure (a retry's 'failed' or the
+ * final 'error') while the restored value is still the one shown resets the
+ * query, so the surface renders its real warming or error state.
+ */
+function settleRestored(queryClient: QueryClient, query: Query, action: string): void {
+  const at = restoredAt.get(query.queryHash);
+  if (at === undefined) return;
+  if (action === 'success') {
+    restoredAt.delete(query.queryHash);
+    return;
+  }
+  if (action !== 'failed' && action !== 'error') return;
+  restoredAt.delete(query.queryHash);
+  if (query.state.dataUpdatedAt !== at) return;
+  void queryClient.resetQueries({ queryKey: query.queryKey, exact: true });
+}
 
 /**
  * Restore once, then save on a trailing throttle. Called by
@@ -179,6 +207,7 @@ export async function startQueryPersistence(queryClient: QueryClient, buster = q
     timer ??= setTimeout(save, QUERY_CACHE_SAVE_THROTTLE_MS);
   };
   queryClient.getQueryCache().subscribe((event) => {
+    if (event.type === 'updated') settleRestored(queryClient, event.query, event.action.type);
     if (event.type === 'added' || event.type === 'removed' || event.type === 'updated') schedule();
   });
   // Reads that settled before this lazy module loaded raised no event here.
@@ -188,4 +217,5 @@ export async function startQueryPersistence(queryClient: QueryClient, buster = q
 /** Test seam: allow another start in the same module instance. */
 export function _resetQueryPersistenceForTests(): void {
   started = false;
+  restoredAt.clear();
 }
