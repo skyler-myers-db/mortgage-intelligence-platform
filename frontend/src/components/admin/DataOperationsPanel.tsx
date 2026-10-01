@@ -6,8 +6,7 @@ import { api } from '../../lib/api';
 import { DEFAULT_QUERY_STALE_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp, parseBackendTimestamp } from '../../lib/time';
-
-type OperationJobKey = 'fred_rates' | 'silver_refresh' | 'gold_refresh' | 'lifecycle_sync';
+import { DataOperationsRunDialog, type OperationJobKey, type OperationRunReason } from './DataOperationsRunDialog';
 
 const ACTIVE_OPERATION_POLL_MS = 5_000;
 const POST_LAUNCH_POLL_WINDOW_MS = 60_000;
@@ -167,6 +166,9 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
   const [operationLaunch, setOperationLaunch] = useState<OperationLaunchResponse | null>(null);
   const [operationPolling, setOperationPolling] = useState(false);
   const [operationPollGeneration, setOperationPollGeneration] = useState(0);
+  // The job whose Run confirm is open (critic-09): Run opens it, only its
+  // Start posts.
+  const [confirmingJob, setConfirmingJob] = useState<OperationJobStatus | null>(null);
 
   useEffect(() => {
     if (!operationPolling) return undefined;
@@ -221,7 +223,18 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
             ? `${freshnessAttentionCount} attention`
             : 'ready';
 
-  const runOperation = async (job: OperationJobStatus) => {
+  const openRunConfirm = (job: OperationJobStatus) => {
+    if (!job.configured || operationRunningKey) return;
+    setOperationError(null);
+    setConfirmingJob(job);
+  };
+
+  const closeRunConfirm = () => {
+    setConfirmingJob(null);
+    setOperationError(null);
+  };
+
+  const runOperation = async (job: OperationJobStatus, reason: OperationRunReason) => {
     if (!job.configured || operationRunningKey) return;
     setOperationError(null);
     setOperationLaunch(null);
@@ -230,9 +243,10 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
       const launch = await api.adminRunOperation<OperationLaunchResponse>({
         job_key: job.key,
         confirm: true,
-        reason: 'operator_refresh',
+        reason,
         request_id: newRequestId(),
       });
+      setConfirmingJob(null);
       setOperationLaunch(launch);
       setOperationPolling(true);
       setOperationPollGeneration((value) => value + 1);
@@ -269,11 +283,6 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
         )}
         {operationsError && (
           <div className="muted body fs-12">Data operations unavailable: {operationsError}</div>
-        )}
-        {operationError && (
-          <div className="muted body fs-12" role="status">
-            {operationError}
-          </div>
         )}
         {operationLaunch && (
           <div className="chip-row" role="status">
@@ -323,7 +332,10 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
           const tone = operationStatusTone(job);
           const busy = operationRunningKey === job.key;
           const cooldown = job.cooldown_remaining_s ?? 0;
-          const disabled = !job.configured || Boolean(operationRunningKey) || Boolean(run?.active) || cooldown > 0;
+          // A start in flight is held by the modal confirm (the page behind it
+          // is inert), not by disabling Run: a Run disabled when the dialog
+          // closes could not take focus back (critic-09).
+          const disabled = !job.configured || Boolean(run?.active) || cooldown > 0;
           return (
             <div key={job.key} className="source-status-row">
               <span aria-hidden className={`status-dot status-dot--${tone}`} />
@@ -340,7 +352,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
                   <button
                     type="button"
                     className="btn btn--ghost btn--sm"
-                    onClick={() => void runOperation(job)}
+                    onClick={() => openRunConfirm(job)}
                     disabled={disabled}
                     title={
                       !job.configured
@@ -375,6 +387,16 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
           );
         })}
       </div>
+      {confirmingJob && (
+        <DataOperationsRunDialog
+          job={confirmingJob}
+          lastRun={`${formatOperationRun(confirmingJob.latest_run)} · ${operationStatusLabel(confirmingJob)}`}
+          starting={operationRunningKey === confirmingJob.key}
+          error={operationError}
+          onConfirm={(reason) => void runOperation(confirmingJob, reason)}
+          onCancel={closeRunConfirm}
+        />
+      )}
     </div>
   );
 }

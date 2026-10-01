@@ -189,61 +189,175 @@ describe('DataOperationsPanel', () => {
     expect(document.body.textContent).toContain('Usable sources...');
   });
 
-  it('disables cooldown jobs and launches available jobs with a UUID request id', async () => {
-    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+  const buttonNamed = (pattern: RegExp): HTMLButtonElement | undefined =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
+      pattern.test(button.textContent ?? ''),
+    );
+  const runButton = () => buttonNamed(/^Run$|Starting/) as HTMLButtonElement;
+  const dialog = () => document.querySelector<HTMLDialogElement>('dialog.admin-run-dialog');
+  const confirmButton = () => dialog()?.querySelector<HTMLButtonElement>('.btn--primary') ?? null;
+  const reasonRadio = (label: string) =>
+    [...(dialog()?.querySelectorAll<HTMLLabelElement>('label') ?? [])]
+      .find((candidate) => candidate.textContent === label)
+      ?.querySelector<HTMLInputElement>('input[type="radio"]') ?? null;
+
+  async function openDialog(): Promise<void> {
+    await act(async () => {
+      runButton().focus();
+      runButton().click();
+    });
+    await settle();
+  }
+
+  async function press(key: string): Promise<void> {
+    await act(async () => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    });
+    await settle();
+  }
+
+  it('disables cooldown jobs, and Run opens a confirm naming the job, its last run and effect, posting nothing', async () => {
     await render();
 
-    const buttons = Array.from(document.querySelectorAll('button'));
-    const runButton = buttons.find((button) => button.textContent?.includes('Run'));
-    const waitButton = buttons.find((button) => button.textContent?.includes('Wait'));
-    expect(runButton).toBeTruthy();
-    expect(waitButton).toBeTruthy();
-    expect((waitButton as HTMLButtonElement).disabled).toBe(true);
+    expect(buttonNamed(/Wait/)?.disabled).toBe(true);
+    await openDialog();
 
+    expect(apiMocks.adminRunOperation).not.toHaveBeenCalled();
+    const open = dialog();
+    expect(open).not.toBeNull();
+    const title = document.getElementById(open?.getAttribute('aria-labelledby') ?? '');
+    expect(title?.textContent).toBe('Run Refresh market rates?');
+    expect(open?.textContent).toContain('mip_fred_rates_ingest');
+    expect(open?.textContent).toContain('Run 201');
+    expect(open?.textContent).toContain('success');
+    expect(document.getElementById(open?.getAttribute('aria-describedby') ?? '')?.textContent).toContain(
+      'Updates the weekly 30-year rate in silver',
+    );
+    expect(open?.querySelector('legend')?.textContent).toBe('Reason (required)');
+    const radios = [...(open?.querySelectorAll<HTMLInputElement>('input[type="radio"]') ?? [])];
+    expect(radios.map((radio) => radio.value)).toEqual([
+      'operator_refresh',
+      'source_update',
+      'release_validation',
+      'support_triage',
+    ]);
+    expect(radios.some((radio) => radio.checked)).toBe(false);
+    expect(document.activeElement?.textContent).toBe('Cancel');
+  });
+
+  it('keeps Confirm disabled until a reason is chosen', async () => {
+    await render();
+    await openDialog();
+
+    expect(confirmButton()?.disabled).toBe(true);
+    expect(confirmButton()?.textContent).toBe('Start Refresh market rates');
     await act(async () => {
-      (runButton as HTMLButtonElement).click();
+      reasonRadio('Source data was updated')?.click();
+    });
+    expect(confirmButton()?.disabled).toBe(false);
+  });
+
+  it('posts nothing on Cancel or Escape, and focus returns to Run', async () => {
+    await render();
+    await openDialog();
+    await act(async () => {
+      buttonNamed(/^Cancel$/)?.click();
+    });
+    await settle();
+    expect(dialog()).toBeNull();
+    expect(document.activeElement).toBe(runButton());
+
+    await openDialog();
+    await act(async () => {
+      reasonRadio('Release validation')?.click();
+    });
+    await press('Escape');
+    expect(dialog()).toBeNull();
+    expect(document.activeElement).toBe(runButton());
+    expect(apiMocks.adminRunOperation).not.toHaveBeenCalled();
+  });
+
+  it('posts the chosen reason with confirm true and a UUID request id, then closes on success', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    await render();
+    await openDialog();
+    await act(async () => {
+      reasonRadio('Source data was updated')?.click();
+    });
+    await act(async () => {
+      confirmButton()?.click();
     });
     await settle();
 
-    expect(apiMocks.adminRunOperation).toHaveBeenCalledWith(expect.objectContaining({
+    expect(apiMocks.adminRunOperation).toHaveBeenCalledTimes(1);
+    expect(apiMocks.adminRunOperation).toHaveBeenCalledWith({
       job_key: 'fred_rates',
       confirm: true,
-      reason: 'operator_refresh',
+      reason: 'source_update',
       request_id: expect.stringMatching(
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
       ),
-    }));
+    });
+    expect(dialog()).toBeNull();
     expect(document.body.textContent).toContain('started');
     expect(document.body.textContent).toContain('run 301');
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: ['mip', 'admin', 'sources'],
     });
+    expect(document.activeElement).toBe(runButton());
+  });
+
+  it('holds both buttons while the start is in flight', async () => {
+    let resolveLaunch: (value: unknown) => void = () => undefined;
+    apiMocks.adminRunOperation.mockReturnValue(new Promise((resolve) => {
+      resolveLaunch = resolve;
+    }));
+    await render();
+    await openDialog();
+    await act(async () => {
+      reasonRadio('Support triage')?.click();
+    });
+    await act(async () => {
+      confirmButton()?.click();
+    });
+
+    expect(confirmButton()?.textContent).toBe('Starting…');
+    expect(confirmButton()?.disabled).toBe(true);
+    expect(buttonNamed(/^Cancel$/)?.disabled).toBe(true);
+    await press('Escape');
+    expect(dialog()).not.toBeNull();
+
+    await act(async () => {
+      resolveLaunch({ accepted: true, key: 'fred_rates', label: 'Refresh market rates', run_id: 302 });
+    });
+    await settle();
+    expect(dialog()).toBeNull();
   });
 
   // runtime-03 pins: the launch helper holds the try/catch. A rejection shows
-  // its error and clears the running key (the button reads Run again); each
-  // click sends its own request id.
-  it('a rejected launch shows the error and clears the running key', async () => {
+  // its error (inside the dialog, which stays open) and clears the running
+  // key; each Start sends its own request id.
+  it('a rejected launch keeps the dialog open with the error and clears the running key', async () => {
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     apiMocks.adminRunOperation.mockRejectedValue(new Error('Job launch refused'));
     await render();
-
-    const runButton = (): HTMLButtonElement =>
-      Array.from(document.querySelectorAll('button')).find((button) =>
-        button.textContent?.includes('Run') || button.textContent?.includes('Starting'),
-      ) as HTMLButtonElement;
+    await openDialog();
     await act(async () => {
-      runButton().click();
+      reasonRadio('Routine operator refresh')?.click();
+    });
+    await act(async () => {
+      confirmButton()?.click();
     });
     await settle();
 
-    expect(document.body.textContent).toContain('Job launch refused');
+    expect(dialog()).not.toBeNull();
+    expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBe('Job launch refused');
+    expect(confirmButton()?.disabled).toBe(false);
     expect(runButton().textContent).toContain('Run');
-    expect(runButton().disabled).toBe(false);
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['mip', 'admin', 'sources'] });
 
     await act(async () => {
-      runButton().click();
+      confirmButton()?.click();
     });
     await settle();
     const requestIds = apiMocks.adminRunOperation.mock.calls.map(
