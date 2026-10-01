@@ -59,3 +59,11 @@ class AdminHealthResponse(HealthResponse):
     fallback_identity_fallbacks_process_total: int = 0
     fallback_identity_fallbacks_total: int = 0
     boundary_warning: BoundaryWarning | None = None
+    auditor_role_overlap: int = Field(
+        default=0,
+        description=(
+            "Identities configured as auditor that are also configured as "
+            "administrator or approver (segregation-of-duties signal). A count only."
+        ),
+    )
+    presenter_mode: bool = False

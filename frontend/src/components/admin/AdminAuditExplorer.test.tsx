@@ -150,7 +150,7 @@ describe('AdminAuditExplorer', () => {
   // css-hygiene: the events table has no row-click action (rows expand from
   // their own button), so it opts out of the row pointer and hover.
   it('marks the events table static', async () => {
-    await render('/admin-config');
+    await render('/audit-ledger');
     expect(container.querySelector('table[aria-label="Audit events"]')?.className).toBe('tbl tbl--static');
   });
 
@@ -159,7 +159,7 @@ describe('AdminAuditExplorer', () => {
   it('says why the explorer and the rollups failed without the transport message', async () => {
     mocks.pageError = new ApiError('SENTINEL 500 Internal Server Error', { path: '/api/v1/audit/events', status: 500 });
     mocks.rollupsError = new ApiError('SENTINEL', { path: '/api/v1/audit/rollups', status: 403 });
-    await render('/admin-config');
+    await render('/audit-ledger');
     expect(container.textContent).toContain('Audit explorer unavailable: The server hit an unexpected error.');
     expect(container.textContent).toContain('Audit rollups unavailable: Ask an administrator for access.');
     expect(container.textContent).not.toContain('SENTINEL');
@@ -167,7 +167,7 @@ describe('AdminAuditExplorer', () => {
 
   it('reads every filter from the URL into the request and the controls', async () => {
     await render(
-      '/admin-config?audit_actor=approver%40summit-mortgage.example&audit_since=2026-07-01'
+      '/audit-ledger?audit_actor=approver%40summit-mortgage.example&audit_since=2026-07-01'
       + '&audit_until=2026-07-14&audit_event_type=LEAD_EXPORT&audit_correlation_id=corr-1#audit',
     );
 
@@ -191,7 +191,7 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('writes applied filters to the URL, keeps the hash, and re-queries with them', async () => {
-    await render('/admin-config#audit');
+    await render('/audit-ledger#audit');
     type(input('ACTOR'), 'approver@summit-mortgage.example');
     type(input('SINCE'), '2026-07-01');
     type(input('UNTIL'), '2026-07-14');
@@ -217,7 +217,7 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('keeps the submitting control focused and in the document after Apply', async () => {
-    await render('/admin-config#audit');
+    await render('/audit-ledger#audit');
     const actor = input('ACTOR');
     type(actor, 'approver@summit-mortgage.example');
     const apply = button(/^Apply filters$/);
@@ -232,7 +232,7 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('refuses an inverted day window without touching the URL, on the date inputs', async () => {
-    await render('/admin-config');
+    await render('/audit-ledger');
     type(input('SINCE'), '2026-07-14');
     type(input('UNTIL'), '2026-07-01');
     act(() => button(/^Apply filters$/).click());
@@ -251,7 +251,7 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('marks only the actor input when the actor is refused, until it is edited', async () => {
-    await render('/admin-config');
+    await render('/audit-ledger');
     type(input('ACTOR'), 'two people');
     type(input('CORRELATION ID'), 'corr-1');
     act(() => button(/^Apply filters$/).click());
@@ -272,7 +272,7 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('removes one filter from the URL when its chip is removed', async () => {
-    await render('/admin-config?audit_actor=approver%40summit-mortgage.example&audit_event_type=LEAD_EXPORT');
+    await render('/audit-ledger?audit_actor=approver%40summit-mortgage.example&audit_event_type=LEAD_EXPORT');
     act(() => button(/^Remove actor filter$/).click());
     await settle();
 
@@ -281,7 +281,7 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('moves focus to the next chip, then to Apply, as filter chips are removed', async () => {
-    await render('/admin-config?audit_actor=approver%40summit-mortgage.example&audit_event_type=LEAD_EXPORT');
+    await render('/audit-ledger?audit_actor=approver%40summit-mortgage.example&audit_event_type=LEAD_EXPORT');
     const removeEvent = button(/^Remove event filter$/);
     removeEvent.focus();
     act(() => removeEvent.click());
@@ -297,7 +297,7 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('shows human labels with the raw code kept in a mono chip', async () => {
-    await render('/admin-config');
+    await render('/audit-ledger');
     const rows = [...container.querySelectorAll('table[aria-label="Audit events"] tbody tr')];
     expect(rows.map((tr) => tr.querySelector('td.is-primary > div')?.textContent)).toEqual([
       'Lead list exported',
@@ -308,7 +308,7 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('opens a deep link on exactly that event, already expanded', async () => {
-    await render('/admin-config?audit_event_id=evt-fixture-2#audit');
+    await render('/audit-ledger?audit_event_id=evt-fixture-2#audit');
 
     expect(lastCall()).toMatchObject({ event_id: 'evt-fixture-2' });
     const toggle = button(/^Collapse audit event evt-fixture-2$/);
@@ -319,14 +319,14 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('links every event id and correlation id back into the explorer', async () => {
-    await render('/admin-config#audit');
+    await render('/audit-ledger#audit');
     act(() => button(/^Expand audit event evt-fixture-1$/).click());
     const eventLink = container.querySelector<HTMLAnchorElement>('a[aria-label="Open audit event evt-fixture-1 on its own"]');
     const correlationLink = container.querySelector<HTMLAnchorElement>(
       'a[aria-label="Show every audit event with correlation id corr-1"]',
     );
-    expect(eventLink?.getAttribute('href')).toBe('/admin-config?audit_event_id=evt-fixture-1#audit');
-    expect(correlationLink?.getAttribute('href')).toBe('/admin-config?audit_correlation_id=corr-1#audit');
+    expect(eventLink?.getAttribute('href')).toBe('/audit-ledger?audit_event_id=evt-fixture-1#audit');
+    expect(correlationLink?.getAttribute('href')).toBe('/audit-ledger?audit_correlation_id=corr-1#audit');
 
     act(() => eventLink?.click());
     // The narrowed page arrives through the query's own notify timer after the
@@ -342,7 +342,7 @@ describe('AdminAuditExplorer', () => {
   });
 
   it('links a masked borrower entity to Borrower 360 and leaves other entities as text', async () => {
-    await render('/admin-config#audit');
+    await render('/audit-ledger#audit');
     const rows = [...container.querySelectorAll('table[aria-label="Audit events"] tbody tr[data-audit-event-id]')];
     expect(rows[0].querySelectorAll('td')[2].querySelector('a')).toBeNull();
     const borrowerLink = rows[1].querySelector<HTMLAnchorElement>('a[aria-label="Open Borrower 360 for B-AAAAAAAAAAAA2"]');
@@ -360,7 +360,7 @@ describe('AdminAuditExplorer', () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
       clicks.push(this.download);
     });
-    await render('/admin-config');
+    await render('/audit-ledger');
 
     act(() => button(/^Download page 1 of the audit explorer as CSV$/).click());
 

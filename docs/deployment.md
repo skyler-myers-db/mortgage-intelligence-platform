@@ -819,6 +819,24 @@ restore, prior app snapshots, source-regression rollback via
 and governed-action HMAC key rotation, use
 [`docs/disaster-recovery.md`](disaster-recovery.md).
 
+## Presenter mode (demo workspaces only)
+
+`MIP_PRESENTER_MODE` (default off) shows demo-only affordances to every user
+of a deployment; today that is the PROTOTYPE "Preview borrower view" on the
+Offer page, whose module is not even downloaded when the flag is off. It
+gates no guard, approval, audit or data path, and it is never an
+authorization input. The deploy payload accepts `0`/`false`/`no`/`off`/empty
+(off: the variable is omitted) or `1`/`true`/`yes`/`on` (on: the App receives
+`MIP_PRESENTER_MODE=1` and the deploy prints a notice); any other value fails
+the deploy, and a truthy value is refused for `-t prod`. At runtime an
+unparseable value reads as off instead of failing boot. Admin -> Deployment
+readiness and the admin health body (`presenter_mode`) show the current
+state.
+
+`MIP_PREVIEW_MIRROR` is a different flag: it gates the roadmap rows of the
+Admin capability panel (`backend/services/capabilities.py`), and it is not
+carried by the deploy payload, so deployed Apps run with it off.
+
 ## Resources
 
 Databricks App resources expected by `app.yaml`:

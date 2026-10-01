@@ -37,7 +37,8 @@ export type FixtureState =
   | 'expanded-row'
   | 'degraded'
   | 'empty'
-  | 'read-failed';
+  | 'read-failed'
+  | 'run-dialog-open';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -113,6 +114,11 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
     case 'read-failed':
       await expect(page.locator(FAILED_READ_SURFACE).first(), 'the failed read renders its own surface').toBeVisible();
       await expect(page.locator('.degraded-banner'), 'health is OK: no banner names the outage').toHaveCount(0);
+      break;
+    case 'run-dialog-open':
+      // Administration's Data operations confirm (critic-09): opening it posts nothing.
+      await page.locator('#data-operations').getByRole('button', { name: 'Run', exact: true }).first().click();
+      await expect(page.locator('dialog.admin-run-dialog')).toHaveAttribute('open', '');
       break;
   }
   await app.settle();

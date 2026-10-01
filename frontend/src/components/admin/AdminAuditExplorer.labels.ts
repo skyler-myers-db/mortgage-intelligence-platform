@@ -62,6 +62,7 @@ export const AUDIT_EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   SAVE_LEAD: 'Lead saved',
   SAVE_QUEUE_VIEW: 'Queue view saved',
   UNSAVE_LEAD: 'Lead removed from saved',
+  VIEW_AUDIT_LEDGER: 'Audit ledger read',
   VIEW_BORROWER: 'Borrower reviewed',
   VIEW_BORROWER_PROOF: 'Borrower proof reviewed',
   VIEW_LEADS: 'Lead queue reviewed',

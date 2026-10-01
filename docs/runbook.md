@@ -712,7 +712,7 @@ If any fail, route to data-modeler + principal-architect before release.
 
 ---
 
-## 11. Admin RBAC compatibility header for local dev
+## 11. Admin and auditor RBAC compatibility headers for local dev
 
 The `/api/v1/admin/*` endpoints are gated by
 [`backend/services/rbac.py`](../backend/services/rbac.py). Sandbox and
@@ -723,10 +723,20 @@ service-principal client IDs. The release probe has no persistent App
 `CAN_USE`; it is reachable only during the signed-capture gate for an explicit
 unsigned-App rebase.
 
+The audit ledger (`/api/v1/audit/events`, `/events/page`, `/rollups`,
+`/facets`, `/count`, and another actor's `/audit/receipt/{id}`) also admits
+the read-only **Auditor** role: an exact identity in `MIP_AUDITOR_EMAILS` or
+`MIP_AUDITOR_IDENTITIES` (comma-separated, case-insensitive). Empty means no
+auditors; there is no deployed group path. An auditor gets no administrator
+or approver power. Every served ledger read, by an admin or an auditor, is
+itself recorded as one `VIEW_AUDIT_LEDGER` row. Both variables ride the
+deploy payload from the environment or `.env.local`; a bare UI deploy drops
+them, which fails closed to no auditors.
+
 `X-Forwarded-Groups` is not a documented Databricks Apps identity-header
-contract. The configured group (default `mip-admin`) and the `admins` fallback
-therefore work only as local/test compatibility helpers; they are never an
-authoritative deployed authorization path.
+contract. The configured group (default `mip-admin`), the `admins` fallback
+and `mip-auditor` therefore work only as local/test compatibility helpers;
+they are never an authoritative deployed authorization path.
 
 Local `uvicorn` and `curl` do **not** get that header automatically —
 we deliberately chose fail-closed over an `app_env == "local"` auto-
@@ -745,8 +755,23 @@ curl -s -X PUT -H "X-Forwarded-Groups: mip-admin" \
      http://localhost:8000/api/v1/admin/rules | jq .
 ```
 
+A read-only auditor's ledger page, locally (the read writes one
+`VIEW_AUDIT_LEDGER` row):
+
+```bash
+curl -s -H "X-Forwarded-Groups: mip-auditor" \
+     -H "X-Forwarded-Email: auditor@example.com" \
+     "http://localhost:8000/api/v1/audit/events/page?limit=25" | jq .
+```
+
 Missing header returns `403 {"detail": "forbidden"}` — that exact body
 string is what the frontend's admin 403 banner keys off of.
+
+The admin health body (`/api/v1/admin/health`) carries
+`auditor_role_overlap`: how many configured auditors also hold the
+administrator or approver role (a count, never an identity). Non-zero is a
+segregation-of-duties finding; `./scripts/deploy.sh` step 0 warns about the
+same count.
 
 Signals to watch in `/api/v1/health` response:
 

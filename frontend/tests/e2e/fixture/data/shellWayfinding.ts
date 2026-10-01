@@ -10,6 +10,8 @@ import { json, type FixtureReply } from '../mockApi';
 export const SIGNED_IN_APPROVER: SessionResponse = {
   can_access_admin: true,
   can_approve: true,
+  can_read_audit: true,
+  presenter_mode: false,
   actor_email: 'jane.doe@summit-mortgage.example',
   actor_display_name: 'Jane Doe',
   role_labels: ['Administrator', 'Approver'],

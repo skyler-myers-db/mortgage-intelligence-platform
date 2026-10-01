@@ -6,7 +6,7 @@ import { Chip, SurfaceTitle } from '../Primitives';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 
 /**
- * Agentic capability readiness — renders the honest DAIS-2026 capability
+ * Agentic capability readiness — renders the honest capability
  * snapshot from GET /api/admin/capabilities. This is the visible enforcement
  * of the no-overclaim posture: capabilities that aren't `claimable` render as
  * "roadmap" / "not provisioned", NEVER as integrated. `hidden` rows (preview
@@ -82,12 +82,12 @@ export function CapabilityPanel() {
   ).length;
 
   return (
-    <div className="surface mt-grid" id="capability-readiness">
+    <div className="surface mt-grid" id="capability-readiness" tabIndex={-1}>
       <div className="surface__hdr surface__hdr--split">
         <div>
           <SurfaceTitle>Agentic capability readiness</SurfaceTitle>
           <div className="muted fs-12">
-            DAIS-2026 stack. Available rows are live-proven; configured rows require a live probe before claims.
+            Available rows are proven live; configured rows need a live probe before they are relied on.
           </div>
         </div>
         <Chip variant={error ? 'warning' : 'neutral'}>

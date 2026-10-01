@@ -70,7 +70,7 @@ from backend.services.observability import (
     recent_breaker_state_changes,
     recent_error_count,
 )
-from backend.services.rbac import AdminDep
+from backend.services.rbac import AdminDep, auditor_role_overlap_count
 
 router = APIRouter()
 
@@ -249,6 +249,10 @@ def _diagnostic_body(
         # scripts/deploy.sh promoted snapshot — treatment writes 503 until a
         # governed roll-forward.
         "campaign_treatment_runtime": treatment_runtime,
+        # Demo-only flag (D-shell-deviations-e1) and the auditor
+        # segregation-of-duties count (D-audit-reads-c3): admin body only.
+        "presenter_mode": settings.mip_presenter_mode,
+        "auditor_role_overlap": auditor_role_overlap_count(),
         "boundary_warning": boundary_warning,
     }
     if settings.mip_git_sha:

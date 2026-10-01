@@ -267,7 +267,7 @@ test.describe('score anatomy', () => {
 
   test('admin explorer: an expanded APPROVE row reads its compact receipt once; a VIEW_LEADS row reads none', async ({ app, page, mockApi }) => {
     registerExplorerDecisionRows(mockApi);
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     const naturalLoad = markNaturalLoad(mockApi);
     const explorer = page.locator('#audit');
     await explorer.getByRole('button', { name: `Expand audit event ${EXPLORER_VIEW_ROW.event_id}` }).click();
@@ -302,7 +302,7 @@ test.describe('score anatomy', () => {
       await expectAxeClean(page, { key: { route: 'score-anatomy', state: 'proof-drawer' }, theme, known: {}, include: '.proof-drawer.is-open' });
       await page.keyboard.press('Escape');
 
-      await app.gotoRoute('/admin-config#audit');
+      await app.gotoRoute('/audit-ledger#audit');
       await page.locator('#audit').getByRole('button', { name: `Expand audit event ${EXPLORER_DECISION_ROW.event_id}` }).click();
       await expect(page.getByTestId('audit-explorer-receipt').getByTestId('decision-receipt')).toBeVisible();
       await expectAxeClean(page, { key: { route: 'score-anatomy', state: 'explorer-receipt' }, theme, known: {}, include: '[data-testid="audit-explorer-receipt"]' });

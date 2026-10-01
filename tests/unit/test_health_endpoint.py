@@ -609,6 +609,41 @@ def test_health_admin_endpoint_returns_full_diagnostics(
     assert "example" not in body["actor_cache_key"].lower()
 
 
+def test_admin_health_carries_the_presenter_flag_and_auditor_overlap_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-shell-deviations-e1 / D-audit-reads-c3: the admin body names the
+    demo-only flag and the auditor segregation-of-duties count (a count, never
+    an identity); the authenticated workspace body carries neither."""
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    monkeypatch.setattr(health_mod.settings, "mip_presenter_mode", True)
+    monkeypatch.setattr(health_mod.settings, "auditor_emails", "audit.one@example.com,ops@example.com")
+    monkeypatch.setattr(health_mod.settings, "auditor_identities", "")
+    monkeypatch.setattr(health_mod.settings, "admin_emails", "OPS@example.com")
+    monkeypatch.setattr(health_mod.settings, "admin_identities", "")
+    monkeypatch.setattr(health_mod.settings, "approver_emails", "")
+    monkeypatch.setattr(health_mod.settings, "approver_identities", "")
+
+    admin = client.get("/api/admin/health", headers=ADMIN_HEADERS).json()
+    assert admin["presenter_mode"] is True
+    assert admin["auditor_role_overlap"] == 1
+    assert "audit.one" not in json.dumps(admin)
+
+    workspace = client.get("/api/health", headers={"X-Forwarded-Email": "lo@example.com"}).json()
+    assert "presenter_mode" not in workspace
+    assert "auditor_role_overlap" not in workspace
+    anonymous = client.get("/api/health", headers={"X-Forwarded-Groups": ""}).json()
+    assert set(anonymous) == {"status", "mode"}
+
+    monkeypatch.setattr(health_mod.settings, "mip_presenter_mode", False)
+    monkeypatch.setattr(health_mod.settings, "auditor_emails", "")
+    admin = client.get("/api/admin/health", headers=ADMIN_HEADERS).json()
+    assert admin["presenter_mode"] is False
+    assert admin["auditor_role_overlap"] == 0
+
+
 def test_health_admin_endpoint_surfaces_trust_boundary_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

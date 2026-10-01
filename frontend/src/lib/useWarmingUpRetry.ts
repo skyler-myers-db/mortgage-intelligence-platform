@@ -147,7 +147,11 @@ export function useWarmingUpRetry<T>(
     enabled,
     queryFn: ({ signal }) => fetcher(signal),
     staleTime: opts.staleTime ?? DEFAULT_QUERY_STALE_MS,
-    refetchOnWindowFocus: opts.refetchOnWindowFocus,
+    // Only when the caller set it: TanStack spreads these options over the
+    // client defaults, so an explicit `undefined` would replace
+    // queryClient.ts's `false` and refetch (and re-audit) every stale read on
+    // window focus (audit runtime-08; D-audit-reads-c3).
+    ...(opts.refetchOnWindowFocus !== undefined && { refetchOnWindowFocus: opts.refetchOnWindowFocus }),
     placeholderData: keepPreviousWhen
       ? (previous, previousQuery) =>
           previousQuery && keepPreviousWhen(previousQuery.queryKey) ? previous : undefined

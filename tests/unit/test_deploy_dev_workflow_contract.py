@@ -2124,6 +2124,22 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers(
     assert "Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME" not in text
 
 
+def test_deploy_dev_carries_the_read_only_auditor_allowlist_like_the_admin_one() -> None:
+    """D-audit-reads-c3: the auditor allowlist reaches .env.local exactly like
+    MIP_ADMIN_EMAILS: a repository variable, kept out of child processes, and
+    written only when non-empty (an empty value means no auditors)."""
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+
+    assert "MIP_AUDITOR_EMAILS: ${{ vars.MIP_AUDITOR_EMAILS }}" in text
+    assert re.search(r"export -n [^\n]*\bMIP_AUDITOR_EMAILS\b", text)
+    assert (
+        'if [ -n "${MIP_AUDITOR_EMAILS:-}" ]; then\n'
+        '              echo "MIP_AUDITOR_EMAILS=${MIP_AUDITOR_EMAILS}"\n'
+        "            fi" in text
+    )
+    assert "secrets.MIP_AUDITOR_EMAILS" not in text
+
+
 def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
     script = _deploy_entrypoint_text()

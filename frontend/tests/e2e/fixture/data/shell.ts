@@ -80,6 +80,10 @@ export const CONFIG_OPTIONS: ConfigOptions = {
 export const SESSION: SessionResponse = {
   can_access_admin: true,
   can_approve: true,
+  // An admin reads the audit ledger by the same decision (D-audit-reads-c3);
+  // presenter mode is the customer default (D-shell-deviations-e1).
+  can_read_audit: true,
+  presenter_mode: false,
   actor_email: 'approver@summit-mortgage.example',
   lender_name: LENDER_NAME,
   rum_enabled: false,

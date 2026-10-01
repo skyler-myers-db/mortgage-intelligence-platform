@@ -46,6 +46,8 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "VIEW_BORROWER",
         "VIEW_BORROWER_PROOF",
         "VIEW_LEADS",
+        # D-audit-reads-c3: a served cross-actor ledger read (audit_ledger_reads).
+        "VIEW_AUDIT_LEDGER",
     }
 )
 

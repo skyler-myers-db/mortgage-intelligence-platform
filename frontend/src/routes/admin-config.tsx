@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useLocation } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import { useApp, type Accent, type Density } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { ThemePreferenceControl } from '../components/layout/ThemePreferenceControl';
@@ -14,9 +14,11 @@ import { CapabilityPanel } from '../components/admin/CapabilityPanel';
 import { ActivationOperationsPanel } from '../components/activation/ActivationLoopPanel';
 import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
 import { PlatformCapabilitiesPanel } from '../components/admin/PlatformCapabilitiesPanel';
-import { AdminAuditExplorer } from '../components/admin/AdminAuditExplorer';
-import { api, type AuditEventRow } from '../lib/api';
-import { formatDate, formatTimestamp, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
+import { ADMIN_SECTIONS, ADMIN_SECTION_IDS, AdminSectionNav } from '../components/admin/AdminSectionNav';
+import { api } from '../lib/api';
+import { ROUTES } from '../lib/routeMeta';
+import { usePresenterMode } from '../lib/presenterMode';
+import { formatDate, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
@@ -34,7 +36,10 @@ import { formatCount, formatFixed, formatUsd } from '../lib/formatters';
  *    `mip.ref.offer_rules_config`. The "Edited" stamp is the max
  *    last_updated across rows; the version chip is a deterministic
  *    hash of the (key, value) pairs.
- *  - Audit trail: GET /api/audit/events?limit=1 (Lakebase-backed).
+ *  - Audit ledger: a link card only. The explorer moved to /audit-ledger
+ *    (D-audit-reads-c3), and every ledger read is now itself recorded, so
+ *    opening Admin reads none (the old "last event" probe would have written
+ *    a row on every open and then shown the reader's own row).
  *  - Data source readiness: GET /api/admin/sources returns per-source
  *    rows with status, row counts, and lastModified stamps from
  *    DESCRIBE DETAIL.
@@ -125,12 +130,12 @@ function dataEstateFallback(lender: string): DataEstateResponse {
             name: 'Data-estate API',
             label: '/api/v1/data-estate',
             status: 'error',
-            note: 'Do not claim source proof until this endpoint recovers.',
+            note: 'Source proof is unavailable until this endpoint recovers.',
           },
         ],
       },
     ],
-    known_data_gaps: ['Data-estate proof API unavailable; do not claim source proof until it recovers.'],
+    known_data_gaps: ['Data-estate proof API unavailable; source proof is unavailable until it recovers.'],
     proof_assets: [],
   };
 }
@@ -171,13 +176,11 @@ export default function AdminConfig() {
     }
   }, [location.hash]);
 
+  // Every section the section nav links to scrolls to the top (below both
+  // sticky bars, AdminSectionNav.css) and takes focus (critic-09).
   useEffect(() => {
-    const targetId = location.hash === '#audit'
-      ? 'audit'
-      : location.hash === '#data-operations'
-        ? 'data-operations'
-        : null;
-    if (!targetId) return;
+    const targetId = location.hash.slice(1);
+    if (!ADMIN_SECTION_IDS.has(targetId)) return;
     const target = document.getElementById(targetId);
     if (!target) return;
     target.scrollIntoView({ block: 'start' });
@@ -198,22 +201,7 @@ export default function AdminConfig() {
     ? 'Data source readiness temporarily unavailable'
     : null;
 
-  const {
-    data: auditEvents,
-    warmingUp: auditWarming,
-    error: auditErrorObj,
-  } = useWarmingUpRetry<AuditEventRow[]>(
-    (signal) => api.auditEvents(1, signal),
-    { queryKey: queryKeys.auditEvents(['latest', 1]) },
-  );
-  const auditLoading =
-    auditEvents === null && auditWarming === null && auditErrorObj === null;
-  const auditError = auditErrorObj
-    ? auditErrorObj instanceof Error
-      ? auditErrorObj.message
-      : 'unreachable'
-    : null;
-  const auditLatest = auditEvents?.[0] ?? null;
+  const presenterMode = usePresenterMode();
 
   // Data-estate proof surface (relocated from Home so the operator console
   // owns source-readiness chrome). Same plain useQuery + honest fallback the
@@ -233,14 +221,30 @@ export default function AdminConfig() {
     : 'loading…';
   const liveCount = sources ? sources.filter((s) => s.status === 'live').length : 0;
   const totalCount = sources ? sources.length : 0;
+  const sourcesPending = sourcesLoading || Boolean(sourcesWarming);
 
   return (
     <PageShell
       eyebrow="Administration"
       title="Rules, data sources, and audit"
-      lede="View the active offer ruleset, data source status, and recent audit activity. Per-user workspace appearance is in the Console panel."
+      lede="View the active offer ruleset, data source status and operations; the audit ledger has its own page. Per-user workspace appearance is in the Console panel."
       heroRight={<EntradaWordmark height={28} />}
     >
+      {/* Status row + sticky section nav (critic-09): computed only from what
+          this page already reads; no request of their own. */}
+      <AdminSectionNav
+        sections={ADMIN_SECTIONS}
+        status={[
+          rules
+            ? { label: 'Offer rules', value: 'active', tone: 'success' }
+            : { label: 'Offer rules', value: rulesError ? 'unavailable' : 'loading', tone: rulesError ? 'warning' : 'neutral' },
+          sourcesError
+            ? { label: 'Data sources', value: 'unavailable', tone: 'warning' }
+            : { label: 'Data sources', value: sourcesPending ? 'loading' : `${liveCount} of ${totalCount} live`, tone: 'neutral' },
+          { label: 'Presenter mode', value: presenterMode ? 'On' : 'Off', tone: presenterMode ? 'warning' : 'neutral' },
+        ]}
+      />
+      <div className="admin-config-sections">
       {/* Data estate — source-readiness proof, directly above the
           "Data source readiness" card in the admin grid below. */}
       {dataEstate ? (
@@ -251,12 +255,14 @@ export default function AdminConfig() {
 
       {/* Platform capability + proof status — relocated here from the Ask Genie
           general-user surface so operators own the live-capability diagnostics. */}
-      <PlatformCapabilitiesPanel />
+      <div id="live-probes" tabIndex={-1}>
+        <PlatformCapabilitiesPanel />
+      </div>
 
       {/* First row — the three operator-grade panels */}
       <div className="admin-grid">
         {/* Offer rules — clickable to expand threshold table */}
-        <div className="surface" id="offer-rules">
+        <div className="surface" id="offer-rules" tabIndex={-1}>
           <div className="surface__hdr surface__hdr--split">
             <SurfaceTitle>Offer rules</SurfaceTitle>
             <button
@@ -351,51 +357,22 @@ export default function AdminConfig() {
           </div>
         </div>
 
-        {/* Audit trail — live count + last event timestamp */}
-        <div className="surface">
-          <div className="surface__hdr surface__hdr--split">
-            <SurfaceTitle>Audit trail</SurfaceTitle>
-            <Chip variant={auditError ? 'warning' : 'success'}>
-              {auditError ? 'reconnecting' : 'live'}
-            </Chip>
+        {/* Audit ledger — a link card: the explorer has its own page
+            (D-audit-reads-c3), and Admin reads nothing from the ledger. */}
+        <div className="surface" id="audit" tabIndex={-1} aria-labelledby="admin-audit-ledger-title">
+          <div className="surface__hdr">
+            <SurfaceTitle id="admin-audit-ledger-title">Audit ledger</SurfaceTitle>
           </div>
           <div className="surface__body admin-panel-body">
             <p className="body flush">
-              Append-only trail of approvals, rejections, and workflow actions, available for compliance export.
+              The append-only ledger of decisions, exports and borrower-level reads, with filters, paging, receipts and CSV. Reading it is itself recorded.
             </p>
-            {auditWarming && (
-              <WarmingUpBlock state={auditWarming} title="Audit probe loading" compact />
-            )}
-            {!auditWarming && auditLoading && (
-              <MetaRow label="Status" value="Probing Lakebase…" status="neutral" />
-            )}
-            {!auditWarming && !auditLoading && auditError && (
-              <MetaRow
-                label="Status"
-                value="Audit feed currently reconnecting"
-                status="warn"
-                statusLabel="503"
-              />
-            )}
-            {!auditWarming && !auditLoading && !auditError && auditLatest && (
-              <>
-                <MetaRow
-                  label="Last event"
-                  value={formatAuditTimestamp(auditLatest.created_at)}
-                  status="ok"
-                  statusLabel={auditLatest.action}
-                />
-                <MetaRow label="Last actor" value={auditLatest.actor} status="neutral" />
-              </>
-            )}
-            {!auditWarming && !auditLoading && !auditError && !auditLatest && (
-              <MetaRow label="Status" value="No events yet" status="neutral" />
-            )}
+            <Link className="btn btn--sm" to={ROUTES.auditLedger.pattern}>Open audit ledger</Link>
           </div>
         </div>
 
         {/* Data source readiness — per-source status rows */}
-        <div className="surface">
+        <div className="surface" id="data-sources" tabIndex={-1}>
           <div className="surface__hdr surface__hdr--split">
             <SurfaceTitle>Data source readiness</SurfaceTitle>
             <Chip variant={sourcesError ? 'warning' : 'neutral'}>
@@ -455,24 +432,24 @@ export default function AdminConfig() {
 
       <DataOperationsPanel
         sources={sources ?? undefined}
-        sourcesLoading={sourcesLoading || Boolean(sourcesWarming)}
+        sourcesLoading={sourcesPending}
         sourcesError={Boolean(sourcesError)}
       />
 
       <BuyerReadinessPanel
         sources={sources ?? undefined}
-        sourcesLoading={sourcesLoading || Boolean(sourcesWarming)}
+        sourcesLoading={sourcesPending}
         sourcesError={Boolean(sourcesError)}
       />
 
       <CapabilityPanel />
 
-      <ActivationOperationsPanel />
-
-      <AdminAuditExplorer />
+      <div id="activation" tabIndex={-1}>
+        <ActivationOperationsPanel />
+      </div>
 
       {/* Second row — disclosure for per-user appearance controls */}
-      <div className="surface">
+      <div className="surface" id="appearance" tabIndex={-1}>
         <button
           type="button"
           className="surface__hdr appearance-toggle"
@@ -558,6 +535,7 @@ export default function AdminConfig() {
           </div>
         )}
       </div>
+      </div>
     </PageShell>
   );
 }
@@ -632,16 +610,6 @@ function sourceStatusLabel(status: SourceStatus): string {
   // gold.source_readiness has no row for the source: tone stays warn.
   if (status === 'unavailable') return 'readiness unavailable';
   return 'roadmap';
-}
-
-/**
- * Audit-row clock times go through lib/time so the rendered label carries
- * an explicit short zone name (re-audit 2026-06-11: this route still had
- * a local zone-naive formatter — instants were correct, labels unzoned —
- * contradicting the "every clock time through lib/time" slice contract).
- */
-function formatAuditTimestamp(iso: string): string {
-  return formatTimestamp(iso, { withYear: 'auto' });
 }
 
 /**

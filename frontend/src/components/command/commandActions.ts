@@ -63,7 +63,11 @@ const ROUTE_ACTION_TERMS = {
   analytics: { id: 'nav-analytics', keywords: ['executive', 'geography', 'economics', 'signals', 'funnel', 'charts'] },
   askGenie: { id: 'nav-genie', keywords: ['ai', 'question', 'chat', 'natural language', 'sql'] },
   glossary: { id: 'nav-glossary', keywords: ['terms', 'definitions', 'clip', 'owner link', 'help'] },
-  admin: { id: 'nav-admin', keywords: ['config', 'audit log', 'offer rules', 'governance'] },
+  auditLedger: {
+    id: 'nav-audit-ledger',
+    keywords: ['audit', 'ledger', 'audit log', 'compliance', 'receipts', 'history'],
+  },
+  admin: { id: 'nav-admin', keywords: ['config', 'offer rules', 'governance'] },
 } as const satisfies Record<NavigationRouteId, { id: string; keywords: readonly string[] }>;
 
 function routeAction(routeId: NavigationRouteId): CommandAction {
@@ -137,11 +141,22 @@ export function commandVerbActions(selection: CommandSelectionContext | null): C
   return verbs;
 }
 
+/**
+ * The actions this session may take: Admin for administrators, the audit
+ * ledger for administrators and auditors (D-audit-reads-c3). `canReadAudit`
+ * defaults to `canAccessAdmin`, so a caller that passes only the admin flag
+ * keeps administrators right; pass the ledger flag to offer it to auditors.
+ */
 export function commandActionsForAccess(
   canAccessAdmin: boolean,
   actions: readonly CommandAction[] = COMMAND_ACTIONS,
+  canReadAudit: boolean = canAccessAdmin,
 ): CommandAction[] {
-  return actions.filter((action) => canAccessAdmin || action.id !== 'nav-admin');
+  return actions.filter((action) => {
+    if (action.id === 'nav-admin') return canAccessAdmin;
+    if (action.id === 'nav-audit-ledger') return canReadAudit;
+    return true;
+  });
 }
 
 function normalize(text: string): string {

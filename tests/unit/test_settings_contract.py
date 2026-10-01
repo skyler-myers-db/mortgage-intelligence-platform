@@ -195,6 +195,10 @@ def test_mip_prefixed_admin_and_trust_env_vars_win_over_legacy_aliases(
         "DEFAULT_ACTOR": "system@legacy.example",
         "MIP_TRUST_FORWARDED_HEADERS": "false",
         "TRUST_FORWARDED_HEADERS": "true",
+        "MIP_AUDITOR_EMAILS": "mip-auditor@example.com",
+        "AUDITOR_EMAILS": "legacy-auditor@example.com",
+        "MIP_AUDITOR_IDENTITIES": "mip-audit-client",
+        "AUDITOR_IDENTITIES": "legacy-audit-client",
     }
     for key, value in pairs.items():
         monkeypatch.setenv(key, value)
@@ -204,6 +208,8 @@ def test_mip_prefixed_admin_and_trust_env_vars_win_over_legacy_aliases(
     assert settings.admin_group_name == "mip-risk-admin"
     assert settings.default_actor == "system@mip.example"
     assert settings.trust_forwarded_headers is False
+    assert settings.auditor_emails == "mip-auditor@example.com"
+    assert settings.auditor_identities == "mip-audit-client"
 
 
 def test_security_sensitive_defaults_are_fail_closed() -> None:
@@ -211,6 +217,34 @@ def test_security_sensitive_defaults_are_fail_closed() -> None:
     assert settings.admin_emails == ""
     assert "entrada.ai" not in settings.admin_emails
     assert settings.mip_rum_enabled is False
+    # D-audit-reads-c3: no auditor unless configured.
+    assert settings.auditor_emails == ""
+    assert settings.auditor_identities == ""
+    # D-shell-deviations-e1: demo affordances are off unless configured.
+    assert settings.mip_presenter_mode is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1", True),
+        ("true", True),
+        (" YES ", True),
+        ("on", True),
+        ("0", False),
+        ("off", False),
+        ("", False),
+        ("banana", False),
+        ("2", False),
+    ],
+)
+def test_presenter_mode_parses_strictly_and_an_unparseable_value_fails_closed(
+    raw: str, expected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unparseable runtime value reads as off instead of crashing boot."""
+    monkeypatch.setenv("MIP_PRESENTER_MODE", raw)
+
+    assert Settings(_env_file=None).mip_presenter_mode is expected
 
 
 @pytest.mark.parametrize(

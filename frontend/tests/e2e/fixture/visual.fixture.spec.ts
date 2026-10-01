@@ -132,6 +132,8 @@ for (const theme of FIXTURE_THEMES) {
       // H: the non-bannered failed read (quality-06), health OK.
       { route: 'lead-queue', state: 'read-failed' },
       { route: 'segment-intelligence', state: 'read-failed' },
+      // critic-09: the Data operations Run confirm.
+      { route: 'admin-config', state: 'run-dialog-open' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {

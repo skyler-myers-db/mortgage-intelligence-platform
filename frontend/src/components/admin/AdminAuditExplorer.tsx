@@ -1,5 +1,6 @@
 /**
- * Audit explorer (admin-config `#audit`, admin-gated with the route).
+ * Audit explorer (/audit-ledger `#audit`, gated with the route to administrators
+ * and the read-only Auditor role, D-audit-reads-c3).
  *
  * Audit flow-04 phase 1 / tables-10 (2026-09-21): the filters live in the URL
  * (AdminAuditExplorer.params.ts) so a view can be shared, bookmarked and
@@ -45,7 +46,7 @@ type FailureModule = typeof import('../ui/AsyncFailure');
 /**
  * The explorer's failure lines in the shared vocabulary (audit states-04):
  * DescribedErrorBody's lazy wrapper (components/ui/DescribedError.tsx),
- * inlined so the admin-config closure does not carry that shared chunk (0.54
+ * inlined so the audit-ledger closure does not carry that shared chunk (0.54
  * KiB br against a route gate with none to spare); same chunk, same fallback.
  */
 const ErrorBodyLine = lazy<ComponentType<ErrorBodyProps>>(() => (import('../ui/AsyncFailure') as Promise<FailureModule | undefined>).then(

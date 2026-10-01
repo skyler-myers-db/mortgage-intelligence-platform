@@ -392,6 +392,14 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "destination_key",
         "destination_type",
         "activation_status",
+        # VIEW_AUDIT_LEDGER (backend/services/audit_ledger_reads.py): which
+        # ledger surface was read, whether it was a later page, how many rows
+        # it returned and, for a receipt, which row. filter_fingerprint
+        # (above) is the SHA-256 of the filters; row contents never land.
+        "ledger_surface",
+        "has_cursor",
+        "returned_row_count",
+        "read_audit_event_id",
     }
 )
 
@@ -484,6 +492,7 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "approval_request_batch_id",
         "revoked_approval_id",
         "released_assignment_id",
+        "read_audit_event_id",
     }
 )
 _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(
@@ -715,3 +724,10 @@ class AuditMetadataValueViolation(RuntimeError):
     def __init__(self, field: str, reason: str) -> None:
         self.field = field
         super().__init__(f"Audit metadata field {field!r} failed value policy: {reason}")
+
+
+# The closed ``ledger_surface`` vocabulary of a VIEW_AUDIT_LEDGER row
+# (D-audit-reads-c3): one token per served ledger read surface.
+LEDGER_SURFACES: frozenset[str] = frozenset(
+    {"events", "events_page", "rollups", "receipt", "refusal_reports", "facets", "count"}
+)

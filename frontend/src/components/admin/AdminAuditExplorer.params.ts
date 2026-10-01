@@ -2,7 +2,7 @@
  * Audit explorer URL state (audit flow-04 phase 1 / tables-10, 2026-09-21).
  *
  * The explorer's filters used to live in useState, so no view could be
- * shared, bookmarked or linked to. They now live in the admin-config URL
+ * shared, bookmarked or linked to. They now live in the /audit-ledger URL
  * under an `audit_` prefix (the page hosts other panels), parsed and
  * serialized here the way `routes/lead-queue.filters.ts` does it for the
  * Lead Queue: every value is validated on the way in, so a hand-edited URL

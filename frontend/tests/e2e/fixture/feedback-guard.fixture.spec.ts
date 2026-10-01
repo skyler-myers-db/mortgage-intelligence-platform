@@ -300,7 +300,7 @@ test.describe('toast region (states-07 slice 1)', () => {
       await expect(toast).toContainText('Summit IL refi cohort');
       await expect(toastRegion(page).locator('[role="status"] .toast')).toHaveCount(1);
       const link = toast.getByRole('link', { name: 'View audit event' });
-      await expect(link).toHaveAttribute('href', `/admin-config?audit_event_id=${SAVE_AUDIT_ID}#audit`);
+      await expect(link).toHaveAttribute('href', `/audit-ledger?audit_event_id=${SAVE_AUDIT_ID}#audit`);
       await expect(save).toHaveText('Save build');
       await app.settle();
       await expect(toast).toHaveCount(1);
@@ -357,7 +357,7 @@ test.describe('toast region (states-07 slice 1)', () => {
 
     await link.click();
     await leaveDialog(page).getByRole('button', { name: 'Leave' }).click();
-    await expect(page).toHaveURL(new RegExp(`/admin-config\\?audit_event_id=${SAVE_AUDIT_ID}#audit$`));
+    await expect(page).toHaveURL(new RegExp(`/audit-ledger\\?audit_event_id=${SAVE_AUDIT_ID}#audit$`));
     await expect(toastRegion(page).locator('.toast')).toHaveCount(0);
     await app.settle();
   });
@@ -453,7 +453,7 @@ test.describe('toast region (states-07 slice 1)', () => {
     await toast.hover();
     await expect(toastRegion(page)).toHaveAttribute('data-paused', 'true');
     await toast.getByRole('link', { name: 'View audit event' }).click();
-    await expect(page).toHaveURL(new RegExp(`/admin-config\\?audit_event_id=${SAVE_AUDIT_ID}#audit$`));
+    await expect(page).toHaveURL(new RegExp(`/audit-ledger\\?audit_event_id=${SAVE_AUDIT_ID}#audit$`));
     await expect(toast).toHaveCount(0);
     await page.mouse.move(200, 300, { steps: 5 });
     await expect(toastRegion(page)).not.toHaveAttribute('data-paused');
@@ -513,7 +513,7 @@ test.describe('toast region (states-07 slice 1)', () => {
     await expect(toast).toContainText(`Assigned to ${ROUTED_LOAN_OFFICER.email} · follow-up Jul 19`);
     await expect(toast.getByRole('link', { name: 'View audit event' })).toHaveAttribute(
       'href',
-      `/admin-config?audit_event_id=${ROUTED_APPROVE_AUDIT_ID}#audit`,
+      `/audit-ledger?audit_event_id=${ROUTED_APPROVE_AUDIT_ID}#audit`,
     );
     await expect(page.getByTestId('decision-receipt')).toBeVisible();
     await expect(page.locator('[data-testid="routing-confirm"], .outreach-routing__confirm')).toHaveCount(0);

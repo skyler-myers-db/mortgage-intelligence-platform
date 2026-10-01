@@ -4,17 +4,21 @@ Slice 5 migrates this router off the in-memory store onto the
 Lakebase-backed ``AuditStore`` via ``get_audit_store``. The wire shape
 is unchanged so the frontend Activity Log keeps working.
 
-Audit explorer (audit tables-10, 2026-09-30): ``GET /audit/facets`` and
-``GET /audit/count`` are admin-gated, AUDIT-FREE reads of the ledger (they
-write no row and are never polled or prefetched); ``POST
-/audit/export-receipt`` writes exactly one server-owned ``AUDIT_EXPORT`` row
-before an explorer CSV download.
+Audit explorer (audit tables-10, 2026-09-30; D-audit-reads-c3, 2026-10-01):
+the ledger reads (``/events``, ``/events/page``, ``/rollups``, ``/facets``,
+``/count``) admit an administrator or a configured read-only auditor
+(``AuditReaderDep``) and are NOT audit-free: every served read writes exactly
+one background, fail-open ``VIEW_AUDIT_LEDGER`` row naming its surface
+(services/audit_ledger_reads), so reading the ledger is itself recorded. They
+are never polled or prefetched. ``POST /audit/export-receipt`` (admin only)
+writes exactly one server-owned ``AUDIT_EXPORT`` row before an explorer CSV
+download; ``/my-events`` stays the caller's own, audit-free feed.
 """
 
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from backend.schemas.audit import (
@@ -39,6 +43,7 @@ from backend.services.audit_export_receipt import (
     write_audit_export_receipt,
 )
 from backend.services.audit_filter_sql import read_audit_count, read_audit_facets
+from backend.services.audit_ledger_reads import record_ledger_read
 from backend.services.audit_pagination import (
     audit_filter_fingerprint,
     decode_audit_cursor,
@@ -57,7 +62,7 @@ from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.observability import is_safe_correlation_id
-from backend.services.rbac import AdminDep, require_authenticated_actor
+from backend.services.rbac import AdminDep, AuditReaderDep, require_authenticated_actor
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -218,7 +223,8 @@ def list_my_events(
 @router.get("/events", response_model=list[AuditEvent])
 def list_events(
     store: StoreDep,
-    _actor: AdminDep,
+    actor_id: AuditReaderDep,
+    background: BackgroundTasks,
     limit: Annotated[int, Query(ge=1, le=MAX_AUDIT_LIMIT)] = DEFAULT_AUDIT_LIMIT,
     offset: Annotated[int, Query(ge=0)] = 0,
     actor: Annotated[str | None, Query(max_length=256)] = None,
@@ -236,7 +242,7 @@ def list_events(
         borrower_id=borrower_id, correlation_id=correlation_id, event_id=event_id
     )
     try:
-        return store.list(
+        rows = store.list(
             limit=limit,
             offset=offset,
             actor=actor,
@@ -257,12 +263,39 @@ def list_events(
         # R5-03: constant body string; full ``str(exc)`` stays in the
         # LakebaseError WARNING + ``from exc`` chaining for ops.
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    fingerprint = audit_filter_fingerprint(
+        {
+            "limit": limit,
+            "offset": offset,
+            "actor": actor,
+            "action": action,
+            "entity_id": entity_id,
+            "borrower_id": borrower_id,
+            "subject_clip": subject_clip,
+            "event_type": event_type,
+            "correlation_id": correlation_id,
+            "since": since,
+            "until": until,
+            "event_id": event_id,
+        }
+    )
+    record_ledger_read(
+        background,
+        store,
+        actor=actor_id,
+        surface="events",
+        filter_fingerprint=fingerprint,
+        has_cursor=offset > 0,
+        returned_row_count=len(rows),
+    )
+    return rows
 
 
 @router.get("/events/page", response_model=AuditEventPage)
 def list_event_page(
     store: StoreDep,
-    _actor: AdminDep,
+    actor_id: AuditReaderDep,
+    background: BackgroundTasks,
     limit: Annotated[int, Query(ge=1, le=MAX_AUDIT_LIMIT)] = DEFAULT_AUDIT_LIMIT,
     cursor: Annotated[str | None, Query(max_length=2048)] = None,
     actor: Annotated[str | None, Query(max_length=256)] = None,
@@ -321,26 +354,37 @@ def list_event_page(
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     items = rows[:limit]
-    if len(rows) <= limit or not items:
-        return AuditEventPage(items=items)
-    snapshot_sequence = items[0].audit_sequence if decoded is None else decoded.snapshot_sequence
-    after_sequence = items[-1].audit_sequence
-    snapshot_token = items[0].audit_snapshot if decoded is None else decoded.snapshot_token
-    if snapshot_sequence is None or after_sequence is None or snapshot_token is None:
-        raise HTTPException(status_code=503, detail="audit pagination unavailable")
-    next_cursor = encode_audit_cursor(
-        after_sequence=after_sequence,
-        snapshot_sequence=snapshot_sequence,
-        snapshot_token=snapshot_token,
+    next_cursor = None
+    if len(rows) > limit and items:
+        snapshot_sequence = items[0].audit_sequence if decoded is None else decoded.snapshot_sequence
+        after_sequence = items[-1].audit_sequence
+        snapshot_token = items[0].audit_snapshot if decoded is None else decoded.snapshot_token
+        if snapshot_sequence is None or after_sequence is None or snapshot_token is None:
+            raise HTTPException(status_code=503, detail="audit pagination unavailable")
+        next_cursor = encode_audit_cursor(
+            after_sequence=after_sequence,
+            snapshot_sequence=snapshot_sequence,
+            snapshot_token=snapshot_token,
+            filter_fingerprint=fingerprint,
+        )
+    record_ledger_read(
+        background,
+        store,
+        actor=actor_id,
+        surface="events_page",
         filter_fingerprint=fingerprint,
+        has_cursor=cursor is not None,
+        returned_row_count=len(items),
     )
     return AuditEventPage(items=items, next_cursor=next_cursor)
 
 
 @router.get("/count", response_model=AuditCountResponse)
 def count_events(
-    _actor: AdminDep,
+    actor_id: AuditReaderDep,
     lakebase: LakebaseDep,
+    store: StoreDep,
+    background: BackgroundTasks,
     actor: Annotated[str | None, Query(max_length=256)] = None,
     action: Annotated[str | None, Query(max_length=128)] = None,
     entity_id: Annotated[str | None, Query(max_length=256)] = None,
@@ -351,13 +395,13 @@ def count_events(
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> AuditCountResponse:
-    """How many ledger rows match the /events/page filters, up to a cap (audit-free)."""
+    """How many ledger rows match the /events/page filters, up to a cap (a recorded read)."""
 
     correlation_id = _validated_explorer_filters(
         borrower_id=borrower_id, correlation_id=correlation_id
     )
     try:
-        return read_audit_count(
+        counted = read_audit_count(
             lakebase,
             actor=actor,
             action=action,
@@ -371,16 +415,41 @@ def count_events(
         )
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    fingerprint = audit_filter_fingerprint(
+        {
+            "actor": actor,
+            "action": action,
+            "entity_id": entity_id,
+            "borrower_id": borrower_id,
+            "subject_clip": subject_clip,
+            "event_type": event_type,
+            "correlation_id": correlation_id,
+            "since": since,
+            "until": until,
+        }
+    )
+    record_ledger_read(
+        background,
+        store,
+        actor=actor_id,
+        surface="count",
+        filter_fingerprint=fingerprint,
+        has_cursor=False,
+        returned_row_count=counted.count,
+    )
+    return counted
 
 
 @router.get("/facets", response_model=AuditFacetsResponse)
 def audit_facets(
-    _actor: AdminDep,
+    actor_id: AuditReaderDep,
     lakebase: LakebaseDep,
+    store: StoreDep,
+    background: BackgroundTasks,
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> AuditFacetsResponse:
-    """Distinct event types, actions and actors for the explorer's pickers (audit-free).
+    """Distinct event types, actions and actors for the explorer's pickers (a recorded read).
 
     Reads the ledger itself, so every event type that occurred in the window
     is offered, not only the seven workflow types /rollups groups.
@@ -388,9 +457,19 @@ def audit_facets(
 
     window_start = since if since is not None else datetime.now(UTC) - DEFAULT_FACET_WINDOW
     try:
-        return read_audit_facets(lakebase, since=window_start, until=until)
+        facets = read_audit_facets(lakebase, since=window_start, until=until)
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    record_ledger_read(
+        background,
+        store,
+        actor=actor_id,
+        surface="facets",
+        filter_fingerprint=audit_filter_fingerprint({"since": window_start, "until": until}),
+        has_cursor=False,
+        returned_row_count=len(facets.event_types) + len(facets.actions) + len(facets.actors),
+    )
+    return facets
 
 
 @router.post(
@@ -421,8 +500,10 @@ def create_audit_export_receipt(
 
 @router.get("/rollups", response_model=list[AuditRollupResponse])
 def audit_rollups(
-    _actor: AdminDep,
+    actor_id: AuditReaderDep,
     lakebase: LakebaseDep,
+    store: StoreDep,
+    background: BackgroundTasks,
     period: Annotated[Literal["day", "week", "month"], Query()] = "week",
     group_by: Annotated[
         Literal["event_type", "actor", "action"],
@@ -471,7 +552,7 @@ def audit_rollups(
         rows = lakebase.fetchall(sql, params, limit=104)
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
-    return [
+    rollups = [
         AuditRollupResponse(
             bucket_start=(
                 row["bucket_start"].isoformat()
@@ -485,6 +566,18 @@ def audit_rollups(
         )
         for row in rows
     ]
+    record_ledger_read(
+        background,
+        store,
+        actor=actor_id,
+        surface="rollups",
+        filter_fingerprint=audit_filter_fingerprint(
+            {"period": period, "group_by": group_by, "since": since, "until": until}
+        ),
+        has_cursor=False,
+        returned_row_count=len(rollups),
+    )
+    return rollups
 
 
 @router.post("/event", response_model=AuditEvent, responses=JSON_CONTENT_TYPE_RESPONSE)

@@ -23,10 +23,12 @@ import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { api, ApiError } from '../../lib/api';
+import { auditEventHref } from '../../lib/auditLinks';
 import type { DecisionOutcome, DecisionReceipt as DecisionReceiptPayload } from '../../lib/apiTypes';
 import { descriptorFor } from '../../lib/drawerSources';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { queryKeys } from '../../lib/queryKeys';
+import { useAuditLedgerAccess } from '../../lib/sessionQuery';
 import { formatTimestamp } from '../../lib/time';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
@@ -110,10 +112,6 @@ export interface DecisionReceiptProps {
    */
   headingLevel?: 2 | 3;
   className?: string;
-}
-
-export function auditExplorerHref(auditEventId: string): string {
-  return `/admin-config?audit_event_id=${encodeURIComponent(auditEventId)}#audit`;
 }
 
 interface ReceiptRow {
@@ -223,6 +221,10 @@ export function DecisionReceipt({
   className = '',
 }: DecisionReceiptProps) {
   const { canAccessAdmin } = useApp();
+  // The ledger opens for administrators and the read-only Auditor role
+  // (D-audit-reads-c3), the same decision /audit-ledger's gate makes.
+  const canReadLedger = useAuditLedgerAccess();
+  const canOpenLedger = canAccessAdmin || canReadLedger;
   const titleId = useId();
   const cardRef = useRef<HTMLElement | null>(null);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
@@ -481,10 +483,10 @@ export function DecisionReceipt({
             <Button size="sm" icon="export" onClick={() => printReceipt(cardRef.current)}>
               {DECISION_RECEIPT_COPY.print}
             </Button>
-            {canAccessAdmin && explorerLink && (
+            {canOpenLedger && explorerLink && (
               <Link
                 className="btn btn--sm decision-receipt__explorer"
-                to={auditExplorerHref(receipt.audit_event_id)}
+                to={auditEventHref(receipt.audit_event_id)}
                 data-testid="decision-receipt-explorer-link"
               >
                 {DECISION_RECEIPT_COPY.openExplorer}
