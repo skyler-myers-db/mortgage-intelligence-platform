@@ -34,14 +34,17 @@
 }
 
 /* Bars: one grid, three columns (label, track, value); the list, the
-   gridline overlay and the value axis share it through subgrid. */
-.genie-bars-chart {
+   gridlines and the value axis share it through subgrid. The list paints
+   above the gridlines, so a gridline never crosses a bar. */
+.genie-bars {
   display: grid;
   grid-template-columns: minmax(0, calc(var(--sp-16) * 2)) minmax(var(--sp-16), 1fr) max-content;
   column-gap: var(--sp-2);
   min-inline-size: 0;
 }
-.genie-bars {
+.genie-bars__list {
+  position: relative;
+  z-index: var(--z-raised);
   grid-column: 1 / -1;
   grid-row: 1;
   display: grid;
@@ -56,6 +59,7 @@
   display: grid;
   grid-template-columns: subgrid;
   align-items: center;
+  min-block-size: var(--sp-6);
   border-radius: var(--r-sm);
   font-size: var(--fs-11);
 }
@@ -76,9 +80,6 @@
   text-align: end;
   color: var(--text-2);
   font-family: var(--font-sans);
-}
-.genie-bars__row {
-  min-block-size: var(--sp-6);
 }
 /* A 24px-tall target (WCAG 2.5.8) that keeps the label's ellipsis. */
 .genie-bars__link {

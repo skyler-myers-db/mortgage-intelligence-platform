@@ -66,8 +66,8 @@ export function GenieBarChart({
     <div className="genie-chart">
       <div className="eyebrow genie-chart__title">{title}</div>
       <ChartFrame title={title} summary={summary}>
-        <div className="genie-bars-chart">
-          <ol className="genie-bars">
+        <div className="genie-bars">
+          <ol className="genie-bars__list">
             {bars.map((bar, i) => {
               const href = hrefs[i];
               return (
