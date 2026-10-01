@@ -17,7 +17,7 @@ import { PlatformCapabilitiesPanel } from '../components/admin/PlatformCapabilit
 import { ADMIN_SECTIONS, ADMIN_SECTION_IDS, AdminSectionNav } from '../components/admin/AdminSectionNav';
 import { api } from '../lib/api';
 import { ROUTES } from '../lib/routeMeta';
-import { usePresenterMode } from '../lib/sessionQuery';
+import { usePresenterMode } from '../lib/presenterMode';
 import { formatDate, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';

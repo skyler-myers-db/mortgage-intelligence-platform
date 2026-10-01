@@ -14,7 +14,8 @@ vi.mock('./api', async (importOriginal) => ({
   api: apiMocks,
 }));
 
-import { canReadAuditLedger, useAuditLedgerAccess, usePresenterMode } from './sessionQuery';
+import { usePresenterMode } from './presenterMode';
+import { canReadAuditLedger, useAuditLedgerAccess } from './sessionQuery';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

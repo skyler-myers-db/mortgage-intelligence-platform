@@ -22,10 +22,9 @@ import {
   SegmentIntelligenceRoute,
   preloadLikelyNextRoutes,
 } from './lib/routePreloaders';
-import { legacyLedgerRedirect } from './lib/auditLinks';
+import { legacyLedgerRedirect } from './lib/legacyLedgerRedirect';
 import { ROUTE_IDS, ROUTES, routeSurfacePath, type RouteId } from './lib/routeMeta';
 import { canReadAuditLedger, sessionQueryOptions } from './lib/sessionQuery';
-import type { SessionResponse } from './types';
 import './app.transitions.css';
 // The evidence hover card's sheet ships with the initial CSS (it was in
 // partial 02 before): every route renders evidence chips, and as a lazy sheet
@@ -36,29 +35,28 @@ import './components/EvidenceHoverCard.css';
 const AdminAccessDeniedRoute = lazy(() => import('./routes/admin-config.access-denied'));
 const AuditLedgerAccessDeniedRoute = lazy(() => import('./routes/audit-ledger.access-denied'));
 
-interface SessionRouteGateProps {
-  /** The server-authoritative decision this route needs. */
-  allows: (session: SessionResponse | undefined) => boolean;
-  granted: ReactElement;
-  /** The 403 surface; `unverified` when the session check failed. */
-  denied: (unverified: boolean) => ReactElement;
-}
-
 /**
  * The ONE session gate both gated routes share (the shell's
- * `['session', 'access']` read, never retried). Pending renders the route
+ * `['session', 'access']` read, never retried): Administration, or with
+ * `ledger` the audit ledger (an administrator or a read-only auditor, the
+ * decision `require_audit_reader` enforces). Pending renders the route
  * fallback; a denied or failed check renders the route's own 403 surface,
  * never the route chunk and never one of its reads.
  */
-function SessionRouteGate({ allows, granted, denied }: SessionRouteGateProps) {
+function SessionRouteGate({ ledger = false }: { ledger?: boolean }) {
   const session = useQuery(sessionQueryOptions());
 
   if (session.isPending) return <RouteFallback />;
-  if (!allows(session.data)) return denied(session.isError);
-  return granted;
+  const unverified = session.isError;
+  if (ledger) {
+    return canReadAuditLedger(session.data)
+      ? <AuditLedgerRoute />
+      : <AuditLedgerAccessDeniedRoute unverified={unverified} />;
+  }
+  return session.data?.can_access_admin
+    ? <AdminConfigRoute />
+    : <AdminAccessDeniedRoute unverified={unverified} />;
 }
-
-const isAdminSession = (session: SessionResponse | undefined) => session?.can_access_admin === true;
 
 /**
  * AdminRouteGate keeps the server-authoritative session decision at the route
@@ -77,14 +75,7 @@ const isAdminSession = (session: SessionResponse | undefined) => session?.can_ac
 export function AdminRouteGate() {
   const { search } = useLocation();
   const ledger = legacyLedgerRedirect(search);
-  if (ledger) return <Navigate replace to={ledger} />;
-  return (
-    <SessionRouteGate
-      allows={isAdminSession}
-      granted={<AdminConfigRoute />}
-      denied={(unverified) => <AdminAccessDeniedRoute unverified={unverified} />}
-    />
-  );
+  return ledger ? <Navigate replace to={ledger} /> : <SessionRouteGate />;
 }
 
 /**
@@ -93,13 +84,7 @@ export function AdminRouteGate() {
  * denied actor loads no ledger chunk and issues no ledger read.
  */
 export function AuditLedgerGate() {
-  return (
-    <SessionRouteGate
-      allows={canReadAuditLedger}
-      granted={<AuditLedgerRoute />}
-      denied={(unverified) => <AuditLedgerAccessDeniedRoute unverified={unverified} />}
-    />
-  );
+  return <SessionRouteGate ledger />;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
-import { usePresenterMode } from '../../lib/sessionQuery';
+import { usePresenterMode } from '../../lib/presenterMode';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
 import type {
   ActivationDestination,

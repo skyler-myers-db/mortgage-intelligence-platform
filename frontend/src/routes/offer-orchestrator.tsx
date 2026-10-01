@@ -15,7 +15,7 @@ import { intentFingerprint, useIntentRequestIds } from '../lib/mutations/request
 import { queueHref, useQueueContext } from '../lib/queueContext';
 import { queuePosition } from '../lib/queuePosition';
 import { offerPath } from '../lib/routeMeta';
-import { usePresenterMode } from '../lib/sessionQuery';
+import { usePresenterMode } from '../lib/presenterMode';
 import { PageShell } from '../components/layout/PageShell';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { QueuePager } from '../components/mortgage/QueuePager';

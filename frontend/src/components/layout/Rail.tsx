@@ -88,8 +88,8 @@ export function Rail() {
         <Link
           to={ROUTES.auditLedger.pattern}
           className="rail__item"
-          aria-label="Audit ledger"
-          title="Audit ledger"
+          aria-label={ROUTES.auditLedger.name}
+          title={ROUTES.auditLedger.name}
           aria-current={onLedger ? 'page' : undefined}
         >
           <Icon name="audit" size={16} />
