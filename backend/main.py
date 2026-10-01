@@ -21,40 +21,7 @@ from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 from starlette.types import ASGIApp
 
-from backend.api import (
-    activation,
-    admin,
-    analytics,
-    analytics_rate_window,
-    assets,
-    audit,
-    audit_receipt,
-    borrowers,
-    campaigns,
-    config,
-    data_estate,
-    genie,
-    genie_feedback_routes,
-    genie_refusal_report,
-    geo,
-    growth_agent,
-    growth_agent_compose_routes,
-    health,
-    home,
-    leads,
-    leads_export,
-    lineage,
-    loan_officers,
-    lookup,
-    offers,
-    outreach,
-    portfolio,
-    sales,
-    segments,
-    session,
-    telemetry,
-    workspace,
-)
+from backend.api.routers import API_ROUTERS
 from backend.config.settings import (
     _running_under_pytest,
     check_trust_boundary_at_startup,
@@ -699,41 +666,6 @@ async def _request_validation_handler(
             content["audit_event_id"] = audit_event_id
     return JSONResponse(status_code=422, content=content)
 
-
-API_ROUTERS = [
-    health.router,
-    config.router,
-    data_estate.router,
-    activation.router,
-    admin.router,
-    assets.router,
-    analytics.router,
-    analytics_rate_window.router,
-    home.router,
-    portfolio.router,
-    campaigns.router,
-    segments.router,
-    leads.router,
-    leads_export.router,
-    lineage.router,
-    borrowers.router,
-    lookup.router,
-    offers.router,
-    outreach.router,
-    sales.router,
-    loan_officers.router,
-    geo.router,
-    session.router,
-    growth_agent.router,
-    growth_agent_compose_routes.router,
-    genie.router,
-    genie_feedback_routes.router,
-    genie_refusal_report.router,
-    audit.router,
-    audit_receipt.router,
-    telemetry.router,
-    workspace.router,
-]
 
 for router in API_ROUTERS:
     app.include_router(router, prefix=CANONICAL_API_PREFIX)

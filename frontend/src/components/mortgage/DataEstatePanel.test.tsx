@@ -106,4 +106,48 @@ describe('DataEstatePanel', () => {
     expect(controls).not.toMatch(/\s/);
     expect(container.querySelector(`#${controls}`)).toBeTruthy();
   });
+
+  it('renders an unavailable readiness source as "readiness unavailable" with a warn tone', () => {
+    const base = estate();
+    const lane = base.lanes[0]!;
+    const unavailableEstate: DataEstateResponse = {
+      ...base,
+      lanes: [
+        {
+          ...lane,
+          status: 'unavailable',
+          assets: [
+            lane.assets[0]!,
+            {
+              name: 'MLS Listings',
+              label: 'Listing activity',
+              status: 'unavailable',
+              uc_object: null,
+              catalog_explorer_url: null,
+              row_count: null,
+              last_updated: null,
+              note: 'readiness summary has no row for this source',
+              synthetic_demo: false,
+            },
+          ],
+        },
+      ],
+    };
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <DataEstatePanel estate={unavailableEstate} />
+        </MemoryRouter>,
+      );
+    });
+
+    const assets = [...container.querySelectorAll<HTMLButtonElement>('.data-estate__asset')];
+    const listing = assets.find((button) => button.textContent?.includes('Listing activity'));
+    expect(listing?.querySelector('.data-estate__asset-meta')?.textContent).toContain('readiness unavailable');
+    expect(listing?.querySelector('.status-dot')?.classList.contains('status-dot--warn')).toBe(true);
+
+    const proof = container.querySelector('.data-estate__lane-proof');
+    expect(proof?.classList.contains('chip--warning')).toBe(true);
+    expect(proof?.textContent).toBe('1 live · 1 readiness unavailable');
+  });
 });

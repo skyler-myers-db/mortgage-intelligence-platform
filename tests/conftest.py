@@ -62,6 +62,7 @@ settings.mip_default_catalog = "mip"
 from backend.api.config import _reset_config_cache_for_tests
 from backend.main import _backpressure_controller, app
 from backend.services.admin_rules import (
+    _SOURCES as _ADMIN_SOURCES,
     AdminRulesService,
     _reset_admin_rules_service_for_tests,
     get_admin_rules_service,
@@ -1230,10 +1231,10 @@ class _FakeAdminSqlClient:
       threshold rows mirroring the seed file.
     * ``SELECT ... FROM mip.gold.borrower_360`` -> operating market-rate row
       injected into the admin rules response.
-    * ``DESCRIBE DETAIL`` / ``SELECT COUNT(*)`` against each silver
-      table -> deterministic row counts + a fixed ``lastModified``
-      timestamp so the sources endpoint reports LIVE for every wired
-      source in unit tests.
+    * ``SELECT ... FROM mip.gold.source_readiness`` -> one complete
+      summary row per admin source (LIVE with a deterministic row count
+      and timestamp; roadmap sources stay roadmap). The App reads only
+      this gold summary; it never probes silver or first-party tables.
 
     Any query not matching the above returns an empty list; tests that
     want to exercise 503 paths install their own fake that raises.
@@ -1302,10 +1303,20 @@ class _FakeAdminSqlClient:
             ]
         if ".GOLD.BORROWER_360" in s and "MARKET_RATE_FRACTION" in s:
             return [{"rate_fraction": 0.0637, "last_updated": "2026-05-07 12:00:00"}]
-        if s.startswith("DESCRIBE DETAIL"):
-            return [{"lastModified": "2026-04-22T12:00:00.000Z"}]
-        if "COUNT(*)" in s and "FROM" in s:
-            return [{"row_count": 1000}]
+        if ".GOLD.SOURCE_READINESS" in s:
+            return [
+                {
+                    "source_name": desc.name,
+                    "status": "roadmap" if desc.roadmap else "live",
+                    "row_count": None if desc.roadmap else 1000,
+                    "last_updated": None if desc.roadmap else "2026-04-22T12:00:00.000Z",
+                    "note": desc.note,
+                    "checked_at": None,
+                    "synthetic_demo": False,
+                    "sort_order": idx,
+                }
+                for idx, desc in enumerate(_ADMIN_SOURCES, start=1)
+            ]
         return []
 
     def execute_one(

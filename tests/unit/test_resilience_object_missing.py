@@ -10,10 +10,12 @@ against a healthy warehouse; one landing as the half-open probe re-opened it.
 
 Pins, from the classifier up to the route:
 
-* ``TABLE_OR_VIEW_NOT_FOUND`` / SQLSTATE 42P01 in the message classify as
-  ``DatabricksSqlObjectMissingError`` (a ``DatabricksSqlError`` subclass); a
-  permission refusal still wins; error codes alone, "not found" prose and the
-  near-miss SQLSTATEs stay plain;
+* ``TABLE_OR_VIEW_NOT_FOUND`` / SQLSTATE 42P01, ``SCHEMA_NOT_FOUND`` and
+  ``UNRESOLVED_ROUTINE`` (error classes only, 2026-09-30) in the message
+  classify as ``DatabricksSqlObjectMissingError`` (a ``DatabricksSqlError``
+  subclass); a permission refusal still wins; error codes alone, "not found"
+  prose, the near-miss SQLSTATEs and the shared SQLSTATEs 42704 / 42883
+  without their class stay plain;
 * both raise sites (a FAILED statement, an HTTP error body) raise it with the
   statement id and state kept;
 * ``with_retry`` gives up on it at once; ``Resilient`` records a breaker
@@ -70,6 +72,15 @@ _MISSING_B360 = (
     "SQLSTATE: 42P01"
 )
 _REFUSAL = "[INSUFFICIENT_PERMISSIONS] User does not have SELECT on Table 'mip.gold.x'. SQLSTATE: 42501"
+# The documented formats of the two classes added 2026-09-30 (delivery-06).
+_MISSING_SCHEMA = (
+    "[SCHEMA_NOT_FOUND] The schema `mip`.`gold` cannot be found. Verify the spelling and "
+    "correctness of the schema and catalog. SQLSTATE: 42704"
+)
+_MISSING_ROUTINE = (
+    "[UNRESOLVED_ROUTINE] Cannot resolve routine `mip`.`gold`.`fn_lead_score` on search path "
+    "[`system`.`builtin`, `system`.`session`, `mip`.`gold`]. SQLSTATE: 42883"
+)
 
 
 class _Calls:
@@ -114,14 +125,19 @@ def _resilient(breaker: CircuitBreaker, *, object_missing: bool = True) -> Resil
         # A refusal wins when a message carries both, and so does its code.
         (f"{_REFUSAL} {_MISSING_BOOK}", None, DatabricksSqlPermissionError),
         (_MISSING_BOOK, "PERMISSION_DENIED", DatabricksSqlPermissionError),
+        # A missing schema or routine: their error classes (2026-09-30).
+        (_MISSING_SCHEMA, None, DatabricksSqlObjectMissingError),
+        (_MISSING_ROUTINE, None, DatabricksSqlObjectMissingError),
         # Controls: near-miss SQLSTATE, empty, an error code alone, prose, and
-        # the definitive-looking classes the closed shape leaves out.
+        # the SQLSTATEs other error classes share, without the class.
         ("SQLSTATE: 42P010", None, DatabricksSqlError),
         ("[TABLE_OR_VIEW_NOT_FOUND_IN_CACHE] x", None, DatabricksSqlError),
+        ("[SCHEMA_NOT_FOUND_ANYWHERE] x", None, DatabricksSqlError),
         (None, None, DatabricksSqlError),
         ("the table was not found", "NOT_FOUND", DatabricksSqlError),
-        ("[SCHEMA_NOT_FOUND] The schema `mip`.`gold` cannot be found. SQLSTATE: 42704", None, DatabricksSqlError),
-        ("[UNRESOLVED_ROUTINE] Cannot resolve routine `fn_x`. SQLSTATE: 42883", None, DatabricksSqlError),
+        ("[ROUTINE_ALREADY_EXISTS] x. SQLSTATE: 42723", None, DatabricksSqlError),
+        ("[DATATYPE_MISMATCH] Some other failure. SQLSTATE: 42704", None, DatabricksSqlError),
+        ("[WRONG_NUM_ARGS] Some other failure. SQLSTATE: 42883", None, DatabricksSqlError),
     ],
 )
 def test_the_classifier_owns_the_missing_table_marker(
@@ -353,3 +369,42 @@ def test_route_answers_a_constant_503_for_any_other_missing_table(
     ]
     assert handled
     assert handled[-1].mip_extras["last_error_type"] == "DatabricksSqlObjectMissingError"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("message", [_MISSING_SCHEMA, _MISSING_ROUTINE], ids=["schema", "routine"])
+def test_a_missing_schema_or_routine_fails_fast_as_retries_exhausted(message: str) -> None:
+    """One attempt, no sleeps, a breaker SUCCESS, the unchanged wire kind."""
+    sleeps: list[float] = []
+    once = _Calls(_sql_error_class(message)(message))
+    with pytest.raises(DatabricksSqlObjectMissingError):
+        with_retry(
+            once,
+            attempts=3,
+            retry_on=(DatabricksSqlError,),
+            give_up_on=(DatabricksSqlObjectMissingError,),
+            sleep=sleeps.append,
+        )
+    assert once.count == 1 and sleeps == []
+
+    breaker = CircuitBreaker("warehouse-test", failure_threshold=1)
+    missing = _Calls(_sql_error_class(message)(message))
+    for attempt in (1, 2):
+        with pytest.raises(DependencyDownError) as raised:
+            _resilient(breaker).call(missing)
+        assert missing.count == attempt, "one attempt per call"
+        assert raised.value.kind == DependencyDownError.KIND_RETRIES_EXHAUSTED
+        assert raised.value.retryable is True
+        assert isinstance(raised.value.last_error, DatabricksSqlObjectMissingError)
+        assert breaker.state == CircuitBreaker.CLOSED, "a definitive answer is a breaker success"
+
+
+def test_a_missing_gold_schema_stays_a_503_after_one_statement(warehouse: _Warehouse) -> None:
+    """Only the Rate Lever's own tables answer built=false; a missing schema is a 503."""
+    warehouse.message = _MISSING_SCHEMA
+
+    response = TestClient(app).get("/api/v1/geo/rate-sensitivity")
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == "retries_exhausted"
+    assert len(warehouse.statements) == 1
+    assert get_breaker("warehouse").state == CircuitBreaker.CLOSED

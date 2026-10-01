@@ -6,6 +6,7 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "ACTIVATION_STAGE",
         "APPROVE",
+        "AUDIT_EXPORT",
         "CALL_DISPOSITION",
         "CAMPAIGN_STATUS_UPDATE",
         "DELETE_DRAFT",

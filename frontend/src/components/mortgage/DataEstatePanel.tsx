@@ -16,6 +16,7 @@ function statusLabel(status: DataEstateStatus): string {
   if (status === 'permission_denied') return 'grant needed';
   if (status === 'roadmap') return 'pending';
   if (status === 'error') return 'error';
+  if (status === 'unavailable') return 'readiness unavailable';
   return 'live';
 }
 
@@ -25,7 +26,8 @@ function chipVariant(status: DataEstateStatus): 'success' | 'warning' | 'neutral
     status === 'demo_synthetic' ||
     status === 'configured_empty' ||
     status === 'not_configured' ||
-    status === 'roadmap'
+    status === 'roadmap' ||
+    status === 'unavailable'
   ) return 'warning';
   return 'neutral';
 }
@@ -51,11 +53,13 @@ function laneStatusSummary(status: DataEstateStatus, assets: { status: DataEstat
     asset.status === 'configured_empty' ||
     asset.status === 'error',
   ).length;
+  const unavailable = assets.filter((asset) => asset.status === 'unavailable').length;
   const parts = [
     live > 0 ? `${live} live` : null,
     synthetic > 0 ? `${synthetic} synthetic` : null,
     roadmap > 0 ? `${roadmap} roadmap` : null,
     blocked > 0 ? `${blocked} blocked` : null,
+    unavailable > 0 ? `${unavailable} readiness unavailable` : null,
   ].filter(Boolean);
   return parts.length > 1 ? parts.join(' · ') : statusLabel(status);
 }

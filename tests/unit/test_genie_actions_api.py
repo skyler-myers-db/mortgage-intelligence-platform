@@ -1068,9 +1068,10 @@ def test_genie_outside_footprint_uses_dynamic_state_footprint() -> None:
         FootprintState("PA", "Pennsylvania", 3, False),
     ]
     _reset_state_footprint_resolver_for_tests(resolver)
+    snapshot = resolver.snapshot()
     try:
-        assert _outside_footprint_match("How many borrowers in New York?") is None
-        assert _outside_footprint_match("How many borrowers in Massachusetts?") == (
+        assert _outside_footprint_match("How many borrowers in New York?", snapshot=snapshot) is None
+        assert _outside_footprint_match("How many borrowers in Massachusetts?", snapshot=snapshot) == (
             "Massachusetts",
             "MA",
             ["NY", "NJ", "PA"],
@@ -1097,23 +1098,24 @@ def test_genie_outside_footprint_matches_lowercase_state_codes() -> None:
         FootprintState("NY", "New York", 1, True),
     ]
     _reset_state_footprint_resolver_for_tests(resolver)
+    snapshot = resolver.snapshot()
     try:
-        assert _outside_footprint_match("How many borrowers in ma?") == (
+        assert _outside_footprint_match("How many borrowers in ma?", snapshot=snapshot) == (
             "Massachusetts",
             "MA",
             ["NY"],
         )
-        assert _outside_footprint_match("How many borrowers in ok?") == (
+        assert _outside_footprint_match("How many borrowers in ok?", snapshot=snapshot) == (
             "Oklahoma",
             "OK",
             ["NY"],
         )
-        assert _outside_footprint_match("How many borrowers in oh?") == (
+        assert _outside_footprint_match("How many borrowers in oh?", snapshot=snapshot) == (
             "Ohio",
             "OH",
             ["NY"],
         )
-        assert _outside_footprint_match("How many borrowers in hi?") == (
+        assert _outside_footprint_match("How many borrowers in hi?", snapshot=snapshot) == (
             "Hawaii",
             "HI",
             ["NY"],
@@ -1128,9 +1130,10 @@ def test_genie_outside_footprint_does_not_treat_uppercase_in_as_indiana() -> Non
         FootprintState("NY", "New York", 1, True),
     ]
     _reset_state_footprint_resolver_for_tests(resolver)
+    snapshot = resolver.snapshot()
     try:
-        assert _outside_footprint_match("How many borrowers IN the money?") is None
-        assert _outside_footprint_match("How many borrowers in IN?") == (
+        assert _outside_footprint_match("How many borrowers IN the money?", snapshot=snapshot) is None
+        assert _outside_footprint_match("How many borrowers in IN?", snapshot=snapshot) == (
             "Indiana",
             "IN",
             ["NY"],
@@ -1145,10 +1148,11 @@ def test_genie_outside_footprint_does_not_treat_common_words_as_state_codes() ->
         FootprintState("NY", "New York", 1, True),
     ]
     _reset_state_footprint_resolver_for_tests(resolver)
+    snapshot = resolver.snapshot()
     try:
-        assert _outside_footprint_match("Hi, how many borrowers are in the money?") is None
-        assert _outside_footprint_match("OK, show the top refinance ZIPs.") is None
-        assert _outside_footprint_match("Oh, show retention risk by ZIP.") is None
+        assert _outside_footprint_match("Hi, how many borrowers are in the money?", snapshot=snapshot) is None
+        assert _outside_footprint_match("OK, show the top refinance ZIPs.", snapshot=snapshot) is None
+        assert _outside_footprint_match("Oh, show retention risk by ZIP.", snapshot=snapshot) is None
     finally:
         _reset_state_footprint_resolver_for_tests(None)
 

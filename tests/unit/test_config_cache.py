@@ -3,7 +3,7 @@ from __future__ import annotations
 import backend.api.config as config_api
 from backend.services.geography_scope import GeographyScope, GeographyScopeCounty
 from backend.services.resilience import TTLCache
-from backend.services.state_footprint import FootprintState
+from backend.services.state_footprint import FootprintSnapshot, FootprintState
 
 
 def setup_function() -> None:
@@ -65,6 +65,9 @@ def test_config_footprint_uses_short_ttl_cache(monkeypatch) -> None:
         def using_fallback(self) -> bool:
             return False
 
+        def snapshot(self) -> FootprintSnapshot:
+            return FootprintSnapshot(rows=tuple(self.list()), status="live_coverage")
+
     def resolver() -> Resolver:
         calls["resolver"] += 1
         return Resolver()
@@ -95,6 +98,10 @@ def test_config_footprint_expired_live_cache_does_not_mask_unavailable(
 
         def using_fallback(self) -> bool:
             return not state["live"]
+
+        def snapshot(self) -> FootprintSnapshot:
+            status = "live_coverage" if state["live"] else "fallback"
+            return FootprintSnapshot(rows=tuple(self.list()), status=status)
 
     def resolver() -> Resolver:
         return Resolver()
@@ -131,6 +138,10 @@ def test_config_options_expired_live_cache_does_not_mask_unavailable(
 
         def using_fallback(self) -> bool:
             return not state["live"]
+
+        def snapshot(self) -> FootprintSnapshot:
+            status = "live_coverage" if state["live"] else "fallback"
+            return FootprintSnapshot(rows=tuple(self.list()), status=status)
 
     def target_lenders() -> tuple[list[str], str]:
         if state["live"]:

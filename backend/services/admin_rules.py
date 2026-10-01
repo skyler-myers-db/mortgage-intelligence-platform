@@ -10,11 +10,12 @@ Two callers:
   unit, label, description, updated_at) plus an ``offer_rules_version``
   derived from a stable hash of the payload + the max ``last_updated``
   across rows.
-* ``GET /api/admin/sources`` reads the non-PII
-  ``mip.gold.source_readiness`` summary produced by the gold refresh job.
-  If that summary has not been deployed yet, the service falls back to the
-  legacy per-table probes and degrades per-source. The running app should
-  not need direct ``mip.silver.*`` grants for the Admin panel.
+* ``GET /api/admin/sources`` reads ONLY the non-PII
+  ``mip.gold.source_readiness`` summary produced by the gold refresh job
+  (App SQL is gold-only). A source the summary has no row for, or every
+  non-roadmap source when the summary is absent, reads ``unavailable``
+  (``readiness unavailable`` in the UI); the App never probes
+  ``mip.silver.*``, ``mip.first_party.*`` or the provider catalog.
 
 Both read paths:
 
@@ -28,12 +29,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from concurrent.futures import ThreadPoolExecutor
+import logging
 from dataclasses import dataclass
 from typing import Any
 
+from backend.services.databricks_sql import DatabricksSqlObjectMissingError
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.observability import emit
 from backend.services.resilience import TTLCache
+
+log = logging.getLogger(__name__)
 
 _OPERATING_MARKET_RATE_SQL = (
     "SELECT CAST(market_rate_fraction AS DOUBLE) AS rate_fraction, "
@@ -44,9 +49,10 @@ _OPERATING_MARKET_RATE_SQL = (
 )
 
 # ---------------------------------------------------------------------------
-# Per-source descriptors -- one row per panel entry. The ``uc_table`` column
-# is ``None`` for roadmap sources (no UC object exists yet). For live sources
-# the readiness read is a single ``DESCRIBE DETAIL`` call; no row scans.
+# Per-source descriptors -- one row per panel entry. Readiness itself comes
+# only from ``mip.gold.source_readiness``; a descriptor carries the name the
+# summary must have a row for, the panel note, and whether the source is on
+# the roadmap (no UC object exists yet).
 # ---------------------------------------------------------------------------
 
 
@@ -54,7 +60,7 @@ _OPERATING_MARKET_RATE_SQL = (
 class _SourceDescriptor:
     name: str
     note: str
-    uc_table: str | None  # None => roadmap
+    roadmap: bool = False
 
 
 # Ordering mirrors the admin panel's prior literal list so the UI visual
@@ -63,85 +69,79 @@ _SOURCES: tuple[_SourceDescriptor, ...] = (
     _SourceDescriptor(
         name="Cotality Public Records",
         note="Delta Share · nightly",
-        uc_table=qualify("silver", "property_master"),
     ),
     _SourceDescriptor(
         name="Voluntary Lien",
         note="Delta Share · nightly",
-        uc_table=qualify("silver", "lien_current"),
     ),
     _SourceDescriptor(
         name="MMA Mortgage Analytics",
         note="Delta Share · nightly",
-        uc_table=qualify("silver", "mortgage_events"),
     ),
     _SourceDescriptor(
         name="CLIP",
         note="Mastered property id",
-        uc_table=qualify("silver", "property_master"),
     ),
     _SourceDescriptor(
         name="Owner Link",
         note="Mastered owner graph",
-        uc_table=qualify("silver", "owner_property_bridge"),
     ),
     _SourceDescriptor(
         name="AVM",
         note="Delta Share · weekly",
-        uc_table=qualify("silver", "lien_current"),
     ),
     _SourceDescriptor(
         name="FRED Market Rates",
         note="Public FRED MORTGAGE30US · weekly",
-        uc_table=qualify("silver", "market_rates_weekly"),
     ),
     _SourceDescriptor(
         name="First-party LOS / Applications",
         note="Customer LOS/application feed · optional",
-        uc_table=qualify("first_party", "loan_applications"),
     ),
     _SourceDescriptor(
         name="First-party Servicing Portfolio",
         note="Customer servicing feed · optional",
-        uc_table=qualify("first_party", "servicing_portfolio"),
     ),
     _SourceDescriptor(
         name="First-party CRM / Campaigns",
         note="Customer CRM/campaign feed · optional",
-        uc_table=qualify("first_party", "crm_campaign_membership"),
     ),
     _SourceDescriptor(
         name="First-party Customer Interactions",
         note="Customer call-center/digital feed · optional",
-        uc_table=qualify("first_party", "customer_interactions"),
     ),
     _SourceDescriptor(
         name="First-party Product Balances",
         note="Customer banking-product feed · optional",
-        uc_table=qualify("first_party", "product_balances"),
     ),
     _SourceDescriptor(
         name="MLS Listings",
         note="Cotality MLS listing feed · current active/under-contract rows drive listed_for_sale",
-        uc_table=qualify("silver", "listing_activity"),
     ),
     _SourceDescriptor(
         name="Cotality HELOC Propensity",
         note="Cotality HELOC propensity model feed · drives HELOC Intent; not a permit filing source",
-        uc_table=qualify("silver", "heloc_propensity"),
     ),
     _SourceDescriptor(
         name="Cotality Refi Propensity",
         note="Cotality refinance propensity model feed · enriches refi timing evidence",
-        uc_table=qualify("silver", "refi_propensity"),
     ),
     _SourceDescriptor(
         name="Building Permits",
         note="Contracted · pending load",
-        uc_table=None,
+        roadmap=True,
     ),
 )
 
+_SOURCE_READINESS_SQL = (
+    "SELECT source_name, status, row_count, "
+    "CAST(last_updated AS STRING) AS last_updated, note, "
+    "CAST(checked_at AS STRING) AS checked_at, "
+    "COALESCE(synthetic_demo, FALSE) AS synthetic_demo, sort_order "
+    f"FROM {qualify('gold', 'source_readiness')} "
+    "ORDER BY sort_order"
+)
+_NO_READINESS_ROW_NOTE = "readiness summary has no row for this source"
 
 # ---------------------------------------------------------------------------
 # Service
@@ -189,7 +189,7 @@ class RulesPayload:
 @dataclass(frozen=True)
 class SourceRow:
     name: str
-    status: str  # 'live' | 'demo_synthetic' | 'configured_empty' | 'not_configured' | 'roadmap' | 'permission_denied' | 'error'
+    status: str  # 'live' | 'demo_synthetic' | 'configured_empty' | 'not_configured' | 'roadmap' | 'permission_denied' | 'error' | 'unavailable'
     rows: int | None
     last_updated: str | None
     note: str
@@ -336,81 +336,35 @@ class AdminRulesService:
         return payload
 
     def _load_sources(self) -> tuple[SourceRow, ...]:
-        summary_rows = self._try_load_source_readiness_summary()
-        if summary_rows is not None:
-            return summary_rows
+        """Read ``mip.gold.source_readiness`` once; never probe silver or first_party.
 
-        # Parallelise the per-source probes. Each live source issues up
-        # to two warehouse round-trips (DESCRIBE DETAIL, optional COUNT)
-        # and the serial version paid 8 * (describe + count) ~= 16 round
-        # trips on every cache miss, which dominated the admin page's
-        # p95. A thread pool collapses the wall-clock to roughly the
-        # slowest single source. The "degrade per-source" contract is
-        # preserved by catching exceptions inside the worker so one
-        # failing table never aborts the batch.
-        #
-        # ``max_workers=8`` matches ``len(_SOURCES)``; roadmap entries
-        # return inline without issuing a future, so the pool is only
-        # sized for the live probes.
-        results: dict[int, SourceRow] = {}
-        live_indices: list[int] = []
-        for idx, desc in enumerate(_SOURCES):
-            if desc.uc_table is None:
-                results[idx] = SourceRow(
-                    name=desc.name,
-                    status="roadmap",
-                    rows=None,
-                    last_updated=None,
-                    note=desc.note,
-                    synthetic_demo=False,
-                )
-            else:
-                live_indices.append(idx)
+        * Complete: the summary rows as they are.
+        * Partial: the present rows as they are, then one ``unavailable`` row
+          per expected source the summary has no row for.
+        * Absent (no rows, or the table itself is missing): every non-roadmap
+          source is ``unavailable``; roadmap sources stay ``roadmap``.
+        * Any other failure propagates, so the router answers 503.
 
-        if live_indices:
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                future_by_idx = {
-                    idx: executor.submit(self._probe_source, _SOURCES[idx])
-                    for idx in live_indices
-                }
-                for idx, future in future_by_idx.items():
-                    results[idx] = future.result()
-
-        return tuple(results[i] for i in range(len(_SOURCES)))
-
-    def _try_load_source_readiness_summary(self) -> tuple[SourceRow, ...] | None:
-        """Read the gold-layer source-readiness snapshot when available.
-
-        This is the preferred production path: ETL has silver access, writes
-        a non-PII summary into gold, and the Databricks App principal reads
-        only gold. Returning ``None`` means "summary unavailable; use the
-        legacy direct-probe fallback" so older deployments keep rendering.
+        ETL has silver access and writes this non-PII summary into gold; the
+        Databricks App principal reads only gold.
         """
         try:
-            rows = self._sql.execute(
-                "SELECT source_name, status, row_count, "
-                "CAST(last_updated AS STRING) AS last_updated, note, "
-                "CAST(checked_at AS STRING) AS checked_at, "
-                "COALESCE(synthetic_demo, FALSE) AS synthetic_demo, sort_order "
-                f"FROM {qualify('gold', 'source_readiness')} "
-                "ORDER BY sort_order"
-            )
-        except Exception:  # noqa: BLE001 -- fallback preserves legacy deploys
-            return None
+            rows = self._sql.execute(_SOURCE_READINESS_SQL) or []
+        except Exception as exc:
+            if not _names_missing_source_readiness(exc):
+                raise
+            rows = []
         if not rows:
-            return None
+            absent = tuple(
+                _placeholder_row(desc, status="roadmap" if desc.roadmap else "unavailable")
+                for desc in _SOURCES
+            )
+            _warn_readiness_unavailable(
+                "absent", sum(1 for row in absent if row.status == "unavailable")
+            )
+            return absent
 
-        by_name = {str(r.get("source_name")) for r in rows}
-        expected = {desc.name for desc in _SOURCES}
-        if not expected.issubset(by_name):
-            # A partial table is more dangerous than the fallback: the Admin
-            # panel would look green while omitting a contracted source. Use
-            # the legacy probe path until the CTAS is corrected. Extra rows
-            # are allowed because /api/data-estate consumes gold/runtime proof
-            # rows that were added after the original Admin source list.
-            return None
-
-        return tuple(
+        present = tuple(
             SourceRow(
                 name=str(r.get("source_name")),
                 status=str(r.get("status") or "error"),
@@ -422,125 +376,17 @@ class AdminRulesService:
             )
             for r in sorted(rows, key=lambda r: _opt_int(r.get("sort_order")) or 999)
         )
-
-    def _probe_source(self, desc: _SourceDescriptor) -> SourceRow:
-        """Probe a single live source. Never raises -- returns a
-        degraded SourceRow on failure so one slow/denied table cannot
-        block the others when called from the thread pool."""
-        assert desc.uc_table is not None  # enforced by caller
-        # Per-source try/except: if the app identity doesn't have
-        # USE SCHEMA / SELECT on a specific table (e.g. silver) we
-        # surface that source as "permission_denied" rather than
-        # 503-ing the entire /api/admin/sources call. A customer's
-        # app identity may only have GRANTs on gold; admin sources
-        # should degrade gracefully. (E2E verifier 2026-04-23 caught
-        # this — `mip.silver.*` denied to workspace identity.)
-        try:
-            rows, last_mod = self._describe_detail(desc.uc_table)
-            if _is_first_party_source(desc):
-                if rows == 0:
-                    return SourceRow(
-                        name=desc.name,
-                        status="configured_empty",
-                        rows=0,
-                        last_updated=last_mod,
-                        note=f"{desc.note} · table exists with zero rows",
-                        synthetic_demo=False,
-                    )
-                synthetic_demo, disclosed_last_mod = self._probe_first_party_disclosure(
-                    desc.uc_table
-                )
-                last_mod = disclosed_last_mod or last_mod
-            return SourceRow(
-                name=desc.name,
-                status=(
-                    "demo_synthetic"
-                    if _is_first_party_source(desc) and synthetic_demo
-                    else "live"
-                ),
-                rows=rows,
-                last_updated=last_mod,
-                note=desc.note,
-                synthetic_demo=synthetic_demo if _is_first_party_source(desc) else False,
-            )
-        except Exception as exc:  # noqa: BLE001 -- degrade-per-source contract
-            msg = str(exc)
-            # Detect permission denial vs. other SQL errors distinctly so
-            # the admin UI can show a clear "grant needed" vs. "transient
-            # error" banner per source. Everything else surfaces as an
-            # unknown status with the raw error clipped to 200 chars.
-            is_permission = "PERMISSION_DENIED" in msg or "does not have" in msg
-            if _is_first_party_source(desc) and _is_not_found_error(msg):
-                return SourceRow(
-                    name=desc.name,
-                    status="not_configured",
-                    rows=None,
-                    last_updated=None,
-                    note=f"{desc.note} · table not created yet",
-                    synthetic_demo=False,
-                )
-            return SourceRow(
-                name=desc.name,
-                status="permission_denied" if is_permission else "error",
-                rows=None,
-                last_updated=None,
-                note=(
-                    "App identity lacks USE SCHEMA/SELECT on "
-                    f"{desc.uc_table}"
-                    if is_permission
-                    else f"{desc.note} (read error: {msg[:200]})"
-                ),
-                synthetic_demo=False,
-            )
-
-    def _probe_first_party_disclosure(self, fqtn: str) -> tuple[bool, str | None]:
-        """Return whether a non-empty first-party feed contains demo rows.
-
-        This is intentionally separate from ``DESCRIBE DETAIL``. Delta metadata
-        can prove a table exists and roughly how many rows it has, but the
-        customer-facing truth contract also requires the ``synthetic_demo``
-        disclosure. If the gold ``source_readiness`` summary is unavailable,
-        the legacy fallback must still avoid overclaiming these optional feeds.
-        """
-        rows = self._sql.execute(
-            "SELECT "
-            "COUNT_IF(COALESCE(synthetic_demo, FALSE)) AS synthetic_rows, "
-            "MAX(CAST(refreshed_at AS STRING)) AS last_updated "
-            f"FROM {fqtn}"
+        # Extra rows are allowed: /api/data-estate consumes gold/runtime proof
+        # rows added after the original Admin source list.
+        names = {row.name for row in present}
+        missing = tuple(
+            _placeholder_row(desc, status="unavailable")
+            for desc in _SOURCES
+            if desc.name not in names
         )
-        row = rows[0] if rows else {}
-        synthetic_rows = _opt_int(row.get("synthetic_rows")) or 0
-        return synthetic_rows > 0, _opt_str(row.get("last_updated"))
-
-    def _describe_detail(self, fqtn: str) -> tuple[int | None, str | None]:
-        """Cheap metadata read for a single table.
-
-        ``DESCRIBE DETAIL`` returns one row with columns including
-        ``numFiles``, ``sizeInBytes``, ``lastModified``, and -- when the
-        Delta writer populated it -- ``numRecords``. We prefer
-        ``numRecords`` from the detail row because it avoids a second
-        warehouse round-trip entirely; many Delta writers (Lakeflow,
-        MERGE, optimized writes) publish an accurate count there.
-        ``SELECT COUNT(*)`` is used only as a fallback when
-        ``numRecords`` is absent or NULL -- which still forces a table
-        scan if Delta stats are stale, but that's the corner case, not
-        the common path. Results are cached for ``self._ttl`` seconds.
-        """
-        # DESCRIBE DETAIL is a table function; the canonical form works
-        # with the fully-qualified name directly.
-        detail_rows = self._sql.execute(f"DESCRIBE DETAIL {fqtn}")
-        last_mod: str | None = None
-        row_count: int | None = None
-        if detail_rows:
-            last_mod = _opt_str(detail_rows[0].get("lastModified"))
-            row_count = _opt_int(detail_rows[0].get("numRecords"))
-        if row_count is None:
-            # Fallback: Delta writer didn't publish numRecords. COUNT(*)
-            # is still pushed down to Parquet row-group summaries on
-            # unpartitioned tables, so cost stays bounded.
-            count_rows = self._sql.execute(f"SELECT COUNT(*) AS row_count FROM {fqtn}")
-            row_count = _opt_int(count_rows[0].get("row_count")) if count_rows else None
-        return row_count, last_mod
+        if missing:
+            _warn_readiness_unavailable("partial", len(missing))
+        return present + missing
 
 
 # ---------------------------------------------------------------------------
@@ -564,20 +410,46 @@ def _opt_int(v: Any) -> int | None:
         return None
 
 
-def _is_first_party_source(desc: _SourceDescriptor) -> bool:
-    return desc.uc_table is not None and ".first_party." in desc.uc_table
+def _placeholder_row(desc: _SourceDescriptor, *, status: str) -> SourceRow:
+    note = f"{desc.note} · {_NO_READINESS_ROW_NOTE}" if status == "unavailable" else desc.note
+    return SourceRow(
+        name=desc.name,
+        status=status,
+        rows=None,
+        last_updated=None,
+        note=note,
+        checked_at=None,
+        synthetic_demo=False,
+    )
 
 
-def _is_not_found_error(message: str) -> bool:
-    lowered = message.lower()
-    return any(
-        needle in lowered
-        for needle in (
-            "table_or_view_not_found",
-            "not found",
-            "does not exist",
-            "cannot resolve",
-        )
+def _names_missing_source_readiness(exc: BaseException) -> bool:
+    """True when the failure is ``gold.source_readiness`` itself not existing.
+
+    The resilient SQL client wraps the warehouse error in a
+    ``DependencyDownError`` (``last_error``); the raw client raises it bare.
+    Either way the typed ``DatabricksSqlObjectMissingError`` is on the chain.
+    Any other missing object (a missing gold schema, say) is a real failure.
+    """
+    seen: set[int] = set()
+    node: BaseException | None = exc
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        if isinstance(node, DatabricksSqlObjectMissingError) and "source_readiness" in str(node):
+            return True
+        next_node = getattr(node, "last_error", None)
+        node = next_node if isinstance(next_node, BaseException) else node.__cause__
+    return False
+
+
+def _warn_readiness_unavailable(outcome: str, missing_count: int) -> None:
+    emit(
+        log,
+        "admin_source_readiness_unavailable",
+        level=logging.WARNING,
+        dependency="warehouse",
+        outcome=outcome,
+        missing_count=missing_count,
     )
 
 

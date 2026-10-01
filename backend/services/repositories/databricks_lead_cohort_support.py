@@ -28,9 +28,11 @@ class LeadCohortQuerySupport:
     @staticmethod
     def state_sets() -> dict[str, list[str]]:
         """Build the active geography-label mapping used by portfolio criteria."""
-        resolver = get_state_footprint_resolver()
-        footprint_codes = resolver.state_codes()
-        state_name_map = resolver.state_name_to_codes()
+        # ONE snapshot: the name map and the "all N states" codes must come
+        # from the same footprint load (decision record e2).
+        snapshot = get_state_footprint_resolver().snapshot()
+        footprint_codes = snapshot.codes()
+        state_name_map = snapshot.name_to_codes()
         all_key = f"all {len(footprint_codes)} states"
         return {**state_name_map, all_key: list(footprint_codes)}
 

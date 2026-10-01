@@ -5,7 +5,11 @@ from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
 from backend.main import app
-from backend.services.admin_rules import SourceRow
+from backend.services.admin_rules import (
+    AdminRulesService,
+    SourceRow,
+    get_admin_rules_service,
+)
 from backend.services.data_estate import build_data_estate_response
 
 client = TestClient(app)
@@ -53,6 +57,37 @@ def test_data_estate_accepts_forwarded_user_without_email() -> None:
         headers={"X-Forwarded-User": "svc-mip-automation"},
     )
     assert response.status_code == 200
+
+
+def test_data_estate_answers_200_with_an_unavailable_source() -> None:
+    """A readiness row the gold summary lacks reads ``unavailable`` end to end.
+
+    ``DataEstateAsset.status`` is a Literal, so without the schema's
+    ``unavailable`` member /api/data-estate would 500 on it.
+    """
+
+    class _AbsentSummaryClient:
+        def execute(self, statement: str, parameters: object = None) -> list[dict[str, object]]:
+            return []
+
+    previous = app.dependency_overrides.get(get_admin_rules_service)
+    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(
+        _AbsentSummaryClient()
+    )
+    try:
+        response = client.get("/api/data-estate", headers=ACTOR_HEADERS)
+    finally:
+        if previous is None:
+            del app.dependency_overrides[get_admin_rules_service]
+        else:
+            app.dependency_overrides[get_admin_rules_service] = previous
+
+    assert response.status_code == 200, response.text
+    assets = {
+        asset["name"]: asset for lane in response.json()["lanes"] for asset in lane["assets"]
+    }
+    assert assets["MLS Listings"]["status"] == "unavailable"
+    assert assets["Building Permits"]["status"] == "roadmap"
 
 
 def test_data_estate_separates_first_party_from_live_cotality() -> None:

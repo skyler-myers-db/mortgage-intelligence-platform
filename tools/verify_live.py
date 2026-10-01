@@ -27,7 +27,15 @@ import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
+
+# Make the repo importable when this script is run directly.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tools.verify_live_rate_sensitivity import rate_sensitivity_flags  # noqa: E402
 
 DEFAULT_BASE = "https://mip-app-2543889327043640.aws.databricksapps.com"
 
@@ -430,6 +438,15 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
     # TestClient. Running an external negative probe would require
     # provisioning a second service principal with no admin membership.
     results.append(probe(base, token, "geo.state_rollups", "GET", "/api/geo/state-rollups"))
+    # The Rate Lever grid; collect_red_flags checks its invariants.
+    results.append(probe(base, token, "geo.rate_sensitivity", "GET", "/api/geo/rate-sensitivity"))
+    # Audit explorer reads (admin-gated, audit-free).
+    results.append(
+        probe(base, token, "audit.facets", "GET", "/api/audit/facets", extra_headers=admin_headers)
+    )
+    results.append(
+        probe(base, token, "audit.count", "GET", "/api/audit/count", extra_headers=admin_headers)
+    )
     results.extend(_geo_drill_probes(base, token))
 
     return results
@@ -583,6 +600,10 @@ def collect_red_flags(results: list[ProbeResult]) -> list[str]:
     if admin_sources is not None and admin_sources.ok and isinstance(admin_sources.sample, list):
         flags.extend(_source_readiness_flags(admin_sources.sample))
 
+    rate_sensitivity = find("geo.rate_sensitivity")
+    if rate_sensitivity is not None and rate_sensitivity.ok:
+        flags.extend(_rate_sensitivity_flags(rate_sensitivity.sample))
+
     for r in results:
         if not r.ok:
             detail = r.error[:160] if r.error else "payload sanity check failed"
@@ -597,6 +618,11 @@ def collect_red_flags(results: list[ProbeResult]) -> list[str]:
                 if isinstance(value, list) and len(value) == 0:
                     flags.append(f"{r.name}: `{key}` returned empty array")
     return flags
+
+
+def _rate_sensitivity_flags(sample: Any) -> list[str]:
+    """The Rate Lever grid's structural invariants (tools/verify_live_rate_sensitivity.py)."""
+    return rate_sensitivity_flags(sample)
 
 
 def _source_readiness_flags(rows: list[Any]) -> list[str]:

@@ -260,22 +260,42 @@ def test_gates_keep_last_good_when_a_refresh_fails() -> None:
     assert _gate(cache, warehouse) == "not_connected", "a failed refresh never un-gates a card"
 
 
-def test_a_cold_gate_failure_gates_nothing_and_is_not_cached(caplog: pytest.LogCaptureFixture) -> None:
+def test_a_cold_gate_failure_raises_and_is_not_cached(caplog: pytest.LogCaptureFixture) -> None:
+    """Decision record e1: a cold readiness failure fails closed.
+
+    It used to gate nothing (every card "connected") for that call; now it
+    logs, re-raises (the segment list answers 503) and stores nothing.
+    """
     warehouse, clock, deferred = _Warehouse(), _Clock(), _DeferredExecutor()
     warehouse.rows[_READINESS] = _readiness("roadmap")
     warehouse.error = RuntimeError("warehouse down")
     cache = _swr(clock, deferred)
 
-    with caplog.at_level(logging.WARNING):
-        gated = apply_source_gates(_listed(), client=warehouse, cache=cache, cache_ttl_s=30.0)  # type: ignore[arg-type]
+    with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError, match="warehouse down"):
+        apply_source_gates(_listed(), client=warehouse, cache=cache, cache_ttl_s=30.0)  # type: ignore[arg-type]
 
-    assert [segment.source_status for segment in gated] == ["connected", "connected"]
-    assert [segment.source_name for segment in gated] == [None, None]
     assert [r for r in caplog.records if getattr(r, "mip_event", None) == "segment_source_readiness_unavailable"]
 
     warehouse.error = None
     assert _gate(cache, warehouse) == "not_connected", "the failure was never stored"
     assert warehouse.count(_READINESS) == 2
+
+
+def test_an_empty_readiness_snapshot_gates_every_mapped_segment_not_connected() -> None:
+    warehouse, clock, deferred = _Warehouse(), _Clock(), _DeferredExecutor()
+    warehouse.rows[_READINESS] = []
+    cache = _swr(clock, deferred)
+
+    gated = apply_source_gates(_listed(), client=warehouse, cache=cache, cache_ttl_s=30.0)  # type: ignore[arg-type]
+
+    by_code = {segment.code: segment for segment in gated}
+    # The core-spine itm card is unmapped and stays connected; the mapped
+    # listed card has no readiness row, so it reads not_connected.
+    assert (by_code["itm"].source_status, by_code["itm"].source_name) == ("connected", None)
+    assert (by_code["listed"].source_status, by_code["listed"].source_name) == (
+        "not_connected",
+        "MLS Listings",
+    )
 
 
 def test_the_segment_repository_gates_through_its_own_gold_cache() -> None:

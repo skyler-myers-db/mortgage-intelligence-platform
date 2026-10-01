@@ -16,6 +16,14 @@ carries one header the browser exposes as ``PerformanceResourceTiming``
 * Only these four names, and only enum or numeric values: never an id, a
   path, a statement hash or an error message.
 
+Separately from Server-Timing, a response whose served value was retained
+after a failed cache refresh (or built from such a read) carries
+``X-Data-Last-Good-At: YYYY-MM-DDTHH:MM:SSZ`` (UTC): the OLDEST last
+successful Unity Catalog read any cache reported for the request
+(``cache_staleness.report_stale``; decision record e1). It is absent on every
+other response, including a plain soft-window stale serve. The Server-Timing
+names and values above are unchanged by it.
+
 One mutable collector per request, set in a ContextVar ONCE, by the
 middleware (critic fix 22): sync handlers and sync dependencies run in the
 threadpool with a copy of the request context, so they mutate the same
@@ -33,6 +41,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 HEADER = "Server-Timing"
+LAST_GOOD_HEADER = "X-Data-Last-Good-At"
 _CACHE_RANK = {"hit": 0, "stale": 1, "miss": 2}
 _DEPENDENCIES = ("warehouse", "lakebase")
 
@@ -44,6 +53,7 @@ class TimingCollector:
         self._lock = Lock()
         self._cache: str | None = None
         self._durations: dict[str, float] = {}
+        self._stale_wall: float | None = None
 
     def record_cache(self, outcome: str) -> None:
         rank = _CACHE_RANK.get(outcome)
@@ -58,6 +68,20 @@ class TimingCollector:
             return
         with self._lock:
             self._durations[name] = self._durations.get(name, 0.0) + max(0.0, float(duration_ms))
+
+    def record_stale_error(self, wall: float) -> None:
+        """Keep the OLDEST last-good wall time (epoch seconds) of any served value."""
+        with self._lock:
+            if self._stale_wall is None or wall < self._stale_wall:
+                self._stale_wall = float(wall)
+
+    def last_good_at(self) -> str | None:
+        """``YYYY-MM-DDTHH:MM:SSZ`` of the oldest stale serve, or None."""
+        with self._lock:
+            wall = self._stale_wall
+        if wall is None:
+            return None
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(wall))
 
     def header_value(self, total_ms: float) -> str:
         with self._lock:
@@ -88,6 +112,13 @@ def record_dependency(name: str, duration_ms: float) -> None:
         collector.record_dependency(name, duration_ms)
 
 
+def record_stale_error(wall: float) -> None:
+    """Mark the current request as serving a value last read at ``wall``."""
+    collector = _COLLECTOR.get()
+    if collector is not None:
+        collector.record_stale_error(wall)
+
+
 def _is_api_path(path: str) -> bool:
     return path == "/api" or path.startswith("/api/")
 
@@ -109,7 +140,11 @@ class ServerTimingMiddleware:
         async def send_with_timing(message: Message) -> None:
             if message["type"] == "http.response.start":
                 total_ms = (time.perf_counter() - start) * 1000.0
-                MutableHeaders(scope=message).append(HEADER, collector.header_value(total_ms))
+                headers = MutableHeaders(scope=message)
+                headers.append(HEADER, collector.header_value(total_ms))
+                last_good_at = collector.last_good_at()
+                if last_good_at is not None:
+                    headers.append(LAST_GOOD_HEADER, last_good_at)
             await send(message)
 
         try:
@@ -120,8 +155,10 @@ class ServerTimingMiddleware:
 
 __all__ = [
     "HEADER",
+    "LAST_GOOD_HEADER",
     "ServerTimingMiddleware",
     "TimingCollector",
     "record_cache",
     "record_dependency",
+    "record_stale_error",
 ]

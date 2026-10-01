@@ -4,9 +4,10 @@ Two read endpoints (both UC-backed as of slice13-accuracy follow-up):
 
 * ``GET /api/admin/rules``    -- reads ``mip.ref.offer_rules_config`` plus
   the operating market rate from ``mip.gold.borrower_360``.
-* ``GET /api/admin/sources``  -- reads per-table metadata via
-  ``DESCRIBE DETAIL`` + ``SELECT COUNT(*)`` for the eight source-of-
-  record tables that back the product.
+* ``GET /api/admin/sources``  -- reads the non-PII
+  ``mip.gold.source_readiness`` summary the gold refresh job writes; a
+  source it has no row for reads ``unavailable``. The App never probes
+  silver or first-party tables (App SQL is gold-only).
 
 Both paths surface warehouse failures as HTTP 503 (same contract as the
 audit and outreach routers). The admin frontend shows a muted "data
@@ -323,7 +324,7 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
             "name":         "Cotality Public Records",
             "status":       "live" | "demo_synthetic" | "configured_empty"
                             | "not_configured" | "roadmap"
-                            | "permission_denied" | "error",
+                            | "permission_denied" | "error" | "unavailable",
             "rows":         12345 | null,
             "last_updated": "2026-04-22T17:02:11Z" | null,
             "checked_at":   "2026-04-22T17:04:11Z" | null,
@@ -334,9 +335,11 @@ def get_sources(service: ServiceDep, _actor: AdminDep) -> list[dict[str, Any]]:
 
     ``rows`` and ``last_updated`` are null for roadmap sources such as
     Building Permits. MLS/Listings is live when
-    ``mip.gold.source_readiness`` reports rows for that feed. Preferred production path reads
-    ``mip.gold.source_readiness`` so the running app principal does not
-    need direct silver grants.
+    ``mip.gold.source_readiness`` reports rows for that feed. The rows come
+    only from ``mip.gold.source_readiness``, so the running app principal
+    needs no silver grants: a source the summary has no row for (or every
+    non-roadmap source when the summary is absent) reads ``unavailable``,
+    and any other read failure answers 503.
     """
     try:
         rows = service.get_sources()

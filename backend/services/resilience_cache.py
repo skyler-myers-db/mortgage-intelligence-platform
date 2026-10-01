@@ -25,6 +25,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from threading import Event, Lock
 from typing import Any
 
+from backend.services.cache_staleness import report_stale, run_in_staleness_scope
 from backend.services.observability import emit
 from backend.services.server_timing import record_cache
 
@@ -53,6 +54,13 @@ class TTLCache:
     Expired entries are retained until eviction so ``stale_if_error``
     can serve the last-good aggregate when a read-only refresh fails.
     Mutable workflow endpoints should not use that option.
+
+    Staleness (decision record e1, same rules as ``GoldAggregateCache``):
+    each entry keeps the wall time of its last successful read and whether it
+    was built from a retained read (``get_or_set`` runs its factory in
+    ``run_in_staleness_scope``). A ``stale_if_error`` serve and a hit of a
+    degraded entry call ``report_stale``, so the response carries
+    ``X-Data-Last-Good-At``.
     """
 
     def __init__(
@@ -60,13 +68,16 @@ class TTLCache:
         now: Callable[[], float] = time.monotonic,
         *,
         max_entries: int = 256,
+        wall: Callable[[], float] = time.time,
     ) -> None:
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
-        self._entries: OrderedDict[str, tuple[Any, float]] = OrderedDict()
+        # key -> (value, expires_at, last_good_wall, degraded)
+        self._entries: OrderedDict[str, tuple[Any, float, float, bool]] = OrderedDict()
         self._inflight: dict[str, Event] = {}
         self._lock = Lock()
         self._now = now
+        self._wall = wall
         self._max_entries = max_entries
 
     def get(self, key: str) -> Any | None:
@@ -75,21 +86,33 @@ class TTLCache:
             if entry is None:
                 self._emit_cache_event("ttl_cache_miss", key, reason="empty")
                 return None
-            value, expires_at = entry
+            value, expires_at, last_good_wall, degraded = entry
             self._entries.move_to_end(key)
             if self._now() >= expires_at:
                 self._emit_cache_event("ttl_cache_miss", key, reason="expired")
                 return None
             self._emit_cache_event("ttl_cache_hit", key)
-            return value
+        if degraded:
+            report_stale(last_good_wall)
+        return value
 
     def set(self, key: str, value: Any, ttl_s: float) -> None:
+        self._set(key, value, ttl_s, None)
+
+    def _set(self, key: str, value: Any, ttl_s: float, degraded_since: float | None) -> None:
         if ttl_s <= 0:
             # Zero TTL disables caching for this entry entirely; this
             # is the "cache disabled" fast-path (MIP_CACHE_TTL_S=0).
             return
+        wall = self._wall()
+        last_good = wall if degraded_since is None else min(wall, degraded_since)
         with self._lock:
-            self._entries[key] = (value, self._now() + ttl_s)
+            self._entries[key] = (
+                value,
+                self._now() + ttl_s,
+                last_good,
+                degraded_since is not None,
+            )
             self._entries.move_to_end(key)
             self._evict_locked()
 
@@ -111,11 +134,13 @@ class TTLCache:
         with self._lock:
             entry = self._entries.get(key)
             if entry is not None:
-                value, expires_at = entry
+                value, expires_at, last_good_wall, degraded = entry
                 self._entries.move_to_end(key)
                 if self._now() < expires_at:
                     self._emit_cache_event("ttl_cache_hit", key, reason="double_check")
                     record_cache("hit")
+                    if degraded:
+                        report_stale(last_good_wall)
                     return value
             event = self._inflight.get(key)
             if event is None:
@@ -131,7 +156,7 @@ class TTLCache:
                     record_cache("miss")
                     return cached
                 if stale_if_error:
-                    stale = self.get_stale(key)
+                    stale = self._serve_stale(key)
                     if stale is not None:
                         self._emit_cache_event("ttl_cache_stale_hit", key, reason="leader_failed")
                         record_cache("stale")
@@ -141,10 +166,10 @@ class TTLCache:
             self._emit_cache_event("ttl_cache_miss", key, reason="singleflight_fallback")
 
         try:
-            value = factory()
+            value, degraded_since = run_in_staleness_scope(factory)
         except Exception:
             if stale_if_error:
-                stale = self.get_stale(key)
+                stale = self._serve_stale(key)
                 if stale is not None:
                     self._emit_cache_event("ttl_cache_stale_hit", key, reason="factory_error")
                     record_cache("stale")
@@ -152,7 +177,9 @@ class TTLCache:
             record_cache("miss")
             raise
         else:
-            self.set(key, value, ttl_s)
+            self._set(key, value, ttl_s, degraded_since)
+            if degraded_since is not None:
+                report_stale(min(self._wall(), degraded_since))
             record_cache("miss")
             return value
         finally:
@@ -170,6 +197,17 @@ class TTLCache:
             self._entries.move_to_end(key)
             return entry[0]
 
+    def _serve_stale(self, key: str) -> Any | None:
+        """``get_stale`` for a ``stale_if_error`` serve: it marks the response."""
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            self._entries.move_to_end(key)
+            value, last_good_wall = entry[0], entry[2]
+        report_stale(last_good_wall)
+        return value
+
     def invalidate(self, key: str) -> None:
         with self._lock:
             self._entries.pop(key, None)
@@ -186,7 +224,7 @@ class TTLCache:
 
     def _evict_locked(self) -> None:
         while len(self._entries) > self._max_entries:
-            evicted_key, _ = self._entries.popitem(last=False)
+            evicted_key, _entry = self._entries.popitem(last=False)
             self._emit_cache_event("ttl_cache_eviction", evicted_key, reason="max_entries")
 
     @staticmethod

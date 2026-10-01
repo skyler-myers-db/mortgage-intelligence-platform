@@ -8,7 +8,7 @@ from backend.schemas.config import ConfigFootprintResponse, ConfigOptionsRespons
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope
 from backend.services.gold_cache import AggregateCache, GoldAggregateCache
-from backend.services.state_footprint import get_state_footprint_resolver
+from backend.services.state_footprint import FootprintSnapshot, get_state_footprint_resolver
 
 router = APIRouter(prefix="/config", tags=["config"])
 # Audit delivery-06: stale-while-revalidate past the 300 s soft TTL. An
@@ -69,11 +69,15 @@ def _live_geography_scope() -> GeographyScope | None:
         return None
 
 
-def _geography_options(scope: GeographyScope | None) -> tuple[list[str], str]:
-    resolver = get_state_footprint_resolver()
-    if resolver.using_fallback():
+def _geography_options(
+    scope: GeographyScope | None, snapshot: FootprintSnapshot
+) -> tuple[list[str], str]:
+    # The degraded flag and the rows come from ONE snapshot (decision record
+    # e2): two resolver reads could straddle a refresh and list fallback
+    # rows under a live status.
+    if snapshot.degraded:
         return ["All"], "metadata_only"
-    states = resolver.list()
+    states = snapshot.rows
     if not states:
         return ["All"], "unavailable"
     options = [f"All {len(states)} states", *(row.state_name for row in states)]
@@ -89,7 +93,8 @@ def get_config_options() -> dict[str, object]:
     def build() -> dict[str, object]:
         target_lenders, target_lenders_status = _target_lender_options()
         geo_scope = _live_geography_scope()
-        geographies, geographies_status = _geography_options(geo_scope)
+        snapshot = get_state_footprint_resolver().snapshot()
+        geographies, geographies_status = _geography_options(geo_scope, snapshot)
         payload = {
             "lender_name": settings.mip_lender_name,
             "rum_enabled": settings.mip_rum_enabled,
@@ -144,8 +149,10 @@ def get_config_footprint() -> dict[str, object]:
     cache_key = "config.footprint.v1"
 
     def build() -> dict[str, object]:
-        resolver = get_state_footprint_resolver()
-        rows = resolver.list()
+        # ONE snapshot for the rows, the flag and the cacheability check.
+        snapshot = get_state_footprint_resolver().snapshot()
+        rows = snapshot.rows
+        using_fallback = snapshot.degraded
         geo_scope = _live_geography_scope()
         payload = {
             "states": [
@@ -158,9 +165,9 @@ def get_config_footprint() -> dict[str, object]:
                 for r in rows
             ],
             "geography_scope": geo_scope.to_api_dict() if geo_scope else None,
-            "using_fallback": resolver.using_fallback(),
+            "using_fallback": using_fallback,
         }
-        if not rows or geo_scope is None or resolver.using_fallback():
+        if not rows or geo_scope is None or using_fallback:
             raise _UncacheableConfig(payload)
         return payload
 

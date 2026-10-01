@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 
+from backend.config.settings import settings
 from backend.schemas.geo import (
     CountyRollup,
     CountyRollupResponse,
@@ -31,13 +32,12 @@ from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.county_names import county_name_for_fips
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.geography_scope import GeographyScope, load_geography_scope
-from backend.services.gold_cache import AggregateCache, GoldAggregateCache
+from backend.services.gold_cache import AggregateCache, GoldAggregateCache, get_or_set_capped
 from backend.services.observability import emit
 from backend.services.repositories import databricks_geo_sql as geo_sql
 from backend.services.repositories.databricks_portfolio import DatabricksPortfolioRepository
 from backend.services.repositories.databricks_segment_gates import apply_source_gates
 from backend.services.repositories.databricks_shared import _parse_facet_mix
-from backend.services.resilience import TTLCache
 from backend.services.segment_predicates import (
     compose_segment_predicate,
     normalise_segment_codes,
@@ -71,26 +71,32 @@ def _contactable(row: dict[str, object], addressable: int) -> int | None:
 class DatabricksSegmentRepository:
     """Segment rollup serves the national ``state='_ALL'`` row.
 
-    Slice-6: wraps the ``list`` read in a short-TTL cache. Segment
-    counts are a national aggregate recomputed by the gold pipeline on
-    a fixed cadence; a 30s stale read is fine and removes a
-    per-request warehouse round-trip from the segment-intelligence
-    route.
+    The ``list`` read sits in a ``GoldAggregateCache`` (audit ``delivery-06``,
+    decision record e1): stale-while-revalidate past the soft TTL (the
+    factory wires ``settings.mip_cache_ttl_s``, 300 s) up to the
+    ``mip_gold_cache_max_stale_s`` hard cap (24 h), with ``stale_if_error``.
+    Segment counts are a national aggregate the gold pipeline recomputes
+    about daily, so nobody pays the warehouse round trip inline. An expired
+    cache never MASKS a refresh failure: a cold failure propagates (503), and
+    a value retained after a failed refresh is served WITH the
+    ``X-Data-Last-Good-At`` marker, as is a list built from retained
+    readiness gates.
     """
 
     def __init__(
         self,
         client: DatabricksSqlClient,
         *,
-        cache: TTLCache | None = None,
+        cache: AggregateCache | None = None,
         cache_ttl_s: float = 30.0,
         gate_cache: AggregateCache | None = None,
     ) -> None:
         self._client = client
-        self._cache = cache if cache is not None else TTLCache()
+        self._cache: AggregateCache = cache if cache is not None else GoldAggregateCache()
         self._cache_ttl_s = cache_ttl_s
-        # The source-readiness gates are served stale-while-revalidate
-        # (delivery-06); the segment list itself keeps hard expiry.
+        # The source-readiness gates sit in their own stale-while-revalidate
+        # cache (delivery-06); a retained gate snapshot marks the list built
+        # from it through the staleness scope.
         self._gate_cache: AggregateCache = gate_cache if gate_cache is not None else GoldAggregateCache()
 
     # SQL text lives in `databricks_geo_sql`; these aliases keep the
@@ -206,10 +212,13 @@ class DatabricksSegmentRepository:
                 cache_ttl_s=self._cache_ttl_s,
             )
 
-        return self._cache.get_or_set(
+        return get_or_set_capped(
+            self._cache,
             key,
             build,
             ttl_s=self._cache_ttl_s,
+            stale_if_error=True,
+            hard_ttl_s=settings.mip_gold_cache_max_stale_s,
         )
 
 
