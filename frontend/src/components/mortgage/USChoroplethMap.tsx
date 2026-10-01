@@ -60,7 +60,7 @@ export type { MapSelection } from './USChoroplethMap.selection';
  * The map is CONTROLLED (audit dataviz-04): the route owns the selection in
  * the URL (`useMapSelectionParams`, `?geo_state=TX&zip=`), so the route's
  * "Clear geography", Back / Forward and a shared link all agree with the
- * drill. Without a `selection` prop it keeps its own (tests, Storybook).
+ * drill. Without a `selection` prop it keeps its own (a unit test or fixture spec).
  *
  * This module owns the drill orchestration and the derived facts; the rest
  * lives in focused siblings — `useChoroplethLiveFacts` (topology and the
