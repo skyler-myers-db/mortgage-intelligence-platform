@@ -521,13 +521,14 @@ def test_an_upper_case_request_id_is_one_request_on_the_real_statements(conn_kwa
     queue = open_borrower_ids_for_queue(lakebase, batch_id=upper, actor=APPROVER, is_approver=True)  # type: ignore[arg-type]
     assert sorted(queue) == [LEAD_A, LEAD_B]
 
+    # The approve route's own sequence: the schema-parsed link is verified,
+    # then written into the decision intent.
     payload = OutreachApproveRequest(
         borrower_id=LEAD_A, offer_code="refi", channel="email", approval_request_batch_id=upper
     )
-    assert payload.approval_request_batch_id == created.batch_id
     verify_decision_link(
         lakebase,  # type: ignore[arg-type]
-        batch_id=created.batch_id,
+        batch_id=str(payload.approval_request_batch_id),
         borrower_id=LEAD_A,
         actor=APPROVER,
     )
@@ -548,6 +549,7 @@ def test_an_upper_case_request_id_is_one_request_on_the_real_statements(conn_kwa
         LEAD_B: ("open", None),
     }
     assert open_borrower_ids_for_queue(lakebase, batch_id=upper, actor=APPROVER, is_approver=True) == [LEAD_B]  # type: ignore[arg-type]
+    assert payload.approval_request_batch_id == created.batch_id
 
 
 def test_a_replay_returns_the_stored_body_and_a_changed_payload_conflicts(conn_kwargs: dict[str, str]) -> None:
