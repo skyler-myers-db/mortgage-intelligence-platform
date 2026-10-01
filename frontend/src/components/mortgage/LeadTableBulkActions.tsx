@@ -301,8 +301,8 @@ export function LeadTableBulkActions({
       {allLoadedSelected && totalMatching !== null && totalMatching > loadedCount && (
         <p className="bulk-actions__scope" data-testid="lead-bulk-scope">
           <span>
-            All {formatCount(selectionCount)} selectable borrowers shown here are selected. {formatCount(totalMatching)}
-            match these filters; bulk actions apply only to borrowers shown here.
+            All {formatCount(selectionCount)} selectable borrowers shown here are selected.{' '}
+            {formatCount(totalMatching)} match these filters; bulk actions apply only to borrowers shown here.
           </span>
           {campaignHandoff}
         </p>
