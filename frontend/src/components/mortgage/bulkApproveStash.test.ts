@@ -4,7 +4,8 @@
  * while the gate is pending and dropped while it is closed, a read returns
  * null unless the gate is open, and a clear removes the key only while the
  * gate is open. Node environment with a stubbed `window` (two Map-backed
- * storages): the gate needs no DOM.
+ * storages; the global `sessionStorage` is the same session area): the gate
+ * needs no DOM.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NOBODY, _resetActorScopeForTests, observeActor } from '../../lib/actorScope';
@@ -39,7 +40,11 @@ const stashOf = (ok: number, aborted: number, kind: 'approve' | 'reject' = 'appr
 
 beforeEach(() => {
   session = new Map();
-  vi.stubGlobal('window', { localStorage: storage(new Map()), sessionStorage: storage(session) });
+  const sessionArea = storage(session);
+  vi.stubGlobal('window', { localStorage: storage(new Map()), sessionStorage: sessionArea });
+  // The bare global too, so a direct `sessionStorage` call (the code before
+  // the gate) lands in the same area these tests read.
+  vi.stubGlobal('sessionStorage', sessionArea);
   vi.useFakeTimers();
   vi.setSystemTime(T0);
   _resetActorScopeForTests({ status: 'open', owner: ACTOR_A });
