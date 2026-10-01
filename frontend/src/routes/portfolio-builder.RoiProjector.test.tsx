@@ -150,4 +150,26 @@ describe('RoiProjector', () => {
     click('roi-mode-baseline');
     expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('60');
   });
+
+  it('names every assumption input by its visible label (WCAG 2.5.3), with the unit beside it and as its description', () => {
+    mount();
+    click('roi-mode-manual');
+    const cases: Array<[string, string, string, string]> = [
+      ['roi-manual-reach', 'Lead → reached', '%', 'percent'],
+      ['roi-manual-application', 'Reached → app', '%', 'percent'],
+      ['roi-manual-submission', 'App → submitted', '%', 'percent'],
+      ['roi-manual-funding', 'Submitted → funded', '%', 'percent'],
+      ['roi-revenue-rate', 'Revenue rate (tenant)', '%', 'percent'],
+      ['roi-cost-per-lead', 'Cost / lead (tenant)', '$', 'US dollars'],
+    ];
+    for (const [testid, label, affix, unit] of cases) {
+      const input = container.querySelector<HTMLInputElement>(`[data-testid="${testid}"]`)!;
+      // No aria-label overriding the visible text: the name IS the label.
+      expect(input.hasAttribute('aria-label'), testid).toBe(false);
+      expect(input.labels?.[0]?.textContent, testid).toBe(label);
+      expect(input.parentElement?.querySelector('.field__affix')?.textContent, testid).toBe(affix);
+      expect(document.getElementById(input.getAttribute('aria-describedby') ?? '')?.textContent, testid).toBe(unit);
+    }
+  });
 });
+

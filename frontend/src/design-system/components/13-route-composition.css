@@ -660,7 +660,8 @@
   gap: var(--sp-2);
   min-width: 0;
 }
-.campaign-setup__field span,
+.campaign-setup__field > span,
+.campaign-setup__toggle-copy > span,
 .campaign-setup__field > .field__label {
   color: var(--text-3);
   font-size: var(--fs-12);
@@ -719,10 +720,6 @@
 .campaign-setup__toggle .switch.on::after {
   translate: calc(var(--sp-10) - var(--sp-5) - var(--sp-1)) 0;
   background: var(--accent);
-}
-.campaign-setup__textarea {
-  min-height: calc(var(--sp-12) + var(--sp-8));
-  resize: vertical;
 }
 .campaign-setup__meta {
   display: flex;

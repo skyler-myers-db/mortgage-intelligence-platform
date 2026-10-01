@@ -132,19 +132,33 @@ describe('portfolio campaign config', () => {
     }
   });
 
-  it('reports {value, clamped, bound} at every bound of every numeric field (critic-04)', () => {
+  it('reports {value, clamped, bound, rounded} at every bound of every numeric field (critic-04)', () => {
     for (const field of Object.keys(CAMPAIGN_NUMERIC_BOUNDS) as CampaignNumericField[]) {
       const { min, max } = CAMPAIGN_NUMERIC_BOUNDS[field];
       // Below, at and above each bound: only the outside values clamp.
-      expect(normalizeCampaignNumericValue(field, String(min - 1)), field).toEqual({ value: String(min), clamped: true, bound: min });
-      expect(normalizeCampaignNumericValue(field, String(min)), field).toEqual({ value: String(min), clamped: false, bound: null });
-      expect(normalizeCampaignNumericValue(field, String(max)), field).toEqual({ value: String(max), clamped: false, bound: null });
-      expect(normalizeCampaignNumericValue(field, String(max + 1)), field).toEqual({ value: String(max), clamped: true, bound: max });
+      expect(normalizeCampaignNumericValue(field, String(min - 1)), field).toEqual({ value: String(min), clamped: true, bound: min, rounded: false });
+      expect(normalizeCampaignNumericValue(field, String(min)), field).toEqual({ value: String(min), clamped: false, bound: null, rounded: false });
+      expect(normalizeCampaignNumericValue(field, String(max)), field).toEqual({ value: String(max), clamped: false, bound: null, rounded: false });
+      expect(normalizeCampaignNumericValue(field, String(max + 1)), field).toEqual({ value: String(max), clamped: true, bound: max, rounded: false });
       expect(normalizeCampaignNumericValue(field, 'not-a-number').clamped, field).toBe(false);
     }
     // A fallback for an unreadable value is not a clamp.
-    expect(normalizeCampaignNumericValue('holdoutPct', 'not-a-number')).toEqual({ value: '10', clamped: false, bound: null });
-    expect(normalizeCampaignNumericValue('budget', '')).toEqual({ value: '', clamped: false, bound: null });
+    expect(normalizeCampaignNumericValue('holdoutPct', 'not-a-number')).toEqual({ value: '10', clamped: false, bound: null, rounded: false });
+    expect(normalizeCampaignNumericValue('budget', '')).toEqual({ value: '', clamped: false, bound: null, rounded: false });
+  });
+
+  it('reports a rounding to the committed two decimals, and only a real one (critic-04)', () => {
+    for (const field of Object.keys(CAMPAIGN_NUMERIC_BOUNDS) as CampaignNumericField[]) {
+      expect(normalizeCampaignNumericValue(field, '12.346'), field).toEqual({ value: '12.35', clamped: false, bound: null, rounded: true });
+      expect(normalizeCampaignNumericValue(field, '12.341'), field).toEqual({ value: '12.34', clamped: false, bound: null, rounded: true });
+      // Already at the committed precision (the workflow spec's never-:user-invalid
+      // values among them): no rounding, however it was spelled.
+      for (const raw of ['1250.50', '10.05', '12.5', '12', '0.01', '7.000']) {
+        expect(normalizeCampaignNumericValue(field, raw).rounded, `${field} ${raw}`).toBe(false);
+      }
+    }
+    // A clamp is reported as the clamp, never also as a rounding.
+    expect(normalizeCampaignNumericValue('holdoutPct', '80.456')).toEqual({ value: '50', clamped: true, bound: 50, rounded: false });
   });
 
   it('commits at the precision each control steps by, so an accepted value is never a step mismatch', () => {
@@ -171,6 +185,12 @@ describe('portfolio campaign config', () => {
     expect(notice('mailCost', '-1')).toBe('Raised to $0');
     expect(notice('holdoutPct', '25')).toBeNull();
     expect(notice('budget', '')).toBeNull();
+    // A rounding names the committed value in the field's own unit.
+    expect(notice('holdoutPct', '12.346')).toBe('Rounded to 12.35%');
+    expect(notice('budget', '1250.556')).toBe('Rounded to $1,250.56');
+    expect(notice('emailCost', '0.125')).toBe('Rounded to $0.13');
+    expect(notice('budget', '1250.50')).toBeNull();
+    expect(notice('holdoutPct', '10.05')).toBeNull();
   });
 
   it('does not seed generic copy or invented channel costs before intelligence loads', () => {

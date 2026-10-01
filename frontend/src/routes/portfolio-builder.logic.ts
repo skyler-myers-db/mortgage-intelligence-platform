@@ -1,7 +1,7 @@
 import type { CampaignSummary, KpiTrend, PortfolioPreview } from '../types';
 import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { roundTo } from '../lib/fixedPrecision';
-import { formatUsd, pct as percentLabel, signedPct } from '../lib/formatters';
+import { formatFixed, formatUsd, pct as percentLabel, signedPct } from '../lib/formatters';
 
 export type FilterGroup = {
   label: string;
@@ -118,6 +118,8 @@ export interface CampaignNumericNormalization {
   clamped: boolean;
   /** The bound it was clamped to (the field's min or max), or null. */
   bound: number | null;
+  /** An in-range value changed at the committed two-decimal precision (critic-04: never silently). */
+  rounded: boolean;
 }
 
 export function normalizeCampaignNumericValue(
@@ -125,21 +127,35 @@ export function normalizeCampaignNumericValue(
   raw: string,
 ): CampaignNumericNormalization {
   const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
-  const unclamped = (value: string): CampaignNumericNormalization => ({ value, clamped: false, bound: null });
+  const unclamped = (value: string, rounded = false): CampaignNumericNormalization => ({
+    value,
+    clamped: false,
+    bound: null,
+    rounded,
+  });
   if (raw.trim() === '' && bounds.fallback === null) return unclamped('');
   const parsed = Number(raw);
   const value = Number.isFinite(parsed) ? parsed : bounds.fallback;
   if (value === null) return unclamped('');
   const bounded = Math.min(bounds.max, Math.max(bounds.min, value));
-  const committed = String(roundTo(bounded, 2));
-  return bounded === value ? unclamped(committed) : { value: committed, clamped: true, bound: bounded };
+  const committed = roundTo(bounded, 2);
+  if (bounded !== value) return { value: String(committed), clamped: true, bound: bounded, rounded: false };
+  return unclamped(String(committed), committed !== value);
 }
 
-/** The field's polite notice for a clamp ('Capped at 50%', 'Capped at $10,000,000'), else null. */
+/**
+ * The field's polite notice for a clamp ('Capped at 50%', 'Capped at
+ * $10,000,000') or a rounding to the committed precision ('Rounded to
+ * 12.35%', 'Rounded to $1,250.55'), else null.
+ */
 export function campaignNumericNotice(
   field: CampaignNumericField,
   normalized: CampaignNumericNormalization,
 ): string | null {
+  if (normalized.rounded) {
+    const committed = Number(normalized.value);
+    return `Rounded to ${field === 'holdoutPct' ? percentLabel(committed, 2) : `$${formatFixed(committed, 2)}`}`;
+  }
   if (!normalized.clamped || normalized.bound === null) return null;
   const bound = normalized.bound;
   const shown = field === 'holdoutPct' ? percentLabel(bound, 0) : formatUsd(bound);

@@ -1,8 +1,8 @@
-import { useState, type ChangeEvent } from 'react';
+import { useRef, useState, type ChangeEvent, type Ref } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip, SurfaceTitle } from '../components/Primitives';
-import { Field } from '../components/ui/Field';
+import { Field, FieldReadout } from '../components/ui/Field';
 import { drawerForAsset } from '../lib/drawerSources';
 import type { CampaignRecommendationResponse } from '../types';
 import { publicAgentResponsesText } from '../lib/agentLabels';
@@ -13,6 +13,17 @@ import {
   type CampaignNumericField,
   type CampaignSetupState,
 } from './portfolio-builder.logic';
+import type { CampaignDraftRestore } from './portfolio-builder.draft';
+
+/** The unit each numeric editor shows beside its control, and says in words (critic-04). */
+const NUMERIC_UNITS: Record<CampaignNumericField, { prefix?: string; suffix?: string; unit: string }> = {
+  holdoutPct: { suffix: '%', unit: 'percent' },
+  budget: { prefix: '$', unit: 'US dollars' },
+  emailCost: { prefix: '$', unit: 'US dollars' },
+  smsCost: { prefix: '$', unit: 'US dollars' },
+  mailCost: { prefix: '$', unit: 'US dollars' },
+};
+const COPY_NOT_SET = 'Not set. Apply a recommendation to fill it.';
 
 type CampaignField = Exclude<
   keyof CampaignSetupState,
@@ -35,6 +46,8 @@ export function CampaignSetupPanel({
   recommendationFetching,
   canRecommend,
   canAccessAdmin = false,
+  draftRestore = null,
+  onResetDraft,
   onFieldChange,
   onNumericFieldCommit,
   onToggleHouseholdDedup,
@@ -48,6 +61,9 @@ export function CampaignSetupPanel({
   recommendationFetching: boolean;
   canRecommend: boolean;
   canAccessAdmin?: boolean;
+  /** A setup restored from this tab's draft (critic-v3): the chip, Reset and the variants note. */
+  draftRestore?: CampaignDraftRestore | null;
+  onResetDraft?: () => void;
   onFieldChange: (
     key: CampaignField,
   ) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
@@ -67,6 +83,13 @@ export function CampaignSetupPanel({
     if (!recommendationActionable) return;
     onApply();
   };
+  const holdoutRef = useRef<HTMLInputElement>(null);
+  const resetDraft = () => {
+    onResetDraft?.();
+    // The Reset button leaves with the chip; focus lands on the first setting.
+    holdoutRef.current?.focus();
+  };
+  const eligibleChip = <span className="chip chip--success">eligible only · 30d cap</span>;
   return (
     <div className="surface mt-4">
       <div className="surface__hdr surface__hdr--split">
@@ -81,7 +104,15 @@ export function CampaignSetupPanel({
             </div>
           </div>
         </div>
-        <span className="chip chip--success">eligible only · 30d cap</span>
+        {draftRestore ? (
+          // deviation:campaign-draft-restore (design_files/index.html:403-408, the .chip
+          // this reuses): the prototype's setup has no draft state.
+          <div className="chip-row">
+            <span className="chip chip--neutral" data-testid="campaign-draft-restored">Draft restored</span>
+            <Button variant="ghost" size="sm" type="button" onClick={resetDraft}>Reset</Button>
+            {eligibleChip}
+          </div>
+        ) : eligibleChip}
       </div>
       <div className="surface__body">
         <div className="campaign-recommendation" aria-live="polite">
@@ -204,18 +235,24 @@ export function CampaignSetupPanel({
             </>
           ) : null}
         </div>
+        {draftRestore?.variantsDropped && (
+          <p className="muted fs-12 mb-3" data-testid="campaign-draft-variants-note">
+            Message variants were for a different build and were not restored.
+          </p>
+        )}
         <div className="campaign-setup">
-          <CampaignTextField label="Benefit-led subject" value={setup.subjectA} maxLength={120} readOnly />
-          <CampaignTextField label="Guidance-led subject" value={setup.subjectB} maxLength={120} readOnly />
-          <CampaignTextField label="Benefit-led message" value={setup.bodyA} maxLength={700} multiline readOnly />
-          <CampaignTextField label="Guidance-led message" value={setup.bodyB} maxLength={700} multiline readOnly />
+          {/* critic-04: copy the operator cannot edit reads as text, never as an input. */}
+          <FieldReadout className="campaign-setup__field" label="Benefit-led subject" value={setup.subjectA} empty={COPY_NOT_SET} />
+          <FieldReadout className="campaign-setup__field" label="Guidance-led subject" value={setup.subjectB} empty={COPY_NOT_SET} />
+          <FieldReadout className="campaign-setup__field campaign-setup__field--wide" label="Benefit-led message" value={setup.bodyA} empty={COPY_NOT_SET} multiline />
+          <FieldReadout className="campaign-setup__field campaign-setup__field--wide" label="Guidance-led message" value={setup.bodyB} empty={COPY_NOT_SET} multiline />
           <div className="campaign-setup__field campaign-setup__field--wide muted fs-12">
             Borrower copy is rendered from reviewed server templates. Apply or regenerate the
             recommendation to change it.
           </div>
-          <CampaignNumericFieldEditor label="Holdout % (0-50)" field="holdoutPct" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} onCommit={onNumericFieldCommit} />
-          <CampaignTextField label="Send start" value={setup.startLocal} onChange={onFieldChange('startLocal')} type="time" />
-          <CampaignTextField label="Send end" value={setup.endLocal} onChange={onFieldChange('endLocal')} type="time" />
+          <CampaignNumericFieldEditor label="Holdout % (0-50)" field="holdoutPct" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} onCommit={onNumericFieldCommit} inputRef={holdoutRef} />
+          <CampaignTimeField label="Send start" value={setup.startLocal} onChange={onFieldChange('startLocal')} />
+          <CampaignTimeField label="Send end" value={setup.endLocal} onChange={onFieldChange('endLocal')} />
           <CampaignNumericFieldEditor label="Budget" field="budget" value={setup.budget} onChange={onFieldChange('budget')} onCommit={onNumericFieldCommit} placeholder="optional" />
           <CampaignNumericFieldEditor label="Email cost" field="emailCost" value={setup.emailCost} onChange={onFieldChange('emailCost')} onCommit={onNumericFieldCommit} />
           <CampaignNumericFieldEditor label="SMS cost" field="smsCost" value={setup.smsCost} onChange={onFieldChange('smsCost')} onCommit={onNumericFieldCommit} />
@@ -262,6 +299,7 @@ function CampaignNumericFieldEditor({
   onChange,
   onCommit,
   placeholder,
+  inputRef,
 }: {
   label: string;
   field: CampaignNumericField;
@@ -269,19 +307,22 @@ function CampaignNumericFieldEditor({
   onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
   onCommit: (field: CampaignNumericField, value: string) => void;
   placeholder?: string;
+  inputRef?: Ref<HTMLInputElement>;
 }) {
   const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
-  // critic-04: a clamp is announced in the field's polite notice ('Capped at
-  // 50%'), never applied silently. The notice belongs to the value it was
-  // written for: the next in-range commit, a keystroke, or a value set from
-  // outside the field (Apply variants) clears it.
+  // critic-04: a clamp or a rounding is announced in the field's polite
+  // notice ('Capped at 50%', 'Rounded to 12.35%'), never applied silently.
+  // The notice belongs to the value it was written for: the next in-range
+  // commit, a keystroke, or a value set from outside the field (Apply
+  // variants) clears it.
   const [notice, setNotice] = useState<{ text: string; value: string } | null>(null);
   if (notice !== null && notice.value !== value) setNotice(null);
   return (
-    <Field className="campaign-setup__field" label={label} notice={notice?.text ?? null}>
+    <Field className="campaign-setup__field" label={label} notice={notice?.text ?? null} {...NUMERIC_UNITS[field]}>
       {(control) => (
         <input
           {...control}
+          ref={inputRef}
           className="form-input"
           value={value}
           onChange={onChange}
@@ -303,47 +344,18 @@ function CampaignNumericFieldEditor({
   );
 }
 
-function CampaignTextField({
+function CampaignTimeField({
   label,
   value,
   onChange,
-  maxLength,
-  multiline = false,
-  type,
-  readOnly = false,
 }: {
   label: string;
   value: string;
-  onChange?: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
-  maxLength?: number;
-  multiline?: boolean;
-  type?: string;
-  readOnly?: boolean;
+  onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
 }) {
-  const className = `campaign-setup__field${multiline ? ' campaign-setup__field--wide' : ''}`;
   return (
-    <label className={className}>
-      <span>{label}</span>
-      {multiline ? (
-        <textarea
-          className="form-input campaign-setup__textarea"
-          aria-label={label}
-          value={value}
-          onChange={onChange}
-          readOnly={readOnly}
-          maxLength={maxLength}
-        />
-      ) : (
-        <input
-          className="form-input"
-          aria-label={label}
-          value={value}
-          onChange={onChange}
-          readOnly={readOnly}
-          maxLength={maxLength}
-          type={type}
-        />
-      )}
-    </label>
+    <Field className="campaign-setup__field" label={label}>
+      {(control) => <input {...control} className="form-input" type="time" value={value} onChange={onChange} />}
+    </Field>
   );
 }

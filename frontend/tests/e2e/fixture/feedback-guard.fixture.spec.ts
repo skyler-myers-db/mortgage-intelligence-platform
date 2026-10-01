@@ -50,7 +50,7 @@ import { expect, test } from './test';
 
 const DIALOG_NAME = 'Leave without saving?';
 const BUDGET = '25000';
-const SETUP_MESSAGE = 'Your campaign setup has not been saved with a build. Leaving discards it.';
+const SETUP_MESSAGE = 'Your campaign setup has not been saved with a build. It is kept as a draft in this tab until you save or reset it.';
 const OFFER_PATH = `/offer-orchestrator/${PRIMARY_BORROWER.borrower_id}`;
 const GENIE_SUBMIT_PATH = '/api/genie/message/submit';
 

@@ -14,3 +14,49 @@
 .field__hint { color: var(--text-3); }
 .field__notice { color: var(--text-2); }
 .field__error { color: var(--status-danger-ink); }
+
+/* deviation:field-affixes-readouts (design_files/index.html:921-925, the
+   prototype's bare .tweak-row controls; :467, the .kpi__unit beside a value).
+   A unit affix sits beside the control in the value's mono voice; the control
+   keeps its own box and focus ring. */
+.field__control {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.field__control > .form-input { min-width: 0; }
+/* A Field inside a row of controls (the Build name form, a saved campaign's
+   variant picker): its label and control join the row as they did before. */
+.field--inline { display: contents; }
+.field__affix {
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+}
+
+/* A value that is not editable here reads as text, never as an input box. */
+.field__readout {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: var(--lh-body);
+}
+.field__readout--multiline { white-space: pre-wrap; }
+.field__readout--empty { color: var(--text-3); }
+
+/* States of a Field-wrapped control. Scoped to `.field .form-input` on
+   purpose: they also reach Lead Queue's Field-wrapped range and saved-view
+   inputs, and nothing outside a Field (Field.test.tsx pins the scope). */
+.field .form-input:read-only:not(:disabled) {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--line-1);
+}
+.field .form-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.field .form-input:user-invalid {
+  border-color: var(--status-danger-line-strong);
+}

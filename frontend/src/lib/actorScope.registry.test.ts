@@ -60,6 +60,7 @@ const STORAGE_FILES: readonly string[] = [
 /** Stores converted to lib/actorScope's guarded accessors: storage-free. */
 const GUARDED_STORES: readonly string[] = [
   'src/lib/pinnedInsights.ts',
+  'src/routes/portfolio-builder.draft.ts',
   'src/lib/genieConversation.ts',
   'src/lib/genieConversationStore.ts',
   'src/lib/genieInFlightRecord.ts',

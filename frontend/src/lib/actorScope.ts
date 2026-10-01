@@ -81,6 +81,7 @@ const PRIVATE_SESSION = Object.freeze([
   'mip.queueContext',
   'mip.bulkApprove.lastCancelled',
   'mip.queryCache.v1',
+  'mip.portfolio.campaignDraft.v1',
 ] as const);
 const ACTOR_PREFERENCE_LOCAL = Object.freeze(['mip.shortcuts.singleKey'] as const);
 const STAMPS = Object.freeze({ local: 'mip.actorOwner', session: 'mip.actorCacheKey' } as const);

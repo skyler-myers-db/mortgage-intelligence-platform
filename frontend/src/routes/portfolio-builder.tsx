@@ -7,7 +7,6 @@ import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type {
   CampaignListResponse,
   CampaignRecommendationResponse,
-  CampaignSummary,
   PortfolioCreateResponse,
   PortfolioPreview,
   CampaignPerformanceFunnelResponse,
@@ -19,7 +18,9 @@ import { Button, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { useApp } from '../components/AppContext';
 import { FilterSelect } from '../components/ui/FilterSelect';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { AsyncStatus } from '../components/ui/AsyncState';
+import { DescribedErrorBody, preloadDescribedError } from '../components/ui/DescribedError';
+import { Field } from '../components/ui/Field';
 import { parseCampaignPrefill } from '../lib/campaignPrefill';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { useFootprint } from '../components/FootprintProvider';
@@ -56,6 +57,7 @@ import {
   type CampaignSetupState,
 } from './portfolio-builder.logic';
 import { campaignSetupsEqual, portfolioUnsavedMessage } from './portfolio-builder.unsaved';
+import { useCampaignDraft } from './portfolio-builder.draft';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { populationKpiLabel } from '../lib/populationLabels';
 
@@ -133,8 +135,10 @@ export default function PortfolioBuilder() {
     parseStateCodesFromUrl(searchParams, footprint.states),
   );
   // Success feedback is a shell toast (audit states-07); a failed save keeps
-  // its inline alert in the naming form until the next attempt.
+  // its inline alert in the naming form until the next attempt, worded from
+  // the caught error (states-04: a 403, a 409 and an outage read differently).
   const [saveFailed, setSaveFailed] = useState(false);
+  const [saveError, setSaveError] = useState<unknown>(null);
   // Inline naming form for "Save build". Re-audit #3 P1 (2026-06-12): the
   // previous native prompt() dialog is SYNCHRONOUS — it blocks the renderer
   // main thread (a hard freeze under any CDP/Playwright session, and an
@@ -144,9 +148,20 @@ export default function PortfolioBuilder() {
   const [savePanelOpen, setSavePanelOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [saveValidationError, setSaveValidationError] = useState<string | null>(null);
-  const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
   // The setup last persisted with a build: the unsaved-changes baseline.
   const [savedCampaignSetup, setSavedCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
+  const previewCriteria = useMemo(
+    () => buildPreviewCriteria(committedFilters, committedStateCodes),
+    [committedFilters, committedStateCodes],
+  );
+  // critic-v3: the setup is this tab's draft, bound to the criteria its variants were applied under.
+  const {
+    setup: campaignSetup,
+    setSetup: setCampaignSetup,
+    restore: draftRestore,
+    reset: resetDraft,
+    saved: draftSaved,
+  } = useCampaignDraft(JSON.stringify(previewCriteria), savedCampaignSetup);
   const campaignBuildConfig = useMemo(() => {
     const config = buildCampaignConfig(campaignSetup);
     return {
@@ -154,18 +169,11 @@ export default function PortfolioBuilder() {
       household_dedup: config.household_dedup,
     };
   }, [campaignSetup]);
-  const {
-    data: campaignsData,
-    isPending: campaignsLoading,
-    isError: campaignsIsError,
-    refetch: refetchCampaigns,
-  } = useQuery<CampaignListResponse>({
+  const campaignsQuery = useQuery<CampaignListResponse>({
     queryKey: queryKeys.campaigns(),
     queryFn: ({ signal }) => api.campaigns(signal),
     retry: false,
   });
-  const campaigns: CampaignSummary[] = campaignsData?.campaigns ?? [];
-  const campaignsError = campaignsIsError ? 'Saved campaigns unavailable' : null;
 
   // Cold-start warming-up loop. Re-runs whenever committedFilters
   // changes (via Run build or URL navigation). 6 retries / 5s apart =
@@ -178,20 +186,11 @@ export default function PortfolioBuilder() {
     }),
     [campaignBuildConfig, committedFilters, committedStateCodes],
   );
-  const {
-    data: preview,
-    warmingUp,
-    error,
-    manualRetry: retryBuild,
-    isFetching: previewFetching,
-  } = useWarmingUpRetry<PortfolioPreview>(
-    (signal) => api.portfolioPreview(
-      buildPreviewCriteria(committedFilters, committedStateCodes),
-      signal,
-      campaignBuildConfig,
-    ),
+  const previewQuery = useWarmingUpRetry<PortfolioPreview>(
+    (signal) => api.portfolioPreview(previewCriteria, signal, campaignBuildConfig),
     { queryKey: queryKeys.portfolioPreview([committedKey]), keepPreviousData: true },
   );
+  const { data: preview, warmingUp, error, isFetching: previewFetching } = previewQuery;
   const building = preview === null && warmingUp === null && error === null;
   // Re-audit #3 P1 (2026-06-12): `building` is false during a background
   // refetch of an UNCHANGED build key (stale preview still rendered), so
@@ -204,11 +203,6 @@ export default function PortfolioBuilder() {
   // remain available.
   const campaignBuildEligible = preview?.campaign_build_eligible === true;
   const campaignBuildLimit = preview?.campaign_build_limit ?? 10_000;
-  const previewError = error
-    ? error instanceof Error
-      ? `Couldn't load portfolio preview: ${error.message}`
-      : "Couldn't load portfolio preview."
-    : null;
   // Both SQL endpoints include start and end, so 89 days back plus today is
   // exactly 90 calendar days.
   const observedFrom = useMemo(() => isoDateDaysAgo(89), []);
@@ -220,10 +214,7 @@ export default function PortfolioBuilder() {
   });
   const recommendationQuery = useQuery<CampaignRecommendationResponse>({
     queryKey: ['portfolio-campaign-recommendation', committedKey],
-    queryFn: ({ signal }) => api.campaignRecommendation(
-      buildPreviewCriteria(committedFilters, committedStateCodes),
-      signal,
-    ),
+    queryFn: ({ signal }) => api.campaignRecommendation(previewCriteria, signal),
     enabled: Boolean(preview && preview.marketable_population > 0),
     retry: false,
   });
@@ -251,7 +242,7 @@ export default function PortfolioBuilder() {
       ...current,
       marketHouseholdTogether: !current.marketHouseholdTogether,
     }));
-  }, []);
+  }, [setCampaignSetup]);
   const applyRecommendation = useCallback(() => {
     const recommendation = recommendationQuery.data;
     if (!recommendation || recommendation.variants.length !== 2) return;
@@ -268,7 +259,7 @@ export default function PortfolioBuilder() {
       provenanceTokenA: variantA.provenance_token,
       provenanceTokenB: variantB.provenance_token,
     }));
-  }, [recommendationQuery.data]);
+  }, [recommendationQuery.data, setCampaignSetup]);
   const buildDirty = useMemo(
     () =>
       JSON.stringify({ filters, stateCodes }) !==
@@ -329,6 +320,8 @@ export default function PortfolioBuilder() {
     setSaveValidationError(null);
     setSaveFailed(false);
     setSavePanelOpen(true);
+    // A failed save words its alert from the shared vocabulary chunk: load it with the intent.
+    void preloadDescribedError();
   }, [buildDirty, buildInFlight, preview?.campaign_build_eligible]);
 
   const saving = createCampaign.isPending;
@@ -356,29 +349,31 @@ export default function PortfolioBuilder() {
     // the panel (and the name) until the save actually succeeds; on failure
     // the form stays open with the typed name and a "Save failed" hint so
     // the operator can retry without re-typing.
-    const criteria = buildPreviewCriteria(committedFilters, committedStateCodes);
+    const criteria = previewCriteria;
     const config = buildCampaignConfig(campaignSetup);
     const intent = intentFingerprint('campaign-create', saveSession, JSON.stringify({ name, criteria, config }));
     let created: PortfolioCreateResponse | undefined;
     try {
       // Resolves after the saved-campaign list is re-read (the mutation's onSuccess).
       created = await createCampaign.mutateAsync({ name, criteria, config, requestId: saveRequestIds.idFor(intent) });
-    } catch {
+    } catch (err) {
+      setSaveError(err);
       setSaveFailed(true);
       return;
     }
     saveRequestIds.settle(intent);
     setSavedCampaignSetup(campaignSetup);
+    draftSaved();
     setSavePanelOpen(false);
     toast.success('Build saved', { detail: name, auditEventId: created?.audit_event_id ?? null });
   }, [
     campaignBuildLimit,
     campaignSetup,
     buildInFlight,
-    committedFilters,
-    committedStateCodes,
     createCampaign,
+    draftSaved,
     preview?.campaign_build_eligible,
+    previewCriteria,
     queryClient,
     saveName,
     saveRequestIds,
@@ -517,18 +512,19 @@ export default function PortfolioBuilder() {
                 void onConfirmSave();
               }}
             >
-              <label className="save-build-form__label" htmlFor="portfolio-save-name">
-                Build name
-              </label>
-              <input
-                id="portfolio-save-name"
-                className="form-input save-build-form__input"
-                value={saveName}
-                onChange={(e) => setSaveName(e.target.value)}
-                maxLength={80}
-                autoFocus
-                data-testid="portfolio-save-name"
-              />
+              <Field className="field--inline" label="Build name">
+                {(control) => (
+                  <input
+                    {...control}
+                    className="form-input save-build-form__input"
+                    value={saveName}
+                    onChange={(e) => setSaveName(e.target.value)}
+                    maxLength={80}
+                    autoFocus
+                    data-testid="portfolio-save-name"
+                  />
+                )}
+              </Field>
               <Button
                 variant="primary"
                 size="sm"
@@ -552,7 +548,9 @@ export default function PortfolioBuilder() {
               </Button>
               {saveFailed && (
                 <span className="save-build-form__error" role="alert">
-                  {saveValidationError ?? 'Save failed — your name is kept; try again.'}
+                  {saveValidationError ?? (
+                    <>Save failed: <DescribedErrorBody error={saveError} subject="the build save" /> Your name is kept; try again.</>
+                  )}
                 </span>
               )}
             </form>
@@ -563,13 +561,10 @@ export default function PortfolioBuilder() {
             </div>
           )}
 
-          {warmingUp && preview === null && (
+          {/* states-04: warming and failure in the shared buyer-safe vocabulary, never error.message. */}
+          {(error !== null || (warmingUp !== null && preview === null)) && (
             <div className="mt-4">
-              <WarmingUpBlock
-                state={warmingUp}
-                title="Portfolio preview loading"
-                compact
-              />
+              <AsyncStatus query={previewQuery} subject="Portfolio preview" compact />
             </div>
           )}
           {warmingUp && preview !== null && (
@@ -577,22 +572,6 @@ export default function PortfolioBuilder() {
               <span className="chip chip--neutral chip--compact stable-status-chip">
                 {warmingUp.label} ({warmingUp.attempt}/{warmingUp.maxAttempts})
               </span>
-            </div>
-          )}
-          {previewError && !warmingUp && (
-            <div
-              role="alert"
-              className="status-callout status-callout--danger mt-4"
-            >
-              <span>{previewError}</span>
-              <button
-                type="button"
-                className="btn btn--ghost btn--sm"
-                onClick={retryBuild}
-                aria-label="Retry portfolio preview"
-              >
-                Retry
-              </button>
             </div>
           )}
 
@@ -712,6 +691,8 @@ export default function PortfolioBuilder() {
         recommendationFetching={recommendationQuery.isFetching}
         canRecommend={Boolean(preview && preview.marketable_population > 0)}
         canAccessAdmin={canAccessAdmin}
+        draftRestore={draftRestore}
+        onResetDraft={resetDraft}
         onFieldChange={setCampaignField}
         onNumericFieldCommit={(key, value) => setCampaignSetup((current) => ({
           ...current,
@@ -722,12 +703,7 @@ export default function PortfolioBuilder() {
         onApply={applyRecommendation}
       />
 
-      <SavedCampaignsPanel
-        campaigns={campaigns}
-        loading={campaignsLoading}
-        error={campaignsError}
-        onRefresh={refetchCampaigns}
-      />
+      <SavedCampaignsPanel query={campaignsQuery} />
 
       {preview?.high_intent_leads !== undefined && preview.high_intent_leads > 0 && (
         <div className="lead-cta">

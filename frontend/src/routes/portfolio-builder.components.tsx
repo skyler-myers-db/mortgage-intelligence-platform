@@ -1,6 +1,7 @@
 import { type ChangeEvent, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { MultiFilterSelect } from '../components/ui/MultiFilterSelect';
+import { Field } from '../components/ui/Field';
 import type { CampaignPerformanceFunnelResponse, PortfolioPreview } from '../types';
 import type { FootprintState } from './portfolio-builder.logic';
 import { formatCount, formatPercent, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
@@ -233,35 +234,38 @@ export function RoiProjector({
 
         {scenarioMode === 'manual' && (
           <div className="roi-projector__assumptions">
-            <RateOverrideField label="Lead → reached %" testId="roi-manual-reach" value={manualRates.reachRatePct} onChange={setManualRate('reachRatePct')} />
-            <RateOverrideField label="Reached → app %" testId="roi-manual-application" value={manualRates.applicationRatePct} onChange={setManualRate('applicationRatePct')} />
-            <RateOverrideField label="App → submitted %" testId="roi-manual-submission" value={manualRates.submissionRatePct} onChange={setManualRate('submissionRatePct')} />
-            <RateOverrideField label="Submitted → funded %" testId="roi-manual-funding" value={manualRates.fundingRatePct} onChange={setManualRate('fundingRatePct')} />
+            <RateOverrideField label="Lead → reached" testId="roi-manual-reach" value={manualRates.reachRatePct} onChange={setManualRate('reachRatePct')} />
+            <RateOverrideField label="Reached → app" testId="roi-manual-application" value={manualRates.applicationRatePct} onChange={setManualRate('applicationRatePct')} />
+            <RateOverrideField label="App → submitted" testId="roi-manual-submission" value={manualRates.submissionRatePct} onChange={setManualRate('submissionRatePct')} />
+            <RateOverrideField label="Submitted → funded" testId="roi-manual-funding" value={manualRates.fundingRatePct} onChange={setManualRate('fundingRatePct')} />
           </div>
         )}
+        {/* critic-04: the accessible name is the visible label (WCAG 2.5.3); the unit is its description. */}
         <div className="roi-projector__assumptions">
-          <label className="roi-projector__field">
-            <span>Revenue rate % (tenant)</span>
-            <input
-              className="form-input"
-              inputMode="decimal"
-              value={unitEconomics.revenueRatePct}
-              onChange={setEconomics('revenueRatePct')}
-              data-testid="roi-revenue-rate"
-              aria-label="Revenue per origination percent"
-            />
-          </label>
-          <label className="roi-projector__field">
-            <span>Cost / lead $ (tenant)</span>
-            <input
-              className="form-input"
-              inputMode="decimal"
-              value={unitEconomics.costPerLeadUsd}
-              onChange={setEconomics('costPerLeadUsd')}
-              data-testid="roi-cost-per-lead"
-              aria-label="Blended outreach cost per lead in dollars"
-            />
-          </label>
+          <Field className="roi-projector__field" label="Revenue rate (tenant)" suffix="%" unit="percent">
+            {(control) => (
+              <input
+                {...control}
+                className="form-input"
+                inputMode="decimal"
+                value={unitEconomics.revenueRatePct}
+                onChange={setEconomics('revenueRatePct')}
+                data-testid="roi-revenue-rate"
+              />
+            )}
+          </Field>
+          <Field className="roi-projector__field" label="Cost / lead (tenant)" prefix="$" unit="US dollars">
+            {(control) => (
+              <input
+                {...control}
+                className="form-input"
+                inputMode="decimal"
+                value={unitEconomics.costPerLeadUsd}
+                onChange={setEconomics('costPerLeadUsd')}
+                data-testid="roi-cost-per-lead"
+              />
+            )}
+          </Field>
         </div>
 
         <div className="roi-projector__derived">
@@ -339,16 +343,18 @@ function RateOverrideField({
   onChange: (event: ChangeEvent<HTMLInputElement>) => void;
 }) {
   return (
-    <label className="roi-projector__field">
-      <span>{label}</span>
-      <input
-        className="form-input"
-        inputMode="decimal"
-        value={value}
-        onChange={onChange}
-        data-testid={testId}
-      />
-    </label>
+    <Field className="roi-projector__field" label={label} suffix="%" unit="percent">
+      {(control) => (
+        <input
+          {...control}
+          className="form-input"
+          inputMode="decimal"
+          value={value}
+          onChange={onChange}
+          data-testid={testId}
+        />
+      )}
+    </Field>
   );
 }
 
