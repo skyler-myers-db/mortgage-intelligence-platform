@@ -173,6 +173,11 @@ export function USChoroplethMap({
   const [drillFocusFor, setDrillFocusFor] = useState<string | null>(null);
   const drillFocus = drillFocusFor !== null && drillFocusFor === current.state;
   const onDrillFocused = useCallback(() => setDrillFocusFor(null), []);
+  // Escape at the ZIP level backs out to the national view (dataviz-10) and
+  // asks the state stage (or the state table) to give focus back to the state
+  // it left, once it mounts; the header's crumb waits for it.
+  const [returnFocusTo, setReturnFocusTo] = useState<string | null>(null);
+  const onReturnFocused = useCallback(() => setReturnFocusTo(null), []);
   const navigate = useNavigate();
   const footprint = useOptionalFootprint();
 
@@ -381,6 +386,8 @@ export function USChoroplethMap({
             : overlayActive ? 'Unattended leads' : null}
           autoFocus={drillFocus}
           onAutoFocused={onDrillFocused}
+          focusRowId={level === 'state' ? returnFocusTo : null}
+          onFocusRowDone={onReturnFocused}
         />
       );
     }
@@ -395,6 +402,8 @@ export function USChoroplethMap({
           footprintStates={footprintStates}
           selectedId={drillBehavior === 'navigate' ? null : drillStateId}
           hover={hoverStage}
+          focusRequest={returnFocusTo}
+          onFocusRequestDone={onReturnFocused}
           onActivate={activateState}
         />
       );
@@ -439,6 +448,7 @@ export function USChoroplethMap({
         drillStateUC={drillStateUC}
         drillStateName={drillStateName}
         onBackToUs={() => changeSelection(EMPTY_MAP_SELECTION)}
+        drillExitFocusPending={returnFocusTo !== null}
         coverageZipCount={footprint.dataScope?.zip_count ?? null}
         drillHint={primary.warmingUp === null && primary.error === null}
         zipUnassigned={zipUnassignedForDrill}
@@ -461,11 +471,19 @@ export function USChoroplethMap({
         key={level}
         aria-busy={mapBusy}
         // Escape hides an open card and stops there, so the same keypress
-        // never also closes a menu that listens on window; with no card it
-        // passes through.
+        // never also closes a menu that listens on window. With no card, at
+        // the ZIP level (map or table) it backs out one level, a history push
+        // like the US crumb; at the national level it passes through.
         onKeyDown={(event) => {
-          if (event.key !== 'Escape' || hovered === null) return;
-          hideCard();
+          if (event.key !== 'Escape') return;
+          if (hovered !== null) {
+            hideCard();
+          } else if (level === 'zip') {
+            setReturnFocusTo(drillStateId);
+            changeSelection(EMPTY_MAP_SELECTION);
+          } else {
+            return;
+          }
           event.stopPropagation();
         }}
       >

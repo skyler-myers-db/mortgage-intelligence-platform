@@ -133,7 +133,7 @@ export function drillExitOriginatedInMap(lastFocused: Element | null, mapRoot: E
  * rollup that resolves late never pulls focus away from where the user
  * moved it. Returns whether `target` now has focus.
  */
-export function claimDrillFocus(target: HTMLElement | null, interim: Element | null = null): boolean {
+export function claimDrillFocus(target: HTMLElement | SVGElement | null, interim: Element | null = null): boolean {
   if (!target) return false;
   const doc = target.ownerDocument;
   const active = doc.activeElement;

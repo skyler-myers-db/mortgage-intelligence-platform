@@ -70,6 +70,13 @@ describe('USChoroplethMapLegend break row', () => {
     expect(breaks.map((b) => b.text)).toEqual(['1.3K', '5.4K', '12.1K']);
     expect(breaks.map((b) => b.title)).toEqual(['1,343', '5,370', '12,083']);
   });
+
+  it('says Escape backs out a level in the keyboard hint (dataviz-10)', () => {
+    renderLegend([3, 2, 1]);
+    expect(document.querySelector('.map-legend__hint')?.textContent?.replace(/\s+/g, ' ')).toBe(
+      'Arrow keys move · Enter or Space drills in · Esc hides the card, then goes back up a level',
+    );
+  });
 });
 
 const GRID: RateSensitivityResponse = {

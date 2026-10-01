@@ -19,12 +19,12 @@
  * cue (opacity 0.3) painted colours the legend never showed and hid states
  * that hold many borrowers of the selected segment.
  */
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup } from '../../types';
 import type { MapScenarioView } from './rateScenario.logic';
-import { moveRovingFocus, stateAriaLabel } from './USChoroplethMap.a11y';
+import { MAP_UNIT_ATTR, claimDrillFocus, moveRovingFocus, stateAriaLabel } from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale, type MapClass } from './USChoroplethMap.scale';
 import type { UsaSvgMap, UsaSvgMapLocation } from './USChoroplethMap.utils';
 import type { MapHoverStage } from './useMapHover';
@@ -44,6 +44,14 @@ interface USChoroplethMapStatesProps {
   selectedId: string | null;
   /** The map's delegated hover / focus card handlers (useMapHover), spread on the <svg>. */
   hover: MapHoverStage;
+  /**
+   * A state to give focus back to (Escape out of its ZIP level, dataviz-10):
+   * it becomes the tab stop and takes focus once the paths are mounted,
+   * unless the user already moved focus elsewhere.
+   */
+  focusRequest?: string | null;
+  /** Called once the request has been answered. */
+  onFocusRequestDone?: () => void;
   /** Click / Enter / Space on a state. `viaKeyboard` lets the drill move focus on. */
   onActivate: (location: UsaSvgMapLocation, hasFacts: boolean, viaKeyboard: boolean) => void;
 }
@@ -66,6 +74,8 @@ export function USChoroplethMapStates({
   footprintStates,
   selectedId,
   hover,
+  focusRequest = null,
+  onFocusRequestDone,
   onActivate,
 }: USChoroplethMapStatesProps) {
   const loading = stateFacts === null;
@@ -94,7 +104,8 @@ export function USChoroplethMapStates({
   // The single tab stop: the last focused state, else the selected one, else
   // the first populated state, else the first state.
   const tabStopId =
-    (activeId && views.some((view) => view.location.id === activeId) ? activeId : null)
+    (focusRequest && views.some((view) => view.location.id === focusRequest) ? focusRequest : null)
+    ?? (activeId && views.some((view) => view.location.id === activeId) ? activeId : null)
     ?? (selectedId && views.some((view) => view.location.id === selectedId) ? selectedId : null)
     ?? views.find((view) => view.rollup)?.location.id
     ?? views[0]?.location.id
@@ -105,8 +116,18 @@ export function USChoroplethMapStates({
   // roving tab stop.
   const stageHandlers = hover.handlers('state', setActiveId);
 
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  useLayoutEffect(() => {
+    if (!focusRequest) return;
+    const target = [...(svgRef.current?.querySelectorAll<SVGPathElement>(`[${MAP_UNIT_ATTR}]`) ?? [])]
+      .find((path) => path.getAttribute(MAP_UNIT_ATTR) === focusRequest) ?? null;
+    claimDrillFocus(target);
+    onFocusRequestDone?.();
+  }, [focusRequest, onFocusRequestDone]);
+
   return (
     <svg
+      ref={svgRef}
       viewBox={usaMap.viewBox}
       preserveAspectRatio="xMidYMid meet"
       className="map-svg-stage"

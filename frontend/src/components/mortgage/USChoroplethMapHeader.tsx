@@ -40,6 +40,12 @@ interface USChoroplethMapHeaderProps {
   drillStateUC: string;
   drillStateName: string;
   onBackToUs: () => void;
+  /**
+   * Escape out of the ZIP level asked the state stage to take focus back
+   * (dataviz-10): the crumb then leaves focus to it, even while the national
+   * stage is still loading. The crumb and Back still land on the crumb.
+   */
+  drillExitFocusPending?: boolean;
   /** Distinct ZIPs in coverage (backend scope), or null while loading. */
   coverageZipCount: number | null;
   /** False while the stage is warming up or failed: no state is drawn to click. */
@@ -62,6 +68,7 @@ export function USChoroplethMapHeader({
   drillStateUC,
   drillStateName,
   onBackToUs,
+  drillExitFocusPending = false,
   coverageZipCount,
   drillHint,
   zipUnassigned,
@@ -99,14 +106,14 @@ export function USChoroplethMapHeader({
   }, []);
   const wasDrilled = useRef(drilled);
   useEffect(() => {
-    if (wasDrilled.current && !drilled) {
+    if (wasDrilled.current && !drilled && !drillExitFocusPending) {
       const crumb = usCrumbRef.current;
       if (drillExitOriginatedInMap(lastFocused.current, crumb?.closest('.map-wrap') ?? null)) {
         claimDrillFocus(crumb);
       }
     }
     wasDrilled.current = drilled;
-  }, [drilled]);
+  }, [drilled, drillExitFocusPending]);
 
   return (
     <div className="map-hdr">

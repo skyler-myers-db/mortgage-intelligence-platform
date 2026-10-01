@@ -9,7 +9,7 @@
  * the table view. The browser-only facts (computed OKLab steps, real focus
  * movement, Back / Forward) live in tests/e2e/fixture/map-encoding.fixture.spec.ts.
  */
-import { act, type ReactNode } from 'react';
+import { act, useEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -19,7 +19,7 @@ import { ApiError } from '../../lib/api';
 import type { StateRollupResponse, ZipRollupResponse } from '../../types';
 import { USChoroplethMap } from './USChoroplethMap';
 import { MAP_DRILL_EXIT_ATTR, claimDrillFocus, drillExitOriginatedInMap } from './USChoroplethMap.a11y';
-import { EMPTY_MAP_SELECTION, type MapSelection } from './USChoroplethMap.selection';
+import { EMPTY_MAP_SELECTION, type MapSelection, type MapSelectionChangeOptions } from './USChoroplethMap.selection';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -312,6 +312,155 @@ describe('USChoroplethMap encoding, resilience and URL control (dataviz-02 / dat
       expect(Number(tile.getAttribute('data-map-class')), tile.getAttribute('data-map-unit') ?? '').toBe(legendClass(count));
     }
     expect(document.querySelector('.map-legend__scale')?.textContent).toContain('quartiles over the 24 densest of 120 ZIPs');
+  });
+});
+
+/** A route stand-in that owns the selection, like useMapSelectionParams, and records each change. */
+const routeControls: {
+  set?: (selection: MapSelection) => void;
+  changes: Array<{ selection: MapSelection; options?: MapSelectionChangeOptions }>;
+} = { changes: [] };
+function RoutedMap({ initial }: { initial: MapSelection }) {
+  const [selection, setSelection] = useState(initial);
+  useEffect(() => {
+    routeControls.set = setSelection;
+  }, []);
+  return (
+    <USChoroplethMap
+      selection={selection}
+      onSelectionChange={(next, options) => {
+        routeControls.changes.push({ selection: next, options });
+        setSelection(next);
+      }}
+    />
+  );
+}
+
+const TX_SELECTION: MapSelection = { state: 'TX', county: null, zip: null };
+const crumb = () => document.querySelector<HTMLButtonElement>('.map-crumbs__trail button');
+const escape = (target: Element | null) =>
+  act(async () => {
+    target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+
+describe('Escape backs out one level (dataviz-10)', () => {
+  let root: Root;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    apiMocks.stateRollups.mockResolvedValue(STATES);
+    apiMocks.zipRollups.mockResolvedValue(TX_ZIPS);
+    routeControls.changes = [];
+    routeControls.set = undefined;
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  async function renderRouted(initial: MapSelection) {
+    await act(async () => {
+      root.render(<Providers><RoutedMap initial={initial} /></Providers>);
+    });
+  }
+
+  it('hides the card first, then backs out and focuses the drilled state, not the crumb', async () => {
+    await renderRouted(TX_SELECTION);
+    const tile = await waitFor(() => document.querySelector<HTMLButtonElement>('ul.zip-tiles button.zip-tile'));
+    await waitFor(() => document.querySelector('.map-crumbs')?.textContent?.includes('Texas'));
+    await act(async () => tile.focus());
+    expect(document.querySelector('.map-tip')).not.toBeNull();
+
+    await escape(tile);
+    expect(document.querySelector('.map-tip')).toBeNull();
+    expect(document.querySelector('ul.zip-tiles')).not.toBeNull();
+    expect(routeControls.changes).toEqual([]);
+
+    await escape(tile);
+    const texas = await waitFor(() => path('tx'));
+    expect(document.activeElement).toBe(texas);
+    expect(document.activeElement).not.toBe(crumb());
+    expect(texas.getAttribute('tabindex')).toBe('0');
+    // A history push, like the US crumb (no replace).
+    expect(routeControls.changes).toEqual([{ selection: EMPTY_MAP_SELECTION, options: undefined }]);
+  });
+
+  it('keeps the request while the national stage is still loading, and focuses the state once it mounts', async () => {
+    apiMocks.stateRollups.mockRejectedValue(new ApiError('boom', { path: '/api/v1/geo/state-rollups', status: 500 }));
+    await renderRouted(TX_SELECTION);
+    const tile = await waitFor(() => document.querySelector<HTMLButtonElement>('ul.zip-tiles button.zip-tile'));
+    await act(async () => tile.focus());
+    await escape(tile);
+    await escape(tile);
+    const card = await waitFor(() => document.querySelector('.map-stage--status'));
+    // The crumb did not take focus while the stage could not draw the state.
+    expect(document.activeElement).toBe(document.body);
+
+    apiMocks.stateRollups.mockResolvedValue(STATES);
+    const retry = [...card.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Retry');
+    await act(async () => retry?.click());
+    const texas = await waitFor(() => path('tx')?.classList.contains('has-data') && path('tx'));
+    expect(document.activeElement).toBe(texas);
+  });
+
+  it('still lands on the crumb for the crumb and for a drill-exit control outside the map', async () => {
+    await renderRouted(TX_SELECTION);
+    await waitFor(() => document.querySelector('ul.zip-tiles'));
+    await act(async () => crumb()?.focus());
+    await act(async () => crumb()?.click());
+    await waitFor(() => path('tx'));
+    expect(document.activeElement).toBe(crumb());
+
+    // Segment Intelligence's "Clear geography": marked as the map's exit, it
+    // ends the drill and removes itself; focus lands on the crumb.
+    await act(async () => routeControls.set?.(TX_SELECTION));
+    await waitFor(() => document.querySelector('ul.zip-tiles'));
+    const clear = document.createElement('button');
+    clear.setAttribute(MAP_DRILL_EXIT_ATTR, '');
+    document.body.append(clear);
+    await act(async () => clear.focus());
+    await act(async () => {
+      clear.remove();
+      routeControls.set?.(EMPTY_MAP_SELECTION);
+    });
+    await waitFor(() => path('tx'));
+    expect(document.activeElement).toBe(crumb());
+  });
+
+  it('in table view, Escape from the ZIP table focuses the state row it left', async () => {
+    await renderRouted(EMPTY_MAP_SELECTION);
+    await waitFor(() => path('tx')?.classList.contains('has-data'));
+    const toggle = [...document.querySelectorAll('button')].find((b) => b.textContent === 'View as table');
+    await act(async () => toggle?.click());
+    const texasRow = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('.map-table__open')].find((b) => b.textContent === 'Texas'));
+    await act(async () => texasRow.focus());
+    await act(async () => texasRow.click());
+    const zipTable = await waitFor(() => document.querySelector<HTMLTableElement>('caption')?.textContent?.includes('by ZIP in Texas')
+      && document.querySelector<HTMLTableElement>('.map-table__table'));
+    await waitFor(() => document.activeElement === zipTable);
+
+    await escape(zipTable);
+    const back = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('.map-table__open')].find((b) => b.textContent === 'Texas'));
+    expect(document.activeElement).toBe(back);
+  });
+
+  it('passes through at the national level', async () => {
+    await renderRouted(EMPTY_MAP_SELECTION);
+    await waitFor(() => path('tx')?.classList.contains('has-data'));
+    let reachedWindow = 0;
+    const listener = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') reachedWindow += 1;
+    };
+    window.addEventListener('keydown', listener);
+    await escape(document.querySelector('.map-levels'));
+    window.removeEventListener('keydown', listener);
+    expect(reachedWindow).toBe(1);
+    expect(routeControls.changes).toEqual([]);
   });
 });
 

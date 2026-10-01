@@ -14,7 +14,7 @@
  * caption), so a keyboard or screen-reader user lands on the drilled data
  * instead of <body>.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { claimDrillFocus } from './USChoroplethMap.a11y';
 import type { MapClass } from './USChoroplethMap.scale';
 
@@ -50,6 +50,10 @@ interface USChoroplethMapTableProps {
   autoFocus?: boolean;
   /** Called once focus has moved, so a later Back navigation does not steal it. */
   onAutoFocused?: () => void;
+  /** A row whose button takes focus back (Escape out of that state's ZIP level, dataviz-10). */
+  focusRowId?: string | null;
+  /** Called once the row request has been answered. */
+  onFocusRowDone?: () => void;
 }
 
 const fmt = (value: number | null | undefined) =>
@@ -62,6 +66,8 @@ export function USChoroplethMapTable({
   extraColumn,
   autoFocus = false,
   onAutoFocused,
+  focusRowId = null,
+  onFocusRowDone,
 }: USChoroplethMapTableProps) {
   const [direction, setDirection] = useState<'descending' | 'ascending'>('descending');
   const tableRef = useRef<HTMLTableElement | null>(null);
@@ -70,6 +76,13 @@ export function USChoroplethMapTable({
     claimDrillFocus(tableRef.current);
     onAutoFocused?.();
   }, [autoFocus, onAutoFocused]);
+  useLayoutEffect(() => {
+    if (!focusRowId) return;
+    const row = [...(tableRef.current?.querySelectorAll<HTMLElement>('tr[data-map-row]') ?? [])]
+      .find((candidate) => candidate.getAttribute('data-map-row') === focusRowId);
+    claimDrillFocus(row?.querySelector<HTMLButtonElement>('button') ?? null);
+    onFocusRowDone?.();
+  }, [focusRowId, onFocusRowDone]);
   const sorted = useMemo(() => {
     const sign = direction === 'descending' ? -1 : 1;
     return [...rows].sort((a, b) => sign * (a.count - b.count) || a.name.localeCompare(b.name));
@@ -101,7 +114,7 @@ export function USChoroplethMapTable({
         </thead>
         <tbody>
           {sorted.map((row) => (
-            <tr key={row.id}>
+            <tr key={row.id} data-map-row={row.id}>
               <th scope="row" className="map-table__unit">
                 <span className={`map-table__swatch lvl-${row.cls ?? 0}`} aria-hidden="true" />
                 {row.onOpen ? (

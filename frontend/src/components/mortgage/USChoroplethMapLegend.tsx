@@ -225,11 +225,11 @@ export function USChoroplethMapLegend({
       {/* Keyboard affordance: always in the DOM for screen readers,
           revealed visually by .map-wrap:focus-within when a region is
           focused. Copy matches the actual handlers: arrows move the single
-          tab stop, Enter/Space drill in, Escape hides the card; backing out
-          is via the breadcrumb trail above the map. */}
+          tab stop, Enter/Space drill in, Escape hides the card and, with no
+          card, backs out of the ZIP level (dataviz-10). */}
       <div className="map-legend__hint">
         <kbd>Arrow keys</kbd> move · <kbd>Enter</kbd> or <kbd>Space</kbd> drills in · <kbd>Esc</kbd> hides
-        the card · use the breadcrumbs to go back
+        the card, then goes back up a level
       </div>
     </div>
   );
