@@ -101,7 +101,11 @@ export type { GenieTurnLockOutcome, GenieTurnLockRequester } from './genieTurnLo
  * Fail-closed identity boundary: a GENIE_CONVERSATION_RESET_EVENT listener,
  * added when this module loads, aborts the turn, removes the record, releases
  * the lock and clears everything, the shared transcript included, whether or
- * not a surface is mounted.
+ * not a surface is mounted. When the reset came from a CLOSED gate (a trusted
+ * nobody, D-identity-review-a2) the gate dropped those removals, so the
+ * record survives; the 'closed' event re-arms the resume and the next
+ * 'opened' (the same owner or an alias) resumes it. Another actor never
+ * reopens a document (lib/actorScope resets it).
  */
 
 export type GenieTurnSurface = 'panel' | 'route';
@@ -774,6 +778,15 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 }
 
 subscribeActorScope(({ reason }) => {
+  // D-identity-review-a2: a closed gate (a trusted nobody) kept the record
+  // (genieConversation's listener, which runs first, has already reset the
+  // live turn, and the gate dropped its removals). Re-arm the resume, so a
+  // reopen for the same owner (or an alias) resumes the kept record.
+  if (reason === 'closed') {
+    resumeChecked = false;
+    resumePending = true;
+    return;
+  }
   if (reason === 'opened' && resumePending) resumeGenieTurnFromSession();
 });
 
