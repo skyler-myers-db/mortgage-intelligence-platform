@@ -37,6 +37,20 @@ interface GenieJobTurnBody {
   question: string;
 }
 
+/** `POST /api/genie/message/complete` with `respond_async` (audit genie-01).
+ *  Not schema-named: genie.ts owns the schema name for the sync shape. */
+export interface GenieCompleteAsyncJobBody extends GenieJobTurnBody {
+  respond_async: true;
+}
+
+/** `POST /api/genie/message/status`: one poll of the caller's own job. */
+export interface GenieCompletionJobStatusRequest extends GenieJobTurnBody {
+  job_id: string;
+}
+
+/** 202 + the job's status, or an older server's 200 with the answer itself. */
+export type GenieCompleteAsyncResult = GenieCompletionJobStatus | GenieResult;
+
 function turnBody(turn: GenieJobTurn): GenieJobTurnBody {
   return {
     conversation_id: turn.conversationId,
@@ -45,16 +59,6 @@ function turnBody(turn: GenieJobTurn): GenieJobTurnBody {
     question: turn.question,
   };
 }
-
-export interface GenieCompleteAsyncJobBody extends GenieJobTurnBody {
-  respond_async: true;
-}
-
-export interface GenieCompletionJobStatusRequest extends GenieJobTurnBody {
-  job_id: string;
-}
-
-export type GenieCompleteAsyncResult = GenieCompletionJobStatus | GenieResult;
 
 export const genieJobsApi = {
   /** 202 + the job's status; an older server ignores `respond_async` and
