@@ -208,6 +208,15 @@ describe('Home renders the personalized last-login summary', () => {
     });
   }
   const fetchedAt = () => container.querySelector('[data-testid="fetched-at"]');
+  /** The stale note is its own chunk (StaleDataNote.lazy): let it land. */
+  async function settleLazy() {
+    for (let i = 0; i < 20; i += 1) {
+      await act(async () => {
+        await vi.dynamicImportSettled();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+    }
+  }
 
   it('shows the age of the OLDEST hero read in the hero, before the one primary action', () => {
     const restoredAt = Date.parse('2026-10-01T06:00:00Z');
@@ -233,11 +242,12 @@ describe('Home renders the personalized last-login summary', () => {
     expect(summary.manualRetry).toHaveBeenCalledTimes(1);
   });
 
-  it('marks a refresh that failed over the data on screen with that data\'s age, once', () => {
+  it('marks a refresh that failed over the data on screen with that data\'s age, once', async () => {
     expect(container.querySelector('[data-testid="stale-data-note"]')).toBeNull();
     const shownAt = Date.parse('2026-10-01T07:00:00Z');
     reads.byKey.set(SUMMARY_KEY, heroRead(SUMMARY, { dataUpdatedAt: shownAt, error: new Error('refresh failed') }));
     renderAgain();
+    await settleLazy();
     const notes = container.querySelectorAll('[data-testid="stale-data-note"]');
     expect(notes).toHaveLength(1);
     expect(notes[0].querySelector('time')?.getAttribute('dateTime')).toBe(new Date(shownAt).toISOString());
@@ -246,9 +256,10 @@ describe('Home renders the personalized last-login summary', () => {
     expect(container.querySelector('.login-summary')?.textContent).toContain('+2,250');
   });
 
-  it('a failure with nothing on screen is not "stale": no note', () => {
-    reads.byKey.set(SUMMARY_KEY, heroRead(null, { error: new Error('down'), dataUpdatedAt: null }));
+  it('a failure with nothing on screen is not "stale": no note, even with an earlier fetch time on record', async () => {
+    reads.byKey.set(SUMMARY_KEY, heroRead(null, { error: new Error('down'), dataUpdatedAt: Date.parse('2026-10-01T07:00:00Z') }));
     renderAgain();
+    await settleLazy();
     expect(container.querySelector('[data-testid="stale-data-note"]')).toBeNull();
   });
 });

@@ -16,7 +16,7 @@ import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { AsyncStatus } from '../components/ui/AsyncState';
 import { FetchedAt } from '../components/ui/FetchedAt';
-import { StaleDataNote } from '../components/ui/StaleDataNote';
+import { LazyStaleDataNote } from '../components/ui/StaleDataNote.lazy';
 import type { Fresh } from '../lib/apiClients/headers';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { useFootprint } from '../components/FootprintProvider';
@@ -612,7 +612,7 @@ export default function SegmentIntelligence() {
       >
         {leadsMeasuredZero ? EmptyState && (
           <div>
-            <StaleDataNote lastGoodAt={staleAt} />
+            <LazyStaleDataNote lastGoodAt={staleAt} />
             <EmptyState cause={leads.length === 0 && activeSegs.length > 1 && segmentMode === 'all' ? 'intersection' : 'filtered'} />
           </div>
         ) : (
@@ -627,7 +627,7 @@ export default function SegmentIntelligence() {
             }}
             headerStatus={(
               <>
-                <StaleDataNote lastGoodAt={staleAt} />
+                <LazyStaleDataNote lastGoodAt={staleAt} />
                 <FetchedAt
                   at={leadsQueryState.dataUpdatedAt}
                   subject="ranked borrowers"

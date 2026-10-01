@@ -20,7 +20,7 @@ import {
 import { USChoroplethMapHeader, type MapColorMode, type MapView } from './USChoroplethMapHeader';
 import { USChoroplethMapLegend } from './USChoroplethMapLegend';
 import { USChoroplethMapStates } from './USChoroplethMapStates';
-import { USChoroplethMapTable } from './USChoroplethMapTable';
+import { MAP_TABLE } from './USChoroplethMapTable.lazy';
 import { MapUnavailable } from './USChoroplethMapUnavailable';
 import { buildMapTableRows, offMapCaption, type MapTableGroups } from './USChoroplethMap.table';
 import { campaignPrefillPath as buildCampaignPath } from './USChoroplethMap.campaign';
@@ -182,6 +182,8 @@ export function USChoroplethMap({
   const scenarioOn = rateOn && !lever.failed;
   const shownStep = useDeferredValue(rateStep);
   const [view, setView] = useState<MapView>('map');
+  // The table view's own chunk, loaded the first time the table is picked.
+  const tableView = useLazyModule(MAP_TABLE, view === 'table');
   // A keyboard drill, and any drill from a table row, removes the control
   // that had focus (the state path, the row's button). Focus then moves on to
   // the drilled level (a ZIP tile, the empty state's action or the ZIP table)
@@ -390,10 +392,23 @@ export function USChoroplethMap({
       if (level === 'state' ? !stateFacts : !zipFacts) {
         return <div className="map-stage map-stage--empty">Loading rollups…</div>;
       }
+      const MapTable = tableView.module?.USChoroplethMapTable ?? null;
+      if (!MapTable) {
+        return tableView.failed ? (
+          <div className="map-stage map-stage--empty" role="status">
+            The table view could not load.{' '}
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => window.location.reload()}>
+              Reload
+            </button>
+          </div>
+        ) : (
+          <div className="map-stage map-stage--empty">Loading the table…</div>
+        );
+      }
       // Rate mode: change versus today as labelled numbers (wow-stage-1, D-dataviz-geo-b).
       const scenarioRate = shownScenario ? ratePct(shownScenario.ratePct) : null;
       return (
-        <USChoroplethMapTable
+        <MapTable
           unitLabel={level === 'state' ? 'State' : 'ZIP'}
           caption={level === 'zip'
             ? `Marketable borrowers by ZIP in ${drillStateName}, ${segmentCaption}`

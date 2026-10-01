@@ -361,6 +361,13 @@ describe('Segment Intelligence rendered states', () => {
   // delivery-06 client half: ONE note for the page, the oldest last good read
   // of the catalog and the map read on screen, beside the table's FetchedAt.
   const notes = () => [...document.querySelectorAll('[data-testid="stale-data-note"]')];
+  /** The note is its own chunk (StaleDataNote.lazy): let a report land, then read. */
+  async function report(lastGoodAt: string | null) {
+    act(() => mapProps.current?.onReadStale?.(lastGoodAt));
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+  }
 
   it('shows one stale note from the oldest of the catalog and map reads, beside FetchedAt', async () => {
     reads.segments = read({ data: catalog([SEGMENT], '2026-09-25T10:00:00Z') });
@@ -370,12 +377,12 @@ describe('Segment Intelligence rendered states', () => {
     expect(notes()[0].nextElementSibling?.getAttribute('data-testid')).toBe('fetched-at');
     expect(notes()[0].querySelector('time')?.getAttribute('dateTime')).toBe('2026-09-25T10:00:00.000Z');
 
-    act(() => mapProps.current?.onReadStale?.('2026-09-25T08:00:00Z'));
+    await report('2026-09-25T08:00:00Z');
     expect(notes()).toHaveLength(1);
     expect(notes()[0].querySelector('time')?.getAttribute('dateTime')).toBe('2026-09-25T08:00:00.000Z');
 
     // The next responses without the header clear it.
-    act(() => mapProps.current?.onReadStale?.(null));
+    await report(null);
     reads.segments = read({ data: catalog([SEGMENT]) });
     await mount();
     expect(notes()).toHaveLength(0);
@@ -385,7 +392,7 @@ describe('Segment Intelligence rendered states', () => {
     await mount();
     expect(typeof mapProps.current?.onReadStale).toBe('function');
     expect(notes()).toHaveLength(0);
-    act(() => mapProps.current?.onReadStale?.('2026-09-25T08:00:00Z'));
+    await report('2026-09-25T08:00:00Z');
     expect(notes()).toHaveLength(1);
   });
 

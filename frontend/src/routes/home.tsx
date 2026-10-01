@@ -15,7 +15,7 @@ import { homeQueries } from '../lib/homeQueries';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { AsyncStatus } from '../components/ui/AsyncState';
 import { FetchedAt } from '../components/ui/FetchedAt';
-import { StaleDataNote } from '../components/ui/StaleDataNote';
+import { LazyStaleDataNote } from '../components/ui/StaleDataNote.lazy';
 import { isAbortError } from '../lib/apiTransport';
 import { useApp } from '../components/AppContext';
 import { EntradaWordmark } from '../components/brand/Entrada';
@@ -190,7 +190,7 @@ export default function Home() {
             recovery, healthRecovery.ts), and any other failure in red with
             the buyer-safe copy. A true outage promises no duration. */}
         <AsyncStatus query={previewQuery} subject="Portfolio KPIs" compact />
-        <StaleDataNote lastGoodAt={staleAt} />
+        <LazyStaleDataNote lastGoodAt={staleAt} />
         {isDayZero && (
           <HomeDayZeroStatus canAccessAdmin={canAccessAdmin} />
         )}

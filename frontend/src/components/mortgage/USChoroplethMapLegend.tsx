@@ -31,7 +31,7 @@ import type { GeoAssignmentOverlayResponse } from '../../lib/api';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import { Chip, EvidenceChip } from '../Primitives';
-import { StaleDataNote } from '../ui/StaleDataNote';
+import { LazyStaleDataNote } from '../ui/StaleDataNote.lazy';
 import { RATE_COHORT_NOTE, type MapScenarioView, type RateScenarioIndex } from './rateScenario.logic';
 import { classRanges, formatBreak, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { GeoRead } from './useChoroplethLiveFacts';
@@ -208,7 +208,7 @@ export function USChoroplethMapLegend({
         )}
         {offMapNote && <span className="map-legend__scale">{` · ${offMapNote}`}</span>}
       </div>
-      <StaleDataNote lastGoodAt={staleLastGoodAt} />
+      <LazyStaleDataNote lastGoodAt={staleLastGoodAt} />
       {rate && (
         // The label never waits on the lazy chunk or the read: it is the
         // legend's own, in every rate state.
