@@ -40,6 +40,7 @@ import {
   decisionRoutingLine,
   humanizeReasonCode,
   receiptChannelLabel,
+  receiptReviewLine,
   type DecisionRouting,
 } from './DecisionReceipt.copy';
 import { copyAuditId, printReceipt } from './DecisionReceipt.actions';
@@ -160,6 +161,10 @@ function receiptRows(receipt: DecisionReceiptPayload): ReceiptRow[] {
   if (receipt.copy_generation_id) {
     rows.push({ key: 'copy-generation', label: 'Copy generation', value: receipt.copy_generation_id, mono: true });
   }
+  // How the copy was reviewed (deviation:receipt-review-mode-line): one row
+  // per review mode, or the bulk rejection run; none when nothing is recorded.
+  const reviewLine = receiptReviewLine(receipt);
+  if (reviewLine) rows.push({ key: 'review', label: 'Review', value: reviewLine });
   rows.push({ key: 'approver', label: 'Approver', value: receipt.approver });
   if (receipt.request_id) rows.push({ key: 'request', label: 'Request id', value: receipt.request_id, mono: true });
   if (receipt.correlation_id) {

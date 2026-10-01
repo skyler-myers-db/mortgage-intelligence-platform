@@ -45,10 +45,21 @@ export function rejectResult(auditEventId: string): FixtureReply<RejectResult> {
   });
 }
 
+/**
+ * The ledger row's review ledger (audit flow-03, tables-07). Absent, the row
+ * records none, so the receipt shows no review line: the receipts other
+ * specs capture (and their VRT states) stay as they were.
+ */
+export interface LedgerReview {
+  review_mode: string | null;
+  bulk_id: string | null;
+}
+
 export function ledgerReceipt(
   auditEventId: string,
   borrower: Borrower360,
   decision: DecisionOutcome,
+  review: LedgerReview = { review_mode: null, bulk_id: null },
 ): DecisionReceipt {
   const rejected = decision === 'rejected';
   return {
@@ -65,6 +76,8 @@ export function ledgerReceipt(
     rationale_code: rejected ? 'low_intent' : null,
     copy_generation_id: rejected ? null : 'gen-fixture-0001',
     copy_hash: rejected ? null : LEDGER_COPY_HASH,
+    review_mode: review.review_mode,
+    bulk_id: review.bulk_id,
     approver: LEDGER_APPROVER,
     request_id: 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e',
     correlation_id: LEDGER_CORRELATION_ID,

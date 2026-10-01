@@ -253,6 +253,14 @@ export interface DecisionReceipt {
   rationale_code: string | null;
   copy_generation_id: string | null;
   copy_hash: string | null;
+  /**
+   * How the approver saw the certified copy (individual, triage,
+   * bulk_sample, bulk_cohort, or 'undeclared' for an older client); null
+   * for a row that records none (a rejection, a decision before the ledger).
+   */
+  review_mode: string | null;
+  /** The bulk run (approve or reject) the decision belonged to. */
+  bulk_id: string | null;
   approver: string;
   request_id: string | null;
   correlation_id: string | null;
