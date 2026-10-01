@@ -60,6 +60,37 @@ else
   DEPLOY_INVENTORY_PRINCIPAL="dry-run-deployer@example.invalid"
 fi
 
+# >>> frontend dependency freshness: check >>>
+# Step 1 builds the App source from frontend/package-lock.json; an install
+# that drifted from the lock would ship a build the lock never described
+# (W5a carryover, audit stack-10). Check and report here, before the prompt;
+# the repair (`npm ci`) runs only after it. A shared/symlinked install is
+# never mutated. Exit codes of tools/frontend_deps_check.py: 0 fresh,
+# 10 stale or missing, 11 shared; anything else is a hard preflight error.
+FRONTEND_DEPS_STATE="skipped"
+if [[ -f tools/frontend_deps_check.py ]]; then
+  _frontend_deps_rc=0
+  "$PYTHON" -m tools.frontend_deps_check || _frontend_deps_rc=$?
+  case "$_frontend_deps_rc" in
+    0) FRONTEND_DEPS_STATE="fresh" ;;
+    10) FRONTEND_DEPS_STATE="stale" ;;
+    11) FRONTEND_DEPS_STATE="shared" ;;
+    *) FRONTEND_DEPS_STATE="error" ;;
+  esac
+  echo "  frontend deps: ${FRONTEND_DEPS_STATE}"
+  if [[ "$DRY_RUN" -eq 0 && "$FRONTEND_DEPS_STATE" == "shared" ]]; then
+    echo "${RED}[deploy] frontend/node_modules is a shared/symlinked install; run npm --prefix frontend ci in a private checkout.${RST}" >&2
+    exit 2
+  fi
+  if [[ "$DRY_RUN" -eq 0 && "$FRONTEND_DEPS_STATE" == "error" ]]; then
+    echo "${RED}[deploy] the frontend dependency check failed (exit ${_frontend_deps_rc}).${RST}" >&2
+    exit 2
+  fi
+else
+  echo "  frontend deps: skipped (tools/frontend_deps_check.py is not in this tree)"
+fi
+# <<< frontend dependency freshness: check <<<
+
 if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
   read -r -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans
   if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
@@ -67,6 +98,21 @@ if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
     exit 1
   fi
 fi
+
+# >>> frontend dependency freshness: repair >>>
+# After the confirmation prompt (or NO_CONFIRM): install exactly the lock into
+# this checkout's own frontend/node_modules, then prove it took.
+if [[ "$DRY_RUN" -eq 0 && "$FRONTEND_DEPS_STATE" == "stale" ]]; then
+  run npm --prefix frontend ci --no-audit --no-fund
+  _frontend_deps_rc=0
+  "$PYTHON" -m tools.frontend_deps_check || _frontend_deps_rc=$?
+  if [[ "$_frontend_deps_rc" -ne 0 ]]; then
+    echo "${RED}[deploy] frontend/node_modules still does not match frontend/package-lock.json after npm ci.${RST}" >&2
+    echo "  fix: npm --prefix frontend ci --no-audit --no-fund, then re-run ./scripts/deploy.sh" >&2
+    exit 2
+  fi
+fi
+# <<< frontend dependency freshness: repair <<<
 
 # Resolve deployment-scoped controls before any workspace mutation. A reviewed
 # shell export wins; otherwise the documented .env.local value wins; defaults
