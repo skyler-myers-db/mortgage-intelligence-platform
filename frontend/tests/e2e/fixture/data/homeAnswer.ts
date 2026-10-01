@@ -70,13 +70,22 @@ export const MAX_HOME_PREVIEW: PortfolioPreview = {
   high_intent_leads: -REFI_SCREEN,
 };
 
-/** Three WHY NOW triggers (SUMMARY_DELTA_MEASURES is three) with wide tokens. */
+const LISTED = 61_412;
+const COMPETITOR_LIENS = 412_870;
+
+/**
+ * Five WHY NOW triggers (SUMMARY_DELTA_MEASURES is five, flow-05) with wide
+ * tokens; the WHY NOW column adds the rate move above them when the rate
+ * window is read (home-answer.fixture.spec.ts registers it).
+ */
 export const MAX_HOME_SUMMARY: HomeSummary = {
   ...HOME_SUMMARY,
   highlights: [
-    { measure: 'high_opportunity', label: 'high-opportunity', display: '+12.5%', value_token: '+12.5%', current: TOP_TIER, baseline: 34_588, delta: 4_324, delta_pct: 12.5 },
+    { measure: 'listed_for_sale', label: 'listed for sale', display: '+11,412', value_token: '+11,412', current: LISTED, baseline: 50_000, delta: 11_412, delta_pct: 22.8 },
+    { measure: 'competitor_lien', label: 'competitor liens', display: '-12,310', value_token: '-12,310', current: COMPETITOR_LIENS, baseline: 425_180, delta: -12_310, delta_pct: -2.9 },
     { measure: 'refi_economics_screen', label: 'refi candidates', display: '+22,250', value_token: '+22,250', current: REFI_SCREEN, baseline: 52_525, delta: 22_250, delta_pct: 42.4 },
-    { measure: 'offers_available', label: 'offers available', display: '+111,190', value_token: '+111,190', current: LIVE_OFFER_PATHS + LIVE_MONITOR_COUNT, baseline: 4_631_199, delta: 111_190, delta_pct: 2.4 },
+    { measure: 'high_opportunity', label: 'high-opportunity', display: '+12.5%', value_token: '+12.5%', current: TOP_TIER, baseline: 34_588, delta: 4_324, delta_pct: 12.5 },
+    { measure: 'offers_recommended', label: 'primary offer paths', display: '+111,190', value_token: '+111,190', current: LIVE_OFFER_PATHS, baseline: LIVE_OFFER_PATHS - 111_190, delta: 111_190, delta_pct: 992.9 },
   ],
   // The live-shaped book's HeadlineKpis, consistent with the highlights above
   // (backend HeadlineKpis requires every count; deltas = current - baseline).
@@ -87,22 +96,28 @@ export const MAX_HOME_SUMMARY: HomeSummary = {
     offers_available: LIVE_OFFER_PATHS + LIVE_MONITOR_COUNT,
     offers_recommended: LIVE_OFFER_PATHS,
     avg_opportunity_score: 81,
+    listed_for_sale: LISTED,
+    competitor_lien: COMPETITOR_LIENS,
   },
   baseline: {
     marketable_population: ADDRESSABLE,
     refi_economics_screen: 52_525,
     high_opportunity: 34_588,
     offers_available: 4_631_199,
-    offers_recommended: LIVE_OFFER_PATHS,
+    offers_recommended: LIVE_OFFER_PATHS - 111_190,
     avg_opportunity_score: 81,
+    listed_for_sale: 50_000,
+    competitor_lien: 425_180,
   },
   deltas: {
     marketable_population: 0,
     refi_economics_screen: 22_250,
     high_opportunity: 4_324,
     offers_available: 111_190,
-    offers_recommended: 0,
+    offers_recommended: 111_190,
     avg_opportunity_score: 0,
+    listed_for_sale: 11_412,
+    competitor_lien: -12_310,
   },
 };
 

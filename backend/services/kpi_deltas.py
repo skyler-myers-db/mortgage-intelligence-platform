@@ -35,6 +35,7 @@ from typing import Any
 
 from backend.schemas.kpi_deltas import (
     HEADLINE_COUNT_MEASURES,
+    HEADLINE_EVENT_MEASURES,
     HeadlineKpis,
     KpiDeltaResult,
     KpiDeltas,
@@ -56,14 +57,17 @@ _CURRENT_METRICS_SQL_TEMPLATE = (
     "  COALESCE(SUM(CASE WHEN is_high_opportunity THEN 1 ELSE 0 END), 0) AS high_opportunity, "
     "  COALESCE(SUM(CASE WHEN offer_available THEN 1 ELSE 0 END), 0)     AS offers_available, "
     "  COALESCE(SUM(CASE WHEN offer_recommended THEN 1 ELSE 0 END), 0)   AS offers_recommended, "
-    "  AVG(opportunity_score)                                      AS avg_opportunity_score "
+    "  AVG(opportunity_score)                                      AS avg_opportunity_score, "
+    "  COALESCE(SUM(CASE WHEN listed_for_sale THEN 1 ELSE 0 END), 0)     AS listed_for_sale, "
+    "  COALESCE(SUM(CASE WHEN is_competitor_lien THEN 1 ELSE 0 END), 0)  AS competitor_lien "
     "FROM {metric_view}"
 )
 
 _SNAPSHOT_COLUMNS = (
     "snapshot_date, snapshot_at, source_view, "
     "marketable_population, refi_economics_screen, high_opportunity, "
-    "offers_available, offers_recommended, avg_opportunity_score"
+    "offers_available, offers_recommended, avg_opportunity_score, "
+    "listed_for_sale, competitor_lien"
 )
 
 _PREVIOUS_VISIT_SQL = """
@@ -106,6 +110,10 @@ def _headline_from_row(row: dict[str, Any]) -> HeadlineKpis:
     }
     avg_score = row.get("avg_opportunity_score")
     values["avg_opportunity_score"] = float(avg_score) if avg_score is not None else None
+    # Event measures keep a missing reading as None (never 0).
+    for measure in HEADLINE_EVENT_MEASURES:
+        reading = row.get(measure)
+        values[measure] = int(reading) if reading is not None else None
     return HeadlineKpis.model_validate(values)
 
 
@@ -118,7 +126,15 @@ def compute_deltas(current: HeadlineKpis, baseline: HeadlineKpis) -> KpiDeltas:
     avg_delta: float | None = None
     if current.avg_opportunity_score is not None and baseline.avg_opportunity_score is not None:
         avg_delta = round(current.avg_opportunity_score - baseline.avg_opportunity_score, 2)
-    return KpiDeltas(avg_opportunity_score=avg_delta, **counts)
+    deltas = KpiDeltas(avg_opportunity_score=avg_delta, **counts)
+    # An event measure with no reading on either side has no delta: a
+    # pre-migration snapshot is NULL, and NULL is never treated as 0.
+    for measure in HEADLINE_EVENT_MEASURES:
+        now_value = getattr(current, measure)
+        then_value = getattr(baseline, measure)
+        if now_value is not None and then_value is not None:
+            setattr(deltas, measure, now_value - then_value)
+    return deltas
 
 
 class KpiDeltaService:
@@ -222,7 +238,9 @@ class KpiDeltaService:
             )
         baseline = HeadlineKpis.model_validate(
             baseline_snapshot.model_dump(
-                include=set(HEADLINE_COUNT_MEASURES) | {"avg_opportunity_score"}
+                include=set(HEADLINE_COUNT_MEASURES)
+                | set(HEADLINE_EVENT_MEASURES)
+                | {"avg_opportunity_score"}
             )
         )
         return KpiDeltaResult(

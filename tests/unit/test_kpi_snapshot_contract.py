@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from backend.schemas.kpi_deltas import HEADLINE_COUNT_MEASURES
+from backend.schemas.kpi_deltas import HEADLINE_COUNT_MEASURES, HEADLINE_EVENT_MEASURES
 from tests.fixtures.deploy_script import deploy_entrypoint_text
 
 REPO = Path(__file__).resolve().parents[2]
@@ -112,3 +112,43 @@ def test_job_service_and_view_agree_on_measure_vocabulary() -> None:
         assert indicator in METRIC_VIEW
         assert indicator in JOB
         assert indicator in SERVICE
+
+
+# -- flow-05 event measures (listed for sale, competitor liens) --------------
+
+_EVENT_MARKER = "-- KPI snapshot event measures ---"
+
+
+def test_event_measures_share_one_vocabulary_across_job_service_and_view() -> None:
+    for measure in HEADLINE_EVENT_MEASURES:
+        assert re.search(rf"AS {measure}\b", JOB), f"job missing alias {measure}"
+        assert re.search(rf"AS {measure}\b", SERVICE), f"service missing alias {measure}"
+        # The upsert writes and refreshes both columns.
+        assert f"%({measure})s" in JOB
+        assert re.search(rf"{measure}\s+= EXCLUDED\.{measure}", JOB)
+    for indicator in ("listed_for_sale", "is_competitor_lien"):
+        assert indicator in METRIC_VIEW
+        assert indicator in JOB
+        assert indicator in SERVICE
+    assert "SUM(listed_for_sale)" in METRIC_VIEW
+    assert "SUM(is_competitor_lien)" in METRIC_VIEW
+
+
+def test_event_measures_are_one_additive_nullable_block() -> None:
+    assert SCHEMA.count(_EVENT_MARKER) == 1
+    block = SCHEMA[SCHEMA.index(_EVENT_MARKER) :]
+    block = block[: block.index("ON CONFLICT (version) DO NOTHING;")]
+    for measure in HEADLINE_EVENT_MEASURES:
+        assert f"ADD COLUMN IF NOT EXISTS {measure} BIGINT;" in block
+        assert f"DROP CONSTRAINT IF EXISTS kpi_snapshots_{measure}_chk" in block
+        assert f"CHECK ({measure} IS NULL OR {measure} >= 0)" in block
+        assert f"COMMENT ON COLUMN mip_app.kpi_snapshots.{measure}" in block
+    assert "_kpi_snapshot_event_measures'" in block
+    # Never a backfill, never a new object or privilege, never a function call.
+    statements = [s.strip() for s in re.sub(r"--[^\n]*", "", block).split(";") if s.strip()]
+    assert not [s for s in statements if s.upper().startswith(("UPDATE", "GRANT", "CREATE"))]
+    assert "NOT NULL" not in re.sub(r"--[^\n]*", "", block)
+    # The CREATE TABLE stays as it was: the columns arrive only through the block.
+    table = SCHEMA.split("CREATE TABLE IF NOT EXISTS mip_app.kpi_snapshots", 1)[1].split(";", 1)[0]
+    for measure in HEADLINE_EVENT_MEASURES:
+        assert measure not in table

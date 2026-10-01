@@ -21,7 +21,12 @@ Measure parity:
     The aggregate SELECT below must stay in lockstep with the headline
     measures documented in sql/metric_views/portfolio_headline_metric_
     view.sql and consumed by backend/services/kpi_deltas.py
-    (tests/unit/test_kpi_snapshot_contract.py pins the parity).
+    (tests/unit/test_kpi_snapshot_contract.py pins the parity): the five
+    headline counts, the average score, and the two WHY NOW event
+    measures, listed_for_sale (SUM(listed_for_sale)) and competitor_lien
+    (SUM(is_competitor_lien)). The event columns are nullable in Lakebase
+    (the 2026-10 ADD COLUMN IF NOT EXISTS block): rows written before it
+    stay NULL and are never backfilled with 0.
 
 Auth model (identical to jobs/lakebase_migrate.py):
     On Databricks the task runs under the workspace identity. We fetch a
@@ -59,7 +64,11 @@ SELECT
                                                        AS offers_available,
   COALESCE(SUM(CASE WHEN offer_recommended THEN 1 ELSE 0 END), 0)
                                                        AS offers_recommended,
-  AVG(opportunity_score)                               AS avg_opportunity_score
+  AVG(opportunity_score)                               AS avg_opportunity_score,
+  COALESCE(SUM(CASE WHEN listed_for_sale THEN 1 ELSE 0 END), 0)
+                                                       AS listed_for_sale,
+  COALESCE(SUM(CASE WHEN is_competitor_lien THEN 1 ELSE 0 END), 0)
+                                                       AS competitor_lien
 FROM {metric_view}
 """
 
@@ -76,7 +85,9 @@ INSERT INTO mip_app.kpi_snapshots (
     high_opportunity,
     offers_available,
     offers_recommended,
-    avg_opportunity_score
+    avg_opportunity_score,
+    listed_for_sale,
+    competitor_lien
 ) VALUES (
     (now() AT TIME ZONE 'utc')::date,
     now(),
@@ -86,7 +97,9 @@ INSERT INTO mip_app.kpi_snapshots (
     %(high_opportunity)s,
     %(offers_available)s,
     %(offers_recommended)s,
-    %(avg_opportunity_score)s
+    %(avg_opportunity_score)s,
+    %(listed_for_sale)s,
+    %(competitor_lien)s
 )
 ON CONFLICT (snapshot_date) DO UPDATE SET
     snapshot_at           = EXCLUDED.snapshot_at,
@@ -96,7 +109,9 @@ ON CONFLICT (snapshot_date) DO UPDATE SET
     high_opportunity      = EXCLUDED.high_opportunity,
     offers_available      = EXCLUDED.offers_available,
     offers_recommended    = EXCLUDED.offers_recommended,
-    avg_opportunity_score = EXCLUDED.avg_opportunity_score
+    avg_opportunity_score = EXCLUDED.avg_opportunity_score,
+    listed_for_sale       = EXCLUDED.listed_for_sale,
+    competitor_lien       = EXCLUDED.competitor_lien
 RETURNING snapshot_id, snapshot_date, snapshot_at
 """
 
@@ -248,6 +263,8 @@ def _read_headline_aggregates(catalog: str) -> dict[str, Any]:
             if aggregates["avg_opportunity_score"] is not None
             else None
         ),
+        "listed_for_sale": int(aggregates["listed_for_sale"] or 0),
+        "competitor_lien": int(aggregates["competitor_lien"] or 0),
     }
 
 

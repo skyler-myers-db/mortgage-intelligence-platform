@@ -8,6 +8,12 @@ population, refi economics screen (in-the-money), high opportunity
 recommended, and average opportunity score. ``mip_app.kpi_snapshots``
 persists the same names, so snapshot rows deserialize into these models
 without a mapping layer.
+
+Two EVENT measures ride beside them for Home's WHY NOW (audit flow-05):
+listed for sale (``SUM(listed_for_sale)``) and competitor liens
+(``SUM(is_competitor_lien)``). They are nullable: a snapshot taken before
+the 2026-10 migration has no reading for them and stays NULL (never 0), so
+its delta is None and the summary omits it rather than inventing a change.
 """
 from __future__ import annotations
 
@@ -25,6 +31,13 @@ HEADLINE_COUNT_MEASURES: tuple[str, ...] = (
     "offers_recommended",
 )
 
+# Nullable event measures (flow-05). Never in HEADLINE_COUNT_MEASURES: a
+# missing reading is None end to end, never coerced to 0.
+HEADLINE_EVENT_MEASURES: tuple[str, ...] = (
+    "listed_for_sale",
+    "competitor_lien",
+)
+
 
 class HeadlineKpis(BaseModel):
     """One reading of the S1 headline aggregates (live or snapshotted)."""
@@ -35,6 +48,8 @@ class HeadlineKpis(BaseModel):
     offers_available: int = Field(ge=0)
     offers_recommended: int = Field(ge=0)
     avg_opportunity_score: float | None = Field(default=None, ge=0, le=100)
+    listed_for_sale: int | None = Field(default=None, ge=0)
+    competitor_lien: int | None = Field(default=None, ge=0)
 
 
 class KpiSnapshot(HeadlineKpis):
@@ -54,6 +69,8 @@ class KpiDeltas(BaseModel):
     offers_available: int
     offers_recommended: int
     avg_opportunity_score: float | None = None
+    listed_for_sale: int | None = None
+    competitor_lien: int | None = None
 
 
 class KpiDeltaResult(BaseModel):

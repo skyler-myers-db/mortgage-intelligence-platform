@@ -9465,10 +9465,34 @@
             ],
             "title": "Avg Opportunity Score"
           },
+          "competitor_lien": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitor Lien"
+          },
           "high_opportunity": {
             "minimum": 0.0,
             "title": "High Opportunity",
             "type": "integer"
+          },
+          "listed_for_sale": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listed For Sale"
           },
           "marketable_population": {
             "minimum": 0.0,
@@ -9900,9 +9924,31 @@
             ],
             "title": "Avg Opportunity Score"
           },
+          "competitor_lien": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitor Lien"
+          },
           "high_opportunity": {
             "title": "High Opportunity",
             "type": "integer"
+          },
+          "listed_for_sale": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listed For Sale"
           },
           "marketable_population": {
             "title": "Marketable Population",

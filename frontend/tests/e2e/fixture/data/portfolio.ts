@@ -99,13 +99,18 @@ export const HOME_SUMMARY: HomeSummary = {
   status: 'delta',
   previous_visit_at: '2026-07-09T14:30:00+00:00',
   baseline_snapshot_at: '2026-07-09T06:00:00+00:00',
-  headline: 'Since your last login: +1.5% high-opportunity, +2,250 refi candidates, +190 offers available.',
+  headline:
+    'Since your last login: +44 listed for sale, -31 competitor liens, +2,250 refi candidates, +1.5% high-opportunity, +190 primary offer paths.',
   phrasing_source: 'deterministic',
   phrasing_fallback_reason: 'genie_not_configured',
+  // SUMMARY_DELTA_MEASURES order (backend/services/home_summary.py, flow-05):
+  // the two event measures first, then refi, high-opportunity, offer paths.
   highlights: [
-    { measure: 'high_opportunity', label: 'high-opportunity', display: '+1.5%', value_token: '+1.5%', current: TOTALS.highOpportunity, baseline: 4059, delta: 61, delta_pct: 1.5 },
+    { measure: 'listed_for_sale', label: 'listed for sale', display: '+44', value_token: '+44', current: 1412, baseline: 1368, delta: 44, delta_pct: 3.2 },
+    { measure: 'competitor_lien', label: 'competitor liens', display: '-31', value_token: '-31', current: 9870, baseline: 9901, delta: -31, delta_pct: -0.3 },
     { measure: 'refi_economics_screen', label: 'refi candidates', display: '+2,250', value_token: '+2,250', current: TOTALS.inTheMoney, baseline: 10590, delta: 2250, delta_pct: 21.2 },
-    { measure: 'offers_available', label: 'offers available', display: '+190', value_token: '+190', current: TOTALS.offersRecommended, baseline: 6060, delta: 190, delta_pct: 3.1 },
+    { measure: 'high_opportunity', label: 'high-opportunity', display: '+1.5%', value_token: '+1.5%', current: TOTALS.highOpportunity, baseline: 4059, delta: 61, delta_pct: 1.5 },
+    { measure: 'offers_recommended', label: 'primary offer paths', display: '+190', value_token: '+190', current: TOTALS.offersRecommended, baseline: 6060, delta: 190, delta_pct: 3.1 },
   ],
   // The HeadlineKpis readings the highlights above are cut from (backend
   // HeadlineKpis / KpiDeltas: every count is required, deltas = current -
@@ -117,6 +122,8 @@ export const HOME_SUMMARY: HomeSummary = {
     offers_available: TOTALS.offersRecommended,
     offers_recommended: TOTALS.offersRecommended,
     avg_opportunity_score: 81,
+    listed_for_sale: 1412,
+    competitor_lien: 9870,
   },
   baseline: {
     marketable_population: 88491,
@@ -125,6 +132,8 @@ export const HOME_SUMMARY: HomeSummary = {
     offers_available: 6060,
     offers_recommended: 6060,
     avg_opportunity_score: 80.6,
+    listed_for_sale: 1368,
+    competitor_lien: 9901,
   },
   deltas: {
     marketable_population: TOTALS.addressable - 88491,
@@ -133,6 +142,8 @@ export const HOME_SUMMARY: HomeSummary = {
     offers_available: 190,
     offers_recommended: 190,
     avg_opportunity_score: 0.4,
+    listed_for_sale: 44,
+    competitor_lien: -31,
   },
   current_source: 'mip.semantics.portfolio_headline_metric_view',
   baseline_source: 'mip_app.kpi_snapshots',

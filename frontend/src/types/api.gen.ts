@@ -1297,7 +1297,9 @@ export interface ResponseSchemas {
   /** One reading of the S1 headline aggregates (live or snapshotted). */
   HeadlineKpis: {
     avg_opportunity_score: number | null;
+    competitor_lien: number | null;
     high_opportunity: number;
+    listed_for_sale: number | null;
     marketable_population: number;
     offers_available: number;
     offers_recommended: number;
@@ -1371,7 +1373,9 @@ export interface ResponseSchemas {
   /** Signed current-minus-baseline differences per headline measure. */
   KpiDeltas: {
     avg_opportunity_score: number | null;
+    competitor_lien: number | null;
     high_opportunity: number;
+    listed_for_sale: number | null;
     marketable_population: number;
     offers_available: number;
     offers_recommended: number;

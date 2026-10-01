@@ -26,6 +26,13 @@
 --                              KPI: non-null AND not 'nurture' (an actionable
 --                              lane, not just a decision).
 --   avg_opportunity_score    — AVG(opportunity_score).
+--   listed_for_sale          — SUM(listed_for_sale). Event measure (WHY NOW,
+--                              audit flow-05): borrowers whose home is
+--                              listed for sale.
+--   competitor_lien          — SUM(is_competitor_lien). Event measure (WHY
+--                              NOW): borrowers whose lien a competitor holds.
+--   Both event measures aggregate existing columns below; jobs/kpi_snapshot.py
+--   persists them (nullable: older snapshot rows stay NULL, never 0).
 --
 -- Score band:
 --   score_band               — mip.gold.fn_score_band(opportunity_score);
@@ -82,4 +89,4 @@ SELECT
   b.refreshed_at
 FROM mip.gold.borrower_360 AS b;
 
-COMMENT ON VIEW mip.semantics.portfolio_headline_metric_view IS 'Borrower-grain semantic view defining every demoed headline KPI: marketable population (COUNT(*)), refi economics screen (SUM(in_the_money)), high opportunity (SUM(is_high_opportunity), canonical fn_high_opportunity threshold), offers available (SUM(offer_available), non-null fn_next_best_offer decision), primary offer paths (SUM(offer_recommended)), and average opportunity score. Home-page KPIs aggregate over this view with portfolio-builder criteria pushed down as WHERE predicates on the dimension columns.';
+COMMENT ON VIEW mip.semantics.portfolio_headline_metric_view IS 'Borrower-grain semantic view defining every demoed headline KPI: marketable population (COUNT(*)), refi economics screen (SUM(in_the_money)), high opportunity (SUM(is_high_opportunity), canonical fn_high_opportunity threshold), offers available (SUM(offer_available), non-null fn_next_best_offer decision), primary offer paths (SUM(offer_recommended)), average opportunity score, and two WHY NOW event measures: listed for sale (SUM(listed_for_sale)) and competitor liens (SUM(is_competitor_lien)). Home-page KPIs aggregate over this view with portfolio-builder criteria pushed down as WHERE predicates on the dimension columns.';

@@ -43,20 +43,27 @@ log = logging.getLogger(__name__)
 
 #: Delta measures the summary sentence calls out, in render order, with
 #: their display style: high-opportunity movement reads best as a percent
-#: ("+1.5% high-opportunity"), the pipeline measures as signed counts
-#: ("+2,250 refi candidates"). The full headline set stays available on
+#: ("+1.5% high-opportunity"), the other measures as signed counts
+#: ("+2,250 refi candidates"). The two EVENT measures lead (audit flow-05:
+#: WHY NOW cites events), and an event measure whose baseline snapshot
+#: predates its column has no delta and is omitted, never shown as 0.
+#: offers_recommended replaces offers_available: its predicate is exactly
+#: the Lead Queue's funnel_stage=offer_recommended, so the trigger opens the
+#: same population. The full headline set stays available on
 #: ``current``/``deltas``.
 SUMMARY_DELTA_MEASURES: tuple[tuple[str, str, str], ...] = (
-    ("high_opportunity", "high-opportunity", "pct"),
+    ("listed_for_sale", "listed for sale", "count"),
+    ("competitor_lien", "competitor liens", "count"),
     ("refi_economics_screen", "refi candidates", "count"),
-    ("offers_available", "offers available", "count"),
+    ("high_opportunity", "high-opportunity", "pct"),
+    ("offers_recommended", "primary offer paths", "count"),
 )
 
 #: Current-state measures shown on first visit / pre-backfill installs.
 SUMMARY_CURRENT_MEASURES: tuple[tuple[str, str], ...] = (
     ("marketable_population", "marketable borrowers"),
     ("high_opportunity", "high-opportunity"),
-    ("offers_available", "offers available"),
+    ("offers_recommended", "primary offer paths"),
 )
 
 #: Rendered token for a zero movement. A literal "0" next to a KPI label
@@ -147,16 +154,22 @@ def compose_home_summary(result: KpiDeltaResult) -> HomeSummaryResponse:
     tests/unit/test_home_summary.py)."""
     current = result.current
     if result.deltas is not None and result.baseline is not None:
+        baseline, deltas = result.baseline, result.deltas
+        # No invented delta: a measure without a baseline reading (an event
+        # measure on a pre-migration snapshot) is left out of the sentence.
         highlights = [
             _delta_highlight(
                 measure,
                 label,
                 style,
                 current=getattr(current, measure),
-                baseline=getattr(result.baseline, measure),
-                delta=getattr(result.deltas, measure),
+                baseline=getattr(baseline, measure),
+                delta=getattr(deltas, measure),
             )
             for measure, label, style in SUMMARY_DELTA_MEASURES
+            if getattr(current, measure) is not None
+            and getattr(baseline, measure) is not None
+            and getattr(deltas, measure) is not None
         ]
         return HomeSummaryResponse(
             status="delta",
