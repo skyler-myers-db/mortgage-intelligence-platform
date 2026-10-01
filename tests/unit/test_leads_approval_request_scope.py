@@ -90,6 +90,7 @@ def test_an_upper_case_request_id_is_the_same_request(
     # the item rows come back keyed by the ledger's lower-case spelling: an
     # uncanonicalized id read a false-empty queue for an open request.
     batch_id = _batch(ledger)
+    assert batch_id.upper() != batch_id  # a random uuid4 has hex letters
     response = client.get(
         "/api/leads", params={"approval_request_batch": batch_id.upper()}, headers=APPROVER
     )
@@ -102,6 +103,7 @@ def test_an_upper_case_request_id_is_the_same_request(
 
 def test_the_queue_scope_service_groups_by_the_ledgers_spelling(ledger: FakeApprovalLedger) -> None:
     batch_id = _batch(ledger)
+    assert batch_id.upper() != batch_id
     open_ids = open_borrower_ids_for_queue(
         ledger,  # type: ignore[arg-type]
         batch_id=batch_id.upper(),

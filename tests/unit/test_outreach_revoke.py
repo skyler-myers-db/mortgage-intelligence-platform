@@ -135,6 +135,7 @@ def test_an_upper_case_approval_id_revokes_that_approval_in_the_ledger_spelling(
     # compares the id as text with approval_id::text (lower-case): without
     # canonicalization the borrower's current approval read "no longer current".
     approval_id = _approve(ledger)
+    assert approval_id.upper() != approval_id
     response = client.post(URL, json=_body(approval_id.upper()), headers=APPROVER)
     assert response.status_code == 200, response.text
     assert response.json()["revoked_approval_id"] == approval_id

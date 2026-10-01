@@ -52,6 +52,8 @@ OWNER = "skyler@entrada.ai"
 HEADERS = {"X-Forwarded-Email": OWNER}
 BORROWER = "B-48291"
 BATCH = "44444444-4444-4444-8444-444444444444"
+# BATCH is all digits, so its upper-case twin is itself; the case tests need letters.
+LETTERED_BATCH = "4abc4def-4444-4a44-8bcd-44444444abcd"
 ACTOR = "approver.one@summit.example"
 
 # Captured from the pre-link tree (8343364e) by printing the canonical intent.
@@ -177,12 +179,13 @@ def test_a_linked_intent_carries_the_request_and_the_matchers_compare_it() -> No
 def test_a_linked_intent_built_from_an_upper_case_id_carries_the_ledger_spelling() -> None:
     # The pattern admits either case; the ledger matches the link as TEXT
     # against batch_id::text (lower-case), so the schema canonicalizes it.
-    upper_approve = _golden_approve(approval_request_batch_id=BATCH.upper())
-    upper_reject = _golden_reject(approval_request_batch_id=BATCH.upper())
-    assert upper_approve.approval_request_batch_id == upper_reject.approval_request_batch_id == BATCH
-    assert _approve_intent(upper_approve) == _approve_intent(_golden_approve(approval_request_batch_id=BATCH))
-    assert _reject_intent(upper_reject) == _reject_intent(_golden_reject(approval_request_batch_id=BATCH))
-    assert f'"approval_request_batch_id":"{BATCH}"' in _approve_intent(upper_approve)
+    assert LETTERED_BATCH.upper() != LETTERED_BATCH
+    upper_approve = _golden_approve(approval_request_batch_id=LETTERED_BATCH.upper())
+    upper_reject = _golden_reject(approval_request_batch_id=LETTERED_BATCH.upper())
+    assert upper_approve.approval_request_batch_id == upper_reject.approval_request_batch_id == LETTERED_BATCH
+    assert _approve_intent(upper_approve) == _approve_intent(_golden_approve(approval_request_batch_id=LETTERED_BATCH))
+    assert _reject_intent(upper_reject) == _reject_intent(_golden_reject(approval_request_batch_id=LETTERED_BATCH))
+    assert f'"approval_request_batch_id":"{LETTERED_BATCH}"' in _approve_intent(upper_approve)
 
 
 def test_a_link_never_rides_a_campaign_binding() -> None:
@@ -294,17 +297,18 @@ def test_an_upper_case_link_is_verified_and_recorded_in_the_ledger_spelling(
     link: _Link, audit: InMemoryAuditStore, fake_lakebase_client: Any, verb: str
 ) -> None:
     body = (
-        _approval(approval_request_batch_id=BATCH.upper())
+        _approval(approval_request_batch_id=LETTERED_BATCH.upper())
         if verb == "approve"
-        else {"borrower_id": BORROWER, "rationale_code": "low_intent", "approval_request_batch_id": BATCH.upper()}
+        else {"borrower_id": BORROWER, "rationale_code": "low_intent", "approval_request_batch_id": LETTERED_BATCH.upper()}
     )
+    assert LETTERED_BATCH.upper() != LETTERED_BATCH
     response = client.post(f"/api/outreach/{verb}", json=body, headers=HEADERS)
     assert response.status_code == 200, response.text
-    assert link.calls == [{"batch_id": BATCH, "borrower_id": BORROWER, "actor": OWNER}]
+    assert link.calls == [{"batch_id": LETTERED_BATCH, "borrower_id": BORROWER, "actor": OWNER}]
     (row,) = _rows(audit, "APPROVE" if verb == "approve" else "OUTREACH_REJECT")
-    assert row["approval_request_batch_id"] == BATCH
+    assert row["approval_request_batch_id"] == LETTERED_BATCH
     (insert,) = _decision_inserts(fake_lakebase_client)
-    assert json.loads(insert["decision_intent"])["approval_request_batch_id"] == BATCH
+    assert json.loads(insert["decision_intent"])["approval_request_batch_id"] == LETTERED_BATCH
 
 
 def test_an_unlinked_decision_never_consults_the_request_service(
@@ -420,6 +424,7 @@ def test_a_decision_linked_with_an_upper_case_id_reads_approved_not_decided_outs
     ledger: FakeApprovalLedger,
 ) -> None:
     batch_id = ledger.add_batch(ALICE, [OPEN_ID, CLOSED_ID])
+    assert batch_id.upper() != batch_id
     linked = _golden_approve(approval_request_batch_id=batch_id.upper()).model_copy(
         update={"borrower_id": OPEN_ID}
     )
