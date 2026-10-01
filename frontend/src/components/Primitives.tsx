@@ -1,7 +1,8 @@
-import type { ButtonHTMLAttributes, PropsWithChildren, Ref, ComponentPropsWithRef } from 'react';
+import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode, Ref, ComponentPropsWithRef } from 'react';
 import { Icon, type IconName } from './Icon';
 import { useApp, type DrawerSource } from './AppContext';
 import { useEvidenceHoverCard } from './EvidenceHoverCard';
+import { Tooltip } from './ui/Tooltip';
 import { freshnessBucket, FRESHNESS_LABEL, type FreshnessBucket } from './freshness';
 
 // Re-export so existing importers (Primitives.test.tsx and others) keep
@@ -16,6 +17,8 @@ export function Chip({
   icon,
   className,
   title,
+  tooltip,
+  tooltipShortcut,
   onRemove,
   removeLabel,
 }: PropsWithChildren<{
@@ -29,6 +32,13 @@ export function Chip({
    */
   title?: string;
   /**
+   * Design-system tooltip (ui/Tooltip, critic-08). A chip is a non-focusable
+   * span, so it gets the hover tooltip plus a hidden description.
+   */
+  tooltip?: ReactNode;
+  /** A keyboard shortcut shown in the tooltip's `<kbd>`. */
+  tooltipShortcut?: string;
+  /**
    * S8: dismiss affordance for removable filter chips (Lead Queue segment
    * intersection). The prototype chip block has no dismiss element, so
    * `.chip__remove` is a BEM extension of the prototype's `.chip`; the base
@@ -39,7 +49,7 @@ export function Chip({
   removeLabel?: string;
 }>) {
   const cls = ['chip', variant ? `chip--${variant}` : '', className ?? ''].filter(Boolean).join(' ');
-  return (
+  const chip = (
     <span className={cls} title={title}>
       {icon && <Icon name={icon} size={10} />}
       <span className="chip__label">{children}</span>
@@ -54,6 +64,12 @@ export function Chip({
         </button>
       )}
     </span>
+  );
+  if (tooltip === undefined || tooltip === null) return chip;
+  return (
+    <Tooltip content={tooltip} shortcut={tooltipShortcut}>
+      {chip}
+    </Tooltip>
   );
 }
 
@@ -70,21 +86,41 @@ interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   // capture the underlying <button> (e.g. LeadTable focus restoration)
   // without wrapping the primitive in forwardRef.
   ref?: Ref<HTMLButtonElement>;
+  /** Design-system tooltip (ui/Tooltip, critic-08); additive beside `title`. */
+  tooltip?: ReactNode;
+  /** A keyboard shortcut shown in the tooltip's `<kbd>`. */
+  tooltipShortcut?: string;
 }
 
-export function Button({ variant = 'default', size = 'default', icon, iconEnd, children, className, ...rest }: BtnProps) {
+export function Button({
+  variant = 'default',
+  size = 'default',
+  icon,
+  iconEnd,
+  children,
+  className,
+  tooltip,
+  tooltipShortcut,
+  ...rest
+}: BtnProps) {
   const cls = [
     'btn',
     variant !== 'default' ? `btn--${variant}` : '',
     size === 'sm' ? 'btn--sm' : '',
     className ?? '',
   ].filter(Boolean).join(' ');
-  return (
+  const button = (
     <button className={cls} {...rest}>
       {icon && <Icon name={icon} size={14} />}
       {children}
       {iconEnd && <Icon name={iconEnd} size={14} />}
     </button>
+  );
+  if (tooltip === undefined || tooltip === null) return button;
+  return (
+    <Tooltip content={tooltip} shortcut={tooltipShortcut}>
+      {button}
+    </Tooltip>
   );
 }
 
