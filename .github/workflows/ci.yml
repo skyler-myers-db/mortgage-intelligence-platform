@@ -693,7 +693,7 @@ jobs:
       - name: gitleaks (secret scan)
         run: |
           set -euo pipefail
-          GITLEAKS_VERSION="8.28.0"
+          GITLEAKS_VERSION="8.30.1"
           mkdir -p "$HOME/.local/bin"
           GITLEAKS_BIN="$(command -v gitleaks || true)"
           if [ -z "$GITLEAKS_BIN" ]; then
