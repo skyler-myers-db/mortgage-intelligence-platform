@@ -11,6 +11,9 @@ import type { DecisionReceipt as DecisionReceiptPayload } from '../../lib/apiTyp
 
 const apiMocks = vi.hoisted(() => ({
   auditReceipt: vi.fn(),
+  // DecisionReceipt reads the shared session (useAuditLedgerAccess); an
+  // unmocked read rejected on every mount (reviewer note, fix round 2).
+  session: vi.fn(),
 }));
 
 vi.mock('../../lib/api', () => {
@@ -92,6 +95,15 @@ describe('DecisionReceipt', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     appMocks.canAccessAdmin = true;
+    // The session agrees with AppContext's admin flag unless a case says otherwise.
+    apiMocks.session.mockImplementation(() =>
+      Promise.resolve({
+        can_access_admin: appMocks.canAccessAdmin,
+        can_approve: appMocks.canAccessAdmin,
+        can_read_audit: false,
+        presenter_mode: false,
+      }),
+    );
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -122,6 +134,11 @@ describe('DecisionReceipt', () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
+  }
+
+  /** settle() until `ready` holds (at most about a second): no fixed window under load. */
+  async function settleUntil(ready: () => boolean) {
+    for (let attempt = 0; attempt < 50 && !ready(); attempt += 1) await settle();
   }
 
   const receipt = () => container.querySelector<HTMLElement>('[data-testid="decision-receipt"]');
@@ -200,7 +217,7 @@ describe('DecisionReceipt', () => {
       act(() => root.unmount());
       root = createRoot(container);
       mount();
-      await settle();
+      await settleUntil(() => receipt() !== null);
       expect(receipt(), JSON.stringify(overrides)).not.toBeNull();
       expect(field('review'), JSON.stringify(overrides)).toBe(expected);
     }
@@ -237,7 +254,7 @@ describe('DecisionReceipt', () => {
 
   it('links a read-only auditor to the audit ledger, by the session decision the ledger gate makes (D-audit-reads-c3)', async () => {
     appMocks.canAccessAdmin = false;
-    queryClient.setQueryData(['session', 'access'], {
+    apiMocks.session.mockResolvedValue({
       can_access_admin: false,
       can_approve: false,
       can_read_audit: true,
