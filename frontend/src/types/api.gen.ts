@@ -1160,6 +1160,7 @@ export interface ResponseSchemas {
   GrowthAgentHomeResponse: {
     capabilities: { [key: string]: unknown }[];
     monitors: ResponseSchemas['GrowthAgentMonitor'][];
+    scheduler_state: "active" | "paused" | "unavailable";
     workflows: ResponseSchemas['GrowthAgentWorkflow'][];
   };
   GrowthAgentMonitor: {
@@ -1239,11 +1240,17 @@ export interface ResponseSchemas {
     audit_event_id: string | null;
     broad_total: number;
     created_at: string | null;
+    monitor_id: string | null;
     run_id: string;
     source_assets: string[];
     status: "completed" | "failed";
     workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
     workflow_title: string;
+  };
+  /** Whether scheduled watchlist runs are on, and why the App knows. */
+  GrowthAgentSchedulerStatus: {
+    reason: "job_schedule" | "no_schedule" | "not_configured" | "lookup_failed";
+    state: "active" | "paused" | "unavailable";
   };
   GrowthAgentToolStep: {
     detail: string;
@@ -1252,6 +1259,29 @@ export interface ResponseSchemas {
     source_asset: string | null;
     status: "completed" | "blocked" | "review_required";
     tool_name: string | null;
+  };
+  /** One saved watchlist with its run-over-run change from the ledger. */
+  GrowthAgentWatchlistBriefing: {
+    actionable_avg_score: number | null;
+    actionable_delta: number | null;
+    actionable_total: number | null;
+    avg_score_delta: number | null;
+    cadence: "daily" | "weekly";
+    last_run_at: string | null;
+    monitor_id: string;
+    name: string;
+    previous_actionable_avg_score: number | null;
+    previous_actionable_total: number | null;
+    previous_run_at: string | null;
+    recent_actionable_totals: number[];
+    run_count: number;
+    status: "active" | "paused" | "disabled";
+    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+  };
+  /** The caller's saved watchlists as briefings, with the scheduler state. */
+  GrowthAgentWatchlistSummaryResponse: {
+    scheduler: ResponseSchemas['GrowthAgentSchedulerStatus'];
+    watchlists: ResponseSchemas['GrowthAgentWatchlistBriefing'][];
   };
   GrowthAgentWorkflow: {
     action_label: string;
@@ -2324,8 +2354,16 @@ export interface RequestSchemas {
     rationale?: string | null;
     status: "draft" | "pending_review" | "approved" | "live" | "active" | "rejected" | "archived";
   };
-  /** Ask the co-pilot to compose (and optionally execute) a governed plan. */
+  /**
+   * Ask the co-pilot to compose a governed plan for the lender to review.
+   *
+   * Compose never runs the plan: the reviewed plan runs only through
+   * ``POST /growth-agent/agent/plan/execute`` with the compose response's
+   * digest. ``execute`` is a retired, tolerant field: false or absent is
+   * accepted, true is a 422 (``EXECUTE_RETIRED_DETAIL``).
+   */
   ComposePlanRequest: {
+    /** Retired: compose never executes; run a reviewed plan with POST /api/v1/growth-agent/agent/plan/execute. */
     execute?: boolean;
     objective: string;
     request_id?: string | null;
@@ -2496,6 +2534,13 @@ export interface RequestSchemas {
     request_id?: string | null;
     save_monitor?: boolean;
     states?: string[];
+  };
+  /** Save the run the lender saw as a watchlist, bound to its result hash. */
+  GrowthAgentRunWatchlistRequest: {
+    cadence?: "daily" | "weekly";
+    monitor_name?: string | null;
+    request_id?: string | null;
+    tool_result_hash: string;
   };
   HouseholdDedupConfig: {
     dedupe_unit?: "borrower" | "household";
@@ -3301,6 +3346,15 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['GrowthAgentMonitor'][];
   };
+  "GET /api/v1/growth-agent/monitors/summary": {
+    pathParams: Record<string, never>;
+    query: {
+      limit?: number;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['GrowthAgentWatchlistSummaryResponse'];
+  };
   "GET /api/v1/growth-agent/runs": {
     pathParams: Record<string, never>;
     query: {
@@ -3951,6 +4005,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['GrowthAgentRunRequest'];
     ok: ResponseSchemas['GrowthAgentRunResponse'];
+  };
+  "POST /api/v1/growth-agent/runs/{run_id}/monitors": {
+    pathParams: {
+      run_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['GrowthAgentRunWatchlistRequest'];
+    ok: ResponseSchemas['GrowthAgentMonitor'];
   };
   "POST /api/v1/growth-agent/workflows/{workflow_id}/run": {
     pathParams: {
