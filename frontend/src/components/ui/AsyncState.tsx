@@ -63,9 +63,14 @@ export function AsyncStatus({ query, subject, onClearFilters, compact }: AsyncSt
   }
   if (error === null || isAbortError(error)) return null;
   if (!failure) {
+    // The failure chunk is still loading (or could not load): the panel
+    // already says it failed, so it already offers the retry (states-04).
     return (
       <div className="status-callout" role="status" data-async-status="pending">
-        {subject} could not load.
+        {subject} could not load.{' '}
+        <button type="button" className="btn btn--ghost btn--sm" onClick={query.manualRetry}>
+          Retry
+        </button>
       </div>
     );
   }

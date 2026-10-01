@@ -79,7 +79,7 @@ describe('AsyncStatus while its failure chunk is not loaded', { timeout: 30_000 
     act(() => root.render(<AsyncStatus query={query} subject="Ranked borrowers" />));
 
     expect(pending()?.getAttribute('role')).toBe('status');
-    expect(pending()?.textContent).toBe('Ranked borrowers could not load.');
+    expect(pending()?.textContent).toBe('Ranked borrowers could not load. Retry');
     expect(document.querySelectorAll('[role="alert"]')).toHaveLength(0);
     expect(text()).not.toContain('SENTINEL');
 
@@ -101,9 +101,28 @@ describe('AsyncStatus while its failure chunk is not loaded', { timeout: 30_000 
     await flush();
 
     expect(pending()?.getAttribute('role')).toBe('status');
-    expect(pending()?.textContent).toBe('Ranked borrowers could not load.');
+    expect(pending()?.textContent).toBe('Ranked borrowers could not load. Retry');
     expect(document.querySelectorAll('[role="alert"]')).toHaveLength(0);
     expect(text()).not.toContain('SENTINEL');
     expect(text()).not.toContain('Failed to fetch');
+  });
+
+  // states-04: the placeholder already says the panel failed, so it already
+  // offers the retry, before (or without) the failure chunk.
+  it('offers Retry on the placeholder, which re-reads through the query', async () => {
+    vi.resetModules();
+    vi.doMock('./AsyncFailure', () => {
+      throw new Error('Failed to fetch dynamically imported module');
+    });
+    const { AsyncStatus, query } = await freshOutage();
+    act(() => root.render(<AsyncStatus query={query} subject="Ranked borrowers" />));
+    await flush();
+
+    const retry = pending()?.querySelector<HTMLButtonElement>('button');
+    expect(retry?.textContent).toBe('Retry');
+    expect(retry?.getAttribute('type')).toBe('button');
+    expect(retry?.className).toBe('btn btn--ghost btn--sm');
+    act(() => retry?.click());
+    expect(query.manualRetry).toHaveBeenCalledTimes(1);
   });
 });
