@@ -268,7 +268,7 @@ describe('cross-tab: another tab restamps the shared local stamp (B5)', () => {
     events.length = 0;
     observeActor({ key: ACTOR_A });
     expect(actorScopeStatus()).toBe('open');
-    expect(events.at(-1)).toBe('opened');
+    expect(events).toEqual(['cleared', 'restamped', 'opened']);
     expect(stamps()).toEqual([ACTOR_A, ACTOR_A]);
     expect(privateLeft()).toEqual(['mip.genie.inFlightTurn', 'mip.queueContext']);
     expect(resetDocument).not.toHaveBeenCalled();
