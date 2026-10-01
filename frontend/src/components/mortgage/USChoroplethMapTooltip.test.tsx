@@ -88,6 +88,39 @@ describe('USChoroplethMapTooltip contactable disclosure', () => {
     expect(tipText()).not.toContain('Contactable');
   });
 
+  // wow-stage-1 / D-dataviz-geo-b: change versus today as labelled numbers.
+  const rows = () => [...document.querySelectorAll('.map-tip__row')].map((row) => (row.textContent ?? '').replace(/\s+/g, ' ').trim());
+
+  it('lists the scenario rows away from step 0, then the cohort note in a muted row', () => {
+    render({ scenario: { step: -50, ratePct: 5.8, today: 1_000, atStep: 1_300, change: 300, contactableAtStep: 90 } });
+    const text = rows();
+    const at = text.indexOf('In the money today1,000');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(text.slice(at, at + 5)).toEqual([
+      'In the money today1,000',
+      'In the money at 5.80%1,300',
+      'Change+300',
+      'Contactable in the money at 5.80%90',
+      "The Lead Queue and campaigns use today's par rate.",
+    ]);
+    const note = [...document.querySelectorAll('.map-tip__row')][at + 4];
+    expect(note.classList.contains('map-tip__row--muted')).toBe(true);
+  });
+
+  it('shows only today and the note at step 0, and no contactable row when it is not reported', () => {
+    render({ scenario: { step: 0, ratePct: 6.3, today: 1_000, atStep: 1_000, change: 0, contactableAtStep: null } });
+    const text = rows();
+    const at = text.indexOf('In the money today1,000');
+    expect(text.slice(at)).toContain("The Lead Queue and campaigns use today's par rate.");
+    expect(text.some((row) => row.startsWith('Change'))).toBe(false);
+    expect(text.some((row) => row.startsWith('In the money at'))).toBe(false);
+    expect(text.some((row) => row.startsWith('Contactable in the money'))).toBe(false);
+  });
+
+  it('a card without a scenario has no scenario rows', () => {
+    render({});
+    expect(rows().some((row) => row.startsWith('In the money'))).toBe(false);
+  });
 });
 
 /**
@@ -151,5 +184,5 @@ describe('USChoroplethMapTooltip top layer (D-dataviz-geo-d1)', () => {
     expect(calls).toHaveLength(4);
     expect(document.querySelector('.map-tip__name')?.textContent).toBe('Illinois');
   });
-});
 
+});

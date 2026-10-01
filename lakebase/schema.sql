@@ -3806,6 +3806,43 @@ VALUES (
 )
 ON CONFLICT (version) DO NOTHING;
 
+-- KPI snapshot event measures ------------------------------------------
+-- Audit 2026-09-21 flow-05: Home's WHY NOW cites listing and competitor-lien
+-- movement since the last visit, so the daily headline snapshot persists two
+-- more aggregates of mip.semantics.portfolio_headline_metric_view
+-- (SUM(listed_for_sale), SUM(is_competitor_lien)). The CREATE TABLE above is
+-- not edited: the columns are added nullable, rows written before this block
+-- stay NULL and are NEVER backfilled with 0 (a NULL baseline gives no delta,
+-- and the summary omits that measure). The CHECKs use comparisons only; no
+-- table, routine, trigger or privilege is added, and the App role keeps
+-- SELECT. Placed before the watchlist series block, which its own contract
+-- test pins as the schema's last block.
+ALTER TABLE mip_app.kpi_snapshots
+    ADD COLUMN IF NOT EXISTS listed_for_sale BIGINT;
+ALTER TABLE mip_app.kpi_snapshots
+    ADD COLUMN IF NOT EXISTS competitor_lien BIGINT;
+ALTER TABLE mip_app.kpi_snapshots
+    DROP CONSTRAINT IF EXISTS kpi_snapshots_listed_for_sale_chk;
+ALTER TABLE mip_app.kpi_snapshots
+    ADD CONSTRAINT kpi_snapshots_listed_for_sale_chk
+    CHECK (listed_for_sale IS NULL OR listed_for_sale >= 0);
+ALTER TABLE mip_app.kpi_snapshots
+    DROP CONSTRAINT IF EXISTS kpi_snapshots_competitor_lien_chk;
+ALTER TABLE mip_app.kpi_snapshots
+    ADD CONSTRAINT kpi_snapshots_competitor_lien_chk
+    CHECK (competitor_lien IS NULL OR competitor_lien >= 0);
+COMMENT ON COLUMN mip_app.kpi_snapshots.listed_for_sale IS
+    'Borrowers whose home is listed for sale (SUM(listed_for_sale) over the headline metric view). NULL on rows written before this column existed; never backfilled with 0.';
+COMMENT ON COLUMN mip_app.kpi_snapshots.competitor_lien IS
+    'Borrowers whose lien a competitor holds (SUM(is_competitor_lien) over the headline metric view). NULL on rows written before this column existed; never backfilled with 0.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_01_kpi_snapshot_event_measures',
+    'KPI snapshot event measures: nullable kpi_snapshots.listed_for_sale and competitor_lien with non-negative CHECKs; older rows stay NULL, never 0'
+)
+ON CONFLICT (version) DO NOTHING;
+
 -- Growth Agent watchlist series ------------------------------------------
 -- Audit 2026-09-21 wow-ai-4 / genie-09: a saved watchlist's runs form a
 -- series, so "change since the previous run" reads the ledger instead of

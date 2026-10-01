@@ -97,6 +97,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/growth-agent/workflows/{workflow_id}/run"): "tests/unit/test_growth_agent_api.py",
     ("GET", "/api/health"): "tests/unit/test_health_endpoint.py",
     ("GET", "/api/home/summary"): "tests/unit/test_home_api.py",
+    ("GET", "/api/home/summary/attribution"): "tests/unit/test_home_attribution.py",
     ("GET", "/api/leads"): "tests/unit/test_api_routes.py",
     ("GET", "/api/leads/count"): "tests/unit/test_leads_count_facets.py",
     ("GET", "/api/leads/facets"): "tests/unit/test_leads_count_facets.py",

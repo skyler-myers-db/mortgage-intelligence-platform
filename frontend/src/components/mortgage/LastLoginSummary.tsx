@@ -1,9 +1,13 @@
 import { Link } from 'react-router';
-import type { HomeSummary } from '../../types';
+import type { HomeSummary, RateWindowResponse } from '../../types';
 import { EvidenceChip } from '../Primitives';
 import { useApp } from '../AppContext';
-import { whyNowTriggers } from '../../lib/homeAnswer';
-import { loginSummaryDrawerSource } from '../../lib/loginSummaryDrawerSource';
+import { api } from '../../lib/api';
+import { queryKeys } from '../../lib/queryKeys';
+import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
+import { rateMoveSinceVisit, whyNowTriggers, type RateMoveSinceVisit } from '../../lib/homeAnswer';
+import { loginSummaryDrawerSource, rateMoveDrawerSource } from '../../lib/loginSummaryDrawerSource';
+import { ratePct, signedBpsLabel } from '../../lib/formatters';
 import { formatTimestamp } from '../../lib/time';
 
 /**
@@ -22,6 +26,16 @@ import { formatTimestamp } from '../../lib/time';
  *   tokens as structured items instead of a rephrased sentence;
  * - first-visit / pre-backfill states render welcome copy with live
  *   numbers only — never fake deltas.
+ *
+ * WHY NOW cites events (flow-05): the server's event measures (listings,
+ * competitor liens) lead the list, and, for a returning visitor with a
+ * delta, the 30-year par move since the last visit comes FIRST. That move is
+ * the one client-side subtraction, of two server prints: the latest weekly
+ * FRED MORTGAGE30US print against the print of the visit's week, both read
+ * from the audit-free rate window (GET /api/analytics/rate-window, the
+ * Analytics route's own query). It is read ONLY when the summary is a delta
+ * with a previous visit; a failed or warming read adds no row (the column is
+ * additive) and a first visit shows none.
  */
 
 const TITLES: Record<HomeSummary['status'], string> = {
@@ -61,6 +75,14 @@ export function LastLoginSummary({
   // cannot show instead of stacking a second error callout.
   const valid = Boolean(summary?.status && TITLES[summary.status] && Array.isArray(summary.highlights));
   const triggers = valid ? whyNowTriggers(summary) : [];
+  const previousVisitAt = summary?.previous_visit_at ?? null;
+  const rateEnabled = valid && summary?.status === 'delta' && previousVisitAt !== null;
+  const rateWindow = useWarmingUpRetry<RateWindowResponse>((signal) => api.analyticsRateWindow(signal), {
+    queryKey: queryKeys.analytics('rate-window'),
+    enabled: rateEnabled,
+    staleTime: 60_000,
+  });
+  const rateMove = rateEnabled ? rateMoveSinceVisit(rateWindow.data?.weeks, previousVisitAt) : null;
 
   return (
     <section
@@ -78,18 +100,21 @@ export function LastLoginSummary({
             <li key={index}><span className="skeleton home-answer__row-skeleton" /></li>
           ))}
         </ul>
-      ) : triggers.length === 0 ? (
+      ) : triggers.length === 0 && !rateMove ? (
         <p className="home-answer__empty" role="status">
           Changes since your last login are not available right now.
         </p>
       ) : (
         <ul className="home-answer__triggers">
+          {rateMove && <RateMoveTrigger move={rateMove} previousVisitAt={previousVisitAt} showEvidence={showEvidence} />}
           {triggers.map((trigger) => (
             <li key={trigger.highlight.measure} className="home-answer__trigger">
               {showEvidence ? (
                 <EvidenceChip
                   source={loginSummaryDrawerSource(trigger.highlight, {
                     previousVisitAt: summary?.previous_visit_at ?? null,
+                    baselineSnapshotAt: summary?.baseline_snapshot_at ?? null,
+                    status: summary?.status,
                   })}
                 >
                   {trigger.display}
@@ -112,5 +137,36 @@ export function LastLoginSummary({
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * The par move since the last visit, as the first WHY NOW row: its signed
+ * basis points as an evidence chip (the rate window's two prints, FRED
+ * MORTGAGE30US), then the two prints, linking to the rate window on Analytics.
+ */
+function RateMoveTrigger({
+  move,
+  previousVisitAt,
+  showEvidence,
+}: {
+  move: RateMoveSinceVisit;
+  previousVisitAt: string | null;
+  showEvidence: boolean;
+}) {
+  const token = signedBpsLabel(move.deltaBps);
+  return (
+    <li className="home-answer__trigger" data-testid="why-now-rate-move">
+      {showEvidence ? (
+        <EvidenceChip source={rateMoveDrawerSource(move, { previousVisitAt })}>{token}</EvidenceChip>
+      ) : (
+        <strong className="login-summary__num-static">{token}</strong>
+      )}{' '}
+      <span className="home-answer__trigger-text">
+        <Link to="/analytics">
+          30-year par rate since your last visit (from {ratePct(move.fromPct)} to {ratePct(move.toPct)})
+        </Link>
+      </span>
+    </li>
   );
 }

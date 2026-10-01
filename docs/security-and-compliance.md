@@ -153,6 +153,9 @@ the pull request that ships the behaviour, never earlier.
 | Approval request create / withdraw (`/outreach/approval-requests`) | `APPROVAL_REQUESTED` / `APPROVAL_REQUEST_REFUSED` / `APPROVAL_REQUEST_WITHDRAWN` | every create attempt that reaches classification (a zero-eligible one writes `APPROVAL_REQUEST_REFUSED` with each id's reason and answers counts only); a withdraw that closed at least one borrower | same Lakebase transaction as the batch (or its own, for a refusal), fail-closed |
 | Triage deck (`/lead-queue?mode=triage`) | none on entry, card show, J / K / Skip, Back or Esc (the cards are the loaded rows); `DRAFT_OUTREACH` only on A; `APPROVE` with `review_mode` `triage` per Confirm; `OUTREACH_REJECT` per card rejected | per explicit action | as the draft / approve / reject rows above |
 | Lead Queue CSV export (`leads_export.create_lead_export_receipt`) | `LEAD_EXPORT` | once per download, before it starts; carries `exported_row_count` and, when the client knew it, `matching_row_count` (how many borrowers matched: a loaded-rows export states it is partial; a count below the file's row count is refused with 422 and nothing written) | synchronous, fail-closed (no download without the row) |
+| Home Delta Explainer (`home.home_summary_attribution`) | none | only while an evidence drawer for a supported "since your last login" measure is open on Overview; never on hover, prefetch or poll | audit-free (gold and ref aggregates) |
+| Home watchlist briefings (`growth_agent_compose_routes.growth_agent_watchlist_summary`) | none | once per Home load (the card never POSTs, so it starts no run) | audit-free |
+| Home WHY NOW rate move (`analytics_rate_window.rate_window`) | none | on Home only when the summary is a delta with a previous visit (and on Analytics as before) | audit-free |
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the

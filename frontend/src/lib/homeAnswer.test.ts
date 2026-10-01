@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { HomeSummary, TopBorrowerAnalyticsRow } from '../types';
+import type { HomeSummary, RateWindowWeek, TopBorrowerAnalyticsRow } from '../types';
+import { parseFunnelStage, parsePortfolioCriteria } from '../routes/lead-queue.filters';
 import {
   HOME_WHO_COUNT,
   borrowerPlace,
   borrowerQueueHref,
   homeTopBorrowers,
   leadQueueHref,
+  rateMoveSinceVisit,
   whyNowTriggers,
 } from './homeAnswer';
 
@@ -94,7 +96,7 @@ describe('whyNowTriggers', () => {
   it('reads a zero movement as "no change in", and falls back to the server label', () => {
     const [, flat, , unknown] = whyNowTriggers(SUMMARY);
     expect(`${flat.display}${flat.joiner}${flat.noun}`).toBe(
-      'no change in borrowers whose rate and equity pass the refinance screen',
+      'no change in borrowers who pass the refi screen',
     );
     expect(unknown.noun).toBe('future things');
   });
@@ -103,7 +105,7 @@ describe('whyNowTriggers', () => {
     const [pct, , count] = whyNowTriggers(SUMMARY);
     // "+1.5% borrowers with ..." would read as a share of borrowers.
     expect(`${pct.display}${pct.joiner}${pct.noun}`).toBe(
-      '+1.5% in borrowers with an opportunity score of 75+',
+      '+1.5% in borrowers with opportunity score 75+',
     );
     expect(`${count.display}${count.joiner}${count.noun}`).toBe('+190 borrowers with an offer decision');
     const negative = whyNowTriggers({
@@ -111,12 +113,76 @@ describe('whyNowTriggers', () => {
       highlights: [{ ...SUMMARY.highlights[0], display: '-0.4%', value_token: '-0.4%', delta: -2, delta_pct: -0.4 }],
     })[0];
     expect(`${negative.display}${negative.joiner}${negative.noun}`).toBe(
-      '-0.4% in borrowers with an opportunity score of 75+',
+      '-0.4% in borrowers with opportunity score 75+',
     );
   });
 
   it('is empty for an absent summary', () => {
     expect(whyNowTriggers(null)).toEqual([]);
     expect(whyNowTriggers({ ...SUMMARY, highlights: undefined } as unknown as HomeSummary)).toEqual([]);
+  });
+});
+
+// flow-05: WHY NOW cites events, and every trigger opens the queue filter
+// with the SAME predicate (the Lead Queue URL contract parses each back).
+describe('WHY NOW event and offer triggers', () => {
+  const EVENTS: HomeSummary = {
+    ...SUMMARY,
+    highlights: ['listed_for_sale', 'competitor_lien', 'offers_recommended', 'offers_available'].map((measure) => ({
+      measure, label: measure, display: '+3', value_token: '+3', current: 3, baseline: 0, delta: 3, delta_pct: null,
+    })),
+  };
+
+  it('links listings, competitor liens and primary offer paths to their exact queue filters', () => {
+    const triggers = Object.fromEntries(whyNowTriggers(EVENTS).map((t) => [t.highlight.measure, t]));
+    expect(triggers.listed_for_sale.href).toBe('/lead-queue?purchase_intent=Listed+for+sale');
+    expect(triggers.listed_for_sale.noun).toBe('borrowers with a listed home');
+    expect(triggers.competitor_lien.href).toBe('/lead-queue?lender_relationship=Competitor+customer');
+    expect(triggers.competitor_lien.noun).toBe('borrowers with a competitor lien');
+    expect(triggers.offers_recommended.href).toBe('/lead-queue?funnel_stage=offer_recommended');
+    expect(triggers.offers_recommended.noun).toBe('borrowers with a primary offer path');
+    // Older payloads still render offers_available, with no link (no queue filter is that population).
+    expect(triggers.offers_available.href).toBeNull();
+  });
+
+  it('every href survives the Lead Queue URL contract', () => {
+    const params = (measure: string) => {
+      const href = whyNowTriggers(EVENTS).find((t) => t.highlight.measure === measure)?.href ?? '';
+      return new URL(href, 'https://mip.test').searchParams;
+    };
+    expect(parsePortfolioCriteria(params('listed_for_sale'), [])).toEqual({ purchase_intent: 'Listed for sale' });
+    expect(parsePortfolioCriteria(params('competitor_lien'), [])).toEqual({ lender_relationship: 'Competitor customer' });
+    expect(parseFunnelStage(params('offers_recommended').get('funnel_stage'))).toBe('offer_recommended');
+  });
+});
+
+describe('rateMoveSinceVisit (flow-05)', () => {
+  const week = (iso: string, pct: number, latest = false): RateWindowWeek => ({
+    week: iso, market_rate_pct: pct, itm_count: 1, ...(latest ? { is_latest: true } : {}),
+  });
+  const WEEKS = [week('2026-06-29', 6.62), week('2026-07-06', 6.7), week('2026-07-13', 6.58), week('2026-09-28', 6.3, true)];
+
+  it('compares the latest print with the week of the visit, in signed basis points', () => {
+    expect(rateMoveSinceVisit(WEEKS, '2026-07-09T14:30:00+00:00')).toEqual({
+      fromWeek: '2026-07-06', fromPct: 6.7, toWeek: '2026-09-28', toPct: 6.3, deltaBps: -40,
+    });
+    // The visit's UTC date decides the week: late on Sunday 12th in UTC-5 is Monday 13th UTC.
+    expect(rateMoveSinceVisit(WEEKS, '2026-07-12T23:30:00-05:00')?.fromWeek).toBe('2026-07-13');
+  });
+
+  it('is null with no visit, no latest week, or a visit before the series', () => {
+    expect(rateMoveSinceVisit(WEEKS, null)).toBeNull();
+    expect(rateMoveSinceVisit(WEEKS, undefined)).toBeNull();
+    expect(rateMoveSinceVisit(WEEKS, 'not a date')).toBeNull();
+    expect(rateMoveSinceVisit(WEEKS.map((w) => ({ ...w, is_latest: false })), '2026-07-09T14:30:00Z')).toBeNull();
+    expect(rateMoveSinceVisit(WEEKS, '2026-06-01T00:00:00Z')).toBeNull();
+    expect(rateMoveSinceVisit(null, '2026-07-09T14:30:00Z')).toBeNull();
+  });
+
+  it('is null when the visit falls in the latest week or the par did not move', () => {
+    expect(rateMoveSinceVisit(WEEKS, '2026-09-30T08:00:00Z')).toBeNull();
+    expect(rateMoveSinceVisit([week('2026-07-06', 6.3), week('2026-09-28', 6.3, true)], '2026-07-09T00:00:00Z')).toBeNull();
+    // A sub-half-basis-point drift rounds to no move.
+    expect(rateMoveSinceVisit([week('2026-07-06', 6.3), week('2026-09-28', 6.304, true)], '2026-07-09T00:00:00Z')).toBeNull();
   });
 });

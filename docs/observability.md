@@ -568,6 +568,51 @@ submit are NOT observed and trail the same way: the job's 04:00 schedule ships
 PAUSED, so a scheduled run happens only if an operator unpauses it, and a run
 started from the Jobs UI is not the App's either.
 
+### Client half: the retained-value marker on screen (W5b)
+
+The browser shows `X-Data-Last-Good-At` instead of only logging it
+(D-platform-process-e1 items 7-9, client half, 2026-10-01):
+
+- Validation. `frontend/src/lib/apiClients/headers.ts` `lastGoodAtHeader`
+  accepts exactly `YYYY-MM-DDTHH:MM:SSZ` with a finite `Date.parse`; any other
+  value reads as "not stale". The header is read on 2xx responses only:
+  `apiTransport` rejects a non-2xx before any caller sees its headers, and the
+  middleware appends the header to 2xx responses only (§6), so a failure
+  never carries a "last good" age.
+- The Fresh shape. The geo client's `segmentsWithFreshness`,
+  `stateRollupsWithFreshness`, `countyRollupsWithFreshness` and
+  `zipRollupsWithFreshness` (same URLs as the plain reads) return
+  `{ data, lastGoodAt }`. The map's state rollups (Home's prefetch stores the
+  same `{ byCode, lastGoodAt }` shape under the same key) and ZIP rollups ride
+  them, and each map read exposes `lastGoodAt` (null for the overlay and the
+  Rate Lever).
+- Where it renders. One `StaleDataNote` ("Showing counts last read …") per
+  surface that shows retained data. Segment Intelligence shows one: the
+  OLDEST of the catalog and the map read on screen beside the ranked table's
+  FetchedAt, as the one-line compact form ("Refresh failed; counts from …",
+  the next-refresh sentence read to assistive technology) so the header
+  keeps its height (above the EmptyState when a measured zero replaces the
+  table, in the full form). Home can show two at once: the map's in the
+  legend, and the hero's at the top of the page when a hero refresh failed
+  over the briefing on screen (below). It clears on the first response
+  without the header, and never offers a Refresh of its own.
+- Persisted aggregates. A restored snapshot shows its true age (FetchedAt on
+  Home) while it bridges the load, and a restored value whose first refresh
+  fails is reset (lib/queryPersist), so the surface shows its warming or
+  error state instead. A Home hero read whose manual refresh fails over data
+  on screen shows the note with that data's age. A read that already failed
+  BEFORE the lazy snapshot restore lands (its final error, or a failed
+  attempt whose retry is in flight) is screened out of the snapshot right
+  before the newer-wins hydrate, so the restored value never replaces its
+  error with a success; a failure that lands while the restore is in
+  progress is settled like any first-refresh failure once it has finished
+  (`frontend/src/lib/queryPersist.restoreRace.test.ts`, and at the rendered
+  layer home-geo-lever.fixture.spec.ts "a refresh that fails before the
+  snapshot restore lands never brings the restored figures back").
+- A list built from retained readiness stays marked until its own next
+  refresh, up to the 300 s soft TTL: one successful readiness read does not
+  clear a list already built from a retained one.
+
 During a sustained warehouse outage, sites built with `stale_if_error` keep
 serving their last good value (up to the `MIP_GOLD_CACHE_MAX_STALE_S` hard
 cap), and every later stale read schedules one more background refresh per key

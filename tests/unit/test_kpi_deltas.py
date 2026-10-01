@@ -274,3 +274,72 @@ def test_headline_measure_vocabulary_is_the_s1_set() -> None:
         "offers_available",
         "offers_recommended",
     )
+
+
+# ---------------------------------------------------------------------------
+# flow-05 event measures: nullable end to end, never coerced to 0.
+# ---------------------------------------------------------------------------
+
+
+def test_event_measures_are_their_own_nullable_vocabulary() -> None:
+    from backend.schemas.kpi_deltas import HEADLINE_EVENT_MEASURES
+
+    assert HEADLINE_EVENT_MEASURES == ("listed_for_sale", "competitor_lien")
+    assert not set(HEADLINE_EVENT_MEASURES) & set(HEADLINE_COUNT_MEASURES)
+
+
+def test_event_deltas_subtract_when_both_sides_have_a_reading() -> None:
+    current = HeadlineKpis.model_validate({**_CURRENT_ROW, "listed_for_sale": 1_250, "competitor_lien": 40_000})
+    baseline = HeadlineKpis.model_validate({**_BASELINE_MEASURES, "listed_for_sale": 1_200, "competitor_lien": 40_310})
+
+    deltas = compute_deltas(current, baseline)
+
+    assert deltas.listed_for_sale == 50
+    assert deltas.competitor_lien == -310
+
+
+def test_a_none_baseline_gives_a_none_event_delta_never_zero() -> None:
+    """A snapshot written before the event columns existed is NULL: no delta."""
+    current = HeadlineKpis.model_validate({**_CURRENT_ROW, "listed_for_sale": 1_250, "competitor_lien": 0})
+    baseline = HeadlineKpis.model_validate(_BASELINE_MEASURES)
+
+    deltas = compute_deltas(current, baseline)
+
+    assert baseline.listed_for_sale is None
+    assert deltas.listed_for_sale is None
+    assert deltas.competitor_lien is None
+    # A real zero on both sides is a real zero delta.
+    both_zero = compute_deltas(
+        HeadlineKpis.model_validate({**_CURRENT_ROW, "competitor_lien": 0}),
+        HeadlineKpis.model_validate({**_BASELINE_MEASURES, "competitor_lien": 0}),
+    )
+    assert both_zero.competitor_lien == 0
+
+
+def test_event_measures_ride_the_live_read_and_the_baseline_snapshot() -> None:
+    visit = _NOW - timedelta(days=1)
+    lakebase = _FakeLakebase(
+        visits=[visit],
+        snapshots=[_snapshot_row(visit - timedelta(hours=1), listed_for_sale=1_200, competitor_lien=None)],
+    )
+    sql = _FakeSql({**_CURRENT_ROW, "listed_for_sale": 1_250, "competitor_lien": 40_000})
+
+    result = _service(lakebase, sql).deltas_for_actor("lo@summit.example")
+
+    assert result.current.listed_for_sale == 1_250
+    assert result.baseline is not None and result.baseline.listed_for_sale == 1_200
+    assert result.baseline.competitor_lien is None
+    assert result.deltas is not None
+    assert result.deltas.listed_for_sale == 50
+    assert result.deltas.competitor_lien is None
+    statement = sql.statements[0]
+    assert "AS listed_for_sale" in statement and "is_competitor_lien" in statement
+    # The baseline SELECT names both columns.
+    assert all("listed_for_sale, competitor_lien" in q for q, _ in lakebase.fetchones if "kpi_snapshots" in q)
+
+
+def test_a_live_row_without_the_event_columns_reads_none() -> None:
+    lakebase = _FakeLakebase()
+    result = _service(lakebase, _FakeSql(dict(_CURRENT_ROW))).deltas_for_actor("lo@summit.example")
+    assert result.current.listed_for_sale is None
+    assert result.current.competitor_lien is None

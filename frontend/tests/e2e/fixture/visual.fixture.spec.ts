@@ -7,15 +7,17 @@
  *  B. the nine `product` routes with the Console open                 18
  *  C. shell states: Home evidence drawer, command palette, Genie
  *     panel and degraded; Lead Queue expanded row, empty and the
- *     Triage deck                                                     14
+ *     Triage deck; Administration's Run confirm                       16
  *  D. the second `.main` page of Home, Borrower 360, Offer detail      6
  *  E. Lead Queue in compact density                                    2
  *  F. 1280x720: Home, Lead Queue, Borrower 360                         6
  *  G. accent sweep: the first Home KPI and the map legend,
  *     teal / navy / red (bright is A-F)                               12
  *  H. read-failed: Lead Queue, Segments                                4
+ *  I. W5b: Home's Delta Explainer drawer, Segments' stale note,
+ *     Home's WHY NOW rate move and the watchlist briefings card        8
  *                                                                     --
- *                                                                    102
+ *                                                                    112
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -28,7 +30,9 @@
 import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
 import { enterState, prepareState, type FixtureState } from './fixtureStates';
-import type { MockApi } from './mockApi';
+import type { HomeSummary } from '../../../src/types';
+import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
+import { json, type MockApi } from './mockApi';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
 import { expect, test } from './test';
 import {
@@ -136,6 +140,9 @@ for (const theme of FIXTURE_THEMES) {
       { route: 'segment-intelligence', state: 'read-failed' },
       // critic-09: the Data operations Run confirm.
       { route: 'admin-config', state: 'run-dialog-open' },
+      // W5b w5-home-geo-lever: the Delta Explainer drawer and the retained-value note.
+      { route: 'home', state: 'delta-explainer' },
+      { route: 'segment-intelligence', state: 'stale-note' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {
@@ -145,6 +152,21 @@ for (const theme of FIXTURE_THEMES) {
         expectNoAuditedReadSince(mockApi, naturalLoad, `${name} · ${state}`);
       });
     }
+
+    // I (W5b w5-home-geo-lever): WHY NOW led by the par move since the last
+    // visit, and the watchlist briefings card further down Home.
+    test('home · why now rate move, watchlist briefings', async ({ app, mockApi, page }) => {
+      mockApi.register('GET', '/api/home/summary', () => json<HomeSummary>(RATE_MOVE_HOME_SUMMARY));
+      const { naturalLoad } = await load(app, mockApi, route('home'), theme);
+      await expect(page.locator('[data-testid="why-now-rate-move"]')).toBeVisible();
+      await check(page, 'home', theme, 'why-now-rate-move');
+      const briefings = page.locator('#main-content .watchlist-briefings');
+      await expect(briefings.locator('[data-testid="watchlist-briefing"]').first()).toBeVisible();
+      await briefings.scrollIntoViewIfNeeded();
+      await app.settle();
+      await capture(page, `home--${theme}--watchlist-briefings.png`, { element: briefings });
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'home · why now rate move');
+    });
 
     // E: compact density.
     test('lead-queue · compact density', async ({ app, mockApi, page }) => {

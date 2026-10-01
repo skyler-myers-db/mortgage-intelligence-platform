@@ -74,6 +74,11 @@ export const queryKeys = {
   growthAgent: () => ['mip', 'growth-agent'] as const,
   growthAgentCapabilities: () => ['mip', 'growth-agent', 'capabilities'] as const,
   growthAgentRuns: (limit: number) => ['mip', 'growth-agent', 'runs', limit] as const,
+  /** Home's watchlist briefings (wow-ai-4): audit-free, never persisted. */
+  growthAgentWatchlistSummary: () => ['mip', 'growth-agent', 'monitors', 'summary'] as const,
+  /** The Delta Explainer's read (wow-ai-3): audit-free; not persisted (only ['mip','home','summary'] is). */
+  homeSummaryAttribution: (measure: string, baseline: string) =>
+    ['mip', 'home', 'summary', 'attribution', measure, baseline] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {

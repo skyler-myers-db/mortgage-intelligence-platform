@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMipQueryClient } from '../../lib/queryClient';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMap } from './USChoroplethMap';
 import type { StateRollupResponse, ZipRollupResponse } from '../../types';
 import { genieStatePrompt } from '../../lib/genieContext';
@@ -27,11 +27,19 @@ const apiMocks = vi.hoisted(() => ({
   stateRollups: vi.fn(),
   countyRollups: vi.fn(),
   zipRollups: vi.fn(),
+  fresh: { states: null as string | null, zips: null as string | null },
 }));
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
-  api: apiMocks,
+  api: {
+    ...apiMocks,
+    // delivery-06: the map reads the Fresh twins; `fresh` sets the retained-value header.
+    stateRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(apiMocks.stateRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: apiMocks.fresh.states })),
+    zipRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(apiMocks.zipRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: apiMocks.fresh.zips })),
+  },
 }));
 
 vi.mock('./USStateMapData', () => ({
@@ -141,6 +149,44 @@ describe('USChoroplethMap state -> ZIP drill', () => {
     act(() => root.unmount());
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    apiMocks.fresh.states = null;
+    apiMocks.fresh.zips = null;
+  });
+
+  // delivery-06 client half: a host without onReadStale (Home) shows the
+  // retained read's age in the legend; a host that passes it (Segment
+  // Intelligence) owns the note, so the legend shows none.
+  const legendNote = () => document.querySelector('.map-legend [data-testid="stale-data-note"]');
+
+  // The note is its own chunk (StaleDataNote.lazy): transform it once up
+  // front, so a loaded machine cannot push its first import past the wait.
+  beforeAll(async () => {
+    await import('../ui/StaleDataNote');
+  }, 60_000);
+
+  it('shows the stale note in the legend when only the map read is retained', async () => {
+    apiMocks.fresh.states = '2026-06-19T08:00:00Z';
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap /></Providers>);
+    });
+    for (let i = 0; i < 80 && !legendNote(); i += 1) {
+      await settle();
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+    }
+    expect(legendNote()?.querySelector('time')?.getAttribute('dateTime')).toBe('2026-06-19T08:00:00.000Z');
+  });
+
+  it('reports the retained read to a host that owns the note, and the legend shows none', async () => {
+    apiMocks.fresh.states = '2026-06-19T08:00:00Z';
+    const reported: (string | null)[] = [];
+    await act(async () => {
+      root.render(<Providers><USChoroplethMap onReadStale={(at) => reported.push(at)} /></Providers>);
+    });
+    for (let i = 0; i < 80 && !reported.includes('2026-06-19T08:00:00Z'); i += 1) await settle();
+    expect(reported).toContain('2026-06-19T08:00:00Z');
+    expect(legendNote()).toBeNull();
   });
 
   it('marks state rollups as loading and announces map load state', async () => {

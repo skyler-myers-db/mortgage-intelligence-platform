@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import type { StateRollup, ZipRollup } from '../../types';
+import type { MapScenarioView } from './rateScenario.logic';
 import {
   SOURCE_IN_SCOPE,
   SOURCE_OUT_OF_SCOPE,
@@ -54,6 +55,7 @@ function inputs(overrides: Partial<MapCardInputs> = {}): MapCardInputs {
     drillStateName: 'Texas',
     zipFacts: { '77002': ZIP },
     selectedZip: null,
+    scenario: null,
     ...overrides,
   };
 }
@@ -108,6 +110,40 @@ describe('buildMapCard (D-dataviz-geo-d1)', () => {
       overlay: undefined,
     });
     expect(card).not.toHaveProperty('zipUnassigned');
+  });
+
+  // wow-stage-1: the Rate Lever's rows ride on the STATE card only.
+  const SCENARIO: MapScenarioView = {
+    step: -50,
+    ratePct: 5.8,
+    inTheMoneyById: { tx: 1_300 },
+    total: 1_300,
+    todayById: { tx: 1_000 },
+    changeById: { tx: 300 },
+    contactableById: { tx: null },
+    totalChange: 300,
+  };
+
+  it('fills the scenario on a state card from the shown view, contactable null when not reported', () => {
+    expect(buildMapCard('state', 'tx', inputs({ scenario: SCENARIO }))?.scenario).toEqual({
+      step: -50,
+      ratePct: 5.8,
+      today: 1_000,
+      atStep: 1_300,
+      change: 300,
+      contactableAtStep: null,
+    });
+    const reported = { ...SCENARIO, contactableById: { tx: 90 } };
+    expect(buildMapCard('state', 'tx', inputs({ scenario: reported }))?.scenario?.contactableAtStep).toBe(90);
+    // Off the grid, or without a step 0 to compare with: no scenario rows.
+    expect(buildMapCard('state', 'wy', inputs({ scenario: SCENARIO }))?.scenario).toBeUndefined();
+    const noToday = { ...SCENARIO, todayById: null, changeById: null, contactableById: null, totalChange: null };
+    expect(buildMapCard('state', 'tx', inputs({ scenario: noToday }))?.scenario).toBeUndefined();
+  });
+
+  it('never puts scenario rows on a ZIP card', () => {
+    const card = buildMapCard('zip', '77002', inputs({ scenario: SCENARIO }));
+    expect(card).not.toHaveProperty('scenario');
   });
 
   it('is null for a unit that is not on the stage', () => {

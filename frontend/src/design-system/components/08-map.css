@@ -188,13 +188,13 @@
    to miss on dense map layers. Bump stroke weight, add a soft accent
    glow, and lift the hovered path into the stacking context so its
    neighbours don't clip the glow. 2026-04-23. */
-.map-region:hover {
+.map-region[data-populated]:hover {
   fill: var(--bg-4);
   stroke: var(--accent);
   stroke-width: 2;
   filter: drop-shadow(0 0 8px color-mix(in oklab, var(--accent) 40%, transparent));
+  paint-order: stroke fill;
 }
-.map-region:hover { paint-order: stroke fill; }
 .map-region.is-loading {
   fill: color-mix(in oklab, var(--accent) 12%, var(--bg-3));
   opacity: 0.72;
@@ -259,10 +259,9 @@
   font-size: var(--fs-12);
   width: 280px;
   transform: translate(-50%, calc(-100% - 10px));
-  /* z-index has to sit above every surface, rail, and drawer because the
-     tip is portaled to document.body and can appear over any page
-     chrome. Kept below the --z-modal / --z-palette tier so focus-
-     trapped modals still occlude it. 2026-04-23. */
+  /* The z-index is only the no-Popover fallback: in the top layer it is
+     ignored. There it sits above every surface, rail and drawer, and below
+     the --z-modal / --z-palette tier so focus-trapped modals occlude it. */
   z-index: var(--z-map-tip);
 }
 .map-tip__name {
@@ -472,7 +471,7 @@
 .zip-tile--lvl-2 { background: var(--map-ramp-2); color: var(--map-ramp-ink-2); }
 .zip-tile--lvl-3 { background: var(--map-ramp-3); color: var(--map-ramp-ink-3); }
 .zip-tile--lvl-4 { background: var(--map-ramp-4); color: var(--map-ramp-ink-4); }
-.zip-tile:hover {
+.zip-tile[data-populated]:hover {
   border-color: var(--accent-ink);
   transform: translateY(-1px);
 }

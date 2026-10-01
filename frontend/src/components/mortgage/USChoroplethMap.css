@@ -113,9 +113,14 @@
    W5a integration run): the slider on Segments' wide legend (Console closed)
    at its longest sentence wraps one more line there than the off-Linux Geist
    Mono emulation predicts, 147.56px against 131.06px; the status lines are
-   13.5-28.2px. geo-foundation.fixture.spec.ts logs every measurement and pins
-   slot >= each state everywhere, and slot - max < var(--sp-2) on Linux. */
-.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 2 + var(--sp-6)); }
+   13.5-28.2px. W5b (w5-home-geo-lever) adds the largest-changes line and the
+   cohort link under the headline: the emulated maximum is now 191.38px
+   (Segments Console closed, Home Console open), so the Linux maximum is
+   expected near 207.9px; 212px leaves that estimate inside the tightness
+   window until CI re-measures it. geo-foundation.fixture.spec.ts logs every
+   measurement and pins slot >= each state everywhere, and slot - max <
+   var(--sp-2) on Linux. */
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 3 + var(--sp-5)); }
 .map-wrap:has(.map-legend__lever) .map-levels {
   flex: 1 0 auto;
   min-block-size: calc(var(--sp-16) * 5);

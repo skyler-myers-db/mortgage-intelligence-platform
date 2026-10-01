@@ -24,6 +24,29 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ lender: 'Summit Mortgage', setDrawer, showEvidence }),
 }));
 
+// The WHY NOW rate move's read (flow-05): recorded per call with its key and
+// whether it is enabled; `rate.data` is what the rate window answers.
+const rate = vi.hoisted(() => ({
+  data: null as unknown,
+  error: null as Error | null,
+  calls: [] as Array<{ key: string; enabled: boolean }>,
+}));
+vi.mock('../../lib/useWarmingUpRetry', () => ({
+  useWarmingUpRetry: (_fetcher: unknown, opts: { queryKey: readonly unknown[]; enabled?: boolean }) => {
+    rate.calls.push({ key: opts.queryKey.join('.'), enabled: opts.enabled ?? true });
+    return {
+      data: opts.enabled === false ? null : rate.data,
+      warmingUp: null,
+      error: rate.error,
+      manualRetry: () => undefined,
+      isFetching: false,
+      isPlaceholderData: false,
+      dataUpdatedAt: null,
+      errorUpdatedAt: null,
+    };
+  },
+}));
+
 import { LastLoginSummary } from './LastLoginSummary';
 
 const DELTA_SUMMARY: HomeSummary = {
@@ -127,6 +150,9 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     root = createRoot(container);
     setDrawer.mockClear();
     showEvidence = true;
+    rate.data = null;
+    rate.error = null;
+    rate.calls = [];
   });
 
   afterEach(() => {
@@ -195,7 +221,7 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     };
     render(flat);
     expect(container.querySelector('.home-answer__trigger')?.textContent).toBe(
-      'no change in borrowers whose rate and equity pass the refinance screen',
+      'no change in borrowers who pass the refi screen',
     );
     expect(chips().map((chip) => chip.textContent)).toEqual(['no change']);
   });
@@ -204,8 +230,8 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     render(DELTA_SUMMARY);
     const [pct, count] = Array.from(container.querySelectorAll('.home-answer__trigger')).map((el) => el.textContent);
     // "+1.5% borrowers with ..." read as "1.5% of borrowers".
-    expect(pct).toBe('+1.5% in borrowers with an opportunity score of 75+');
-    expect(count).toBe('+2,250 borrowers whose rate and equity pass the refinance screen');
+    expect(pct).toBe('+1.5% in borrowers with opportunity score 75+');
+    expect(count).toBe('+2,250 borrowers who pass the refi screen');
   });
 
   it('first visit renders welcome copy, no delta language, no snapshot citation', () => {
@@ -262,5 +288,76 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     render(null, true);
     expect(container.querySelector('.login-summary[aria-busy="true"]')).toBeTruthy();
     expect(container.querySelector('.home-answer__empty')).toBeNull();
+  });
+
+  // flow-05: WHY NOW cites events. The par move since the last visit comes
+  // first (two server prints, one client subtraction), then the server's
+  // event measures with their exact queue destinations.
+  const RATE_WINDOW = {
+    series_id: 'MORTGAGE30US',
+    weeks: [
+      { week: '2026-07-06', market_rate_pct: 6.7, itm_count: 10 },
+      { week: '2026-09-28', market_rate_pct: 6.3, itm_count: 14, is_latest: true },
+    ],
+    book_lien_count: 100,
+    thresholds: {},
+    provenance: { market_rate_source: 'm', book_source: 'b', gold_source: 'g', rule_source: 'r', note: 'n' },
+  };
+
+  it('lists the 30-year par move since the last visit FIRST, from the rate window prints', () => {
+    rate.data = RATE_WINDOW;
+    render(DELTA_SUMMARY);
+    const rows = Array.from(container.querySelectorAll('.home-answer__trigger'));
+    expect(rows).toHaveLength(4);
+    expect(rows[0].getAttribute('data-testid')).toBe('why-now-rate-move');
+    expect(rows[0].textContent).toBe('-40 bps 30-year par rate since your last visit (from 6.70% to 6.30%)');
+    expect(rows[0].querySelector('a')?.getAttribute('href')).toBe('/analytics');
+    act(() => chips()[0].click());
+    const source = setDrawer.mock.calls[0][0] as DrawerSource;
+    expect(source.assetPath).toBe('mip.gold.rate_window_weekly');
+    expect(source.lineageFamily).toBe('rate_spread');
+    expect((source.signals ?? []).slice(0, 3).map((signal) => signal.value)).toEqual(['6.70%', '6.30%', '-40 bps']);
+    expect((source.signals ?? [])[0].source).toContain('MORTGAGE30US');
+  });
+
+  it('reads the rate window only for a delta with a previous visit, on the Analytics key', () => {
+    render(FIRST_VISIT_SUMMARY);
+    expect(rate.calls.every((call) => !call.enabled)).toBe(true);
+    render({ ...DELTA_SUMMARY, previous_visit_at: null });
+    expect(rate.calls[rate.calls.length - 1]).toEqual({ key: 'mip.analytics.rate-window', enabled: false });
+    render(DELTA_SUMMARY);
+    expect(rate.calls[rate.calls.length - 1]).toEqual({ key: 'mip.analytics.rate-window', enabled: true });
+  });
+
+  it('a failed, warming or unmoved rate read adds no row; the column stays additive', () => {
+    rate.error = new Error('rate window down');
+    render(DELTA_SUMMARY);
+    expect(container.querySelector('[data-testid="why-now-rate-move"]')).toBeNull();
+    expect(chips().map((chip) => chip.textContent)).toEqual(['+1.5%', '+2,250', '+4,120']);
+    rate.error = null;
+    rate.data = { ...RATE_WINDOW, weeks: RATE_WINDOW.weeks.map((week) => ({ ...week, market_rate_pct: 6.3 })) };
+    render(DELTA_SUMMARY);
+    expect(container.querySelector('[data-testid="why-now-rate-move"]')).toBeNull();
+  });
+
+  it('renders the event and offer-path triggers with their exact queue links', () => {
+    const events: HomeSummary = {
+      ...DELTA_SUMMARY,
+      highlights: [
+        { measure: 'listed_for_sale', label: 'listed for sale', display: '+44', value_token: '+44', current: 1412, baseline: 1368, delta: 44, delta_pct: 3.2 },
+        { measure: 'competitor_lien', label: 'competitor liens', display: '-31', value_token: '-31', current: 9870, baseline: 9901, delta: -31, delta_pct: -0.3 },
+        { measure: 'offers_recommended', label: 'primary offer paths', display: '+190', value_token: '+190', current: 6250, baseline: 6060, delta: 190, delta_pct: 3.1 },
+      ],
+    };
+    render(events);
+    const rows = Array.from(container.querySelectorAll('.home-answer__trigger')).map((el) => el.textContent);
+    expect(rows).toEqual([
+      '+44 borrowers with a listed home',
+      '-31 borrowers with a competitor lien',
+      '+190 borrowers with a primary offer path',
+    ]);
+    expect(triggerLink(0)).toBe('/lead-queue?purchase_intent=Listed+for+sale');
+    expect(triggerLink(1)).toBe('/lead-queue?lender_relationship=Competitor+customer');
+    expect(triggerLink(2)).toBe('/lead-queue?funnel_stage=offer_recommended');
   });
 });

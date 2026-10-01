@@ -21,8 +21,10 @@ after a failed cache refresh (or built from such a read) carries
 ``X-Data-Last-Good-At: YYYY-MM-DDTHH:MM:SSZ`` (UTC): the OLDEST last
 successful Unity Catalog read any cache reported for the request
 (``cache_staleness.report_stale``; decision record e1). It is absent on every
-other response, including a plain soft-window stale serve. The Server-Timing
-names and values above are unchanged by it.
+other response, including a plain soft-window stale serve, and on every
+non-2xx response even when a read was marked (the W5a ruling: a failure
+never carries a "last good" age; the client ignores it there too). The
+Server-Timing names and values above are unchanged by it.
 
 One mutable collector per request, set in a ContextVar ONCE, by the
 middleware (critic fix 22): sync handlers and sync dependencies run in the
@@ -143,7 +145,7 @@ class ServerTimingMiddleware:
                 headers = MutableHeaders(scope=message)
                 headers.append(HEADER, collector.header_value(total_ms))
                 last_good_at = collector.last_good_at()
-                if last_good_at is not None:
+                if last_good_at is not None and 200 <= int(message["status"]) < 300:
                     headers.append(LAST_GOOD_HEADER, last_good_at)
             await send(message)
 

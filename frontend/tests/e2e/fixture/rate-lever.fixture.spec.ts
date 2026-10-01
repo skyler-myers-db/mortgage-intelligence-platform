@@ -157,7 +157,7 @@ test.describe('Rate Lever on the geography hero', () => {
     await expectStep(page, 0);
     await page.getByRole('button', { name: 'View as table' }).click();
     const table = page.getByTestId('map-table');
-    await expect(table.getByRole('columnheader', { name: 'In the money at 6.30%' })).toBeVisible();
+    await expect(table.getByRole('columnheader', { name: 'In the money at 6.30%', exact: true })).toBeVisible();
     await expect(page.getByTestId('map-table-extra-total')).toHaveText(COUNT.format(stepZero));
     await expect(legendTotal(page)).toHaveText(COUNT.format(stepZero));
   });
@@ -423,6 +423,104 @@ test.describe('Rate Lever on the geography hero', () => {
     await expect(page.locator('.map-legend__lever')).toContainText('The rate scenario control could not load. Showing borrower counts.');
     expect(await underStage(), 'after the control chunk failed').toBe(true);
     await expect(page.locator(BOUNDARY_SURFACE)).toHaveCount(0);
+  });
+});
+
+/**
+ * W5b w5-home-geo-lever (wow-stage-1 remainder, D-dataviz-geo-b): change
+ * versus today as labelled numbers, never a diverging ramp, and the
+ * map-side cohort handoff over today's spread band.
+ */
+test.describe('Rate Lever change as numbers and the cohort handoff', () => {
+  const COHORT_NOTE = "The Lead Queue and campaigns use today's par rate.";
+
+  async function scrubTo(page: Page, presses: number): Promise<void> {
+    await slider(page).focus();
+    for (let i = 0; i < presses; i += 1) await page.keyboard.press('ArrowLeft');
+    await page.keyboard.up('ArrowLeft');
+    await expect(page.locator('.map-wrap[data-scenario-pending]')).toHaveCount(0);
+  }
+
+  test('scrubbing to -50 makes every change >= 0, and the change footer is the headline delta', async ({ app, page }) => {
+    await openHomeRate(page, app);
+    await scrubTo(page, 2);
+    await expectStep(page, -50);
+    await page.getByRole('button', { name: 'View as table' }).click();
+    const table = page.getByTestId('map-table');
+    const header = table.getByRole('columnheader', { name: 'In the money: change vs today' });
+    await expect(header).toBeVisible();
+    const index = await header.evaluate((th) => [...(th.parentElement?.children ?? [])].indexOf(th));
+    const cells = await table.locator('tbody tr').evaluateAll(
+      (rows, column) => rows.map((row) => row.children[column]?.textContent ?? '').filter((text) => text !== ''),
+      index,
+    );
+    // A row without a scenario count (no rate data for it) reads '—'; every number is a gain.
+    const numbers = cells.filter((cell) => cell !== '—');
+    expect(numbers.length).toBeGreaterThan(0);
+    for (const cell of numbers) expect(Number(cell.replace(/[+,]/g, '')), cell).toBeGreaterThanOrEqual(0);
+    // The headline's "5,779 more than today" is the footer.
+    await expect(headline(page)).toContainText('5,779 more than today');
+    await expect(page.getByTestId('map-table-change-total')).toHaveText('+5,779');
+    await expect(table.locator('caption')).toHaveText(/^Marketable \(addressable\) borrowers by state, with in-the-money counts at 5\.80% par/);
+    await expect(table).not.toContainText(/pipeline/i);
+  });
+
+  test('the largest gains name the first three rows sorted by change', async ({ app, page }) => {
+    await openHomeRate(page, app);
+    await scrubTo(page, 2);
+    const largest = page.getByTestId('rate-lever-largest');
+    await expect(largest).toHaveText(/^Largest in-the-money gains: /);
+    const named = ((await largest.textContent()) ?? '').replace('Largest in-the-money gains: ', '').split(' · ').map((part) => part.replace(/ [+-][\d,]+$/, ''));
+    await page.getByRole('button', { name: 'View as table' }).click();
+    const table = page.getByTestId('map-table');
+    await table.getByRole('button', { name: /^In the money: change vs today/ }).click();
+    await expect(table.getByRole('columnheader', { name: /In the money: change vs today/ })).toHaveAttribute('aria-sort', 'descending');
+    const firstThree = await table.locator('tbody').first().locator('tr th').evaluateAll((cells) => cells.slice(0, 3).map((cell) => cell.textContent?.trim()));
+    expect(named).toEqual(firstThree);
+  });
+
+  test('a rate link at -50 shows the scenario label and the cohort note, and the hover card says it too', async ({ app, page }) => {
+    await app.gotoRoute('/?map_mode=rate&rate_step=-50');
+    await expect(slider(page)).toHaveValue('-50');
+    await expect(scenarioLabel(page)).toBeVisible();
+    await expect(page.locator('.map-legend__lever-note')).toContainText(COHORT_NOTE);
+    await designated(page).hover();
+    const tip = page.locator('.map-tip');
+    await expect(tip).toContainText('In the money today');
+    await expect(tip).toContainText('In the money at 5.80%');
+    await expect(tip).toContainText(COHORT_NOTE);
+    // The state's accessible name carries its scenario numbers; one note describes every path.
+    await expect(designated(page)).toHaveAttribute('aria-label', /; in the money at 5\.80%: [\d,]+ \(\+[\d,]+ vs today\)$/);
+    const describedBy = await designated(page).getAttribute('aria-describedby');
+    await expect(page.locator(`[id="${describedBy}"]`)).toHaveText(COHORT_NOTE);
+  });
+
+  test('the cohort link opens the Lead Queue over today\'s spread band, with the RATE SPREAD chip', async ({ app, page, mockApi }) => {
+    await openHomeRate(page, app);
+    await scrubTo(page, 2);
+    const link = page.locator('.rate-lever').getByRole('link', { name: 'Open borrowers within 50 bps of the refi screen in the Lead Queue' });
+    await expect(link).toHaveAttribute('href', '/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
+    await link.click();
+    await expect(page).toHaveURL(/\/lead-queue\?min_rate_spread_bps=25&max_rate_spread_bps=74$/);
+    await app.settle();
+    await expect(page.getByRole('button', { name: /^Remove RATE SPREAD: .+ filter$/ })).toBeVisible();
+    const leadsRead = mockApi.calls.find((call) => call.path === '/api/leads');
+    expect(leadsRead?.search ?? '').toContain('min_rate_spread_bps=25');
+    expect(leadsRead?.search ?? '').not.toContain('borrower_ids');
+  });
+
+  test('no rate read on a plain load or on hover; axe-clean with the change column', async ({ app, page, mockApi }) => {
+    await app.gotoRoute('/');
+    await designated(page).hover();
+    await colouring(page, 'Rate scenario').hover();
+    await app.settle();
+    expect(rateReads(mockApi)).toBe(0);
+    await colouring(page, 'Rate scenario').click();
+    await expect(slider(page)).toBeVisible();
+    await scrubTo(page, 2);
+    await page.getByRole('button', { name: 'View as table' }).click();
+    await expect(page.getByTestId('map-table-change-total')).toBeVisible();
+    await expectAxeClean(page, { key: { route: 'home', state: 'rate-lever' }, theme: 'dark', known: {}, include: '.map-wrap' });
   });
 });
 

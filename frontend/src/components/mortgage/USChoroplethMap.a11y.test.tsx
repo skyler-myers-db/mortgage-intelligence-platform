@@ -31,7 +31,14 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
-  api: apiMocks,
+  api: {
+    ...apiMocks,
+    // delivery-06: the map reads the Fresh twins (no retained-value header here).
+    stateRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(apiMocks.stateRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: null })),
+    zipRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(apiMocks.zipRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: null })),
+  },
 }));
 
 vi.mock('./USStateMapData', () => ({
@@ -39,6 +46,9 @@ vi.mock('./USStateMapData', () => ({
     label: 'United States',
     viewBox: '0 0 300 100',
     locations: [
+      // Alabama has no rollup: first alphabetically, so the "first populated"
+      // tab stop (California) is pinned against an unpopulated state before it.
+      { id: 'al', name: 'Alabama', path: 'M120,0L140,0L140,20Z', labelAt: [130, 10] },
       { id: 'il', name: 'Illinois', path: 'M0,0L20,0L20,20Z', labelAt: [10, 10] },
       { id: 'in', name: 'Indiana', path: 'M30,0L50,0L50,20Z', labelAt: [40, 10] },
       { id: 'tx', name: 'Texas', path: 'M60,0L80,0L80,20Z', labelAt: [70, 10] },
@@ -137,7 +147,7 @@ describe('USChoroplethMap keyboard and screen-reader access (a11y-04)', () => {
     const svg = document.querySelector('svg.map-svg-stage');
     expect(svg?.getAttribute('role')).toBe('group');
 
-    // Alphabetical order: California, Illinois, Indiana, Texas.
+    // Alphabetical order: Alabama (no borrowers), California, Illinois, Indiana, Texas.
     await act(async () => path('ca')?.focus());
     expect(document.querySelector('.map-tip__name')?.textContent).toBe('California');
     await act(async () => {
@@ -345,9 +355,10 @@ describe('populated-only roving and activation (dataviz-10, WCAG 2.1.1)', () => 
 
   it('walks populated states only, and Home / End go to the first / last populated state', async () => {
     await renderMap();
-    // California, Illinois, Indiana (no borrowers), Texas.
+    // Alabama (no borrowers), California, Illinois, Indiana (no borrowers), Texas.
     expect([...document.querySelectorAll('path[data-populated]')].map((p) => p.getAttribute('data-map-unit')))
       .toEqual(['ca', 'il', 'tx']);
+    expect(path('al')?.getAttribute('tabindex')).toBe('-1');
     await act(async () => path('il')?.focus());
     await key(path('il'), 'ArrowRight');
     expect(document.activeElement).toBe(path('tx'));
@@ -388,7 +399,7 @@ describe('populated-only roving and activation (dataviz-10, WCAG 2.1.1)', () => 
     await renderMap();
     const svg = document.querySelector('svg.map-svg-stage');
     const note = () => document.getElementById(svg?.getAttribute('aria-describedby') ?? '')?.textContent;
-    expect(note()).toBe('1 state has no borrowers in this selection and is skipped; the table view lists them.');
+    expect(note()).toBe('2 states have no borrowers in this selection and are skipped; the table view lists them.');
 
     act(() => root.unmount());
     root = createRoot(document.getElementById('root') as HTMLElement);
@@ -398,7 +409,7 @@ describe('populated-only roving and activation (dataviz-10, WCAG 2.1.1)', () => 
     });
     await waitFor(() => path('il')?.classList.contains('has-data'));
     expect(document.getElementById(document.querySelector('svg.map-svg-stage')?.getAttribute('aria-describedby') ?? '')?.textContent)
-      .toBe('3 states have no borrowers in this selection and are skipped; the table view lists them.');
+      .toBe('4 states have no borrowers in this selection and are skipped; the table view lists them.');
   });
 
   it('says nothing about skipped states while the rollups load, and has no tab stop then', async () => {
@@ -422,7 +433,7 @@ describe('populated-only roving and activation (dataviz-10, WCAG 2.1.1)', () => 
     expect(table.textContent).not.toContain('Not drawn on the map');
     const header = groups[1].querySelector('tr.map-table__group th');
     expect(header?.getAttribute('scope')).toBe('colgroup');
-    expect(header?.textContent).toBe('No borrowers in this selection (1)');
+    expect(header?.textContent).toBe('No borrowers in this selection (2)');
     const indiana = groups[1].querySelector('tr[data-map-row="in"]');
     expect(indiana?.querySelector('th')?.textContent).toBe('Indiana');
     expect(indiana?.querySelector('button')).toBeNull();
@@ -557,8 +568,11 @@ describe('Escape backs out one level (dataviz-10)', () => {
     await escape(tile);
     await escape(tile);
     const card = await waitFor(() => document.querySelector('.map-stage--status'));
-    // The crumb did not take focus while the stage could not draw the state.
-    expect(document.activeElement).toBe(document.body);
+    // Neither the crumb nor <body>: focus parks on the unavailable stage (its
+    // Retry once the read failed) while the state cannot be drawn.
+    await waitFor(() => card.contains(document.activeElement));
+    expect(document.activeElement?.textContent).toBe('Retry');
+    expect(document.activeElement).not.toBe(crumb());
 
     apiMocks.stateRollups.mockResolvedValue(STATES);
     const retry = [...card.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Retry');

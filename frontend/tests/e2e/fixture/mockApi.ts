@@ -181,6 +181,28 @@ export class MockApi {
     this.add({ method, pattern, handler }, true);
   }
 
+  /**
+   * Add response headers to one registered fixture for the current test,
+   * keeping its body and status (e.g. `X-Data-Last-Good-At` on a read the
+   * server retained after a failed refresh).
+   */
+  withHeaders(method: HttpMethod, pattern: string, headers: Record<string, string>): void {
+    const current = this.entries.get(registryKey(method, pattern));
+    if (!current) throw new Error(`No fixture registered for ${method} ${pattern}`);
+    const { handler } = current.entry;
+    this.add(
+      {
+        method,
+        pattern,
+        handler: async (request) => {
+          const reply = await handler(request);
+          return { ...reply, headers: { ...reply.headers, ...headers } };
+        },
+      },
+      true,
+    );
+  }
+
   /** Remove one fixture so the endpoint becomes unregistered (harness self-tests). */
   unregister(method: HttpMethod, pattern: string): void {
     if (!this.entries.delete(registryKey(method, pattern))) {

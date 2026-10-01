@@ -20,7 +20,7 @@ import {
 import { USChoroplethMapHeader, type MapColorMode, type MapView } from './USChoroplethMapHeader';
 import { USChoroplethMapLegend } from './USChoroplethMapLegend';
 import { USChoroplethMapStates } from './USChoroplethMapStates';
-import { USChoroplethMapTable } from './USChoroplethMapTable';
+import { MAP_TABLE } from './USChoroplethMapTable.lazy';
 import { MapUnavailable } from './USChoroplethMapUnavailable';
 import { buildMapTableRows, offMapCaption, type MapTableGroups } from './USChoroplethMap.table';
 import { campaignPrefillPath as buildCampaignPath } from './USChoroplethMap.campaign';
@@ -125,6 +125,13 @@ interface USChoroplethMapProps {
   onModeChange?: (mode: MapColorMode) => void;
   /** A committed step (pointerup, a key, Reset, or the snap to the grid). */
   onStepCommit?: (step: number) => void;
+  /**
+   * The map read on screen (state rollups at the national view, ZIP rollups
+   * when drilled) was retained by the server after a failed refresh: its last
+   * good read, or null (delivery-06). A host that passes this owns the stale
+   * note; without it the legend shows the note itself.
+   */
+  onReadStale?: (lastGoodAt: string | null) => void;
 }
 
 /**
@@ -142,6 +149,7 @@ export function USChoroplethMap({
   step: stepProp,
   onModeChange,
   onStepCommit,
+  onReadStale,
 }: USChoroplethMapProps) {
   const [ownSelection, setOwnSelection] = useState<MapSelection>(EMPTY_MAP_SELECTION);
   const current = selection ?? ownSelection;
@@ -174,6 +182,8 @@ export function USChoroplethMap({
   const scenarioOn = rateOn && !lever.failed;
   const shownStep = useDeferredValue(rateStep);
   const [view, setView] = useState<MapView>('map');
+  // The table view's own chunk, loaded the first time the table is picked.
+  const tableView = useLazyModule(MAP_TABLE, view === 'table');
   // A keyboard drill, and any drill from a table row, removes the control
   // that had focus (the state path, the row's button). Focus then moves on to
   // the drilled level (a ZIP tile, the empty state's action or the ZIP table)
@@ -267,6 +277,11 @@ export function USChoroplethMap({
     return zipFacts ? Object.values(zipFacts).reduce((a, r) => a + (r.addressable_borrowers ?? 0), 0) : null;
   }, [level, stateFacts, zipFacts]);
   const primary: GeoRead<unknown> = level === 'zip' ? zips : states;
+  // delivery-06: the age of a retained read on screen, reported to the host or shown in the legend.
+  const staleAt = primary.data !== null ? primary.lastGoodAt : null;
+  useEffect(() => {
+    onReadStale?.(staleAt);
+  }, [onReadStale, staleAt]);
   const mapBusy = !usaMap || primary.loading || (level === 'zip' && states.loading);
   // Borrowers in the drilled state that the ZIP layer cannot show. The
   // backend derives it as (state total - sum of ZIP tiles) off one refresh
@@ -276,6 +291,11 @@ export function USChoroplethMap({
     if (!drillStateId) return '';
     return usaMap?.locations.find((l) => l.id === drillStateId)?.name ?? drillStateUC;
   }, [drillStateId, drillStateUC, usaMap]);
+  // The Rate Lever's state names (largest gains); off the map, the USPS code.
+  const stateName = useCallback(
+    (id: string) => usaMap?.locations.find((l) => l.id === id)?.name ?? id.toUpperCase(),
+    [usaMap],
+  );
   const levelWhat = level === 'zip' ? `ZIP rollups for ${drillStateName || 'state'}` : 'State borrower rollups';
   // runtime-06: the previous cohort stays painted while the new one reads,
   // labelled; a warming loop over it keeps the fill and says so in the pill.
@@ -344,6 +364,7 @@ export function USChoroplethMap({
         drillStateName,
         zipFacts,
         selectedZip: current.zip,
+        scenario: shownScenario,
       })
     : null;
 
@@ -361,7 +382,9 @@ export function USChoroplethMap({
               Open Lead Queue for {drillStateName}
             </button>
           ) : undefined}
-          autoFocus={drillFocus}
+          // A keyboard drill waiting on this read, or an Escape out of a ZIP
+          // level whose national stage is down: park focus here, not on <body>.
+          autoFocus={drillFocus || (level === 'state' && returnFocusTo !== null)}
         />
       );
     }
@@ -369,16 +392,35 @@ export function USChoroplethMap({
       if (level === 'state' ? !stateFacts : !zipFacts) {
         return <div className="map-stage map-stage--empty">Loading rollups…</div>;
       }
+      const MapTable = tableView.module?.USChoroplethMapTable ?? null;
+      if (!MapTable) {
+        return tableView.failed ? (
+          <div className="map-stage map-stage--empty" role="status">
+            The table view could not load.{' '}
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => window.location.reload()}>
+              Reload
+            </button>
+          </div>
+        ) : (
+          <div className="map-stage map-stage--empty">Loading the table…</div>
+        );
+      }
+      // Rate mode: change versus today as labelled numbers (wow-stage-1, D-dataviz-geo-b).
+      const scenarioRate = shownScenario ? ratePct(shownScenario.ratePct) : null;
       return (
-        <USChoroplethMapTable
+        <MapTable
           unitLabel={level === 'state' ? 'State' : 'ZIP'}
-          caption={level === 'state'
-            ? `Marketable borrowers by state, ${segmentCaption}`
-            : `Marketable borrowers by ZIP in ${drillStateName}, ${segmentCaption}`}
+          caption={level === 'zip'
+            ? `Marketable borrowers by ZIP in ${drillStateName}, ${segmentCaption}`
+            : scenarioRate
+              ? `Marketable (addressable) borrowers by state, with in-the-money counts at ${scenarioRate} par, ${segmentCaption}`
+              : `Marketable borrowers by state, ${segmentCaption}`}
           groups={tableGroups}
-          extraColumn={shownScenario
-            ? `In the money at ${ratePct(shownScenario.ratePct)}`
+          extraColumn={scenarioRate
+            ? `In the money at ${scenarioRate}`
             : overlayActive ? 'Unattended leads' : null}
+          changeColumn={shownScenario?.changeById && shownScenario.step !== 0 ? 'In the money: change vs today' : null}
+          scenarioContactableColumn={scenarioRate ? `Contactable in the money at ${scenarioRate}` : null}
           autoFocus={drillFocus}
           onAutoFocused={onDrillFocused}
           focusRowId={level === 'state' ? returnFocusTo : null}
@@ -509,6 +551,7 @@ export function USChoroplethMap({
         segmentCaption={segmentCaption}
         segmentFilter={segmentFilter}
         updating={updating}
+        staleLastGoodAt={onReadStale ? null : staleAt}
         rate={rateOn ? {
           read: rate,
           index: rateIndex,
@@ -517,6 +560,7 @@ export function USChoroplethMap({
           onStepChange: setRateStep,
           onStepCommit,
           scope: drillStateId ? { id: drillStateId, name: drillStateName } : null,
+          stateName,
           control: lever.module?.default ?? null,
           controlFailed: lever.failed,
         } : null}

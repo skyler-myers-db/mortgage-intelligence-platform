@@ -1,5 +1,6 @@
 import type { MapCard } from './USChoroplethMap.hover';
-import { formatCount } from '../../lib/formatters';
+import { RATE_COHORT_NOTE } from './rateScenario.logic';
+import { formatCount, ratePct, signedCount } from '../../lib/formatters';
 
 /**
  * The map hover card's content (`map-tip` block, inside the top-layer
@@ -22,6 +23,12 @@ import { formatCount } from '../../lib/formatters';
  * `.map-tip__seg*`) and use design tokens only — no class was invented
  * without a matching rule. Do NOT rename back to the prototype's flatter
  * vocabulary; that would drop the KPI grid styling.
+ *
+ * deviation:rate-change-as-numbers (wow-stage-1): in rate mode a state card
+ * adds the scenario as `.map-tip__row--compact` rows (in the money today; at
+ * the scenario rate and the signed change once the step moves; the
+ * contactable subset at that rate when reported) and closes them with the
+ * cohort note in a muted row, the prototype's flat label / value rows.
  */
 
 interface MapTipBodyProps {
@@ -71,6 +78,7 @@ export function MapTipBody({ card: hover, activeSegNames }: MapTipBodyProps) {
           </span>
         </div>
       )}
+      {hover.scenario && <MapTipScenario scenario={hover.scenario} />}
       {hover.topSegment && (
         <div className="map-tip__seg">
           <span className="map-tip__seg-label">Top segment</span>
@@ -141,6 +149,40 @@ export function MapTipBody({ card: hover, activeSegNames }: MapTipBodyProps) {
         <span className="v mono map-tip__value--small">
           {hover.sourceHint ?? 'mip.gold'}
         </span>
+      </div>
+    </>
+  );
+}
+
+/** The Rate Lever's rows on a state card: server counts and their difference from today. */
+function MapTipScenario({ scenario }: { scenario: NonNullable<MapCard['scenario']> }) {
+  const rate = ratePct(scenario.ratePct);
+  return (
+    <>
+      <div className="map-tip__row map-tip__row--compact" data-testid="map-tip-scenario">
+        <span>In the money today</span>
+        <span className="v num map-tip__value--small">{formatCount(scenario.today)}</span>
+      </div>
+      {scenario.step !== 0 && (
+        <>
+          <div className="map-tip__row map-tip__row--compact">
+            <span>In the money at {rate}</span>
+            <span className="v num map-tip__value--small">{formatCount(scenario.atStep)}</span>
+          </div>
+          <div className="map-tip__row map-tip__row--compact">
+            <span>Change</span>
+            <span className="v num map-tip__value--small">{signedCount(scenario.change)}</span>
+          </div>
+        </>
+      )}
+      {typeof scenario.contactableAtStep === 'number' && (
+        <div className="map-tip__row map-tip__row--compact">
+          <span>Contactable in the money at {rate}</span>
+          <span className="v num map-tip__value--small">{formatCount(scenario.contactableAtStep)}</span>
+        </div>
+      )}
+      <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
+        <span className="v map-tip__value--small">{RATE_COHORT_NOTE}</span>
       </div>
     </>
   );

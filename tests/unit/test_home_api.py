@@ -92,14 +92,18 @@ def test_summary_delta_shape_and_actor_resolution() -> None:
     body = res.json()
     assert body["status"] == "delta"
     assert [h["display"] for h in body["highlights"]] == [
-        "+1.5%",
         "+2,250",
+        "+1.5%",
         "no change",
     ]
     assert body["headline"] == (
-        "Since your last login: +1.5% high-opportunity, "
-        "+2,250 refi candidates, no change in offers available."
+        "Since your last login: +2,250 refi candidates, "
+        "+1.5% high-opportunity, no change in primary offer paths."
     )
+    # flow-05: the response carries the event measures' keys (null without a reading).
+    assert set(body["current"]) >= {"listed_for_sale", "competitor_lien"}
+    assert set(body["deltas"]) >= {"listed_for_sale", "competitor_lien"}
+    assert body["deltas"]["listed_for_sale"] is None
     # The resolved forwarded identity is what anchors the delta lookup.
     assert stub.actors == ["growth@summit.example"]
     # The actor's email is not reflected back in the payload.

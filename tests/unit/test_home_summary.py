@@ -74,18 +74,19 @@ def test_delta_summary_golden() -> None:
     assert summary.status == "delta"
     assert summary.previous_visit_at == _PREVIOUS_VISIT
     assert summary.baseline_snapshot_at == _SNAPSHOT_AT
-    # +1,310 / 86,900 = +1.5075% -> +1.5%
+    # +1,310 / 86,900 = +1.5075% -> +1.5%. The fixture's snapshot predates
+    # the event columns (None), so the two event measures are omitted.
     assert summary.headline == (
-        "Since your last login: +1.5% high-opportunity, "
-        "+2,250 refi candidates, +4,120 offers available."
+        "Since your last login: +2,250 refi candidates, "
+        "+1.5% high-opportunity, +4,525 primary offer paths."
     )
-    assert [h.display for h in summary.highlights] == ["+1.5%", "+2,250", "+4,120"]
+    assert [h.display for h in summary.highlights] == ["+2,250", "+1.5%", "+4,525"]
     assert [h.measure for h in summary.highlights] == [
-        "high_opportunity",
         "refi_economics_screen",
-        "offers_available",
+        "high_opportunity",
+        "offers_recommended",
     ]
-    high = summary.highlights[0]
+    high = summary.highlights[1]
     assert high.current == 88_210
     assert high.baseline == 86_900
     assert high.delta == 1_310
@@ -97,6 +98,71 @@ def test_delta_summary_golden() -> None:
     assert summary.baseline_source == "mip_app.kpi_snapshots"
 
 
+def test_event_measures_lead_the_sentence_once_their_baseline_has_a_reading() -> None:
+    """flow-05: WHY NOW cites events first; the measure order is pinned."""
+    result = _delta_result().model_copy(
+        update={
+            "current": _CURRENT.model_copy(update={"listed_for_sale": 1_250, "competitor_lien": 40_000}),
+            "baseline": _BASELINE.model_copy(update={"listed_for_sale": 1_200, "competitor_lien": 40_310}),
+            "deltas": _DELTAS.model_copy(update={"listed_for_sale": 50, "competitor_lien": -310}),
+        }
+    )
+    summary = compose_home_summary(result)
+    assert [h.measure for h in summary.highlights] == [
+        "listed_for_sale",
+        "competitor_lien",
+        "refi_economics_screen",
+        "high_opportunity",
+        "offers_recommended",
+    ]
+    assert [h.label for h in summary.highlights] == [
+        "listed for sale",
+        "competitor liens",
+        "refi candidates",
+        "high-opportunity",
+        "primary offer paths",
+    ]
+    assert summary.headline == (
+        "Since your last login: +50 listed for sale, -310 competitor liens, "
+        "+2,250 refi candidates, +1.5% high-opportunity, +4,525 primary offer paths."
+    )
+    assert summary.highlights[0].current == 1_250
+    assert summary.highlights[0].baseline == 1_200
+
+
+def test_a_highlight_without_a_baseline_reading_is_omitted_never_zero() -> None:
+    """A pre-migration snapshot has NULL event columns: no invented delta."""
+    result = _delta_result().model_copy(
+        update={
+            "current": _CURRENT.model_copy(update={"listed_for_sale": 1_250, "competitor_lien": 40_000}),
+            "baseline": _BASELINE.model_copy(update={"listed_for_sale": None, "competitor_lien": 40_310}),
+            "deltas": _DELTAS.model_copy(update={"listed_for_sale": None, "competitor_lien": -310}),
+        }
+    )
+    summary = compose_home_summary(result)
+    assert [h.measure for h in summary.highlights] == [
+        "competitor_lien",
+        "refi_economics_screen",
+        "high_opportunity",
+        "offers_recommended",
+    ]
+    assert "listed for sale" not in summary.headline
+    # A delta present without its baseline is still omitted (both are required).
+    stray = result.model_copy(update={"deltas": result.deltas.model_copy(update={"listed_for_sale": 50})})  # type: ignore[union-attr]
+    assert "listed_for_sale" not in [h.measure for h in compose_home_summary(stray).highlights]
+
+
+def test_offers_recommended_replaces_offers_available_everywhere() -> None:
+    for summary in (
+        compose_home_summary(_delta_result()),
+        compose_home_summary(KpiDeltaResult(actor_email="new@summit.example", current=_CURRENT)),
+    ):
+        measures = [h.measure for h in summary.highlights]
+        assert "offers_recommended" in measures
+        assert "offers_available" not in measures
+        assert "offers available" not in summary.headline
+
+
 def test_delta_summary_negative_and_zero_movements() -> None:
     result = _delta_result().model_copy(
         update={
@@ -104,19 +170,19 @@ def test_delta_summary_negative_and_zero_movements() -> None:
                 update={
                     "high_opportunity": -1_310,
                     "refi_economics_screen": 0,
-                    "offers_available": -315,
+                    "offers_recommended": -315,
                 }
             )
         }
     )
     summary = compose_home_summary(result)
-    assert [h.display for h in summary.highlights] == ["-1.5%", "no change", "-315"]
+    assert [h.display for h in summary.highlights] == ["no change", "-1.5%", "-315"]
     assert summary.headline == (
-        "Since your last login: -1.5% high-opportunity, "
-        "no change in refi candidates, -315 offers available."
+        "Since your last login: no change in refi candidates, "
+        "-1.5% high-opportunity, -315 primary offer paths."
     )
     # The delta itself is untouched -- only its rendering changed.
-    assert summary.highlights[1].delta == 0
+    assert summary.highlights[0].delta == 0
 
 
 def test_zero_delta_never_reads_as_a_zero_total() -> None:
@@ -134,7 +200,7 @@ def test_zero_delta_never_reads_as_a_zero_total() -> None:
                 update={
                     "high_opportunity": 0,
                     "refi_economics_screen": 0,
-                    "offers_available": 0,
+                    "offers_recommended": 0,
                 }
             )
         }
@@ -142,15 +208,15 @@ def test_zero_delta_never_reads_as_a_zero_total() -> None:
     summary = compose_home_summary(result)
 
     assert summary.headline == (
-        "Since your last login: no change in high-opportunity, "
-        "no change in refi candidates, no change in offers available."
+        "Since your last login: no change in refi candidates, "
+        "no change in high-opportunity, no change in primary offer paths."
     )
     # No bare "0" token anywhere in the sentence a reader could take for a
     # population count.
     assert "0 " not in summary.headline
     # Current totals still ride along for the evidence drawer.
     assert summary.current.high_opportunity == 88_210
-    assert [h.current for h in summary.highlights] == [88_210, 261_400, 402_330]
+    assert [h.current for h in summary.highlights] == [261_400, 88_210, 310_450]
     # Each token still appears exactly once per highlight, so the frontend's
     # exact-substring attachment keeps working.
     for highlight in summary.highlights:
@@ -165,8 +231,8 @@ def test_delta_summary_zero_baseline_falls_back_to_signed_count() -> None:
         }
     )
     summary = compose_home_summary(result)
-    assert summary.highlights[0].display == "+42"
-    assert summary.highlights[0].delta_pct is None
+    assert summary.highlights[1].display == "+42"
+    assert summary.highlights[1].delta_pct is None
 
 
 def test_first_visit_summary_has_no_deltas() -> None:
@@ -178,9 +244,9 @@ def test_first_visit_summary_has_no_deltas() -> None:
     assert summary.baseline is None
     assert summary.headline == (
         "Welcome — here's your book today: 5,240,100 marketable borrowers, "
-        "88,210 high-opportunity, 402,330 offers available."
+        "88,210 high-opportunity, 310,450 primary offer paths."
     )
-    assert [h.display for h in summary.highlights] == ["5,240,100", "88,210", "402,330"]
+    assert [h.display for h in summary.highlights] == ["5,240,100", "88,210", "310,450"]
     assert all(h.delta is None for h in summary.highlights)
 
 
@@ -195,7 +261,7 @@ def test_no_baseline_summary_is_honest_about_pending_snapshots() -> None:
     assert summary.previous_visit_at == _PREVIOUS_VISIT
     assert summary.deltas is None
     assert "baseline is still being captured" in summary.headline
-    assert [h.display for h in summary.highlights] == ["5,240,100", "88,210", "402,330"]
+    assert [h.display for h in summary.highlights] == ["5,240,100", "88,210", "310,450"]
 
 
 # -- Genie phrasing validation ----------------------------------------------
@@ -207,21 +273,21 @@ def _highlights() -> list[Any]:
 
 def test_validator_substitutes_tokens_into_placeholder_slots() -> None:
     text = (
-        "Great news since you were last here: high-opportunity is up {{0}}, "
-        "you have {{1}} refi candidates, and {{2}} offers available."
+        "Great news since you were last here: you have {{0}} refi candidates, "
+        "high-opportunity is up {{1}}, and {{2}} primary offer paths."
     )
     assert validate_genie_phrasing(text, _highlights()) == (
-        "Great news since you were last here: high-opportunity is up +1.5%, "
-        "you have +2,250 refi candidates, and +4,120 offers available."
+        "Great news since you were last here: you have +2,250 refi candidates, "
+        "high-opportunity is up +1.5%, and +4,525 primary offer paths."
     )
 
 
 def test_validator_keeps_attachment_structural_under_reordering() -> None:
     # The model may reorder the slots freely — each slot still carries its
     # OWN highlight's number, so a delta can never land on the wrong KPI.
-    text = "You gained {{1}} refi candidates, {{2}} offers available, and {{0}} high-opportunity."
+    text = "You gained {{2}} primary offer paths, {{0}} refi candidates, and {{1}} high-opportunity."
     assert validate_genie_phrasing(text, _highlights()) == (
-        "You gained +2,250 refi candidates, +4,120 offers available, "
+        "You gained +4,525 primary offer paths, +2,250 refi candidates, "
         "and +1.5% high-opportunity."
     )
 
@@ -238,9 +304,9 @@ def test_validator_rejects_the_reorder_exploit_sentence() -> None:
 
 
 def test_validator_normalizes_whitespace() -> None:
-    text = "Up {{0}},\n with {{1}} refi candidates   and {{2}} offers."
+    text = "Up {{1}},\n with {{0}} refi candidates   and {{2}} offers."
     assert validate_genie_phrasing(text, _highlights()) == (
-        "Up +1.5%, with +2,250 refi candidates and +4,120 offers."
+        "Up +1.5%, with +2,250 refi candidates and +4,525 offers."
     )
 
 
@@ -301,7 +367,7 @@ def test_phrasing_prompt_carries_headline_slots_and_tokens() -> None:
     assert summary.headline in prompt
     for slot in ("{{0}}", "{{1}}", "{{2}}"):
         assert slot in prompt
-    for token in ("+1.5%", "+2,250", "+4,120"):
+    for token in ("+1.5%", "+2,250", "+4,525"):
         assert token in prompt
     assert "Do not write any digits" in prompt
 
@@ -336,12 +402,12 @@ def _service(
 
 
 _VALID_REPHRASE = (
-    "Since yesterday your book gained {{0}} high-opportunity, "
-    "{{1}} refi candidates and {{2}} offers available — nice tailwind."
+    "Since yesterday your book gained {{0}} refi candidates, "
+    "{{1}} high-opportunity and {{2}} primary offer paths — nice tailwind."
 )
 _VALID_REPHRASE_SUBSTITUTED = (
-    "Since yesterday your book gained +1.5% high-opportunity, "
-    "+2,250 refi candidates and +4,120 offers available — nice tailwind."
+    "Since yesterday your book gained +2,250 refi candidates, "
+    "+1.5% high-opportunity and +4,525 primary offer paths — nice tailwind."
 )
 
 
@@ -391,7 +457,7 @@ def test_service_skips_enrichment_when_tokens_are_not_distinct(monkeypatch: Any)
     result = _delta_result().model_copy(
         update={
             "deltas": _DELTAS.model_copy(
-                update={"refi_economics_screen": 0, "offers_available": 0}
+                update={"refi_economics_screen": 0, "offers_recommended": 0}
             )
         }
     )
@@ -401,7 +467,7 @@ def test_service_skips_enrichment_when_tokens_are_not_distinct(monkeypatch: Any)
         spawn=_sync_spawn,
     )
     summary = service.summary_for_actor("lo01@summit.example")
-    assert [h.display for h in summary.highlights] == ["+1.5%", "no change", "no change"]
+    assert [h.display for h in summary.highlights] == ["no change", "+1.5%", "no change"]
     assert summary.phrasing_source == "deterministic"
     assert summary.phrasing_fallback_reason == "genie_duplicate_tokens"
     assert asked == []

@@ -1,4 +1,4 @@
-import type { Query, QueryClient, QueryKey } from '@tanstack/react-query';
+import type { Query, QueryCache, QueryClient, QueryKey } from '@tanstack/react-query';
 import {
   persistQueryClientRestore,
   persistQueryClientSave,
@@ -32,7 +32,9 @@ import { readActorScoped, removeActorScoped, writeActorScoped } from './actorSco
  *     bridges the load: if the first refresh of a restored query FAILS (a
  *     warming warehouse's retry, an error), the query is reset, so the
  *     surface shows its real warming or error state instead of a snapshot
- *     that silently masks the failure (CLAUDE.md: fail visibly). `maxAge` 24 h; the
+ *     that silently masks the failure (CLAUDE.md: fail visibly). A read that
+ *     already failed BEFORE the lazy restore lands is never hydrated at all
+ *     (newer-wins would turn its error into the restored success). `maxAge` 24 h; the
  *     buster is the hashed entry file name, which every chunk change
  *     re-hashes, so a deploy discards the snapshot.
  *   - Size: a snapshot over 256 KiB of JSON is not written (and the stale
@@ -128,6 +130,29 @@ function isPersistedClient(value: unknown): value is PersistedClient {
 /** Restored queries (hash -> restored dataUpdatedAt) until a refresh settles them. */
 const restoredAt = new Map<string, number>();
 
+/** The snapshot under the actor gate, screened; synchronous, so a caller can
+ *  screen it again against the live cache right before it is hydrated. */
+function restoreSnapshot(): PersistedClient | undefined {
+  const raw = readActorScoped('session', QUERY_CACHE_KEY);
+  if (!raw) return undefined;
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Malformed: removed below.
+  }
+  if (!isPersistedClient(parsed)) {
+    removeActorScoped('session', QUERY_CACHE_KEY);
+    return undefined;
+  }
+  // Defence in depth: restore only what this build would persist.
+  const queries = parsed.clientState.queries.filter(
+    (query) => isPersistableQueryKey(query.queryKey) && !carriesMaskedId(query.state.data),
+  );
+  for (const query of queries) restoredAt.set(query.queryHash, query.state.dataUpdatedAt);
+  return { ...parsed, clientState: { mutations: [], queries } };
+}
+
 /** A Persister over the actor gate: the only way this key is read or written. */
 export const actorScopedPersister: Persister = {
   persistClient(client) {
@@ -135,30 +160,33 @@ export const actorScopedPersister: Persister = {
     if (json.length > QUERY_CACHE_MAX_CHARS) removeActorScoped('session', QUERY_CACHE_KEY);
     else writeActorScoped('session', QUERY_CACHE_KEY, json);
   },
-  restoreClient() {
-    const raw = readActorScoped('session', QUERY_CACHE_KEY);
-    if (!raw) return undefined;
-    let parsed: unknown = null;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      // Malformed: removed below.
-    }
-    if (!isPersistedClient(parsed)) {
-      removeActorScoped('session', QUERY_CACHE_KEY);
-      return undefined;
-    }
-    // Defence in depth: restore only what this build would persist.
-    const queries = parsed.clientState.queries.filter(
-      (query) => isPersistableQueryKey(query.queryKey) && !carriesMaskedId(query.state.data),
-    );
-    for (const query of queries) restoredAt.set(query.queryHash, query.state.dataUpdatedAt);
-    return { ...parsed, clientState: { mutations: [], queries } };
-  },
+  restoreClient: restoreSnapshot,
   removeClient() {
     removeActorScoped('session', QUERY_CACHE_KEY);
   },
 };
+
+/** A live read that already failed: its final 'error', or a retry's 'failed' still in flight. */
+function readFailed(query: Query | undefined): boolean {
+  return query !== undefined && (query.state.status === 'error' || query.state.fetchFailureCount > 0);
+}
+
+/**
+ * The snapshot minus every query whose live read already failed before it
+ * landed. Hydrate is newer-wins and a failed first read has no data
+ * (`dataUpdatedAt` 0), so the restored value would replace the error with a
+ * success and no later refresh would settle it: the figures would come back
+ * with no marker. Such a read keeps its real warming or error state.
+ */
+function withoutFailedReads(snapshot: PersistedClient | undefined, cache: QueryCache): PersistedClient | undefined {
+  if (!snapshot) return snapshot;
+  const queries = snapshot.clientState.queries.filter((query) => {
+    if (!readFailed(cache.get(query.queryHash))) return true;
+    restoredAt.delete(query.queryHash);
+    return false;
+  });
+  return { ...snapshot, clientState: { ...snapshot.clientState, queries } };
+}
 
 let started = false;
 
@@ -189,12 +217,8 @@ function settleRestored(queryClient: QueryClient, query: Query, action: string):
 export async function startQueryPersistence(queryClient: QueryClient, buster = queryCacheBuster()): Promise<void> {
   if (started) return;
   started = true;
+  const cache = queryClient.getQueryCache();
   const options = { queryClient, persister: actorScopedPersister, buster };
-  try {
-    await persistQueryClientRestore({ ...options, maxAge: QUERY_CACHE_MAX_AGE_MS });
-  } catch {
-    // The restore already removed the unreadable snapshot.
-  }
   let timer: ReturnType<typeof setTimeout> | null = null;
   const save = () => {
     timer = null;
@@ -206,10 +230,36 @@ export async function startQueryPersistence(queryClient: QueryClient, buster = q
   const schedule = () => {
     timer ??= setTimeout(save, QUERY_CACHE_SAVE_THROTTLE_MS);
   };
-  queryClient.getQueryCache().subscribe((event) => {
-    if (event.type === 'updated') settleRestored(queryClient, event.query, event.action.type);
-    if (event.type === 'added' || event.type === 'removed' || event.type === 'updated') schedule();
+  // Reads that fail while the snapshot is landing; settled once it has.
+  let failedWhileRestoring: Set<string> | null = new Set();
+  cache.subscribe((event) => {
+    if (event.type === 'updated') {
+      const action = event.action.type;
+      if (failedWhileRestoring) {
+        if (action === 'failed' || action === 'error') failedWhileRestoring.add(event.query.queryHash);
+      } else {
+        settleRestored(queryClient, event.query, action);
+      }
+    }
+    if (!failedWhileRestoring && (event.type === 'added' || event.type === 'removed' || event.type === 'updated')) {
+      schedule();
+    }
   });
+  // A read that already failed is screened out right before hydrate.
+  const persister: Persister = { ...actorScopedPersister, restoreClient: () => withoutFailedReads(restoreSnapshot(), cache) };
+  try {
+    await persistQueryClientRestore({ ...options, persister, maxAge: QUERY_CACHE_MAX_AGE_MS });
+  } catch {
+    // The restore already removed the unreadable snapshot.
+  }
+  const failed = failedWhileRestoring;
+  failedWhileRestoring = null;
+  // A failure that landed between the screen and this line, over a value the
+  // restore put on screen, settles like any first-refresh failure.
+  for (const hash of failed) {
+    const query = cache.get(hash);
+    if (query) settleRestored(queryClient, query, 'error');
+  }
   // Reads that settled before this lazy module loaded raised no event here.
   schedule();
 }

@@ -6,6 +6,10 @@
  *
  * DECLARED EXTENSION beyond design_files: the prototype has no slider
  * (Module 0 Prototype.html's map legend, ~L1860-1871, is a static class bar).
+ * deviation:rate-change-as-numbers: under the headline, the whole book's
+ * "Largest in-the-money gains / drops" clause, and a link that opens the
+ * borrowers the move would bring onto (or take off) the refi screen in the
+ * Lead Queue, by today's spread band (scenarioCohortLink; no count).
  * The control is a native `input[type=range]` in basis points of par move, so
  * the keyboard is the platform's own (arrows +/-1 step, PageUp / PageDown,
  * Home / End) and `aria-valuenow` is a meaningful number; `aria-valuetext`
@@ -28,15 +32,16 @@
  * input event, so a scrub is one history-free URL write, not dozens.
  */
 import { useId } from 'react';
+import { Link } from 'react-router';
 import type { RateLeverInputs } from './USChoroplethMapLegend';
 import { useWarmingBlockDefers } from './USChoroplethMap.warming';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { bpsLabel, formatCount, ratePct } from '../../lib/formatters';
 import { formatDate } from '../../lib/time';
 import { EvidenceChip } from '../Primitives';
-import type { RateScenarioIndex } from './rateScenario.logic';
+import { scenarioView, type RateScenarioIndex } from './rateScenario.logic';
 import { nearestStep, recountAt } from './rateScenario.recount';
-import { scenarioHeadline, scenarioValueText } from './rateScenario.copy';
+import { largestChanges, scenarioCohortLink, scenarioHeadline, scenarioValueText } from './rateScenario.copy';
 import './RateScenarioControl.css';
 
 export default function RateScenarioControl({ rate }: { rate: RateLeverInputs }) {
@@ -69,6 +74,7 @@ export default function RateScenarioControl({ rate }: { rate: RateLeverInputs })
       onStepChange={rate.onStepChange}
       onStepCommit={rate.onStepCommit}
       scope={rate.scope}
+      stateName={rate.stateName}
     />
   ) : null;
 }
@@ -85,9 +91,10 @@ interface RateLeverProps {
   onStepCommit?: (step: number) => void;
   /** The drilled state, when the legend recounts one state; null for the whole book. */
   scope: { id: string; name: string } | null;
+  stateName: (id: string) => string;
 }
 
-function RateLever({ index, step, onStepChange, onStepCommit, scope }: RateLeverProps) {
+function RateLever({ index, step, onStepChange, onStepCommit, scope, stateName }: RateLeverProps) {
   const inputId = useId();
   const { steps, response } = index;
   const stride = steps.length > 1 ? steps[1] - steps[0] : 1;
@@ -97,6 +104,8 @@ function RateLever({ index, step, onStepChange, onStepCommit, scope }: RateLever
   const sentence = rate !== null && recount
     ? { step, ratePct: rate, ...recount, scopeName: scope?.name ?? null }
     : null;
+  const largest = scope === null ? largestChanges(scenarioView(index, step)?.changeById ?? null, stateName, step) : null;
+  const cohort = scenarioCohortLink(step, minSpread, scope);
   return (
     <div className="rate-lever" data-step={step}>
       <div className="rate-lever__row">
@@ -136,6 +145,12 @@ function RateLever({ index, step, onStepChange, onStepCommit, scope }: RateLever
         <span className="rate-lever__sentence">{sentence ? scenarioHeadline(sentence) : '—'}</span>{' '}
         <EvidenceChip source={DRAWER_SOURCES.rateSensitivity}>{DRAWER_SOURCES.rateSensitivity.short}</EvidenceChip>
       </p>
+      {largest && <p className="rate-lever__meta" data-testid="rate-lever-largest">{largest}</p>}
+      {cohort && (
+        <Link to={cohort.href} className="btn btn--ghost btn--sm">
+          {cohort.label}
+        </Link>
+      )}
       <div className="rate-lever__meta">
         Refi screen {typeof minSpread === 'number' ? bpsLabel(minSpread) : '—'} spread,{' '}
         {typeof minEquity === 'number' ? `${formatCount(minEquity)}%` : '—'} equity · today&apos;s par{' '}

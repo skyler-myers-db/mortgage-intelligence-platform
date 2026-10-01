@@ -4,11 +4,12 @@
  * an axe verdict and a pixel baseline describe the same DOM.
  *
  * Two kinds:
- *  - LOAD states (`degraded`, `empty`, `read-failed`) change what the
+ *  - LOAD states (`degraded`, `empty`, `read-failed`, `stale-note`) change what the
  *    route's natural load receives, so `prepareState` registers their
  *    fixture BEFORE navigation;
  *  - OVERLAY states (`evidence-drawer`, `command-palette`, `genie`,
- *    `filter-menu`, `expanded-row`, `triage`) are opened after the natural load by
+ *    `filter-menu`, `expanded-row`, `triage`, `delta-explainer`) are opened
+ *    after the natural load by
  *    `enterState`, which never opens an audited read: the Borrower 360
  *    proof drawer is not among them, and visual.ts's audited-read guard
  *    checks every state after it is entered.
@@ -39,7 +40,9 @@ export type FixtureState =
   | 'degraded'
   | 'empty'
   | 'read-failed'
-  | 'run-dialog-open';
+  | 'run-dialog-open'
+  | 'stale-note'
+  | 'delta-explainer';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -47,6 +50,16 @@ export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> 
   // Both Segment reads, so the map is not half-loaded beside failed cards.
   'segment-intelligence': ['/api/segments', '/api/geo/state-rollups'],
 };
+
+/**
+ * The reads `stale-note` (W5b delivery-06 client half) serves with
+ * `X-Data-Last-Good-At`, per route name: the server retained their values
+ * after a failed refresh, so the page shows one StaleDataNote.
+ */
+export const STALE_NOTE_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
+  'segment-intelligence': ['/api/segments', '/api/geo/state-rollups'],
+};
+export const STALE_NOTE_LAST_GOOD_AT = '2026-07-14T08:00:00Z';
 
 /** A failed-read surface that is neither the bannered calm line nor a pending one. */
 export const FAILED_READ_SURFACE =
@@ -75,6 +88,10 @@ export function prepareState(mockApi: MockApi, state: FixtureState, routeName?: 
     for (const endpoint of endpoints) mockApi.degrade(endpoint, WAREHOUSE_OUTAGE_503);
   } else if (state === 'degraded') {
     mockApi.register<HealthPayload>('GET', '/api/health', () => json(WAREHOUSE_DOWN_HEALTH));
+  } else if (state === 'stale-note') {
+    const endpoints = STALE_NOTE_ENDPOINTS[routeName ?? ''];
+    if (!endpoints) throw new Error(`stale-note names no reads for route ${routeName ?? '(none)'}`);
+    for (const endpoint of endpoints) mockApi.withHeaders('GET', endpoint, { 'X-Data-Last-Good-At': STALE_NOTE_LAST_GOOD_AT });
   } else if (state === 'empty') {
     mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
       json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
@@ -127,6 +144,19 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       await page.locator('#data-operations').getByRole('button', { name: 'Run', exact: true }).first().click();
       await expect(page.locator('dialog.admin-run-dialog')).toHaveAttribute('open', '');
       break;
+    case 'stale-note': {
+      const note = page.locator('#main-content [data-testid="stale-data-note"]');
+      await expect(note, 'one retained-value note').toHaveCount(1);
+      await note.scrollIntoViewIfNeeded();
+      break;
+    }
+    case 'delta-explainer': {
+      // Home's refi trigger (WHY NOW): its chip's drawer explains the change (audit-free read).
+      const chip = page.locator('.home-answer .login-summary .home-answer__trigger', { hasText: 'refi screen' }).locator('.evidence-chip');
+      const drawer = await app.openEvidenceDrawer(chip);
+      await expect(drawer.locator('[data-testid="delta-explainer"] table tbody tr').first()).toBeVisible();
+      break;
+    }
   }
   await app.settle();
 }

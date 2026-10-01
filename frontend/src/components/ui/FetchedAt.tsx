@@ -13,6 +13,7 @@ import './FetchedAt.css';
  *
  * `.fetched-at` is a declared extension (design_files has no freshness
  * control); colocated CSS, lazy with the routes that show it.
+ * deviation:home-fetched-at (Home's hero shows the briefing's age too).
  */
 interface FetchedAtProps {
   /**

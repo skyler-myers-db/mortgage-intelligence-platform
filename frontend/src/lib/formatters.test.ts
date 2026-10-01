@@ -23,6 +23,7 @@ import {
   ratePctFromFraction,
   signedBps,
   signedBpsLabel,
+  signedCount,
   signedPct,
 } from './formatters';
 
@@ -47,6 +48,31 @@ describe('signedBps', () => {
   it('renders an em dash for a non-finite value rather than NaN', () => {
     expect(signedBps(Number.NaN)).toBe('—');
     expect(signedBps(Number.POSITIVE_INFINITY)).toBe('—');
+  });
+});
+
+describe('signedCount', () => {
+  it('signs a change in a population with grouping and an ASCII minus', () => {
+    expect(signedCount(1234)).toBe('+1,234');
+    expect(signedCount(-1234)).toBe('-1,234');
+    expect(signedCount(-1234).charCodeAt(0)).toBe(45);
+  });
+
+  it('prints zero, and anything that rounds to zero, without a sign', () => {
+    expect(signedCount(0)).toBe('0');
+    expect(signedCount(-0.4)).toBe('0');
+    expect(signedCount(0.4)).toBe('0');
+  });
+
+  it('rounds half up to a whole count', () => {
+    expect(signedCount(2.5)).toBe('+3');
+    expect(signedCount(-2.6)).toBe('-3');
+  });
+
+  it('renders the unknown glyph for a missing or non-finite value', () => {
+    expect(signedCount(Number.NaN)).toBe('—');
+    expect(signedCount(null)).toBe('—');
+    expect(signedCount(undefined)).toBe('—');
   });
 });
 

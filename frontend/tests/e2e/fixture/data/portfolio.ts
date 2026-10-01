@@ -12,8 +12,10 @@ import type {
   PortfolioPreview,
   SalesTeamMember,
 } from '../../../../src/types';
+import type { GrowthAgentWatchlistSummaryResponse } from '../../../../src/types/growthAgent';
+import type { HomeAttributionMeasure, HomeSummaryAttributionResponse } from '../../../../src/types/homeAttribution';
 import { fixture, json, type FixtureEntry, type FixtureRequest } from '../mockApi';
-import { SNAPSHOT_AT, TOTALS } from './reference';
+import { SNAPSHOT_AT, STATES, TOTALS } from './reference';
 
 function trend(latest: number, growthPct: number): KpiTrend {
   // Seven points ending on the headline value, rising by `growthPct` overall.
@@ -99,13 +101,18 @@ export const HOME_SUMMARY: HomeSummary = {
   status: 'delta',
   previous_visit_at: '2026-07-09T14:30:00+00:00',
   baseline_snapshot_at: '2026-07-09T06:00:00+00:00',
-  headline: 'Since your last login: +1.5% high-opportunity, +2,250 refi candidates, +190 offers available.',
+  headline:
+    'Since your last login: +44 listed for sale, -31 competitor liens, +2,250 refi candidates, +1.5% high-opportunity, +190 primary offer paths.',
   phrasing_source: 'deterministic',
   phrasing_fallback_reason: 'genie_not_configured',
+  // SUMMARY_DELTA_MEASURES order (backend/services/home_summary.py, flow-05):
+  // the two event measures first, then refi, high-opportunity, offer paths.
   highlights: [
-    { measure: 'high_opportunity', label: 'high-opportunity', display: '+1.5%', value_token: '+1.5%', current: TOTALS.highOpportunity, baseline: 4059, delta: 61, delta_pct: 1.5 },
+    { measure: 'listed_for_sale', label: 'listed for sale', display: '+44', value_token: '+44', current: 1412, baseline: 1368, delta: 44, delta_pct: 3.2 },
+    { measure: 'competitor_lien', label: 'competitor liens', display: '-31', value_token: '-31', current: 9870, baseline: 9901, delta: -31, delta_pct: -0.3 },
     { measure: 'refi_economics_screen', label: 'refi candidates', display: '+2,250', value_token: '+2,250', current: TOTALS.inTheMoney, baseline: 10590, delta: 2250, delta_pct: 21.2 },
-    { measure: 'offers_available', label: 'offers available', display: '+190', value_token: '+190', current: TOTALS.offersRecommended, baseline: 6060, delta: 190, delta_pct: 3.1 },
+    { measure: 'high_opportunity', label: 'high-opportunity', display: '+1.5%', value_token: '+1.5%', current: TOTALS.highOpportunity, baseline: 4059, delta: 61, delta_pct: 1.5 },
+    { measure: 'offers_recommended', label: 'primary offer paths', display: '+190', value_token: '+190', current: TOTALS.offersRecommended, baseline: 6060, delta: 190, delta_pct: 3.1 },
   ],
   // The HeadlineKpis readings the highlights above are cut from (backend
   // HeadlineKpis / KpiDeltas: every count is required, deltas = current -
@@ -117,6 +124,8 @@ export const HOME_SUMMARY: HomeSummary = {
     offers_available: TOTALS.offersRecommended,
     offers_recommended: TOTALS.offersRecommended,
     avg_opportunity_score: 81,
+    listed_for_sale: 1412,
+    competitor_lien: 9870,
   },
   baseline: {
     marketable_population: 88491,
@@ -125,6 +134,8 @@ export const HOME_SUMMARY: HomeSummary = {
     offers_available: 6060,
     offers_recommended: 6060,
     avg_opportunity_score: 80.6,
+    listed_for_sale: 1368,
+    competitor_lien: 9901,
   },
   deltas: {
     marketable_population: TOTALS.addressable - 88491,
@@ -133,10 +144,102 @@ export const HOME_SUMMARY: HomeSummary = {
     offers_available: 190,
     offers_recommended: 190,
     avg_opportunity_score: 0.4,
+    listed_for_sale: 44,
+    competitor_lien: -31,
   },
   current_source: 'mip.semantics.portfolio_headline_metric_view',
   baseline_source: 'mip_app.kpi_snapshots',
 };
+
+/**
+ * Home's watchlist briefings (wow-ai-4): two saved watchlists, one with a
+ * three-run series and one paused on its first run, under a scheduler that
+ * ships paused (the honest default of every bundle schedule).
+ */
+export const HOME_WATCHLIST_SUMMARY: GrowthAgentWatchlistSummaryResponse = {
+  scheduler: { state: 'paused', reason: 'job_schedule' },
+  watchlists: [
+    {
+      monitor_id: 'fixture-home-monitor-0001',
+      workflow_id: 'daily_refi_brief',
+      name: 'Daily refi brief',
+      cadence: 'daily',
+      status: 'active',
+      run_count: 3,
+      last_run_at: SNAPSHOT_AT,
+      previous_run_at: SNAPSHOT_AT,
+      actionable_total: TOTALS.contactableInTheMoney,
+      previous_actionable_total: TOTALS.contactableInTheMoney - 12,
+      actionable_delta: 12,
+      actionable_avg_score: 84.6,
+      previous_actionable_avg_score: 83.9,
+      avg_score_delta: 0.7,
+      recent_actionable_totals: [TOTALS.contactableInTheMoney - 20, TOTALS.contactableInTheMoney - 12, TOTALS.contactableInTheMoney],
+    },
+    {
+      monitor_id: 'fixture-home-monitor-0002',
+      workflow_id: 'listing_watch',
+      name: 'Listed homes, purchase path',
+      cadence: 'weekly',
+      status: 'paused',
+      run_count: 1,
+      last_run_at: SNAPSHOT_AT,
+      previous_run_at: null,
+      actionable_total: 211,
+      previous_actionable_total: null,
+      actionable_delta: null,
+      actionable_avg_score: 71.2,
+      previous_actionable_avg_score: null,
+      avg_score_delta: null,
+      recent_actionable_totals: [211],
+    },
+  ],
+};
+
+/** Per-state change in the funnel snapshots behind the Delta Explainer (wow-ai-3); 30 more are unattributed. */
+const ATTRIBUTION_CHANGES: Readonly<Record<string, number>> = { IL: 620, TX: 540, CA: 410, FL: 300, AZ: 180, WA: 90, CO: 40, GA: 20 };
+const ATTRIBUTION_UNATTRIBUTED = 30;
+const ATTRIBUTION_LABELS: Readonly<Record<HomeAttributionMeasure, string>> = {
+  refi_economics_screen: 'refi candidates',
+  high_opportunity: 'high-opportunity',
+  offers_recommended: 'primary offer paths',
+  listed_for_sale: 'listed for sale',
+};
+
+/**
+ * GET /api/home/summary/attribution: whole-book state counts that reconcile
+ * (baseline + every state change + the unattributed 30 = now), the par prints
+ * of both weeks and an offer-rules change after the baseline. No ids.
+ */
+export function homeAttribution(measureParam: string | null, baseline: string | null): HomeSummaryAttributionResponse {
+  const measure = (measureParam && measureParam in ATTRIBUTION_LABELS ? measureParam : 'refi_economics_screen') as HomeAttributionMeasure;
+  const states = STATES.map((state) => {
+    const change = ATTRIBUTION_CHANGES[state.code] ?? 0;
+    return { state: state.code, baseline_count: state.inTheMoney - change, current_count: state.inTheMoney, change };
+  }).sort((a, b) => Math.abs(b.change) - Math.abs(a.change) || a.state.localeCompare(b.state));
+  const attributed = states.reduce((sum, row) => sum + row.change, 0);
+  const current = states.reduce((sum, row) => sum + row.current_count, 0);
+  const totalChange = attributed + ATTRIBUTION_UNATTRIBUTED;
+  return {
+    measure,
+    label: ATTRIBUTION_LABELS[measure],
+    population: 'addressable',
+    requested_baseline_date: baseline ?? '2026-07-09',
+    baseline_snapshot_date: '2026-07-08',
+    current_snapshot_date: SNAPSHOT_AT.slice(0, 10),
+    nearest_snapshot: true,
+    baseline_total: current - totalChange,
+    current_total: current,
+    total_change: totalChange,
+    states,
+    unattributed_change: ATTRIBUTION_UNATTRIBUTED,
+    rate: { series_id: 'MORTGAGE30US', baseline_week: '2026-07-06', baseline_pct: 6.7, latest_week: '2026-07-13', latest_pct: 6.62 },
+    offer_rules_last_updated: '2026-07-20T09:00:00',
+    offer_rules_changed_since_baseline: true,
+    sources: ['mip.gold.funnel_snapshot_daily', 'mip.gold.rate_window_weekly', 'mip.ref.offer_rules_config'],
+    note: 'These coincided with the change; they are not shown as causes.',
+  };
+}
 
 export const SALES_TEAM: SalesTeamMember[] = [
   { email: 'lo.alpha@summit.example', display_label: 'Loan Officer A', role: 'loan_officer', region: 'Midwest', manager_email: 'manager@summit.example', capacity_per_day: 25, active: true },
@@ -199,4 +302,8 @@ export const portfolioFixtures: FixtureEntry[] = [
   ),
   fixture('GET', '/api/sales/team', () => json<SalesTeamMember[]>(SALES_TEAM)),
   fixture('GET', '/api/home/summary', () => json<HomeSummary>(HOME_SUMMARY)),
+  fixture('GET', '/api/growth-agent/monitors/summary', () =>
+    json<GrowthAgentWatchlistSummaryResponse>(HOME_WATCHLIST_SUMMARY)),
+  fixture('GET', '/api/home/summary/attribution', ({ query }) =>
+    json<HomeSummaryAttributionResponse>(homeAttribution(query.get('measure'), query.get('baseline')))),
 ];

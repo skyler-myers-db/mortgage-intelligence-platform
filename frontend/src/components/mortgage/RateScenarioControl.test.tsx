@@ -8,6 +8,7 @@
  */
 import { act, useDeferredValue, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import type { GeoRead } from './useChoroplethLiveFacts';
@@ -47,9 +48,10 @@ const RESPONSE: RateSensitivityResponse = {
   },
 };
 const INDEX = indexRateScenario(RESPONSE) as RateScenarioIndex;
+const stateName = (id: string) => id.toUpperCase();
 
 function read(overrides: Partial<GeoRead<RateSensitivityResponse>> = {}): GeoRead<RateSensitivityResponse> {
-  return { data: RESPONSE, warmingUp: null, error: null, loading: false, updating: false, retry: vi.fn(), ...overrides };
+  return { data: RESPONSE, warmingUp: null, error: null, loading: false, updating: false, lastGoodAt: null, retry: vi.fn(), ...overrides };
 }
 
 /** The map's arrangement: the control gets the input step, the fill a deferred copy. */
@@ -59,7 +61,7 @@ function Harness({ onShown, onStepCommit }: { onShown: (step: number) => void; o
   onShown(shown);
   return (
     <RateScenarioControl
-      rate={{ read: read(), index: INDEX, view: null, step, onStepChange: setStep, onStepCommit, scope: null }}
+      rate={{ read: read(), index: INDEX, view: null, step, onStepChange: setStep, onStepCommit, scope: null, stateName }}
     />
   );
 }
@@ -91,7 +93,7 @@ describe('RateScenarioControl', () => {
   }
 
   it('is a labelled native range in basis points with the server rate in its output', () => {
-    act(() => root.render(<Harness onShown={() => undefined} />));
+    act(() => root.render(<MemoryRouter><Harness onShown={() => undefined} /></MemoryRouter>));
     const input = slider();
     expect(input?.min).toBe('-100');
     expect(input?.max).toBe('100');
@@ -105,7 +107,7 @@ describe('RateScenarioControl', () => {
   });
 
   it('moves the thumb, the output, the value text and the headline with the input', () => {
-    act(() => root.render(<Harness onShown={() => undefined} />));
+    act(() => root.render(<MemoryRouter><Harness onShown={() => undefined} /></MemoryRouter>));
     change(-50);
     expect(slider()?.value).toBe('-50');
     expect(document.querySelector('output')?.textContent).toBe('5.80%');
@@ -119,7 +121,7 @@ describe('RateScenarioControl', () => {
   });
 
   it('Reset returns to today', () => {
-    act(() => root.render(<Harness onShown={() => undefined} />));
+    act(() => root.render(<MemoryRouter><Harness onShown={() => undefined} /></MemoryRouter>));
     change(100);
     expect(slider()?.value).toBe('100');
     const reset = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Reset to today');
@@ -134,6 +136,7 @@ describe('RateScenarioControl', () => {
     // must already show the input.
     act(() =>
       root.render(
+        <MemoryRouter>
         <RateScenarioControl
           rate={{
             read: read(),
@@ -141,9 +144,10 @@ describe('RateScenarioControl', () => {
             view: scenarioView(INDEX, 0),
             step: -100,
             onStepChange: () => undefined,
-            scope: null,
+            scope: null, stateName,
           }}
-        />,
+        />
+        </MemoryRouter>,
       ),
     );
     expect(slider()?.value).toBe('-100');
@@ -155,14 +159,14 @@ describe('RateScenarioControl', () => {
 
   it('the deferred copy catches up with the input', () => {
     const shown: number[] = [];
-    act(() => root.render(<Harness onShown={(step) => shown.push(step)} />));
+    act(() => root.render(<MemoryRouter><Harness onShown={(step) => shown.push(step)} /></MemoryRouter>));
     change(-100);
     expect(slider()?.value).toBe('-100');
     expect(shown[shown.length - 1]).toBe(-100);
   });
 
   it('opens the evidence drawer on the gold grid from the headline chip', () => {
-    act(() => root.render(<Harness onShown={() => undefined} />));
+    act(() => root.render(<MemoryRouter><Harness onShown={() => undefined} /></MemoryRouter>));
     const chip = document.querySelector<HTMLButtonElement>('.rate-lever__headline .evidence-chip');
     act(() => chip?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(appMocks.setDrawer).toHaveBeenCalledWith(
@@ -174,7 +178,9 @@ describe('RateScenarioControl', () => {
     const render = (r: GeoRead<RateSensitivityResponse>, index: RateScenarioIndex | null) =>
       act(() =>
         root.render(
-          <RateScenarioControl rate={{ read: r, index, view: null, step: 0, onStepChange: () => undefined, scope: null }} />,
+          <MemoryRouter>
+            <RateScenarioControl rate={{ read: r, index, view: null, step: 0, onStepChange: () => undefined, scope: null, stateName }} />
+          </MemoryRouter>,
         ),
       );
     render(
@@ -206,7 +212,7 @@ describe('RateScenarioControl', () => {
 
   it('commits the step on pointerup, on keyup of a moving key and on Reset, never per input (D-dataviz-geo-d2)', () => {
     const commits: number[] = [];
-    act(() => root.render(<Harness onShown={() => undefined} onStepCommit={(step) => commits.push(step)} />));
+    act(() => root.render(<MemoryRouter><Harness onShown={() => undefined} onStepCommit={(step) => commits.push(step)} /></MemoryRouter>));
     const input = slider() as HTMLInputElement;
     act(() => input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
     for (const value of [-25, -50, -75, -50, -75]) change(value);
@@ -226,5 +232,22 @@ describe('RateScenarioControl', () => {
     expect(commits).toEqual([-75, -100, -100, 0]);
     expect(slider()?.value).toBe('0');
   });
-});
 
+  // wow-stage-1: the whole book's largest movers and the cohort handoff sit
+  // under the headline once the step moves; nothing at today's rate.
+  it('lists the largest in-the-money gains and links the cohort, only away from step 0', () => {
+    act(() => root.render(<MemoryRouter><Harness onShown={() => undefined} /></MemoryRouter>));
+    expect(document.querySelector('[data-testid="rate-lever-largest"]')).toBeNull();
+    expect(document.querySelector('.rate-lever a')).toBeNull();
+    change(-50);
+    expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe('Largest in-the-money gains: IL +400');
+    const link = document.querySelector<HTMLAnchorElement>('.rate-lever a');
+    expect(link?.textContent).toBe('Open borrowers within 50 bps of the refi screen in the Lead Queue');
+    expect(link?.getAttribute('href')).toBe('/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
+    change(25);
+    expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe('Largest in-the-money drops: IL -200');
+    expect(document.querySelector('.rate-lever a')?.getAttribute('href')).toBe(
+      '/lead-queue?segment=itm&min_rate_spread_bps=75&max_rate_spread_bps=99',
+    );
+  });
+});

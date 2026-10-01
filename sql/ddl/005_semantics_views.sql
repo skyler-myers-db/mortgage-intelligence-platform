@@ -295,7 +295,10 @@ COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
 -- copy + per-column rationale. App-serving headline-KPI view (S1): the
 -- portfolio preview aggregates its indicator columns; the canonical
 -- high-opportunity threshold and score bands live only in
--- mip.gold.fn_high_opportunity / mip.gold.fn_score_band.
+-- mip.gold.fn_high_opportunity / mip.gold.fn_score_band. The WHY NOW event
+-- measures aggregate existing columns: listed_for_sale = SUM(listed_for_sale)
+-- and competitor_lien = SUM(is_competitor_lien) (lockstep with the authored
+-- copy's header; audit flow-05).
 CREATE OR REPLACE VIEW mip.semantics.portfolio_headline_metric_view AS
 SELECT
   -- Grain + geography
@@ -335,4 +338,4 @@ SELECT
   b.refreshed_at
 FROM mip.gold.borrower_360 AS b;
 
-COMMENT ON VIEW mip.semantics.portfolio_headline_metric_view IS 'Borrower-grain semantic view defining every demoed headline KPI: marketable population (COUNT(*)), refi economics screen (SUM(in_the_money)), high opportunity (SUM(is_high_opportunity), canonical fn_high_opportunity threshold), offers available (SUM(offer_available), non-null fn_next_best_offer decision), primary offer paths (SUM(offer_recommended)), and average opportunity score. Home-page KPIs aggregate over this view with portfolio-builder criteria pushed down as WHERE predicates on the dimension columns.';
+COMMENT ON VIEW mip.semantics.portfolio_headline_metric_view IS 'Borrower-grain semantic view defining every demoed headline KPI: marketable population (COUNT(*)), refi economics screen (SUM(in_the_money)), high opportunity (SUM(is_high_opportunity), canonical fn_high_opportunity threshold), offers available (SUM(offer_available), non-null fn_next_best_offer decision), primary offer paths (SUM(offer_recommended)), average opportunity score, and two WHY NOW event measures: listed for sale (SUM(listed_for_sale)) and competitor liens (SUM(is_competitor_lien)). Home-page KPIs aggregate over this view with portfolio-builder criteria pushed down as WHERE predicates on the dimension columns.';
