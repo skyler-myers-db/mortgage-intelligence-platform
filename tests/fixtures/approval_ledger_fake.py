@@ -284,13 +284,29 @@ class FakeApprovalLedger:
 
     _sql_batch_by_id_for_update = _sql_batch_by_id
 
+    def _undecided(self, batch: dict[str, Any], borrower_id: str) -> bool:
+        """No finalized approve/reject linked at/after the request, or any after it."""
+
+        marker = f'"approval_request_batch_id":"{batch["batch_id"]}"'
+        return not any(
+            row["borrower_id"] == borrower_id
+            and row["audit_event_id"]
+            and row["action"] in ("approve", "reject")
+            and row["decided_at"] >= batch["created_at"]
+            and (row["decided_at"] > batch["created_at"] or marker in (row["decision_intent"] or ""))
+            for row in self.approvals
+        )
+
     def _sql_open_scope_batches(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         rows = [
             batch
             for batch in self.batches.values()
             if batch["audit_event_id"]
             and batch["created_at"] >= self.now - timedelta(days=30)
-            and any(key[0] == batch["batch_id"] and item["status"] == "open" for key, item in self.items.items())
+            and any(
+                key[0] == batch["batch_id"] and item["status"] == "open" and self._undecided(batch, key[1])
+                for key, item in self.items.items()
+            )
         ]
         rows.sort(key=lambda batch: (batch["created_at"], batch["batch_id"]))
         return [self._batch_view(batch) for batch in rows[:200]]

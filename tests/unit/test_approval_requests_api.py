@@ -352,6 +352,20 @@ def test_the_open_scope_hides_requests_with_no_open_borrower(
     assert [batch["batch_id"] for batch in batches] == [waiting]
 
 
+def test_two_hundred_decided_requests_never_hide_a_newer_open_one(
+    client: TestClient, ledger: FakeApprovalLedger
+) -> None:
+    # Decided items keep status 'open'; the open-scope read excludes them
+    # (SQL pinned on PostgreSQL), so they cannot fill its 200 rows.
+    for n in range(200):
+        borrower_id = f"B-ARQWIN{n:07d}"
+        batch_id = ledger.add_batch(ALICE, [borrower_id], created_at=ledger.now - timedelta(days=2, minutes=-n))
+        ledger.add_decision(borrower_id, "approve", batch_id=batch_id if n % 2 == 0 else None)
+    waiting = ledger.add_batch(BOB, [OK_2], created_at=ledger.now - timedelta(days=1))
+    batches = client.get(URL, headers=APPROVER).json()["batches"]
+    assert [batch["batch_id"] for batch in batches] == [waiting]
+
+
 # -- withdraw -----------------------------------------------------------------
 
 

@@ -78,6 +78,12 @@ WHERE batch_id = %(batch_id)s
 
 BATCH_BY_ID_FOR_UPDATE = BATCH_BY_ID.rstrip() + "\nFOR UPDATE\n"
 
+# A decided item keeps status 'open' (the decision is derived, never stored),
+# so the open scope also requires an item with NO finalized approve/reject
+# that would derive it approved/rejected (linked, at or after the request) or
+# decided_outside (any, after it): the same two facts ITEMS_WITH_DECISIONS
+# reads. Without it, fully decided requests inside the 30-day window would
+# fill the 200-row read and push newer open requests out of the list.
 OPEN_SCOPE_BATCHES = """
 SELECT batch.batch_id::text AS batch_id, batch.requested_by, batch.note, batch.created_at
 FROM mip_app.approval_request_batches AS batch
@@ -88,6 +94,21 @@ WHERE batch.audit_event_id IS NOT NULL
       FROM mip_app.approval_request_items AS item
       WHERE item.batch_id = batch.batch_id
         AND item.status = 'open'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM mip_app.approvals AS decision
+            WHERE decision.borrower_id = item.borrower_id
+              AND decision.audit_event_id IS NOT NULL
+              AND decision.action IN ('approve', 'reject')
+              AND decision.decided_at >= batch.created_at
+              AND (
+                  decision.decided_at > batch.created_at
+                  OR strpos(
+                      decision.decision_intent,
+                      '"approval_request_batch_id":"' || item.batch_id::text || '"'
+                  ) > 0
+              )
+        )
   )
 ORDER BY batch.created_at ASC, batch.batch_id ASC
 LIMIT 200

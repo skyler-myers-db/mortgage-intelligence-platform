@@ -30,6 +30,7 @@ from psycopg.rows import dict_row
 
 from backend.schemas.offer import OutreachApproveRequest
 from backend.schemas.outreach_revoke import OutreachRevokeRequest
+from backend.services import approval_request_sql
 from backend.services.approval_request_create import create_approval_request
 from backend.services.approval_requests import (
     ApprovalRequestConflict,
@@ -604,6 +605,52 @@ def test_two_concurrent_requests_for_one_borrower_hold_it_once(conn_kwargs: dict
             (LEAD_A,),
         ).fetchall()
     assert open_rows == [(first_batch,)]
+
+
+def test_fully_decided_requests_never_crowd_an_open_one_out_of_the_open_list(
+    conn_kwargs: dict[str, str],
+) -> None:
+    # A decided item keeps status 'open' (its state is derived), so the open
+    # scope's 200-row read must exclude decided requests in SQL: 200 older,
+    # fully decided requests (linked and outside decisions) used to fill it and
+    # hide a newer open request from every approver.
+    lakebase = _service(conn_kwargs)
+    with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+        for n in range(200):
+            borrower_id = f"B-ARQWIN{n:07d}"
+            batch_id = _insert_batch(conn)
+            conn.execute(
+                "INSERT INTO mip_app.approval_request_items (batch_id, borrower_id) VALUES (%s, %s)",
+                (batch_id, borrower_id),
+            )
+            conn.execute(
+                "UPDATE mip_app.approval_request_batches "
+                "SET response = %s::jsonb, audit_event_id = %s WHERE batch_id = %s",
+                (json.dumps({"batch_id": batch_id}), _audit_id(conn), batch_id),
+            )
+            intent: dict[str, Any] = {"action": "approve", "borrower_id": borrower_id}
+            if n % 2 == 0:
+                intent["approval_request_batch_id"] = batch_id  # linked; odd n decide outside
+            decision = conn.execute(
+                "INSERT INTO mip_app.approvals (borrower_id, action, actor_email, channel, offer_code, "
+                "decision_intent, decided_at) VALUES (%s, 'approve', %s, 'email', 'refi', %s, "
+                "clock_timestamp()) RETURNING approval_id::text",
+                (borrower_id, APPROVER, json.dumps(intent, sort_keys=True, separators=(",", ":"))),
+            ).fetchone()
+            assert decision is not None
+            conn.execute(
+                "UPDATE mip_app.approvals SET decision_response = '{}'::jsonb, audit_event_id = %s "
+                "WHERE approval_id = %s",
+                (_audit_id(conn), decision[0]),
+            )
+    waiting = create_approval_request(
+        lakebase, _Leads(), actor=ALICE, borrower_ids=[LEAD_A], note=NOTE,  # type: ignore[arg-type]
+        request_key=str(uuid4()),
+    )
+    fetched = lakebase.fetchall(approval_request_sql.OPEN_SCOPE_BATCHES, None, limit=200)
+    assert [row["batch_id"] for row in fetched] == [waiting.batch_id]
+    listed = list_approval_requests(lakebase, actor=APPROVER, scope="open").batches  # type: ignore[arg-type]
+    assert [batch.batch_id for batch in listed] == [waiting.batch_id]
 
 
 def test_a_zero_eligible_request_writes_only_its_refusal_audit_row(conn_kwargs: dict[str, str]) -> None:
