@@ -26,7 +26,12 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from backend.services.growth_agent_ledger_sql import WATCHLIST_SUMMARY_SQL
+from backend.services.growth_agent_ledger_sql import (
+    MONITOR_ID_BY_KEY_SQL,
+    MONITOR_SELECT_BY_KEY_SQL,
+    RUN_SELECT_FOR_SAVE_SQL,
+    WATCHLIST_SUMMARY_SQL,
+)
 from backend.services.growth_agent_watchlist_summary import briefings_from_rows
 from jobs import lakebase_migrate
 
@@ -248,6 +253,25 @@ def test_the_watchlist_summary_sql_reads_the_series_with_lag_deltas(conn_kwargs:
     assert series.last_run_at == datetime(2026, 9, 22, 9, 0, tzinfo=UTC)
     assert briefings[empty].run_count == 0 and briefings[empty].recent_actionable_totals == []
     assert seed_run  # the seed (untagged, pre-series) run is the first point
+
+
+def test_the_save_and_series_lookups_never_read_another_actors_rows(conn_kwargs: dict[str, str]) -> None:
+    # genie-09 part 1 / wow-ai-4: Save as watchlist reads the run and the
+    # watchlist key, and a save_monitor run resolves its series, ONLY within
+    # the caller's own rows; another actor's run is the same miss as an
+    # unknown one (the route's 404). Each statement runs here as shipped.
+    seed_run, monitor_id = _upgraded_with_a_saved_watchlist(conn_kwargs)
+    other = "someone.else@example.com"
+    key = {"workflow_id": "daily_refi_brief", "name": "Daily refi brief - IL"}
+    with psycopg.connect(**conn_kwargs, row_factory=dict_row) as conn:
+        assert conn.execute(RUN_SELECT_FOR_SAVE_SQL, {"actor_email": other, "run_id": seed_run}).fetchone() is None
+        own = conn.execute(RUN_SELECT_FOR_SAVE_SQL, {"actor_email": _ACTOR, "run_id": seed_run}).fetchone()
+        assert own is not None
+        assert (str(own["run_id"]), own["status"], own["workflow_id"]) == (seed_run, "completed", "daily_refi_brief")
+        for sql in (MONITOR_SELECT_BY_KEY_SQL, MONITOR_ID_BY_KEY_SQL):
+            assert conn.execute(sql, {**key, "actor_email": other}).fetchone() is None
+            mine = conn.execute(sql, {**key, "actor_email": _ACTOR}).fetchone()
+            assert mine is not None and str(mine["monitor_id"]) == monitor_id
 
 
 def _insert_monitor_named(conn: psycopg.Connection[Any], name: str) -> str:

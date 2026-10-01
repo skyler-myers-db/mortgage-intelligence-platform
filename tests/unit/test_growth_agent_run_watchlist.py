@@ -12,7 +12,9 @@ composer and the SQL warehouse are never reached.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -21,6 +23,7 @@ import pytest
 import backend.api.growth_agent as growth_agent_api
 import backend.api.growth_agent_compose_routes as compose_routes
 import backend.services.growth_agent_composer as composer_module
+import backend.services.growth_agent_ledger_sql as ledger_sql
 from tests.unit.test_growth_agent_api import (
     _clear_overrides,
     _client,
@@ -129,6 +132,46 @@ def test_another_actors_run_is_not_found(harness: _Harness) -> None:
     assert response.status_code == 404
     assert response.json()["detail"] == "growth-agent run not found"
     assert harness.save_events() == [] and harness.lakebase.monitors == []
+
+
+@pytest.mark.parametrize("name", ["RUN_SELECT_FOR_SAVE_SQL", "MONITOR_SELECT_BY_KEY_SQL", "MONITOR_ID_BY_KEY_SQL"])
+def test_every_save_and_series_lookup_reads_only_the_callers_rows(name: str) -> None:
+    # The cross-actor 404 and the replay/series key live in the SQL's own
+    # predicate; the fake Lakebase honours it only when the text carries it,
+    # and tests/integration/test_growth_agent_runs_postgres.py runs it for real.
+    assert re.search(r"WHERE\s+actor_email\s*=\s*%\(actor_email\)s", getattr(ledger_sql, name)), name
+
+
+def test_another_actors_watchlist_with_the_same_key_is_never_replayed(harness: _Harness) -> None:
+    # Same (workflow, name) key, same cadence, even pointing at this run: it is
+    # someone else's watchlist, so the save writes the caller's own.
+    foreign_id = uuid4()
+    now = datetime.now(UTC)
+    harness.lakebase.monitors.append(
+        {
+            "monitor_id": foreign_id,
+            "actor_email": OTHER_ACTOR,
+            "workflow_id": "daily_refi_brief",
+            "name": "Daily Refi Opportunity Brief - IL",
+            "cadence": "weekly",
+            "status": "active",
+            "criteria": {"states": ["TX"]},
+            "route": "/lead-queue?states=TX",
+            "actionable_total": 1,
+            "source_assets": [],
+            "last_run_id": harness.run["run_id"],
+            "seed_run_id": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    response = harness.save()
+    assert response.status_code == 200, response.text
+    monitor = response.json()
+    assert monitor["monitor_id"] != str(foreign_id)
+    assert monitor["criteria"] == harness.run["criteria"]
+    assert len(harness.save_events()) == 1
+    assert [row["actor_email"] for row in harness.lakebase.monitors] == [OTHER_ACTOR, ACTOR]
 
 
 def test_an_unknown_run_is_not_found(harness: _Harness) -> None:

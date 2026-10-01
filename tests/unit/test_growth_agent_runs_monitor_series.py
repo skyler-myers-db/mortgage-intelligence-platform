@@ -179,6 +179,21 @@ def test_a_resave_of_an_existing_name_joins_that_watchlists_series() -> None:
     assert len(lakebase.monitors) == 1
 
 
+def test_another_actors_watchlist_of_the_same_name_never_tags_the_run() -> None:
+    lakebase = _FakeLakebaseClient()
+    foreign = _monitor_row(actor="someone.else@example.com")
+    lakebase.monitors.append(foreign)
+    response = _post(
+        lakebase,
+        "/api/growth-agent/workflows/daily_refi_brief/run",
+        {"states": ["IL"], "save_monitor": True, "monitor_name": "IL Refi Watch"},
+    )
+    assert response.status_code == 200, response.text
+    # The caller's first save of that name starts its own series (untagged seed).
+    assert _inserted_monitor_ids(lakebase) == [None]
+    assert [row["actor_email"] for row in lakebase.monitors] == ["someone.else@example.com", ACTOR]
+
+
 def test_a_new_watchlists_first_run_is_untagged_and_becomes_its_seed() -> None:
     lakebase = _FakeLakebaseClient()
     response = _post(

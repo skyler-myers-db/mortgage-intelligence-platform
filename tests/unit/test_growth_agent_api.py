@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -159,6 +160,21 @@ class _FakeConn:
         return _ExecuteResult(self.lakebase.handle_execute(sql, params or {}))
 
 
+_ACTOR_SCOPE_RE = re.compile(r"WHERE\s+actor_email\s*=\s*%\(actor_email\)s")
+
+
+def _actor_visible(sql: str, row: dict[str, Any], params: dict[str, Any]) -> bool:
+    """Whether ``row`` passes the statement's OWN actor predicate.
+
+    The fake filters by actor only when the SQL text carries
+    ``WHERE actor_email = %(actor_email)s``, as PostgreSQL would, so a
+    statement that loses its actor scope reads other actors' rows here too
+    (audit 2026-09-21 genie-09 part 1: the cross-actor proof lives in the SQL).
+    """
+
+    return not _ACTOR_SCOPE_RE.search(sql) or row.get("actor_email") == params.get("actor_email")
+
+
 class _FakeLakebaseClient:
     def __init__(self) -> None:
         self.executes: list[tuple[str, dict[str, Any]]] = []
@@ -235,9 +251,7 @@ class _FakeLakebaseClient:
             # RUN_SELECT_FOR_SAVE_SQL: the caller's own run by id (status
             # defaults to 'completed', as the column does).
             for row in self.runs:
-                if row.get("actor_email") == params.get("actor_email") and str(row.get("run_id")) == str(
-                    params.get("run_id")
-                ):
+                if _actor_visible(sql, row, params) and str(row.get("run_id")) == str(params.get("run_id")):
                     return {"status": "completed", **row}
             return None
         if "FROM mip_app.growth_agent_runs" in sql and "WHERE actor_email" in sql:
@@ -254,8 +268,8 @@ class _FakeLakebaseClient:
             # MONITOR_ID_BY_KEY_SQL / MONITOR_SELECT_BY_KEY_SQL: the watchlist
             # with the same (actor, workflow, name) key.
             for row in self.monitors:
-                if (row.get("actor_email"), row.get("workflow_id"), row.get("name")) == (
-                    params.get("actor_email"), params.get("workflow_id"), params.get("name"),
+                if _actor_visible(sql, row, params) and (row.get("workflow_id"), row.get("name")) == (
+                    params.get("workflow_id"), params.get("name"),
                 ):
                     return dict(row)
             return None
