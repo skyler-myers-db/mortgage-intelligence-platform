@@ -60,13 +60,10 @@ export type KnownViolations = Readonly<Record<string, KnownViolation>>;
  * key must name a scan axe.fixture.spec.ts runs (it validates at load).
  */
 export const KNOWN_VIOLATIONS: KnownViolations = {
-  // a11y-01's "red primary CTA 3.62:1": in dark + red, `.btn--primary` paints
-  // #FFFFFF on the red accent #FF3621 at 3.61:1 (12-13px text needs 4.5:1).
-  // Surfaced by the first accent sweep (wave 2); the token fix is not in any
-  // wave-2 lane, so it waits for the a11y-01 remainder.
-  'home|default|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
-  'lead-queue|default|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
-  'borrower-360-detail|default|color-contrast': { finding: 'a11y-01', recorded: '2026-09-24', themes: ['dark'], accents: ['red'], nodes: '.btn--primary' },
+  // a11y-01 (the red primary CTA, white on #FF3621 at 3.61:1 in dark + red)
+  // was retired 2026-09-30: `.btn--primary` fills with --accent-fill, #D92D1A
+  // in dark + red (4.84:1), and the `home|`, `lead-queue|` and
+  // `borrower-360-detail|default|color-contrast` entries stopped reproducing.
   // a11y-01 (the selected evidence tab painted the light accent at 1.75:1)
   // was retired 2026-09-23: the theme x accent token lane moved
   // `.drawer__tab.is-active` onto --accent-ink and the five

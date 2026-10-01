@@ -7,7 +7,8 @@ import type { CSSProperties, ReactElement, SVGProps } from 'react';
  * db, flow, target, permit, tag, investor, equity, money, audit, tweak,
  * etc.) — pages, rail, and topbar all rely on it.
  *
- * Two declared departures (2026-09-21 audit critic-12):
+ * Three declared departures (2026-09-21 audit critic-12 / shell-06;
+ * deviation:icon-set-departures):
  *  - a stroke floor at small sizes: the prototype's fixed 1.6 on a 24 unit
  *    viewBox renders 0.6-0.8 CSS px at the 9-12 px sizes most call sites
  *    use, so at 12 px and below the stroke is scaled to at least 1 CSS px
@@ -15,6 +16,11 @@ import type { CSSProperties, ReactElement, SVGProps } from 'react';
  *    strokeWidth still wins.
  *  - `audit` is its own glyph (a clipboard list), no longer the filter's
  *    three bars.
+ *  - `account` is its own glyph (a circled user) for the signed-in actor.
+ *
+ * One glyph, one meaning: `user` is the BORROWER glyph (Module 0
+ * Prototype.html:1997, the dossier preview), `account` is the signed-in
+ * actor, and a new person-type meaning gets its own glyph.
  */
 export type IconName =
   | 'search' | 'filter' | 'map' | 'layers' | 'bolt' | 'home' | 'user' | 'pin'
@@ -22,7 +28,7 @@ export type IconName =
   | 'up' | 'down' | 'thumbup' | 'thumbdown' | 'info' | 'shield' | 'bell' | 'settings' | 'db' | 'flow'
   | 'target' | 'permit' | 'tag' | 'building' | 'doc' | 'audit' | 'link'
   | 'play' | 'send' | 'tweak' | 'sun' | 'moon' | 'money' | 'equity'
-  | 'investor' | 'export';
+  | 'investor' | 'export' | 'account';
 
 type Paths = Record<IconName, ReactElement>;
 
@@ -71,6 +77,10 @@ const paths: Paths = {
   equity:     <><path d="M3 21h18"/><path d="M5 21V9l7-5 7 5v12"/><path d="M9 21V13h6v8"/></>,
   investor:   <><path d="M4 21h16"/><rect x="6" y="14" width="3" height="7"/><rect x="10.5" y="9" width="3" height="12"/><rect x="15" y="5" width="3" height="16"/></>,
   export:     <><path d="M12 3v12M7 8l5-5 5 5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></>,
+  // circle-user from Lucide 1.47.0 (ISC License, (c) Lucide Contributors;
+  // https://lucide.dev/license), copied as path data, no dependency. The
+  // signed-in actor's glyph; `user` stays the borrower (audit shell-06).
+  account:    <><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/></>,
 };
 
 interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {

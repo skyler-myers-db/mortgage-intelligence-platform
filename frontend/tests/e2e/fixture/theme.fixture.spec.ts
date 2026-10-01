@@ -8,16 +8,22 @@
  *  b. `color-scheme` follows the theme, so a native checkbox in the Lead
  *     Queue paints dark in the dark theme (pixel-sampled, not just computed);
  *  c. <meta name="theme-color"> follows the theme;
- *  d. nothing stored + `prefers-color-scheme: light` boots light, and the
- *     Console's System option follows OS flips live, theme-color included;
- *     the Administration appearance section marks and edits the same
- *     preference (it used to mark the painted theme, so System read "Light");
+ *  d. nothing stored boots dark even under `prefers-color-scheme: light`
+ *     (the prototype default; 2026-09-30, report 12.4 #4), and so does an
+ *     unmarked stored 'system' an earlier build wrote on mount; a chosen
+ *     System follows OS flips live, theme-color included, and is stored with
+ *     its mip.themeChosen marker; the Administration appearance section
+ *     marks and edits the same preference as the Console;
  *  e. every theme x accent pair paints the shared token focus ring at 3:1,
- *     from the global :focus-visible rule and from a bespoke one, and passes
- *     the shared axe gate (fixture/axe.ts) on / and /lead-queue;
+ *     from the global :focus-visible rule and from a bespoke one, the skip
+ *     link and the primary CTA (at rest and hovered) at 4.5:1 (a11y-01,
+ *     --accent-fill), and passes the shared axe gate (fixture/axe.ts) on /
+ *     and /lead-queue with no ratchet entry;
  *  f. every theme x accent pair prints the accent family monochrome, as
  *     print.css asks (the (0,2,0) theme x accent compounds used to outrank
- *     its remap: dark + navy printed accent-ink #66C5FF on white paper).
+ *     its remap: dark + navy printed accent-ink #66C5FF on white paper);
+ *  g. data ink is fixed per theme (D-dataviz-geo-c1): an accent switch
+ *     repaints the primary button but never a sparkline or the choropleth.
  *
  * States the axe loop never renders (warning copy, amber glyphs, the active
  * evidence-drawer tab, text-input focus) are proven in
@@ -25,6 +31,7 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
+import { mapAllClassesFixture } from './data/mapEncoding';
 import {
   asComputedRgb,
   centerPixel,
@@ -42,6 +49,8 @@ const TRANSPARENT = 'rgba(0, 0, 0, 0)';
 /** CanvasText / Canvas under the light color-scheme tokens.css forces for print. */
 const PRINT_INK = 'rgb(0, 0, 0)';
 const PRINT_PAPER = 'rgb(255, 255, 255)';
+/** The fixed data ink per theme (tokens.css --accent-data; D-dataviz-geo-c1). */
+const DATA_INK: Record<FixtureTheme, string> = { dark: '#66C5FF', light: '#014E80' };
 
 interface AttributeTrace {
   atDomContentLoaded: string | null;
@@ -200,26 +209,26 @@ test('meta theme-color follows the painted theme and the page background token',
   expect(seen.dark).not.toBe(seen.light);
 });
 
-test('with nothing stored the app follows the OS, and the Console System option follows live flips', async ({ app, page }) => {
+test('with nothing stored the app boots dark even when the OS prefers light; a chosen System follows it live', async ({ app, page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
+  await traceRootAttribute(page, 'data-theme');
   await app.gotoRoute('/');
   const html = page.locator('html');
-  await expect(html, 'nothing stored + OS light boots light').toHaveAttribute('data-theme', 'light');
+  const trace = await page.evaluate(() => window.__mipAttrTrace?.['data-theme']);
+  expect(trace?.atDomContentLoaded, 'the first document is dark').toBe('dark');
+  expect(trace?.transitions, 'it never passes through light').not.toContain('light');
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  expect(await page.evaluate(() => [window.localStorage.getItem('mip.theme'), window.localStorage.getItem('mip.themeChosen')]), 'a first visit stores nothing').toEqual([null, null]);
 
   const console_ = await app.openConsole();
   const themeGroup = console_.getByRole('group', { name: 'Theme' });
-  await expect(themeGroup.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
-
-  await themeGroup.getByRole('button', { name: 'Dark' }).click();
-  await expect(html, 'an explicit choice pins the theme').toHaveAttribute('data-theme', 'dark');
-  await page.emulateMedia({ colorScheme: 'dark' });
-  await page.emulateMedia({ colorScheme: 'light' });
-  await expect(html, 'an explicit choice ignores OS flips').toHaveAttribute('data-theme', 'dark');
+  await expect(themeGroup.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
 
   await themeGroup.getByRole('button', { name: 'System' }).click();
-  await expect(html).toHaveAttribute('data-theme', 'light');
+  await expect(html, 'a chosen System follows the light OS').toHaveAttribute('data-theme', 'light');
   const lightChrome = await themeColorAndPageBackground(page);
   expect(lightChrome.meta, 'theme-color is the light page background').toBe(lightChrome.background);
+  expect(await page.evaluate(() => [window.localStorage.getItem('mip.theme'), window.localStorage.getItem('mip.themeChosen')])).toEqual(['system', 'true']);
 
   await page.emulateMedia({ colorScheme: 'dark' });
   await expect(html, 'System follows an OS flip without a reload').toHaveAttribute('data-theme', 'dark');
@@ -233,31 +242,43 @@ test('with nothing stored the app follows the OS, and the Console System option 
 
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(html).toHaveAttribute('data-theme', 'light');
-  expect(await page.evaluate(() => window.localStorage.getItem('mip.theme'))).toBe('system');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await app.settle();
+  await expect(html, 'the chosen System survives a reload under OS light').toHaveAttribute('data-theme', 'light');
+});
+
+test('an unmarked stored System (auto-written by an earlier build) boots dark under OS light', async ({ app, page }) => {
+  await seedStorage(page, 'mip.theme', 'system');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await traceRootAttribute(page, 'data-theme');
+  await app.gotoRoute('/');
+  const trace = await page.evaluate(() => window.__mipAttrTrace?.['data-theme']);
+  expect(trace?.atDomContentLoaded).toBe('dark');
+  expect(trace?.transitions).not.toContain('light');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
 test('the Administration appearance section marks and edits the same preference as the Console', async ({ app, page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await app.gotoRoute('/admin-config');
   const html = page.locator('html');
-  await expect(html, 'nothing stored + OS light paints light').toHaveAttribute('data-theme', 'light');
+  await expect(html, 'nothing stored + OS light paints dark').toHaveAttribute('data-theme', 'dark');
 
   const main = page.locator('#main-content');
   await main.getByRole('button', { name: /Workspace appearance/ }).click();
   const adminTheme = main.locator('.appearance-body').getByRole('group', { name: 'Theme' });
-  // The painted theme is Light, but what the user chose is System.
-  await expect(adminTheme.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(adminTheme.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(adminTheme.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(adminTheme.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'false');
+
+  await adminTheme.getByRole('button', { name: 'System' }).click();
+  await expect(html, 'a chosen System follows the light OS').toHaveAttribute('data-theme', 'light');
+  const consoleTheme = (await app.openConsole()).getByRole('group', { name: 'Theme' });
+  await expect(consoleTheme.getByRole('button', { name: 'System' }), 'the Console shows the same choice').toHaveAttribute('aria-pressed', 'true');
 
   await adminTheme.getByRole('button', { name: 'Dark' }).click();
   await expect(html).toHaveAttribute('data-theme', 'dark');
-  const consoleTheme = (await app.openConsole()).getByRole('group', { name: 'Theme' });
-  await expect(consoleTheme.getByRole('button', { name: 'Dark' }), 'the Console shows the same choice').toHaveAttribute('aria-pressed', 'true');
-
-  await adminTheme.getByRole('button', { name: 'System' }).click();
-  await expect(html, 'System follows the light OS again').toHaveAttribute('data-theme', 'light');
-  await expect(consoleTheme.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
-  expect(await page.evaluate(() => window.localStorage.getItem('mip.theme'))).toBe('system');
+  await expect(consoleTheme.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => [window.localStorage.getItem('mip.theme'), window.localStorage.getItem('mip.themeChosen')])).toEqual(['dark', 'true']);
 });
 
 for (const theme of THEMES) {
@@ -272,8 +293,27 @@ for (const theme of THEMES) {
       await app.gotoRoute('/');
       await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
 
-      // Keyboard first so a later script focus() keeps :focus-visible.
+      // Keyboard first so a later script focus() keeps :focus-visible. The
+      // first Tab lands on the skip link: text on --accent-fill at 4.5:1.
       await page.keyboard.press('Tab');
+      const skip = page.locator(':focus');
+      await expect(skip).toHaveClass(/\bsr-skip-link\b/);
+      await settleTransitions(skip);
+      const skipColors = await renderedColors(skip);
+      const skipRatio = contrastRatio(skipColors.fg, skipColors.bg);
+      expect(skipRatio, `skip link ${skipColors.color}: ${skipRatio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+
+      // The primary CTA, at rest and hovered (a11y-01: dark + red read 3.62:1).
+      const primary = page.locator('#main-content .btn--primary:not([disabled]):visible').first();
+      for (const state of ['rest', 'hover'] as const) {
+        if (state === 'hover') await primary.hover();
+        await settleTransitions(primary);
+        const colors = await renderedColors(primary);
+        const ratio = contrastRatio(colors.fg, colors.bg);
+        expect(ratio, `.btn--primary ${state}: ${colors.color} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+      }
+      await page.mouse.move(0, 0);
+
       const nav = page.getByRole('navigation', { name: 'Primary navigation' });
       // The brand link has a bespoke rule (.rail__brand:focus-visible); the
       // module links have none, so only the ONE global :focus-visible rule in
@@ -282,10 +322,8 @@ for (const theme of THEMES) {
       await expectTokenRing(page, nav.locator('a.rail__item').first(), 'rail module link (global rule)');
 
       // The shared gate: WCAG A/AA at every impact against the canonical
-      // ratchet. Dark + red keeps a11y-01's `.btn--primary` contrast entry
-      // ('home|default' and 'lead-queue|default', white on brand red #FF3621,
-      // design_files/index.html:165); any other violation fails, and so does
-      // that entry once it stops reproducing (stale).
+      // ratchet, which holds no entry for these scans since a11y-01's red CTA
+      // entries were retired by --accent-fill; any violation fails.
       for (const [path, route] of [['/', 'home'], ['/lead-queue', 'lead-queue']] as const) {
         if (path !== '/') await app.gotoRoute(path);
         await expectAxeClean(page, { key: { route, state: 'default' }, theme, accent, known: KNOWN_VIOLATIONS });
@@ -307,17 +345,58 @@ for (const theme of THEMES) {
 
       await page.emulateMedia({ media: 'print' });
       const printed: Record<string, string> = {};
-      for (const token of ['--accent-ink', '--accent', '--chip-text', '--chip-bg']) {
+      for (const token of ['--accent-ink', '--accent-data', '--accent-fill', '--accent-fill-hover', '--accent', '--chip-text', '--chip-bg']) {
         printed[token] = await asComputedRgb(page, `var(${token})`);
       }
       // --accent-ink colours every accent text site that survives print
       // (.text-accent, .proof-component__score, .audit__ico, .uc-asset-link).
       expect(printed).toEqual({
         '--accent-ink': PRINT_INK,
+        '--accent-data': PRINT_INK,
+        '--accent-fill': PRINT_INK,
+        '--accent-fill-hover': PRINT_INK,
         '--accent': PRINT_INK,
         '--chip-text': PRINT_INK,
         '--chip-bg': PRINT_PAPER,
       });
     });
   }
+}
+
+for (const theme of THEMES) {
+  test(`${theme}: an accent switch repaints the primary button, never a sparkline or the choropleth`, async ({ app, mockApi, page }) => {
+    // The map-encoding rollup that paints every class, so a lvl-4 state exists.
+    mockApi.register(mapAllClassesFixture.method, mapAllClassesFixture.pattern, mapAllClassesFixture.handler);
+    await app.setTheme(theme);
+    await app.setAccent('red');
+    await app.gotoRoute('/');
+    const html = page.locator('html');
+    await expect(html).toHaveAttribute('data-accent', 'red');
+    const spark = page.locator('#main-content .kpi .spark__line[stroke="var(--accent-data)"]').first();
+    const region = page.locator('#main-content path.map-region.lvl-4').first();
+    const button = page.locator('#main-content .btn--primary').first();
+    await expect(spark, 'an up-trend KPI sparkline').toBeAttached();
+    await expect(region, 'a top-step state').toBeAttached();
+    await expect(button).toBeAttached();
+    const read = async () => {
+      for (const target of [spark, region, button]) await settleTransitions(target);
+      return {
+        stroke: await spark.evaluate((el) => getComputedStyle(el).stroke),
+        fill: await region.evaluate((el) => getComputedStyle(el).fill),
+        button: await button.evaluate((el) => getComputedStyle(el).backgroundColor),
+      };
+    };
+    const red = await read();
+    expect(red.stroke, 'the sparkline paints the fixed data ink').toBe(await asComputedRgb(page, DATA_INK[theme]));
+    const [r, g, b] = parseRgb(red.button);
+    expect(r - Math.max(g, b), `the primary button paints the red accent family: ${red.button}`).toBeGreaterThan(80);
+
+    const console_ = await app.openConsole();
+    await console_.getByRole('button', { name: 'Accent bright' }).click();
+    await expect(html).toHaveAttribute('data-accent', 'bright');
+    const bright = await read();
+    expect(bright.button, 'chrome follows the accent').not.toBe(red.button);
+    expect(bright.stroke, 'the sparkline ignores the accent').toBe(red.stroke);
+    expect(bright.fill, 'the choropleth ignores the accent').toBe(red.fill);
+  });
 }

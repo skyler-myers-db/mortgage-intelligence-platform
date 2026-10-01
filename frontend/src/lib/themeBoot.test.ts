@@ -24,13 +24,20 @@ import { installLocalStorage } from '../test/installLocalStorage';
 import { TokenCascade, readTokensCss } from '../test/tokenCascade';
 import {
   ACCENTS,
+  ACCENT_CHOICE_KEY,
   ACCENT_STORAGE_KEY,
   CONSOLE_OPEN_STORAGE_KEY,
+  DEFAULT_ACCENT,
+  DEFAULT_THEME_PREFERENCE,
   DENSITIES,
   DENSITY_STORAGE_KEY,
+  THEME_CHOICE_KEY,
   THEME_COLOR_TOKEN,
   THEME_PREFERENCES,
   THEME_STORAGE_KEY,
+  readAccentPreference,
+  readThemePreference,
+  resolveTheme,
 } from './themePreference';
 
 declare const process: { cwd(): string };
@@ -94,6 +101,10 @@ describe('theme-boot.js mirrors lib/themePreference.ts', () => {
     expect(bootSource).toContain(`var ACCENT_KEY = '${ACCENT_STORAGE_KEY}';`);
     expect(bootSource).toContain(`var DENSITY_KEY = '${DENSITY_STORAGE_KEY}';`);
     expect(bootSource).toContain(`var CONSOLE_KEY = '${CONSOLE_OPEN_STORAGE_KEY}';`);
+    expect(bootSource).toContain(`var THEME_CHOICE_KEY = '${THEME_CHOICE_KEY}';`);
+    expect(bootSource).toContain(`var ACCENT_CHOICE_KEY = '${ACCENT_CHOICE_KEY}';`);
+    expect(bootSource).toContain(`var DEFAULT_THEME = '${DEFAULT_THEME_PREFERENCE}';`);
+    expect(bootSource).toContain(`var DEFAULT_ACCENT = '${DEFAULT_ACCENT}';`);
     expect(bootConstant('THEME_PREFERENCES')).toEqual([...THEME_PREFERENCES]);
     expect(bootConstant('ACCENTS')).toEqual([...ACCENTS]);
     expect(bootConstant('DENSITIES')).toEqual([...DENSITIES]);
@@ -116,11 +127,47 @@ describe('theme-boot.js mirrors lib/themePreference.ts', () => {
     });
   });
 
-  it('follows prefers-color-scheme when nothing or "system" is stored', () => {
-    expect(runBoot({ stored: {}, prefersDark: false }).theme).toBe('light');
-    expect(runBoot({ stored: {}, prefersDark: true }).theme).toBe('dark');
-    expect(runBoot({ stored: { 'mip.theme': 'system' }, prefersDark: false }).theme).toBe('light');
-    expect(runBoot({ stored: { 'mip.theme': 'system' }, prefersDark: true }).theme).toBe('dark');
+  it('boots dark with nothing stored, even when the OS prefers light (2026-09-30, 12.4 #4)', () => {
+    expect(runBoot({ stored: {}, prefersDark: false })).toEqual({
+      theme: 'dark', accent: 'bright', density: 'comfortable', themeColor: '#04101F',
+    });
+  });
+
+  it('follows the OS only for a System the user chose (the mip.themeChosen marker)', () => {
+    // An unmarked 'system' was auto-written on mount by fa4c944f..0a30fca2.
+    expect(runBoot({ stored: { 'mip.theme': 'system' }, prefersDark: false }).theme).toBe('dark');
+    const chosen = { 'mip.theme': 'system', 'mip.themeChosen': 'true' };
+    expect(runBoot({ stored: chosen, prefersDark: false }).theme).toBe('light');
+    expect(runBoot({ stored: chosen, prefersDark: true }).theme).toBe('dark');
+    // No build ever auto-wrote 'light': it applies unmarked.
+    expect(runBoot({ stored: { 'mip.theme': 'light' }, prefersDark: true }).theme).toBe('light');
+  });
+
+  it('honours an unmarked accent only when it is not the default', () => {
+    expect(runBoot({ stored: { 'mip.accent': 'bright' }, prefersDark: true }).accent).toBe('bright');
+    expect(runBoot({ stored: { 'mip.accent': 'teal' }, prefersDark: true }).accent).toBe('teal');
+  });
+
+  it('lands exactly what AppContext reads, for every stored / marker / OS combination', () => {
+    const themes = [undefined, 'dark', 'light', 'system', 'neon'];
+    const accents = [undefined, 'bright', 'teal', 'purple'];
+    const marks = [undefined, 'true', 'yes'];
+    for (const theme of themes) for (const themeMark of marks) for (const accent of accents) {
+      for (const accentMark of marks) for (const prefersDark of [true, false]) {
+        const stored: Record<string, string> = {};
+        if (theme) stored[THEME_STORAGE_KEY] = theme;
+        if (themeMark) stored[THEME_CHOICE_KEY] = themeMark;
+        if (accent) stored[ACCENT_STORAGE_KEY] = accent;
+        if (accentMark) stored[ACCENT_CHOICE_KEY] = accentMark;
+        const booted = runBoot({ stored, prefersDark });
+        // runBoot left the same storage installed for the TS readers.
+        const expected = {
+          theme: resolveTheme(readThemePreference(DEFAULT_THEME_PREFERENCE), prefersDark),
+          accent: readAccentPreference(DEFAULT_ACCENT),
+        };
+        expect({ theme: booted.theme, accent: booted.accent }, JSON.stringify({ stored, prefersDark })).toEqual(expected);
+      }
+    }
   });
 
   it('boots dark when the platform cannot report a preference', () => {
@@ -132,7 +179,7 @@ describe('theme-boot.js mirrors lib/themePreference.ts', () => {
       stored: { 'mip.theme': 'neon', 'mip.accent': 'purple', 'mip.density': 'cozy' },
       prefersDark: false,
     });
-    expect(result).toEqual({ theme: 'light', accent: 'bright', density: 'comfortable', themeColor: '#F4F7FA' });
+    expect(result).toEqual({ theme: 'dark', accent: 'bright', density: 'comfortable', themeColor: '#04101F' });
   });
 
   it('pre-sets the Console gutter the way AppContext reflects the stored flag', () => {

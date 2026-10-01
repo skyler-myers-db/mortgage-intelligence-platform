@@ -21,6 +21,23 @@
 .topbar:has(.identity-menu__panel) {
   z-index: var(--z-topbar-menu);
 }
+/* The signed-in actor's initials inside the 34px trigger. DECLARED EXTENSION
+   (Module 0 Prototype.html:1206-1243 has no account control; audit shell-06)
+   deviation:account-avatar. Before a session names a real email the trigger
+   shows the `account` glyph instead, never the borrower's `user` glyph. */
+.identity-menu__avatar {
+  inline-size: var(--sp-6);
+  block-size: var(--sp-6);
+  border-radius: var(--r-pill);
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  line-height: 1;
+}
 
 /* Breadcrumbs (audit shell-04): the prototype `.topbar__crumbs` row with
    `.sep` and `.cur` (Module 0 Prototype.html:1210-1219), rendered as a

@@ -4,7 +4,7 @@
    ============================================================
    DECLARED EXTENSION. The prototype (design_files/Module 0 Prototype.html)
    has no route or theme motion; this is additive, timed on the motion tokens
-   and at or under 250 ms everywhere.
+   and at or under 250 ms everywhere (deviation:route-theme-view-transitions).
 
    app.tsx wraps the painted route in a keyed <ViewTransition> whose enter /
    exit classes are `mip-route-enter` / `mip-route-exit` (update and default
@@ -82,7 +82,7 @@
 }
 
 /* Pending navigation (the shell-05 remainder handed on by w2-error-telemetry).
-   DECLARED DEVIATION for the owner's decision-#10 list: the prototype has
+   DECLARED DEVIATION for the owner's decision-#10 list (deviation:route-pending-line): the prototype has
    no pending-navigation indicator. While a held navigation marks the
    painted route aria-busy (app.tsx, hooks/useRoutePending), the route nav
    draws a 2px --accent-ink line on its bottom edge: an inset box-shadow, so

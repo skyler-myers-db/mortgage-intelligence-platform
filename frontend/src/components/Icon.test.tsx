@@ -13,14 +13,20 @@ import { Icon, type IconName } from './Icon';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const ALL_ICONS: IconName[] = [
-  'search', 'filter', 'map', 'layers', 'bolt', 'home', 'user', 'pin',
-  'sparkle', 'chat', 'close', 'check', 'cross', 'chevdown', 'chevright',
-  'up', 'down', 'thumbup', 'thumbdown', 'info', 'shield', 'bell', 'settings', 'db', 'flow',
-  'target', 'permit', 'tag', 'building', 'doc', 'audit', 'link',
-  'play', 'send', 'tweak', 'sun', 'moon', 'money', 'equity',
-  'investor', 'export',
-];
+/**
+ * Every glyph, as a `satisfies` table (wave-3 minor #135): adding an IconName
+ * without a row here, or keeping a row for a removed name, fails `tsc`, so
+ * the drawable-content check below can never silently skip a glyph.
+ */
+const ICON_TABLE = {
+  search: true, filter: true, map: true, layers: true, bolt: true, home: true, user: true, pin: true,
+  sparkle: true, chat: true, close: true, check: true, cross: true, chevdown: true, chevright: true,
+  up: true, down: true, thumbup: true, thumbdown: true, info: true, shield: true, bell: true, settings: true,
+  db: true, flow: true, target: true, permit: true, tag: true, building: true, doc: true, audit: true,
+  link: true, play: true, send: true, tweak: true, sun: true, moon: true, money: true, equity: true,
+  investor: true, export: true, account: true,
+} satisfies Record<IconName, true>;
+const ALL_ICONS = Object.keys(ICON_TABLE) as IconName[];
 
 describe('Icon', () => {
   let container: HTMLDivElement;
@@ -75,6 +81,13 @@ describe('Icon', () => {
     const filter = svg(<Icon name="filter" size={12} />).innerHTML;
     expect(audit).not.toBe(filter);
     expect(audit).toContain('<rect');
+  });
+
+  it('draws account (the signed-in actor) apart from user (the borrower)', () => {
+    const account = svg(<Icon name="account" size={15} />).innerHTML;
+    const user = svg(<Icon name="user" size={15} />).innerHTML;
+    expect(account).not.toBe(user);
+    expect(account).toContain('<circle cx="12" cy="12" r="10"');
   });
 
   it.each(ALL_ICONS)('renders %s with drawable content', (name) => {

@@ -34,6 +34,12 @@
   .zip-tile.is-selected { border-color: Highlight; }
   .segmented,
   .switch { border-color: CanvasText; }
+  /* The account avatar's tint is forced away; an edge keeps its circle. */
+  .identity-menu__avatar {
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+  }
   .switch.switch::after {
     forced-color-adjust: none;
     background-color: CanvasText;

@@ -51,12 +51,8 @@ interface Pair {
  * (stale exception) or an unlisted pair fails.
  */
 const DOCUMENTED_EXCEPTIONS: Record<string, string> = {
-  // a11y-01: the red primary CTA is white on brand red #FF3621 (3.62:1).
-  // design_files/index.html:165 pins both --accent and --accent-contrast for
-  // the red accent; the dark theme keeps them. The light theme darkens
-  // --accent instead (see [data-theme="light"][data-accent="red"]).
-  'dark/red/--accent-contrast/--accent':
-    'a11y-01: prototype-verbatim red accent (design_files/index.html:165), white CTA text reads 3.62:1',
+  // Empty. The last entry (a11y-01, white CTA text on brand red #FF3621 at
+  // 3.62:1) was retired by --accent-fill: dark + red fills with #D92D1A.
 };
 
 function textPairs(): Pair[] {
@@ -125,8 +121,13 @@ function textPairs(): Pair[] {
   for (const base of ['--bg-1', '--bg-2']) {
     pairs.push({ finding: 'a11y-01', fg: '--signal-danger', bg: '--status-danger-soft-subtle', base, min: AA_TEXT });
   }
-  // Primary CTA: contrast text on the accent fill.
-  pairs.push({ finding: 'a11y-01', fg: '--accent-contrast', bg: '--accent', min: AA_TEXT });
+  // Primary CTA: contrast text on the CTA fill, at rest and hovered / pressed
+  // (--accent-fill is the accent except dark + red, where it is #D92D1A).
+  pairs.push({ finding: 'a11y-01', fg: '--accent-contrast', bg: '--accent-fill', min: AA_TEXT });
+  pairs.push({ finding: 'a11y-01', fg: '--accent-contrast', bg: '--accent-fill-hover', min: AA_TEXT });
+  // Skip link: the same pair (it used --bg-1 text on --accent: light + bright
+  // 1.91:1, light + teal 1.57:1, dark + navy 2.06:1).
+  pairs.push({ finding: 'a11y-01 skip link', fg: '--accent-contrast', bg: '--accent-fill', min: AA_TEXT });
   return pairs;
 }
 

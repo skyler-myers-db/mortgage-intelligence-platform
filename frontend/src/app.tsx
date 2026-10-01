@@ -117,8 +117,13 @@ function prefersReducedMotionAtMount(): boolean {
  * load makes one entrance, not two) with the page-shaped layout and the
  * `.route-transition > [data-route-fallback]` selectors unchanged. A chunk
  * that rejects during a held navigation still reaches the route boundary,
- * which offers Reload. No loaders, no useNavigation, no route objects
- * (owner decision #9).
+ * which offers Reload. No loaders, no useNavigation, no route objects: the
+ * 2026-09-30 ruling (docs/prototype-deviations.md, data-router-loaders) keeps
+ * route data on TanStack Query because a loader would write a VIEW_* audit
+ * row on every revalidation instead of once per deliberate open, a cold
+ * warehouse would hold the navigation instead of painting the route's own
+ * warm-up state, and data-before-mount already ships as prefetchRouteData
+ * (lib/routeDataPrefetch).
  *
  * View Transitions: that same startTransition activates the boundary. A new
  * pathname unmounts the old keyed boundary (exit) and mounts a new one
@@ -159,7 +164,7 @@ function prefersReducedMotionAtMount(): boolean {
  * the URL instead of trusting the URL. The fallback wrapper carries none.
  *
  * Pending navigation (the shell-05 remainder; a DECLARED DEVIATION, the
- * prototype has none): while a navigation is held, the painted wrapper
+ * prototype has none; deviation:route-pending-line): while a navigation is held, the painted wrapper
  * carries aria-busy="true" (hooks/useRoutePending) and app.transitions.css
  * draws a 2px --accent-ink line under the route nav once the hold outlasts
  * --dur-base, so a preloaded route never flashes it.

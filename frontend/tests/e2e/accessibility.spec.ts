@@ -78,20 +78,29 @@ type Theme = 'dark' | 'light';
 const THEMES: Theme[] = ['dark', 'light'];
 
 /**
- * Flip the app's theme in-place without a full reload. AppContext reads
- * `mip.theme` from localStorage on boot and mirrors it into
- * <html data-theme="…">. We set both so tokens flip immediately AND the
- * next route navigation hydrates with the same theme.
+ * Store the theme as an explicit pick: `mip.theme` plus its `mip.themeChosen`
+ * marker (lib/themePreference honours a stored 'dark' only with the marker;
+ * nothing stored boots dark), and mirror it on <html data-theme="…"> when the
+ * document exists. The ONE theme writer this spec uses: as an init script
+ * before the first paint, and again after load in case the init script raced
+ * a browser-specific storage quirk.
  */
+function storeThemeChoice(theme: string): void {
+  try {
+    window.localStorage.setItem('mip.theme', theme);
+    window.localStorage.setItem('mip.themeChosen', 'true');
+  } catch {
+    // ignore (private mode): the attribute below still flips the palette
+  }
+  document.documentElement?.setAttribute('data-theme', theme);
+}
+
+async function seedTheme(page: import('@playwright/test').Page, theme: Theme) {
+  await page.addInitScript(storeThemeChoice, theme);
+}
+
 async function setTheme(page: import('@playwright/test').Page, theme: Theme) {
-  await page.evaluate((t: Theme) => {
-    try {
-      window.localStorage.setItem('mip.theme', t);
-    } catch {
-      // ignore (SSR / private mode) — attribute fallback below
-    }
-    document.documentElement.setAttribute('data-theme', t);
-  }, theme);
+  await page.evaluate(storeThemeChoice, theme);
 }
 
 /**
@@ -112,13 +121,7 @@ test.describe('Module 0 — accessibility (nightly)', () => {
         test(`${route.path} has no WCAG A/AA axe violation (${theme})`, async ({ page }) => {
           // Seed the theme in localStorage BEFORE the first paint so
           // AppContext boots into the right palette and no flash occurs.
-          await page.addInitScript((t) => {
-            try {
-              window.localStorage.setItem('mip.theme', t as string);
-            } catch {
-              // ignore
-            }
-          }, theme);
+          await seedTheme(page, theme);
           await page.goto(route.path);
           // Defensive: also flip the attribute post-load in case the
           // init script raced a browser-specific storage quirk.
@@ -134,13 +137,7 @@ test.describe('Module 0 — accessibility (nightly)', () => {
 
       test(`borrower-360 (deep-linked real id) has no WCAG A/AA axe violation (${theme})`, async ({ page, request }) => {
         const id = await fetchFirstLeadId(request);
-        await page.addInitScript((t) => {
-          try {
-            window.localStorage.setItem('mip.theme', t as string);
-          } catch {
-            // ignore
-          }
-        }, theme);
+        await seedTheme(page, theme);
         await page.goto(`/borrower-360/${id}`);
         await setTheme(page, theme);
         await expect(page.getByText(/Borrower dossier|Refi economics check/i).first()).toBeVisible({ timeout: 20_000 });
@@ -149,13 +146,7 @@ test.describe('Module 0 — accessibility (nightly)', () => {
 
       test(`offer-orchestrator (deep-linked real id) has no WCAG A/AA axe violation (${theme})`, async ({ page, request }) => {
         const id = await fetchFirstLeadId(request);
-        await page.addInitScript((t) => {
-          try {
-            window.localStorage.setItem('mip.theme', t as string);
-          } catch {
-            // ignore
-          }
-        }, theme);
+        await seedTheme(page, theme);
         await page.goto(`/offer-orchestrator/${id}`);
         await setTheme(page, theme);
         await expect(page.getByText(/Draft outreach|Recommended offer/i).first()).toBeVisible({ timeout: 30_000 });
@@ -165,9 +156,7 @@ test.describe('Module 0 — accessibility (nightly)', () => {
       test(`admin-config uses the admin session and has no WCAG A/AA axe violation (${theme})`, async ({ page }) => {
         test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin accessibility coverage.');
         await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
-        await page.addInitScript((t) => {
-          window.localStorage.setItem('mip.theme', t as string);
-        }, theme);
+        await seedTheme(page, theme);
         await page.goto('/admin-config');
         await setTheme(page, theme);
         await expect(

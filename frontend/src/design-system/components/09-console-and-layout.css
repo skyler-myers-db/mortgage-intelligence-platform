@@ -15,7 +15,7 @@
   z-index: var(--z-console);
   display: none;
   flex-flow: column;
-  /* Animated open / close. ADDITIVE DEVIATION from the prototype, which
+  /* Animated open / close (deviation:console-motion). ADDITIVE DEVIATION from the prototype, which
      hard-cuts the panel through display none/block (Module 0
      Prototype.html:904-906): `@starting-style` gives the entry and
      `transition-behavior: allow-discrete` on `display` keeps the panel

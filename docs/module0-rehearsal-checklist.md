@@ -80,7 +80,8 @@ curl -s https://<databricks-app-host>/api/v1/audit/events?limit=5 | jq '.[0]'
 ## 5. Frontend sanity check — no DegradedBanner
 
 Open the app in an incognito / private tab at **1440×900, dark theme,
-compact density**. Expect:
+compact density** (an incognito tab stores nothing, so it boots dark by
+default whatever the OS scheme). Expect:
 
 - KPI row animates in; hero renders without a `DegradedBanner` strip.
 - Right-rail Console footer shows *Warehouse up · Genie up* with a probe

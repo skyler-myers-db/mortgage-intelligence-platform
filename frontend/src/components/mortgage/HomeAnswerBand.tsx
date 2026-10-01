@@ -41,7 +41,7 @@ export function HomeAnswerBand({
   return (
     <section className="surface home-answer" aria-labelledby="home-answer-title">
       <div className="surface__hdr home-answer__hdr">
-        <div className="surface__icon"><Icon name="sparkle" size={14} /></div>
+        <div className="surface__icon"><Icon name="doc" size={14} /></div>
         <div className="home-answer__intro">
           <h2 className="h-4" id="home-answer-title">Today&apos;s briefing</h2>
           {previewLoading ? (
