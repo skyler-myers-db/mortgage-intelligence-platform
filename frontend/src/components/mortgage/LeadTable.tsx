@@ -6,7 +6,7 @@ import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
 import { queryKeys } from '../../lib/queryKeys';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
-import { loadedExportTruncatedOf, planLeadCsvExport } from './LeadTable.csv';
+import { loadedExportTruncatedOf, planLeadCsvExport } from './LeadTable.csvPlan';
 import { leadExportNotice } from './LeadExportNotice';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.constants';
@@ -42,7 +42,6 @@ import type { LeadSummary } from '../../types';
 import type { LeadTableProps, LeadTableSort, SortDir, SortKey } from './LeadTable.types';
 import './LeadTable.css';
 
-export { buildLeadCsv } from './LeadTable.csv';
 export {
   bulkActionFocusTarget,
   isEditableTarget,

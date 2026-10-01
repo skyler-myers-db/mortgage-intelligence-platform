@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { buildLeadCsv } from './LeadTable.csv';
 import {
-  buildLeadCsv,
   bulkActionFocusTarget,
   isEditableTarget,
   isLeadApprovalEligible,

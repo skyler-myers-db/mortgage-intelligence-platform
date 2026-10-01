@@ -12,6 +12,10 @@
  * other failure means NO download and a visible error. Nothing here retries
  * a write: the transport retries only the backend's retryable bodies, where
  * no row was written.
+ *
+ * The CSV builder (LeadTable.csv) loads on the click, before step 1: the
+ * shared LeadTable chunk carries only the plan and counts (LeadTable.csvPlan).
+ * A builder that cannot load writes nothing and says so.
  */
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, isAbortError } from '../../lib/api';
@@ -20,14 +24,7 @@ import {
   LEAD_EXPORT_DIGEST_MISMATCH_DETAIL,
   type LeadExportReceipt,
 } from '../../lib/apiClients/leadExport';
-import {
-  buildLeadCsv,
-  describeLeadCsvExport,
-  downloadLeadCsv,
-  exportMatchingRows,
-  loadedExportTruncatedOf,
-  type LeadCsvExportPlan,
-} from './LeadTable.csv';
+import { exportMatchingRows, loadedExportTruncatedOf, type LeadCsvExportPlan } from './LeadTable.csvPlan';
 import type { LeadExportContext } from './LeadTable.types';
 
 export type LeadCsvExportState =
@@ -62,6 +59,13 @@ export interface LeadCsvExportRequest {
 }
 
 const EXPORT_NOT_DOWNLOADED = 'Nothing was downloaded.';
+
+/** The click-time builder; a failed chunk load reads as a plain failure (no asset URL on screen). */
+function loadLeadCsvBuilder() {
+  return import('./LeadTable.csv').catch(() => {
+    throw new Error('the export could not load; reload the page, then export again');
+  });
+}
 
 /**
  * How long the confirmation strip stays up, as before the receipt existed
@@ -140,6 +144,7 @@ export function useLeadCsvExport() {
     inflight.current = true;
     setState({ status: 'pending', rowCount: plan.rows.length });
     try {
+      const { buildLeadCsv, describeLeadCsvExport, downloadLeadCsv } = await loadLeadCsvBuilder();
       // Stamped before the bytes are built and hashed: the receipt's digest
       // covers the rules_version line the file carries.
       const rulesVersion = await resolveExportRulesVersion(exportContext);
