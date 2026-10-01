@@ -35,6 +35,23 @@ def _validate_sha256_hex(value: str, field_name: str) -> str:
     return digest
 
 
+# Shared with the audit-explorer export receipt (schemas/audit.py), so both
+# receipts bound their digests and filter maps identically.
+validate_sha256_hex = _validate_sha256_hex
+
+
+def validate_export_filters(value: dict[str, str]) -> dict[str, str]:
+    """Bound an export's query-parameter map: entry count, key shape, value length."""
+    if len(value) > MAX_EXPORT_FILTER_ENTRIES:
+        raise ValueError("filters carries too many entries")
+    for key, raw in value.items():
+        if not _FILTER_KEY_PATTERN.fullmatch(key):
+            raise ValueError("filters keys must be lowercase query parameter names")
+        if not isinstance(raw, str) or len(raw) > MAX_EXPORT_FILTER_VALUE_LENGTH:
+            raise ValueError("filters values must be bounded strings")
+    return value
+
+
 class LeadExportReceiptRequest(BaseModel):
     """What the client declares about the file it is about to download."""
 
@@ -85,14 +102,7 @@ class LeadExportReceiptRequest(BaseModel):
     @field_validator("filters")
     @classmethod
     def _bounded_filters(cls, value: dict[str, str]) -> dict[str, str]:
-        if len(value) > MAX_EXPORT_FILTER_ENTRIES:
-            raise ValueError("filters carries too many entries")
-        for key, raw in value.items():
-            if not _FILTER_KEY_PATTERN.fullmatch(key):
-                raise ValueError("filters keys must be lowercase query parameter names")
-            if not isinstance(raw, str) or len(raw) > MAX_EXPORT_FILTER_VALUE_LENGTH:
-                raise ValueError("filters values must be bounded strings")
-        return value
+        return validate_export_filters(value)
 
 
 class LeadExportReceipt(BaseModel):

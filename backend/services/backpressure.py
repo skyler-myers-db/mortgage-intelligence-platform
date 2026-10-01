@@ -32,6 +32,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
 from backend.config.settings import _running_under_pytest, settings
+from backend.services.actor_identity import forwarded_identity
 from backend.services.observability import emit, get_correlation_id
 
 log = logging.getLogger("mip.backpressure")
@@ -287,9 +288,9 @@ class BackpressureController:
 def actor_key_for_request(request: Request) -> str:
     if not settings.trust_forwarded_headers:
         return "untrusted-edge"
-    email = request.headers.get("X-Forwarded-Email") or request.headers.get("X-Forwarded-User")
-    if email and len(email) <= 254:
-        return email.strip().lower()
+    identity = forwarded_identity(request)
+    if identity and len(identity) <= 254:
+        return identity.strip().lower()
     return "anonymous"
 
 

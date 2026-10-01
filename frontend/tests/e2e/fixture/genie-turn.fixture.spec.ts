@@ -10,11 +10,9 @@
  * so they count what the browser really sent. 1440x900, production build.
  */
 import type { Page } from '@playwright/test';
-import type { HealthPayload } from '../../../src/lib/apiTypes';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { GENIE_QUESTION, genieAnswerFixture, registerGenieTurn } from './data/genieTurn';
-import { HEALTH_OK } from './data/shell';
-import { json } from './mockApi';
+import { FIXTURE_ACTOR_A, FIXTURE_ACTOR_B, serveActor } from './data/shell';
 import { contrastRatio, renderedColors } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -137,8 +135,8 @@ test.describe('one turn that survives the route', () => {
   });
 
   test('(d) an actor change mid-turn clears the record, stops polling, and a reload resumes nothing', async ({ app, page, mockApi }) => {
-    let actor = 'fixture-actor-a';
-    mockApi.register('GET', '/api/health', () => json<HealthPayload>({ ...HEALTH_OK, actor_cache_key: actor }));
+    let actor = FIXTURE_ACTOR_A;
+    serveActor(mockApi, () => actor);
     const turn = registerGenieTurn(mockApi);
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);
@@ -147,7 +145,7 @@ test.describe('one turn that survives the route', () => {
 
     // The next health poll (8 s) reports a different actor: the shell clears
     // actor-scoped state, and the turn store fails closed on the reset event.
-    actor = 'fixture-actor-b';
+    actor = FIXTURE_ACTOR_B;
     const healthCalls = () => mockApi.calls.filter((call) => call.path === '/api/v1/health' || call.path === '/api/health').length;
     const healthBefore = healthCalls();
     await page.clock.runFor(8_000);

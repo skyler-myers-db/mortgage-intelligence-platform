@@ -132,7 +132,7 @@
                             },
                             "operator": "="
                           },
-                          "backgroundColor": "#66C5FF",
+                          "backgroundColor": "#2985DF",
                           "foregroundColor": "#04101F"
                         },
                         {
@@ -176,7 +176,7 @@
                             },
                             "operator": "="
                           },
-                          "backgroundColor": "#A78BFA",
+                          "backgroundColor": "#C4B5FD",
                           "foregroundColor": "#04101F"
                         },
                         {
@@ -187,7 +187,7 @@
                             },
                             "operator": "="
                           },
-                          "backgroundColor": "#34D399",
+                          "backgroundColor": "#3FD073",
                           "foregroundColor": "#04101F"
                         }
                       ]
@@ -370,7 +370,7 @@
                     "mappings": [
                       {
                         "value": "Home Equity Candidate",
-                        "color": "#66C5FF"
+                        "color": "#2985DF"
                       },
                       {
                         "value": "In the Money",
@@ -386,11 +386,11 @@
                       },
                       {
                         "value": "Permit Activity",
-                        "color": "#A78BFA"
+                        "color": "#C4B5FD"
                       },
                       {
                         "value": "Retention Risk",
-                        "color": "#34D399"
+                        "color": "#3FD073"
                       },
                       {
                         "value": "None / Unsegmented",
@@ -398,7 +398,7 @@
                       },
                       {
                         "value": "equity",
-                        "color": "#66C5FF"
+                        "color": "#2985DF"
                       },
                       {
                         "value": "itm",
@@ -418,7 +418,7 @@
                       },
                       {
                         "value": "retention",
-                        "color": "#34D399"
+                        "color": "#3FD073"
                       },
                       {
                         "value": "none",
@@ -513,7 +513,7 @@
                     "mappings": [
                       {
                         "value": "Home Equity Candidate",
-                        "color": "#66C5FF"
+                        "color": "#2985DF"
                       },
                       {
                         "value": "In the Money",
@@ -529,11 +529,11 @@
                       },
                       {
                         "value": "Permit Activity",
-                        "color": "#A78BFA"
+                        "color": "#C4B5FD"
                       },
                       {
                         "value": "Retention Risk",
-                        "color": "#34D399"
+                        "color": "#3FD073"
                       },
                       {
                         "value": "None / Unsegmented",
@@ -541,7 +541,7 @@
                       },
                       {
                         "value": "equity",
-                        "color": "#66C5FF"
+                        "color": "#2985DF"
                       },
                       {
                         "value": "itm",
@@ -561,7 +561,7 @@
                       },
                       {
                         "value": "retention",
-                        "color": "#34D399"
+                        "color": "#3FD073"
                       },
                       {
                         "value": "none",
@@ -758,7 +758,7 @@
                     "mappings": [
                       {
                         "value": "Home Equity Candidate",
-                        "color": "#66C5FF"
+                        "color": "#2985DF"
                       },
                       {
                         "value": "In the Money",
@@ -774,11 +774,11 @@
                       },
                       {
                         "value": "Permit Activity",
-                        "color": "#A78BFA"
+                        "color": "#C4B5FD"
                       },
                       {
                         "value": "Retention Risk",
-                        "color": "#34D399"
+                        "color": "#3FD073"
                       },
                       {
                         "value": "None / Unsegmented",
@@ -786,7 +786,7 @@
                       },
                       {
                         "value": "equity",
-                        "color": "#66C5FF"
+                        "color": "#2985DF"
                       },
                       {
                         "value": "itm",
@@ -806,7 +806,7 @@
                       },
                       {
                         "value": "retention",
-                        "color": "#34D399"
+                        "color": "#3FD073"
                       },
                       {
                         "value": "none",

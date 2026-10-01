@@ -63,7 +63,10 @@ export const SEGMENT_DEFINITIONS: readonly SegmentDefinition[] = [
     icon: 'shield',
   },
   // S1.3 overlay segments — registry parity with the gold `meta` VALUES
-  // table in sql/transformations/gold_segment_population.sql.
+  // table in sql/transformations/gold_segment_population.sql. Colours stay
+  // var(--seg-*): the dark tokens.css hexes mirror that registry (and the
+  // dashboards' segment mappings); the light theme has its own validated set
+  // (tests/unit/test_segment_palette_parity.py, segmentPalette.test.ts).
   {
     code: 'second_lien_itm',
     name: 'Second-Lien Consolidation',

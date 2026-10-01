@@ -1,4 +1,5 @@
 import { Suspense, useEffect, useState, type ComponentType } from 'react';
+import { actorScopeStatus, readActorScoped, subscribeActorScope } from '../../lib/actorScope';
 import { GENIE_IN_FLIGHT_TURN_KEY } from '../../lib/genieConversation';
 import { subscribeGenieOpenRequests } from '../../lib/genieOpen';
 import {
@@ -22,14 +23,21 @@ interface GenieDockProps {
   Chat: ComponentType;
 }
 
-/** A reload left a Genie turn in this tab's session. Module level: a try
- *  statement in the component would stop the React Compiler. */
+/** A reload left a Genie turn in this tab's session, and the actor gate
+ *  (lib/actorScope) says it is the observed actor's: null until the gate is
+ *  open, and gone once the gate removed another actor's record. */
 function hasGenieTurnToResume(): boolean {
-  try {
-    return window.sessionStorage.getItem(GENIE_IN_FLIGHT_TURN_KEY) !== null;
-  } catch {
-    return false;
-  }
+  return readActorScoped('session', GENIE_IN_FLIGHT_TURN_KEY) !== null;
+}
+
+/** Once per page: the first time the gate is open, resume a record if there
+ *  is one. Before that the record belongs to no one yet. */
+let shellResumeChecked = false;
+
+function resumeOnceGateOpens(): void {
+  if (shellResumeChecked || actorScopeStatus() !== 'open') return;
+  shellResumeChecked = true;
+  if (hasGenieTurnToResume()) resumeGenieTurnFromShell();
 }
 
 /**
@@ -75,7 +83,10 @@ function resumeGenieTurnFromShell(): void {
  * `/api/genie/start`. The shell FAB wears the same ring and badge classes as
  * the chat's (16-genie-fab-status.css covers any `.genie__fab`), and the dock
  * renders the launchers' sr-only `#genie-launcher-status` description until
- * the chat mounts and renders its own; the two never coexist.
+ * the chat mounts and renders its own; the two never coexist. The resume
+ * waits for the actor gate (D-identity-review-b): no chunk import and no
+ * resume until it first opens, so a record another actor left is removed
+ * by the gate, never resumed.
  *
  * Open requests (audit `genie-04`): `openGenie({ prompt })` from any surface
  * reaches the shell here as a window event and opens the panel; the queued
@@ -94,7 +105,8 @@ export function GenieDock({ open, onOpen, onClose, onWarm, Chat }: GenieDockProp
   if (open && !everOpened) setEverOpened(true);
   useEffect(() => subscribeGenieOpenRequests(onOpen), [onOpen]);
   useEffect(() => {
-    if (hasGenieTurnToResume()) resumeGenieTurnFromShell();
+    resumeOnceGateOpens();
+    return subscribeActorScope(resumeOnceGateOpens);
   }, []);
   const status = useGenieTurnStatus();
   const outcome = useGenieLauncherOutcome();

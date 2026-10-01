@@ -93,3 +93,23 @@
   flex-direction: column;
   gap: var(--sp-1);
 }
+
+/* ============================================================
+   BULK REJECT GATE (audit tables-07, D-approval-flow-d;
+   deviation:bulk-reject-gate). Shipped with the lazy bulk chunk like the
+   approve gate's review: `.bulk-actions__reject` is the gate (a form taking
+   the same full line as `.bulk-actions__review`), `.bulk-actions__reject-fields`
+   lays out its Reason select and the required shared note, whose inputs
+   reuse the reject panel's `.decision-panel__field` look (initial CSS).
+   The prototype's batch reject (design_files/Module 0 Prototype.html:2187)
+   has no reason form; this finding requires one.
+   ============================================================ */
+.bulk-actions__reject-fields {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: start;
+}
+@media (max-width: 40rem) {
+  .bulk-actions__reject-fields { grid-template-columns: minmax(0, 1fr); }
+}

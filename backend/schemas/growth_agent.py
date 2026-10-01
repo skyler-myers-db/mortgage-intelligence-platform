@@ -64,6 +64,7 @@ GrowthAgentWorkflowId = Literal[
     "live_analysis",
 ]
 GrowthAgentCadence = Literal["daily", "weekly"]
+GrowthAgentSchedulerState = Literal["active", "paused", "unavailable"]  # flow-08: scheduled-run state
 GrowthAgentSegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
 GrowthAgentSegmentMode = Literal["any", "all"]
 GrowthAgentNotificationChannel = Literal["slack", "teams"]
@@ -879,6 +880,7 @@ class GrowthAgentHomeResponse(BaseModel):
     workflows: list[GrowthAgentWorkflow]
     monitors: list[GrowthAgentMonitor]
     capabilities: list[dict[str, object]] = Field(default_factory=list)
+    scheduler_state: GrowthAgentSchedulerState = "unavailable"
 
 
 class GrowthAgentDueMonitorRunResponse(BaseModel):

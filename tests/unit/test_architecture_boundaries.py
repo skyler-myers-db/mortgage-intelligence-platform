@@ -46,6 +46,9 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/audit/my-events"): "tests/unit/test_audit_my_events.py",
     ("GET", "/api/audit/receipt/{audit_event_id}"): "tests/unit/test_audit_receipt.py",
     ("GET", "/api/audit/rollups"): "tests/unit/test_sales_manager_api.py",
+    ("GET", "/api/audit/count"): "tests/unit/test_audit_explorer_api.py",
+    ("GET", "/api/audit/facets"): "tests/unit/test_audit_explorer_api.py",
+    ("POST", "/api/audit/export-receipt"): "tests/unit/test_audit_explorer_api.py",
     ("GET", "/api/borrowers/search"): "tests/unit/test_borrowers_router.py",
     ("GET", "/api/borrowers/{borrower_id}"): "tests/unit/test_borrowers_router.py",
     ("GET", "/api/borrowers/{borrower_id}/evidence"): "tests/unit/test_borrowers_router.py",
@@ -84,6 +87,8 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/growth-agent/agent/compose"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/agent/plan/execute"): "tests/unit/test_growth_agent_plan_execute.py",
     ("GET", "/api/growth-agent/runs"): "tests/unit/test_growth_agent_run_history.py",
+    ("GET", "/api/growth-agent/monitors/summary"): "tests/unit/test_growth_agent_watchlist_summary.py",
+    ("POST", "/api/growth-agent/runs/{run_id}/monitors"): "tests/unit/test_growth_agent_run_watchlist.py",
     ("POST", "/api/growth-agent/custom/run"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/monitors/run-due"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/monitors/run-due-all"): "tests/unit/test_growth_agent_api.py",
@@ -93,6 +98,8 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/health"): "tests/unit/test_health_endpoint.py",
     ("GET", "/api/home/summary"): "tests/unit/test_home_api.py",
     ("GET", "/api/leads"): "tests/unit/test_api_routes.py",
+    ("GET", "/api/leads/count"): "tests/unit/test_leads_count_facets.py",
+    ("GET", "/api/leads/facets"): "tests/unit/test_leads_count_facets.py",
     ("POST", "/api/leads/export-receipt"): "tests/unit/test_leads_export_receipt.py",
     ("POST", "/api/leads/{borrower_id}/assign"): "tests/unit/test_sales_manager_api.py",
     ("GET", "/api/leads/{borrower_id}/assignment"): "tests/unit/test_sales_manager_api.py",
@@ -106,6 +113,11 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/loan-officers/assignments/{assignment_id}/outcome"): "tests/unit/test_assignment_outcome.py",
     ("POST", "/api/lookup/property-loan"): "tests/unit/test_lookup_router.py",
     ("POST", "/api/offers/recommend"): "tests/unit/test_offers_router.py",
+    # The /outreach decisions are per borrower by design (audit tables-07 /
+    # tables-02, report 12.4 #9): no "select all N matching" and no server
+    # batch endpoint; a bulk run is one request per borrower under one bulk_id.
+    # tests/unit/test_outreach_decision_models.py pins the route set and the
+    # request models; a new /outreach route needs that ruling revisited first.
     ("POST", "/api/outreach/approve"): "tests/unit/test_api_routes.py",
     ("POST", "/api/outreach/draft"): "tests/unit/test_api_routes.py",
     ("POST", "/api/outreach/reject"): "tests/unit/test_outreach_reject.py",
@@ -124,6 +136,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/sales/team"): "tests/unit/test_sales_manager_api.py",
     ("GET", "/api/session"): "tests/unit/test_admin_rbac.py",
     ("GET", "/api/segments"): "tests/unit/test_api_routes.py",
+    ("GET", "/api/segments/combinations"): "tests/unit/test_segment_combinations_api.py",
     ("POST", "/api/telemetry/rum"): "tests/unit/test_rum_telemetry.py",
     ("GET", "/api/workspace"): "tests/unit/test_workspace_api.py",
     ("DELETE", "/api/workspace/drafts/{borrower_id}"): "tests/unit/test_workspace_api.py",
@@ -131,6 +144,9 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("DELETE", "/api/workspace/leads/{borrower_id}"): "tests/unit/test_workspace_api.py",
     ("PUT", "/api/workspace/leads/{borrower_id}"): "tests/unit/test_workspace_api.py",
     ("GET", "/api/workspace/queue-version"): "tests/unit/test_workspace_queue_version.py",
+    ("GET", "/api/workspace/saved-views"): "tests/unit/test_saved_views_api.py",
+    ("POST", "/api/workspace/saved-views"): "tests/unit/test_saved_views_api.py",
+    ("DELETE", "/api/workspace/saved-views/{view_id}"): "tests/unit/test_saved_views_api.py",
 }
 
 

@@ -266,6 +266,8 @@ Waves 0 to 4b reached `main` in ten merges, each deployed to dev. This section r
 
 What wave 4 cut, deferred or left unowned, checked against the wave-4b tree with all six lanes merged on 2026-09-29. Items wave 4b closes are not listed.
 
+**W5a status (2026-10-01).** Landed in wave 5a (PR to be linked at merge): `quality-04`/`stack-v1` generated API types and their gates, `quality-09` a4-i (served bodies must be complete), `quality-06` (no Storybook; the fixture VRT is the catalogue, plus a read-failed state), `delivery-08` (ruling pinned), the WebKit and Firefox forced-colors CI projects, the a11y-v2 sticky-header and review-dialog clearance residuals, the interaction-budget gating mechanism and `quality-08` budget targets, the oxlint ratchet holes; `delivery-06` server half (one footprint snapshot per decision, segment list stale-while-error with `X-Data-Last-Good-At`, `SCHEMA_NOT_FOUND`/`UNRESOLVED_ROUTINE` fail fast) and the new finding below (admin rules read gold only), the `tables-10` explorer facets/count backend and `critic-08`'s Tooltip primitive; the identity foundation (`genie-02` item 1, `bundle-04` item 4, `delivery-05`); the design contract (dark default, `--accent-fill`, fixed data ink, the re-stepped segment palette, the account glyph, `css-06` item 4, `critic-12`, minors #130 and #135, the deviation register); `tables-07` bulk Reject and the approve-review hardening (`flow-03`, `states-06`, the `tables-05` step-0 header/footer split, the WebKit pinned-focus fix, the hotkeys leftover); `tables-06` public score/spread bounds, audit-free facet counts and counts, saved views (`tables-09` phase 2, `flow-08` slice 1); the Geography foundation (`runtime-07`, `dataviz-10`, `css-03`, Rate Lever #57/#58, the URL mode/step, the PR/VI legend divergence, the lazy legend shift, `wow-stage-5`); and Growth Agent trust (`critic-01` residual with the execute:true retirement, `genie-09` part 1, `flow-08` slice 2 scheduler state, `runtime-03` for growth-agent-state, the `wow-ai-4` backend). Everything else below stays in the wave-5 plan (12.6); the lanes' deferrals were folded into their W5b-W5d owners.
+
 **Lead Queue**
 - `tables-07` bulk Reject, the whole item: the reject gate with one shared reason and rationale, the `bulk_rejection` status, kind-aware progress copy (the bulk fallback still says "Approving") and the `outreach.ts` signal; `BulkRunKind` is `'approve'` only. Budget cut 3: the lane was already over every cap before bulk Reject was built (LeadTable chunk 37.63-37.72 KiB br against a 37.6 cap). Grouping bulk rejects under a `bulk_id` needs a backend field OutreachRejectRequest does not have; do it if compliance asks.
 - `critic-06` item (d), the compact lifecycle stepper: built, then removed with its CSS and tests by budget cut 2. The verb-first labels, the confirm row and Cancel/Esc shipped.
@@ -331,17 +333,152 @@ What wave 4 cut, deferred or left unowned, checked against the wave-4b tree with
 - CSS cascade and lint depth: `stack-v3`, `css-05`, `bundle-06`, `css-07`, `responsive-09` items 1-2 and 4; `stack-07` items 3-5, `quality-10` steps 2-4. Palette and help: `shell-07` items 1-3 and 5, `bundle-09` item 1, `runtime-06`'s shared borrower search, `critic-07`, `wow-power-4`, and a keyboard path to the toast region (wave-3 review #13).
 - Not yet in a lane: `runtime-05`, `stack-v2`, `delivery-05`, `quality-08`, `critic-05`'s presenter-mode flag, `critic-09`, `critic-12`, and the wave-3 remainders (`wow-ai-1` margins in the drawer Math tab, `runtime-08` React Activity, `motion-10` map-drill continuity, a `verify_live` probe for rate sensitivity, WebKit and Firefox pagehide and Web Lock coverage, and legacy-created jobs joined async that show "Queued").
 
-### 12.4 Owner decisions still open
+### 12.4 Owner decisions (all ruled 2026-09-30)
 
-Nothing new is built for these; each stays where it is until the owner rules. The OS-seeded theme is live as shipped, and the identity boundary is built fail-closed and waits for review. Smaller rulings sit in 12.3: Storybook (`quality-06`), the segment list's hard expiry and the footprint snapshot (`delivery-06`), the Stop "ended" copy (`genie-03`) and turning RUM on for customers (`runtime-09`).
+The owner delegated every decision below to the delivery team on 2026-09-30; each is now ruled, with the full record in 12.5 and the building lane in 12.6. The original question is kept for the record, with its ruling under it.
 
 1. The OpenAPI type generator (`stack-v1`, `quality-04` items 1-2, `quality-09` item 2). `@hey-api/openapi-ts` 0.97.1 and later pulls js-yaml 4.2.0, which carries high advisories. Options: an npm override to js-yaml 4.3.2, a pin to 0.97.0, or wait. Types stay hand-written.
+   Ruled 2026-09-30 and built in W5a (w5-contract-tooling): a repo-owned, standard-library emitter, tools/gen_api_types.py, writes the type-only frontend/src/types/api.gen.ts from the committed baseline. hey-api 0.97.1-0.98.2 pull js-yaml 4.1.1 and 0.99.0 pulls 4.2.0; only 4.3.2 clears GHSA-52cp-r559-cp3m, GHSA-5p4m-2wfm-xmqj and GHSA-2883-xcg3-v3hh; 0.97.0 carries GHSA-hhx9-57xq-r5rw; the next channel moves to js-yaml 5.2.0, which is also advised; openapi-typescript peers TypeScript 5.
 2. VIEW_LEADS semantics for server paging (`tables-02`, `delivery-02`): one audit row per requested page, or one per cohort view with the cursor in the payload. It blocks the filtering and server-sort lane.
+   Ruled 2026-09-30: one VIEW_LEADS row per delivered page (as today), grouped by a server-minted view_id with page_index, sort, total_matching, a filter fingerprint and source freshness; an HMAC-signed, actor-bound cursor; pages only on an explicit "Load next 500". Built in W5c (w5-lead-queue-paging).
 3. VIEW_OFFER (`delivery-08`): compliance sign-off to share the dossier read, or a new VIEW_OFFER event. Offer keeps its own snapshot and writes VIEW_BORROWER on every open.
+   Ruled 2026-09-30 and pinned in W5a: the Offer keeps its own audited reads; no VIEW_OFFER; RECOMMEND_OFFER is the approval-surface open record (docs/security-and-compliance.md, "Read-audit semantics by surface").
 4. The OS-seeded theme (`a11y-10` item 5, `responsive-03`): ratify the departure from design_files/index.html:2, or revert `DEFAULT_THEME_PREFERENCE` from `'system'` to `'dark'` and re-pin theme-boot.js.
+   Ruled 2026-09-30: reverted to dark; System is an explicit choice; choice markers (`mip.themeChosen`, `mip.accentChosen`) keep an auto-written value from counting as a choice; a tenant default follows via D-theme-nav-d.
 5. The route-nav dock: the nav docks only when the viewport is at least 40rem tall, a threshold chosen so the wrapped sticky nav cannot cover the whole scrollport at 400% zoom (WCAG 1.4.10); below it the nav scrolls away with the page. The css-hygiene lane's reviewer noted that a 1366x768 laptop often has a 620-660 px viewport after browser chrome and the taskbar, so some of those users lose the docked nav. The owner ratifies or changes the threshold.
+   Ruled 2026-09-30: the fixed 40rem query is replaced by a measured rule, docked while the nav is at most one sixth of the scrollport, and the same measurement drives the focus clearance. Built in W5c (w5-shell-nav-followups).
 6. `runtime-07`: close it on the recorded numbers (median 3 ms, p95 4-5 ms at 4x CPU), or move map hover out of React state.
+   Ruled 2026-09-30 and built in W5a (w5-geo-foundation): map hover moved out of React state (delegated handlers, rAF placement, a popover top-layer tip), because the ZCTA drill (10 #5) puts 1,000-2,000 units in the stage.
 7. The section 10 item 10 deviations: the notification bell (`shell-09`), nav badges and groups (`flow-07`), the borrower peek sheet and shared-element morphs (`shell-10`, `motion-03`; also tracked as `stack-04`, `runtime-10` and `css-10`), the animated Console, dark + red CTA contrast (`a11y-01`, three recorded axe violations on `.btn--primary`; the `.sr-skip-link` repaint onto `--accent-contrast` ships with that answer), square-root against linear funnel marks (`dataviz-03`; wave 4 kept linear with a not-to-scale note), the diverging ramp, the "user" glyph, `dataviz-09`'s categorical layer (re-stepping `--seg-itm`/`--seg-equity` and decoupling data colour from `[data-accent]`) and hiding the M1-M4 rail slots (`critic-05`).
+   Ruled 2026-09-30 (docs/prototype-deviations.md, created): `a11y-01` adopted as `--accent-fill` (dark + red #D92D1A, hover #C8281A; the skip link on the same pair); `dataviz-09` adopted: data colour decoupled from `[data-accent]`, the segment palette re-stepped per theme and the offer-mix refi + HELOC stripe; the "user" glyph replaced by the account avatar / `account` glyph; the animated Console ratified; the borrower peek sheet not adopted.
 8. An identity-owner review of wave-4a delivery item 1, the identity boundary (`genie-02` item 1, `lib/healthTrust.ts`). It is built fail-closed. The same review covers a pre-existing gap: a new tab has no stored actor key, so the previous actor's localStorage pins, `lastBorrowerId` and single-key shortcut preference carry into it until an actor key scopes localStorage.
+   Ruled 2026-09-30: approved with required changes, built in wave 5. W5a (w5-identity-foundation) landed one forwarded-identity resolver, owner-stamped storage behind one actor gate with a key registry, and the new-tab carry-over fix; the closed gate on a trusted "nobody", the document reset on a proven change (W5b) and the per-request actor binding (W5d) follow. Correction: lastBorrowerId has been in-memory AppContext state since 8a30eafa; the real carriers were the pins, the Genie conversation id and the shortcut preference.
 9. The rest of section 10, still unanswered: #2 approve-review friction (Triage Mode, `wow-power-1`; select-all N matching and server batch decisions, `tables-07`, which also needs #4); #3 non-admin visibility of audit rows and asset freshness (`critic-03`, `flow-04`, `tables-10`, `flow-06` phase 2); #4 full-cohort export; #5 committed ZCTA geometry (`visual-09`, `dataviz-01`); #6 capturing refused prompt text (`genie-05`); #7 update automation (`quality-v2`, `stack-10`); #8 a release gate on the age of the last green live run, or auto-triggering the live suite (`quality-03` item 3); #9 the data router, borrower notes and white-label theming (`shell-05`, `flow-08`, `responsive-10`). #1 is moot: the in-house listbox shipped.
+   Ruled 2026-09-30 on #9: the data router is not migrated to loaders (pinned by appRouter.test.tsx) and borrower notes / @mentions are not adopted (pinned by tests/unit/test_no_free_text_borrower_notes.py); both are rows in docs/prototype-deviations.md.
+   Ruled 2026-09-30 on the rest: #2 the draft is shown before every approve, bulk runs need one previewed sample per offer, a canary row, a server-enforced rationale and a review_mode on every APPROVE row (W5a), and Triage Mode is a lazy one-borrower deck (W5b); no "select all N matching" and no server batch endpoint, so bulk actions apply to the loaded rows and a whole cohort goes to a campaign through the scope line's handoff (W5a, deviation:bulk-scope-handoff). #3 freshness to every user, the borrower decision history to the working team, the full ledger to admins and a read-only Auditor role (W5b-W5c). #4 full-cohort export declined; the export states its partial scope (W5b). #5 committed per-state ZCTA geometry, lazily fetched (W5c). #6 consented, expiring, access-logged capture of refused prompt text only (W5c). #7 a weekly report workflow, no update bots (W5d). #8 a fail-closed release gate on the age of the last green live run, no auto-trigger (W5b).
 10. Two calls outside section 10: "Request approval" for non-approvers (`flow-02`), and the canonical term for "In the Money", with compliance (`critic-11`).
+   Ruled 2026-09-30: Request approval is built as an audited maker-checker request (Lead Queue only, server-refused self-approval, withdraw and a 30-day expiry; backend W5b, UI W5d). "In the Money" is the canonical term with defined forms, and the competing names are banned (W5d w5-lexicon-copy).
+
+### 12.5 Owner decisions taken (2026-09-30)
+
+The owner delegated every open decision in 10 and 12.4, and the smaller rulings in 12.3, to the delivery team: decide on what is best for the product and build it. Each call was researched against the register, the prototype and the code on main `0a30fca2`. Two independent challengers then contested it, one on governance and one on product and engineering, and the challenged versions were merged into final records. The full records, with rationale and build specs, are in the wave-5 lane briefs. The lane that builds each record is named in 12.6.
+
+Generated API types
+- **OpenAPI generator (12.4 #1).** A repo-owned, standard-library Python emitter, `tools/gen_api_types.py`, reads the committed OpenAPI baseline and writes the type-only `frontend/src/types/api.gen.ts`. That module has a presence view of responses (FastAPI serializes every declared field), a declared view of requests and a map of operations. It fails closed on any schema construct outside the 22 keywords the baseline uses.
+  - Declined: `@hey-api/openapi-ts` with a js-yaml override or a pin, and `openapi-typescript`. Every hey-api line pins an advised js-yaml, or carries its own advisory. `openapi-typescript` peers TypeScript 5, and neither tool can express the presence view.
+  - The generated file is committed without a linguist-generated marker, so contract diffs show in review. It is gated by pytest drift and serialization-override proofs.
+- **Migration onto the generated types.** A type-only wire contract (P1), drift fixed at its cause (P2), then per-domain aliasing proven by identical dist hashes (P3). Served fixture bodies must carry every key the server serializes, enforced by a shrink-only omissions ratchet.
+
+Reads, audit and visibility
+- **VIEW_LEADS under server paging (12.4 #2).** One row per delivered page, as today. Each row stays self-describing and gains `view_id`, `page_index`, sort, `total_matching`, a filter fingerprint and `source_refreshed_at`. Paging is keyset through an HMAC-signed, actor-bound, 60-minute cursor. Pages load only on an explicit "Load next 500", up to 5,000 rows: no prefetch, no scroll-load.
+- **VIEW_OFFER (12.4 #3).** No new event. `RECOMMEND_OFFER` is designated the approval-surface open record: written only by the Offer route, synchronously and fail-closed, and carrying the decision inputs and evidence. The Offer keeps its own audited read. The ruling is documented and pinned.
+- **Visibility (10 #3).**
+  - Asset freshness goes to every authenticated user, through a gold-only freshness endpoint; the "Admin-only freshness" state is deleted. Asset metadata stays admin-only.
+  - The borrower's decision history (approvals, rejects, assignment, dispositions, outcomes) goes to the working team as a closed projection.
+  - The full ledger stays privileged, with a new read-only Auditor role (`MIP_AUDITOR_*`, empty by default). Auditor reads of the ledger are themselves audited.
+- **Refused prompt text (10 #6).** Consented capture only: "Report with my question" on the refusal card.
+  - The text must hash-match a refusal the same actor received within 30 days. It is scrubbed and held 90 days, then nulled.
+  - It is never captured for PII-shaped refusals. It is readable by admins and auditors only, and every read is audited.
+  - Blanket capture is declined.
+
+Approvals and export
+- **Approve-review friction (10 #2).**
+  - The single-row approve already shows the draft first.
+  - A bulk run of two or more rows now needs one previewed draft per distinct offer, with an in-run re-check, a server-enforced rationale and a canary row.
+  - Every APPROVE row records `review_mode` and the draft's age.
+  - Triage Mode is built as a lazy one-borrower deck: it drafts only on an explicit A and records each decision individually.
+  - No "select all N matching" and no server batch endpoint. Approvals stay scoped to borrowers a human saw; a filtered cohort goes to a campaign through an honest handoff.
+- **Full-cohort export (10 #4).** Declined on the merits: the Cotality redistribution terms, and the fact that an unreviewed cohort would bypass approval. The audited export of loaded rows states its partial scope in the label, in the file and on the receipt.
+- **Request approval for non-approvers (12.4 #10, `flow-02`).** An audited maker-checker request, for the Lead Queue only. The server refuses self-approval. Requesters can withdraw, and requests expire after 30 days. No notifications.
+- **Bulk Reject (`tables-07`).** Built with a `bulk_id`, a human-chosen reason and a required note, all enforced by the server. Consent reasons are refused in bulk, and the `low_intent` default is removed everywhere.
+
+Theme, navigation and brand
+- **Theme default (12.4 #4).** It reverts to Dark, per the prototype, and System stays an explicit choice. The app no longer stores a default as if the user had chosen it.
+- **Route-nav dock (12.4 #5).** The fixed 40rem height query is replaced. The nav docks while its measured height is at most one sixth of the scrollport, and the same measurement drives the focus clearance. That closes the wrapped-nav under-clearance residual (12.3), and 1366x768 laptops keep the docked nav.
+- **Dark + red CTA (12.4 #7).** New `--accent-fill` tokens give 4.84:1 in dark + red, while brand red stays for chips and indicators. The skip link moves onto the same pair and its three other failures close.
+- **White-label (10 #9).** Deploy-time co-branding: a reviewed lender mark bound to the lender's NMLS identity, plus a tenant-default accent (from the four prototype accents) and theme. Declined: arbitrary brand colours, and any product rename.
+- **"user" glyph (12.4 #7).** It means borrower only. The account trigger shows the signed-in actor's initials, or a distinct account glyph when identity is not verified.
+
+Prototype deviations in the shell (12.4 #7, 10 #10)
+- **`docs/prototype-deviations.md`.** Becomes the single declared-deviation register, pinned by a test.
+- **Ratified:**
+  - the animated Console;
+  - the sticky Approval column and viewport-sized scroller;
+  - the hybrid router: no further data-router migration (10 #9).
+- **Built, in a different form:**
+  - a "Follow-ups due" rail item (the prototype's bell glyph, dot only) with a lazy tray of the actor's own due work, instead of a notification bell;
+  - two unlabelled nav clusters, with no count badges, instead of nav groups;
+  - one shared-element morph (the borrower id, from the Lead Queue row to the Borrower 360 title) instead of a peek sheet.
+- **Presenter mode.** The M1-M4 rail slots and the prototype borrower-preview mock are hidden unless `MIP_PRESENTER_MODE` is on; it is refused for prod.
+- **Not built:** borrower notes and @mentions (10 #9), a new free-text PII surface. The write-only free-text disposition note is retired.
+
+Data visualisation and geography
+- **Funnel marks (12.4 #7).** Linear is final. Floored marks disclose themselves: hatched or outlined, and "not to scale" in their accessible names.
+- **Diverging ramp (12.4 #7).** Not built. Change versus today is shown as labelled numbers instead: a sortable column, rows in the hover card and a suffix on the accessible name.
+- **Data colour (12.4 #7, `dataviz-09`).** Data hue is fixed per theme and decoupled from `[data-accent]`. The segment palette is re-stepped and validated, with a new light-theme set.
+- **Map hover (12.4 #6, `runtime-07`).** Moved out of React state, with delegated handlers, rAF positioning and a popover top-layer tip. One Geography lane owns the map files.
+- **ZCTA polygons (10 #5).** Built: per-state, shape-only geometry, committed and fetched lazily on drill. At most 20 MB committed and 1.5 MB per file. The tile grid stays as the degraded fallback.
+
+Platform and process
+- **Dependency updates (10 #7).** A weekly report workflow that edits one issue in place. No Renovate or Dependabot branches.
+- **Live e2e (10 #8).** A fail-closed release gate on the age (14 days) and runtime-equivalence of the last green live run. No auto-trigger.
+- **Storybook (`quality-06`).** Not built. The fixture VRT harness is the catalogue.
+- **RUM (`runtime-09`).** On by default through the deploy payload, within an identifier-free, route-template-only, day-aggregate envelope stored in Lakebase. Operators can opt out.
+- **Segment list.** Stale-while-error with a visible last-good marker.
+- **Footprint guards.** They read one snapshot per decision. This is a strengthening: guard regexes are unchanged.
+- **Genie Stop.** A fourth outcome, `recording`, and `recorded` is decided from the History row.
+- **"In the Money" (`critic-11`).** The canonical term, with defined forms. The competing names are banned.
+
+Identity boundary (12.4 #8)
+- **The as-built trust model is approved**, with hardening:
+  - one server module owns forwarded identity;
+  - a trusted "nobody" closes the actor gate without destroying state;
+  - a proven mid-session actor change replaces the document with Home;
+  - every request carries the owner's actor key, and a 409 `actor_changed` stops cross-tab bulk runs.
+- **The new-tab gap closes** through owner-stamped storage behind one gate, with every key classified in a registry.
+
+Manual checks (2026-09-30)
+- **WebKit 26.6 (Safari's engine).** It clears the pinned Approval column and the sticky header, Console open, for focus-driven walks. One real difference was found: `focus()` on a pinned Approve or Reject scrolls the table to its end. It is fixed in W5a, and a WebKit CI project pins it.
+- **Firefox forced colors.** Playwright's Firefox 155 does not start on the macOS 27 host, so the manual pass becomes an automated Linux CI project.
+- **Screen readers.** NVDA is Windows-only, and VoiceOver scripting needs a macOS system setting. These passes, and the ACR, still need a person.
+
+### 12.6 Wave-5 plan
+
+Thirty-two lanes in four batches. Each batch starts from the merged previous one and is merged, deployed to dev and verified live before the next begins.
+
+- **W5a, foundations:**
+  - contract tooling: generated types, WebKit and Firefox CI projects;
+  - platform backend: gold-only admin rules, footprint snapshot, segment SWR;
+  - identity foundation;
+  - design contract: dark default, CTA and data tokens, segment palette, deviation register;
+  - approval core;
+  - filters and saved views;
+  - Geography foundation;
+  - Growth Agent trust.
+- **W5b:**
+  - identity reset and the shell toast platform;
+  - Auditor role and presenter mode;
+  - lender co-branding;
+  - approval-ledger backend;
+  - Triage Mode and export honesty;
+  - Home and the Rate Lever;
+  - Genie verified reveal;
+  - wire contract P1 and the non-major dependency batch.
+- **W5c:**
+  - evidence drawer: freshness for everyone;
+  - Lead Queue server paging;
+  - refusal capture and the sales loop;
+  - dossier decision history;
+  - Genie Stop and context;
+  - shell navigation and Follow-ups;
+  - field vitals;
+  - ZCTA and watchlists.
+- **W5d, quiet-tree cleanup:**
+  - Request approval UI and the actor binding;
+  - print, glossary and the sales manager view;
+  - palette, Offer and the sales loop;
+  - wire types P3;
+  - test harness and the dependency report;
+  - CSS cascade;
+  - lexicon;
+  - compiler and lint depth.

@@ -32,7 +32,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 import { api, ApiError, isAbortError } from '../api';
-import type { ApproveResult, OutreachDraftResult, RejectResult } from '../apiTypes';
+import type { ApproveResult, OutreachDraftResult, RejectResult, ReviewMode } from '../apiTypes';
 import { invalidateOperationalQueries } from '../queryKeys';
 
 export const outreachMutationKeys = {
@@ -62,6 +62,18 @@ export interface ApproveLeadVariables {
   rationale: string | null;
   bulkId: string | null;
   bulkRationale: string | null;
+  /**
+   * How the approver saw this copy, recorded on the APPROVE row. Required,
+   * with no default: every caller states it (the review 'individual', a
+   * bulk run 'bulk_sample' for a previewed row, else 'bulk_cohort').
+   */
+  reviewMode: ReviewMode;
+  /**
+   * A bulk run's previewed offer codes. An unsampled row (no reviewedDraft)
+   * is drafted here; if that draft's offer is not in this set, no approve is
+   * sent (OfferNotPreviewedError): the run's gate never showed that offer.
+   */
+  coveredOfferCodes?: ReadonlySet<string> | null;
   signal?: AbortSignal;
   /** A bulk run invalidates once at the end instead of per row. */
   suppressInvalidation?: boolean;
@@ -76,15 +88,38 @@ export interface RejectLeadVariables {
   campaignBinding: OutreachCampaignBinding | null;
   evidenceIds: string[];
   offerCode: string | null;
+  /** A bulk rejection run's id (every row carries the same one), else null. */
+  bulkId: string | null;
+  /** Aborts on unmount only (a bulk run); a single reject is never aborted. */
+  signal?: AbortSignal;
+  /** A bulk run invalidates once at the end instead of per row. */
+  suppressInvalidation?: boolean;
+}
+
+/**
+ * A bulk run's unsampled row drafted an offer its gate never previewed (the
+ * row's recommendation changed after the samples were drawn). Its
+ * DRAFT_OUTREACH row stays on record; no approve was sent.
+ */
+export class OfferNotPreviewedError extends Error {
+  readonly offerCode: string;
+
+  constructor(offerCode: string) {
+    super('Offer changed since preview');
+    this.name = 'OfferNotPreviewedError';
+    this.offerCode = offerCode;
+  }
 }
 
 type DecisionVariables = ApproveLeadVariables | RejectLeadVariables;
 
 /**
  * Generate the governed email draft an approval certifies. Called only on
- * explicit intent (the review's Approve / A, a bulk run, or "Preview 3
- * sample drafts"): each call writes a DRAFT_OUTREACH audit row, so never
- * on row expand, hover, cursor movement or prefetch.
+ * explicit intent (the review's Approve / A, a started bulk run, or the bulk
+ * gate's "Preview ... sample drafts" / "Preview 1 more sample"): each call
+ * writes a DRAFT_OUTREACH audit row, which records that a draft was
+ * generated, not that anyone saw it. Never on row expand, hover, cursor
+ * movement, selection change or prefetch.
  */
 export async function draftForApproval(
   borrowerId: string,
@@ -112,6 +147,12 @@ export async function draftForApproval(
 async function approveLeadRequest(variables: ApproveLeadVariables): Promise<ApproveResult> {
   const draft = variables.reviewedDraft
     ?? await draftForApproval(variables.borrowerId, variables.campaignBinding, variables.signal);
+  // The in-run offer check: an unsampled row whose drafted offer the gate
+  // never previewed is refused here, before any approve POST.
+  if (variables.reviewedDraft === null && variables.coveredOfferCodes) {
+    const offerCode = draft.offer_code ?? variables.offerCode ?? '';
+    if (!variables.coveredOfferCodes.has(offerCode)) throw new OfferNotPreviewedError(offerCode);
+  }
   return api.approve(
     variables.borrowerId,
     {
@@ -126,6 +167,7 @@ async function approveLeadRequest(variables: ApproveLeadVariables): Promise<Appr
       rationale: variables.rationale,
       bulk_id: variables.bulkId,
       bulk_rationale: variables.bulkRationale,
+      review_mode: variables.reviewMode,
       campaign_id: variables.campaignBinding?.campaign_id ?? null,
       variant_name: variables.campaignBinding?.variant_name ?? null,
       request_id: variables.requestId,
@@ -135,18 +177,20 @@ async function approveLeadRequest(variables: ApproveLeadVariables): Promise<Appr
 }
 
 function rejectLeadRequest(variables: RejectLeadVariables): Promise<RejectResult> {
-  return api.reject(
-    variables.borrowerId,
-    {
-      evidence_ids: variables.evidenceIds,
-      offer_code: variables.offerCode,
-      rationale_code: variables.rationaleCode,
-      rationale: variables.rationale,
-      campaign_id: variables.campaignBinding?.campaign_id ?? null,
-      variant_name: variables.campaignBinding?.variant_name ?? null,
-      request_id: variables.requestId,
-    },
-  );
+  const body = {
+    evidence_ids: variables.evidenceIds,
+    offer_code: variables.offerCode,
+    rationale_code: variables.rationaleCode,
+    rationale: variables.rationale,
+    campaign_id: variables.campaignBinding?.campaign_id ?? null,
+    variant_name: variables.campaignBinding?.variant_name ?? null,
+    bulk_id: variables.bulkId,
+    request_id: variables.requestId,
+  };
+  // The signal only when set: a single rejection is never abortable.
+  return variables.signal
+    ? api.reject(variables.borrowerId, body, variables.signal)
+    : api.reject(variables.borrowerId, body);
 }
 
 export function useApproveLead(queryClient: QueryClient) {
@@ -173,8 +217,10 @@ export function useRejectLead(queryClient: QueryClient) {
       mutationFn: rejectLeadRequest,
       networkMode: 'always',
       retry: false,
-      onSuccess: (result) => {
-        if (result.rejected) void invalidateOperationalQueries(queryClient);
+      onSuccess: (result, variables) => {
+        if (result.rejected && !variables.suppressInvalidation) {
+          void invalidateOperationalQueries(queryClient);
+        }
       },
     },
     queryClient,

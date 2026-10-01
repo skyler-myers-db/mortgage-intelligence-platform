@@ -445,6 +445,29 @@ export function useLeadTableKeyboardFlow({
   }
 
   /**
+   * Toolbar "Reject N": one eligible row opens that row's reject panel,
+   * several open the bulk reject gate (reason + shared note). Never submits.
+   */
+  function bulkRejectFromToolbar() {
+    const ids = eligibleSelectedIds();
+    if (ids.length === 1) {
+      openReject(ids[0]);
+      return;
+    }
+    if (ids.length > 1) approval.openBulkReject();
+  }
+
+  /** Shift+R and the Cmd-K verb: the same routing as the toolbar; never submit. */
+  function openBulkRejectGate() {
+    if (approval.bulkApproving || approval.isBulkRunInFlight()) return;
+    const ids = eligibleSelectedIds();
+    if (ids.length === 0) return;
+    // A gate that cannot reject is not opened: the refusal says why.
+    if (!approval.canStartRejection()) return;
+    bulkRejectFromToolbar();
+  }
+
+  /**
    * The reject write RETURNED ok: advance the cursor and keep the keyboard
    * in the table. The panel unmounts with focus inside it, which would drop
    * focus to <body> and leave the next J / K with nothing to act on.
@@ -515,6 +538,7 @@ export function useLeadTableKeyboardFlow({
       openReject(targetId);
     },
     openBulkGate,
+    openBulkRejectGate,
   }, tableWrapRef);
 
   /**
@@ -541,6 +565,7 @@ export function useLeadTableKeyboardFlow({
   useEffect(() => {
     verbRunRef.current = (verb) => {
       if (verb === 'approve-selected') openBulkGate();
+      else if (verb === 'reject-selected') openBulkRejectGate();
       else requestAnimationFrame(() => assigneeRef.current?.focus());
     };
   });
@@ -553,6 +578,9 @@ export function useLeadTableKeyboardFlow({
       selectedCount,
       approveCount,
       canApprove: canApproveVerb,
+      // Rejecting reads the same eligible rows and the same gate.
+      rejectCount: approveCount,
+      canReject: canApproveVerb,
       canAssign: canAssign && selectedCount > 0,
       run: (verb) => verbRunRef.current(verb),
     });
@@ -571,6 +599,7 @@ export function useLeadTableKeyboardFlow({
     focusRow,
     viewReceipt,
     bulkApproveFromToolbar,
+    bulkRejectFromToolbar,
     rejectReasonRef,
     openReject,
     submitReject,

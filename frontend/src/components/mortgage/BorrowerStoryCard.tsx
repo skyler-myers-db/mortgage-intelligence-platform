@@ -23,7 +23,7 @@ export function BorrowerStoryCard({ borrower }: { borrower: Borrower360 }) {
     <div className="surface borrower-story">
       <div className="surface__hdr">
         <div className="surface__hdr-main">
-          <div className="surface__icon"><Icon name="sparkle" size={14} /></div>
+          <div className="surface__icon"><Icon name="doc" size={14} /></div>
           <div>
             <SurfaceTitle>The story</SurfaceTitle>
             <div className="muted fs-12">

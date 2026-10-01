@@ -526,7 +526,7 @@ function DraftOutreachPanel({
               <Button
                 variant="ghost"
                 size="sm"
-                icon="sparkle"
+                icon="doc"
                 onClick={() => setRegenerateReviewOpen(true)}
                 disabled={approving || draftSavePending || !borrowerId}
               >

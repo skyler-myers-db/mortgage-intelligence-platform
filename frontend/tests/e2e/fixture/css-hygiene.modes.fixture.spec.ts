@@ -145,6 +145,25 @@ test.describe('forced colors (css-06 / a11y-10 / responsive-v3)', () => {
         expect(await bar.evaluate((el) => getComputedStyle(el).stroke)).toBe(await asComputedRgb(page, 'Highlight'));
       });
 
+      test('the Home offer-mix slices keep their segment hues on a Canvas track (D-dataviz-geo-c2)', async ({ app, page }) => {
+        await app.gotoRoute('/');
+        const bar = page.locator('.home-answer .offer-mix');
+        await expect(bar.locator('.offer-mix__seg').first()).toBeVisible();
+        const canvas = await asComputedRgb(page, 'Canvas');
+        const canvasText = await asComputedRgb(page, 'CanvasText');
+        const slice = bar.locator('.offer-mix__seg[data-offer="refi"]');
+        const sliceFill = await slice.evaluate((el) => getComputedStyle(el).backgroundColor);
+        expect(sliceFill, 'a data mark keeps its hue, never the forced Canvas').not.toBe(canvas);
+        // A non-system colour on a probe is itself forced, so read the token's hex.
+        const itm = await tokenValue(page.locator('html'), '--seg-itm');
+        const [r, g, b] = [1, 3, 5].map((at) => Number.parseInt(itm.slice(at, at + 2), 16));
+        expect(sliceFill, `--seg-itm ${itm}`).toBe(`rgb(${r}, ${g}, ${b})`);
+        const track = await bar.evaluate((el) => ({ bg: getComputedStyle(el).backgroundColor, outline: getComputedStyle(el).outlineColor }));
+        expect(track).toEqual({ bg: canvas, outline: canvasText });
+        const swatch = page.locator('.home-answer .offer-mix__swatch').first();
+        expect(await swatch.evaluate((el) => getComputedStyle(el).outlineColor)).toBe(canvasText);
+      });
+
       test('the selected Analytics view tab keeps a Highlight fill (.layout-tabs, visual-05)', async ({ app, page }) => {
         await app.gotoRoute('/analytics');
         const tablist = page.getByRole('tablist', { name: 'Analytics views' });

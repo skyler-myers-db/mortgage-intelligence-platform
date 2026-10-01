@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
 from backend.main import app
+from backend.services.actor_identity import actor_cache_key
 
 _ACTOR = "approver.one@summit.example"
 
@@ -61,6 +62,7 @@ def test_session_identity_matches_the_actor_the_approver_gate_admits(
         "role_labels": ["Approver"],
         "lender_name": settings.mip_lender_name,
         "rum_enabled": settings.mip_rum_enabled,
+        "actor_cache_key": actor_cache_key(_ACTOR),
     }
 
 
@@ -105,6 +107,7 @@ def test_session_ignores_forwarded_identity_when_the_edge_is_untrusted(
         "role_labels": [],
         "lender_name": settings.mip_lender_name,
         "rum_enabled": settings.mip_rum_enabled,
+        "actor_cache_key": None,
     }
 
 

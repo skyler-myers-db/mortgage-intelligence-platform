@@ -348,6 +348,105 @@ def test_outcomes_reach_the_request_server_timing_collector(
     assert outcome_of(lambda: cache.get_or_set("k", factory, ttl_s=60)) == "cache;desc=stale"
 
 
+# ---------------------------------------------------------------------------
+# Staleness marker (decision record e1): X-Data-Last-Good-At.
+# ---------------------------------------------------------------------------
+
+_WALL0 = 1_790_000_000.0
+
+
+def _served(read: Callable[[], Any]) -> tuple[Any, str | None]:
+    collector = server_timing.TimingCollector()
+    token = server_timing._COLLECTOR.set(collector)
+    try:
+        value = read()
+    finally:
+        server_timing._COLLECTOR.reset(token)
+    return value, collector.last_good_at()
+
+
+def _iso(wall: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(wall))
+
+
+def test_refresh_failed_survives_move_to_end_and_resets_only_in_store(
+    clock: _Clock, deferred: _DeferredExecutor
+) -> None:
+    wall = [_WALL0]
+    cache = GoldAggregateCache(now=clock, executor=deferred, wall=lambda: wall[0])
+    factory = _Factory("v1", "v2")
+
+    def read() -> Any:
+        return cache.get_or_set("k", factory, ttl_s=60, stale_if_error=True, hard_ttl_s=600)
+
+    read()
+    clock.now += 61
+    wall[0] += 61
+    assert _served(read) == ("v1", None), "a plain soft-window stale carries no marker"
+    factory.fail = RuntimeError("refresh failed")
+    deferred.run_all()
+    assert cache._entries["k"].refresh_failed is True
+
+    # LRU traffic on another key, then k again: reads move k to the end.
+    cache.get_or_set("j", _Factory("j"), ttl_s=60)
+    assert _served(read) == ("v1", _iso(_WALL0))
+    assert list(cache._entries)[-1] == "k"
+    assert cache._entries["k"].refresh_failed is True, "the flag survives move_to_end"
+
+    factory.fail = None
+    deferred.run_all()  # the refresh that read scheduled now succeeds
+
+    assert cache._entries["k"].refresh_failed is False
+    assert _served(read) == ("v2", None)
+
+
+def test_a_hard_expired_entry_served_after_an_inline_failure_still_marks(
+    clock: _Clock, deferred: _DeferredExecutor
+) -> None:
+    wall = [_WALL0]
+    cache = GoldAggregateCache(now=clock, executor=deferred, wall=lambda: wall[0])
+    factory = _Factory("v1")
+    cache.get_or_set("k", factory, ttl_s=60, hard_ttl_s=60)
+    clock.now += 61
+    wall[0] += 61
+    factory.fail = RuntimeError("flap")
+
+    served = _served(
+        lambda: cache.get_or_set("k", factory, ttl_s=60, hard_ttl_s=60, stale_if_error=True)
+    )
+
+    assert served == ("v1", _iso(_WALL0))
+
+
+def test_a_value_built_from_a_marked_read_is_stored_degraded(
+    clock: _Clock, deferred: _DeferredExecutor
+) -> None:
+    wall = [_WALL0]
+    inner = GoldAggregateCache(now=clock, executor=deferred, wall=lambda: wall[0])
+    outer = GoldAggregateCache(now=clock, executor=deferred, wall=lambda: wall[0])
+    source = _Factory("rows")
+    inner.get_or_set("inner", source, ttl_s=60, hard_ttl_s=60)
+    clock.now += 61
+    wall[0] += 61
+    source.fail = RuntimeError("flap")
+
+    def build() -> str:
+        rows = inner.get_or_set("inner", source, ttl_s=60, hard_ttl_s=60, stale_if_error=True)
+        return f"built:{rows}"
+
+    assert _served(lambda: outer.get_or_set("outer", build, ttl_s=60)) == (
+        "built:rows",
+        _iso(_WALL0),
+    )
+    entry = outer._entries["outer"]
+    assert (entry.degraded, entry.last_good_wall) == (True, _WALL0)
+    # A later hit of the degraded entry keeps marking the response.
+    assert _served(lambda: outer.get_or_set("outer", build, ttl_s=60)) == (
+        "built:rows",
+        _iso(_WALL0),
+    )
+
+
 def test_workflow_generation_moves_forward() -> None:
     before = workflow_generation()
 

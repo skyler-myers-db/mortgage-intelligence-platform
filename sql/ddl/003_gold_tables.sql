@@ -971,3 +971,28 @@ TBLPROPERTIES (
   'delta.autoOptimize.optimizeWrite' = 'true',
   'delta.autoOptimize.autoCompact'   = 'true'
 );
+
+-- -----------------------------------------------------------------------------
+-- 20. mip.gold.segment_combination_rollup
+--     Signal stack (2026-09-21 UI/UX audit, wow-stage-5): one row per
+--     non-empty exact set of the six core segment codes a borrower carries
+--     (at most 63 rows), with the addressable count; the S1.3 overlay codes
+--     are ignored. Contactable counts are joined live by the endpoint, never
+--     stored. See sql/ddl/gold_segment_combination_rollup.sql for column
+--     comments.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.segment_combination_rollup (
+  combination_key        STRING        NOT NULL COMMENT 'The distinct core segment codes (itm, listed, permit, investor, equity, retention) a borrower carries, sorted and joined with +. PK.',
+  segment_codes          ARRAY<STRING> NOT NULL COMMENT 'combination_key split on +: the exact set of core segment codes, sorted.',
+  signal_count           INT           NOT NULL COMMENT 'Number of core codes in the set (1 .. 6).',
+  addressable_borrowers  BIGINT        NOT NULL COMMENT 'gold.borrower_360 rows carrying exactly these core codes (overlay codes ignored).',
+  refreshed_at           TIMESTAMP     NOT NULL COMMENT 'Deterministic refresh anchor from mip.ref.refresh_run_state.'
+)
+USING DELTA
+CLUSTER BY (combination_key)
+COMMENT 'Signal stack: borrowers per exact set of the six core segment codes (at most 63 rows), from gold.borrower_360 segment membership. Contactable is joined live by the endpoint, never stored. Built by mip_refresh_scores via gold_segment_combination_rollup.sql; read by /api/v1/segments/combinations.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);

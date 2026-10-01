@@ -1,6 +1,7 @@
 /**
  * The selection context a page publishes for Cmd-K verbs (audit
- * wow-power-4): "Approve 12 selected…", "Assign selected…".
+ * wow-power-4): "Approve 12 selected…", "Reject 12 selected…" (tables-07),
+ * "Assign selected…".
  *
  * A module store rather than a React context: the publisher (LeadTable,
  * inside a route) and the consumer (the palette, in the shell) live in
@@ -12,7 +13,7 @@
  */
 import { useSyncExternalStore } from 'react';
 
-export type CommandVerb = 'approve-selected' | 'assign-selected';
+export type CommandVerb = 'approve-selected' | 'reject-selected' | 'assign-selected';
 
 export interface CommandSelectionContext {
   /** Rows selected on the page. */
@@ -24,6 +25,10 @@ export interface CommandSelectionContext {
    * binding blocks it, no bulk run in flight). False hides the approve verb.
    */
   canApprove: boolean;
+  /** Selected rows the reject gate would run (the approval-eligible ones). */
+  rejectCount: number;
+  /** Same predicate as canApprove: the reject verb opens the reject gate. */
+  canReject: boolean;
   /** An assignment target exists and nothing is in flight. */
   canAssign: boolean;
   run: (verb: CommandVerb) => void;

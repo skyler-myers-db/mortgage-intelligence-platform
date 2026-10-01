@@ -31,6 +31,9 @@ class GrowthAgentRunSummary(BaseModel):
     source_assets: list[str] = Field(default_factory=list)
     audit_event_id: str | None = None
     created_at: datetime | str | None = None
+    # The saved watchlist this run refreshed (2026_10_01 watchlist series);
+    # None for a one-off run and for a new watchlist's first (seed) run.
+    monitor_id: str | None = None
 
 
 __all__ = ["GrowthAgentRunSummary"]

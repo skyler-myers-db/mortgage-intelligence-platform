@@ -13,15 +13,26 @@
  * button. The ZIP table then takes focus itself (it is named by its
  * caption), so a keyboard or screen-reader user lands on the drilled data
  * instead of <body>.
+ *
+ * deviation:map-table-coverage-groups (dataviz-10, wow-stage-1): the ids
+ * the map cannot draw (PR, VI) and the drawn states it skips (no borrowers in
+ * this selection) follow as their own <tbody> groups under a
+ * `.map-table__group` header, the skipped ones with a `.map-table__note`
+ * saying why, so the table lists the whole book. The borrower total counts
+ * the populated and not-drawn groups (the legend's total); the extra
+ * column's total counts every group (USChoroplethMap.table.ts).
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { formatCount, formatNumber } from '../../lib/formatters';
 import { claimDrillFocus } from './USChoroplethMap.a11y';
 import type { MapClass } from './USChoroplethMap.scale';
+import { EMPTY_GROUP_LABEL, OFF_MAP_GROUP_LABEL, type MapTableGroups } from './USChoroplethMap.table';
 
 export interface MapTableRow {
   id: string;
   name: string;
-  count: number;
+  /** Marketable borrowers; null when the unit has none in this selection. */
+  count: number | null;
   avgScore: number | null;
   topSegment?: string;
   /** Contact-eligible subset (state rows); undefined when not reported. */
@@ -32,14 +43,16 @@ export interface MapTableRow {
    */
   extra?: number | null;
   cls: MapClass | null;
-  /** Drill into this unit (states only). */
+  /** Drill into this unit (populated states only). */
   onOpen?: () => void;
+  /** Why a grouped row has no borrowers ("Outside Cotality evaluation scope"). */
+  note?: string;
 }
 
 interface USChoroplethMapTableProps {
   unitLabel: 'State' | 'ZIP';
   caption: string;
-  rows: MapTableRow[];
+  groups: MapTableGroups;
   /**
    * Header of the `extra` column ("Unattended leads", "In the money at
    * 5.80%"), or null when the fill encodes borrowers. Its total equals the
@@ -50,18 +63,24 @@ interface USChoroplethMapTableProps {
   autoFocus?: boolean;
   /** Called once focus has moved, so a later Back navigation does not steal it. */
   onAutoFocused?: () => void;
+  /** A row whose button takes focus back (Escape out of that state's ZIP level, dataviz-10). */
+  focusRowId?: string | null;
+  /** Called once the row request has been answered. */
+  onFocusRowDone?: () => void;
 }
 
-const fmt = (value: number | null | undefined) =>
-  typeof value === 'number' ? value.toLocaleString('en-US') : '—';
+const countOf = (row: MapTableRow) => row.count ?? 0;
+
 
 export function USChoroplethMapTable({
   unitLabel,
   caption,
-  rows,
+  groups,
   extraColumn,
   autoFocus = false,
   onAutoFocused,
+  focusRowId = null,
+  onFocusRowDone,
 }: USChoroplethMapTableProps) {
   const [direction, setDirection] = useState<'descending' | 'ascending'>('descending');
   const tableRef = useRef<HTMLTableElement | null>(null);
@@ -70,12 +89,27 @@ export function USChoroplethMapTable({
     claimDrillFocus(tableRef.current);
     onAutoFocused?.();
   }, [autoFocus, onAutoFocused]);
+  useLayoutEffect(() => {
+    if (!focusRowId) return;
+    const row = [...(tableRef.current?.querySelectorAll<HTMLElement>('tr[data-map-row]') ?? [])]
+      .find((candidate) => candidate.getAttribute('data-map-row') === focusRowId);
+    claimDrillFocus(row?.querySelector<HTMLButtonElement>('button') ?? null);
+    onFocusRowDone?.();
+  }, [focusRowId, onFocusRowDone]);
+  const { rows, offMap, empty } = groups;
   const sorted = useMemo(() => {
     const sign = direction === 'descending' ? -1 : 1;
-    return [...rows].sort((a, b) => sign * (a.count - b.count) || a.name.localeCompare(b.name));
+    return [...rows].sort((a, b) => sign * (countOf(a) - countOf(b)) || a.name.localeCompare(b.name));
   }, [direction, rows]);
-  const total = rows.reduce((sum, row) => sum + row.count, 0);
+  // The borrower total counts the populated and not-drawn groups; the extra column's every group.
+  const counted = [...rows, ...offMap];
+  const total = counted.reduce((sum, row) => sum + countOf(row), 0);
+  const extraTotal = [...counted, ...empty].reduce((sum, row) => sum + (row.extra ?? 0), 0);
   const showContactable = rows.some((row) => typeof row.contactable === 'number');
+  const columns = 4 + (showContactable ? 1 : 0) + (extraColumn ? 1 : 0);
+  const renderRow = (row: MapTableRow) => (
+    <MapTableBodyRow key={row.id} row={row} showContactable={showContactable} showExtra={extraColumn !== null} />
+  );
   return (
     <div className="map-table" data-testid="map-table">
       <table ref={tableRef} className="tbl map-table__table" tabIndex={-1}>
@@ -99,39 +133,31 @@ export function USChoroplethMapTable({
             <th scope="col">Top segment</th>
           </tr>
         </thead>
-        <tbody>
-          {sorted.map((row) => (
-            <tr key={row.id}>
-              <th scope="row" className="map-table__unit">
-                <span className={`map-table__swatch lvl-${row.cls ?? 0}`} aria-hidden="true" />
-                {row.onOpen ? (
-                  <button type="button" className="map-table__open" onClick={row.onOpen}>
-                    {row.name}
-                  </button>
-                ) : (
-                  row.name
-                )}
-              </th>
-              <td className="num tbl-cell--right">{fmt(row.count)}</td>
-              {showContactable && <td className="num tbl-cell--right">{fmt(row.contactable)}</td>}
-              {extraColumn && <td className="num tbl-cell--right">{fmt(row.extra)}</td>}
-              <td className="num tbl-cell--right">{fmt(row.avgScore)}</td>
-              <td>{row.topSegment ?? '—'}</td>
-            </tr>
-          ))}
-        </tbody>
+        <tbody>{sorted.map(renderRow)}</tbody>
+        {[[OFF_MAP_GROUP_LABEL, offMap] as const, [EMPTY_GROUP_LABEL, empty] as const].map(([label, group]) =>
+          group.length > 0 ? (
+            <tbody key={label}>
+              <tr className="map-table__group">
+                <th scope="colgroup" colSpan={columns}>
+                  {label} ({formatCount(group.length)})
+                </th>
+              </tr>
+              {group.map(renderRow)}
+            </tbody>
+          ) : null,
+        )}
         <tfoot>
           <tr>
-            <th scope="row">Total ({rows.length.toLocaleString('en-US')})</th>
-            <td className="num tbl-cell--right" data-testid="map-table-total">{fmt(total)}</td>
+            <th scope="row">Total ({formatCount(counted.length)})</th>
+            <td className="num tbl-cell--right" data-testid="map-table-total">{formatCount(total)}</td>
             {showContactable && (
               <td className="num tbl-cell--right">
-                {fmt(rows.reduce((sum, row) => sum + (row.contactable ?? 0), 0))}
+                {formatCount(counted.reduce((sum, row) => sum + (row.contactable ?? 0), 0))}
               </td>
             )}
             {extraColumn && (
               <td className="num tbl-cell--right" data-testid="map-table-extra-total">
-                {fmt(rows.reduce((sum, row) => sum + (row.extra ?? 0), 0))}
+                {formatCount(extraTotal)}
               </td>
             )}
             <td />
@@ -140,5 +166,34 @@ export function USChoroplethMapTable({
         </tfoot>
       </table>
     </div>
+  );
+}
+
+interface MapTableBodyRowProps {
+  row: MapTableRow;
+  showContactable: boolean;
+  showExtra: boolean;
+}
+
+/** One unit's row; a grouped row (no borrowers) carries its note in the last cell. */
+function MapTableBodyRow({ row, showContactable, showExtra }: MapTableBodyRowProps) {
+  return (
+    <tr data-map-row={row.id}>
+      <th scope="row" className="map-table__unit">
+        <span className={`map-table__swatch lvl-${row.cls ?? 0}`} aria-hidden="true" />
+        {row.onOpen ? (
+          <button type="button" className="map-table__open" onClick={row.onOpen}>
+            {row.name}
+          </button>
+        ) : (
+          row.name
+        )}
+      </th>
+      <td className="num tbl-cell--right">{formatCount(row.count)}</td>
+      {showContactable && <td className="num tbl-cell--right">{formatCount(row.contactable)}</td>}
+      {showExtra && <td className="num tbl-cell--right">{formatCount(row.extra)}</td>}
+      <td className="num tbl-cell--right">{formatNumber(row.avgScore)}</td>
+      {row.note ? <td className="map-table__note">{row.note}</td> : <td>{row.topSegment ?? '—'}</td>}
+    </tr>
   );
 }

@@ -27,6 +27,7 @@ from backend.services.lakebase import get_lakebase_client
 from tests.unit.growth_refusal_contract import (
     GROWTH_REFUSAL_MESSAGE_RE,
     assert_refusal_isolation,
+    post_growth_execute,
 )
 
 _DISCLOSURE = MagicMock(
@@ -133,7 +134,7 @@ def test_unknown_selection_grammar_fails_both_growth_contracts(objective: str) -
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
-        ComposePlanRequest(objective=objective, execute=True)
+        ComposePlanRequest(objective=objective)
 
 
 @pytest.mark.parametrize(
@@ -163,10 +164,8 @@ def test_unknown_selection_stops_before_planners_or_writes(
         json={"prompt": objective, "save_monitor": True, "cadence": "daily"},
         headers={"X-Forwarded-Email": "operator@example.com"},
     )
-    compose_response = client.post(
-        "/api/growth-agent/agent/compose",
-        json={"objective": objective, "execute": True},
-        headers={"X-Forwarded-Email": "operator@example.com"},
+    compose_response = post_growth_execute(
+        client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
     )
 
     assert run_response.status_code == 422, run_response.text

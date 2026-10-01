@@ -177,6 +177,8 @@ const GOLDEN_EMAIL_APPROVE = {
   follow_up_in_days: 7,
   campaign_id: null,
   variant_name: null,
+  // The review ledger (audit flow-03): the Offer page approves the draft on screen.
+  review_mode: 'individual',
 };
 
 /** SMS: no subject (null, never ''), channel 'sms', no routing chosen. */
@@ -193,6 +195,7 @@ const GOLDEN_SMS_APPROVE = {
   follow_up_in_days: null,
   campaign_id: null,
   variant_name: null,
+  review_mode: 'individual',
 };
 
 const GOLDEN_CAMPAIGN_APPROVE = {
@@ -208,6 +211,7 @@ const GOLDEN_CAMPAIGN_APPROVE = {
   follow_up_in_days: null,
   campaign_id: CAMPAIGN_ID,
   variant_name: VARIANT,
+  review_mode: 'individual',
 };
 
 const GOLDEN_OTHER_REJECT = {

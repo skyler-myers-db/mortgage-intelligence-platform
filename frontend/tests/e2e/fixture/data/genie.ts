@@ -89,6 +89,8 @@ export const GROWTH_AGENT_HOME: GrowthAgentHomeResponse = {
     { key: 'genie_conversation', label: 'Genie Conversation API', ga: true, status: 'configured', claimable: true, detail: 'Space configured (fixture).' },
     { key: 'agent_bricks', label: 'Agent Bricks supervisor', ga: false, status: 'not_provisioned', claimable: false, detail: 'Not provisioned in this workspace.' },
   ],
+  // The bundle ships the saved-watchlist scheduler job paused (flow-08 slice 2).
+  scheduler_state: 'paused',
 };
 
 /** `GET /api/genie/sessions/{id}`: one replayable, already-governed turn. */

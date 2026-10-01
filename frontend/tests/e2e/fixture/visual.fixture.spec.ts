@@ -12,8 +12,9 @@
  *  F. 1280x720: Home, Lead Queue, Borrower 360                         6
  *  G. accent sweep: the first Home KPI and the map legend,
  *     teal / navy / red (bright is A-F)                               12
+ *  H. read-failed: Lead Queue, Segments                                4
  *                                                                     --
- *                                                                     96
+ *                                                                    100
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -88,7 +89,7 @@ interface Loaded {
 
 async function load(app: AppDriver, mockApi: MockApi, target: FixtureRoute, theme: FixtureTheme, state: FixtureState = 'default'): Promise<Loaded> {
   await app.setTheme(theme);
-  prepareState(mockApi, state);
+  prepareState(mockApi, state, target.name);
   await app.gotoRoute(target.path);
   return { naturalLoad: markNaturalLoad(mockApi) };
 }
@@ -128,6 +129,9 @@ for (const theme of FIXTURE_THEMES) {
       { route: 'home', state: 'degraded' },
       { route: 'lead-queue', state: 'expanded-row' },
       { route: 'lead-queue', state: 'empty' },
+      // H: the non-bannered failed read (quality-06), health OK.
+      { route: 'lead-queue', state: 'read-failed' },
+      { route: 'segment-intelligence', state: 'read-failed' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {

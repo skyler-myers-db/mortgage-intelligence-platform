@@ -34,7 +34,11 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.schemas.geo_rate_sensitivity import RateSensitivityResponse
 from backend.services.audit_store import get_audit_store
-from backend.services.databricks_sql import DatabricksSqlError, _sql_error_class
+from backend.services.databricks_sql import (
+    DatabricksSqlError,
+    DatabricksSqlObjectMissingError,
+    _sql_error_class,
+)
 from backend.services.rate_scenario import RATE_SCENARIO_STEPS_BPS
 from backend.services.repositories import get_rate_sensitivity_repository
 from backend.services.repositories.databricks_rate_sensitivity import (
@@ -339,6 +343,26 @@ def test_another_missing_object_still_fails() -> None:
     repo = DatabricksRateSensitivityRepository(client, cache=TTLCache())
 
     with pytest.raises(DatabricksSqlError):
+        repo.rate_sensitivity()
+
+
+def test_a_missing_gold_schema_is_not_mistaken_for_not_built() -> None:
+    """SCHEMA_NOT_FOUND now fails fast as a missing object, but only the lane's
+    own tables answer built=false: a missing mip.gold schema still fails."""
+    missing_schema = _warehouse_error(
+        "[SCHEMA_NOT_FOUND] The schema `mip`.`gold` cannot be found. SQLSTATE: 42704"
+    )
+    assert isinstance(missing_schema, DatabricksSqlObjectMissingError)
+    client = _FakeSqlClient()
+    client.error = DependencyDownError(
+        "warehouse",
+        reason="DatabricksSqlObjectMissingError: ...",
+        last_error=missing_schema,
+        kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
+    )
+    repo = DatabricksRateSensitivityRepository(client, cache=TTLCache())
+
+    with pytest.raises(DependencyDownError):
         repo.rate_sensitivity()
 
 

@@ -3,18 +3,28 @@
 Slice 5 migrates this router off the in-memory store onto the
 Lakebase-backed ``AuditStore`` via ``get_audit_store``. The wire shape
 is unchanged so the frontend Activity Log keeps working.
+
+Audit explorer (audit tables-10, 2026-09-30): ``GET /audit/facets`` and
+``GET /audit/count`` are admin-gated, AUDIT-FREE reads of the ledger (they
+write no row and are never polled or prefetched); ``POST
+/audit/export-receipt`` writes exactly one server-owned ``AUDIT_EXPORT`` row
+before an explorer CSV download.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from backend.schemas.audit import (
+    AuditCountResponse,
     AuditEvent,
     AuditEventCreateRequest,
     AuditEventPage,
+    AuditExportReceipt,
+    AuditExportReceiptRequest,
+    AuditFacetsResponse,
     AuditRollupResponse,
 )
 from backend.schemas.common import (
@@ -23,6 +33,12 @@ from backend.schemas.common import (
     validate_public_borrower_id,
 )
 from backend.services.audit_event_types import is_server_owned_audit_event_type
+from backend.services.audit_export_receipt import (
+    AuditExportDeclarationMismatch,
+    AuditExportInvalidEventIds,
+    write_audit_export_receipt,
+)
+from backend.services.audit_filter_sql import read_audit_count, read_audit_facets
 from backend.services.audit_pagination import (
     audit_filter_fingerprint,
     decode_audit_cursor,
@@ -58,6 +74,11 @@ DEFAULT_AUDIT_LIMIT: int = 50
 MAX_AUDIT_LIMIT: int = 500
 DEFAULT_MY_ACTIVITY_LIMIT: int = 8
 MAX_MY_ACTIVITY_LIMIT: int = 50
+# GET /audit/facets looks back this far when the caller passes no ``since``.
+DEFAULT_FACET_WINDOW = timedelta(days=90)
+EXPORT_DIGEST_MISMATCH_DETAIL = "export declaration does not match the event id list"
+
+
 class ActorAuditEventSummary(BaseModel):
     """PII-minimized event shape for an operator's own recovery feed."""
 
@@ -80,6 +101,32 @@ def _validate_correlation_filter(value: str) -> str:
     if not is_safe_correlation_id(value):
         raise ValueError("correlation_id must be a non-PII request correlation id")
     return value
+
+
+def _validated_explorer_filters(
+    *,
+    borrower_id: str | None,
+    correlation_id: str | None,
+    event_id: str | None = None,
+) -> str | None:
+    """The one validator /events, /events/page and /count share.
+
+    Answers 422 for an invalid event id, borrower id or correlation id and
+    returns the normalized correlation id.
+    """
+    if event_id is not None and not is_valid_audit_event_id(event_id):
+        raise HTTPException(status_code=422, detail="invalid event_id")
+    if borrower_id is not None:
+        try:
+            validate_public_borrower_id(borrower_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid borrower_id") from exc
+    if correlation_id is not None:
+        try:
+            return _validate_correlation_filter(correlation_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid correlation_id") from exc
+    return correlation_id
 
 
 def _actor_event_summary(event: AuditEvent) -> ActorAuditEventSummary:
@@ -185,18 +232,9 @@ def list_events(
     until: datetime | None = None,
     event_id: Annotated[str | None, Query(max_length=64)] = None,
 ) -> list[AuditEvent]:
-    if event_id is not None and not is_valid_audit_event_id(event_id):
-        raise HTTPException(status_code=422, detail="invalid event_id")
-    if borrower_id is not None:
-        try:
-            validate_public_borrower_id(borrower_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="invalid borrower_id") from exc
-    if correlation_id is not None:
-        try:
-            correlation_id = _validate_correlation_filter(correlation_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="invalid correlation_id") from exc
+    correlation_id = _validated_explorer_filters(
+        borrower_id=borrower_id, correlation_id=correlation_id, event_id=event_id
+    )
     try:
         return store.list(
             limit=limit,
@@ -240,18 +278,9 @@ def list_event_page(
 ) -> AuditEventPage:
     """Traverse a snapshot of the append-only audit ledger without page drift."""
 
-    if event_id is not None and not is_valid_audit_event_id(event_id):
-        raise HTTPException(status_code=422, detail="invalid event_id")
-    if borrower_id is not None:
-        try:
-            validate_public_borrower_id(borrower_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="invalid borrower_id") from exc
-    if correlation_id is not None:
-        try:
-            correlation_id = _validate_correlation_filter(correlation_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="invalid correlation_id") from exc
+    correlation_id = _validated_explorer_filters(
+        borrower_id=borrower_id, correlation_id=correlation_id, event_id=event_id
+    )
     filters = {
         "limit": limit,
         "actor": actor,
@@ -306,6 +335,88 @@ def list_event_page(
         filter_fingerprint=fingerprint,
     )
     return AuditEventPage(items=items, next_cursor=next_cursor)
+
+
+@router.get("/count", response_model=AuditCountResponse)
+def count_events(
+    _actor: AdminDep,
+    lakebase: LakebaseDep,
+    actor: Annotated[str | None, Query(max_length=256)] = None,
+    action: Annotated[str | None, Query(max_length=128)] = None,
+    entity_id: Annotated[str | None, Query(max_length=256)] = None,
+    borrower_id: Annotated[str | None, Query(max_length=64)] = None,
+    subject_clip: Annotated[str | None, Query(max_length=128)] = None,
+    event_type: Annotated[str | None, Query(max_length=128)] = None,
+    correlation_id: Annotated[str | None, Query(max_length=128)] = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> AuditCountResponse:
+    """How many ledger rows match the /events/page filters, up to a cap (audit-free)."""
+
+    correlation_id = _validated_explorer_filters(
+        borrower_id=borrower_id, correlation_id=correlation_id
+    )
+    try:
+        return read_audit_count(
+            lakebase,
+            actor=actor,
+            action=action,
+            entity_id=entity_id,
+            borrower_id=borrower_id,
+            subject_clip=subject_clip,
+            event_type=event_type,
+            correlation_id=correlation_id,
+            since=since,
+            until=until,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+
+
+@router.get("/facets", response_model=AuditFacetsResponse)
+def audit_facets(
+    _actor: AdminDep,
+    lakebase: LakebaseDep,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> AuditFacetsResponse:
+    """Distinct event types, actions and actors for the explorer's pickers (audit-free).
+
+    Reads the ledger itself, so every event type that occurred in the window
+    is offered, not only the seven workflow types /rollups groups.
+    """
+
+    window_start = since if since is not None else datetime.now(UTC) - DEFAULT_FACET_WINDOW
+    try:
+        return read_audit_facets(lakebase, since=window_start, until=until)
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+
+
+@router.post(
+    "/export-receipt",
+    response_model=AuditExportReceipt,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def create_audit_export_receipt(
+    payload: AuditExportReceiptRequest,
+    store: StoreDep,
+    _: Annotated[None, Depends(require_json_content_type)],
+    actor: AdminDep,
+) -> AuditExportReceipt:
+    """Write the ``AUDIT_EXPORT`` ledger row an explorer CSV download waits for."""
+
+    try:
+        return write_audit_export_receipt(store, actor=actor, payload=payload)
+    except AuditExportInvalidEventIds as exc:
+        raise HTTPException(status_code=422, detail="invalid event_ids") from exc
+    except AuditExportDeclarationMismatch as exc:
+        # Constant body: the client only needs to know the receipt was refused.
+        raise HTTPException(status_code=422, detail=EXPORT_DIGEST_MISMATCH_DETAIL) from exc
+    except (AuditPIIError, AuditMetadataViolation, AuditMetadataValueViolation) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
 
 
 @router.get("/rollups", response_model=list[AuditRollupResponse])

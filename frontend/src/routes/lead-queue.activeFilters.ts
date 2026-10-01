@@ -1,5 +1,13 @@
 import type { LeadFunnelStage } from '../lib/api';
-import { FUNNEL_STAGE_LABELS, LEAD_TABLE_PLACE_PARAMS, LEAD_TABLE_VIEW_PARAM } from './lead-queue.filters';
+import { formatCount, signedBpsLabel } from '../lib/formatters';
+import {
+  FUNNEL_STAGE_LABELS,
+  LEAD_BOUND_FILTER_KEYS,
+  LEAD_TABLE_PLACE_PARAMS,
+  LEAD_TABLE_VIEW_PARAM,
+  parseLeadBound,
+  type LeadBoundDimension,
+} from './lead-queue.filters';
 
 /**
  * Active NON-core Lead Queue filters, rendered as removable `.filter` chips in
@@ -45,7 +53,29 @@ export const MORE_FILTER_PARAMS: readonly string[] = [
   'outreach_status',
   'assigned_to',
   'aged_days',
+  // The score and rate-spread inputs sit in the More filters panel too.
+  ...LEAD_BOUND_FILTER_KEYS,
 ];
+
+/**
+ * `≥ 70`, `≤ 90` or `70–90` for the score; the spread reads in signed bps
+ * (`≥ +50 bps`, `-25 bps – +150 bps`). Null when neither bound is set.
+ * deviation:lead-queue-range-filters (the SCORE / RATE SPREAD hero chips).
+ */
+export function leadBoundChipValue(
+  dimension: LeadBoundDimension,
+  criteria: Readonly<Record<string, string>> | undefined,
+): string | null {
+  const low = parseLeadBound(`min_${dimension}`, criteria?.[`min_${dimension}`]);
+  const high = parseLeadBound(`max_${dimension}`, criteria?.[`max_${dimension}`]);
+  const format = dimension === 'opportunity_score' ? formatCount : signedBpsLabel;
+  if (low !== undefined && high !== undefined) {
+    return dimension === 'opportunity_score' ? `${format(low)}–${format(high)}` : `${format(low)} – ${format(high)}`;
+  }
+  if (low !== undefined) return `≥ ${format(low)}`;
+  if (high !== undefined) return `≤ ${format(high)}`;
+  return null;
+}
 
 export interface LeadQueueActiveFilterInput {
   targetLenderRef?: string;
@@ -81,6 +111,12 @@ export function leadQueueActiveFilterChips(input: LeadQueueActiveFilterInput): L
   // `me` (the "Assigned to me" preset) reads "Me", never the resolved email.
   if (input.assignedTo) push('assigned_to', 'ASSIGNED', input.assignedTo.toLowerCase() === 'me' ? 'Me' : input.assignedTo);
   if (input.agedDays) push('aged_days', 'AGING', `Aged >${input.agedDays}d`);
+  // One chip per bounded dimension; removing it drops both of its keys. The
+  // generic loop above never sees these keys (PORTFOLIO_CHIP_LABELS).
+  const score = leadBoundChipValue('opportunity_score', input.portfolioCriteria);
+  if (score) push('opportunity_score', 'SCORE', score, ['min_opportunity_score', 'max_opportunity_score']);
+  const spread = leadBoundChipValue('rate_spread_bps', input.portfolioCriteria);
+  if (spread) push('rate_spread_bps', 'RATE SPREAD', spread, ['min_rate_spread_bps', 'max_rate_spread_bps']);
   if (input.funnelStage) push('funnel_stage', 'STAGE', FUNNEL_STAGE_LABELS[input.funnelStage]);
   if (input.zipFilter) push('zip', 'ZIP', input.zipFilter);
   if (input.zipFilters.length > 0) push('zips', 'ZIPS', `${input.zipFilters.length} selected`);

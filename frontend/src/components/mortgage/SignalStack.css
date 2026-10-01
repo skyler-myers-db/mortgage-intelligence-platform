@@ -1,0 +1,143 @@
+/* ============================================================
+   Signal stack (audit wow-stage-5; deviation:signal-stack). Imported by
+   SignalStack.tsx, so it ships with Segment Intelligence's lazy chunk,
+   never in the initial stylesheet.
+
+   The prototype's segment row (design_files/Module 0 Prototype.html
+   seg-grid ~L1546-1551) has no overlap view: block .signal-stack is an app
+   addition on the prototype's .surface / .surface__hdr / .tbl vocabulary,
+   tokens and --seg-* colours only. The UpSet strip is a bar per exact
+   combination over a six-row dot matrix (one row per core signal).
+   ============================================================ */
+/* The grid gap above, like the filter row's below (.filter-row--spaced). */
+.signal-stack { margin-block-start: var(--gap-grid); }
+.signal-stack__body {
+  display: grid;
+  align-content: start;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--pad-card);
+  /* The loaded, collapsed body's height (headline, overlap, footnote and
+     the disclosure: 144.5px at 1440x900, Console open or closed), reserved
+     while the read is in flight so the filter row below never moves when
+     it lands (signal-stack.fixture.spec.ts). */
+  min-block-size: calc(var(--sp-16) * 2 + var(--sp-5));
+}
+.signal-stack__status,
+.signal-stack__headline,
+.signal-stack__overlap,
+.signal-stack__footnote {
+  margin: 0;
+}
+.signal-stack__status { color: var(--text-2); }
+.signal-stack__headline {
+  color: var(--text-1);
+  font-size: var(--fs-14);
+}
+.signal-stack__lead { font-weight: 600; }
+.signal-stack__overlap {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+.signal-stack__footnote {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.signal-stack__link {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+.signal-stack__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.signal-stack__panel { margin-block-start: var(--sp-2); }
+
+/* UpSet strip: the signal names on the left share the dot matrix's rows. */
+.signal-stack__upset {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: end;
+  gap: var(--sp-3);
+}
+.signal-stack__legend,
+.signal-stack__dots {
+  display: grid;
+  grid-template-rows: repeat(6, var(--sp-4));
+  row-gap: var(--sp-1);
+  align-items: center;
+}
+.signal-stack__legend {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.signal-stack__columns {
+  display: flex;
+  align-items: end;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+}
+.signal-stack__column-link {
+  display: grid;
+  grid-template-rows: auto calc(var(--sp-16) * 2) auto;
+  justify-items: center;
+  gap: var(--sp-1);
+  inline-size: var(--sp-12);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  text-decoration: none;
+}
+.signal-stack__count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+}
+.signal-stack__bar-track {
+  display: flex;
+  align-items: flex-end;
+  inline-size: var(--sp-6);
+  block-size: 100%;
+}
+.signal-stack__bar {
+  inline-size: 100%;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: var(--accent-ink);
+}
+.signal-stack__column-link:hover .signal-stack__bar { background: var(--accent); }
+.signal-stack__dots { justify-items: center; }
+.signal-stack__dot {
+  inline-size: var(--sp-2);
+  block-size: var(--sp-2);
+  border-radius: 50%;
+  background: var(--line-2);
+}
+.signal-stack__dot--itm.is-on { background: var(--seg-itm); }
+.signal-stack__dot--listed.is-on { background: var(--seg-listed); }
+.signal-stack__dot--permit.is-on { background: var(--seg-permit); }
+.signal-stack__dot--investor.is-on { background: var(--seg-investor); }
+.signal-stack__dot--equity.is-on { background: var(--seg-equity); }
+.signal-stack__dot--retention.is-on { background: var(--seg-retention); }
+
+/* The table alternative. */
+.signal-stack__table-wrap { overflow-x: auto; }
+.signal-stack__caption {
+  caption-side: top;
+  padding-block-end: var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  text-align: start;
+}
+.signal-stack__table .tbl-cell--right { text-align: end; }
+.signal-stack__table tbody th,
+.signal-stack__table tfoot th {
+  font-weight: 500;
+  text-align: start;
+}
+.signal-stack__note { color: var(--text-3); }

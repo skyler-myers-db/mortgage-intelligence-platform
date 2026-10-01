@@ -9,12 +9,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.lead import LeadSummary
 from backend.schemas.queue_version import QueueVersionResponse
+from backend.schemas.saved_views import (
+    SavedViewCreateRequest,
+    SavedViewListResponse,
+    SavedViewMutationResponse,
+)
 from backend.schemas.workspace import (
     SavedDraft,
     SavedDraftInput,
@@ -39,6 +45,15 @@ from backend.services.repositories import (
     get_lead_repository,
     get_outreach_repository,
 )
+from backend.services.saved_view_params import (
+    SAVED_VIEW_PARAMS_REFUSED,
+    canonical_saved_view_params,
+)
+from backend.services.saved_view_store import (
+    SavedViewConflict,
+    SavedViewStore,
+    get_saved_view_store,
+)
 from backend.services.workspace_queue_version import QueueVersionService, get_queue_version_service
 from backend.services.workspace_store import WorkspaceStore, get_workspace_store
 
@@ -49,6 +64,15 @@ LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 OutreachRepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 QueueVersionDep = Annotated[QueueVersionService, Depends(get_queue_version_service)]
+SavedViewStoreDep = Annotated[SavedViewStore, Depends(get_saved_view_store)]
+
+# Fixed copy: a saved-view response never echoes the name or the params.
+SAVED_VIEW_CONFLICT_DETAIL: dict[str, str] = {
+    "duplicate": "A saved view with this name already exists",
+    "limit": "Saved view limit reached (25)",
+    "changed": "Saved views changed while saving; try again",
+}
+SAVED_VIEW_NOT_FOUND_DETAIL = "Saved view not found"
 
 
 def _as_lakebase_503() -> HTTPException:
@@ -334,3 +358,64 @@ def delete_draft(
         )
     except LakebaseError as exc:
         raise _as_lakebase_503() from exc
+
+
+@router.get("/saved-views", response_model=SavedViewListResponse)
+def list_saved_views(request: Request, store: SavedViewStoreDep) -> SavedViewListResponse:
+    """The actor's saved Lead Queue views (tables-09 phase 2). Audit-free.
+
+    Fetched only when the Lead Queue's Saved views panel is first opened, and
+    served apart from WorkspaceState so the workspace read stays unchanged.
+    """
+
+    try:
+        return SavedViewListResponse(saved_views=store.list(actor=resolve_workflow_actor(request)))
+    except LakebaseError as exc:
+        raise _as_lakebase_503() from exc
+
+
+@router.post(
+    "/saved-views",
+    response_model=SavedViewMutationResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def create_saved_view(
+    payload: SavedViewCreateRequest,
+    request: Request,
+    store: SavedViewStoreDep,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> SavedViewMutationResponse:
+    """Name the current Lead Queue view; writes SAVE_QUEUE_VIEW in the same statement."""
+
+    try:
+        params, fingerprint = canonical_saved_view_params(payload.params)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=SAVED_VIEW_PARAMS_REFUSED) from exc
+    try:
+        return store.create(
+            actor=resolve_workflow_actor(request),
+            name=payload.name,
+            params=params,
+            filter_fingerprint=fingerprint,
+        )
+    except SavedViewConflict as exc:
+        raise HTTPException(status_code=409, detail=SAVED_VIEW_CONFLICT_DETAIL[exc.kind]) from exc
+    except LakebaseError as exc:
+        raise _as_lakebase_503() from exc
+
+
+@router.delete("/saved-views/{view_id}", response_model=SavedViewMutationResponse)
+def delete_saved_view(view_id: UUID, request: Request, store: SavedViewStoreDep) -> SavedViewMutationResponse:
+    """Soft-delete one of the actor's views; writes DELETE_QUEUE_VIEW in the same statement.
+
+    404 when the view is absent, already deleted, or another actor's: the
+    answer never confirms that someone else's view exists.
+    """
+
+    try:
+        result = store.delete(actor=resolve_workflow_actor(request), view_id=str(view_id))
+    except LakebaseError as exc:
+        raise _as_lakebase_503() from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail=SAVED_VIEW_NOT_FOUND_DETAIL)
+    return result

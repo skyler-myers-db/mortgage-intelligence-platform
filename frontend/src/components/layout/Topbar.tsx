@@ -4,6 +4,7 @@ import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { useListboxNavigation } from '../ui/useListboxNavigation';
 import { ElapsedTicker } from '../ui/ElapsedTicker';
+import { Tooltip } from '../ui/Tooltip';
 import { useHealth } from '../HealthProvider';
 import type { ConnectionStatus } from '../connectionState';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -167,22 +168,25 @@ export function systemStatusViewModel(
  *  itself is not memoized, so three props would re-render it just as often). */
 function SystemStatusPill({ status }: { status: SystemStatusView }) {
   const shown = status.shortLabel ?? status.label;
+  // The per-dependency details are the tooltip AND the pill's accessible
+  // description (critic-08: a native title never reached keyboard users).
   return (
-    <div
-      className="topbar__pill"
-      title={status.tooltip}
-      aria-label={status.ariaLabel}
-      data-testid="system-status-pill"
-    >
-      <span className={status.dotClass} aria-hidden="true" />
-      <span className="topbar__pill-label">
-        {shown}
-        {shown !== status.label && <span className="sr-only">{status.label.slice(shown.length)}</span>}
-      </span>
-      {/* Outside the label and aria-hidden: a per-second change must never
-          be re-spoken (the pill's accessible name stays "Waking warehouse"). */}
-      {status.resumingSince != null && <ElapsedTicker startedAt={status.resumingSince} paused={false} />}
-    </div>
+    <Tooltip content={status.tooltip}>
+      <div
+        className="topbar__pill"
+        aria-label={status.ariaLabel}
+        data-testid="system-status-pill"
+      >
+        <span className={status.dotClass} aria-hidden="true" />
+        <span className="topbar__pill-label">
+          {shown}
+          {shown !== status.label && <span className="sr-only">{status.label.slice(shown.length)}</span>}
+        </span>
+        {/* Outside the label and aria-hidden: a per-second change must never
+            be re-spoken (the pill's accessible name stays "Waking warehouse"). */}
+        {status.resumingSince != null && <ElapsedTicker startedAt={status.resumingSince} paused={false} />}
+      </div>
+    </Tooltip>
   );
 }
 
@@ -387,15 +391,16 @@ export function Topbar() {
           aria-controls={searchListShown ? searchListbox.listboxId : undefined}
           aria-activedescendant={searchListShown ? searchListbox.activeDescendant : undefined}
         />
-        <button
-          type="button"
-          className="topbar__search-kbd"
-          onClick={openCommandPalette}
-          aria-label={`Open command palette (${CMDK_LABEL})`}
-          title={`Command palette · ${CMDK_LABEL}`}
-        >
-          {CMDK_LABEL}
-        </button>
+        <Tooltip content="Command palette" shortcut={CMDK_LABEL}>
+          <button
+            type="button"
+            className="topbar__search-kbd"
+            onClick={openCommandPalette}
+            aria-label={`Open command palette (${CMDK_LABEL})`}
+          >
+            {CMDK_LABEL}
+          </button>
+        </Tooltip>
         {searchResultsShown && (
           <div className="topbar__search-results">
             {searchListShown && (
@@ -447,14 +452,15 @@ export function Topbar() {
       {/* Tenant pill — display-only label for the configured lender. The
           backend applies lender configuration; the UI does not support
           arbitrary client-side lender switching. */}
-      <div
-        className="topbar__pill"
-        title={`Configured tenant · ${lender}. Lender configuration is applied server-side.`}
-        aria-label={`Configured tenant: ${lender}`}
-      >
-        <Icon name="building" size={12} />
-        <span className="topbar__pill-tenant">{lender}</span>
-      </div>
+      <Tooltip content={`Configured tenant · ${lender}. Lender configuration is applied server-side.`}>
+        <div
+          className="topbar__pill"
+          aria-label={`Configured tenant: ${lender}`}
+        >
+          <Icon name="building" size={12} />
+          <span className="topbar__pill-tenant">{lender}</span>
+        </div>
+      </Tooltip>
       {/*
         Single "system status" pill consolidating environment + warehouse
         + lakebase + genie state. Replaces the prior 3-pill row (sandbox /
@@ -469,45 +475,49 @@ export function Topbar() {
       */}
       <SystemStatusPill status={systemStatusViewModel(health, connection, warehouseResumingSince)} />
       {footprintFallback && mountGraceOver && (
-        <span
-          className="chip chip--warning"
-          title="The /api/config/footprint fetch failed — showing generic US-state metadata until the footprint endpoint recovers."
-          data-testid="footprint-fallback-chip"
-        >
-          <Icon name="shield" size={10} />
-          Footprint: fallback
-        </span>
+        <Tooltip content="The /api/config/footprint fetch failed — showing generic US-state metadata until the footprint endpoint recovers.">
+          <span
+            className="chip chip--warning"
+            data-testid="footprint-fallback-chip"
+          >
+            <Icon name="shield" size={10} />
+            Footprint: fallback
+          </span>
+        </Tooltip>
       )}
-      <button
-        className="topbar__icon-btn"
-        onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-        title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-        aria-label="Toggle theme"
-        type="button"
-      >
-        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={15} />
-      </button>
-      <button
-        className={`topbar__icon-btn ${genieOpen ? 'is-active' : ''} ${genieLauncherStateClass(genieTurn)}`}
-        onClick={() => setGenieOpen(!genieOpen)}
-        title="Ask Genie"
-        aria-label="Toggle Genie chat"
-        aria-describedby={genieTurn === 'idle' ? undefined : GENIE_LAUNCHER_STATUS_ID}
-        aria-pressed={genieOpen}
-        type="button"
-      >
-        <Icon name="sparkle" size={15} />
-      </button>
-      <button
-        className={`topbar__icon-btn ${consoleOpen ? 'is-active' : ''}`}
-        onClick={() => setConsoleOpen(!consoleOpen)}
-        title="Console (theme, density, accent)"
-        aria-label="Toggle console"
-        aria-pressed={consoleOpen}
-        type="button"
-      >
-        <Icon name="tweak" size={15} />
-      </button>
+      <Tooltip content={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
+        <button
+          className="topbar__icon-btn"
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          aria-label="Toggle theme"
+          type="button"
+        >
+          <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={15} />
+        </button>
+      </Tooltip>
+      <Tooltip content="Ask Genie">
+        <button
+          className={`topbar__icon-btn ${genieOpen ? 'is-active' : ''} ${genieLauncherStateClass(genieTurn)}`}
+          onClick={() => setGenieOpen(!genieOpen)}
+          aria-label="Toggle Genie chat"
+          aria-describedby={genieTurn === 'idle' ? undefined : GENIE_LAUNCHER_STATUS_ID}
+          aria-pressed={genieOpen}
+          type="button"
+        >
+          <Icon name="sparkle" size={15} />
+        </button>
+      </Tooltip>
+      <Tooltip content="Console (theme, density, accent)">
+        <button
+          className={`topbar__icon-btn ${consoleOpen ? 'is-active' : ''}`}
+          onClick={() => setConsoleOpen(!consoleOpen)}
+          aria-label="Toggle console"
+          aria-pressed={consoleOpen}
+          type="button"
+        >
+          <Icon name="tweak" size={15} />
+        </button>
+      </Tooltip>
       <IdentityMenu />
       </div>
     </header>

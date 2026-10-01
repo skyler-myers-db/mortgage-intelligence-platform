@@ -6,7 +6,7 @@
  * exported `api` object in the original order. Consumers import `api` from
  * `../api` — never from this module.
  */
-import type { ApproveResult, RejectResult, OutreachDraftResult } from '../apiTypes';
+import type { ApproveResult, RejectResult, OutreachDraftResult, ReviewMode } from '../apiTypes';
 import { _newRequestId, postJson } from '../apiTransport';
 
 export const outreachApi = {
@@ -24,6 +24,11 @@ export const outreachApi = {
       rationale?: string | null;
       bulk_id?: string | null;
       bulk_rationale?: string | null;
+      /**
+       * How the approver saw this copy (the APPROVE row's review ledger).
+       * Omitted, the server records 'undeclared'.
+       */
+      review_mode?: ReviewMode | null;
       channel?: 'email' | 'sms' | 'direct_mail';
       campaign_id?: string | null;
       variant_name?: string | null;
@@ -50,6 +55,7 @@ export const outreachApi = {
         rationale?: string | null;
         bulk_id?: string | null;
         bulk_rationale?: string | null;
+        review_mode?: ReviewMode | null;
         channel?: 'email' | 'sms' | 'direct_mail';
         campaign_id?: string | null;
         variant_name?: string | null;
@@ -72,6 +78,7 @@ export const outreachApi = {
         rationale: opts.rationale ?? null,
         bulk_id: opts.bulk_id ?? null,
         bulk_rationale: opts.bulk_rationale ?? null,
+        review_mode: opts.review_mode ?? null,
         channel: opts.channel ?? 'email',
         campaign_id: opts.campaign_id ?? null,
         variant_name: opts.variant_name ?? null,
@@ -107,6 +114,8 @@ export const outreachApi = {
       channel?: 'email' | 'sms' | 'direct_mail';
       campaign_id?: string | null;
       variant_name?: string | null;
+      /** One bulk rejection run: every row carries the same id and shared note. */
+      bulk_id?: string | null;
       request_id?: string;
     },
     signal?: AbortSignal,
@@ -123,6 +132,7 @@ export const outreachApi = {
         channel?: 'email' | 'sms' | 'direct_mail';
         campaign_id?: string | null;
         variant_name?: string | null;
+        bulk_id?: string | null;
         request_id: string;
       }
     >(
@@ -137,6 +147,7 @@ export const outreachApi = {
         channel: opts.channel ?? 'email',
         campaign_id: opts.campaign_id ?? null,
         variant_name: opts.variant_name ?? null,
+        bulk_id: opts.bulk_id ?? null,
         request_id: opts.request_id ?? _newRequestId(),
       },
       signal,
@@ -144,9 +155,10 @@ export const outreachApi = {
 
   /**
    * Fetch the backend-generated outreach draft for a borrower. The
-   * backend emits a DRAFT_OUTREACH audit row as a side effect so we
-   * know which draft copy was shown to the approver. Callers must fail
-   * closed if this rejects; outreach copy is never generated locally.
+   * backend emits a DRAFT_OUTREACH audit row as a side effect: a draft was
+   * generated for this actor. Whether the approver saw it is the APPROVE
+   * row's review_mode, not this row. Callers must fail closed if this
+   * rejects; outreach copy is never generated locally.
    */
   draftOutreach: (
     borrower_id: string,

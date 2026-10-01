@@ -1,7 +1,9 @@
 /**
  * Segments lane (audit 2026-09-21 wave 1b): segment cards at prototype
  * proportions on a shared row grid (visual-04), and every Segments filter in
- * the URL (flow-09). Rendered-layer proof at 1440x900.
+ * the URL (flow-09). Rendered-layer proof at 1440x900. Each card paints its
+ * own hue from the theme's validated segment palette (dataviz-09,
+ * D-dataviz-geo-c2).
  */
 import { expectAxeClean } from './axe';
 import type { Locator, Page } from '@playwright/test';
@@ -17,10 +19,16 @@ import {
   registerVariedSegments,
 } from './data/segmentsCards';
 import { json } from './mockApi';
+import { asComputedRgb } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
 const ROUTE = '/segment-intelligence';
+/** Every --seg-* token (tokens.css); the light theme sets its own values. */
+const SEGMENT_TOKENS = [
+  'itm', 'listed', 'permit', 'investor', 'equity', 'retention', 'second-lien', 'heloc-draw',
+  'equity-history', 'refi-propensity', 'related-itm', 'payoff-loss', 'permit-activity',
+] as const;
 /** One element per subgrid row, top to bottom. */
 const CARD_ROWS = [
   '.seg-card__hdr',
@@ -323,6 +331,19 @@ for (const theme of FIXTURE_THEMES) {
         expect(Math.abs(height - loadingCards[index]), `card ${index}: loaded ${height}px vs loading ${loadingCards[index]}px`).toBeLessThanOrEqual(1);
       }
       expect(Math.abs((await gridHeight()) - loadingGrid), 'grid height across the load').toBeLessThanOrEqual(1);
+    });
+
+    test("each card's accent bar paints a distinct hue from this theme's segment palette", async ({ app, mockApi, page }) => {
+      // All thirteen registered codes: the six cards plus the S1.3 overlays.
+      mockApi.register('GET', '/api/segments', () => json<SegmentSummary[]>([...ALL_CODE_ELIGIBLE_SEGMENTS]));
+      await app.gotoRoute(ROUTE);
+      const cards = page.locator('.seg-grid .seg-card:not(.seg-card--skeleton)');
+      await expect(cards).toHaveCount(ALL_CODE_ELIGIBLE_SEGMENTS.length);
+      const bars = await cards.evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node, '::before').backgroundColor));
+      expect(new Set(bars).size, `accent bars: ${bars.join(' | ')}`).toBe(bars.length);
+      const palette = new Set<string>();
+      for (const token of SEGMENT_TOKENS) palette.add(await asComputedRgb(page, `var(--seg-${token})`));
+      expect(bars.filter((bar) => !palette.has(bar)), `bars outside the ${theme} palette`).toEqual([]);
     });
 
     test('the segment cards, facet share bars included, pass axe WCAG A/AA', async ({ app, page }) => {

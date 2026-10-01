@@ -11,6 +11,11 @@ import type { Page } from '@playwright/test';
 import { genieAnswerFixture, genieDeepAnswerFixture, GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { expect, test } from './test';
 
+/** Matches one id among an element's space-separated aria-describedby ids. */
+function describedByToken(id: string): RegExp {
+  return new RegExp(`(^|\\s)${id}(\\s|$)`);
+}
+
 const LAUNCHER_STATUS_ID = 'genie-launcher-status';
 
 function panelAnnouncer(page: Page) {
@@ -29,7 +34,8 @@ test.describe('a turn survives closing the panel', () => {
     await expect(app.geniePanel()).toHaveAttribute('aria-hidden', 'true');
     const toggle = app.genieToggle();
     await expect(toggle).toHaveClass(/is-genie-running/);
-    await expect(toggle).toHaveAttribute('aria-describedby', LAUNCHER_STATUS_ID);
+    // One id among the description ids: the Topbar Tooltip (critic-08) adds its own.
+    await expect(toggle).toHaveAttribute('aria-describedby', describedByToken(LAUNCHER_STATUS_ID));
     await expect(page.locator(`#${LAUNCHER_STATUS_ID}`)).toHaveText('Genie is still working on your question.');
 
     // Progress polls keep arriving while the panel is closed (1.5 s cadence).
@@ -46,7 +52,7 @@ test.describe('a turn survives closing the panel', () => {
     await toggle.click();
     await expect(app.geniePanel()).toHaveClass(/is-open/);
     await expect(toggle).not.toHaveClass(/is-genie-ready|is-genie-running/);
-    await expect(toggle).not.toHaveAttribute('aria-describedby', LAUNCHER_STATUS_ID);
+    await expect(toggle).not.toHaveAttribute('aria-describedby', describedByToken(LAUNCHER_STATUS_ID));
     const body = dialog.locator('.genie__body');
     await expect(body.locator('.genie__msg--user')).toHaveText(GENIE_QUESTION);
     const answer = body.locator('.genie__msg--ai .genie-answer');

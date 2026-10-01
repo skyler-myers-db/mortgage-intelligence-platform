@@ -12,15 +12,22 @@
  *   - `registerBulkApprove`: POST /api/outreach/approve per row, optionally
  *     holding the first chunk on a RequestGate, failing chosen ids with a 500
  *     or ending the session (401 {}) on one; records every body in order.
+ *   - `registerDraftForRows`: POST /api/outreach/draft answering the
+ *     requested ROW's recommended offer (so a queue of several offers drafts
+ *     one response per offer code, as the bulk gate's stratified samples
+ *     expect), with a generation id and hash unique to the borrower; records
+ *     every borrower drafted, in order (w5-approval-core).
  *   - `contractSamples()`: the bodies these helpers answer with, in the
  *     exporter's record shape, so the fixture contract can validate them.
  *
  * Synthetic only: masked ids in the production shape, no names or contacts.
  */
 import type { LeadSummary, SessionResponse } from '../../../../src/types';
-import type { ApproveResult } from '../../../../src/lib/apiTypes';
+import type { ApproveResult, OutreachDraftResult, ReviewMode } from '../../../../src/lib/apiTypes';
 import { json, type FixtureReply, type FixtureRequest, type MockApi } from '../mockApi';
 import { APPROVE_AUDIT_ID, RequestGate, approveResult } from './decisionReceipt';
+import { LEADS } from './borrowers';
+import { outreachDraftFor } from './offers';
 import { SALES_TEAM } from './portfolio';
 import { TOTALS } from './reference';
 
@@ -30,6 +37,7 @@ export const LO_SESSION: SessionResponse = {
   can_access_admin: false,
   can_approve: true,
   actor_email: LO_EMAIL,
+  actor_cache_key: null,
 };
 
 function rankedPage(rows: readonly LeadSummary[], query: URLSearchParams): FixtureReply<LeadSummary[]> {
@@ -52,6 +60,9 @@ export interface BulkApproveBody {
   request_id?: string;
   bulk_id?: string | null;
   bulk_rationale?: string | null;
+  /** The review ledger (D-approval-flow-a1): bulk_sample or bulk_cohort in a run. */
+  review_mode?: ReviewMode | null;
+  draft_generation_id?: string | null;
 }
 
 export interface BulkApproveOptions {
@@ -61,6 +72,8 @@ export interface BulkApproveOptions {
   failIds?: readonly string[];
   /** Answer this id with the proxy's ended-session 401 `{}`. */
   expireOn?: string | null;
+  /** Answer these ids with the governed text policy's 422 (a canary refusal). */
+  refuseIds?: readonly string[];
 }
 
 export interface BulkApproveTracker {
@@ -83,12 +96,51 @@ export function registerBulkApprove(mockApi: MockApi, options: BulkApproveOption
     if (options.expireOn && borrowerId === options.expireOn) {
       return json<Record<string, never>>({}, { status: 401 });
     }
+    if (options.refuseIds?.includes(borrowerId)) {
+      return json<ErrorBody>({ detail: 'bulk_rationale failed the governed text policy' }, { status: 422 });
+    }
     if (options.failIds?.includes(borrowerId)) {
       return json<ErrorBody>({ detail: 'Internal Server Error' }, { status: 500 });
     }
     return approveResult(APPROVE_AUDIT_ID);
   });
   return tracker;
+}
+
+/** A hex digest unique to the borrower (deterministic, no crypto needed). */
+function borrowerHex(borrowerId: string, length: number): string {
+  const codes = [...borrowerId].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('');
+  return codes.padEnd(length, '0').slice(-length);
+}
+
+/** The draft a row's own recommended offer gets: one response per offer code. */
+export function draftForRow(row: LeadSummary, request: FixtureRequest): OutreachDraftResult {
+  return {
+    ...outreachDraftFor(request),
+    borrower_id: row.borrower_id,
+    offer_code: row.recommended_offer_code ?? 'refi',
+    generation_id: `00000000-0000-4000-8000-${borrowerHex(row.borrower_id, 12)}`,
+    response_hash: borrowerHex(row.borrower_id, 64),
+    subject: `A quick review of your mortgage options (${row.borrower_id})`,
+  };
+}
+
+export interface RowDrafts {
+  /** Draft POSTs received, by borrower id, in arrival order. */
+  readonly calls: string[];
+}
+
+export function registerDraftForRows(mockApi: MockApi, rows: readonly LeadSummary[]): RowDrafts {
+  const drafts: RowDrafts = { calls: [] };
+  const byId = new Map(rows.map((row) => [row.borrower_id, row]));
+  mockApi.register<OutreachDraftResult>('POST', '/api/outreach/draft', (request) => {
+    const body = request.body as { borrower_id?: unknown } | null;
+    const borrowerId = typeof body?.borrower_id === 'string' ? body.borrower_id : '';
+    drafts.calls.push(borrowerId);
+    const row = byId.get(borrowerId) ?? rows[0];
+    return json<OutreachDraftResult>(draftForRow(row, request));
+  });
+  return drafts;
 }
 
 export interface ContractSample {
@@ -121,6 +173,22 @@ export function contractSamples(): ContractSample[] {
       query: '',
       status: 200,
       body: approveResult(APPROVE_AUDIT_ID).body,
+    },
+    {
+      source: 'data/queuePlace.ts#registerDraftForRows',
+      method: 'POST',
+      pattern: '/api/outreach/draft',
+      path: '/api/outreach/draft',
+      query: '',
+      status: 200,
+      body: draftForRow(LEADS[0], {
+        method: 'POST',
+        path: '/api/outreach/draft',
+        url: new URL('http://127.0.0.1/api/outreach/draft'),
+        query: new URLSearchParams(),
+        params: {},
+        body: { borrower_id: LEADS[0].borrower_id, channel: 'email' },
+      }),
     },
   ];
 }

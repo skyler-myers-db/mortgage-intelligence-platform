@@ -34,6 +34,7 @@ _PUBLIC_CAPABILITY_AVAILABLE_DETAILS = {
         "has been verified in the deployment proof ledger."
     ),
     "lakebase_sync": "Live Lakebase synced-table probes passed for MIP-owned serving tables.",
+    "growth_agent_scheduler": "Live Jobs API read: the saved-watchlist scheduled run is on.",
 }
 _PUBLIC_CAPABILITY_CONFIGURED_DETAILS = {
     "genie_conversation_api": "Genie Conversation API dependencies are configured; live proof is required before claiming this row.",

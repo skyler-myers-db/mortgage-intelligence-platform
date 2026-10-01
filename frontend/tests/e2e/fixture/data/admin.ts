@@ -107,6 +107,66 @@ function rollup(date: string, eventType: string, eventCount: number): AuditRollu
   return { bucket_start: `${date}T00:00:00Z`, event_type: eventType, group_by: 'event_type', group_key: eventType, event_count: eventCount };
 }
 
+/** Mirror of backend AuditFacetsResponse (GET /api/audit/facets, audit-free). */
+interface AuditFacetsFixture {
+  event_types: Array<{ value: string; count: number }>;
+  actions: Array<{ value: string; count: number }>;
+  actors: Array<{ value: string; count: number }>;
+  truncated: { event_types: boolean; actions: boolean; actors: boolean };
+  since: string;
+  until: string | null;
+}
+
+/** Mirror of backend AuditCountResponse (GET /api/audit/count, audit-free). */
+interface AuditCountFixture {
+  count: number;
+  capped: boolean;
+  cap: number;
+}
+
+/** Mirror of backend AuditExportReceipt (POST /api/audit/export-receipt). */
+interface AuditExportReceiptFixture {
+  audit_event_id: string;
+  event_type: 'AUDIT_EXPORT';
+  actor: string;
+  row_count: number;
+  csv_sha256: string;
+  event_ids_sha256: string;
+  filter_fingerprint: string;
+  recorded_at: string;
+}
+
+function facetCounts(values: readonly string[]): Array<{ value: string; count: number }> {
+  return values
+    .map((value) => ({ value, count: AUDIT_EVENTS.filter((event) => [event.event_type, event.action, event.actor].includes(value)).length }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+}
+
+const AUDIT_FACETS: AuditFacetsFixture = {
+  event_types: facetCounts(AUDIT_ACTIONS),
+  actions: facetCounts(AUDIT_ACTIONS),
+  actors: facetCounts(['approver@summit.example', 'analyst@summit.example']),
+  truncated: { event_types: false, actions: false, actors: false },
+  since: '2026-04-15T00:00:00Z',
+  until: null,
+};
+
+function auditExportReceipt(body: unknown): AuditExportReceiptFixture {
+  const declared = (body ?? {}) as { row_count?: unknown; csv_sha256?: unknown; event_ids_sha256?: unknown };
+  const hex = (value: unknown, fill: string): string =>
+    typeof value === 'string' && /^[0-9a-f]{64}$/.test(value) ? value : fill.repeat(64);
+  return {
+    audit_event_id: '3b7c9f2e-5a41-4d8e-9c06-2f1a8b7d4e90',
+    event_type: 'AUDIT_EXPORT',
+    actor: 'approver@summit.example',
+    row_count: typeof declared.row_count === 'number' ? declared.row_count : AUDIT_EVENTS.length,
+    csv_sha256: hex(declared.csv_sha256, 'c'),
+    event_ids_sha256: hex(declared.event_ids_sha256, 'e'),
+    filter_fingerprint: 'f'.repeat(64),
+    recorded_at: '2026-07-14T12:00:00Z',
+  };
+}
+
 const DESTINATIONS: ActivationDestination[] = [
   // allowed_actions uses the governed activation vocabulary and is never
   // empty (backend/schemas/activation.py); the values mirror the
@@ -180,6 +240,11 @@ export const adminFixtures: FixtureEntry[] = [
     return json<AuditEventRow[]>(AUDIT_EVENTS.slice(0, limit > 0 ? limit : AUDIT_EVENTS.length));
   }),
   fixture('GET', '/api/audit/events/page', () => json<AuditEventPage>({ items: AUDIT_EVENTS, next_cursor: null })),
+  // Audit explorer (tables-10): admin-gated, audit-free reads and the
+  // AUDIT_EXPORT receipt an explorer CSV download waits for.
+  fixture('GET', '/api/audit/facets', () => json<AuditFacetsFixture>(AUDIT_FACETS)),
+  fixture('GET', '/api/audit/count', () => json<AuditCountFixture>({ count: AUDIT_EVENTS.length, capped: false, cap: 50000 })),
+  fixture('POST', '/api/audit/export-receipt', ({ body }) => json<AuditExportReceiptFixture>(auditExportReceipt(body))),
   // The default `group_by=event_type` rollup: the backend echoes the group in
   // group_by / group_key and fills event_type from it (backend/api/audit.py).
   fixture('GET', '/api/audit/rollups', () =>

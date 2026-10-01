@@ -11,6 +11,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
+import { subscribeActorScope } from '../../lib/actorScope';
 import { genieStartQueryOptions } from '../../lib/genieStartQuery';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
@@ -157,6 +158,16 @@ export function GenieChat() {
   }, []);
 
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
+  // Mounted before the actor gate opened (lib/actorScope), the stored id read
+  // null: re-read it when the gate opens, unless a turn owns the id.
+  useEffect(
+    () =>
+      subscribeActorScope(({ reason }) => {
+        if (reason !== 'opened' || getGenieTurnSnapshot().inFlight !== null) return;
+        setConversationId((current) => current ?? readGenieConversationId());
+      }),
+    [],
+  );
   const bodyRef = useRef<HTMLDivElement>(null);
   const suppressBootstrapConversationRef = useRef(false);
 

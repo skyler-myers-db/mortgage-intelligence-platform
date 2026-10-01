@@ -20,6 +20,8 @@ from tests.unit.growth_refusal_contract import (
     GROWTH_REFUSAL_MESSAGE_RE,
     assert_only_refusal_audit_writes,
     assert_refused_with_audit,
+    growth_refusal_code,
+    post_growth_execute,
 )
 
 _UNSAFE_HEALTH_OBJECTIVES = (
@@ -141,8 +143,9 @@ def test_growth_agent_health_objective_is_rejected_before_all_side_effects(
 ) -> None:
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=objective)
-    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
-        ComposePlanRequest(objective=objective, execute=True)
+    with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE) as compose_refusal:
+        ComposePlanRequest(objective=objective)
+    assert growth_refusal_code(compose_refusal.value) is not None
 
     sql = MagicMock(name="sql_client")
     lakebase = MagicMock(name="lakebase_client")
@@ -171,10 +174,8 @@ def test_growth_agent_health_objective_is_rejected_before_all_side_effects(
             },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": objective, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
         )
     finally:
         app.dependency_overrides.pop(get_sql_client, None)

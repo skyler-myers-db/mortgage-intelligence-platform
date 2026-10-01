@@ -10,6 +10,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { Icon } from '../components/Icon';
 import { genieActionConfirmation, runGenieActionRequest } from '../components/mortgage/GenieChat.helpers';
 import { GenieAnnouncerRegion } from '../components/mortgage/GenieAnnouncerRegion';
+import { subscribeActorScope } from '../lib/actorScope';
 import { descriptorFor } from '../lib/drawerSources';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
@@ -120,6 +121,18 @@ export default function AskGenie() {
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [activeAssetPath, setActiveAssetPath] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
+  // Mounted before the actor gate opened (lib/actorScope), the stored id read
+  // null: re-read it when the gate opens, unless a turn owns the id or the URL
+  // links a conversation (the link adopts its own).
+  useEffect(
+    () =>
+      subscribeActorScope(({ reason }) => {
+        if (reason !== 'opened' || getGenieTurnSnapshot().inFlight !== null) return;
+        if (urlRef.current.conversationParam !== undefined) return;
+        setConversationId((current) => current ?? readGenieConversationId());
+      }),
+    [],
+  );
   const growthAgent = useGrowthAgentWorkspace();
 
   // Shared with the floating panel (lib/genieStartQuery, audit `runtime-06`).

@@ -77,7 +77,8 @@ def _default_itm_queue_sql() -> tuple[str, bool]:
 
 
 def test_leads_route_defaults_to_the_eligibility_the_banner_counts() -> None:
-    source = (_REPO_ROOT / "backend" / "api" / "leads.py").read_text()
+    # The GET /leads defaults live in the lead_query_params dependency.
+    source = (_REPO_ROOT / "backend" / "schemas" / "lead_query.py").read_text()
     assert 'marketing_eligibility: MarketingEligibilityParam = "Eligible only"' in source
 
 

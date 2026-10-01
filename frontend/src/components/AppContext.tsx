@@ -15,17 +15,18 @@ import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
 import { sessionQueryOptions } from '../lib/sessionQuery';
 import {
-  ACCENTS,
-  ACCENT_STORAGE_KEY,
   DEFAULT_ACCENT,
   DEFAULT_DENSITY,
   DEFAULT_THEME_PREFERENCE,
   DENSITIES,
   CONSOLE_OPEN_STORAGE_KEY,
   DENSITY_STORAGE_KEY,
-  THEME_PREFERENCES,
-  THEME_STORAGE_KEY,
+  persistAccent,
+  persistDensity,
+  persistThemePreference,
+  readAccentPreference,
   readStoredChoice,
+  readThemePreference,
   resolveTheme,
   subscribeSystemTheme,
   syncThemeColorMeta,
@@ -54,7 +55,9 @@ import type {
  * system); `theme` is what is painted. public/theme-boot.js applies the same
  * attributes before first paint from the same storage keys (see
  * lib/themePreference.ts), so the post-mount effect below only re-asserts
- * them and takes over live changes (Console, OS scheme flips).
+ * them and takes over live changes (Console, OS scheme flips). Nothing is
+ * stored on mount: only an explicit pick persists, with its choice marker
+ * (a first visit boots dark and stays unstored; 2026-09-30, report 12.4 #4).
  */
 
 export type { Accent, Density, Theme, ThemePreference };
@@ -194,13 +197,11 @@ function mapDraftsByBorrowerChannel(items: SavedDraft[]): Record<string, SavedDr
 
 export function AppProvider({ children }: PropsWithChildren) {
   const [themePreference, setThemePreferenceState] = useState<ThemePreference>(() =>
-    readStoredChoice(THEME_STORAGE_KEY, DEFAULT_THEME_PREFERENCE, THEME_PREFERENCES),
+    readThemePreference(DEFAULT_THEME_PREFERENCE),
   );
   const [systemDark, setSystemDark] = useState<boolean>(() => systemPrefersDark());
   const theme = resolveTheme(themePreference, systemDark);
-  const [accent, setAccentState] = useState<Accent>(() =>
-    readStoredChoice(ACCENT_STORAGE_KEY, DEFAULT_ACCENT, ACCENTS),
-  );
+  const [accent, setAccentState] = useState<Accent>(() => readAccentPreference(DEFAULT_ACCENT));
   const [density, setDensityState] = useState<Density>(() =>
     readStoredChoice(DENSITY_STORAGE_KEY, DEFAULT_DENSITY, DENSITIES),
   );
@@ -283,14 +284,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     // Browser chrome (Safari tab bar, PWA title bar) follows the page
     // background of the painted theme; theme-boot.js set the boot value.
     syncThemeColorMeta(root);
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, themePreference);
-      window.localStorage.setItem(ACCENT_STORAGE_KEY, accent);
-      window.localStorage.setItem(DENSITY_STORAGE_KEY, density);
-    } catch {
-      // ignore
-    }
-  }, [theme, themePreference, accent, density]);
+  }, [theme, accent, density]);
 
   // Reflect console-open state on <html> (so .app-shell can pad .main when the
   // Console overlays the right edge) and persist the presenter's preference.
@@ -334,16 +328,30 @@ export function AppProvider({ children }: PropsWithChildren) {
   // A change of the PAINTED theme cross-fades (lib/themeTransition, audit
   // motion-03); the data-theme effect above has run by the time its
   // flushSync'd update returns, so the new snapshot shows the new theme.
+  // The pick is stored first, synchronously, never inside the transition's
+  // callback (which runs a task later, or never when it is skipped).
   const setTheme = useCallback(
-    (t: Theme) => changeTheme(theme, t, () => setThemePreferenceState(t)),
+    (t: Theme) => {
+      persistThemePreference(t);
+      changeTheme(theme, t, () => setThemePreferenceState(t));
+    },
     [theme],
   );
   const setThemePreference = useCallback(
-    (p: ThemePreference) => changeTheme(theme, resolveTheme(p, systemDark), () => setThemePreferenceState(p)),
+    (p: ThemePreference) => {
+      persistThemePreference(p);
+      changeTheme(theme, resolveTheme(p, systemDark), () => setThemePreferenceState(p));
+    },
     [systemDark, theme],
   );
-  const setAccent = useCallback((a: Accent) => setAccentState(a), []);
-  const setDensity = useCallback((d: Density) => setDensityState(d), []);
+  const setAccent = useCallback((a: Accent) => {
+    persistAccent(a);
+    setAccentState(a);
+  }, []);
+  const setDensity = useCallback((d: Density) => {
+    persistDensity(d);
+    setDensityState(d);
+  }, []);
   const setConsoleOpen = useCallback((v: boolean) => setConsoleOpenState(v), []);
   const openConsoleRecentActivity = useCallback(() => {
     setConsoleOpenState(true);

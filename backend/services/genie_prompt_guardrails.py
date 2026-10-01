@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from backend.schemas.marketing_safety_terms import UNREVIEWED_LENDER_NAME_RE_FRAGMENT
-from backend.services.state_footprint import get_state_footprint_resolver
+
+if TYPE_CHECKING:
+    from backend.services.state_footprint import FootprintSnapshot
 
 _INSTRUCTION_OVERRIDE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
@@ -293,30 +297,97 @@ def _mentioned_states(question: str) -> list[tuple[str, str]]:
     return matched
 
 
-def footprint_metadata_gap_match(question: str) -> tuple[str, str] | None:
-    matched = _mentioned_states(question)
-    if not matched:
-        return None
-    resolver = get_state_footprint_resolver()
-    if not resolver.using_fallback():
-        return None
-    return matched[0]
+@dataclass(frozen=True)
+class FootprintGuardMatch:
+    """One footprint refusal verdict, decided from ONE footprint snapshot."""
+
+    kind: Literal["metadata_gap", "outside_footprint"]
+    name: str
+    code: str
+    footprint_codes: tuple[str, ...]
 
 
-def outside_footprint_match(question: str) -> tuple[str, str, list[str]] | None:
+# The 50 codes the state matcher knows. A geography hint whose code is one of
+# them names a US state for the degraded-snapshot metadata gap; Puerto Rico
+# and Guam (PR, GU) are outside this set and stay outside_footprint.
+_US_STATE_CODES: frozenset[str] = frozenset(_US_STATE_NAMES.values())
+
+
+def _mentioned_hints(question: str) -> list[tuple[str, str]]:
+    q = question.lower()
+    matched: list[tuple[str, str]] = []
+    for token, (label, code) in _GEOGRAPHY_STATE_HINTS.items():
+        if re.search(r"(?<![a-z0-9])" + re.escape(token) + r"(?![a-z0-9])", q):
+            matched.append((label, code))
+    return matched
+
+
+def _metadata_gap_verdict(
+    question: str, snapshot: FootprintSnapshot
+) -> FootprintGuardMatch | None:
+    if not snapshot.degraded:
+        return None
+    codes = tuple(snapshot.codes())
     matched = _mentioned_states(question)
-    footprint_codes = get_state_footprint_resolver().state_codes()
+    if matched:
+        name, code = matched[0]
+        return FootprintGuardMatch("metadata_gap", name, code, codes)
+    for label, code in _mentioned_hints(question):
+        if code in _US_STATE_CODES:
+            return FootprintGuardMatch("metadata_gap", label, code, codes)
+    return None
+
+
+def _outside_footprint_verdict(
+    question: str, snapshot: FootprintSnapshot
+) -> FootprintGuardMatch | None:
+    footprint_codes = tuple(snapshot.codes())
     allowed_codes = set(footprint_codes)
+    matched = _mentioned_states(question)
     for name, code in matched:
         if code not in allowed_codes:
-            return (name, code, footprint_codes)
+            return FootprintGuardMatch("outside_footprint", name, code, footprint_codes)
     if matched:
         return None
-    q = question.lower()
-    for token, (label, code) in _GEOGRAPHY_STATE_HINTS.items():
-        if (
-            re.search(r"(?<![a-z0-9])" + re.escape(token) + r"(?![a-z0-9])", q)
-            and code not in allowed_codes
-        ):
-            return (label, code, footprint_codes)
+    for label, code in _mentioned_hints(question):
+        if code not in allowed_codes:
+            return FootprintGuardMatch("outside_footprint", label, code, footprint_codes)
     return None
+
+
+def footprint_guard_match(
+    question: str, *, snapshot: FootprintSnapshot
+) -> FootprintGuardMatch | None:
+    """The footprint verdict for ``question``: metadata gap first, as Genie orders it.
+
+    Both facts (the degraded flag and the covered codes) come from the one
+    ``snapshot`` the caller took, so a refresh landing mid-decision cannot pair
+    a live flag with fallback codes (decision record e2).
+    """
+    return _metadata_gap_verdict(question, snapshot) or _outside_footprint_verdict(
+        question, snapshot
+    )
+
+
+def footprint_metadata_gap_match(
+    question: str, *, snapshot: FootprintSnapshot
+) -> tuple[str, str] | None:
+    """(name, code) when a degraded snapshot cannot scope the named US geography.
+
+    ``snapshot`` is required: a caller that also runs ``outside_footprint_match``
+    passes the SAME snapshot to both.
+    """
+    verdict = _metadata_gap_verdict(question, snapshot)
+    if verdict is None:
+        return None
+    return (verdict.name, verdict.code)
+
+
+def outside_footprint_match(
+    question: str, *, snapshot: FootprintSnapshot
+) -> tuple[str, str, list[str]] | None:
+    """(name, code, footprint codes) when the question names a place outside coverage."""
+    verdict = _outside_footprint_verdict(question, snapshot)
+    if verdict is None:
+        return None
+    return (verdict.name, verdict.code, list(verdict.footprint_codes))

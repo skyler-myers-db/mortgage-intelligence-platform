@@ -28,7 +28,12 @@ from backend.main import _backpressure_controller, app
 from backend.services import lakebase
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.resilience_cache import TTLCache
-from backend.services.server_timing import record_cache, record_dependency
+from backend.services.server_timing import (
+    LAST_GOOD_HEADER,
+    record_cache,
+    record_dependency,
+    record_stale_error,
+)
 
 _DUR = r"\d+\.\d"
 _PROBE_CACHE = TTLCache()
@@ -77,6 +82,27 @@ def _client_recorder_probe(_request: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
+# 2026-09-29T00:00:00Z and one hour later (epoch seconds).
+_OLDER = 1_790_640_000.0
+_NEWER = _OLDER + 3600.0
+
+
+def _stale_probe(_request: Request) -> Response:
+    """Two stale serves in one request: the OLDEST last-good time wins."""
+    record_cache("stale")
+    record_stale_error(_NEWER)
+    record_stale_error(_OLDER)
+    record_stale_error(_NEWER)
+    return JSONResponse({"ok": True})
+
+
+def _executor_stale_probe(_request: Request) -> Response:
+    """A stale serve inside a plain executor thread never reaches the request."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(record_stale_error, _OLDER).result()
+    return JSONResponse({"ok": True})
+
+
 async def _async_probe(_request: Request) -> Response:
     record_dependency("warehouse", 7.0)
     return JSONResponse({"ok": True})
@@ -95,6 +121,8 @@ def client() -> Iterator[TestClient]:
         Route("/api/v1/pytest-timing-ttl", _ttl_cache_probe),
         Route("/api/v1/pytest-timing-async", _async_probe),
         Route("/api/v1/pytest-timing-clients", _client_recorder_probe),
+        Route("/api/v1/pytest-timing-stale", _stale_probe),
+        Route("/api/v1/pytest-timing-executor-stale", _executor_stale_probe),
         Route("/pytest-timing-page", _page_probe),
     ]
     app.router.routes[0:0] = probes
@@ -182,3 +210,28 @@ def test_header_values_are_enum_or_numeric_only(client: TestClient) -> None:
         name, _, value = entry.partition(";")
         assert name in {"cache", "warehouse", "lakebase", "total"}
         assert re.fullmatch(rf"desc=(hit|miss|stale)|dur={_DUR}", value), entry
+
+
+def test_last_good_header_is_present_only_when_a_stale_serve_is_marked(
+    client: TestClient,
+) -> None:
+    marked = client.get("/api/v1/pytest-timing-stale")
+    plain = client.get("/api/v1/pytest-timing-sync")
+
+    assert marked.headers[LAST_GOOD_HEADER] == "2026-09-29T00:00:00Z"
+    assert LAST_GOOD_HEADER.lower() not in plain.headers
+    # The Server-Timing names and values are unchanged by the marker.
+    assert re.fullmatch(rf"cache;desc=stale, total;dur={_DUR}", marked.headers["server-timing"])
+
+
+def test_last_good_header_keeps_the_oldest_wall_time(client: TestClient) -> None:
+    header = client.get("/api/v1/pytest-timing-stale").headers[LAST_GOOD_HEADER]
+
+    assert header == time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(_OLDER))
+
+
+def test_executor_threads_record_no_last_good_marker(client: TestClient) -> None:
+    response = client.get("/api/v1/pytest-timing-executor-stale")
+
+    assert response.status_code == 200
+    assert LAST_GOOD_HEADER.lower() not in response.headers

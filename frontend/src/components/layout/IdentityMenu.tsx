@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useApp, type ThemePreference } from '../AppContext';
 import { Icon } from '../Icon';
+import { actorInitials } from '../../lib/actorInitials';
 import { api } from '../../lib/api';
 import { pushEscapeLayer } from '../../lib/escapeStack';
 import { preloadBestEffort } from '../../lib/lazyPreload';
@@ -60,6 +61,11 @@ export function identityView(session: SessionResponse | undefined, isError: bool
  * has no account control); it reuses the `.topbar__icon-btn` trigger and the
  * `.filter-menu` dropdown primitives.
  *
+ * The trigger shows the actor's initials once the session names a real
+ * signed-in email, and the `account` glyph otherwise (loading, error, no
+ * email, or an application id): never the `user` glyph, which is the
+ * borrower's (2026-09-30 ruling, audit shell-06; deviation:account-avatar).
+ *
  * The email is display-only: nothing here writes it anywhere, and RUM and
  * client-error telemetry never read the DOM.
  */
@@ -114,6 +120,7 @@ export function IdentityMenu() {
   const triggerLabel = view.status === 'ready' && view.email
     ? `Account menu, signed in as ${view.name}`
     : 'Account menu';
+  const initials = view.status === 'ready' && view.email?.includes('@') ? actorInitials(view.name) : null;
 
   return (
     <div
@@ -144,7 +151,9 @@ export function IdentityMenu() {
         }}
         data-testid="identity-menu-trigger"
       >
-        <Icon name="user" size={15} />
+        {initials
+          ? <span className="identity-menu__avatar" aria-hidden="true">{initials}</span>
+          : <Icon name="account" size={15} />}
       </button>
       {open && (
           <IdentityMenuPanel

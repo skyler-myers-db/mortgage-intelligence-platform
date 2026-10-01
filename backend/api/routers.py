@@ -1,0 +1,78 @@
+"""The API router registry: every domain router the app mounts, in mount order.
+
+``backend/main.py`` mounts each entry twice (under the canonical ``/api/v1``
+prefix and the deprecated ``/api`` compatibility prefix), so the order here is
+the route-table order. Moved verbatim out of ``backend/main.py`` (2026-09-30)
+so the entrypoint stays under the file-size gate and later waves can append a
+router without touching app assembly.
+"""
+
+from backend.api import (
+    activation,
+    admin,
+    analytics,
+    analytics_rate_window,
+    assets,
+    audit,
+    audit_receipt,
+    borrowers,
+    campaigns,
+    config,
+    data_estate,
+    genie,
+    genie_feedback_routes,
+    genie_refusal_report,
+    geo,
+    growth_agent,
+    growth_agent_compose_routes,
+    health,
+    home,
+    leads,
+    leads_export,
+    lineage,
+    loan_officers,
+    lookup,
+    offers,
+    outreach,
+    portfolio,
+    sales,
+    segments,
+    session,
+    telemetry,
+    workspace,
+)
+
+API_ROUTERS = [
+    health.router,
+    config.router,
+    data_estate.router,
+    activation.router,
+    admin.router,
+    assets.router,
+    analytics.router,
+    analytics_rate_window.router,
+    home.router,
+    portfolio.router,
+    campaigns.router,
+    segments.router,
+    leads.router,
+    leads_export.router,
+    lineage.router,
+    borrowers.router,
+    lookup.router,
+    offers.router,
+    outreach.router,
+    sales.router,
+    loan_officers.router,
+    geo.router,
+    session.router,
+    growth_agent.router,
+    growth_agent_compose_routes.router,
+    genie.router,
+    genie_feedback_routes.router,
+    genie_refusal_report.router,
+    audit.router,
+    audit_receipt.router,
+    telemetry.router,
+    workspace.router,
+]

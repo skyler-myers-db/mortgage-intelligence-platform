@@ -1732,7 +1732,8 @@
                   "not_configured",
                   "roadmap",
                   "permission_denied",
-                  "error"
+                  "error",
+                  "unavailable"
                 ],
                 "type": "string"
               },
@@ -2048,6 +2049,31 @@
         "title": "AssignmentStatusUpdateRequest",
         "type": "object"
       },
+      "AuditCountResponse": {
+        "description": "How many ledger rows match the explorer filters, counted up to ``cap``.",
+        "properties": {
+          "cap": {
+            "title": "Cap",
+            "type": "integer"
+          },
+          "capped": {
+            "description": "True when more rows match than the cap counts.",
+            "title": "Capped",
+            "type": "boolean"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "capped",
+          "cap"
+        ],
+        "title": "AuditCountResponse",
+        "type": "object"
+      },
       "AuditEvent": {
         "properties": {
           "action": {
@@ -2258,6 +2284,195 @@
           }
         },
         "title": "AuditEventPage",
+        "type": "object"
+      },
+      "AuditExportReceipt": {
+        "description": "The ``AUDIT_EXPORT`` ledger entry the explorer download waits for.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "csv_sha256": {
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "event_ids_sha256": {
+            "title": "Event Ids Sha256",
+            "type": "string"
+          },
+          "event_type": {
+            "const": "AUDIT_EXPORT",
+            "default": "AUDIT_EXPORT",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "filter_fingerprint": {
+            "title": "Filter Fingerprint",
+            "type": "string"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "actor",
+          "row_count",
+          "csv_sha256",
+          "event_ids_sha256",
+          "filter_fingerprint",
+          "recorded_at"
+        ],
+        "title": "AuditExportReceipt",
+        "type": "object"
+      },
+      "AuditExportReceiptRequest": {
+        "description": "What the explorer declares about the ledger CSV it is about to download.",
+        "properties": {
+          "csv_sha256": {
+            "description": "SHA-256 (hex) of the exact CSV bytes handed to the download.",
+            "title": "Csv Sha256",
+            "type": "string"
+          },
+          "event_ids": {
+            "description": "Audit event ids in the order the file holds them.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Event Ids",
+            "type": "array"
+          },
+          "event_ids_sha256": {
+            "description": "SHA-256 (hex) of the compact JSON array of event_ids, computed client-side; the server recomputes it and refuses the receipt on a mismatch. The ids themselves are not stored.",
+            "title": "Event Ids Sha256",
+            "type": "string"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The explorer query parameters the exported rows were read with. Only their fingerprint is written to the ledger.",
+            "title": "Filters",
+            "type": "object"
+          },
+          "row_count": {
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Row Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "row_count",
+          "csv_sha256",
+          "event_ids",
+          "event_ids_sha256"
+        ],
+        "title": "AuditExportReceiptRequest",
+        "type": "object"
+      },
+      "AuditFacetValue": {
+        "description": "One distinct ledger value and how many rows carry it in the window.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "count"
+        ],
+        "title": "AuditFacetValue",
+        "type": "object"
+      },
+      "AuditFacetsResponse": {
+        "description": "Distinct event types, actions and actors in the ledger window, most frequent first.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/AuditFacetValue"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "actors": {
+            "items": {
+              "$ref": "#/components/schemas/AuditFacetValue"
+            },
+            "title": "Actors",
+            "type": "array"
+          },
+          "event_types": {
+            "items": {
+              "$ref": "#/components/schemas/AuditFacetValue"
+            },
+            "title": "Event Types",
+            "type": "array"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "truncated": {
+            "$ref": "#/components/schemas/AuditFacetsTruncated"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
+          }
+        },
+        "required": [
+          "since"
+        ],
+        "title": "AuditFacetsResponse",
+        "type": "object"
+      },
+      "AuditFacetsTruncated": {
+        "description": "Per facet: true when more distinct values exist than were returned.",
+        "properties": {
+          "actions": {
+            "default": false,
+            "title": "Actions",
+            "type": "boolean"
+          },
+          "actors": {
+            "default": false,
+            "title": "Actors",
+            "type": "boolean"
+          },
+          "event_types": {
+            "default": false,
+            "title": "Event Types",
+            "type": "boolean"
+          }
+        },
+        "title": "AuditFacetsTruncated",
         "type": "object"
       },
       "AuditRollupResponse": {
@@ -3871,10 +4086,11 @@
       },
       "ComposePlanRequest": {
         "additionalProperties": false,
-        "description": "Ask the co-pilot to compose (and optionally execute) a governed plan.",
+        "description": "Ask the co-pilot to compose a governed plan for the lender to review.\n\nCompose never runs the plan: the reviewed plan runs only through\n``POST /growth-agent/agent/plan/execute`` with the compose response's\ndigest. ``execute`` is a retired, tolerant field: false or absent is\naccepted, true is a 422 (``EXECUTE_RETIRED_DETAIL``).",
         "properties": {
           "execute": {
             "default": false,
+            "description": "Retired: compose never executes; run a reviewed plan with POST /api/v1/growth-agent/agent/plan/execute.",
             "title": "Execute",
             "type": "boolean"
           },
@@ -4401,7 +4617,8 @@
               "not_configured",
               "roadmap",
               "permission_denied",
-              "error"
+              "error",
+              "unavailable"
             ],
             "title": "Status",
             "type": "string"
@@ -4456,7 +4673,8 @@
               "not_configured",
               "roadmap",
               "permission_denied",
-              "error"
+              "error",
+              "unavailable"
             ],
             "title": "Status",
             "type": "string"
@@ -4553,6 +4771,17 @@
               }
             ],
             "title": "Borrower Id"
+          },
+          "bulk_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bulk Id"
           },
           "campaign_id": {
             "anyOf": [
@@ -4683,6 +4912,17 @@
               }
             ],
             "title": "Request Id"
+          },
+          "review_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Mode"
           },
           "variant_name": {
             "anyOf": [
@@ -7930,6 +8170,16 @@
             "title": "Monitors",
             "type": "array"
           },
+          "scheduler_state": {
+            "default": "unavailable",
+            "enum": [
+              "active",
+              "paused",
+              "unavailable"
+            ],
+            "title": "Scheduler State",
+            "type": "string"
+          },
           "workflows": {
             "items": {
               "$ref": "#/components/schemas/GrowthAgentWorkflow"
@@ -8726,6 +8976,17 @@
             ],
             "title": "Created At"
           },
+          "monitor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Id"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -8774,6 +9035,85 @@
           "actionable_total"
         ],
         "title": "GrowthAgentRunSummary",
+        "type": "object"
+      },
+      "GrowthAgentRunWatchlistRequest": {
+        "additionalProperties": false,
+        "description": "Save the run the lender saw as a watchlist, bound to its result hash.",
+        "properties": {
+          "cadence": {
+            "default": "daily",
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "monitor_name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Name"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "tool_result_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Tool Result Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_result_hash"
+        ],
+        "title": "GrowthAgentRunWatchlistRequest",
+        "type": "object"
+      },
+      "GrowthAgentSchedulerStatus": {
+        "additionalProperties": false,
+        "description": "Whether scheduled watchlist runs are on, and why the App knows.",
+        "properties": {
+          "reason": {
+            "enum": [
+              "job_schedule",
+              "no_schedule",
+              "not_configured",
+              "lookup_failed"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "reason"
+        ],
+        "title": "GrowthAgentSchedulerStatus",
         "type": "object"
       },
       "GrowthAgentToolStep": {
@@ -8835,6 +9175,189 @@
           "detail"
         ],
         "title": "GrowthAgentToolStep",
+        "type": "object"
+      },
+      "GrowthAgentWatchlistBriefing": {
+        "additionalProperties": false,
+        "description": "One saved watchlist with its run-over-run change from the ledger.",
+        "properties": {
+          "actionable_avg_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Avg Score"
+          },
+          "actionable_delta": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Delta"
+          },
+          "actionable_total": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Total"
+          },
+          "avg_score_delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Score Delta"
+          },
+          "cadence": {
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "monitor_id": {
+            "title": "Monitor Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "previous_actionable_avg_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Actionable Avg Score"
+          },
+          "previous_actionable_total": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Actionable Total"
+          },
+          "previous_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Run At"
+          },
+          "recent_actionable_totals": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 8,
+            "title": "Recent Actionable Totals",
+            "type": "array"
+          },
+          "run_count": {
+            "minimum": 0.0,
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "workflow_id": {
+            "enum": [
+              "daily_refi_brief",
+              "borrower_dossier_review",
+              "listing_watch",
+              "competitor_recapture_monitor",
+              "high_equity_heloc_watch",
+              "branch_capacity_review",
+              "source_freshness_sentinel",
+              "custom_segment_watch",
+              "live_analysis"
+            ],
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "monitor_id",
+          "workflow_id",
+          "name",
+          "cadence",
+          "status",
+          "run_count"
+        ],
+        "title": "GrowthAgentWatchlistBriefing",
+        "type": "object"
+      },
+      "GrowthAgentWatchlistSummaryResponse": {
+        "additionalProperties": false,
+        "description": "The caller's saved watchlists as briefings, with the scheduler state.",
+        "properties": {
+          "scheduler": {
+            "$ref": "#/components/schemas/GrowthAgentSchedulerStatus"
+          },
+          "watchlists": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentWatchlistBriefing"
+            },
+            "title": "Watchlists",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scheduler",
+          "watchlists"
+        ],
+        "title": "GrowthAgentWatchlistSummaryResponse",
         "type": "object"
       },
       "GrowthAgentWorkflow": {
@@ -9554,6 +10077,22 @@
         "title": "LeadAssignment",
         "type": "object"
       },
+      "LeadCountResponse": {
+        "description": "The number of borrowers the Lead Queue filters match.",
+        "properties": {
+          "total_matching": {
+            "description": "Borrowers matching the filters, the same total GET /leads reports as X-Total-Matching.",
+            "minimum": 0.0,
+            "title": "Total Matching",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_matching"
+        ],
+        "title": "LeadCountResponse",
+        "type": "object"
+      },
       "LeadExportReceipt": {
         "description": "The ledger entry the download waits for.",
         "properties": {
@@ -9667,6 +10206,65 @@
           "borrower_ids_sha256"
         ],
         "title": "LeadExportReceiptRequest",
+        "type": "object"
+      },
+      "LeadFacetBucket": {
+        "description": "One option of a Lead Queue filter menu and how many borrowers it holds.",
+        "properties": {
+          "count": {
+            "description": "Borrowers matching every other filter and this option.",
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "value": {
+            "description": "A closed-vocabulary option: a USPS code, a segment code, a product label or an approval state.",
+            "maxLength": 32,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "count"
+        ],
+        "title": "LeadFacetBucket",
+        "type": "object"
+      },
+      "LeadFacetsResponse": {
+        "description": "Counts for one filter dimension, with that dimension's own filter dropped.",
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/LeadFacetBucket"
+            },
+            "maxItems": 64,
+            "title": "Buckets",
+            "type": "array"
+          },
+          "dimension": {
+            "enum": [
+              "state",
+              "segment",
+              "product",
+              "approval"
+            ],
+            "title": "Dimension",
+            "type": "string"
+          },
+          "total_matching": {
+            "description": "Borrowers matching every filter except this dimension's own.",
+            "minimum": 0.0,
+            "title": "Total Matching",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dimension",
+          "total_matching",
+          "buckets"
+        ],
+        "title": "LeadFacetsResponse",
         "type": "object"
       },
       "LeadOutcome": {
@@ -11229,6 +11827,23 @@
             ],
             "title": "Request Id"
           },
+          "review_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "individual",
+                  "triage",
+                  "bulk_sample",
+                  "bulk_cohort"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Mode"
+          },
           "variant_name": {
             "anyOf": [
               {
@@ -11538,6 +12153,18 @@
           "borrower_id": {
             "title": "Borrower Id",
             "type": "string"
+          },
+          "bulk_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bulk Id"
           },
           "campaign_id": {
             "anyOf": [
@@ -14209,6 +14836,118 @@
         "title": "SavedLeadInput",
         "type": "object"
       },
+      "SavedView": {
+        "description": "One saved Lead Queue view the actor owns.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "description": "Canonical Lead Queue query string, without a leading question mark.",
+            "title": "Params",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "view_id": {
+            "description": "Server-issued view id (UUID).",
+            "title": "View Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view_id",
+          "name",
+          "params",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SavedView",
+        "type": "object"
+      },
+      "SavedViewCreateRequest": {
+        "additionalProperties": false,
+        "description": "POST /workspace/saved-views: name the current Lead Queue view.",
+        "properties": {
+          "name": {
+            "description": "A short label for the view, without personal details.",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "description": "The Lead Queue query string: its filters, sort and column preset only.",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Params",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "params"
+        ],
+        "title": "SavedViewCreateRequest",
+        "type": "object"
+      },
+      "SavedViewListResponse": {
+        "description": "The actor's saved Lead Queue views, most recently updated first.",
+        "properties": {
+          "saved_views": {
+            "items": {
+              "$ref": "#/components/schemas/SavedView"
+            },
+            "maxItems": 25,
+            "title": "Saved Views",
+            "type": "array"
+          }
+        },
+        "required": [
+          "saved_views"
+        ],
+        "title": "SavedViewListResponse",
+        "type": "object"
+      },
+      "SavedViewMutationResponse": {
+        "description": "What a save or a delete wrote, including its audit row.",
+        "properties": {
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "view_id": {
+            "title": "View Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "view_id"
+        ],
+        "title": "SavedViewMutationResponse",
+        "type": "object"
+      },
       "ScoreBucket": {
         "properties": {
           "borrower_count": {
@@ -14326,6 +15065,156 @@
           "borrower_count"
         ],
         "title": "SegmentByStateRow",
+        "type": "object"
+      },
+      "SegmentCombination": {
+        "description": "Borrowers carrying EXACTLY these core segment codes (and no other core code).",
+        "properties": {
+          "addressable": {
+            "description": "Borrowers in gold.borrower_360 carrying exactly this set.",
+            "minimum": 0.0,
+            "title": "Addressable",
+            "type": "integer"
+          },
+          "contactable": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The contact-eligible subset of addressable (live eligibility predicate, clamped to addressable). None means not reported, never zero.",
+            "title": "Contactable"
+          },
+          "segment_codes": {
+            "description": "The exact set of core segment codes, distinct and in core order.",
+            "items": {
+              "enum": [
+                "itm",
+                "listed",
+                "permit",
+                "investor",
+                "equity",
+                "retention",
+                "second_lien_itm",
+                "heloc_draw_to_payback",
+                "home_equity_history",
+                "refi_propensity",
+                "itm_on_related_property",
+                "payoff_loss_leads",
+                "permit_activity"
+              ],
+              "type": "string"
+            },
+            "title": "Segment Codes",
+            "type": "array"
+          },
+          "signal_count": {
+            "description": "Number of codes in segment_codes.",
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Signal Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "segment_codes",
+          "signal_count",
+          "addressable"
+        ],
+        "title": "SegmentCombination",
+        "type": "object"
+      },
+      "SegmentCombinationProvenance": {
+        "description": "Evidence manifest for the signal stack.",
+        "properties": {
+          "contactable_source": {
+            "description": "Where the live contactable subset comes from.",
+            "title": "Contactable Source",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Refresh anchor of the gold rows.",
+            "title": "Refreshed At"
+          },
+          "source": {
+            "description": "The precomputed gold table the exact rows come from.",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "contactable_source",
+          "note"
+        ],
+        "title": "SegmentCombinationProvenance",
+        "type": "object"
+      },
+      "SegmentCombinationResponse": {
+        "properties": {
+          "built": {
+            "description": "False until the gold refresh has built mip.gold.segment_combination_rollup.",
+            "title": "Built",
+            "type": "boolean"
+          },
+          "combinations": {
+            "description": "Exact combinations, largest addressable first, then by combination key.",
+            "items": {
+              "$ref": "#/components/schemas/SegmentCombination"
+            },
+            "title": "Combinations",
+            "type": "array"
+          },
+          "core_codes": {
+            "description": "The six core segment codes the rows are drawn from, in core order.",
+            "items": {
+              "enum": [
+                "itm",
+                "listed",
+                "permit",
+                "investor",
+                "equity",
+                "retention",
+                "second_lien_itm",
+                "heloc_draw_to_payback",
+                "home_equity_history",
+                "refi_propensity",
+                "itm_on_related_property",
+                "payoff_loss_leads",
+                "permit_activity"
+              ],
+              "type": "string"
+            },
+            "title": "Core Codes",
+            "type": "array"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/SegmentCombinationProvenance"
+          }
+        },
+        "required": [
+          "built",
+          "core_codes",
+          "combinations",
+          "provenance"
+        ],
+        "title": "SegmentCombinationResponse",
         "type": "object"
       },
       "SegmentMetricRow": {
@@ -14584,6 +15473,18 @@
       },
       "SessionResponse": {
         "properties": {
+          "actor_cache_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque per-actor browser-cache discriminator: the same keyed hash of the forwarded identity that the authenticated health body carries, so the browser can seed its actor-scoped storage gate before the first health probe. Not reversible to the identity and never sent to telemetry. Null exactly when actor_email is.",
+            "title": "Actor Cache Key"
+          },
           "actor_display_name": {
             "anyOf": [
               {
@@ -15900,7 +16801,7 @@
     "/api/admin/sources": {
       "get": {
         "deprecated": true,
-        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. Preferred production path reads\n``mip.gold.source_readiness`` so the running app principal does not\nneed direct silver grants.",
+        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\" | \"unavailable\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. The rows come\nonly from ``mip.gold.source_readiness``, so the running app principal\nneeds no silver grants: a source the summary has no row for (or every\nnon-roadmap source when the summary is absent) reads ``unavailable``,\nand any other read failure answers 503.",
         "operationId": "get_api_admin_sources_get_sources",
         "responses": {
           "200": {
@@ -17199,6 +18100,194 @@
         ]
       }
     },
+    "/api/audit/count": {
+      "get": {
+        "deprecated": true,
+        "description": "How many ledger rows match the /events/page filters, up to a cap (audit-free).",
+        "operationId": "get_api_audit_count_count_events",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "entity_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "borrower_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Borrower Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_clip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Clip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "event_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Correlation Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Count Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/audit/event": {
       "post": {
         "deprecated": true,
@@ -17711,6 +18800,128 @@
           }
         },
         "summary": "List Event Page",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/audit/export-receipt": {
+      "post": {
+        "deprecated": true,
+        "description": "Write the ``AUDIT_EXPORT`` ledger row an explorer CSV download waits for.",
+        "operationId": "post_api_audit_export_receipt_create_audit_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuditExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Audit Export Receipt",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/audit/facets": {
+      "get": {
+        "deprecated": true,
+        "description": "Distinct event types, actions and actors for the explorer's pickers (audit-free).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
+        "operationId": "get_api_audit_facets_audit_facets",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditFacetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Audit Facets",
         "tags": [
           "audit"
         ]
@@ -20068,7 +21279,7 @@
     "/api/growth-agent/agent/compose": {
       "post": {
         "deprecated": true,
-        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, then \u2014 when\n``execute`` is set \u2014 runs the validated steps deterministically with the\nexisting per-step audit and approval rails. Every composed response is\nlabelled ``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
+        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, and returns it\nsigned and unexecuted for the lender to review. It never runs a step: the\nreviewed plan runs only through ``/agent/plan/execute``, and the retired\n``execute: true`` flag is a 422. Every composed response is labelled\n``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
         "operationId": "post_api_growth_agent_agent_compose_compose_mortgage_growth_agent_plan",
         "requestBody": {
           "content": {
@@ -20411,6 +21622,53 @@
         ]
       }
     },
+    "/api/growth-agent/monitors/summary": {
+      "get": {
+        "deprecated": true,
+        "description": "Brief the caller's saved watchlists: latest run, change since the previous run.\n\nRead-only Lakebase app state plus the cached scheduler state: it writes no\naudit row, starts no run and reads no Unity Catalog table. Each briefing\nomits the stored route, criteria and actor.",
+        "operationId": "get_api_growth_agent_monitors_summary_growth_agent_watchlist_summary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentWatchlistSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Watchlist Summary",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/growth-agent/monitors/{monitor_id}/notification-drafts": {
       "post": {
         "deprecated": true,
@@ -20591,6 +21849,77 @@
           }
         },
         "summary": "List Growth Agent Runs",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/runs/{run_id}/monitors": {
+      "post": {
+        "deprecated": true,
+        "description": "Save the run the lender saw as a watchlist, with no re-plan.\n\nThe posted ``tool_result_hash`` must match the stored run; the watchlist is\nbuilt from the run's stored workflow, criteria and route, and one\n``GROWTH_AGENT_MONITOR_SAVE`` audit row is written (a replay writes none).",
+        "operationId": "post_api_growth_agent_runs_run_id_monitors_save_growth_agent_run_watchlist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunWatchlistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentMonitor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No run with this id belongs to the caller."
+          },
+          "409": {
+            "description": "The run did not complete, is unaudited, or changed since it was shown."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Run Watchlist",
         "tags": [
           "growth-agent"
         ]
@@ -21367,6 +22696,86 @@
             }
           },
           {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          },
+          {
             "description": "Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N \u2014 refine filters'.",
             "in": "query",
             "name": "limit",
@@ -21408,6 +22817,769 @@
           }
         },
         "summary": "List Leads",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/leads/count": {
+      "get": {
+        "deprecated": true,
+        "description": "Audit-free total for the Lead Queue filters (wow-power-6, wow-power-2).\n\nThe same authorization preamble, filters, \"Eligible only\" default and\nshort-TTL repository cache as the ranked list's X-Total-Matching. No\nborrower is shown, so no VIEW_LEADS row is written and the audit store is\nnever resolved. A Growth Agent handoff binds ranked rows, so it is never\nread here.",
+        "operationId": "get_api_leads_count_count_leads",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "segment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
+          },
+          {
+            "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "portfolio_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Portfolio Id"
+            }
+          },
+          {
+            "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+              "title": "Zip"
+            }
+          },
+          {
+            "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+            "in": "query",
+            "name": "county",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+              "title": "County"
+            }
+          },
+          {
+            "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "zips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+              "title": "Zips"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "counties",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+              "title": "Counties"
+            }
+          },
+          {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
+            }
+          },
+          {
+            "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+            "in": "query",
+            "name": "borrower_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+              "title": "Borrower Ids"
+            }
+          },
+          {
+            "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder geography label to replay the built population.",
+            "in": "query",
+            "name": "geography",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder geography label to replay the built population.",
+              "title": "Geography"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder occupancy filter.",
+            "in": "query",
+            "name": "occupancy",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder occupancy filter.",
+              "title": "Occupancy"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lien-status filter.",
+            "in": "query",
+            "name": "lien_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lien-status filter.",
+              "title": "Lien Status"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lender-relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lender-relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder product filter.",
+            "in": "query",
+            "name": "product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder product filter.",
+              "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder display equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder display equity threshold.",
+              "title": "Min Equity Pct Label"
+            }
+          },
+          {
+            "description": "Optional numeric Portfolio Builder equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional numeric Portfolio Builder equity threshold.",
+              "title": "Min Equity Pct"
+            }
+          },
+          {
+            "description": "Optional owner-link bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "owner_link",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional owner-link bucket from Segment Intelligence.",
+              "title": "Owner Link"
+            }
+          },
+          {
+            "description": "Optional purchase-intent bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "purchase_intent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional purchase-intent bucket from Segment Intelligence.",
+              "title": "Purchase Intent"
+            }
+          },
+          {
+            "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+            "in": "query",
+            "name": "marketing_eligibility",
+            "required": false,
+            "schema": {
+              "default": "Eligible only",
+              "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+              "maxLength": 32,
+              "title": "Marketing Eligibility",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+            "in": "query",
+            "name": "consent_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+              "title": "Consent Status"
+            }
+          },
+          {
+            "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+            "in": "query",
+            "name": "recency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+              "title": "Recency"
+            }
+          },
+          {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Sales workflow approval state filter.",
+            "in": "query",
+            "name": "approval_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow approval state filter.",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "hold",
+                "any"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sales workflow outreach state filter.",
+            "in": "query",
+            "name": "outreach_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow outreach state filter.",
+              "enum": [
+                "none",
+                "queued",
+                "actioned",
+                "sent",
+                "bounced",
+                "replied",
+                "any"
+              ],
+              "title": "Outreach Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Internal LO email assigned to the lead.",
+            "in": "query",
+            "name": "assigned_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Internal LO email assigned to the lead.",
+              "title": "Assigned To"
+            }
+          },
+          {
+            "description": "Only approved leads aged at least this many days with no outreach.",
+            "in": "query",
+            "name": "aged_days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only approved leads aged at least this many days with no outreach.",
+              "title": "Aged Days"
+            }
+          },
+          {
+            "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+            "in": "query",
+            "name": "cohort_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+              "title": "Cohort Id"
+            }
+          },
+          {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Count Leads",
         "tags": [
           "leads"
         ]
@@ -21461,6 +23633,786 @@
           }
         },
         "summary": "Create Lead Export Receipt",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/leads/facets": {
+      "get": {
+        "deprecated": true,
+        "description": "Audit-free option counts for one Lead Queue filter menu (tables-06).\n\nThe dimension's own filter is dropped, every other filter resolves\nexactly as the ranked list resolves it, and the buckets are closed\nvocabularies. Fetched only when a user opens that menu.",
+        "operationId": "get_api_leads_facets_lead_facets",
+        "parameters": [
+          {
+            "description": "The filter menu to count: state, segment, product or approval.",
+            "in": "query",
+            "name": "dimension",
+            "required": true,
+            "schema": {
+              "description": "The filter menu to count: state, segment, product or approval.",
+              "enum": [
+                "state",
+                "segment",
+                "product",
+                "approval"
+              ],
+              "title": "Dimension",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "segment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
+          },
+          {
+            "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "portfolio_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Portfolio Id"
+            }
+          },
+          {
+            "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+              "title": "Zip"
+            }
+          },
+          {
+            "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+            "in": "query",
+            "name": "county",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+              "title": "County"
+            }
+          },
+          {
+            "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "zips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+              "title": "Zips"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "counties",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+              "title": "Counties"
+            }
+          },
+          {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
+            }
+          },
+          {
+            "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+            "in": "query",
+            "name": "borrower_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+              "title": "Borrower Ids"
+            }
+          },
+          {
+            "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder geography label to replay the built population.",
+            "in": "query",
+            "name": "geography",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder geography label to replay the built population.",
+              "title": "Geography"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder occupancy filter.",
+            "in": "query",
+            "name": "occupancy",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder occupancy filter.",
+              "title": "Occupancy"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lien-status filter.",
+            "in": "query",
+            "name": "lien_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lien-status filter.",
+              "title": "Lien Status"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lender-relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lender-relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder product filter.",
+            "in": "query",
+            "name": "product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder product filter.",
+              "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder display equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder display equity threshold.",
+              "title": "Min Equity Pct Label"
+            }
+          },
+          {
+            "description": "Optional numeric Portfolio Builder equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional numeric Portfolio Builder equity threshold.",
+              "title": "Min Equity Pct"
+            }
+          },
+          {
+            "description": "Optional owner-link bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "owner_link",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional owner-link bucket from Segment Intelligence.",
+              "title": "Owner Link"
+            }
+          },
+          {
+            "description": "Optional purchase-intent bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "purchase_intent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional purchase-intent bucket from Segment Intelligence.",
+              "title": "Purchase Intent"
+            }
+          },
+          {
+            "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+            "in": "query",
+            "name": "marketing_eligibility",
+            "required": false,
+            "schema": {
+              "default": "Eligible only",
+              "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+              "maxLength": 32,
+              "title": "Marketing Eligibility",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+            "in": "query",
+            "name": "consent_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+              "title": "Consent Status"
+            }
+          },
+          {
+            "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+            "in": "query",
+            "name": "recency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+              "title": "Recency"
+            }
+          },
+          {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Sales workflow approval state filter.",
+            "in": "query",
+            "name": "approval_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow approval state filter.",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "hold",
+                "any"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sales workflow outreach state filter.",
+            "in": "query",
+            "name": "outreach_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow outreach state filter.",
+              "enum": [
+                "none",
+                "queued",
+                "actioned",
+                "sent",
+                "bounced",
+                "replied",
+                "any"
+              ],
+              "title": "Outreach Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Internal LO email assigned to the lead.",
+            "in": "query",
+            "name": "assigned_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Internal LO email assigned to the lead.",
+              "title": "Assigned To"
+            }
+          },
+          {
+            "description": "Only approved leads aged at least this many days with no outreach.",
+            "in": "query",
+            "name": "aged_days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only approved leads aged at least this many days with no outreach.",
+              "title": "Aged Days"
+            }
+          },
+          {
+            "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+            "in": "query",
+            "name": "cohort_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+              "title": "Cohort Id"
+            }
+          },
+          {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadFacetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lead Facets",
         "tags": [
           "leads"
         ]
@@ -23341,6 +26293,29 @@
         ]
       }
     },
+    "/api/segments/combinations": {
+      "get": {
+        "deprecated": true,
+        "description": "Where several Cotality signals fire on the same borrower (audit wow-stage-5).\n\nOne row per non-empty exact set of the six core segment codes, whole book\nand never narrowed by a filter, with the addressable count from\n``mip.gold.segment_combination_rollup`` and a live contactable subset.\n``built`` is False until the gold refresh job has built the table. A cold\nwarehouse surfaces as the resilience layer's 503 ``warming_up``; there is\nno fallback, and the route writes no audit row.",
+        "operationId": "get_api_segments_combinations_segment_combinations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentCombinationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Segment Combinations",
+        "tags": [
+          "segments"
+        ]
+      }
+    },
     "/api/session": {
       "get": {
         "deprecated": true,
@@ -23895,7 +26870,7 @@
     },
     "/api/v1/admin/sources": {
       "get": {
-        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. Preferred production path reads\n``mip.gold.source_readiness`` so the running app principal does not\nneed direct silver grants.",
+        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\" | \"unavailable\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. The rows come\nonly from ``mip.gold.source_readiness``, so the running app principal\nneeds no silver grants: a source the summary has no row for (or every\nnon-roadmap source when the summary is absent) reads ``unavailable``,\nand any other read failure answers 503.",
         "operationId": "get_api_v1_admin_sources_get_sources",
         "responses": {
           "200": {
@@ -25185,6 +28160,193 @@
         ]
       }
     },
+    "/api/v1/audit/count": {
+      "get": {
+        "description": "How many ledger rows match the /events/page filters, up to a cap (audit-free).",
+        "operationId": "get_api_v1_audit_count_count_events",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "entity_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "borrower_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Borrower Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "subject_clip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Clip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "event_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Correlation Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Count Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/v1/audit/event": {
       "post": {
         "operationId": "post_api_v1_audit_event_log_event",
@@ -25694,6 +28856,126 @@
           }
         },
         "summary": "List Event Page",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/export-receipt": {
+      "post": {
+        "description": "Write the ``AUDIT_EXPORT`` ledger row an explorer CSV download waits for.",
+        "operationId": "post_api_v1_audit_export_receipt_create_audit_export_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuditExportReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditExportReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Audit Export Receipt",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/facets": {
+      "get": {
+        "description": "Distinct event types, actions and actors for the explorer's pickers (audit-free).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
+        "operationId": "get_api_v1_audit_facets_audit_facets",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditFacetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Audit Facets",
         "tags": [
           "audit"
         ]
@@ -28017,7 +31299,7 @@
     },
     "/api/v1/growth-agent/agent/compose": {
       "post": {
-        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, then \u2014 when\n``execute`` is set \u2014 runs the validated steps deterministically with the\nexisting per-step audit and approval rails. Every composed response is\nlabelled ``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
+        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, and returns it\nsigned and unexecuted for the lender to review. It never runs a step: the\nreviewed plan runs only through ``/agent/plan/execute``, and the retired\n``execute: true`` flag is a 422. Every composed response is labelled\n``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
         "operationId": "post_api_v1_growth_agent_agent_compose_compose_mortgage_growth_agent_plan",
         "requestBody": {
           "content": {
@@ -28354,6 +31636,52 @@
         ]
       }
     },
+    "/api/v1/growth-agent/monitors/summary": {
+      "get": {
+        "description": "Brief the caller's saved watchlists: latest run, change since the previous run.\n\nRead-only Lakebase app state plus the cached scheduler state: it writes no\naudit row, starts no run and reads no Unity Catalog table. Each briefing\nomits the stored route, criteria and actor.",
+        "operationId": "get_api_v1_growth_agent_monitors_summary_growth_agent_watchlist_summary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentWatchlistSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Watchlist Summary",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/v1/growth-agent/monitors/{monitor_id}/notification-drafts": {
       "post": {
         "description": "Create Slack/Teams review drafts for a saved watchlist's latest run.",
@@ -28531,6 +31859,76 @@
           }
         },
         "summary": "List Growth Agent Runs",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/runs/{run_id}/monitors": {
+      "post": {
+        "description": "Save the run the lender saw as a watchlist, with no re-plan.\n\nThe posted ``tool_result_hash`` must match the stored run; the watchlist is\nbuilt from the run's stored workflow, criteria and route, and one\n``GROWTH_AGENT_MONITOR_SAVE`` audit row is written (a replay writes none).",
+        "operationId": "post_api_v1_growth_agent_runs_run_id_monitors_save_growth_agent_run_watchlist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunWatchlistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentMonitor"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No run with this id belongs to the caller."
+          },
+          "409": {
+            "description": "The run did not complete, is unaudited, or changed since it was shown."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Run Watchlist",
         "tags": [
           "growth-agent"
         ]
@@ -29303,6 +32701,86 @@
             }
           },
           {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          },
+          {
             "description": "Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N \u2014 refine filters'.",
             "in": "query",
             "name": "limit",
@@ -29344,6 +32822,768 @@
           }
         },
         "summary": "List Leads",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/v1/leads/count": {
+      "get": {
+        "description": "Audit-free total for the Lead Queue filters (wow-power-6, wow-power-2).\n\nThe same authorization preamble, filters, \"Eligible only\" default and\nshort-TTL repository cache as the ranked list's X-Total-Matching. No\nborrower is shown, so no VIEW_LEADS row is written and the audit store is\nnever resolved. A Growth Agent handoff binds ranked rows, so it is never\nread here.",
+        "operationId": "get_api_v1_leads_count_count_leads",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "segment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
+          },
+          {
+            "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "portfolio_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Portfolio Id"
+            }
+          },
+          {
+            "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+              "title": "Zip"
+            }
+          },
+          {
+            "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+            "in": "query",
+            "name": "county",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+              "title": "County"
+            }
+          },
+          {
+            "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "zips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+              "title": "Zips"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "counties",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+              "title": "Counties"
+            }
+          },
+          {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
+            }
+          },
+          {
+            "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+            "in": "query",
+            "name": "borrower_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+              "title": "Borrower Ids"
+            }
+          },
+          {
+            "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder geography label to replay the built population.",
+            "in": "query",
+            "name": "geography",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder geography label to replay the built population.",
+              "title": "Geography"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder occupancy filter.",
+            "in": "query",
+            "name": "occupancy",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder occupancy filter.",
+              "title": "Occupancy"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lien-status filter.",
+            "in": "query",
+            "name": "lien_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lien-status filter.",
+              "title": "Lien Status"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lender-relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lender-relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder product filter.",
+            "in": "query",
+            "name": "product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder product filter.",
+              "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder display equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder display equity threshold.",
+              "title": "Min Equity Pct Label"
+            }
+          },
+          {
+            "description": "Optional numeric Portfolio Builder equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional numeric Portfolio Builder equity threshold.",
+              "title": "Min Equity Pct"
+            }
+          },
+          {
+            "description": "Optional owner-link bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "owner_link",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional owner-link bucket from Segment Intelligence.",
+              "title": "Owner Link"
+            }
+          },
+          {
+            "description": "Optional purchase-intent bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "purchase_intent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional purchase-intent bucket from Segment Intelligence.",
+              "title": "Purchase Intent"
+            }
+          },
+          {
+            "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+            "in": "query",
+            "name": "marketing_eligibility",
+            "required": false,
+            "schema": {
+              "default": "Eligible only",
+              "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+              "maxLength": 32,
+              "title": "Marketing Eligibility",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+            "in": "query",
+            "name": "consent_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+              "title": "Consent Status"
+            }
+          },
+          {
+            "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+            "in": "query",
+            "name": "recency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+              "title": "Recency"
+            }
+          },
+          {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Sales workflow approval state filter.",
+            "in": "query",
+            "name": "approval_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow approval state filter.",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "hold",
+                "any"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sales workflow outreach state filter.",
+            "in": "query",
+            "name": "outreach_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow outreach state filter.",
+              "enum": [
+                "none",
+                "queued",
+                "actioned",
+                "sent",
+                "bounced",
+                "replied",
+                "any"
+              ],
+              "title": "Outreach Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Internal LO email assigned to the lead.",
+            "in": "query",
+            "name": "assigned_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Internal LO email assigned to the lead.",
+              "title": "Assigned To"
+            }
+          },
+          {
+            "description": "Only approved leads aged at least this many days with no outreach.",
+            "in": "query",
+            "name": "aged_days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only approved leads aged at least this many days with no outreach.",
+              "title": "Aged Days"
+            }
+          },
+          {
+            "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+            "in": "query",
+            "name": "cohort_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+              "title": "Cohort Id"
+            }
+          },
+          {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Count Leads",
         "tags": [
           "leads"
         ]
@@ -29396,6 +33636,785 @@
           }
         },
         "summary": "Create Lead Export Receipt",
+        "tags": [
+          "leads"
+        ]
+      }
+    },
+    "/api/v1/leads/facets": {
+      "get": {
+        "description": "Audit-free option counts for one Lead Queue filter menu (tables-06).\n\nThe dimension's own filter is dropped, every other filter resolves\nexactly as the ranked list resolves it, and the buckets are closed\nvocabularies. Fetched only when a user opens that menu.",
+        "operationId": "get_api_v1_leads_facets_lead_facets",
+        "parameters": [
+          {
+            "description": "The filter menu to count: state, segment, product or approval.",
+            "in": "query",
+            "name": "dimension",
+            "required": true,
+            "schema": {
+              "description": "The filter menu to count: state, segment, product or approval.",
+              "enum": [
+                "state",
+                "segment",
+                "product",
+                "approval"
+              ],
+              "title": "Dimension",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "segment",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
+          },
+          {
+            "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+            "in": "query",
+            "name": "segment_codes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated SegmentCode list for multi-card filters. Use when more than one segment card is active.",
+              "title": "Segment Codes"
+            }
+          },
+          {
+            "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+            "in": "query",
+            "name": "segment_mode",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "portfolio_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Portfolio Id"
+            }
+          },
+          {
+            "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 2-char USPS state code. When present, the repo queries borrower_360 directly (no score floor) so the returned rows match the per-state map count.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char ZIP. Same borrower_360 query path as state. Use with state for the most narrow filter.",
+              "title": "Zip"
+            }
+          },
+          {
+            "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+            "in": "query",
+            "name": "county",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional 5-char county FIPS. Same borrower_360 query path as state/zip so map drill-downs preserve the counted cohort.",
+              "title": "County"
+            }
+          },
+          {
+            "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "states",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated USPS states for Genie-generated cohort actions.",
+              "title": "States"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "zips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit ZIP list for Genie-generated cohort actions.",
+              "title": "Zips"
+            }
+          },
+          {
+            "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+            "in": "query",
+            "name": "counties",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 5-digit county FIPS list for Genie-generated cohort actions.",
+              "title": "Counties"
+            }
+          },
+          {
+            "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+            "in": "query",
+            "name": "cities",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated CITY~ST pairs (for example CHICAGO~IL,FORT LAUDERDALE~FL) for city-grain Genie cohort actions. Always a pair: 5 city names in gold span two states, so a bare name opens the wrong population.",
+              "title": "Cities"
+            }
+          },
+          {
+            "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+            "in": "query",
+            "name": "borrower_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated synthetic borrower IDs for Genie borrower-list cohort actions.",
+              "title": "Borrower Ids"
+            }
+          },
+          {
+            "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+            "in": "query",
+            "name": "target_lender_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-demo-safe current-lender ref such as the configured tenant lender or Competitor A.",
+              "title": "Target Lender Ref"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder geography label to replay the built population.",
+            "in": "query",
+            "name": "geography",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder geography label to replay the built population.",
+              "title": "Geography"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder occupancy filter.",
+            "in": "query",
+            "name": "occupancy",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder occupancy filter.",
+              "title": "Occupancy"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lien-status filter.",
+            "in": "query",
+            "name": "lien_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lien-status filter.",
+              "title": "Lien Status"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder lender-relationship filter.",
+            "in": "query",
+            "name": "lender_relationship",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder lender-relationship filter.",
+              "title": "Lender Relationship"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder product filter.",
+            "in": "query",
+            "name": "product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder product filter.",
+              "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "description": "Optional Portfolio Builder display equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct_label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Portfolio Builder display equity threshold.",
+              "title": "Min Equity Pct Label"
+            }
+          },
+          {
+            "description": "Optional numeric Portfolio Builder equity threshold.",
+            "in": "query",
+            "name": "min_equity_pct",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional numeric Portfolio Builder equity threshold.",
+              "title": "Min Equity Pct"
+            }
+          },
+          {
+            "description": "Optional owner-link bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "owner_link",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional owner-link bucket from Segment Intelligence.",
+              "title": "Owner Link"
+            }
+          },
+          {
+            "description": "Optional purchase-intent bucket from Segment Intelligence.",
+            "in": "query",
+            "name": "purchase_intent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional purchase-intent bucket from Segment Intelligence.",
+              "title": "Purchase Intent"
+            }
+          },
+          {
+            "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+            "in": "query",
+            "name": "marketing_eligibility",
+            "required": false,
+            "schema": {
+              "default": "Eligible only",
+              "description": "Contactability gate. Defaults to Eligible only for fail-closed campaign/export use.",
+              "maxLength": 32,
+              "title": "Marketing Eligibility",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+            "in": "query",
+            "name": "consent_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional consent filter: Opt-in, Opt-out, Unknown, Any.",
+              "title": "Consent Status"
+            }
+          },
+          {
+            "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+            "in": "query",
+            "name": "recency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional touch-recency filter: Untouched 30d/60d/90d or Any.",
+              "title": "Recency"
+            }
+          },
+          {
+            "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+            "in": "query",
+            "name": "include_suppressed_for_analytics",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
+              "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Sales workflow approval state filter.",
+            "in": "query",
+            "name": "approval_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow approval state filter.",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "hold",
+                "any"
+              ],
+              "title": "Approval Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sales workflow outreach state filter.",
+            "in": "query",
+            "name": "outreach_status",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "Sales workflow outreach state filter.",
+              "enum": [
+                "none",
+                "queued",
+                "actioned",
+                "sent",
+                "bounced",
+                "replied",
+                "any"
+              ],
+              "title": "Outreach Status",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Internal LO email assigned to the lead.",
+            "in": "query",
+            "name": "assigned_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Internal LO email assigned to the lead.",
+              "title": "Assigned To"
+            }
+          },
+          {
+            "description": "Only approved leads aged at least this many days with no outreach.",
+            "in": "query",
+            "name": "aged_days",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only approved leads aged at least this many days with no outreach.",
+              "title": "Aged Days"
+            }
+          },
+          {
+            "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+            "in": "query",
+            "name": "cohort_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Lakebase persisted cohort id produced by a governed Genie action.",
+              "title": "Cohort Id"
+            }
+          },
+          {
+            "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+            "in": "query",
+            "name": "funnel_stage",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "addressable",
+                    "in_the_money",
+                    "high_opportunity",
+                    "offer_recommended",
+                    "approved",
+                    "actioned"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact native-analytics Lead Funnel drilldown. When present, the repository applies the same gold.borrower_360 predicate used by the funnel snapshot so X-Total-Matching equals the clicked stage count.",
+              "title": "Funnel Stage"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the opportunity score.",
+            "in": "query",
+            "name": "min_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the opportunity score.",
+              "title": "Min Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the opportunity score.",
+            "in": "query",
+            "name": "max_opportunity_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the opportunity score.",
+              "title": "Max Opportunity Score"
+            }
+          },
+          {
+            "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "min_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive lower bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Min Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+            "in": "query",
+            "name": "max_rate_spread_bps",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5000,
+                  "minimum": -1000,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
+              "title": "Max Rate Spread Bps"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadFacetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lead Facets",
         "tags": [
           "leads"
         ]
@@ -31247,6 +36266,28 @@
         ]
       }
     },
+    "/api/v1/segments/combinations": {
+      "get": {
+        "description": "Where several Cotality signals fire on the same borrower (audit wow-stage-5).\n\nOne row per non-empty exact set of the six core segment codes, whole book\nand never narrowed by a filter, with the addressable count from\n``mip.gold.segment_combination_rollup`` and a live contactable subset.\n``built`` is False until the gold refresh job has built the table. A cold\nwarehouse surfaces as the resilience layer's 503 ``warming_up``; there is\nno fallback, and the route writes no audit row.",
+        "operationId": "get_api_v1_segments_combinations_segment_combinations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentCombinationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Segment Combinations",
+        "tags": [
+          "segments"
+        ]
+      }
+    },
     "/api/v1/session": {
       "get": {
         "operationId": "get_api_v1_session_get_session",
@@ -31582,6 +36623,122 @@
         ]
       }
     },
+    "/api/v1/workspace/saved-views": {
+      "get": {
+        "description": "The actor's saved Lead Queue views (tables-09 phase 2). Audit-free.\n\nFetched only when the Lead Queue's Saved views panel is first opened, and\nserved apart from WorkspaceState so the workspace read stays unchanged.",
+        "operationId": "get_api_v1_workspace_saved_views_list_saved_views",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Saved Views",
+        "tags": [
+          "workspace"
+        ]
+      },
+      "post": {
+        "description": "Name the current Lead Queue view; writes SAVE_QUEUE_VIEW in the same statement.",
+        "operationId": "post_api_v1_workspace_saved_views_create_saved_view",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Saved View",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/v1/workspace/saved-views/{view_id}": {
+      "delete": {
+        "description": "Soft-delete one of the actor's views; writes DELETE_QUEUE_VIEW in the same statement.\n\n404 when the view is absent, already deleted, or another actor's: the\nanswer never confirms that someone else's view exists.",
+        "operationId": "delete_api_v1_workspace_saved_views_view_id_delete_saved_view",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "view_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "View Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Saved View",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/api/workspace": {
       "get": {
         "deprecated": true,
@@ -31845,6 +37002,125 @@
           }
         },
         "summary": "Read Queue Version",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/saved-views": {
+      "get": {
+        "deprecated": true,
+        "description": "The actor's saved Lead Queue views (tables-09 phase 2). Audit-free.\n\nFetched only when the Lead Queue's Saved views panel is first opened, and\nserved apart from WorkspaceState so the workspace read stays unchanged.",
+        "operationId": "get_api_workspace_saved_views_list_saved_views",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Saved Views",
+        "tags": [
+          "workspace"
+        ]
+      },
+      "post": {
+        "deprecated": true,
+        "description": "Name the current Lead Queue view; writes SAVE_QUEUE_VIEW in the same statement.",
+        "operationId": "post_api_workspace_saved_views_create_saved_view",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Saved View",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/saved-views/{view_id}": {
+      "delete": {
+        "deprecated": true,
+        "description": "Soft-delete one of the actor's views; writes DELETE_QUEUE_VIEW in the same statement.\n\n404 when the view is absent, already deleted, or another actor's: the\nanswer never confirms that someone else's view exists.",
+        "operationId": "delete_api_workspace_saved_views_view_id_delete_saved_view",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "view_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "View Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Saved View",
         "tags": [
           "workspace"
         ]

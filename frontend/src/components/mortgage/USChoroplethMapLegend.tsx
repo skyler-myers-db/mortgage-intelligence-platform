@@ -33,7 +33,7 @@ import { Chip, EvidenceChip } from '../Primitives';
 import type { MapScenarioView, RateScenarioIndex } from './rateScenario.logic';
 import { classRanges, formatBreak, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { GeoRead } from './useChoroplethLiveFacts';
-import { formatCount } from '../../lib/formatters';
+import { formatCount, formatNumber } from '../../lib/formatters';
 
 /** What the lazy RateScenarioControl reads. */
 export interface RateLeverInputs {
@@ -45,6 +45,8 @@ export interface RateLeverInputs {
   /** The thumb's step (undeferred). */
   step: number;
   onStepChange: (step: number) => void;
+  /** A committed step (pointerup, a moving key, Reset): the route writes it to the URL (useMapModeParams). */
+  onStepCommit?: (step: number) => void;
   /** The drilled state (ZIP level, where tiles keep borrower colouring), or null for the whole book. */
   scope: { id: string; name: string } | null;
 }
@@ -68,6 +70,12 @@ interface USChoroplethMapLegendProps {
   scale: ChoroplethScale | null;
   /** Which units the scale was built over, when not all of them ("over the 24 densest of 212 ZIPs"). */
   scaleScope?: string | null;
+  /**
+   * The whole-book total includes ids the map cannot draw (wow-stage-1):
+   * "Includes 1,234 in PR, VI (not drawn on the map)", in the fill's value;
+   * null when every id is drawn.
+   */
+  offMapNote?: string | null;
   /** "marketable population" / "opportunity within <segments>". */
   segmentCaption: string;
   /** Active segment filter — drives the overlay's scope-mismatch note. */
@@ -86,6 +94,7 @@ export function USChoroplethMapLegend({
   totalCount,
   scale,
   scaleScope = null,
+  offMapNote = null,
   segmentCaption,
   segmentFilter,
   rate = null,
@@ -105,8 +114,8 @@ export function USChoroplethMapLegend({
   const barLabel = scale
     ? `Fill classes: no borrowers or no data; ${ranges
         .map((range) => (range.to === null
-          ? `${range.from.toLocaleString('en-US')} or more`
-          : `${range.from.toLocaleString('en-US')} to ${range.to.toLocaleString('en-US')}`))
+          ? `${formatCount(range.from)} or more`
+          : `${formatCount(range.from)} to ${formatCount(range.to)}`))
         .join('; ')}`
     : 'Fill classes: lower to higher';
   return (
@@ -154,7 +163,7 @@ export function USChoroplethMapLegend({
               key={index}
               className={`map-legend__break map-legend__break--${index + 1}`}
               data-break={value}
-              title={value.toLocaleString('en-US')}
+              title={formatNumber(value)}
             >
               {repeat ? '' : label}
             </span>
@@ -187,6 +196,7 @@ export function USChoroplethMapLegend({
             {scaleScope ? ` ${scaleScope}` : ''}
           </span>
         )}
+        {offMapNote && <span className="map-legend__scale">{` · ${offMapNote}`}</span>}
       </div>
       {rate && (
         // The label never waits on the lazy chunk or the read: it is the
@@ -203,7 +213,9 @@ export function USChoroplethMapLegend({
           <div className="map-legend__lever-slot">
             {rate.controlFailed ? (
               <div className="map-legend__caption map-legend__caption--degraded" role="status">
-                Rate scenarios could not load. Showing borrower counts.{' '}
+                {/* Rate Lever #57: the control's own chunk failed, not the read (whose
+                    line, with Retry, lives in RateScenarioControl), so it says so. */}
+                The rate scenario control could not load. Showing borrower counts.{' '}
                 <button type="button" className="btn btn--ghost btn--sm" onClick={() => window.location.reload()}>
                   Reload
                 </button>
@@ -225,11 +237,11 @@ export function USChoroplethMapLegend({
       {/* Keyboard affordance: always in the DOM for screen readers,
           revealed visually by .map-wrap:focus-within when a region is
           focused. Copy matches the actual handlers: arrows move the single
-          tab stop, Enter/Space drill in, Escape hides the card; backing out
-          is via the breadcrumb trail above the map. */}
+          tab stop, Enter/Space drill in, Escape hides the card and, with no
+          card, backs out of the ZIP level (dataviz-10). */}
       <div className="map-legend__hint">
         <kbd>Arrow keys</kbd> move · <kbd>Enter</kbd> or <kbd>Space</kbd> drills in · <kbd>Esc</kbd> hides
-        the card · use the breadcrumbs to go back
+        the card, then goes back up a level
       </div>
     </div>
   );

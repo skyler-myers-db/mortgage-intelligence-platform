@@ -54,6 +54,23 @@ class ManagedJobDefinition:
 
 
 @dataclass(frozen=True)
+class ReadOnlyJobDefinition:
+    """A bundle job the App may READ (its schedule) but never list or run.
+
+    Deliberately not a ``ManagedJobDefinition`` and never in ``MANAGED_JOBS``:
+    Admin Operations lists and triggers only managed jobs, so a read-only job
+    cannot be started from the browser.
+    """
+
+    key: str
+    job_name: str
+    env_var: str
+
+
+SchedulePauseStatus = Literal["PAUSED", "UNPAUSED", "NONE"]
+
+
+@dataclass(frozen=True)
 class ManagedJobRun:
     run_id: int | None
     life_cycle_state: str | None
@@ -127,6 +144,16 @@ MANAGED_JOBS: dict[ManagedJobKey, ManagedJobDefinition] = {
 }
 
 
+# Audit 2026-09-21 flow-08 slice 2 / wow-ai-4: the saved-watchlist scheduler
+# job ships PAUSED (cost control). The App reads its schedule's pause status so
+# the UI can say whether scheduled runs are on; it never runs the job.
+GROWTH_AGENT_SCHEDULER_JOB = ReadOnlyJobDefinition(
+    key="growth_agent_scheduler",
+    job_name="mip_growth_agent_monitor_scheduler",
+    env_var="MIP_GROWTH_AGENT_SCHEDULER_JOB_ID",
+)
+
+
 def _enum_value(value: Any) -> str | None:
     if value is None:
         return None
@@ -147,7 +174,7 @@ def _ms_to_iso(value: Any) -> str | None:
     return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat()
 
 
-def _job_id_from_env(definition: ManagedJobDefinition) -> int | None:
+def _job_id_from_env(definition: ManagedJobDefinition | ReadOnlyJobDefinition) -> int | None:
     raw = os.environ.get(definition.env_var)
     if raw is None or not raw.strip():
         return None
@@ -340,7 +367,9 @@ class DatabricksJobOperations:
             raise JobOperationError("databricks sdk unavailable") from exc
         return WorkspaceClient()
 
-    def _resolve_job_id(self, workspace: Any, definition: ManagedJobDefinition) -> int | None:
+    def _resolve_job_id(
+        self, workspace: Any, definition: ManagedJobDefinition | ReadOnlyJobDefinition
+    ) -> int | None:
         configured = _job_id_from_env(definition)
         if configured is not None:
             return configured
@@ -442,6 +471,59 @@ def _run_from_sdk(run: Any) -> ManagedJobRun:
     )
 
 
+def job_name_lookup_allowed() -> bool:
+    """Public view of the local-only name-lookup rule (see the private helper)."""
+
+    return _allow_name_lookup_fallback()
+
+
+def read_only_job_bound(definition: ReadOnlyJobDefinition) -> bool:
+    """True when the App has the job's id bound (its env var holds a valid id)."""
+
+    return _job_id_from_env(definition) is not None
+
+
+def resolve_read_only_job_id(workspace: Any | None, definition: ReadOnlyJobDefinition) -> int | None:
+    """The bound job id; the name lookup only when ``APP_ENV=local``.
+
+    ``workspace`` may be ``None`` when the caller has not built a client: an
+    unbound deployed App then answers ``None`` without touching the workspace.
+    """
+
+    bound = _job_id_from_env(definition)
+    if bound is not None or not _allow_name_lookup_fallback() or workspace is None:
+        return bound
+    return DatabricksJobOperations(workspace)._resolve_job_id(workspace, definition)
+
+
+def read_schedule_pause_status(
+    workspace: Any, job_id: int, definition: ReadOnlyJobDefinition
+) -> SchedulePauseStatus:
+    """The job's ``settings.schedule`` (else ``settings.trigger``) pause status.
+
+    ``NONE`` when the job has neither. Raises ``JobOperationError`` when the
+    resolved job is not ``definition``'s job (a mis-bound id) or the pause
+    status is not one the Jobs API documents, so the caller reports
+    ``lookup_failed`` instead of guessing.
+    """
+
+    job = workspace.jobs.get(job_id=job_id)
+    job_settings = _safe_attr(job, "settings")
+    if not _job_name_matches(_safe_attr(job_settings, "name"), definition.job_name):
+        raise JobOperationError(f"{definition.job_name} binding names a different job")
+    for attribute in ("schedule", "trigger"):
+        holder = _safe_attr(job_settings, attribute)
+        if holder is None:
+            continue
+        status = _enum_value(_safe_attr(holder, "pause_status"))
+        if status == "PAUSED":
+            return "PAUSED"
+        if status == "UNPAUSED":
+            return "UNPAUSED"
+        raise JobOperationError(f"{definition.job_name} {attribute} pause status is unreadable")
+    return "NONE"
+
+
 def describe_run(run: Any) -> ManagedJobRun:
     """The typed view of an SDK ``Run`` (``jobs.get_run`` / ``jobs.list_runs``)."""
     return _run_from_sdk(run)
@@ -452,6 +534,7 @@ def get_job_operations() -> DatabricksJobOperations:
 
 
 __all__ = [
+    "GROWTH_AGENT_SCHEDULER_JOB",
     "DatabricksJobOperations",
     "JobAlreadyRunningError",
     "JobLaunch",
@@ -459,7 +542,13 @@ __all__ = [
     "ManagedJobKey",
     "ManagedJobRun",
     "ManagedJobStatus",
+    "ReadOnlyJobDefinition",
+    "SchedulePauseStatus",
     "TERMINAL_LIFECYCLE_STATES",
     "describe_run",
     "get_job_operations",
+    "job_name_lookup_allowed",
+    "read_only_job_bound",
+    "read_schedule_pause_status",
+    "resolve_read_only_job_id",
 ]

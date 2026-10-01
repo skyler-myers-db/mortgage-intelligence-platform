@@ -74,8 +74,8 @@
   left: var(--sp-2);
   z-index: var(--z-skip-link);
   padding: var(--sp-2) var(--sp-3);
-  background: var(--accent);
-  color: var(--bg-1);
+  background: var(--accent-fill);
+  color: var(--accent-contrast);
   border-radius: var(--r-md);
   font-size: var(--fs-12);
   font-weight: 600;
@@ -488,7 +488,8 @@
   max-width: min(100%, 1920px);
   margin-inline: auto;
 }
-/* When the Console is docked open at top-right (fixed --console-w card),
+/* When the Console is docked open at top-right (fixed --console-w card;
+   deviation:console-gutter-snap),
    reserve a right gutter on .main so long rows do not slide under it. The
    Console is position:fixed, so we can't rely on flow; an explicit gutter is
    the fix. The gutter derives from --console-w (audit motion-01 follow-up:
@@ -592,11 +593,14 @@
     scale var(--dur-instant) var(--ease);
 }
 .btn:hover { background: var(--bg-3); border-color: var(--line-3); }
+/* The fill is --accent-fill (a11y-01): the accent everywhere except dark +
+   red, where white text needs a darker red (deviation:cta-fill-dark-red).
+   The halo keeps the accent. */
 .btn--primary {
-  background: var(--accent); color: var(--accent-contrast); border-color: transparent;
+  background: var(--accent-fill); color: var(--accent-contrast); border-color: transparent;
   box-shadow: 0 1px 0 var(--surface-inset-shadow) inset, 0 4px 14px -4px var(--accent);
 }
-.btn--primary:hover { background: var(--accent-hover); }
+.btn--primary:hover { background: var(--accent-fill-hover); }
 .btn--ghost { border-color: transparent; color: var(--text-2); }
 .btn--ghost:hover { color: var(--text-1); background: var(--bg-3); }
 .btn--sm { padding: 5px 10px; min-block-size: var(--sp-6); font-size: var(--fs-12); border-radius: var(--r-sm); }
@@ -619,7 +623,7 @@
    press reads as the button meeting the surface (audit motion-02). */
 .btn:active:not([disabled]) { translate: 0 var(--pressed-shift); }
 .btn--primary:active:not([disabled]) {
-  background: var(--accent-hover);
+  background: var(--accent-fill-hover);
   box-shadow: 0 1px 0 var(--surface-inset-shadow) inset;
 }
 

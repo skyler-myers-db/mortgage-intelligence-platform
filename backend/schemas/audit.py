@@ -8,6 +8,7 @@ use ``action`` / ``entity_type`` / ``entity_id`` continue to work --
 preserving the pre-Slice-5 contract.
 """
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -20,6 +21,7 @@ from backend.schemas.common import (
     validate_public_audit_subject_segment,
     validate_public_opaque_id,
 )
+from backend.schemas.lead_export import validate_export_filters, validate_sha256_hex
 
 
 class AuditEvent(BaseModel):
@@ -116,3 +118,108 @@ class AuditEventCreateRequest(BaseModel):
         if value is None:
             return value
         return validate_public_opaque_id(value)
+
+
+# ---------------------------------------------------------------------------
+# Audit explorer (audit tables-10): facets, count and the export receipt.
+# ---------------------------------------------------------------------------
+
+# The largest ledger slice one explorer CSV export may declare.
+AUDIT_EXPORT_MAX_ROWS = 5000
+
+
+class AuditFacetValue(BaseModel):
+    """One distinct ledger value and how many rows carry it in the window."""
+
+    value: str
+    count: int
+
+
+class AuditFacetsTruncated(BaseModel):
+    """Per facet: true when more distinct values exist than were returned."""
+
+    event_types: bool = False
+    actions: bool = False
+    actors: bool = False
+
+
+class AuditFacetsResponse(BaseModel):
+    """Distinct event types, actions and actors in the ledger window, most frequent first."""
+
+    event_types: list[AuditFacetValue] = Field(default_factory=list)
+    actions: list[AuditFacetValue] = Field(default_factory=list)
+    actors: list[AuditFacetValue] = Field(default_factory=list)
+    truncated: AuditFacetsTruncated = Field(default_factory=AuditFacetsTruncated)
+    since: datetime
+    until: datetime | None = None
+
+
+class AuditCountResponse(BaseModel):
+    """How many ledger rows match the explorer filters, counted up to ``cap``."""
+
+    count: int
+    capped: bool = Field(description="True when more rows match than the cap counts.")
+    cap: int
+
+
+class AuditExportReceiptRequest(BaseModel):
+    """What the explorer declares about the ledger CSV it is about to download."""
+
+    row_count: int = Field(ge=1, le=AUDIT_EXPORT_MAX_ROWS)
+    csv_sha256: str = Field(
+        description="SHA-256 (hex) of the exact CSV bytes handed to the download.",
+    )
+    event_ids: list[str] = Field(
+        min_length=1,
+        max_length=AUDIT_EXPORT_MAX_ROWS,
+        description="Audit event ids in the order the file holds them.",
+    )
+    event_ids_sha256: str = Field(
+        description=(
+            "SHA-256 (hex) of the compact JSON array of event_ids, computed "
+            "client-side; the server recomputes it and refuses the receipt on a "
+            "mismatch. The ids themselves are not stored."
+        ),
+    )
+    filters: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "The explorer query parameters the exported rows were read with. "
+            "Only their fingerprint is written to the ledger."
+        ),
+    )
+
+    @field_validator("csv_sha256")
+    @classmethod
+    def _csv_digest(cls, value: str) -> str:
+        return validate_sha256_hex(value, "csv_sha256")
+
+    @field_validator("event_ids_sha256")
+    @classmethod
+    def _ids_digest(cls, value: str) -> str:
+        return validate_sha256_hex(value, "event_ids_sha256")
+
+    @field_validator("event_ids")
+    @classmethod
+    def _unique_event_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("event_ids must not repeat")
+        return value
+
+    @field_validator("filters")
+    @classmethod
+    def _bounded_filters(cls, value: dict[str, str]) -> dict[str, str]:
+        return validate_export_filters(value)
+
+
+class AuditExportReceipt(BaseModel):
+    """The ``AUDIT_EXPORT`` ledger entry the explorer download waits for."""
+
+    audit_event_id: str
+    event_type: Literal["AUDIT_EXPORT"] = "AUDIT_EXPORT"
+    actor: str
+    row_count: int
+    csv_sha256: str
+    event_ids_sha256: str
+    filter_fingerprint: str
+    recorded_at: str

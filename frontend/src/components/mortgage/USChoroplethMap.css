@@ -106,7 +106,16 @@
 @container map-wrap (max-width: 1100px) {
   .map-legend > .map-legend__lever { inline-size: auto; }
 }
-.map-legend__lever-slot { min-block-size: calc(var(--sp-16) + var(--sp-6)); }
+/* The slot reserves the TALLEST state of the loaded control (D-dataviz-geo-d2
+   2(iv)), measured at 1440x900 on Home and on Segment Intelligence (filters
+   cleared), both themes, Console open and closed, in the warming, failed,
+   not-built and slider states. The reference is CI's Linux Chromium (the
+   W5a integration run): the slider on Segments' wide legend (Console closed)
+   at its longest sentence wraps one more line there than the off-Linux Geist
+   Mono emulation predicts, 147.56px against 131.06px; the status lines are
+   13.5-28.2px. geo-foundation.fixture.spec.ts logs every measurement and pins
+   slot >= each state everywhere, and slot - max < var(--sp-2) on Linux. */
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 2 + var(--sp-6)); }
 .map-wrap:has(.map-legend__lever) .map-levels {
   flex: 1 0 auto;
   min-block-size: calc(var(--sp-16) * 5);
@@ -225,6 +234,21 @@
   text-underline-offset: 0.2em;
   cursor: pointer;
 }
+/* deviation:map-table-coverage-groups (dataviz-10): drawn states the map
+   skips follow the populated rows as their own <tbody>, under a group
+   header in the eyebrow style, each with a muted note saying why. */
+.map-table__table .map-table__group th {
+  height: auto;
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--bg-1);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.map-table__note { color: var(--text-3); }
+
 /* The arrow-key / drill hint describes the map, not the table. */
 .map-wrap[data-map-view="table"] .map-legend__hint { display: none; }
 /* Like the ZIP grid, the table fills the stage: the legend joins the flow

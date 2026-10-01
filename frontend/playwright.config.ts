@@ -44,8 +44,38 @@ const vrtRun = fixtureE2E && process.env.MIP_VRT === '1';
 const perfRun = fixtureE2E && process.env.MIP_PERF === '1';
 const VRT_SPEC = /[\\/]visual\.fixture\.spec\.ts$/;
 export const PERF_SPEC = /[\\/](perf-budget|interaction-budget)\.fixture\.spec\.ts$/;
-const fixtureIgnore = [...(vrtRun ? [] : [VRT_SPEC]), ...(perfRun ? [] : [PERF_SPEC])];
-const fixtureArtifacts = vrtRun ? 'vrt' : perfRun ? 'perf' : null;
+// Cross-engine projects (manual check 2026-09-30, a11y-10 item 4, css-06
+// item 3; the e2e-cross-engine CI job sets MIP_CROSS_ENGINE=1, nothing else
+// does). The testMatch contract:
+//  - `*.cross-engine.fixture.spec.ts` runs in fixture-chromium (every normal
+//    fixture run) AND in fixture-webkit;
+//  - `*.webkit.fixture.spec.ts` runs ONLY in fixture-webkit, so a lane's
+//    WebKit-only proof (w5-approval-core's pinned-focus fix may land as one)
+//    is collected there once both lanes merge;
+//  - `*.firefox.fixture.spec.ts` and genie-pagehide.cross-engine run in
+//    fixture-firefox-forced (Firefox with forced colors on). Playwright
+//    Firefox does not start on the macOS 27 host: CI's Linux runners, or the
+//    pinned mcr.microsoft.com/playwright:v1.63.0-noble container, only.
+// WebKit's Tab skips buttons and checkboxes on macOS/Linux defaults, so the
+// cross-engine walks move focus with element.focus() (fixture/focusWalk.ts).
+const crossEngineRun = fixtureE2E && process.env.MIP_CROSS_ENGINE === '1';
+export const WEBKIT_SPEC = /[\\/][^\\/]+\.(cross-engine|webkit)\.fixture\.spec\.ts$/;
+export const FIREFOX_FORCED_SPEC = /[\\/]([^\\/]+\.firefox|genie-pagehide\.cross-engine)\.fixture\.spec\.ts$/;
+export const ENGINE_ONLY_SPEC = /\.(webkit|firefox)\.fixture\.spec\.ts$/;
+const fixtureIgnore = [
+  ...(vrtRun ? [] : [VRT_SPEC]),
+  ...(perfRun ? [] : [PERF_SPEC]),
+  ...(crossEngineRun ? [] : [ENGINE_ONLY_SPEC]),
+];
+const fixtureArtifacts = vrtRun ? 'vrt' : perfRun ? 'perf' : crossEngineRun ? 'cross-engine' : null;
+/** The fixture pins every engine shares: 1440x900, en-US, New York, reduced motion. */
+const FIXTURE_PINS = {
+  viewport: { width: 1440, height: 900 },
+  // Pinned so formatted dates and numbers match on every machine.
+  locale: 'en-US',
+  timezoneId: 'America/New_York',
+  contextOptions: { reducedMotion: 'reduce' as const },
+};
 const outputDir = fixtureArtifacts ? `test-results/${fixtureArtifacts}` : 'test-results';
 const htmlReportDir = fixtureArtifacts ? `playwright-report/${fixtureArtifacts}` : 'playwright-report';
 const htmlReport = ['html', { open: 'never', outputFolder: htmlReportDir }] as const;
@@ -141,18 +171,30 @@ export default defineConfig({
     actionTimeout: liveE2E ? 20_000 : fixtureE2E ? 15_000 : 10_000,
     navigationTimeout: liveE2E || fixtureE2E ? 30_000 : 15_000,
   },
-  projects: fixtureE2E
+  projects: crossEngineRun
+    ? [
+        {
+          name: 'fixture-webkit',
+          testMatch: WEBKIT_SPEC,
+          use: { ...devices['Desktop Safari'], ...FIXTURE_PINS, deviceScaleFactor: 1 },
+        },
+        {
+          name: 'fixture-firefox-forced',
+          testMatch: FIREFOX_FORCED_SPEC,
+          use: {
+            ...devices['Desktop Firefox'],
+            ...FIXTURE_PINS,
+            deviceScaleFactor: 1,
+            // Firefox implements forced colors itself: Override colors = Always.
+            launchOptions: { firefoxUserPrefs: { 'browser.display.document_color_use': 2 } },
+          },
+        },
+      ]
+    : fixtureE2E
     ? [
         {
           name: 'fixture-chromium',
-          use: {
-            ...devices['Desktop Chrome'],
-            viewport: { width: 1440, height: 900 },
-            // Pinned so formatted dates and numbers match on every machine.
-            locale: 'en-US',
-            timezoneId: 'America/New_York',
-            contextOptions: { reducedMotion: 'reduce' },
-          },
+          use: { ...devices['Desktop Chrome'], ...FIXTURE_PINS },
         },
       ]
     : browserMatrix

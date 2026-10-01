@@ -4,6 +4,14 @@ import { useExitRetained } from '../hooks/useExitRetained';
 import type { DrawerSource } from './AppContext';
 import { freshnessBucket, FRESHNESS_LABEL } from './freshness';
 import { preloadEvidenceDrawerBody } from './mortgage/evidenceDrawerBodyLoader';
+import {
+  inReopenGrace,
+  markHoverClosed,
+  measuredPlacement,
+  SHOW_DELAY_MS,
+  supportsAnchorPositioning,
+  type RectPlacement,
+} from './ui/anchorPlacement';
 import './EvidenceHoverCard.css';
 
 /**
@@ -31,9 +39,11 @@ import './EvidenceHoverCard.css';
  *    scroll or resize instead of drifting.
  *
  * Timing: hover waits SHOW_DELAY_MS so sweeping the pointer across a table
- * does not pop a card per chip; once a card has closed, the next one opens
- * at once for REOPEN_GRACE_MS (a user scanning chips one by one). Keyboard
- * focus shows immediately. Closing fades out over --dur-instant through
+ * does not pop a card per chip; once a card (or a Tooltip) has closed, the
+ * next one opens at once for REOPEN_GRACE_MS (a user scanning chips one by
+ * one). Keyboard focus shows immediately. The constants, the module-wide
+ * close clock and the placement helpers live in ui/anchorPlacement.ts,
+ * shared with ui/Tooltip.tsx. Closing fades out over --dur-instant through
  * hooks/useExitRetained (instant under reduced motion and where no
  * transition runs, such as the test DOM).
  *
@@ -41,21 +51,6 @@ import './EvidenceHoverCard.css';
  * body chunk (audit bundle-04), so a click opens it without a loading state.
  * The chunk only, never data: the drawer's reads start once it is open.
  */
-
-const SHOW_DELAY_MS = 350;
-const REOPEN_GRACE_MS = 300;
-/** Gap between the chip and the card, and the room kept above the card. */
-const CARD_GAP_PX = 8;
-const VIEWPORT_MARGIN_PX = 4;
-
-/** When the last card began to close (module-wide; read only in handlers). */
-let lastClosedAt = Number.NEGATIVE_INFINITY;
-
-interface RectPlacement {
-  x: number;
-  y: number;
-  side: 'above' | 'below';
-}
 
 interface OpenCard {
   anchored: boolean;
@@ -77,21 +72,6 @@ export interface EvidenceHoverApi {
 export interface EvidenceHoverOptions {
   /** Call-to-action line; defaults to the evidence-drawer CTA of an EvidenceChip. */
   cta?: string;
-}
-
-function supportsAnchorPositioning(): boolean {
-  return typeof CSS !== 'undefined' && CSS.supports('anchor-name: --a');
-}
-
-function measuredPlacement(anchor: HTMLElement, card: HTMLElement): RectPlacement {
-  const rect = anchor.getBoundingClientRect();
-  const height = card.getBoundingClientRect().height;
-  const above = rect.top >= height + CARD_GAP_PX + VIEWPORT_MARGIN_PX;
-  return {
-    x: rect.left + rect.width / 2,
-    y: above ? rect.top - CARD_GAP_PX : rect.bottom + CARD_GAP_PX,
-    side: above ? 'above' : 'below',
-  };
 }
 
 export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHoverOptions = {}): EvidenceHoverApi {
@@ -121,7 +101,7 @@ export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHov
 
   const hide = useCallback(() => {
     clearTimer();
-    if (open) lastClosedAt = Date.now();
+    if (open) markHoverClosed();
     setOpen(null);
   }, [clearTimer, open]);
 
@@ -129,7 +109,7 @@ export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHov
     if (!source) return;
     preloadEvidenceDrawerBody();
     clearTimer();
-    if (Date.now() - lastClosedAt < REOPEN_GRACE_MS) {
+    if (inReopenGrace()) {
       show();
       return;
     }

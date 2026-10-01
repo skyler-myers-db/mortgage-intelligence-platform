@@ -14,7 +14,11 @@ from typing import Any
 from fastapi import HTTPException
 
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
-from backend.services.audit_store import AuditMetadataViolation, AuditPIIError
+from backend.services.audit_store import (
+    AuditMetadataValueViolation,
+    AuditMetadataViolation,
+    AuditPIIError,
+)
 from backend.services.lakebase import LakebaseClient, LakebaseError
 from backend.services.outreach_decision_intent import (
     _campaign_decision_proof_fingerprint,
@@ -442,7 +446,9 @@ def _commit_outreach_decision_atomic(
             if finalized is None:
                 raise LakebaseError("Lakebase approval response could not be finalized")
             return final_response, True
-    except (AuditMetadataViolation, AuditPIIError):
+    # A value-policy refusal is re-raised as itself (the router answers 422);
+    # normalised below it would read as a Lakebase outage and answer 503.
+    except (AuditMetadataViolation, AuditMetadataValueViolation, AuditPIIError):
         raise
     except HTTPException:
         raise

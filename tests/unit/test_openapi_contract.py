@@ -27,7 +27,8 @@ BASELINE = ROOT / "tests" / "fixtures" / "openapi_baseline.json"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 REGEN_HINT = (
     "The committed OpenAPI baseline is stale. "
-    "Run `python tools/regen_openapi_baseline.py` and commit the result."
+    "Run `python tools/regen_openapi_baseline.py` and commit "
+    "tests/fixtures/openapi_baseline.json and frontend/src/types/api.gen.ts."
 )
 
 
@@ -183,8 +184,8 @@ def test_canonical_api_routes_do_not_use_generic_dict_response_models() -> None:
 def _api_paths(schema: dict[str, Any]) -> dict[str, Any]:
     """All /api-prefixed paths: canonical /api/v1/* plus /api/* compat aliases.
 
-    Every /api route mounts unconditionally via ``API_ROUTERS`` in
-    ``backend.main``. The SPA catch-all ``/{full_path}`` is deliberately
+    Every /api route mounts unconditionally: ``backend.main`` mounts each
+    router in ``API_ROUTERS`` (``backend.api.routers``). The SPA catch-all ``/{full_path}`` is deliberately
     excluded: it mounts only when ``frontend/dist/index.html`` exists, so its
     presence varies between environments and it carries no API contract.
     """

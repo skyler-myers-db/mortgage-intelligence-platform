@@ -75,6 +75,12 @@ function approvable(rows: readonly LeadSummary[]): LeadSummary[] {
 /** A 12-row queue of approvable rows, in rank order (real dossier ids). */
 const BULK_QUEUE: readonly LeadSummary[] = approvable(LEADS).slice(0, 12);
 const BULK_IDS = BULK_QUEUE.slice(0, 9).map((lead) => lead.borrower_id);
+/**
+ * The gate's stratified samples for the 9-row range: the first row of each
+ * of its six offers (refi_plus_heloc, purchase, cash_out, refi, retention,
+ * heloc; rows 5, 7 and 8 repeat an offer).
+ */
+const SAMPLED_IDS = [0, 1, 2, 3, 4, 6].map((index) => BULK_IDS[index]);
 
 async function scrollTopOf(page: Page): Promise<number> {
   return tableWrap(page).evaluate((element) => element.scrollTop);
@@ -87,10 +93,18 @@ async function selectNineByRange(page: Page): Promise<void> {
   await expect(page.locator('.bulk-actions__label')).toHaveText('9 leads selected');
 }
 
+/**
+ * Open the gate, preview its samples (one per offer: Approve arms only once
+ * every offer in the run has one, D-approval-flow-a1), write the shared
+ * rationale and approve.
+ */
 async function startBulkApprove(page: Page): Promise<void> {
   const approve = page.getByTestId('lead-bulk-approve');
   await approve.click();
+  await page.getByTestId('lead-bulk-preview-samples').click();
+  await expect(page.getByTestId('lead-bulk-preview-samples'), 'every offer has a ready sample').toHaveCount(0);
   await page.locator('.bulk-actions__rationale input').fill('Q3 retention sweep');
+  await expect(approve).not.toHaveAttribute('aria-disabled', 'true');
   await approve.click();
 }
 
@@ -253,17 +267,18 @@ test.describe('(d)-(e) preset views and Copy link', () => {
 });
 
 test.describe('(f)-(j) bulk selection and honest runs', () => {
-  test('(f) Shift range over 9 rows, a held batch, k of 9, then Stop: 3 POSTs, none aborted, 6 not started', async ({ app, mockApi, page }) => {
+  test('(f) Shift range over 9 rows, the held canary, k of 9, then Stop: 1 POST, none aborted, 8 not started', async ({ app, mockApi, page }) => {
     registerRankedQueue(mockApi, BULK_QUEUE);
     const echo = registerDraftEcho(mockApi);
-    const tracker = registerBulkApprove(mockApi, { holdFirst: 3 });
+    // The canary (D-approval-flow-a1) goes alone: hold it.
+    const tracker = registerBulkApprove(mockApi, { holdFirst: 1 });
     const failed: string[] = [];
     page.on('requestfailed', (request) => failed.push(`${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`));
     await app.gotoRoute('/lead-queue');
     await selectNineByRange(page);
     await startBulkApprove(page);
 
-    await expect.poll(() => tracker.bodies.length).toBe(3);
+    await expect.poll(() => tracker.bodies.length).toBe(1);
     await expect(page.getByTestId('lead-bulk-approve')).toHaveText('Approving…');
     await expect(page.getByTestId('lead-bulk-run-count')).toHaveText('0 of 9');
     await expect(page.locator('progress.bulk-actions__progress')).toHaveAttribute('max', '9');
@@ -274,13 +289,13 @@ test.describe('(f)-(j) bulk selection and honest runs', () => {
     tracker.gate.release();
 
     const result = page.getByTestId('lead-bulk-result');
-    await expect(result).toContainText('3 of 9 approved, 6 not started. Stopped.');
-    expect(tracker.bodies.map((body) => body.borrower_id)).toEqual(BULK_IDS.slice(0, 3));
-    expect(new Set(tracker.bodies.map((body) => body.request_id)).size).toBe(3);
-    expect(echo.calls.sort(), 'drafts only for the rows that started').toEqual(BULK_IDS.slice(0, 3).sort());
+    await expect(result).toContainText('1 of 9 approved, 8 not started. Stopped.');
+    expect(tracker.bodies.map((body) => body.borrower_id)).toEqual(BULK_IDS.slice(0, 1));
+    expect(tracker.bodies[0]).toMatchObject({ review_mode: 'bulk_sample', draft_generation_id: `gen-${BULK_IDS[0]}` });
+    expect(echo.calls.sort(), 'the previewed samples only: the canary row approves its own sample').toEqual([...SAMPLED_IDS].sort());
     expect(failed, 'no request was aborted').toEqual([]);
-    await expect(page.locator('.bulk-actions__label')).toHaveText('6 leads selected');
-    for (const id of BULK_IDS.slice(3)) await expect(page.getByTestId(`lead-select-${id}`)).toBeChecked();
+    await expect(page.locator('.bulk-actions__label')).toHaveText('8 leads selected');
+    for (const id of BULK_IDS.slice(1)) await expect(page.getByTestId(`lead-select-${id}`)).toBeChecked();
   });
 
   test('(g) an approve that returns 500 is listed and stays selected', async ({ app, hygiene, mockApi, page }) => {
@@ -313,7 +328,8 @@ test.describe('(f)-(j) bulk selection and honest runs', () => {
     const warn = page.locator('dialog.session-dialog [data-session-unrecorded]');
     await expect(warn).toHaveAttribute('data-session-unrecorded', 'bulk_approval');
     await expect(warn).toContainText('Rows already approved stay approved; the rest were not recorded.');
-    expect(tracker.bodies.map((body) => body.borrower_id), 'the loop stopped after that batch').toEqual(BULK_IDS.slice(0, 3));
+    // The canary, then the first batch of three (the 401 is its first row).
+    expect(tracker.bodies.map((body) => body.borrower_id), 'the loop stopped after that batch').toEqual(BULK_IDS.slice(0, 4));
   });
 
   test('(j) a preset prunes the selection to the rows still on screen', async ({ app, mockApi, page }) => {
@@ -414,7 +430,8 @@ test.describe('(l) axe on the new surfaces', () => {
     test(`${theme}: the presets row and a run's progress are clean`, async ({ app, mockApi, page }) => {
       registerRankedQueue(mockApi, BULK_QUEUE);
       registerDraftEcho(mockApi);
-      const tracker = registerBulkApprove(mockApi, { holdFirst: 3 });
+      // The canary goes alone: hold it.
+      const tracker = registerBulkApprove(mockApi, { holdFirst: 1 });
       await app.setTheme(theme);
       await app.gotoRoute('/lead-queue');
       await expectAxeClean(page, {
@@ -426,7 +443,7 @@ test.describe('(l) axe on the new surfaces', () => {
 
       await selectNineByRange(page);
       await startBulkApprove(page);
-      await expect.poll(() => tracker.bodies.length).toBe(3);
+      await expect.poll(() => tracker.bodies.length).toBe(1);
       await expect(page.getByTestId('lead-bulk-run')).toBeVisible();
       await expectAxeClean(page, {
         key: { route: 'lead-queue', state: 'bulk-run' },

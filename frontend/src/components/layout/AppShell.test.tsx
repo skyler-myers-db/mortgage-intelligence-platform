@@ -1,12 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
-import {
-  AppShell,
-  applyActorScopedStateTransition,
-  shouldResetActorScopedStateForActorChange,
-} from './AppShell';
+import { AppShell } from './AppShell';
 import { systemStatusViewModel } from './Topbar';
 import { createMipQueryClient } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
@@ -118,64 +114,6 @@ describe('AppShell skip-link + landmarks', () => {
     expect(html).toContain('Acme Mortgage');
     expect(html).toContain('Configured tenant: Acme Mortgage');
     expect(html).not.toContain('Configured tenant: Summit Mortgage');
-  });
-});
-
-describe('actor-scoped state reset guard', () => {
-  it('does not clear on the first trusted actor key', () => {
-    expect(shouldResetActorScopedStateForActorChange(null, 'actor_a')).toBe(false);
-  });
-
-  it('clears when Databricks swaps the trusted actor key', () => {
-    expect(shouldResetActorScopedStateForActorChange('actor_a', 'actor_b')).toBe(true);
-  });
-
-  it('clears when the trusted actor key disappears after being present', () => {
-    expect(shouldResetActorScopedStateForActorChange('actor_a', null)).toBe(true);
-  });
-
-  it('clears QueryClient, AppContext, and Genie state on actor-boundary changes', () => {
-    const clearQueryClient = vi.fn();
-    const clearAppState = vi.fn();
-    const clearBrowserState = vi.fn();
-    const clearMemoryState = vi.fn();
-
-    const next = applyActorScopedStateTransition({
-      previousActorCacheKey: 'actor_a',
-      nextActorCacheKey: 'actor_b',
-      clearQueryClient,
-      clearAppState,
-      clearBrowserState,
-      clearMemoryState,
-    });
-
-    expect(next).toBe('actor_b');
-    expect(clearQueryClient).toHaveBeenCalledTimes(1);
-    expect(clearAppState).toHaveBeenCalledTimes(1);
-    expect(clearBrowserState).toHaveBeenCalledTimes(1);
-    expect(clearMemoryState).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not clear scoped state for the initial actor observation', () => {
-    const clearQueryClient = vi.fn();
-    const clearAppState = vi.fn();
-    const clearBrowserState = vi.fn();
-    const clearMemoryState = vi.fn();
-
-    const next = applyActorScopedStateTransition({
-      previousActorCacheKey: null,
-      nextActorCacheKey: 'actor_a',
-      clearQueryClient,
-      clearAppState,
-      clearBrowserState,
-      clearMemoryState,
-    });
-
-    expect(next).toBe('actor_a');
-    expect(clearQueryClient).not.toHaveBeenCalled();
-    expect(clearAppState).not.toHaveBeenCalled();
-    expect(clearMemoryState).not.toHaveBeenCalled();
-    expect(clearBrowserState).not.toHaveBeenCalled();
   });
 });
 

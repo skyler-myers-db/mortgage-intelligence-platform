@@ -1,10 +1,12 @@
 """Unit tests for the Unity-Catalog-backed admin rules + sources endpoints.
 
 Slice13-accuracy follow-up: the ``/api/admin/rules`` + ``/api/admin/sources``
-endpoints now read from ``mip.ref.offer_rules_config`` and per-table
-``DESCRIBE DETAIL`` / ``SELECT COUNT(*)``. The admin UI drops its
-THRESHOLD_DEFAULTS, RULES_EDITED_AT, and DATA_SOURCES literals and
-consumes these endpoints.
+endpoints read ``mip.ref.offer_rules_config`` and the gold
+``mip.gold.source_readiness`` summary. App SQL is gold-only (2026-09-30): the
+sources read never probes silver, first-party or provider tables; a source the
+summary has no row for reads ``unavailable``. The admin UI drops its
+THRESHOLD_DEFAULTS, RULES_EDITED_AT, and DATA_SOURCES literals and consumes
+these endpoints.
 
 The conftest installs ``_FakeAdminSqlClient`` so the default tests
 exercise the real ``AdminRulesService`` against a programmed SQL shim.
@@ -12,17 +14,24 @@ exercise the real ``AdminRulesService`` against a programmed SQL shim.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
 from backend.main import app
 from backend.services.admin_rules import (
+    _SOURCES,
     AdminRulesService,
     get_admin_rules_service,
 )
-from backend.services.databricks_sql import DatabricksSqlError
+from backend.services.databricks_sql import (
+    DatabricksSqlError,
+    DatabricksSqlObjectMissingError,
+    DatabricksSqlPermissionError,
+)
 from backend.services.resilience import DependencyDownError
 
 client = TestClient(app)
@@ -256,111 +265,158 @@ def test_get_sources_prefers_gold_source_readiness_summary() -> None:
     assert not any("SILVER." in call.upper() for call in fake.calls)
 
 
-def test_first_party_fallback_marks_empty_tables_configured_empty() -> None:
-    """Fallback source probing must not call empty first-party tables live."""
+_ADMIN_SOURCE_NAMES = [desc.name for desc in _SOURCES]
+_ROADMAP_NAMES = {desc.name for desc in _SOURCES if desc.roadmap}
+_APP_SCHEMAS = (".GOLD.", ".REF.")
+_ETL_ONLY_MARKERS = (".SILVER.", ".FIRST_PARTY.", ".RAW.", "COTALITY_MORTGAGE_DATA.")
 
-    class _EmptyFirstPartyClient:
-        def execute(
-            self, statement: str, parameters: Any = None
-        ) -> list[dict[str, Any]]:
-            s = statement.strip().upper()
-            if "GOLD.SOURCE_READINESS" in s:
-                raise DatabricksSqlError("summary unavailable")
-            if s.startswith("DESCRIBE DETAIL"):
-                if ".FIRST_PARTY." in s:
-                    return [{"lastModified": "2026-05-06T00:00:00.000Z", "numRecords": 0}]
-                return [{"lastModified": "2026-05-06T00:00:00.000Z", "numRecords": 100}]
+
+class _RecordingSummaryClient:
+    """Answers the gold readiness summary for ``names``; records every statement."""
+
+    def __init__(self, names: list[str] | None, *, error: BaseException | None = None) -> None:
+        self.names = names
+        self.error = error
+        self.calls: list[str] = []
+
+    def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:
+        self.calls.append(statement)
+        if self.error is not None:
+            raise self.error
+        if ".GOLD.SOURCE_READINESS" not in statement.upper() or self.names is None:
             return []
+        return [
+            {
+                "source_name": name,
+                "status": "roadmap" if name in _ROADMAP_NAMES else "live",
+                "row_count": None if name in _ROADMAP_NAMES else 10 + idx,
+                "last_updated": None if name in _ROADMAP_NAMES else "2026-09-29 06:00:00",
+                "note": "summary note",
+                "checked_at": "2026-09-29 06:05:00",
+                "synthetic_demo": False,
+                "sort_order": idx,
+            }
+            for idx, name in enumerate(self.names, start=1)
+        ]
 
-    service = AdminRulesService(_EmptyFirstPartyClient())
-    rows = service.get_sources()
+    def assert_gold_only(self) -> None:
+        assert self.calls, "the readiness summary was never read"
+        for call in self.calls:
+            upper = call.upper()
+            assert any(schema in upper for schema in _APP_SCHEMAS), call
+            assert not any(marker in upper for marker in _ETL_ONLY_MARKERS), call
+            assert "DESCRIBE" not in upper and "COUNT(*)" not in upper, call
+
+
+def test_get_sources_absent_readiness_marks_every_non_roadmap_source_unavailable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake = _RecordingSummaryClient(names=[])
+
+    with caplog.at_level(logging.WARNING):
+        rows = AdminRulesService(fake).get_sources()
+
+    assert [row.name for row in rows] == _ADMIN_SOURCE_NAMES
+    for row in rows:
+        expected = "roadmap" if row.name in _ROADMAP_NAMES else "unavailable"
+        assert row.status == expected, row
+        assert (row.rows, row.last_updated, row.checked_at) == (None, None, None)
+    unavailable = [row for row in rows if row.status == "unavailable"]
+    assert all(row.note.endswith("· readiness summary has no row for this source") for row in unavailable)
+    events = [r for r in caplog.records if getattr(r, "mip_event", None) == "admin_source_readiness_unavailable"]
+    assert events and events[0].mip_outcome == "absent"  # type: ignore[attr-defined]
+    fake.assert_gold_only()
+
+
+def test_get_sources_missing_readiness_table_reads_as_absent() -> None:
+    missing = DatabricksSqlObjectMissingError(
+        "[TABLE_OR_VIEW_NOT_FOUND] The table or view `mip`.`gold`.`source_readiness` cannot be found."
+    )
+    wrapped = DependencyDownError("warehouse", reason="object missing")
+    wrapped.last_error = missing
+    fake = _RecordingSummaryClient(names=None, error=wrapped)
+
+    rows = AdminRulesService(fake).get_sources()
+
+    assert {row.status for row in rows} == {"unavailable", "roadmap"}
+    fake.assert_gold_only()
+
+
+def test_get_sources_partial_readiness_appends_unavailable_rows() -> None:
+    present = [name for name in _ADMIN_SOURCE_NAMES if name not in {"AVM", "MLS Listings"}]
+    fake = _RecordingSummaryClient(names=[*present, "UC Gold Borrower 360"])
+
+    rows = AdminRulesService(fake).get_sources()
+
+    names = [row.name for row in rows]
+    assert names[: len(present) + 1] == [*present, "UC Gold Borrower 360"]
+    assert names[len(present) + 1 :] == ["AVM", "MLS Listings"]
     by_name = {row.name: row for row in rows}
-
-    assert by_name["First-party LOS / Applications"].status == "configured_empty"
-    assert by_name["First-party LOS / Applications"].rows == 0
-    assert by_name["First-party LOS / Applications"].synthetic_demo is False
-
-
-def test_first_party_fallback_preserves_synthetic_demo_disclosure() -> None:
-    """If the gold summary is down, non-empty demo feeds must still disclose."""
-
-    class _SyntheticFirstPartyClient:
-        def execute(
-            self, statement: str, parameters: Any = None
-        ) -> list[dict[str, Any]]:
-            s = statement.strip().upper()
-            if "GOLD.SOURCE_READINESS" in s:
-                raise DatabricksSqlError("summary unavailable")
-            if s.startswith("DESCRIBE DETAIL"):
-                return [{"lastModified": "2026-05-06T00:00:00.000Z", "numRecords": 100}]
-            if "COUNT_IF(COALESCE(SYNTHETIC_DEMO" in s:
-                return [{"synthetic_rows": 100, "last_updated": "2026-05-06 00:00:00"}]
-            return []
-
-    service = AdminRulesService(_SyntheticFirstPartyClient())
-    rows = service.get_sources()
-    by_name = {row.name: row for row in rows}
-
-    assert by_name["First-party CRM / Campaigns"].status == "demo_synthetic"
-    assert by_name["First-party CRM / Campaigns"].synthetic_demo is True
-    assert by_name["First-party CRM / Campaigns"].last_updated == "2026-05-06 00:00:00"
+    assert by_name["Voluntary Lien"].status == "live"
+    assert by_name["Voluntary Lien"].rows == 12
+    for name in ("AVM", "MLS Listings"):
+        row = by_name[name]
+        assert row.status == "unavailable"
+        assert (row.rows, row.last_updated, row.checked_at) == (None, None, None)
+        assert row.note.endswith("· readiness summary has no row for this source")
+    assert by_name["Building Permits"].status == "roadmap"
+    fake.assert_gold_only()
 
 
-def test_get_sources_degrades_per_source_on_sql_failure() -> None:
-    """Per-source degrade contract (2026-04-23): if a DESCRIBE DETAIL
-    fails for one table (permission denial, schema drift, etc.), the
-    remaining sources still render. The failing source comes back with
-    ``status='error'`` and a diagnostic note, NOT 503 for the whole
-    panel. This prevents a single grant gap from blacking out the
-    admin page.
-    """
+def test_get_sources_complete_readiness_passes_through_unchanged() -> None:
+    fake = _RecordingSummaryClient(names=_ADMIN_SOURCE_NAMES)
 
-    class _BoomClient:
-        def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:
-            raise DatabricksSqlError("DESCRIBE DETAIL unavailable")
+    rows = AdminRulesService(fake).get_sources()
 
+    assert [row.name for row in rows] == _ADMIN_SOURCE_NAMES
+    assert "unavailable" not in {row.status for row in rows}
+    assert {row.status for row in rows if row.name in _ROADMAP_NAMES} == {"roadmap"}
+    fake.assert_gold_only()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DatabricksSqlError("SQL execution failed"),
+        DatabricksSqlPermissionError("[INSUFFICIENT_PERMISSIONS] no SELECT on mip.gold"),
+        DatabricksSqlObjectMissingError("[TABLE_OR_VIEW_NOT_FOUND] `mip`.`gold`.`other_table`"),
+    ],
+    ids=["sql-error", "permission", "other-missing-object"],
+)
+def test_get_sources_other_readiness_failures_answer_503(error: BaseException) -> None:
+    fake = _RecordingSummaryClient(names=None, error=error)
     previous = app.dependency_overrides.get(get_admin_rules_service)
-    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(_BoomClient())
+    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(fake)
     try:
         response = client.get("/api/admin/sources")
-        assert response.status_code == 200, response.text
-        rows = response.json()
-        # All live-source candidates degrade to `error`; roadmap rows pass through.
-        statuses = {r["status"] for r in rows}
-        assert "error" in statuses
-        assert "roadmap" in statuses
-        # No live sources when the SQL client blows up on every call.
-        assert "live" not in statuses
     finally:
         if previous is None:
             del app.dependency_overrides[get_admin_rules_service]
         else:
             app.dependency_overrides[get_admin_rules_service] = previous
 
+    assert response.status_code == 503, response.text
+    # One statement, and never a probe of silver or first-party tables.
+    assert len(fake.calls) == 1
+    fake.assert_gold_only()
 
-def test_get_sources_permission_denied_marks_source_cleanly() -> None:
-    """PERMISSION_DENIED on a single table → `status='permission_denied'`
-    (a distinct value so the admin UI can show "grant needed" specifically)."""
 
-    class _PermDeniedClient:
-        def execute(self, statement: str, parameters: Any = None) -> list[dict[str, Any]]:
-            raise DatabricksSqlError(
-                "PERMISSION_DENIED: User does not have USE SCHEMA on Schema 'mip.silver'."
-            )
-
+def test_sources_route_answers_200_with_unavailable_rows() -> None:
+    fake = _RecordingSummaryClient(names=[])
     previous = app.dependency_overrides.get(get_admin_rules_service)
-    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(_PermDeniedClient())
+    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(fake)
     try:
-        response = client.get("/api/admin/sources")
-        assert response.status_code == 200, response.text
-        rows = response.json()
-        statuses = {r["status"] for r in rows}
-        assert "permission_denied" in statuses
+        sources = client.get("/api/admin/sources")
     finally:
         if previous is None:
             del app.dependency_overrides[get_admin_rules_service]
         else:
             app.dependency_overrides[get_admin_rules_service] = previous
+
+    assert sources.status_code == 200, sources.text
+    by_name = {row["name"]: row for row in sources.json()}
+    assert by_name["MLS Listings"]["status"] == "unavailable"
+    assert by_name["Building Permits"]["status"] == "roadmap"
 
 
 # ---------------------------------------------------------------------------
@@ -414,135 +470,3 @@ def test_put_rules_rejects_every_app_local_edit_attempt() -> None:
     put = client.put("/api/admin/rules", json={"x": "y"})
     assert put.status_code == 410
     assert "Unity Catalog" in put.json()["detail"]
-
-
-# ---------------------------------------------------------------------------
-# Parallel probe behavior (perf HIGH, 2026-04-23)
-# ---------------------------------------------------------------------------
-
-
-def test_get_sources_two_failing_sources_do_not_cascade() -> None:
-    """One or more failing probes must not block the other sources.
-
-    The service now fans the per-source DESCRIBE DETAIL + COUNT(*) probes
-    out on a ThreadPoolExecutor. The degrade-per-source contract is that
-    a single (or multi-source) failure still returns a populated payload
-    for every other source. This test wires a client that fails only on
-    two specific silver tables and asserts the remaining six rows still
-    land with ``status='live'`` (or ``'roadmap'`` for filed permits).
-    """
-
-    FAILING_TABLES = ("silver.lien_current", "silver.mortgage_events")
-
-    class _SelectivelyFailingClient:
-        def __init__(self) -> None:
-            self.calls: list[str] = []
-
-        def execute(
-            self, statement: str, parameters: Any = None
-        ) -> list[dict[str, Any]]:
-            self.calls.append(statement)
-            # Match the failing tables by suffix so catalog overrides
-            # (mip_demo/mip_prod) don't break the test.
-            for failing in FAILING_TABLES:
-                if failing in statement:
-                    raise DatabricksSqlError(
-                        f"simulated warehouse error on {failing}"
-                    )
-            s = statement.strip().upper()
-            if s.startswith("DESCRIBE DETAIL"):
-                return [
-                    {
-                        "lastModified": "2026-04-22T12:00:00.000Z",
-                        "numRecords": 4242,
-                    }
-                ]
-            if "COUNT(*)" in s and "FROM" in s:
-                return [{"row_count": 4242}]
-            return []
-
-    previous = app.dependency_overrides.get(get_admin_rules_service)
-    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(
-        _SelectivelyFailingClient()
-    )
-    try:
-        response = client.get("/api/admin/sources")
-        assert response.status_code == 200, response.text
-        rows = response.json()
-        by_name = {r["name"]: r for r in rows}
-        # The two failing tables degrade independently. Both back
-        # "MMA Mortgage Analytics" (mortgage_events) and "Voluntary Lien"
-        # (lien_current) per the _SOURCES descriptor table.
-        assert by_name["Voluntary Lien"]["status"] == "error"
-        assert by_name["MMA Mortgage Analytics"]["status"] == "error"
-        assert by_name["AVM"]["status"] == "error"
-        # The other live sources still render with row counts.
-        for still_live in ("Cotality Public Records", "CLIP", "Owner Link"):
-            r = by_name[still_live]
-            assert r["status"] == "live", r
-            assert r["rows"] == 4242, r
-        # Live overlays still render; filed-permit roadmap row passes through untouched.
-        assert by_name["MLS Listings"]["status"] == "live"
-        assert by_name["Cotality HELOC Propensity"]["status"] == "live"
-        assert by_name["Cotality Refi Propensity"]["status"] == "live"
-        assert by_name["Building Permits"]["status"] == "roadmap"
-    finally:
-        if previous is None:
-            del app.dependency_overrides[get_admin_rules_service]
-        else:
-            app.dependency_overrides[get_admin_rules_service] = previous
-
-
-def test_get_sources_prefers_numrecords_over_count_when_both_available() -> None:
-    """When DESCRIBE DETAIL returns ``numRecords``, the service must use
-    that value and skip the follow-up ``SELECT COUNT(*)`` round-trip.
-
-    Delta's writer publishes ``numRecords`` on most write paths
-    (Lakeflow, MERGE, optimized writes), so the common production path
-    should be one warehouse call per source instead of two. We verify
-    both the returned row count and that no COUNT(*) statement was
-    issued.
-    """
-
-    class _NumRecordsClient:
-        def __init__(self) -> None:
-            self.calls: list[str] = []
-
-        def execute(
-            self, statement: str, parameters: Any = None
-        ) -> list[dict[str, Any]]:
-            self.calls.append(statement)
-            s = statement.strip().upper()
-            if s.startswith("DESCRIBE DETAIL"):
-                return [
-                    {
-                        "lastModified": "2026-04-22T12:00:00.000Z",
-                        # numRecords present AND distinct from any
-                        # fallback so a preference bug surfaces clearly.
-                        "numRecords": 9191,
-                    }
-                ]
-            # If the service incorrectly falls back, return a different
-            # value so the assertion can tell which path won.
-            if "COUNT(*)" in s and "FROM" in s:
-                return [{"row_count": 1}]
-            return []
-
-    fake = _NumRecordsClient()
-    previous = app.dependency_overrides.get(get_admin_rules_service)
-    app.dependency_overrides[get_admin_rules_service] = lambda: AdminRulesService(fake)
-    try:
-        response = client.get("/api/admin/sources")
-        assert response.status_code == 200, response.text
-        rows = response.json()
-        live_rows = [r for r in rows if r["status"] == "live"]
-        assert live_rows, "expected at least one live source"
-        for r in live_rows:
-            assert r["rows"] == 9191, r
-        # No COUNT(*) should have been issued — numRecords was available.
-        assert not any("COUNT(*)" in call.upper() for call in fake.calls), fake.calls
-    finally:
-        if previous is None:
-            del app.dependency_overrides[get_admin_rules_service]
-        else:
-            app.dependency_overrides[get_admin_rules_service] = previous

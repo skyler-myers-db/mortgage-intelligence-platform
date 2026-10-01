@@ -63,6 +63,8 @@ const LEDGER: DecisionReceiptPayload = {
   rationale_code: null,
   copy_generation_id: '22222222-2222-4222-8222-222222222222',
   copy_hash: 'c'.repeat(64),
+  review_mode: 'individual',
+  bulk_id: null,
   approver: 'ledger.approver@summit.example',
   request_id: '33333333-3333-4333-8333-333333333333',
   correlation_id: 'corr-ledger-0001',
@@ -177,6 +179,30 @@ describe('DecisionReceipt', () => {
     const link = card.querySelector<HTMLAnchorElement>('[data-testid="decision-receipt-explorer-link"]')!;
     expect(link.getAttribute('href')).toBe(auditExplorerHref(AUDIT_ID));
     expect(link.getAttribute('href')).toContain(`audit_event_id=${AUDIT_ID}`);
+  });
+
+  it('states how the copy was reviewed: one review line per mode, and none when nothing was recorded (flow-03)', async () => {
+    const BULK = '0d1e2f3a-4b5c-4d6e-8f70-8192a3b4c5d6';
+    const cases: Array<[Partial<DecisionReceiptPayload>, string | undefined]> = [
+      [{ review_mode: 'individual' }, 'Copy shown to the approver before approval'],
+      [{ review_mode: 'triage' }, 'Copy shown to the approver before approval (Triage)'],
+      [{ review_mode: 'bulk_sample', bulk_id: BULK }, "Bulk run 0d1e2f3a · this borrower's copy was previewed"],
+      [{ review_mode: 'bulk_cohort', bulk_id: BULK }, 'Bulk run 0d1e2f3a · approved under the shared rationale; copy not individually shown'],
+      [{ review_mode: 'undeclared' }, 'Review mode not recorded (earlier client)'],
+      [{ review_mode: null }, undefined],
+      [{ decision: 'rejected', event_type: 'OUTREACH_REJECT', rationale_code: 'low_intent', review_mode: null, bulk_id: BULK }, 'Bulk rejection 0d1e2f3a · shared note recorded'],
+      [{ decision: 'rejected', event_type: 'OUTREACH_REJECT', rationale_code: 'low_intent', review_mode: null, bulk_id: null }, undefined],
+    ];
+    for (const [overrides, expected] of cases) {
+      queryClient.clear();
+      apiMocks.auditReceipt.mockResolvedValue({ ...LEDGER, ...overrides });
+      act(() => root.unmount());
+      root = createRoot(container);
+      mount();
+      await settle();
+      expect(receipt(), JSON.stringify(overrides)).not.toBeNull();
+      expect(field('review'), JSON.stringify(overrides)).toBe(expected);
+    }
   });
 
   it('plays the reveal once: onRevealed fires after the read-back and a parent flip does not cut it short', async () => {

@@ -16,13 +16,21 @@ Slice: slice13-accuracy-validation.
 """
 from __future__ import annotations
 
+import contextvars
+import time
+from collections.abc import Callable
+from concurrent.futures import Executor, Future
 from typing import Any
+
+import pytest
 
 from backend.schemas.geo import (
     CountyRollupResponse,
     StateRollupResponse,
     ZipRollupResponse,
 )
+from backend.services import server_timing
+from backend.services.gold_cache import GoldAggregateCache
 from backend.services.repositories.databricks_repo import (
     DatabricksGeoRepository,
     DatabricksSegmentRepository,
@@ -68,42 +76,176 @@ def _make_repo() -> tuple[DatabricksGeoRepository, _FakeSqlClient]:
     return repo, client
 
 
-def test_segment_list_expired_cache_failure_propagates() -> None:
-    """Segment list keeps fail-visible behavior when an expired refresh fails."""
-    clock = [0.0]
-    client = _FakeSqlClient()
-    client.responses = [
-        (
-            ".gold.segment_population",
-            [
-                {
-                    "segment_code": "itm",
-                    "name": "In the money",
-                    "count": 1,
-                    "delta_vs_prior": "+0%",
-                    "avg_score": 80,
-                    "description": "Ready",
-                    "color": "#000000",
-                }
-            ],
+# ---------------------------------------------------------------------------
+# Segment list staleness (audit delivery-06, decision record e1): an expired
+# cache never MASKS a refresh failure. A cold failure propagates; a value
+# retained after a failed refresh is served WITH the X-Data-Last-Good-At
+# marker (the request collector's stale wall time).
+# ---------------------------------------------------------------------------
+
+_ITM_ROW = {
+    "segment_code": "itm",
+    "name": "In the money",
+    "count": 1,
+    "delta_vs_prior": "+0%",
+    "avg_score": 80,
+    "description": "Ready",
+    "color": "#000000",
+}
+
+
+class _SyncExecutor(Executor):
+    """Runs a refresh at once, in an EMPTY context like a real pool thread."""
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        future: Future[Any] = Future()
+        future.set_result(contextvars.Context().run(fn, *args, **kwargs))
+        return future
+
+
+class _Clocks:
+    def __init__(self) -> None:
+        self.mono = 1000.0
+        self.wall = 1_790_000_000.0
+
+    def advance(self, seconds: float) -> None:
+        self.mono += seconds
+        self.wall += seconds
+
+
+class _FailingOn(_FakeSqlClient):
+    """Fails only the statements that contain ``fail_marker``."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_marker: str | None = None
+
+    def execute(self, statement: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        if self.fail_marker is not None and self.fail_marker in statement:
+            raise RuntimeError("warehouse down")
+        return super().execute(statement, parameters)
+
+
+def _swr_segment_repo(client: _FakeSqlClient, clocks: _Clocks) -> DatabricksSegmentRepository:
+    def cache() -> GoldAggregateCache:
+        return GoldAggregateCache(
+            now=lambda: clocks.mono, wall=lambda: clocks.wall, executor=_SyncExecutor()
         )
-    ]
-    repo = DatabricksSegmentRepository(
-        client,
-        cache=TTLCache(now=lambda: clock[0]),
+
+    return DatabricksSegmentRepository(
+        client,  # type: ignore[arg-type]
+        cache=cache(),
         cache_ttl_s=10.0,
+        gate_cache=cache(),
     )
 
-    assert repo.list(None)[0].code == "itm"
-    clock[0] = 11.0
-    client.error = RuntimeError("warehouse down")
 
+def _served(read: Callable[[], Any]) -> tuple[Any, str | None]:
+    """Run one read as a request would; return (value, X-Data-Last-Good-At)."""
+    collector = server_timing.TimingCollector()
+    token = server_timing._COLLECTOR.set(collector)
     try:
+        value = read()
+    finally:
+        server_timing._COLLECTOR.reset(token)
+    return value, collector.last_good_at()
+
+
+def _iso(wall: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(wall))
+
+
+def test_segment_list_cold_cache_failure_propagates() -> None:
+    client = _FakeSqlClient()
+    client.error = RuntimeError("warehouse down")
+    repo = _swr_segment_repo(client, _Clocks())
+
+    with pytest.raises(RuntimeError, match="warehouse down"):
         repo.list(None)
-    except RuntimeError as exc:
-        assert str(exc) == "warehouse down"
-    else:  # pragma: no cover - assertion clarity
-        raise AssertionError("expired segment cache must not mask refresh failures")
+
+
+def test_segment_list_expired_refresh_failure_serves_last_good_with_marker() -> None:
+    clocks, client = _Clocks(), _FakeSqlClient()
+    client.responses = [(".gold.segment_population", [_ITM_ROW])]
+    repo = _swr_segment_repo(client, clocks)
+    stored_at = clocks.wall
+    assert _served(lambda: repo.list(None)) == ([repo.list(None)[0]], None)
+
+    clocks.advance(11.0)  # past the 10 s soft TTL, far inside the 24 h cap
+    client.error = RuntimeError("warehouse down")
+    segments, last_good_at = _served(lambda: repo.list(None))
+
+    assert [segment.code for segment in segments] == ["itm"]
+    assert last_good_at == _iso(stored_at)
+    # Still marked on the next read while the retained value is served.
+    assert _served(lambda: repo.list(None))[1] == _iso(stored_at)
+
+
+def test_segment_list_marker_clears_after_successful_refresh() -> None:
+    clocks, client = _Clocks(), _FakeSqlClient()
+    client.responses = [(".gold.segment_population", [_ITM_ROW])]
+    repo = _swr_segment_repo(client, clocks)
+    repo.list(None)
+    clocks.advance(11.0)
+    client.error = RuntimeError("warehouse down")
+    assert _served(lambda: repo.list(None))[1] is not None
+
+    client.error = None
+    clocks.advance(11.0)
+    _served(lambda: repo.list(None))  # serves the retained value; refresh succeeds
+
+    assert _served(lambda: repo.list(None)) == ([repo.list(None)[0]], None)
+
+
+def test_segment_list_nested_gate_staleness_marks_the_list() -> None:
+    clocks, client = _Clocks(), _FailingOn()
+    client.responses = [
+        (".gold.segment_population", [_segment_row("listed", 5)]),
+        (".gold.source_readiness", [{"source_name": "MLS Listings", "status": "live"}]),
+    ]
+    repo = _swr_segment_repo(client, clocks)
+    gates_read_at = clocks.wall
+    repo.list(None)
+
+    clocks.advance(11.0)
+    client.fail_marker = ".gold.source_readiness"
+    # The list refresh succeeds, but its readiness refresh fails and the gate
+    # cache serves last-good: the refreshed list was BUILT from a stale read.
+    assert _served(lambda: repo.list(None))[1] is None, "the value served here was fresh"
+    (listed,), last_good_at = _served(lambda: repo.list(None))
+
+    assert listed.source_status == "connected"
+    assert last_good_at == _iso(gates_read_at)
+
+
+def test_segment_list_cold_readiness_failure_is_not_cached_as_good() -> None:
+    clocks, client = _Clocks(), _FailingOn()
+    client.responses = [
+        (".gold.segment_population", [_segment_row("listed", 5)]),
+        (".gold.source_readiness", [{"source_name": "MLS Listings", "status": "live"}]),
+    ]
+    client.fail_marker = ".gold.source_readiness"
+    repo = _swr_segment_repo(client, clocks)
+
+    with pytest.raises(RuntimeError, match="warehouse down"):
+        repo.list(None)
+
+    client.fail_marker = None
+    (listed,) = repo.list(None)
+    assert (listed.source_status, listed.source_name) == ("connected", "MLS Listings")
+
+
+def test_segment_list_soft_window_stale_without_failure_has_no_marker() -> None:
+    clocks, client = _Clocks(), _FakeSqlClient()
+    client.responses = [(".gold.segment_population", [_ITM_ROW])]
+    repo = _swr_segment_repo(client, clocks)
+    repo.list(None)
+
+    clocks.advance(11.0)
+    segments, last_good_at = _served(lambda: repo.list(None))
+
+    assert [segment.code for segment in segments] == ["itm"]
+    assert last_good_at is None
 
 
 def _segment_row(code: str, count: int = 0) -> dict[str, Any]:
@@ -155,9 +297,10 @@ def test_segment_list_applies_three_state_source_gates() -> None:
     assert by_code["second_lien_itm"].source_name == "Voluntary Lien"
 
 
-def test_segment_list_skips_gating_when_readiness_unavailable() -> None:
-    """A failed/empty gold.source_readiness read must never wrongly gate a
-    live segment -- everything defaults to connected."""
+def test_segment_list_gates_not_connected_when_readiness_has_no_row() -> None:
+    """Decision record e1: an EMPTY gold.source_readiness snapshot no longer
+    skips the gates. A mapped segment with no readiness row reads
+    not_connected; it never defaults to connected."""
     client = _FakeSqlClient()
     client.responses = [
         (".gold.segment_population", [_segment_row("listed", 5)]),
@@ -166,8 +309,8 @@ def test_segment_list_skips_gating_when_readiness_unavailable() -> None:
     repo = DatabricksSegmentRepository(client, cache_ttl_s=10.0)
 
     (listed,) = repo.list(None)
-    assert listed.source_status == "connected"
-    assert listed.source_name is None
+    assert listed.source_status == "not_connected"
+    assert listed.source_name == "MLS Listings"
 
 
 def test_segment_filtered_rollup_counts_distinct_clips() -> None:

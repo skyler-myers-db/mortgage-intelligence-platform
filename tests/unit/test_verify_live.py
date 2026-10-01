@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tools.verify_live import ProbeResult, collect_red_flags
 
 REPO = Path(__file__).resolve().parents[2]
@@ -237,3 +239,126 @@ def test_verify_live_does_not_positive_probe_synthetic_outreach_writes() -> None
     assert "Synthetic approvals/rejections written" not in text
     assert "outreach.approve.unknown_404" in text
     assert "expect_status=404" in text
+
+
+# ---------------------------------------------------------------------------
+# The Rate Lever probe (wave-3 remainder): structural invariants of the grid.
+# ---------------------------------------------------------------------------
+
+
+def _state(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "state": "IL",
+        "addressable": 1000,
+        "rate_movable": 900,
+        "in_the_money": [400, 300, 200],
+        "contactable_in_the_money": [40, 30, 20],
+    }
+    row.update(overrides)
+    return row
+
+
+def _rate_grid(**overrides: object) -> dict[str, object]:
+    grid: dict[str, object] = {
+        "built": True,
+        "steps_bps": [-50, 0, 50],
+        "scenario_market_rate_pct": [5.8, 6.3, 6.8],
+        "base_market_rate_pct": 6.3,
+        "thresholds": {"min_spread_bps": 75, "min_equity_pct": 15},
+        "states": [
+            _state(),
+            _state(
+                state="TX",
+                addressable=500,
+                rate_movable=450,
+                in_the_money=[100, 100, 90],
+                contactable_in_the_money=None,
+            ),
+        ],
+        "provenance": {"note": "fixture"},
+    }
+    grid.update(overrides)
+    return grid
+
+
+def _rate_flags(sample: object) -> list[str]:
+    return collect_red_flags(
+        [
+            ProbeResult(
+                name="geo.rate_sensitivity",
+                method="GET",
+                path="/api/geo/rate-sensitivity",
+                status=200,
+                ok=True,
+                sample=sample,
+            )
+        ]
+    )
+
+
+def test_verify_live_probes_rate_sensitivity_and_the_audit_explorer_reads() -> None:
+    source = (REPO / "tools" / "verify_live.py").read_text(encoding="utf-8")
+
+    assert '"geo.rate_sensitivity", "GET", "/api/geo/rate-sensitivity"' in source
+    assert source.index('"geo.state_rollups"') < source.index('"geo.rate_sensitivity"')
+    for name, path in (("audit.facets", "/api/audit/facets"), ("audit.count", "/api/audit/count")):
+        assert f'"{name}", "GET", "{path}", extra_headers=admin_headers' in source
+
+
+def test_a_clean_rate_grid_raises_no_flag() -> None:
+    assert _rate_flags(_rate_grid()) == []
+
+
+@pytest.mark.parametrize(
+    ("grid", "flag"),
+    [
+        (_rate_grid(built=False, steps_bps=[], scenario_market_rate_pct=[], states=[]), "built is not true"),
+        (_rate_grid(steps_bps=[], scenario_market_rate_pct=[]), "steps_bps is empty"),
+        (_rate_grid(steps_bps=[-50, 25, 50]), "steps_bps is missing step 0"),
+        (_rate_grid(steps_bps=[0, -50, 50]), "steps_bps is not strictly ascending"),
+        (_rate_grid(steps_bps=[-50, 0, 0]), "steps_bps is not strictly ascending"),
+        (_rate_grid(scenario_market_rate_pct=[6.3]), "scenario_market_rate_pct length differs from steps_bps"),
+        (_rate_grid(states=[]), "states is empty"),
+        (_rate_grid(states=[_state(in_the_money=[400, 300])]), "IL: in_the_money length differs from steps_bps"),
+        (_rate_grid(states=[_state(in_the_money=[1001, 300, 200])]), "IL: in_the_money above addressable"),
+        (_rate_grid(states=[_state(rate_movable=1001)]), "IL: rate_movable above addressable"),
+        (
+            _rate_grid(states=[_state(contactable_in_the_money=[40, 30])]),
+            "IL: contactable_in_the_money length differs from steps_bps",
+        ),
+        (
+            _rate_grid(states=[_state(contactable_in_the_money=[401, 30, 20])]),
+            "IL: contactable_in_the_money above in_the_money",
+        ),
+        (_rate_grid(states=[_state(in_the_money=[300, 301, 200])]), "IL: in_the_money increases as par rises"),
+    ],
+    ids=[
+        "not-built",
+        "no-steps",
+        "no-zero-step",
+        "not-ascending",
+        "repeated-step",
+        "rate-length",
+        "no-states",
+        "itm-length",
+        "itm-above-addressable",
+        "movable-above-addressable",
+        "contactable-length",
+        "contactable-above-itm",
+        "itm-increases",
+    ],
+)
+def test_each_rate_grid_defect_raises_its_flag(grid: dict[str, object], flag: str) -> None:
+    flags = _rate_flags(grid)
+
+    assert any(flag in line for line in flags), flags
+    assert all(line.startswith("geo.rate_sensitivity: ") for line in flags)
+
+
+def test_rate_grid_offenders_are_capped_at_five_states() -> None:
+    states = [_state(state=f"S{index}", rate_movable=5000) for index in range(8)]
+
+    flags = _rate_flags(_rate_grid(states=states))
+
+    assert len([line for line in flags if "rate_movable above addressable" in line]) == 5
+    assert flags[-1] == "geo.rate_sensitivity: and 3 more states"

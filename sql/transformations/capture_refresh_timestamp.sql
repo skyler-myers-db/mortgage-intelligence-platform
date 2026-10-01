@@ -15,6 +15,8 @@
 -- CURRENT_TIMESTAMP() independently. Within a single run, two "Refreshed
 -- ..." chips rendered from different tables could disagree by several
 -- seconds -- enough to make parity tests flaky.
+-- Later gold CTAS read the same anchor from the start, among them
+-- `gold_segment_combination_rollup.sql` (signal stack, wow-stage-5).
 --
 -- Contract: The seed INSERT below is the ONE place CURRENT_TIMESTAMP() is
 -- allowed to live on the refresh path. Every other gold CTAS reads

@@ -11,7 +11,13 @@ import App from './app';
  * The data router exists for one reason: `useBlocker`, which the unsaved-
  * changes guard (hooks/useUnsavedGuard) needs and which a declarative router
  * cannot provide. This is deliberately NOT the loader / action migration: no
- * loaders, no actions, no nested route objects.
+ * loaders, no actions, no nested route objects. The 2026-09-30 ruling
+ * (docs/prototype-deviations.md, data-router-loaders; audit shell-05 /
+ * shell-v2 / stack-04) keeps it that way for three reasons: a loader re-runs
+ * on every revalidation, and borrower / lead reads write one VIEW_* audit row
+ * per deliberate open; a cold SQL warehouse would hold the navigation instead
+ * of painting the route's own warm-up state; and data-before-mount already
+ * ships as lib/routeDataPrefetch. appRouter.test.tsx pins the key set.
  */
 
 /**

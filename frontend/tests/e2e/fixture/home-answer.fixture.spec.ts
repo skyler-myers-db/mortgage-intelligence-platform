@@ -22,6 +22,9 @@
  *  - KPI values are at least the size of the page title;
  *  - no two cards touch: every measured gap is at least --gap-grid;
  *  - exactly one primary button above the fold, into the ranked queue;
+ *  - the offer slices and legend swatches paint pairwise-distinct segment
+ *    hues, refi + HELOC as the refi / HELOC stripe (D-dataviz-geo-c2), axe
+ *    clean;
  *  - every WHO row opens the Lead Queue narrowed to that borrower, and Home
  *    itself never reads GET /api/leads (that read writes a VIEW_LEADS audit
  *    row), not on load and not on hover.
@@ -35,6 +38,7 @@
  * whole".
  */
 import type { Locator, Page } from '@playwright/test';
+import { expectAxeClean } from './axe';
 import { BORROWERS } from './data/borrowers';
 import {
   LIVE_ACTIONABLE_MIX,
@@ -217,6 +221,32 @@ for (const theme of FIXTURE_THEMES) {
       );
       expect(overflowing).toEqual([]);
       await page.screenshot({ path: test.info().outputPath(`home-max-${theme}.png`) });
+    });
+
+    test('offer slices and swatches paint distinct segment hues, refi + HELOC striped (dataviz-09)', async ({ app, mockApi, page }) => {
+      mockApi.register('POST', '/api/portfolio/preview', homePreviewHandler(MAX_HOME_PREVIEW));
+      mockApi.register('GET', '/api/home/summary', () => ({ body: MAX_HOME_SUMMARY }));
+      await app.gotoRoute('/');
+      const band = page.locator('.home-answer');
+      await expect(band.locator('.offer-mix__seg')).toHaveCount(LIVE_ACTIONABLE_MIX.length);
+      for (const part of ['.offer-mix__seg', '.offer-mix__swatch']) {
+        const paints = await band.locator(part).evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const style = getComputedStyle(node);
+            return { offer: node.getAttribute('data-offer'), color: style.backgroundColor, image: style.backgroundImage };
+          }),
+        );
+        const striped = paints.filter((paint) => paint.offer === 'refi_plus_heloc');
+        expect(striped.length, `${part}: refi + HELOC is drawn`).toBeGreaterThan(0);
+        for (const paint of striped) expect(paint.image, `${part} refi + HELOC`).toContain('repeating-linear-gradient');
+        const solids = [...new Map(paints.filter((paint) => paint.offer !== 'refi_plus_heloc').map((paint) => [paint.offer, paint])).values()];
+        for (const paint of solids) expect(paint.image, `${part} ${paint.offer} is a solid hue`).toBe('none');
+        expect(new Set(solids.map((paint) => paint.color)).size, `${part}: ${JSON.stringify(solids)}`).toBe(solids.length);
+      }
+      // The slice gap is the 2px card surface, drawn inside the next slice.
+      const gap = await band.locator('.offer-mix__seg').nth(1).evaluate((node) => getComputedStyle(node).boxShadow);
+      expect(gap).toMatch(/inset 2px 0px 0px 0px$|^rgb.* 2px 0px 0px 0px inset$/);
+      await expectAxeClean(page, { key: { route: 'home', state: 'offer-mix-max' }, theme, known: {}, include: '.home-answer' });
     });
 
     test('the geography map starts above the fold beside a side panel', async ({ page }) => {

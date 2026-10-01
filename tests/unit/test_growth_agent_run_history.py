@@ -161,6 +161,17 @@ def test_the_read_writes_no_audit_row(ledger: tuple[_LedgerLakebase, InMemoryAud
     assert lakebase.transactions == 0
 
 
+def test_a_watchlist_run_carries_its_monitor_id(
+    ledger: tuple[_LedgerLakebase, InMemoryAuditStore, TestClient],
+) -> None:
+    lakebase, _audit, client = ledger
+    monitor_id = uuid4()
+    lakebase.rows.append(_row(ACTOR, 90, monitor_id=monitor_id))
+    body = _get(client).json()
+    assert body[0]["monitor_id"] == str(monitor_id)
+    assert [summary["monitor_id"] for summary in body[1:]] == [None, None, None]
+
+
 def test_a_lakebase_failure_is_a_safe_503(ledger: tuple[_LedgerLakebase, InMemoryAuditStore, TestClient]) -> None:
     lakebase, _audit, client = ledger
     lakebase.fail = True

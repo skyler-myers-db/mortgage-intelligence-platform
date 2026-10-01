@@ -20,7 +20,12 @@ the model validators (score-band canon, governed identifiers, name-shaped
 text, vocabularies). A non-2xx sample must still resolve to a route but is not
 validated against a model. A 2xx body may also carry no key its model does
 not declare (the w3-api-contract carryover): the model drops such a key, so
-the UI could be built on a field the real wire never sends. Every body must
+the UI could be built on a field the real wire never sends. Nor may it omit a
+key the real server sends (quality-09 item 2): FastAPI serializes every
+declared field, so ``omitted_keys`` dumps the validated body the way the
+route itself serializes it (its own response_model flags; a declared raw 202
+in full) and reports what the served body lacks; the partial bodies found
+when the check landed sit in the shrink-only KNOWN_OMISSIONS. Every body must
 also stay synthetic: masked borrower ids, ``.example`` email domains and the
 Summit Mortgage sample lender.
 
@@ -47,6 +52,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.routing import Match
 
 from backend.main import API_VERSION, app
+from tests.fixtures.e2e_fixture_known_omissions import KNOWN_OMISSIONS
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPORTER = ROOT / "tools" / "export_e2e_fixtures.mjs"
@@ -193,6 +199,67 @@ def undeclared_keys(body: Any, model: Any) -> list[str]:
     return _extra_paths(body, by_alias, by_name, "")
 
 
+def _served_by_route_model(route: APIRoute, status: int) -> bool:
+    """True when ``status`` is serialized through the route's own response_model
+    (``response_model_for`` did not take ``route.responses[status]['model']``)."""
+    declared = route.responses.get(status) or route.responses.get(str(status)) or {}
+    return not (isinstance(declared, dict) and declared.get("model") is not None)
+
+
+def _missing_paths(body: Any, dumped: Any, path: str) -> list[str]:
+    """Dotted paths the server's dump carries and ``body`` does not.
+
+    Lists are zipped by index. A ``dict[str, X]`` field's dump has exactly
+    the body's keys (it was validated from the body), so its keys are never
+    reported, only walked.
+    """
+    if isinstance(dumped, dict) and isinstance(body, dict):
+        missing: list[str] = []
+        for key, child in dumped.items():
+            where = f"{path}.{key}" if path else str(key)
+            if key not in body:
+                missing.append(where)
+                continue
+            missing.extend(_missing_paths(body[key], child, where))
+        return missing
+    if isinstance(dumped, list) and isinstance(body, list):
+        return [
+            item
+            for index, (child, dumped_child) in enumerate(zip(body, dumped, strict=False))
+            for item in _missing_paths(child, dumped_child, f"{path}[{index}]")
+        ]
+    return []
+
+
+def omitted_keys(body: Any, model: Any, route: APIRoute, status: int) -> list[str]:
+    """Dotted paths the real server would send for this route and status but ``body`` omits.
+
+    The dump mirrors the route's own serialization (quality-09 item 2): a status
+    served through the route's response_model uses the route's flags (by_alias,
+    exclude_unset, exclude_defaults, exclude_none, include, exclude), so the
+    /health exclude_unset route reports nothing a body left unset; a declared
+    raw status (the genie 202) is dumped in full by alias, which
+    test_api_types_generated.py (c) proves is what the server sends.
+    ``exclude=True`` fields are never dumped and so never reported.
+    """
+    adapter = _adapter(model)
+    validated = adapter.validate_json(json.dumps(body))
+    if _served_by_route_model(route, status):
+        dumped = adapter.dump_python(
+            validated,
+            mode="json",
+            by_alias=route.response_model_by_alias,
+            exclude_unset=route.response_model_exclude_unset,
+            exclude_defaults=route.response_model_exclude_defaults,
+            exclude_none=route.response_model_exclude_none,
+            include=route.response_model_include,
+            exclude=route.response_model_exclude,
+        )
+    else:
+        dumped = adapter.dump_python(validated, mode="json", by_alias=True)
+    return _missing_paths(body, dumped, "")
+
+
 def contract_problems(sample: dict[str, Any], routes: list[APIRoute] | None = None) -> list[str]:
     """Why ``sample`` breaks the contract; empty when it holds (or is non-2xx)."""
     method, path, status = sample["method"], sample["path"], int(sample["status"])
@@ -223,6 +290,15 @@ def contract_problems(sample: dict[str, Any], routes: list[APIRoute] | None = No
         problems.append(
             f"{where}: {getattr(model, '__name__', model)} does not declare {', '.join(unknown)}"
             " (the real response drops it)"
+        )
+    known_omitted = KNOWN_OMISSIONS.get(sample["source"], {}).get("keys", "").split(",")
+    omitted = [
+        item for item in omitted_keys(sample["body"], model, route, status) if item not in known_omitted
+    ]
+    if omitted:
+        problems.append(
+            f"{where}: {getattr(model, '__name__', model)} omits {', '.join(omitted)}"
+            " (the real server always sends them)"
         )
     return problems
 
@@ -300,6 +376,29 @@ def test_known_drift_is_shrink_only(samples: list[dict[str, Any]]) -> None:
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry["recorded"]), source
         assert source in by_source, f"KNOWN_DRIFT names {source!r}, which the exporter no longer emits"
         assert contract_problems(by_source[source]), f"KNOWN_DRIFT {source!r} no longer reproduces: remove it"
+
+
+def _sample_omissions(sample: dict[str, Any]) -> list[str]:
+    status = int(sample["status"])
+    if not 200 <= status < 300:
+        return []
+    route = resolve_route(sample["method"], sample["path"])
+    return omitted_keys(sample["body"], response_model_for(route, status), route, status)
+
+
+def test_known_omissions_is_shrink_only(samples: list[dict[str, Any]]) -> None:
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for sample in samples:
+        by_source.setdefault(sample["source"], []).append(sample)
+    for source, entry in KNOWN_OMISSIONS.items():
+        assert {"finding", "owner", "recorded", "why", "keys"} <= entry.keys(), source
+        assert entry["finding"] == "quality-09 item 2", source
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry["recorded"]), source
+        assert source in by_source, f"KNOWN_OMISSIONS names {source!r}, which the exporter no longer emits"
+        reproduced = list(dict.fromkeys(path for sample in by_source[source] for path in _sample_omissions(sample)))
+        assert reproduced == entry["keys"].split(","), (
+            f"KNOWN_OMISSIONS {source!r} no longer reproduces exactly its keys: narrow or remove it"
+        )
 
 
 def test_known_extras_is_shrink_only(samples: list[dict[str, Any]]) -> None:
@@ -423,6 +522,7 @@ def test_dispatch_order_resolves_the_static_segment_first() -> None:
 
 class _JobReceipt(BaseModel):
     job_id: str
+    state: str = "queued"
 
 
 class _Answer(BaseModel):
@@ -449,12 +549,83 @@ def test_a_non_default_2xx_status_validates_against_its_declared_model() -> None
     route = _declared_202_route()
     base = {"source": "non-vacuity", "method": "POST", "pattern": "/api/non-vacuity/jobs", "path": "/api/non-vacuity/jobs", "query": ""}
 
-    assert contract_problems({**base, "status": 202, "body": {"job_id": "j-1"}}, [route]) == []
+    assert contract_problems({**base, "status": 202, "body": {"job_id": "j-1", "state": "queued"}}, [route]) == []
     assert contract_problems({**base, "status": 200, "body": {"answer": "ok"}}, [route]) == []
     wrong_model = contract_problems({**base, "status": 202, "body": {"answer": "ok"}}, [route])
     assert any("fails _JobReceipt" in problem and "job_id" in problem for problem in wrong_model)
     undeclared = contract_problems({**base, "status": 203, "body": {"job_id": "j-1"}}, [route])
     assert any("status 203 is not declared" in problem for problem in undeclared)
+
+
+def test_a_declared_202_body_missing_a_defaulted_key_is_rejected() -> None:
+    """A declared raw status is dumped in full by alias: the genie 202 sends every field."""
+    route = _declared_202_route()
+    base = {"source": "non-vacuity", "method": "POST", "pattern": "/api/non-vacuity/jobs", "path": "/api/non-vacuity/jobs", "query": ""}
+    assert contract_problems({**base, "status": 202, "body": {"job_id": "j-1"}}, [route]) == [
+        "non-vacuity [POST /api/non-vacuity/jobs -> 202]: _JobReceipt omits state"
+        " (the real server always sends them)"
+    ]
+
+
+# --- Non-vacuity: served 2xx bodies are complete (quality-09 item 2) ---------
+
+
+def test_the_validator_rejects_a_top_level_omission() -> None:
+    sample = {**_valid_session_sample(), "body": {}}
+    assert contract_problems(sample) == [
+        "non-vacuity [GET /api/genie/sessions -> 200]: GenieSessionListResponse omits sessions"
+        " (the real server always sends them)"
+    ]
+
+
+def test_the_validator_rejects_an_omission_inside_a_list_item() -> None:
+    sample = _valid_session_sample()
+    del sample["body"]["sessions"][0]["title"]
+    assert any("omits sessions[0].title" in problem for problem in contract_problems(sample))
+
+
+def _synthetic_route(model: Any) -> APIRoute:
+    router = APIRouter()
+
+    @router.get(f"/api/{API_VERSION}/non-vacuity/model", response_model=model)
+    def _served() -> None:  # pragma: no cover - never served
+        return None
+
+    route = router.routes[0]
+    assert isinstance(route, APIRoute)
+    return route
+
+
+def test_an_exclude_unset_route_reports_nothing_a_body_left_unset() -> None:
+    route = resolve_route("GET", "/api/health")
+    assert route.response_model_exclude_unset, "non-vacuity: /health is serialized with exclude_unset"
+    model = response_model_for(route, 200)
+    body = {"status": "ok", "mode": "live"}
+    assert omitted_keys(body, model, route, 200) == []
+    unflagged = omitted_keys(body, model, _synthetic_route(model), 200)
+    assert "dependencies" in unflagged, "control: the same body on an unflagged route omits keys"
+
+
+class _Labels(BaseModel):
+    labels: dict[str, str]
+
+
+def test_a_dict_field_with_arbitrary_keys_omits_nothing() -> None:
+    route = _synthetic_route(_Labels)
+    assert omitted_keys({"labels": {"a": "1", "any-new-key": "2"}}, _Labels, route, 200) == []
+    assert omitted_keys({"labels": {}}, _Labels, route, 200) == []
+
+
+def test_an_excluded_field_is_never_reported(samples: list[dict[str, Any]]) -> None:
+    from backend.schemas.lead import LeadSummary
+
+    assert LeadSummary.model_fields["row_refreshed_at"].exclude is True, "non-vacuity: the field is exclude=True"
+    leads = next(sample for sample in samples if sample["source"] == "registry:GET /api/leads")
+    row = {key: value for key, value in leads["body"][0].items() if key != "row_refreshed_at"}
+    route = resolve_route("GET", "/api/leads")
+    omitted = omitted_keys([row], response_model_for(route, 200), route, 200)
+    assert omitted, "non-vacuity: the served row omits other keys"
+    assert not any(path.endswith("row_refreshed_at") for path in omitted)
 
 
 def test_a_route_without_a_response_model_fails_closed() -> None:

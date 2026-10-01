@@ -14,92 +14,37 @@ import re
 from datetime import UTC
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 
-from backend.schemas._validators_tenant import normalize_public_lender_ref
-from backend.schemas.common import validate_internal_staff_email
-from backend.schemas.genie_geo_filters import GENIE_CITY_FILTER_KEY
-from backend.schemas.lead import SEGMENT_CODE_VALUES, LeadSummary
+from backend.schemas.lead import LeadSummary
+from backend.schemas.lead_facets import (
+    LeadCountResponse,
+    LeadFacetBucket,
+    LeadFacetDimension,
+    LeadFacetsResponse,
+)
 from backend.schemas.lead_query import (
     DEFAULT_LEAD_LIMIT,
     MAX_LEAD_LIMIT,
-    AgedDaysParam,
-    ApprovalStatusParam,
-    AssignedToParam,
-    BorrowerIdsParam,
-    CitiesParam,
-    CohortIdParam,
-    ConsentStatusParam,
-    CountiesParam,
-    CountyParam,
-    FunnelStageParam,
-    GeographyParam,
-    IncludeIdentityProofParam,
-    IncludeSuppressedForAnalyticsParam,
-    LenderRelationshipParam,
-    LienStatusParam,
-    LimitParam,
-    LoanProductParam,
-    MarketingEligibilityParam,
-    MinEquityPctLabelParam,
-    MinEquityPctParam,
-    OccupancyParam,
-    OriginationChannelParam,
-    OutreachStatusParam,
-    OwnerLinkParam,
-    ProductParam,
-    PurchaseIntentParam,
-    RecencyParam,
-    SegmentCodesParam,
-    SegmentModeParam,
-    StateParam,
-    StatesParam,
-    TargetLenderRefParam,
-    ZipParam,
-    ZipsParam,
+    LeadLimitDep,
+    LeadQueryParams,
+    LeadQueryParamsDep,
 )
-from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.audit_store import AuditStore, get_audit_store
 from backend.services.lakebase import LakebaseError
-from backend.services.lead_cohort_replay import (
-    cohort_portfolio_criteria,
-    resolve_cohort_replay,
-)
-from backend.services.lead_query_helpers import (
-    apply_cohort_equity_floor as _apply_cohort_equity_floor,
-)
-from backend.services.lead_query_helpers import (
-    parse_borrower_ids as _parse_borrower_ids,
-)
-from backend.services.lead_query_helpers import (
-    parse_city_states as _parse_city_states,
-)
-from backend.services.lead_query_helpers import (
-    parse_csv_filter as _parse_csv_filter,
-)
-from backend.services.lead_query_helpers import (
-    parse_segment_codes as _parse_segment_codes,
-)
-from backend.services.lead_query_helpers import (
-    parse_segment_mode as _parse_segment_mode,
-)
-from backend.services.lead_query_helpers import (
-    portfolio_criteria_from_query as _portfolio_criteria_from_query,
-)
-from backend.services.lead_query_helpers import (
-    requires_marketing_override_admin as _requires_marketing_override_admin,
+from backend.services.lead_query_resolution import (
+    resolve_lead_query,
+    view_leads_audit_payload,
+    without_facet_dimension,
 )
 from backend.services.observability import emit
-from backend.services.rbac import require_admin
 from backend.services.repositories import LeadRepository, get_lead_repository
 from backend.services.repositories.databricks_lead_cohorts import (
-    GrowthAgentHandoffInvalid,
-    GrowthAgentHandoffProof,
     GrowthAgentHandoffStale,
-    LeadCohortFilters,
-    normalise_lead_queue_handoff_filters,
     validate_growth_agent_handoff_identity,
-    verify_growth_agent_handoff,
 )
+from backend.services.repositories.factory import get_lead_facet_repository
+from backend.services.repositories.protocols import LeadFacetRepository
 from backend.services.sales_state import (
     SalesStateStore,
     get_sales_state_store,
@@ -115,21 +60,27 @@ router = APIRouter(tags=["leads"])
 # tests) have always read them from here.
 __all__ = ["DEFAULT_LEAD_LIMIT", "MAX_LEAD_LIMIT", "router"]
 
-_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
-_ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
-    {
-        "addressable",
-        "in_the_money",
-        "high_opportunity",
-        "offer_recommended",
-        "approved",
-        "actioned",
-    }
-)
-
 RepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 StoreDep = Annotated[AuditStore, Depends(get_audit_store)]
 SalesStateDep = Annotated[SalesStateStore, Depends(get_sales_state_store)]
+FacetRepoDep = Annotated[LeadFacetRepository, Depends(get_lead_facet_repository)]
+FacetDimensionParam = Annotated[
+    LeadFacetDimension,
+    Query(description="The filter menu to count: state, segment, product or approval."),
+]
+
+IDENTITY_PROOF_LIST_ONLY_DETAIL = "include_identity_proof applies to GET /leads only"
+# A count or facet over named borrowers reads their attributes without the
+# VIEW_LEADS row the ranked list writes: a per-borrower read must be the
+# audited list, so the audit-free aggregates refuse a borrower list.
+BORROWER_LIST_LIST_ONLY_DETAIL = "borrower_ids applies to GET /leads only: a read of named borrowers is audited"
+
+
+def _refuse_list_only_params(params: LeadQueryParams) -> None:
+    if params.include_identity_proof:
+        raise HTTPException(status_code=422, detail=IDENTITY_PROOF_LIST_ONLY_DETAIL)
+    if params.borrower_ids and params.borrower_ids.strip():
+        raise HTTPException(status_code=422, detail=BORROWER_LIST_LIST_ONLY_DETAIL)
 
 
 def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
@@ -183,306 +134,26 @@ def list_leads(
     repo: RepoDep,
     audit: StoreDep,
     sales_state: SalesStateDep,
-    segment: str | None = None,
-    segment_codes: SegmentCodesParam = None,
-    segment_mode: SegmentModeParam = "any",
-    portfolio_id: str | None = None,
-    state: StateParam = None,
-    zip_code: ZipParam = None,
-    county: CountyParam = None,
-    states: StatesParam = None,
-    zips: ZipsParam = None,
-    counties: CountiesParam = None,
-    cities: CitiesParam = None,
-    borrower_ids: BorrowerIdsParam = None,
-    target_lender_ref: TargetLenderRefParam = None,
-    geography: GeographyParam = None,
-    occupancy: OccupancyParam = None,
-    lien_status: LienStatusParam = None,
-    lender_relationship: LenderRelationshipParam = None,
-    product: ProductParam = None,
-    loan_product: LoanProductParam = None,
-    origination_channel: OriginationChannelParam = None,
-    min_equity_pct_label: MinEquityPctLabelParam = None,
-    min_equity_pct: MinEquityPctParam = None,
-    owner_link: OwnerLinkParam = None,
-    purchase_intent: PurchaseIntentParam = None,
-    marketing_eligibility: MarketingEligibilityParam = "Eligible only",
-    consent_status: ConsentStatusParam = None,
-    recency: RecencyParam = None,
-    include_suppressed_for_analytics: IncludeSuppressedForAnalyticsParam = False,
-    include_identity_proof: IncludeIdentityProofParam = False,
-    approval_status: ApprovalStatusParam = "any",
-    outreach_status: OutreachStatusParam = "any",
-    assigned_to: AssignedToParam = None,
-    aged_days: AgedDaysParam = None,
-    cohort_id: CohortIdParam = None,
-    funnel_stage: FunnelStageParam = None,
-    limit: LimitParam = DEFAULT_LEAD_LIMIT,
+    params: LeadQueryParamsDep,
+    limit: LeadLimitDep,
 ) -> list[LeadSummary]:
-    # 2026-05-04 FIX β: plumb optional state/zip filters through to the
-    # repo. The repo's geo-filtered path bypasses lead_population (which
-    # has score >= 50 baked in) and queries borrower_360, so the returned
-    # rows match the addressable counts the map tooltips report. Without
-    # this, the previous behaviour returned the national top-N from
-    # lead_population and the FE filtered client-side, producing 0 rows
-    # for ZIPs whose borrowers didn't make the national top 500.
-    if segment:
-        segment = segment.strip().lower()
-        if segment not in _ALLOWED_SEGMENT_CODES:
-            raise HTTPException(status_code=422, detail="segment contains an unknown segment")
-    handoff_values = request.query_params.getlist("growth_handoff")
-    if len(handoff_values) > 1:
-        raise HTTPException(status_code=422, detail="Growth Agent handoff proof is invalid")
-    growth_handoff = handoff_values[0].strip() if handoff_values else None
-    if growth_handoff and len(growth_handoff) > 4096:
-        raise HTTPException(status_code=422, detail="Growth Agent handoff proof is invalid")
-    effective_marketing_eligibility = marketing_eligibility
-    if include_suppressed_for_analytics:
-        effective_marketing_eligibility = None
-
-    if funnel_stage and funnel_stage not in _ALLOWED_FUNNEL_STAGES:
-        raise HTTPException(status_code=422, detail="funnel_stage contains an unknown stage")
-
-    if growth_handoff and cohort_id:
-        raise HTTPException(
-            status_code=422,
-            detail="Growth Agent handoff cannot be combined with a persisted cohort",
-        )
-    if not growth_handoff and _requires_marketing_override_admin(
-        marketing_eligibility=effective_marketing_eligibility,
-        consent_status=consent_status,
-        include_suppressed_for_analytics=include_suppressed_for_analytics,
-    ):
-        require_admin(request)
-    if include_identity_proof and not growth_handoff:
-        require_admin(request)
-    actor = resolve_actor(request)
-    parsed_segments = _parse_segment_codes(segment_codes)
-    parsed_states = _parse_csv_filter(states, width=2, label="states")
-    parsed_zips = _parse_csv_filter(zips, width=5, label="zips", numeric=True)
-    parsed_counties = _parse_csv_filter(counties, width=5, label="counties", numeric=True)
-    # Pairs, not a CSV of names: `parse_csv_filter`'s isalpha()/width check
-    # rejects every multi-word city and every `CITY~ST` token.
-    parsed_cities = _parse_city_states(cities)
-    parsed_borrower_ids = _parse_borrower_ids(borrower_ids)
-    if growth_handoff and (assigned_to or parsed_borrower_ids):
-        raise HTTPException(
-            status_code=422,
-            detail="Growth Agent handoff cannot contain borrower or assignee filters",
-        )
-    assignment_filter_ids: list[str] | None = None
-    if assigned_to:
-        try:
-            assigned_to = validate_internal_staff_email(assigned_to)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="assigned_to must be an internal staff email") from exc
-        try:
-            sales_state.require_visible_assignee(actor=actor, assigned_to_email=assigned_to)
-            assignment_filter_ids = sales_state.borrower_ids_for_assignee(assigned_to)
-        except LakebaseError as exc:
-            raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
-        except KeyError as exc:
-            raise HTTPException(status_code=422, detail="assigned_to must be an active loan officer") from exc
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail="assigned_to is outside the actor scope") from exc
-        if parsed_borrower_ids:
-            allowed = set(assignment_filter_ids)
-            parsed_borrower_ids = [bid for bid in parsed_borrower_ids if bid in allowed]
-        else:
-            parsed_borrower_ids = assignment_filter_ids
-        if parsed_borrower_ids == []:
-            response.headers["X-Total-Matching"] = "0"
-            response.headers["X-Returned-Rows"] = "0"
-            return []
-    cohort_filters: dict[str, object] = {}
-
-    cohort_has_replay_filter = False
-    cohort_stated_count: int | None = None
-    cohort_unreplayable: list[str] = []
-    # Reviewed numeric floors carried by a governed Genie cohort. Without them
-    # a score-narrowed answer of 32 replayed as 1,766 (live 2026-08-11).
-    cohort_narrowing_floors: tuple[bool, ...] = ()
-    cohort_min_opportunity_score: int | None = None
-    cohort_min_rate_spread_bps: int | None = None
-    cohort_min_equity_pct: int | None = None
-    segment_mode = _parse_segment_mode(segment_mode)
-
-    if cohort_id:
-        # Cohort id is the governed source of truth. Query params are
-        # useful for shareable URLs and visual chips, but they must not
-        # widen a confirmed Genie cohort if the URL is edited by hand.
-        replay = resolve_cohort_replay(cohort_id, actor=actor)
-        cohort_filters = replay.filters
-        cohort_stated_count = replay.stated_count
-        cohort_unreplayable = replay.header_unreplayable_filters
-        cohort_narrowing_floors = replay.narrowing_floors
-        cohort_min_opportunity_score = replay.min_opportunity_score
-        cohort_min_rate_spread_bps = replay.min_rate_spread_bps
-        cohort_min_equity_pct = replay.min_equity_pct
-        segment = None
-        state = None
-        zip_code = None
-        portfolio_id = None
-        geography = None
-        occupancy = None
-        lien_status = None
-        lender_relationship = None
-        product = None
-        min_equity_pct_label = None
-        min_equity_pct = None
-        owner_link = None
-        purchase_intent = None
-        marketing_eligibility = "Eligible only"
-        consent_status = None
-        recency = None
-        approval_status = "any"
-        outreach_status = "any"
-        assigned_to = None
-        aged_days = None
-        county = replay.county_fips
-        target_lender_ref = replay.target_lender_ref
-        segment_mode = replay.segment_mode
-        parsed_segments = replay.segment_codes
-        parsed_states = replay.state_codes
-        parsed_zips = replay.zip_codes
-        parsed_counties = replay.county_fipses
-        parsed_cities = replay.city_states
-        parsed_borrower_ids = replay.borrower_ids
-    try:
-        target_lender_ref = normalize_public_lender_ref(target_lender_ref, allow_all=True)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail="target_lender_ref must be the configured tenant lender, a public-safe Competitor alias, or All",
-        ) from exc
-    if target_lender_ref == "All":
-        target_lender_ref = None
-
-    if cohort_id:
-        portfolio_criteria, cohort_has_replay_filter = cohort_portfolio_criteria(
-            cohort_filters,
-            has_replay_filter=any(
-                (
-                    parsed_states,
-                    parsed_zips,
-                    parsed_counties,
-                    parsed_cities,
-                    parsed_borrower_ids,
-                    county,
-                    parsed_segments,
-                    target_lender_ref,
-                    # Only floors that compile to a predicate count -- see
-                    # CohortReplay.narrowing_floors for why a zero score or
-                    # equity floor must not open the whole book.
-                    *cohort_narrowing_floors,
-                )
-            ),
-        )
-    else:
-        try:
-            portfolio_criteria = _portfolio_criteria_from_query(
-                geography=geography,
-                occupancy=occupancy,
-                lien_status=lien_status,
-                lender_relationship=lender_relationship,
-                product=product,
-                target_lender_ref=target_lender_ref,
-                loan_product=loan_product,
-                origination_channel=origination_channel,
-                min_equity_pct_label=min_equity_pct_label,
-                min_equity_pct=min_equity_pct,
-                owner_link=owner_link,
-                purchase_intent=purchase_intent,
-                marketing_eligibility=effective_marketing_eligibility,
-                consent_status=consent_status,
-                recency=recency,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    if cohort_id and portfolio_criteria is not None:
-        # The equity floor rides the reviewed Portfolio vocabulary, which
-        # already compiles `equity_pct >= :equity_floor`.
-        portfolio_criteria = _apply_cohort_equity_floor(portfolio_criteria, cohort_min_equity_pct)
-
-    repo_kwargs: dict[str, object] = {}
-    if portfolio_criteria is not None:
-        repo_kwargs["portfolio_criteria"] = portfolio_criteria
-    if parsed_counties:
-        repo_kwargs["county_fipses"] = parsed_counties
-    # Only pass the floors when a governed cohort set them: repositories and
-    # test doubles that predate this contract keep their existing signature.
-    if cohort_min_opportunity_score is not None:
-        repo_kwargs["min_opportunity_score"] = cohort_min_opportunity_score
-    if cohort_min_rate_spread_bps is not None:
-        repo_kwargs["min_rate_spread_bps"] = cohort_min_rate_spread_bps
-
-    if cohort_id and not cohort_has_replay_filter:
-        raise HTTPException(
-            status_code=422,
-            detail="cohort has no replayable lead filters",
-        )
-
-    repository_args: dict[str, object] = {
-        "segment": segment,
-        "portfolio_id": portfolio_id,
-        "state": state,
-        "zip_code": zip_code,
-        "county_fips": county,
-        "state_codes": parsed_states,
-        "zip_codes": parsed_zips,
-        "city_states": parsed_cities,
-        "borrower_ids": parsed_borrower_ids,
-        "segment_codes": parsed_segments,
-        "segment_mode": segment_mode,
-        "target_lender_ref": target_lender_ref,
-        "cohort_id": cohort_id,
-        "funnel_stage": funnel_stage,
-        "approval_status": None if approval_status == "any" else approval_status,
-        "outreach_status": None if outreach_status == "any" else outreach_status,
-        "aged_days": aged_days,
-        **repo_kwargs,
-    }
-    handoff_proof: GrowthAgentHandoffProof | None = None
-    normalized_handoff_filters: dict[str, object] | None = None
-    if growth_handoff:
-        try:
-            normalized_handoff_filters = normalise_lead_queue_handoff_filters(
-                LeadCohortFilters(
-                    segment=segment,
-                    state=state,
-                    zip_code=zip_code,
-                    county_fips=county,
-                    county_fipses=parsed_counties,
-                    state_codes=parsed_states,
-                    zip_codes=parsed_zips,
-                    city_states=parsed_cities,
-                    borrower_ids=parsed_borrower_ids,
-                    segment_codes=parsed_segments,
-                    segment_mode=segment_mode,
-                    target_lender_ref=target_lender_ref,
-                    funnel_stage=funnel_stage,
-                    portfolio_criteria=portfolio_criteria,
-                    approval_status=None if approval_status == "any" else approval_status,
-                    outreach_status=None if outreach_status == "any" else outreach_status,
-                    aged_days=aged_days,
-                )
-            )
-            handoff_proof = verify_growth_agent_handoff(
-                growth_handoff,
-                actor=actor,
-                normalized_filters=normalized_handoff_filters,
-            )
-        except GrowthAgentHandoffStale as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except (GrowthAgentHandoffInvalid, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="Growth Agent handoff verification is unavailable",
-            ) from exc
+    resolved = resolve_lead_query(
+        request,
+        sales_state,
+        params,
+        growth_handoff=request.query_params.getlist("growth_handoff"),
+    )
+    if resolved.assignment_empty:
+        response.headers["X-Total-Matching"] = "0"
+        response.headers["X-Returned-Rows"] = "0"
+        return []
+    actor = resolved.actor
+    repository_args = resolved.repository_args
+    handoff_proof = resolved.handoff_proof
+    include_identity_proof = resolved.include_identity_proof
+    cohort_id = resolved.cohort_id
+    cohort_stated_count = resolved.cohort_stated_count
+    cohort_unreplayable = resolved.cohort_unreplayable
     identity: dict[str, str | int] | None = None
     if include_identity_proof or handoff_proof is not None:
         list_with_identity = getattr(repo, "list_with_identity", None)
@@ -561,62 +232,9 @@ def list_leads(
     # conservative signal ("capped at") and the UI phrases it that way.
     if len(leads) >= limit:
         response.headers["X-Truncated-At"] = str(limit)
-    audit_payload: dict[str, object] = {
-        "rendered_borrower_ids": [lead.borrower_id for lead in leads],
-        "portfolio_id": portfolio_id,
-        "segment": segment,
-        "limit": limit,
-    }
-    if parsed_segments:
-        audit_payload["segment_codes"] = parsed_segments
-        audit_payload["segment_mode"] = segment_mode
-    if state:
-        audit_payload["state"] = state.upper()
-    if zip_code:
-        audit_payload["zip"] = zip_code
-    if county:
-        audit_payload["county"] = county
-    if parsed_states:
-        audit_payload["states"] = parsed_states
-    if parsed_zips:
-        audit_payload["zips"] = parsed_zips
-    if parsed_cities:
-        audit_payload[GENIE_CITY_FILTER_KEY] = parsed_cities
-    if parsed_counties:
-        audit_payload["counties"] = parsed_counties
-    if parsed_borrower_ids:
-        audit_payload["borrower_ids"] = parsed_borrower_ids
-    if target_lender_ref:
-        audit_payload["target_lender_ref"] = target_lender_ref
-    if cohort_id:
-        audit_payload["cohort_id"] = cohort_id
-    if cohort_min_opportunity_score is not None:
-        audit_payload["min_opportunity_score"] = cohort_min_opportunity_score
-    if cohort_min_rate_spread_bps is not None:
-        audit_payload["min_rate_spread_bps"] = cohort_min_rate_spread_bps
-    if handoff_proof is not None:
-        audit_payload.update(
-            {
-                "growth_agent_run_id": handoff_proof.run_id,
-                "growth_agent_filters_fingerprint": handoff_proof.filters_fingerprint,
-                "growth_agent_cohort_fingerprint": handoff_proof.cohort_fingerprint,
-                "growth_agent_source_snapshot": handoff_proof.source_snapshot,
-                "tool_result_hash": handoff_proof.tool_result_hash,
-            }
-        )
-    if funnel_stage:
-        audit_payload["funnel_stage"] = funnel_stage
-    if approval_status != "any":
-        audit_payload["approval_status"] = approval_status
-    if outreach_status != "any":
-        audit_payload["outreach_status"] = outreach_status
-    if assigned_to:
-        audit_payload["assigned_to_email"] = assigned_to
-    if aged_days is not None:
-        audit_payload["aged_days"] = aged_days
-    portfolio_payload = portfolio_criteria.model_dump(exclude_none=True) if portfolio_criteria else {}
-    if portfolio_payload:
-        audit_payload["portfolio_criteria"] = portfolio_payload
+    audit_payload = view_leads_audit_payload(resolved, leads, limit=limit)
+    segment = resolved.segment
+    parsed_segments = resolved.segment_codes
     background.add_task(
         _safe_audit_write,
         audit,
@@ -629,3 +247,54 @@ def list_leads(
         subject_segment=segment or (",".join(parsed_segments) if parsed_segments else None),
     )
     return leads
+
+
+@router.get("/leads/count", response_model=LeadCountResponse)
+def count_leads(
+    request: Request,
+    repo: RepoDep,
+    sales_state: SalesStateDep,
+    params: LeadQueryParamsDep,
+) -> LeadCountResponse:
+    """Audit-free total for the Lead Queue filters (wow-power-6, wow-power-2).
+
+    The same authorization preamble, filters, "Eligible only" default and
+    short-TTL repository cache as the ranked list's X-Total-Matching. No
+    borrower is shown, so no VIEW_LEADS row is written and the audit store is
+    never resolved. A Growth Agent handoff binds ranked rows, so it is never
+    read here.
+    """
+
+    _refuse_list_only_params(params)
+    resolved = resolve_lead_query(request, sales_state, params, growth_handoff=None)
+    if resolved.assignment_empty:
+        return LeadCountResponse(total_matching=0)
+    return LeadCountResponse(total_matching=int(repo.count(**resolved.repository_args)))
+
+
+@router.get("/leads/facets", response_model=LeadFacetsResponse)
+def lead_facets(
+    request: Request,
+    facets: FacetRepoDep,
+    sales_state: SalesStateDep,
+    dimension: FacetDimensionParam,
+    params: LeadQueryParamsDep,
+) -> LeadFacetsResponse:
+    """Audit-free option counts for one Lead Queue filter menu (tables-06).
+
+    The dimension's own filter is dropped, every other filter resolves
+    exactly as the ranked list resolves it, and the buckets are closed
+    vocabularies. Fetched only when a user opens that menu.
+    """
+
+    _refuse_list_only_params(params)
+    params = without_facet_dimension(params, dimension)
+    resolved = resolve_lead_query(request, sales_state, params, growth_handoff=None)
+    if resolved.assignment_empty:
+        return LeadFacetsResponse(dimension=dimension, total_matching=0, buckets=[])
+    counts = facets.facets(dimension, **resolved.repository_args)
+    return LeadFacetsResponse(
+        dimension=dimension,
+        total_matching=counts.total_matching,
+        buckets=[LeadFacetBucket(value=value, count=count) for value, count in counts.buckets],
+    )

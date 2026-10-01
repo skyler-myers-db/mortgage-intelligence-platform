@@ -22,11 +22,6 @@ REPO = Path(__file__).resolve().parents[2]
             "daily_refi_brief",
         ),
         (
-            "frontend/tests/e2e/growth_agent_live.spec.ts",
-            "Find prime refinance opportunities for a branch manager monitor.",
-            "daily_refi_brief",
-        ),
-        (
             "frontend/src/routes/ask-genie.growth-agent.saved-watchlists.test.tsx",
             "Find refinance opportunities for branch follow-up.",
             "daily_refi_brief",

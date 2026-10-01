@@ -1,8 +1,10 @@
 /**
  * @vitest-environment happy-dom
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { GenieAnswer as GenieAnswerShape } from '../types';
+import { ACTOR_A, ACTOR_B } from '../test/actorKeys';
+import { NOBODY, _resetActorScopeForTests, observeActor } from './actorScope';
 import { buildPinFromAnswer } from './genieAnswerText';
 import {
   PINNED_INSIGHTS_KEY,
@@ -10,7 +12,20 @@ import {
   isTrustedGenieSource,
   pinInsight,
   unpinInsight,
+  usePinnedInsights,
 } from './pinnedInsights';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createElement } from 'react';
+
+function PinIds() {
+  return usePinnedInsights().pins.map((pin) => pin.id).join(',');
+}
+
+/** The pin ids a consumer of the store renders (its current snapshot). */
+function pinnedSnapshot(): Array<{ id: string }> {
+  const ids = renderToStaticMarkup(createElement(PinIds));
+  return ids ? ids.split(',').map((id) => ({ id })) : [];
+}
 
 function answer(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   return {
@@ -95,10 +110,55 @@ describe('pinned insights store', () => {
     expect(stored.map((p) => p.id)).toEqual(['h9', 'h8', 'h7', 'h6', 'h5', 'h4']);
   });
 
-  it('clearPinnedInsights empties the store (actor-change reset)', () => {
+  it('clearPinnedInsights removes the stored list', () => {
     pinInsight(buildPinFromAnswer(answer(), 's', 'Q'));
     clearPinnedInsights();
-    expect(JSON.parse(window.localStorage.getItem(PINNED_INSIGHTS_KEY)!)).toHaveLength(0);
+    expect(window.localStorage.getItem(PINNED_INSIGHTS_KEY)).toBeNull();
+    expect(pinnedSnapshot()).toEqual([]);
+  });
+});
+
+/**
+ * The store reads and writes only through the actor gate (lib/actorScope):
+ * nothing before the actor is known, and a pin made meanwhile is an UPDATER
+ * replayed over what the gate kept.
+ */
+describe('pinned insights behind the actor gate', () => {
+  const p1 = { id: 'p1', question: 'Q1', summary: 's1', source: null, pinnedAt: '2026-09-30T00:00:00Z' };
+  const p2 = { id: 'p2', question: 'Q2', summary: 's2', source: null, pinnedAt: '2026-09-30T00:01:00Z' };
+
+  beforeEach(() => {
+    installLocalStorage();
+  });
+
+  afterEach(() => {
+    _resetActorScopeForTests({ status: 'open', owner: NOBODY });
+  });
+
+  function pendingWithP1(): void {
+    _resetActorScopeForTests({ status: 'pending', owner: ACTOR_A });
+    window.localStorage.setItem(PINNED_INSIGHTS_KEY, JSON.stringify([p1]));
+  }
+
+  it('renders nothing from storage before the first trusted observation', () => {
+    pendingWithP1();
+    expect(pinnedSnapshot()).toEqual([]);
+    observeActor({ key: ACTOR_A });
+    expect(pinnedSnapshot().map((p) => p.id)).toEqual(['p1']);
+  });
+
+  it('a pin made while pending lands as [p2, p1] for the same actor', () => {
+    pendingWithP1();
+    pinInsight(p2);
+    observeActor({ key: ACTOR_A });
+    expect(pinnedSnapshot().map((p) => p.id)).toEqual(['p2', 'p1']);
+  });
+
+  it('and as [p2] for a new one: the previous actor pins are removed, never adopted', () => {
+    pendingWithP1();
+    pinInsight(p2);
+    observeActor({ key: ACTOR_B });
+    expect(pinnedSnapshot().map((p) => p.id)).toEqual(['p2']);
   });
 });
 

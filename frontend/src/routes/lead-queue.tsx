@@ -24,6 +24,7 @@ import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
+import { buildPortfolioBuilderUrlFromQueue } from './lead-queue.handoff';
 import { copyLink } from '../lib/copyLink';
 import {
   hasLeadQueueFilters,
@@ -157,6 +158,10 @@ export default function LeadQueue() {
   const targetLenderRef = parseTargetLenderRef(searchParams.get('target_lender_ref'), targetLenderOptions);
   const portfolioCriteria = useMemo(
     () => parsePortfolioCriteria(searchParams, targetLenderOptions),
+    [searchParams, targetLenderOptions],
+  );
+  const campaignHandoff = useMemo(
+    () => buildPortfolioBuilderUrlFromQueue(searchParams, targetLenderOptions),
     [searchParams, targetLenderOptions],
   );
   const cohortId = (searchParams.get('cohort_id') ?? '').trim() || undefined;
@@ -765,6 +770,7 @@ export default function LeadQueue() {
                   fillHeight
                   restoreScroll
                   headerStatus={freshness}
+                  campaignHandoff={campaignHandoff}
                   // A sort (and Reset to rank) is a new history entry; expand and
                   // collapse replace the current one, so Back leaves the queue.
                   sort={place.sort}

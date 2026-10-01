@@ -35,8 +35,22 @@ vi.mock('../components/AppContext', () => ({
   useApp: () => ({ canAccessAdmin: false }),
 }));
 
+// The leads query keys the route asked for (the request object rides at [3]).
+const leadsKeys = vi.hoisted(() => [] as unknown[][]);
+const copied = vi.hoisted(() => [] as string[]);
+
 vi.mock('../lib/useWarmingUpRetry', () => ({
-  useWarmingUpRetry: () => retryState,
+  useWarmingUpRetry: (_fetcher: unknown, options: { queryKey: unknown[] }) => {
+    leadsKeys.push(options.queryKey);
+    return retryState;
+  },
+}));
+
+vi.mock('../lib/copyLink', () => ({
+  copyLink: (url: string) => {
+    copied.push(url);
+    return Promise.resolve(true);
+  },
 }));
 
 vi.mock('../lib/configOptionsQuery', () => {
@@ -79,6 +93,8 @@ vi.mock('../lib/api', () => ({
 }));
 
 import LeadQueue from './lead-queue';
+import { leadQueueShareParams } from './lead-queue.filters';
+import { leadQueueFilterInputFromSearchParams, leadsRequestFromSearchParams } from './lead-queue.request';
 
 function LocationProbe() {
   const location = useLocation();
@@ -244,5 +260,88 @@ describe('Lead Queue filter bar', () => {
   it('reads an unknown ?view= as the Default preset', async () => {
     await mountAt('/lead-queue?view=everything');
     expect(byTestId('lead-table')?.dataset.view).toBe('default');
+  });
+
+  it('shows one removable chip per bounded dimension and counts them in More filters', async () => {
+    await mountAt('/lead-queue?min_opportunity_score=70&max_opportunity_score=90&min_rate_spread_bps=-25');
+    const hero = byTestId('lead-queue-active-filters')!;
+    expect([...hero.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Remove SCORE: 70–90 filter',
+      'Remove RATE SPREAD: ≥ -25 bps filter',
+    ]);
+    expect(byTestId('lead-queue-more-filters')?.getAttribute('aria-label')).toBe('More filters (2 active)');
+    await act(async () => (hero.querySelector('button') as HTMLButtonElement).click());
+    expect(search()).toBe('?min_rate_spread_bps=-25');
+  });
+
+  it('renders the labelled range inputs at the foot of the More filters panel', async () => {
+    await mountAt('/lead-queue?max_rate_spread_bps=150');
+    const panel = document.querySelector('[role="group"][aria-label="More queue filters"]') as HTMLElement;
+    const inputs = [...panel.querySelectorAll<HTMLInputElement>('input[type="number"]')];
+    expect(inputs.map((input) => document.querySelector(`label[for="${input.id}"]`)?.textContent)).toEqual([
+      'Score at least', 'Score at most', 'Rate spread at least (bps)', 'Rate spread at most (bps)',
+    ]);
+    expect(inputs.map((input) => input.value)).toEqual(['', '', '', '150']);
+    expect(inputs.every((input) => input.className === 'form-input' && input.inputMode === 'numeric')).toBe(true);
+  });
+});
+
+/**
+ * Parity (W5a): lead-queue.request.ts must derive exactly what the route
+ * derives inline, or the facet counts and the saved views would describe a
+ * different queue. For each URL: the request object the route keys its
+ * leads query on, and the Copy-link URL it copies.
+ */
+describe('Lead Queue request and share parity with lead-queue.request.ts', () => {
+  const REFS = ['All', 'Competitor B'];
+  const BATTERY = [
+    '/lead-queue',
+    '/lead-queue?state=il&segment_codes=itm,equity&segment_mode=all',
+    '/lead-queue?segment=listed&states=IL,TX&zip=60617&zips=60617,75217&cities=CHICAGO~IL&county=17031&counties=17031',
+    '/lead-queue?borrower_ids=B-0123456789ABC,B-0123456789ABD&funnel_stage=high_opportunity',
+    '/lead-queue?target_lender_ref=Competitor+B&occupancy=Owner-occupied&product=HELOC&loan_product=jumbo',
+    '/lead-queue?min_opportunity_score=70&max_opportunity_score=90&min_rate_spread_bps=-25&max_rate_spread_bps=150',
+    '/lead-queue?min_opportunity_score=91&max_opportunity_score=90&marketing_eligibility=Any',
+    '/lead-queue?approval_status=pending&outreach_status=none&assigned_to=me&aged_days=7',
+    '/lead-queue?assigned_to=lo.one%40summit.example&approval_status=approved',
+    '/lead-queue?cohort_id=11111111-1111-1111-1111-111111111111&min_opportunity_score=70',
+    '/lead-queue?sort=score&dir=asc&view=sales-ops&row=B-0123456789ABC&campaign_id=c1&variant_name=A&utm=x',
+  ];
+  let root: Root;
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    leadsKeys.length = 0;
+    copied.length = 0;
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    queryClient.clear();
+    document.body.innerHTML = '';
+  });
+
+  it.each(BATTERY)('%s', async (url) => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={[url]}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    const sp = new URL(url, 'http://queue.test').searchParams;
+    const key = leadsKeys[leadsKeys.length - 1];
+    expect(key?.slice(0, 3)).toEqual(['mip', 'leads', 'lead-queue']);
+    expect(key?.[3]).toEqual(leadsRequestFromSearchParams(sp, REFS, undefined));
+
+    await act(async () => byTestId<HTMLButtonElement>('lead-queue-copy-link')!.click());
+    const share = leadQueueShareParams(sp, leadQueueFilterInputFromSearchParams(sp, REFS));
+    expect(copied).toHaveLength(1);
+    expect(new URL(copied[0]).search).toBe(share.search);
   });
 });

@@ -491,44 +491,57 @@ def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     cleaned = dict(metadata)
     for key in _FREE_TEXT_METADATA_KEYS:
         if key in cleaned and cleaned[key] is not None:
-            cleaned[key] = scrub_free_text(str(cleaned[key]))
-            clean_text = str(cleaned[key])
-            if contains_protected_class_marketing_text(clean_text):
-                raise AuditMetadataValueViolation(
-                    key,
-                    "must not contain protected-class targeting language",
-                )
-            if contains_unsupported_borrower_qualification_claim(clean_text):
-                raise AuditMetadataValueViolation(
-                    key,
-                    "must not contain unsupported borrower-facing claims",
-                )
-            if (
-                contains_borrower_copy_contextual_name(clean_text)
-                or (
-                    key == "notes"
-                    and (
-                        contains_human_name_shape(clean_text)
-                        or any(
-                            hit.group(0).startswith(("[", "{"))
-                            for hit in _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.finditer(
-                                clean_text
-                            )
-                        )
+            cleaned[key] = validate_free_text_metadata_value(key, str(cleaned[key]))
+    return cleaned
+
+
+def validate_free_text_metadata_value(key: str, value: str) -> str:
+    """Scrub one free-text audit metadata value and apply its value policy.
+
+    The per-key body of ``_sanitize_metadata``'s free-text loop, public so a
+    router can refuse a value BEFORE any write (the outreach decision routes
+    answer 422 instead of failing inside the commit). Returns the scrubbed
+    text and raises ``AuditMetadataValueViolation`` exactly as the write
+    path does.
+    """
+
+    clean_text = scrub_free_text(value)
+    if contains_protected_class_marketing_text(clean_text):
+        raise AuditMetadataValueViolation(
+            key,
+            "must not contain protected-class targeting language",
+        )
+    if contains_unsupported_borrower_qualification_claim(clean_text):
+        raise AuditMetadataValueViolation(
+            key,
+            "must not contain unsupported borrower-facing claims",
+        )
+    if (
+        contains_borrower_copy_contextual_name(clean_text)
+        or (
+            key == "notes"
+            and (
+                contains_human_name_shape(clean_text)
+                or any(
+                    hit.group(0).startswith(("[", "{"))
+                    for hit in _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.finditer(
+                        clean_text
                     )
                 )
-                or (
-                    key not in _BORROWER_DRAFT_METADATA_KEYS
-                    and _AUDIT_HUMAN_IDENTITY_DIRECTIVE_RE.search(clean_text)
-                )
-            ):
-                raise AuditMetadataValueViolation(
-                    key,
-                    "must not contain human-name-shaped text or unresolved placeholders",
-                )
-            if contains_borrower_cta_contradiction(clean_text):
-                raise AuditMetadataValueViolation(
-                    key,
-                    "must not contain a contact action that contradicts consent or response handling",
-                )
-    return cleaned
+            )
+        )
+        or (
+            key not in _BORROWER_DRAFT_METADATA_KEYS
+            and _AUDIT_HUMAN_IDENTITY_DIRECTIVE_RE.search(clean_text)
+        )
+    ):
+        raise AuditMetadataValueViolation(
+            key,
+            "must not contain human-name-shaped text or unresolved placeholders",
+        )
+    if contains_borrower_cta_contradiction(clean_text):
+        raise AuditMetadataValueViolation(
+            key,
+            "must not contain a contact action that contradicts consent or response handling",
+        )
+    return clean_text

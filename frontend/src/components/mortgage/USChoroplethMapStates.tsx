@@ -19,14 +19,21 @@
  * cue (opacity 0.3) painted colours the legend never showed and hid states
  * that hold many borrowers of the selected segment.
  */
-import { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup } from '../../types';
 import type { MapScenarioView } from './rateScenario.logic';
-import { moveRovingFocus, showCardOnFocus, stateAriaLabel } from './USChoroplethMap.a11y';
+import {
+  MAP_UNIT_ATTR,
+  claimDrillFocus,
+  moveRovingFocus,
+  skippedStatesNote,
+  stateAriaLabel,
+} from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale, type MapClass } from './USChoroplethMap.scale';
-import type { HoverState, UsaSvgMap, UsaSvgMapLocation } from './USChoroplethMap.utils';
+import type { UsaSvgMap, UsaSvgMapLocation } from './USChoroplethMap.utils';
+import type { MapHoverStage } from './useMapHover';
 
 interface USChoroplethMapStatesProps {
   usaMap: UsaSvgMap;
@@ -41,9 +48,18 @@ interface USChoroplethMapStatesProps {
   footprintStates: Record<string, string>;
   /** Lowercase id of the selected state, if any. */
   selectedId: string | null;
-  setHover: Dispatch<SetStateAction<HoverState | null>>;
-  /** Click / Enter / Space on a state. `viaKeyboard` lets the drill move focus on. */
-  onActivate: (location: UsaSvgMapLocation, hasFacts: boolean, viaKeyboard: boolean) => void;
+  /** The map's delegated hover / focus card handlers (useMapHover), spread on the <svg>. */
+  hover: MapHoverStage;
+  /**
+   * A state to give focus back to (Escape out of its ZIP level, dataviz-10):
+   * it becomes the tab stop and takes focus once the paths are mounted,
+   * unless the user already moved focus elsewhere.
+   */
+  focusRequest?: string | null;
+  /** Called once the request has been answered. */
+  onFocusRequestDone?: () => void;
+  /** Click / Enter / Space on a populated state. `viaKeyboard` lets the drill move focus on. */
+  onActivate: (location: UsaSvgMapLocation, populated: boolean, viaKeyboard: boolean) => void;
 }
 
 interface StateView {
@@ -53,10 +69,9 @@ interface StateView {
   overlayUnit: GeoAssignmentOverlayUnit | undefined;
   cls: MapClass | null;
   inFootprint: boolean;
+  /** Borrowers in this selection (addressable > 0): never the fill value. */
+  populated: boolean;
 }
-
-const SOURCE_IN_SCOPE = 'mip.gold.funnel_snapshot_daily + mip.gold.state_top_segment';
-const SOURCE_OUT_OF_SCOPE = 'Outside Cotality evaluation scope';
 
 export function USChoroplethMapStates({
   usaMap,
@@ -66,7 +81,9 @@ export function USChoroplethMapStates({
   scenario = null,
   footprintStates,
   selectedId,
-  setHover,
+  hover,
+  focusRequest = null,
+  onFocusRequestDone,
   onActivate,
 }: USChoroplethMapStatesProps) {
   const loading = stateFacts === null;
@@ -87,61 +104,54 @@ export function USChoroplethMapStates({
           overlayUnit,
           cls: classify(scale, value),
           inFootprint: Boolean(footprintStates[location.id]),
+          populated: (rollup?.addressable ?? 0) > 0,
         };
       });
   }, [footprintStates, overlayByUnit, scale, scenario, stateFacts, usaMap.locations]);
 
   const [activeId, setActiveId] = useState<string | null>(null);
-  // The single tab stop: the last focused state, else the selected one, else
-  // the first populated state, else the first state.
-  const tabStopId =
-    (activeId && views.some((view) => view.location.id === activeId) ? activeId : null)
-    ?? (selectedId && views.some((view) => view.location.id === selectedId) ? selectedId : null)
-    ?? views.find((view) => view.rollup)?.location.id
-    ?? views[0]?.location.id
+  // The single tab stop, among populated states only (dataviz-10, WCAG
+  // 2.1.1): a requested return, else the last focused state, else the
+  // selected one, else the first populated state; none when nothing is.
+  const isStop = (id: string | null) => views.some((view) => view.populated && view.location.id === id);
+  const tabStopId = [focusRequest, activeId, selectedId].find(isStop)
+    ?? views.find((view) => view.populated)?.location.id
     ?? null;
+  // Drawn states with no borrowers in this selection: skipped by the keys,
+  // listed by the table view, and said so to assistive technology.
+  const skippedNoteId = useId();
+  const skipped = loading ? 0 : views.filter((view) => !view.populated).length;
 
-  const hoverFor = (view: StateView, x: number, y: number): HoverState => {
-    const { location, rollup, overlayUnit } = view;
-    return {
-      x,
-      y,
-      name: location.name,
-      count: rollup ? rollup.addressable : null,
-      avgScore: rollup ? rollup.avg_score : null,
-      topSegment: view.topSegment,
-      // In-footprint states surface the live rollup; out-of-footprint states
-      // an honest "outside the evaluation scope" card, so no hover is blank.
-      sourceHint: view.inFootprint ? SOURCE_IN_SCOPE : SOURCE_OUT_OF_SCOPE,
-      // Both gaps are disclosed on the tile before the click: `contactable`
-      // is the subset the Lead Queue behind this tile shows, `zipUnassigned`
-      // the subset the ZIP drill cannot show.
-      contactable: rollup?.contactable ?? null,
-      zipUnassigned: rollup?.zip_unassigned_count ?? null,
-      overlay: overlayUnit
-        ? {
-            leadCount: overlayUnit.lead_count,
-            assignedCount: overlayUnit.assigned_count,
-            unattendedCount: overlayUnit.unattended_count,
-            coveringOfficerCount: overlayUnit.covering_officer_count,
-            coveringOfficers: selectedId === location.id ? overlayUnit.covering_officers : undefined,
-          }
-        : undefined,
-    };
-  };
+  // One set of handlers on the <svg> (D-dataviz-geo-d1): the card follows
+  // the unit under the pointer or focus, and focusing a state makes it the
+  // roving tab stop.
+  const stageHandlers = hover.handlers('state', setActiveId);
+
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  useLayoutEffect(() => {
+    if (!focusRequest) return;
+    const target = [...(svgRef.current?.querySelectorAll<SVGPathElement>(`[${MAP_UNIT_ATTR}]`) ?? [])]
+      .find((path) => path.getAttribute(MAP_UNIT_ATTR) === focusRequest) ?? null;
+    claimDrillFocus(target);
+    onFocusRequestDone?.();
+  }, [focusRequest, onFocusRequestDone]);
 
   return (
+    <>
     <svg
+      ref={svgRef}
       viewBox={usaMap.viewBox}
       preserveAspectRatio="xMidYMid meet"
       className="map-svg-stage"
       role="group"
       aria-label="States: use the arrow keys to move between states"
+      aria-describedby={skipped > 0 ? skippedNoteId : undefined}
       // Escape (hide the card) is handled once, by the map's .map-levels.
       onKeyDown={moveRovingFocus}
+      {...stageHandlers}
     >
       {views.map((view) => {
-        const { location, rollup, cls } = view;
+        const { location, cls, populated } = view;
         const hasFill = !loading && cls !== null;
         const classes = [
           'map-region',
@@ -153,23 +163,27 @@ export function USChoroplethMapStates({
         ]
           .filter(Boolean)
           .join(' ');
-        const activate = (viaKeyboard: boolean) => onActivate(location, Boolean(rollup), viaKeyboard);
+        const activate = (viaKeyboard: boolean) => onActivate(location, populated, viaKeyboard);
         return (
           <path
             key={location.id}
             d={location.path}
             className={classes}
-            role="button"
-            tabIndex={location.id === tabStopId ? 0 : -1}
+            // deviation:map-escape-and-populated-roving: a state with no
+            // borrowers in this selection is an image, not a control; it
+            // keeps its name and its hover card.
+            role={populated ? 'button' : 'img'}
+            tabIndex={populated && location.id === tabStopId ? 0 : -1}
             data-map-unit={location.id}
+            data-populated={populated ? '' : undefined}
             data-map-class={hasFill ? cls : 0}
             data-target-size-exempt="geographic-shape"
             aria-label={stateAriaLabel(
               location.name,
-              rollup
+              view.rollup
                 ? {
-                    count: rollup.addressable,
-                    avgScore: rollup.avg_score,
+                    count: view.rollup.addressable,
+                    avgScore: view.rollup.avg_score,
                     topSegment: view.topSegment,
                     unattended: overlayByUnit ? view.overlayUnit?.unattended_count ?? null : undefined,
                   }
@@ -177,21 +191,13 @@ export function USChoroplethMapStates({
               loading ? 'loading' : 'ready',
               view.inFootprint,
             )}
-            aria-keyshortcuts="Enter"
-            onMouseEnter={(event) => setHover(hoverFor(view, event.clientX, event.clientY))}
-            onMouseMove={(event) => setHover((h) => (h ? { ...h, x: event.clientX, y: event.clientY } : h))}
-            onMouseLeave={() => setHover(null)}
-            onFocus={(event) => {
-              setActiveId(location.id);
-              showCardOnFocus(event.currentTarget, (anchor) => setHover(hoverFor(view, anchor.x, anchor.y)));
-            }}
-            onBlur={() => setHover(null)}
-            onClick={() => activate(false)}
-            onKeyDown={(event) => {
+            aria-keyshortcuts={populated ? 'Enter' : undefined}
+            onClick={populated ? () => activate(false) : undefined}
+            onKeyDown={populated ? (event) => {
               if (event.key !== 'Enter' && event.key !== ' ') return;
               event.preventDefault();
               activate(true);
-            }}
+            } : undefined}
           />
         );
       })}
@@ -213,5 +219,11 @@ export function USChoroplethMapStates({
         )}
       </g>
     </svg>
+    {skipped > 0 && (
+      <span id={skippedNoteId} className="sr-only">
+        {skippedStatesNote(skipped)}
+      </span>
+    )}
+    </>
   );
 }

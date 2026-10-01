@@ -7,7 +7,8 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearActorScopedBrowserState } from './actorScopedBrowserState';
+import { observeActor } from './actorScope';
+import { ACTOR_A, ACTOR_B } from '../test/actorKeys';
 import { MASKED_BORROWER_ID_RE } from './routeMeta';
 import {
   QUEUE_CONTEXT_STORAGE_KEY,
@@ -67,8 +68,10 @@ describe('queue context', () => {
   });
 
   it('an actor change clears the stored queue and invalidates the copies history entries still hold', () => {
+    observeActor({ key: ACTOR_A });
     const before = publishQueueContext({ search: '?state=IL', label: 'IL', ids: IDS });
-    clearActorScopedBrowserState();
+    expect(before).not.toBeNull();
+    observeActor({ key: ACTOR_B });
     expect(window.sessionStorage.getItem(QUEUE_CONTEXT_STORAGE_KEY)).toBeNull();
     expect(resolveQueueContext({ queue: before }, IDS[0])).toBeNull();
     const after = publishQueueContext({ search: '', label: '', ids: IDS });

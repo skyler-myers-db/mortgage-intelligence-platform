@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
-import { readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { initialClosure, routeClosures, staleManifestProblems } from './build_manifest.mjs';
+// quality-08: targets, the per-chunk JSON and the step summary (main() only).
+import { chunkReport, evaluateTargets, loadTargets, parseBudgetFlags, summaryTable } from './frontend_budget_report.mjs';
 
 // The manifest maths, re-exported so a test (or another tool) can import the
 // budget gate's exact definitions from one place.
@@ -12,7 +14,6 @@ export { initialClosure, routeClosures, staleManifestProblems };
 
 const repoRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const distDir = path.join(repoRoot, 'frontend', 'dist');
-const assetsDir = path.join(distDir, 'assets');
 const buildMetaDir = path.join(repoRoot, 'frontend', 'build-meta');
 
 const KiB = 1024;
@@ -311,8 +312,21 @@ const budgets = {
   // could not cut never-cut items asked for this re-baseline in their
   // reports. Initial JS 144.03 -> 144.53 br. Totals: 1701.66 raw /
   // 581.56 gzip / 501.92 br across 95 chunks. ~5% headroom.
-  totalJsBytes: 1787 * KiB, // actual 1701.66 (wave-4b integration)
-  totalJsGzipBytes: 611 * KiB, // actual 581.56 (wave-4b integration)
+  // Re-baselined 2026-10-01 at the wave-5a integration (every first-parent
+  // merge step built and measured; br deltas): contract-tooling +0.02,
+  // platform-backend +1.90 (lazy tooltip controller + anchor placement),
+  // identity-foundation +4.48 (actorScope gate, lazy persist-client +
+  // hydration), design-contract +0.18, approval-core +6.42 (bulk reject gate,
+  // stratified samples, canary, receipt review row), filters-saved-views
+  // +6.13 (range filters, facet counts, saved views route chunk),
+  // geo-foundation +5.75 (map split, delegated hover, Signal Stack),
+  // growth-agent-trust +3.79 (plan diff, run save, watchlist briefings),
+  // integration fixes -0.11. Totals: 1792.25 raw / 615.23 gzip / 530.74 br
+  // across 100 chunks (502.18 br before). Every lane reported its growth;
+  // none of it is initial JS (144.50 -> 146.41 br, still under the 152
+  // gate held for wave 5). ~5% headroom.
+  totalJsBytes: 1882 * KiB, // actual 1792.25 (wave-5a integration)
+  totalJsGzipBytes: 646 * KiB, // actual 615.23 (wave-5a integration)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -337,8 +351,12 @@ const budgets = {
   // runtime out (-1.37 br), and w4-lead-queue added LeadTableBody, the
   // approval banner, compliance text and write-failure toasts (+1.98 br).
   // ~5% headroom.
-  maxLazyJsBytes: 138 * KiB, // actual 131.07 (LeadTable chunk, wave-4b integration)
-  maxLazyJsGzipBytes: 45 * KiB, // actual 42.33 (LeadTable chunk, wave-4b integration)
+  // wave-5a integration: the LeadTable chunk 131.07 -> 137.01 raw / 42.33 ->
+  // 44.56 gzip / 36.33 -> 37.96 br, almost all w5-approval-core (+5.98 raw /
+  // +2.21 gz / +1.59 br: the arming status line, kind-aware runs, the canary
+  // and the WebKit pinned-focus guard), 0.7% raw left. ~5% headroom.
+  maxLazyJsBytes: 144 * KiB, // actual 137.01 (LeadTable chunk, wave-5a integration)
+  maxLazyJsGzipBytes: 47 * KiB, // actual 44.56 (LeadTable chunk, wave-5a integration)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -369,8 +387,8 @@ const budgets = {
   // wave-4b integration: 24.17 -> 24.32 br (see initialCssBytes), which left
   // 2.7%. Re-baselined to ~5%.
   initialCssBrBytes: 26 * KiB, // actual 24.32 (wave-4b integration; 22.96 on 2026-09-24)
-  totalJsBrBytes: 528 * KiB, // actual 501.92 (95 chunks, wave-4b integration; see totalJsBytes)
-  maxLazyJsBrBytes: 39 * KiB, // actual 36.33 (LeadTable chunk, wave-4b integration; see maxLazyJsBytes)
+  totalJsBrBytes: 558 * KiB, // actual 530.74 (100 chunks, wave-5a integration; see totalJsBytes)
+  maxLazyJsBrBytes: 40 * KiB, // actual 37.96 (LeadTable chunk, wave-5a integration; see maxLazyJsBytes)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
@@ -399,7 +417,10 @@ const budgets = {
     // genie-server +0.57 cancel).
     // wave-4b: 61.89 -> 64.07 (w4-genie-client +2.03: deep link state,
     // pre-open turn survival, answer memory; w4-charts +0.15), 1.4% left.
-    'src/routes/ask-genie.tsx': 68 * KiB, // actual 64.07
+    // wave-5a: 64.06 -> 69.42 (w5-growth-agent-trust +3.89 plan diff, run
+    // save and focus; w5-identity-foundation +1.06 actorScope readers in
+    // the Genie stores; platform-backend +0.26).
+    'src/routes/ask-genie.tsx': 73 * KiB, // actual 69.42
     'src/routes/asset.tsx': 8 * KiB, // actual 7.08
     // wave-4a: 36.x -> 37.44 (delivery-boot +0.4, error-surfaces +0.37).
     'src/routes/borrower-360.tsx': 40 * KiB, // actual 37.44
@@ -411,14 +432,21 @@ const budgets = {
     // wave-3 integration: 40.40 -> 43.24, w3-rate-lever +2.37 (the Rate
     // Lever on the geography hero), w3-motion-nav +0.49. ~5% headroom.
     // wave-4a: 43.14 -> 44.17 (error-surfaces +1.16 AsyncState on Home).
-    'src/routes/home.tsx': 47 * KiB, // actual 44.17
+    // wave-5a: 44.26 -> 48.03 (w5-geo-foundation +2.75 delegated hover,
+    // map split and table groups; identity +0.60; platform-backend +0.30).
+    'src/routes/home.tsx': 51 * KiB, // actual 48.03
     // wave-3 integration: 66.10 -> 67.13 net: w3-score-anatomy moved the
     // proof out (-4.23), w3-queue-place added place + bulk progress (+4.22).
     // wave-4a: 67.13 -> 69.44 (error-surfaces +1.90 FetchedAt, EmptyState,
     // queue version; overlays +0.22).
     // wave-4b: 69.55 -> 72.71 (w4-lead-queue +2.27, w4-workflow +0.78
     // shared mutation chunks), 0.4% left.
-    'src/routes/lead-queue.tsx': 77 * KiB, // actual 72.71
+    // wave-5a: 72.67 -> 79.85 (w5-filters-saved-views +4.50 range
+    // filters and facet counts, w5-approval-core +2.34, platform +0.21).
+    'src/routes/lead-queue.tsx': 84 * KiB, // actual 79.85
+    // wave-5a (w5-filters-saved-views): the Saved views panel, a lazy route
+    // module whose closure statically reaches the lead-queue chunk.
+    'src/routes/lead-queue.savedViews.tsx': 87 * KiB, // actual 82.61
     // w4 pre-cut: 3.93 (wave 3) -> 4.00 on the CI build (see glossary above).
     'src/routes/not-found.tsx': 5 * KiB, // actual 4.00 (CI build)
     // wave-3 integration: ratcheted DOWN, 34.29 -> 31.29 (w3-score-anatomy
@@ -441,7 +469,9 @@ const budgets = {
     // Segments, overlays +0.29).
     // wave-4b: 86.39 -> 89.57 (w4-lead-queue +2.21 via the shared LeadTable
     // chunk, w4-workflow +0.89 shared mutation chunks), 1.6% left.
-    'src/routes/segment-intelligence.tsx': 95 * KiB, // actual 89.57
+    // wave-5a: 89.57 -> 98.03 (w5-geo-foundation +5.90 Signal Stack and the
+    // map, w5-approval-core +1.76 shared LeadTable chunk, filters +0.41).
+    'src/routes/segment-intelligence.tsx': 103 * KiB, // actual 98.03
   },
 };
 
@@ -555,6 +585,12 @@ export const LAZY_ONLY_VENDOR_MODULES = [
   // The geography map's topology.
   'node_modules/topojson-client/',
   'node_modules/us-atlas/',
+  // The persisted aggregate cache (audit delivery-05, lib/queryPersist): the
+  // restore's hydrate and the persist-client core load only after the actor
+  // gate first opens (@tanstack/react-query-persist-client itself is a
+  // re-export barrel and renders no module).
+  'node_modules/@tanstack/query-core/build/modern/hydration.js',
+  'node_modules/@tanstack/query-persist-client-core/',
 ];
 
 const NODE_MODULES = 'node_modules/';
@@ -685,8 +721,8 @@ export function vendorChunkProblems(manifest, initial, chunkModules = null, lazy
   return problems;
 }
 
-function readBuildMeta(file) {
-  const abs = path.join(buildMetaDir, file);
+function readBuildMeta(file, dir = buildMetaDir) {
+  const abs = path.join(dir, file);
   try {
     return JSON.parse(readFileSync(abs, 'utf8'));
   } catch (err) {
@@ -697,17 +733,25 @@ function readBuildMeta(file) {
   }
 }
 
-function main() {
+function main(argv = process.argv.slice(2)) {
+  // Flags (quality-08): --json <path> writes the per-chunk report; --base
+  // <json> adds base and delta columns to the step summary; --report-only
+  // never fails on a gate (the bundle-delta job's base build); --dist and
+  // --build-meta point at another build (default: this tree's).
+  const options = parseBudgetFlags(argv, { distDir, buildMetaDir });
+  const dist = path.resolve(options.distDir);
+  const assets = path.join(dist, 'assets');
   let files;
   try {
-    files = readdirSync(assetsDir);
+    files = readdirSync(assets);
   } catch (err) {
-    console.error(`Frontend budget check requires a built Vite dist at ${assetsDir}.`);
+    console.error(`Frontend budget check requires a built Vite dist at ${assets}.`);
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
-  const manifest = readBuildMeta('build-manifest.json');
-  const chunkModules = readBuildMeta('build-modules.json');
+  const targets = loadTargets(path.join(repoRoot, 'tools', 'frontend_budget_targets.json'));
+  const manifest = readBuildMeta('build-manifest.json', path.resolve(options.buildMetaDir));
+  const chunkModules = readBuildMeta('build-modules.json', path.resolve(options.buildMetaDir));
 
   const overages = [];
   const failIf = (condition, message) => {
@@ -718,7 +762,7 @@ function main() {
 
   const sizes = new Map();
   const sizeOf = (file) => {
-    if (!sizes.has(file)) sizes.set(file, { file, ...measureBuffer(readFileSync(path.join(distDir, file))) });
+    if (!sizes.has(file)) sizes.set(file, { file, ...measureBuffer(readFileSync(path.join(dist, file))) });
     return sizes.get(file);
   };
   const present = new Set(distChunks);
@@ -730,12 +774,13 @@ function main() {
   const js = distChunks.filter((f) => f.endsWith('.js'));
   const totalJs = sumSizes(js, sizeOf);
   const lazy = largestPerDimension(js.filter((f) => !initial.js.includes(f)).map(sizeOf));
-  const routes = Object.entries(routeClosures(manifest, initial)).map(([key, closure]) => ({
+  const closures = routeClosures(manifest, initial);
+  const routes = Object.entries(closures).map(([key, closure]) => ({
     key,
     ...sumSizes(measurable([...closure.js, ...closure.css]), sizeOf),
   }));
   const fonts = files.filter((f) => /\.(woff2?|ttf|otf)$/.test(f));
-  const fontBytes = fonts.reduce((sum, f) => sum + readFileSync(path.join(assetsDir, f)).length, 0);
+  const fontBytes = fonts.reduce((sum, f) => sum + readFileSync(path.join(assets, f)).length, 0);
 
   const gate = (label, actual, budget) => failIf(actual > budget, `${label} is ${bytes(actual)} > ${bytes(budget)}`);
   gate('initial JS br', initialJs.brBytes, budgets.initialJsBrBytes);
@@ -786,10 +831,37 @@ function main() {
   );
   console.log(`  fonts: ${fonts.length} files, ${bytes(fontBytes)}`);
 
+  const report = {
+    actuals: {
+      initialJsBr: initialJs.brBytes,
+      initialCssBr: initialCss.brBytes,
+      totalJsBr: totalJs.brBytes,
+      routes: Object.fromEntries(routes.map((route) => [route.key, route.brBytes])),
+    },
+    chunks: chunkReport(
+      distChunks.map(sizeOf),
+      [...initial.js, ...initial.css],
+      Object.fromEntries(Object.entries(closures).map(([key, closure]) => [key, [...closure.js, ...closure.css]])),
+    ),
+  };
+  overages.push(...evaluateTargets(report.actuals, targets, new Date().toISOString().slice(0, 10)));
+  if (options.json) writeFileSync(options.json, `${JSON.stringify(report, null, 2)}\n`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    const gates = {
+      initialJsBr: budgets.initialJsBrBytes,
+      initialCssBr: budgets.initialCssBrBytes,
+      totalJsBr: budgets.totalJsBrBytes,
+      ...Object.fromEntries(Object.entries(budgets.routes).map(([key, value]) => [`routes.${key}`, value])),
+    };
+    const base = options.base ? JSON.parse(readFileSync(options.base, 'utf8')) : null;
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryTable(report, gates, targets, base));
+  }
+
   if (overages.length > 0) {
-    console.error('\nFrontend budget check failed:');
+    console.error(`\nFrontend budget check ${options.reportOnly ? 'found (report-only)' : 'failed'}:`);
     for (const overage of overages) console.error(`  - ${overage}`);
-    process.exit(1);
+    if (!options.reportOnly) process.exit(1);
+    return;
   }
   console.log('Frontend budget check passed.');
 }

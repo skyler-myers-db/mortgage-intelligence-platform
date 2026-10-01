@@ -180,26 +180,29 @@ def test_default_state_falls_back_to_first_when_no_row_flagged() -> None:
 def test_outside_footprint_guard_is_unaffected_by_the_absent_default() -> None:
     """The fallback still exposes a full state list to the Genie guards.
 
-    ``outside_footprint_match`` answers "is this state in scope?" from
-    ``state_codes()``, and ``footprint_metadata_gap_match`` keys on
-    ``using_fallback()``. Neither reads ``default_state_code()``, so dropping
+    ``outside_footprint_match`` answers "is this state in scope?" from the
+    snapshot's ``codes()``, and ``footprint_metadata_gap_match`` keys on its
+    ``degraded`` flag. Neither reads ``default_state_code()``, so dropping
     the fabricated default must not widen or narrow either guard.
     """
     resolver = _resolver_with_uc_rows(None)
     previous = get_state_footprint_resolver()
     _reset_state_footprint_resolver_for_tests(resolver)
     try:
-        assert resolver.default_state_code() is None
-        assert len(resolver.state_codes()) == 50
-        assert resolver.using_fallback() is True
+        snapshot = resolver.snapshot()
+        assert snapshot.default_state_code() is None
+        assert len(snapshot.codes()) == 50
+        assert snapshot.degraded is True
         # A non-US geography is still flagged as out of scope...
-        flagged = outside_footprint_match("How many borrowers in Ontario?")
+        flagged = outside_footprint_match("How many borrowers in Ontario?", snapshot=snapshot)
         assert flagged is not None
         assert flagged[1] == "Canada"
         # ...and a state inside the fallback list is not.
-        assert outside_footprint_match("How many borrowers in Illinois?") is None
+        assert outside_footprint_match("How many borrowers in Illinois?", snapshot=snapshot) is None
         # The degraded-scope disclosure still fires for that same question.
-        assert footprint_metadata_gap_match("How many borrowers in Illinois?") == (
+        assert footprint_metadata_gap_match(
+            "How many borrowers in Illinois?", snapshot=snapshot
+        ) == (
             "Illinois",
             "IL",
         )

@@ -7,17 +7,22 @@ Behavior is unchanged and pinned by the compose tests in
 ``POST /api/growth-agent/agent/compose`` because both routers share the
 ``/growth-agent`` prefix.
 
-Audit 2026-09-21 ``critic-01`` / ``genie-09``: compose signs every composed
-plan (``plan_digest``); ``POST /growth-agent/agent/plan/execute`` runs exactly
-that reviewed plan, and ``GET /growth-agent/runs`` lists the caller's own
-reviewed-workflow runs. Both mount here because ``backend/api`` modules may
-not import each other and this router is already registered.
+Audit 2026-09-21 ``critic-01`` / ``genie-09`` / ``wow-ai-4``: compose signs
+every composed plan (``plan_digest``) and never runs it; ``POST
+/growth-agent/agent/plan/execute`` runs exactly that reviewed plan; ``GET
+/growth-agent/runs`` lists the caller's own reviewed-workflow runs; ``POST
+/growth-agent/runs/{run_id}/monitors`` saves exactly one of those runs as a
+watchlist; and ``GET /growth-agent/monitors/summary`` briefs the caller's
+saved watchlists. They
+mount here because ``backend/api`` modules may not import each other and this
+router is already registered.
 """
 
 from __future__ import annotations
 
 import logging
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -26,7 +31,14 @@ from backend.schemas.agent_plan import (
     ComposePlanResponse,
     ExecutePlanRequest,
 )
+from backend.schemas.growth_agent import GrowthAgentMonitor
 from backend.schemas.growth_agent_run_history import GrowthAgentRunSummary
+from backend.schemas.growth_agent_watchlist import (
+    DEFAULT_WATCHLIST_SUMMARY_LIMIT,
+    MAX_WATCHLIST_SUMMARY_LIMIT,
+    GrowthAgentRunWatchlistRequest,
+    GrowthAgentWatchlistSummaryResponse,
+)
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
@@ -37,13 +49,15 @@ from backend.services.growth_agent_plan_digest import (
     PlanDigestUnavailable,
     issue_plan_digest,
 )
-from backend.services.growth_agent_plan_executor import execute_plan
 from backend.services.growth_agent_reviewed_plan import execute_reviewed_plan
 from backend.services.growth_agent_run_history import (
     DEFAULT_RUN_LIST_LIMIT,
     MAX_RUN_LIST_LIMIT,
     list_runs,
 )
+from backend.services.growth_agent_run_watchlist import save_run_as_watchlist
+from backend.services.growth_agent_scheduler import growth_agent_scheduler_status
+from backend.services.growth_agent_watchlist_summary import watchlist_summary
 from backend.services.growth_agent_workflows import WORKFLOWS as _WORKFLOWS
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, get_lakebase_client
@@ -82,24 +96,24 @@ def compose_mortgage_growth_agent_plan(
     payload: ComposePlanRequest,
     request: Request,
     _: Annotated[None, Depends(require_json_content_type)],
-    sql_client: SqlDep,
-    lakebase: LakebaseDep,
-    audit_store: Annotated[AuditStore, Depends(get_audit_store)],
 ) -> ComposePlanResponse:
     """Compose a specialized multi-step plan from the governed tool registry.
 
     Unlike ``/agent/run`` (which selects one reviewed workflow), this endpoint
     asks the Supervisor serving endpoint to *compose* a plan whose every step is
-    validated against the reviewed deterministic tool registry, then — when
-    ``execute`` is set — runs the validated steps deterministically with the
-    existing per-step audit and approval rails. Every composed response is
-    labelled ``planner="supervisor_composed"`` and carries the model endpoint, so
+    validated against the reviewed deterministic tool registry, and returns it
+    signed and unexecuted for the lender to review. It never runs a step: the
+    reviewed plan runs only through ``/agent/plan/execute``, and the retired
+    ``execute: true`` flag is a 422. Every composed response is labelled
+    ``planner="supervisor_composed"`` and carries the model endpoint, so
     nothing composed can masquerade as a reviewed catalog workflow. When the
     Supervisor host is unavailable the response degrades honestly and offers the
     reviewed catalog workflows as a labelled fallback; when the model answers but
     the plan fails validation the response is ``invalid`` with no canned plan.
     """
 
+    # AUDIT EXEMPT: compose drafts a plan for review and runs nothing; the
+    # reviewed plan's audit rows are written by /agent/plan/execute.
     actor = resolve_actor(request)
     outcome = compose_growth_agent_plan(payload)
     if outcome.status == "degraded":
@@ -117,7 +131,7 @@ def compose_mortgage_growth_agent_plan(
             message=outcome.message or "The composed plan failed governed validation.",
         )
     plan = outcome.plan
-    response = ComposePlanResponse(
+    return ComposePlanResponse(
         status="composed",
         model_endpoint=outcome.endpoint,
         plan=plan,
@@ -130,25 +144,6 @@ def compose_mortgage_growth_agent_plan(
         approval_required=plan.requires_approval,
         interpreted_intent=outcome.interpreted_intent,
         reasoning_summary=outcome.reasoning_summary,
-    )
-    if not payload.execute:
-        return response
-    execution = execute_plan(
-        plan,
-        sql_client=sql_client,
-        lakebase=lakebase,
-        audit_store=audit_store,
-        actor=actor,
-        request_id=payload.request_id,
-    )
-    return response.model_copy(
-        update={
-            "executed": True,
-            "trace": execution.trace,
-            "plan_id": execution.plan_id,
-            "approval_gate_step_id": execution.approval_gate_step_id,
-            "audit_event_ids": execution.audit_event_ids,
-        }
     )
 
 
@@ -214,3 +209,50 @@ def list_growth_agent_runs(
     """
 
     return list_runs(lakebase, actor=resolve_actor(request), limit=limit)
+
+
+@router.post(
+    "/runs/{run_id}/monitors",
+    response_model=GrowthAgentMonitor,
+    responses={
+        **JSON_CONTENT_TYPE_RESPONSE,
+        404: {"description": "No run with this id belongs to the caller."},
+        409: {"description": "The run did not complete, is unaudited, or changed since it was shown."},
+    },
+)
+def save_growth_agent_run_watchlist(
+    run_id: UUID,
+    payload: GrowthAgentRunWatchlistRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+    lakebase: LakebaseDep,
+) -> GrowthAgentMonitor:
+    """Save the run the lender saw as a watchlist, with no re-plan.
+
+    The posted ``tool_result_hash`` must match the stored run; the watchlist is
+    built from the run's stored workflow, criteria and route, and one
+    ``GROWTH_AGENT_MONITOR_SAVE`` audit row is written (a replay writes none).
+    """
+
+    return save_run_as_watchlist(lakebase, actor=resolve_actor(request), run_id=run_id, payload=payload)
+
+
+@router.get("/monitors/summary", response_model=GrowthAgentWatchlistSummaryResponse)
+def growth_agent_watchlist_summary(
+    request: Request,
+    lakebase: LakebaseDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_WATCHLIST_SUMMARY_LIMIT)] = DEFAULT_WATCHLIST_SUMMARY_LIMIT,
+) -> GrowthAgentWatchlistSummaryResponse:
+    """Brief the caller's saved watchlists: latest run, change since the previous run.
+
+    Read-only Lakebase app state plus the cached scheduler state: it writes no
+    audit row, starts no run and reads no Unity Catalog table. Each briefing
+    omits the stored route, criteria and actor.
+    """
+
+    return watchlist_summary(
+        lakebase,
+        actor=resolve_actor(request),
+        limit=limit,
+        scheduler=growth_agent_scheduler_status(),
+    )

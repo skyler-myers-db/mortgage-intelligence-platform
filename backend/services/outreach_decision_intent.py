@@ -121,32 +121,36 @@ def _approval_decision_intent(
     campaign_owner_email: str | None,
     campaign_treatment_fingerprint: str | None,
 ) -> str:
-    return _canonical_intent(
-        {
-            "action": "approve",
-            "actor": actor,
-            "borrower_id": payload.borrower_id,
-            "offer_code": offer_code,
-            "offer_code_supplied": payload.offer_code is not None,
-            "channel": payload.channel,
-            "campaign_id": payload.campaign_id,
-            "variant_name": payload.variant_name,
-            "campaign_owner_email": campaign_owner_email,
-            "campaign_treatment_fingerprint": campaign_treatment_fingerprint,
-            "evidence_ids": evidence_ids,
-            "evidence_ids_supplied": bool(_normalized_payload_evidence_ids(payload.evidence_ids)),
-            "rationale": safe_rationale,
-            "bulk_id": payload.bulk_id,
-            "bulk_rationale": safe_bulk_rationale,
-            "draft_body": (payload.draft_body or "").strip(),
-            "draft_subject": (payload.draft_subject or "").strip() or None,
-            "draft_generation_id": payload.draft_generation_id,
-            "draft_response_hash": payload.draft_response_hash,
-            "draft_source_refreshed_at": payload.draft_source_refreshed_at,
-            "assigned_to_email": payload.assigned_to_email,
-            "follow_up_in_days": payload.follow_up_in_days,
-        }
-    )
+    intent: dict[str, Any] = {
+        "action": "approve",
+        "actor": actor,
+        "borrower_id": payload.borrower_id,
+        "offer_code": offer_code,
+        "offer_code_supplied": payload.offer_code is not None,
+        "channel": payload.channel,
+        "campaign_id": payload.campaign_id,
+        "variant_name": payload.variant_name,
+        "campaign_owner_email": campaign_owner_email,
+        "campaign_treatment_fingerprint": campaign_treatment_fingerprint,
+        "evidence_ids": evidence_ids,
+        "evidence_ids_supplied": bool(_normalized_payload_evidence_ids(payload.evidence_ids)),
+        "rationale": safe_rationale,
+        "bulk_id": payload.bulk_id,
+        "bulk_rationale": safe_bulk_rationale,
+        "draft_body": (payload.draft_body or "").strip(),
+        "draft_subject": (payload.draft_subject or "").strip() or None,
+        "draft_generation_id": payload.draft_generation_id,
+        "draft_response_hash": payload.draft_response_hash,
+        "draft_source_refreshed_at": payload.draft_source_refreshed_at,
+        "assigned_to_email": payload.assigned_to_email,
+        "follow_up_in_days": payload.follow_up_in_days,
+    }
+    # Only a declared review_mode enters the intent, so an intent without one
+    # (and its derived fallback request id) stays byte-identical to the
+    # intents written before the review_mode ledger.
+    if payload.review_mode is not None:
+        intent["review_mode"] = payload.review_mode
+    return _canonical_intent(intent)
 
 
 def _normalized_payload_evidence_ids(evidence_ids: list[str]) -> list[str]:
@@ -165,24 +169,27 @@ def _reject_decision_intent(
     campaign_owner_email: str | None,
     campaign_treatment_fingerprint: str | None,
 ) -> str:
-    return _canonical_intent(
-        {
-            "action": "reject",
-            "actor": actor,
-            "borrower_id": payload.borrower_id,
-            "offer_code": offer_code,
-            "offer_code_supplied": payload.offer_code is not None,
-            "channel": payload.channel,
-            "campaign_id": campaign_id,
-            "variant_name": variant_name,
-            "campaign_owner_email": campaign_owner_email,
-            "campaign_treatment_fingerprint": campaign_treatment_fingerprint,
-            "evidence_ids": evidence_ids,
-            "evidence_ids_supplied": bool(_normalized_payload_evidence_ids(payload.evidence_ids)),
-            "rationale_code": payload.rationale_code,
-            "rationale": safe_rationale,
-        }
-    )
+    intent: dict[str, Any] = {
+        "action": "reject",
+        "actor": actor,
+        "borrower_id": payload.borrower_id,
+        "offer_code": offer_code,
+        "offer_code_supplied": payload.offer_code is not None,
+        "channel": payload.channel,
+        "campaign_id": campaign_id,
+        "variant_name": variant_name,
+        "campaign_owner_email": campaign_owner_email,
+        "campaign_treatment_fingerprint": campaign_treatment_fingerprint,
+        "evidence_ids": evidence_ids,
+        "evidence_ids_supplied": bool(_normalized_payload_evidence_ids(payload.evidence_ids)),
+        "rationale_code": payload.rationale_code,
+        "rationale": safe_rationale,
+    }
+    # Only a bulk run's id enters the intent: a single rejection's intent
+    # (and its derived fallback request id) stays byte-identical.
+    if payload.bulk_id is not None:
+        intent["bulk_id"] = payload.bulk_id
+    return _canonical_intent(intent)
 
 
 def _decision_intent_without_owner_claim(decision_intent: str) -> str:
@@ -270,6 +277,7 @@ def _approve_intent_matches_payload(
         "draft_source_refreshed_at": payload.draft_source_refreshed_at,
         "assigned_to_email": payload.assigned_to_email,
         "follow_up_in_days": payload.follow_up_in_days,
+        "review_mode": payload.review_mode,
     }
     treatment_fingerprint = intent.get("campaign_treatment_fingerprint")
     campaign_owner_email = intent.get("campaign_owner_email")
@@ -313,6 +321,7 @@ def _reject_intent_matches_payload(
         "variant_name": payload.variant_name,
         "rationale_code": payload.rationale_code,
         "rationale": safe_rationale,
+        "bulk_id": payload.bulk_id,
     }
     treatment_fingerprint = intent.get("campaign_treatment_fingerprint")
     campaign_owner_email = intent.get("campaign_owner_email")

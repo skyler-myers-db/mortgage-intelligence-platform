@@ -24,6 +24,7 @@ from tests.unit.growth_refusal_contract import (
     GROWTH_REFUSAL_MESSAGE_RE,
     assert_only_refusal_audit_writes,
     assert_refused_with_audit,
+    post_growth_execute,
 )
 
 _UNSAFE_STRUCTURAL_SELECTION_TEXT = (
@@ -99,7 +100,7 @@ def test_structural_selection_is_rejected_at_copy_and_objective_boundaries(
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
         GrowthAgentPromptRunRequest(prompt=unsafe_text)
     with pytest.raises(ValidationError, match=GROWTH_REFUSAL_MESSAGE_RE):
-        ComposePlanRequest(objective=unsafe_text, execute=True)
+        ComposePlanRequest(objective=unsafe_text)
 
 
 @pytest.mark.parametrize("safe_text", _SAFE_REVIEWED_SELECTION_TEXT)
@@ -142,10 +143,8 @@ def test_structural_selection_is_rejected_before_planners_or_storage(
             },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": unsafe_text, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, unsafe_text, headers={"X-Forwarded-Email": "operator@example.com"}
         )
     finally:
         app.dependency_overrides.pop(get_sql_client, None)

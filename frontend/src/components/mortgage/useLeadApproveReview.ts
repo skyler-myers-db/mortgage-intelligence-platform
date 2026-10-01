@@ -43,6 +43,7 @@ export interface LeadApproveReviewState {
 }
 
 type ApprovalActions = ReturnType<typeof useLeadApprovalActions>;
+type ApproveLeadExtras = NonNullable<Parameters<ApprovalActions['approveLead']>[2]>;
 
 export interface UseLeadApproveReviewInput {
   canStartApproval: ApprovalActions['canStartApproval'];
@@ -177,8 +178,12 @@ export function useLeadApproveReview({
     startDraft(current.borrowerId, current.mode);
   }
 
-  /** Approve the exact draft on screen. No-op unless the draft is ready. */
-  async function confirm(): Promise<void> {
+  /**
+   * Approve the exact draft on screen. No-op unless the draft is ready.
+   * `extras` reach approveLead (e.g. the Triage deck's review mode); the
+   * default records review_mode 'individual'.
+   */
+  async function confirm(extras: ApproveLeadExtras = {}): Promise<void> {
     const current = reviewRef.current;
     if (!current || current.phase !== 'ready' || !current.draft) return;
     // The row was decided another way while this review was open (its
@@ -190,7 +195,7 @@ export function useLeadApproveReview({
     }
     const submitting: LeadApproveReviewState = { ...current, phase: 'submitting', error: null };
     setReview(submitting);
-    const outcome = await approveLead(current.borrowerId, undefined, {}, current.draft);
+    const outcome = await approveLead(current.borrowerId, undefined, extras, current.draft);
     if (reviewRef.current !== submitting) return;
     if (outcome === 'ok') {
       setReview(null);

@@ -73,7 +73,7 @@ def test_compose_surface_names_the_same_family(prompt: str, expected_code: str) 
     """Both co-pilot surfaces share one guard, so they share one family."""
 
     with pytest.raises(ValidationError) as excinfo:
-        ComposePlanRequest(objective=prompt, execute=True)
+        ComposePlanRequest(objective=prompt)
     assert growth_refusal_code(excinfo.value) == expected_code
 
 

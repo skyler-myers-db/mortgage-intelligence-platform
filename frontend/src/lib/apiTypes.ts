@@ -74,6 +74,15 @@ export interface HealthPayload {
   } | null;
 }
 
+/**
+ * How the approver saw the copy an approval certifies (audit flow-03): on
+ * screen for this borrower (individual, triage), previewed as a bulk sample
+ * (bulk_sample), or approved under a bulk run's shared rationale without
+ * being shown (bulk_cohort). The server records 'undeclared' for a client
+ * that sends none; a client never sends that token.
+ */
+export type ReviewMode = 'individual' | 'triage' | 'bulk_sample' | 'bulk_cohort';
+
 export interface ApproveResult {
   approved: boolean;
   approval_id?: string | null;
@@ -99,6 +108,8 @@ export interface OutreachDraftResult {
   borrower_id: string;
   campaign_id?: string | null;
   variant_name?: string | null;
+  /** The campaign treatment this draft was bound to; null exactly when campaign_id is. */
+  campaign_treatment_fingerprint?: string | null;
   offer_code: string;
   channel: 'email' | 'sms' | 'direct_mail';
   subject?: string | null;
@@ -244,6 +255,14 @@ export interface DecisionReceipt {
   rationale_code: string | null;
   copy_generation_id: string | null;
   copy_hash: string | null;
+  /**
+   * How the approver saw the certified copy (individual, triage,
+   * bulk_sample, bulk_cohort, or 'undeclared' for an older client); null
+   * for a row that records none (a rejection, a decision before the ledger).
+   */
+  review_mode: string | null;
+  /** The bulk run (approve or reject) the decision belonged to. */
+  bulk_id: string | null;
   approver: string;
   request_id: string | null;
   correlation_id: string | null;

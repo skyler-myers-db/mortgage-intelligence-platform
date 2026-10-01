@@ -65,7 +65,15 @@ interface RulesResponse {
   thresholds: ThresholdRow[];
 }
 
-type SourceStatus = 'live' | 'demo_synthetic' | 'configured_empty' | 'not_configured' | 'roadmap' | 'permission_denied' | 'error';
+type SourceStatus =
+  | 'live'
+  | 'demo_synthetic'
+  | 'configured_empty'
+  | 'not_configured'
+  | 'roadmap'
+  | 'permission_denied'
+  | 'error'
+  | 'unavailable';
 
 interface SourceRow {
   name: string;
@@ -621,6 +629,8 @@ function sourceStatusLabel(status: SourceStatus): string {
   if (status === 'demo_synthetic') return 'demo synthetic';
   if (status === 'configured_empty') return 'empty';
   if (status === 'not_configured') return 'not connected';
+  // gold.source_readiness has no row for the source: tone stays warn.
+  if (status === 'unavailable') return 'readiness unavailable';
   return 'roadmap';
 }
 

@@ -14,7 +14,7 @@ import type {
   LeadSummary,
   OfferRecommendation,
 } from '../../types';
-import type { LeadQueryOptions } from '../apiTypes';
+import type { GrowthAgentCohortProof, LeadQueryOptions } from '../apiTypes';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from './leadExport';
 import {
   _growthAgentProofFromLocation,
@@ -30,55 +30,84 @@ function dataRefreshedAtHeader(value: string | null): string | null {
   return value && DATA_REFRESHED_AT_RE.test(value) ? value : null;
 }
 
+/** The geography argument of `api.leadsPage`. */
+export interface LeadsGeo {
+  state?: string;
+  zip?: string;
+  county?: string;
+  counties?: string[];
+  states?: string[];
+  zips?: string[];
+  cities?: string[];
+  borrowerIds?: string[];
+}
+
+/**
+ * The `/api/leads` query for one request, as the page fetch sends it: pure,
+ * so the audit-free facet counts (apiClients/leadFacets.ts) build the SAME
+ * filter params from the same request object. `growthAgentProof` is passed
+ * in resolved (leadsPage reads it from the location when the options leave
+ * it undefined).
+ */
+export function leadsQueryParams(
+  segment: string | undefined,
+  geo: LeadsGeo | undefined,
+  opts: LeadQueryOptions,
+  growthAgentProof: GrowthAgentCohortProof | null,
+): URLSearchParams {
+  // 2026-05-04 FIX β: forward state + zip to the API so the backend
+  // queries borrower_360 directly (no score floor) when a geo
+  // narrowing is requested. Without this, narrow ZIP/state filters
+  // returned 0 rows because the unfiltered top-500 from
+  // lead_population didn't include the geo's borrowers.
+  const params = new URLSearchParams();
+  if (segment) params.set('segment', segment);
+  if (opts.segmentCodes && opts.segmentCodes.length > 0) {
+    params.set('segment_codes', opts.segmentCodes.join(','));
+    params.set('segment_mode', opts.segmentMode ?? 'any');
+  }
+  if (opts.funnelStage) params.set('funnel_stage', opts.funnelStage);
+  if (opts.limit) params.set('limit', String(opts.limit));
+  if (geo?.state) params.set('state', geo.state);
+  if (geo?.zip) params.set('zip', geo.zip);
+  if (geo?.county) params.set('county', geo.county);
+  if (geo?.counties && geo.counties.length > 0) params.set('counties', geo.counties.join(','));
+  if (geo?.states && geo.states.length > 0) params.set('states', geo.states.join(','));
+  if (geo?.zips && geo.zips.length > 0) params.set('zips', geo.zips.join(','));
+  // `CITY~ST` pairs. `~` is unreserved, so it survives the encode literal.
+  if (geo?.cities && geo.cities.length > 0) params.set('cities', geo.cities.join(','));
+  if (geo?.borrowerIds && geo.borrowerIds.length > 0) params.set('borrower_ids', geo.borrowerIds.join(','));
+  if (opts.targetLenderRef) params.set('target_lender_ref', opts.targetLenderRef);
+  if (opts.cohortId) params.set('cohort_id', opts.cohortId);
+  if (opts.approvalStatus && opts.approvalStatus !== 'any') params.set('approval_status', opts.approvalStatus);
+  if (opts.outreachStatus && opts.outreachStatus !== 'any') params.set('outreach_status', opts.outreachStatus);
+  if (opts.assignedTo) params.set('assigned_to', opts.assignedTo);
+  if (opts.agedDays) params.set('aged_days', String(opts.agedDays));
+  if (growthAgentProof) {
+    params.set('include_identity_proof', 'true');
+    params.set('growth_handoff', growthAgentProof.growthHandoff);
+  }
+  if (opts.portfolioCriteria) {
+    for (const [key, value] of Object.entries(opts.portfolioCriteria)) {
+      if (value !== null && value !== undefined && String(value).length > 0) {
+        params.set(key, String(value));
+      }
+    }
+  }
+  return params;
+}
+
 export const leadsPageApi = {
   leadsPage: (
     segment?: string,
     signal?: AbortSignal,
-    geo?: { state?: string; zip?: string; county?: string; counties?: string[]; states?: string[]; zips?: string[]; cities?: string[]; borrowerIds?: string[] },
+    geo?: LeadsGeo,
     opts: LeadQueryOptions = {},
   ) => {
-    // 2026-05-04 FIX β: forward state + zip to the API so the backend
-    // queries borrower_360 directly (no score floor) when a geo
-    // narrowing is requested. Without this, narrow ZIP/state filters
-    // returned 0 rows because the unfiltered top-500 from
-    // lead_population didn't include the geo's borrowers.
-    const params = new URLSearchParams();
     const growthAgentProof = opts.growthAgentProof === undefined
       ? _growthAgentProofFromLocation()
       : opts.growthAgentProof;
-    if (segment) params.set('segment', segment);
-    if (opts.segmentCodes && opts.segmentCodes.length > 0) {
-      params.set('segment_codes', opts.segmentCodes.join(','));
-      params.set('segment_mode', opts.segmentMode ?? 'any');
-    }
-    if (opts.funnelStage) params.set('funnel_stage', opts.funnelStage);
-    if (opts.limit) params.set('limit', String(opts.limit));
-    if (geo?.state) params.set('state', geo.state);
-    if (geo?.zip) params.set('zip', geo.zip);
-    if (geo?.county) params.set('county', geo.county);
-    if (geo?.counties && geo.counties.length > 0) params.set('counties', geo.counties.join(','));
-    if (geo?.states && geo.states.length > 0) params.set('states', geo.states.join(','));
-    if (geo?.zips && geo.zips.length > 0) params.set('zips', geo.zips.join(','));
-    // `CITY~ST` pairs. `~` is unreserved, so it survives the encode literal.
-    if (geo?.cities && geo.cities.length > 0) params.set('cities', geo.cities.join(','));
-    if (geo?.borrowerIds && geo.borrowerIds.length > 0) params.set('borrower_ids', geo.borrowerIds.join(','));
-    if (opts.targetLenderRef) params.set('target_lender_ref', opts.targetLenderRef);
-    if (opts.cohortId) params.set('cohort_id', opts.cohortId);
-    if (opts.approvalStatus && opts.approvalStatus !== 'any') params.set('approval_status', opts.approvalStatus);
-    if (opts.outreachStatus && opts.outreachStatus !== 'any') params.set('outreach_status', opts.outreachStatus);
-    if (opts.assignedTo) params.set('assigned_to', opts.assignedTo);
-    if (opts.agedDays) params.set('aged_days', String(opts.agedDays));
-    if (growthAgentProof) {
-      params.set('include_identity_proof', 'true');
-      params.set('growth_handoff', growthAgentProof.growthHandoff);
-    }
-    if (opts.portfolioCriteria) {
-      for (const [key, value] of Object.entries(opts.portfolioCriteria)) {
-        if (value !== null && value !== undefined && String(value).length > 0) {
-          params.set(key, String(value));
-        }
-      }
-    }
+    const params = leadsQueryParams(segment, geo, opts, growthAgentProof);
     const qs = params.toString();
     return getJsonWithHeaders<LeadSummary[]>(
       qs ? `/api/leads?${qs}` : '/api/leads',

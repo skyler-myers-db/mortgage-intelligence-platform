@@ -55,6 +55,7 @@ def test_qualify_accepts_explicit_catalog() -> None:
         ("gold", "rate_window_weekly", "mip.gold.rate_window_weekly"),
         ("gold", "rate_sensitivity_rollup", "mip.gold.rate_sensitivity_rollup"),
         ("gold", "rate_sensitivity_book", "mip.gold.rate_sensitivity_book"),
+        ("gold", "segment_combination_rollup", "mip.gold.segment_combination_rollup"),
     ],
 )
 def test_qualify_allows_known_public_relations(

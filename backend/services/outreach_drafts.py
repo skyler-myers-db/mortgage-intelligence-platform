@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -64,7 +64,8 @@ FROM persisted
 
 _GENERATED_OUTREACH_DRAFT_LOOKUP = """
 SELECT generation_id, audit_event_id, actor_email, borrower_id, campaign_id,
-       variant_name, channel, offer_code, generation_mode, response_hash, response_json
+       variant_name, channel, offer_code, generation_mode, response_hash, response_json,
+       GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - created_at))))::bigint AS draft_age_seconds
 FROM mip_app.generated_outreach_drafts
 WHERE generation_id = %(generation_id)s
   AND actor_email = %(actor_email)s
@@ -93,6 +94,27 @@ def _refresh_timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(UTC) if parsed is not None else None
 
 
+class VerifiedGeneratedDraft(NamedTuple):
+    """The verified draft proof an approval binds, plus its age at approval."""
+
+    generated: OutreachDraft | None
+    draft_edited: bool
+    # Whole seconds between the draft's generation and this approval, read
+    # from Lakebase (never from the request). None on the local/test no-proof
+    # path. Recorded on the APPROVE row; never part of the decision intent.
+    draft_age_seconds: int | None
+
+
+def _draft_age_seconds(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        age = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, age)
+
+
 def _verified_generated_draft(
     lakebase: LakebaseClient,
     *,
@@ -101,7 +123,7 @@ def _verified_generated_draft(
     borrower: Any,
     offer_code: str,
     campaign_variant: GovernedCampaignVariant | None,
-) -> tuple[OutreachDraft | None, bool]:
+) -> VerifiedGeneratedDraft:
     """Load and verify the audited draft that the operator is approving.
 
     Production approvals must reference the exact generated artifact returned
@@ -114,7 +136,7 @@ def _verified_generated_draft(
     generation_id = (payload.draft_generation_id or "").strip()
     if not generation_id:
         if settings.app_env.strip().lower() in _LOCAL_TEST_APP_ENVS:
-            return None, False
+            return VerifiedGeneratedDraft(None, False, None)
         raise HTTPException(
             status_code=422,
             detail="Approval requires the audited generated draft proof.",
@@ -203,7 +225,11 @@ def _verified_generated_draft(
                 "regenerate an audited draft before approval."
             ),
         )
-    return generated, draft_edited
+    return VerifiedGeneratedDraft(
+        generated,
+        draft_edited,
+        _draft_age_seconds(row.get("draft_age_seconds")),
+    )
 
 
 _DRAFT_PLACEHOLDER_PATTERNS: tuple[str, ...] = (

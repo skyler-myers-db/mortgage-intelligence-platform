@@ -120,6 +120,20 @@ describe('SessionExpiredDialog', () => {
     );
   });
 
+  it('says a bulk rejection stopped part-way, never that one rejection was lost', async () => {
+    await render();
+    await act(async () => {
+      markSessionExpired({ method: 'POST', path: '/api/v1/outreach/reject' });
+      markUnrecordedWrite('bulk_rejection');
+    });
+    const warn = dialog()?.querySelector('[data-session-unrecorded]');
+    expect(warn?.getAttribute('data-session-unrecorded')).toBe('bulk_rejection');
+    expect(warn?.textContent).toBe(
+      'Your bulk rejection stopped part-way. Rows already rejected stay rejected; the rest were not recorded. '
+      + 'After you sign in, check Recent activity before rejecting them again.',
+    );
+  });
+
   it('cannot be dismissed: Escape is cancelled and a forced close re-opens it', async () => {
     await render();
     await act(async () => {

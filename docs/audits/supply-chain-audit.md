@@ -323,3 +323,19 @@ reports it:
   cap. Once a release admits oauthlib 4, move both pins and retire both
   ignores.
 
+## 2026-10-01 addendum: PyJWT 2.15.0 and urllib3 2.8.0
+
+Four advisories published on 2026-10-01 turned the security job red on every
+fresh run (first seen on PR #266), with no ignore warranted: each has a
+patched release that resolves cleanly.
+
+- **PyJWT** GHSA-42vr-xj54-vc7v, first patched in 2.15.0: `pyjwt==2.15.0` in
+  requirements.in (the explicit transitive pin for databricks-sql-connector).
+- **urllib3** GHSA-8988-9cw3-xx77, GHSA-gh4c-6fx4-qh6g and GHSA-vxq7-64xx-v4gw,
+  each first patched in 2.8.0: a new explicit floor, `urllib3==2.8.0`, so a
+  lock refresh cannot reintroduce 2.7.0.
+- **Lock refresh:** `uv pip compile ... --upgrade-package pyjwt --upgrade-package
+  urllib3`. Only those two packages move in uv.lock, plus urllib3's
+  `-r requirements.in` provenance comment, and test_supply_chain_licenses pins
+  both.
+

@@ -64,6 +64,7 @@ export const ASSET_KEYS_BY_SOURCE: Readonly<Record<string, string>> = {
   'mip.silver.refi_propensity': 'refi_propensity',
   'mip.gold.lead_population': 'lead_population',
   'mip.gold.segment_population': 'segment_population',
+  'mip.gold.segment_combination_rollup': 'segment_combination_rollup',
   'mip.gold.lead_scores': 'lead_scores',
   'mip.gold.borrower_360': 'borrower_360',
   'mip.gold.borrower_dossier': 'borrower_dossier',
@@ -163,6 +164,19 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   if (key.includes('borrower_opportunity_metric_view')) return enrichAsset(DRAWER_SOURCES.borrowerOpportunityView);
   if (key.includes('lead_generation_metric_view')) return enrichAsset(DRAWER_SOURCES.leadGenerationView);
   if (key.includes('lead_population')) return enrichAsset(DRAWER_SOURCES.leadPopulation);
+  // The signal stack's gold table (wow-stage-5): the segment family's lineage,
+  // its own asset; the asset page carries the registry description.
+  if (key.includes('segment_combination_rollup')) {
+    return {
+      ...DRAWER_SOURCES.segmentPopulation,
+      title: 'Segment combinations',
+      short: 'Segment combinations',
+      description: undefined,
+      signals: [],
+      assetKey: 'segment_combination_rollup',
+      assetPath: 'mip.gold.segment_combination_rollup',
+    };
+  }
   if (key.includes('segment_population')) return enrichAsset(DRAWER_SOURCES.segmentPopulation);
   if (key.includes('borrower_dossier')) return enrichAsset(DRAWER_SOURCES.borrowerDossier);
   if (key.includes('household_rollup')) return enrichAsset(DRAWER_SOURCES.householdRollup);

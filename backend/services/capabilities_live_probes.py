@@ -33,6 +33,12 @@ from backend.services.capability_genie_probe import (
 from backend.services.capability_serving_probes import (
     query_serving_endpoint_with_proof,
 )
+from backend.services.databricks_jobs import (
+    GROWTH_AGENT_SCHEDULER_JOB,
+    read_only_job_bound,
+    read_schedule_pause_status,
+    resolve_read_only_job_id,
+)
 from backend.services.databricks_sql_helpers import _validate_identifier, qualify
 from backend.services.supervisor_runtime import verify_supervisor_runtime
 
@@ -111,7 +117,24 @@ def collect_live_capability_statuses(
             sql_client=sql_client,
             lakebase=lakebase,
         )
+    if workspace_client is not None and read_only_job_bound(GROWTH_AGENT_SCHEDULER_JOB):
+        statuses["growth_agent_scheduler"] = _probe_growth_agent_scheduler(workspace_client)
     return statuses
+
+
+def _probe_growth_agent_scheduler(workspace_client: Any) -> LiveCapabilityStatus:
+    """Available only when the bound scheduler job's schedule is UNPAUSED (read-only)."""
+
+    try:
+        job_id = resolve_read_only_job_id(workspace_client, GROWTH_AGENT_SCHEDULER_JOB)
+        if job_id is None:
+            return LiveCapabilityStatus(False, "The saved-watchlist scheduler job is not bound.")
+        pause_status = read_schedule_pause_status(workspace_client, job_id, GROWTH_AGENT_SCHEDULER_JOB)
+    except Exception as exc:  # noqa: BLE001 - a failed read is never a claim
+        return LiveCapabilityStatus(False, f"Scheduler job read failed: {type(exc).__name__}.")
+    if pause_status == "UNPAUSED":
+        return LiveCapabilityStatus(True, "The bound saved-watchlist scheduler job has an unpaused schedule.")
+    return LiveCapabilityStatus(False, "The bound saved-watchlist scheduler job is paused or has no schedule.")
 
 
 def _probe_metric_views(sql_client: Any) -> LiveCapabilityStatus:

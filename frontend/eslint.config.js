@@ -271,7 +271,7 @@ export default [
     },
   },
   // Import-hygiene guard: production code (routes, lib, non-test components)
-  // must not silently pull from src/mocks. Tests + Storybook may import
+  // must not silently pull from src/mocks. Tests may import
   // fixture data; production code must not. Regressions here re-introduce
   // the "silent mock fallback" pattern that CLAUDE.md explicitly forbids.
   {
@@ -284,7 +284,6 @@ export default [
     ],
     ignores: [
       "src/**/*.test.{ts,tsx}",
-      "src/**/*.stories.{ts,tsx}",
     ],
     rules: {
       "no-restricted-imports": [
@@ -307,13 +306,12 @@ export default [
       ],
     },
   },
-  // The formatting contract (see FORMATTING_BAN above). Tests, stories and
-  // test helpers may build expected strings however they like.
+  // The formatting contract (see FORMATTING_BAN above). Tests and test
+  // helpers may build expected strings however they like.
   {
     files: ["src/**/*.{ts,tsx}"],
     ignores: [
       "src/**/*.test.{ts,tsx}",
-      "src/**/*.stories.{ts,tsx}",
       "src/mocks/**",
       "src/test/**",
       ...FORMATTING_HOMES,

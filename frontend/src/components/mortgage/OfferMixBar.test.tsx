@@ -7,6 +7,11 @@
  * and says honestly when a book has no primary offer path at all.
  */
 
+// @ts-expect-error Frontend app types intentionally exclude Node globals; the
+// stylesheet contract below reads the lazy sheet's text under Vitest only.
+import { readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -22,6 +27,8 @@ vi.mock('../AppContext', () => ({
 import { OfferMixBar } from './OfferMixBar';
 
 type OfferMix = NonNullable<PortfolioPreview['offer_mix']>;
+
+declare const process: { cwd(): string };
 
 const ACTIONABLE: OfferMix = [
   { offer_code: 'refi', borrower_count: 55_871 },
@@ -113,5 +120,36 @@ describe('OfferMixBar', () => {
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       'No borrower has a primary offer path in this snapshot; 12 are on Monitor for later.',
     );
+  });
+});
+
+/**
+ * The bar's stylesheet (HomeAnswerBand.css, a lazy sheet) under the
+ * re-stepped segment palette (D-dataviz-geo-c2): refi + HELOC is the refi and
+ * HELOC hues striped together (its own sky hue sat within dE 15 of the new
+ * equity blue), slices are separated by a 2px surface gap, and the
+ * forced-colours block lives in this sheet so it wins ties with the shell.
+ * Rendered proof: home-answer.fixture.spec.ts and css-hygiene.modes.
+ */
+describe('offer-mix stylesheet contract', () => {
+  const css = (readFileSync(join(process.cwd(), 'src/components/mortgage/HomeAnswerBand.css'), 'utf8') as string)
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('stripes refi + HELOC with both the refi and the HELOC hues', () => {
+    const rule = /\.offer-mix__swatch\[data-offer="refi_plus_heloc"\]\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).toMatch(/repeating-linear-gradient\(/);
+    expect(rule).toContain('var(--seg-itm)');
+    expect(rule).toContain('var(--seg-permit)');
+    expect(rule).not.toContain('--seg-related-itm');
+  });
+
+  it('separates slices with a half-step surface gap', () => {
+    expect(css).toMatch(/\.offer-mix__seg \+ \.offer-mix__seg\s*\{\s*box-shadow:\s*inset calc\(var\(--sp-1\) \/ 2\) 0 0 var\(--bg-2\);/);
+  });
+
+  it('keeps its forced-colours block in this sheet', () => {
+    const forced = /@media \(forced-colors: active\)\s*\{([\s\S]*)\}\s*$/.exec(css)?.[1] ?? '';
+    expect(forced).toMatch(/\.offer-mix\s*\{[^}]*forced-color-adjust:\s*none;[^}]*background:\s*Canvas;/);
+    expect(forced).toMatch(/\.offer-mix__seg \+ \.offer-mix__seg\s*\{\s*box-shadow:\s*inset calc\(var\(--sp-1\) \/ 2\) 0 0 Canvas;/);
   });
 });

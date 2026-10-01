@@ -15,11 +15,7 @@ import { ShellToaster } from '../feedback/ShellToaster';
 import { UnsavedChangesGuard } from '../feedback/UnsavedChangesGuard';
 import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
-import {
-  clearActorScopedBrowserState,
-  readStoredActorCacheKey,
-  storeActorCacheKey,
-} from '../../lib/actorScopedBrowserState';
+import { observeActor, subscribeActorScope } from '../../lib/actorScope';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
 import { useExitRetained } from '../../hooks/useExitRetained';
 import { useMainScroll } from '../../hooks/useMainScroll';
@@ -86,46 +82,10 @@ export function useIsHealthDegraded(): boolean {
   return useHealth().degraded;
 }
 
-export function shouldResetActorScopedStateForActorChange(
-  previousActorCacheKey: string | null,
-  nextActorCacheKey: string | null,
-): boolean {
-  return previousActorCacheKey !== null && previousActorCacheKey !== nextActorCacheKey;
-}
-
-export function applyActorScopedStateTransition({
-  previousActorCacheKey,
-  nextActorCacheKey,
-  clearQueryClient,
-  clearAppState,
-  clearBrowserState,
-  clearMemoryState,
-}: {
-  previousActorCacheKey: string | null;
-  nextActorCacheKey: string | null;
-  clearQueryClient: () => void;
-  clearAppState: () => void;
-  clearBrowserState: () => void;
-  clearMemoryState: () => void;
-}): string | null {
-  if (previousActorCacheKey === nextActorCacheKey) return previousActorCacheKey;
-  if (shouldResetActorScopedStateForActorChange(previousActorCacheKey, nextActorCacheKey)) {
-    clearQueryClient();
-    clearAppState();
-    clearBrowserState();
-    clearMemoryState();
-  }
-  return nextActorCacheKey;
-}
-
 function AppShellInner({ children }: PropsWithChildren) {
   const { clearActorScopedState, consoleOpen, genieOpen, setGenieOpen } = useApp();
   const { actorIdentity } = useHealth();
   const queryClient = useQueryClient();
-  // undefined until the first TRUSTED actor observation: then seeded from the
-  // tab's stored key, so a reload by a different actor is an actor change
-  // (Genie residual #3), not a first observation.
-  const actorCacheKeyRef = useRef<string | null | undefined>(undefined);
   const mainRef = useRef<HTMLElement | null>(null);
   const routeAnnouncerRef = useRef<HTMLDivElement | null>(null);
   useMainScroll(mainRef);
@@ -150,28 +110,35 @@ function AppShellInner({ children }: PropsWithChildren) {
     };
   }, []);
 
-  // The actor boundary keys on HealthProvider's `actorIdentity`, which only a
-  // TRUSTED probe sets (lib/healthTrust): an unreachable, 5xx, offline or
-  // unreadable probe, or a thrown one, is skipped, so a network blip or a
-  // post-deploy 502 never reads as "the actor changed to nobody". A reachable
-  // null or different key clears, and so does an authentication failure
-  // (401, a sign-in redirect, 403). After a reload whose first probes fail,
-  // nothing happens until the first trusted key, which is then compared with
-  // the stored one.
+  // The in-memory half of the actor boundary (lib/actorScope owns storage).
+  // Declared before the observer below so it is subscribed first. On
+  // 'cleared' (another actor's data was removed) and, as the W5a nobody
+  // bridge, on 'closed' (a trusted nobody after a real owner: a 401, 403 or
+  // anonymous body), drop the query cache, the shell's actor state (last
+  // borrower, approvals, drawer, workspace) and the route-local caches. While
+  // closed the stores' storage survives and their reads return null, so a
+  // same-actor reopen shows it again.
+  useEffect(
+    () =>
+      subscribeActorScope(({ reason }) => {
+        if (reason !== 'cleared' && reason !== 'closed') return;
+        queryClient.clear();
+        clearActorScopedState();
+        clearActorScopedMemoryCaches();
+      }),
+    [clearActorScopedState, queryClient],
+  );
+
+  // Every trusted actor observation goes to the gate. HealthProvider's
+  // `actorIdentity` is set only by a TRUSTED probe (lib/healthTrust) or, before
+  // the first one, by the primed session body: an unreachable, 5xx, offline
+  // or unreadable probe, or a thrown one, is skipped, so a network blip or a
+  // post-deploy 502 never reads as "the actor changed to nobody". Until the
+  // first trusted observation the gate stays pending and private storage
+  // reads nothing.
   useEffect(() => {
-    if (actorIdentity === null) return;
-    const nextKey = actorIdentity.key;
-    const previousKey = actorCacheKeyRef.current === undefined ? readStoredActorCacheKey() : actorCacheKeyRef.current;
-    actorCacheKeyRef.current = applyActorScopedStateTransition({
-      previousActorCacheKey: previousKey,
-      nextActorCacheKey: nextKey,
-      clearQueryClient: () => queryClient.clear(),
-      clearAppState: clearActorScopedState,
-      clearBrowserState: clearActorScopedBrowserState,
-      clearMemoryState: clearActorScopedMemoryCaches,
-    });
-    storeActorCacheKey(actorCacheKeyRef.current);
-  }, [actorIdentity, clearActorScopedState, queryClient]);
+    if (actorIdentity !== null) observeActor({ key: actorIdentity.key });
+  }, [actorIdentity]);
 
   const openGenie = useCallback(() => {
     setGenieOpen(true);

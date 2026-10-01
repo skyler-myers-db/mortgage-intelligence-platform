@@ -12,6 +12,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
+import { NOBODY } from '../../lib/actorScope';
 import { registerKeyBinding } from '../../lib/keymap';
 import {
   SINGLE_KEY_SHORTCUTS_STORAGE_KEY,
@@ -104,7 +105,8 @@ describe('Console single-key shortcuts switch', () => {
 
       expect(toggle().getAttribute('aria-pressed')).toBe('false');
       expect(singleKeyShortcutsEnabled()).toBe(false);
-      expect(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY)).toBe('off');
+      // The per-actor map entry (lib/actorScope): the suite runs as an open gate for nobody.
+      expect(JSON.parse(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) ?? '{}')).toEqual({ [NOBODY]: 'off' });
       act(() => {
         document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true, cancelable: true }));
         document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true }));
@@ -114,7 +116,7 @@ describe('Console single-key shortcuts switch', () => {
 
       act(() => toggle().click());
       expect(toggle().getAttribute('aria-pressed')).toBe('true');
-      expect(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY)).toBe('on');
+      expect(JSON.parse(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) ?? '{}')).toEqual({ [NOBODY]: 'on' });
     } finally {
       offLetter();
       offChord();

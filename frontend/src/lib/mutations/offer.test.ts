@@ -50,6 +50,7 @@ function approveVars(): OfferApproveVariables {
       follow_up_in_days: null,
       campaign_id: null,
       variant_name: null,
+      review_mode: 'individual',
     },
   };
 }
@@ -136,6 +137,8 @@ describe('Offer write mutations', () => {
     });
     expect(apiMocks.approve).toHaveBeenCalledWith(BORROWER, { ...approveVars().body, request_id: 'req-approve-1' });
     expect(apiMocks.approve.mock.calls[0]).toHaveLength(2);
+    // The Offer page approves the on-screen draft: the ledger says 'individual'.
+    expect(apiMocks.approve.mock.calls[0][1]).toEqual(expect.objectContaining({ review_mode: 'individual' }));
     expect(apiMocks.reject).toHaveBeenCalledWith(BORROWER, { ...rejectVars().body, request_id: 'req-reject-1' });
     expect(apiMocks.reject.mock.calls[0]).toHaveLength(2);
   });

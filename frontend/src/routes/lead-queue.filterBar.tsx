@@ -1,6 +1,8 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Icon } from '../components/Icon';
 import type { LeadQueueFilterChip } from './lead-queue.activeFilters';
+import { FilterFacetsProvider } from './lead-queue.facets';
+import { LeadQueueRangeFilters } from './lead-queue.rangeFilters';
 import './lead-queue.css';
 
 /**
@@ -14,6 +16,10 @@ import './lead-queue.css';
  * inline panel BELOW the pill row, not a floating popover (the prototype has
  * neither: its builder shows all six pills). Inline keeps it in flow, so no
  * positioning library is needed and nothing overlaps the table.
+ *
+ * W5a: the STATE, SEGMENT, PRODUCT and APPROVAL menus show option counts on
+ * open (FilterFacetsProvider, lead-queue.facets.tsx), and the panel ends
+ * with the score and rate-spread bounds (lead-queue.rangeFilters.tsx).
  */
 export function LeadQueueFilterBar({
   core,
@@ -34,7 +40,7 @@ export function LeadQueueFilterBar({
   const [open, setOpen] = useState(false);
   const panelId = useId();
   return (
-    <>
+    <FilterFacetsProvider>
       <div className="filter-row filter-row--lead-queue" role="group" aria-label="Queue filters">
         {core}
         <button
@@ -72,8 +78,9 @@ export function LeadQueueFilterBar({
         hidden={!open}
       >
         {more}
+        <LeadQueueRangeFilters />
       </div>
-    </>
+    </FilterFacetsProvider>
   );
 }
 

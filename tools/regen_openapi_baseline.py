@@ -5,7 +5,9 @@ Usage:
 
 Writes ``tests/fixtures/openapi_baseline.json`` from the live FastAPI app's
 ``app.openapi()`` document, formatted deterministically (sorted keys, two-space
-indent, trailing newline) so reruns produce byte-identical output.
+indent, trailing newline) so reruns produce byte-identical output, then
+re-renders ``frontend/src/types/api.gen.ts`` from those bytes with
+``tools/gen_api_types.py`` (both status lines are printed; commit both files).
 
 Determinism note: every ``/api/*`` router mounts unconditionally in
 ``backend.main``, but the SPA catch-all ``/{full_path}`` mounts only when
@@ -59,6 +61,17 @@ def main() -> int:
     path_count = len(spec.get("paths", {}))  # type: ignore[union-attr]
     status = "unchanged" if rendered == previous else "updated"
     print(f"{status}: {BASELINE.relative_to(ROOT)} ({path_count} paths)")
+    # The generated API types render from the exact bytes just written, and
+    # are rewritten on every run so a stale module heals even when the
+    # baseline itself did not move. ROOT is on sys.path via _generate_spec.
+    from tools import gen_api_types
+
+    try:
+        types_text = gen_api_types.render(json.loads(rendered))
+    except gen_api_types.UnsupportedSchema as exc:
+        print(f"unsupported schema at {exc.pointer} ({exc.keyword}): {exc}")
+        return 1
+    print(f"{gen_api_types.write_output(types_text)}: {gen_api_types.OUTPUT_REL}")
     return 0
 
 

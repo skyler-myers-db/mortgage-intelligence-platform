@@ -131,15 +131,21 @@
      forbids `color: var(--signal-warning)`. Dark: the hue itself clears AA. */
   --signal-warning-ink: var(--signal-warning);
 
-  /* ---------- Segment palette (chips, map fills) ---------- */
+  /* ---------- Segment palette (chips, map fills) ----------
+   * DECLARED ACCESSIBILITY DEVIATION from design_files/index.html:33-39
+   * (deviation:segment-palette; dataviz-09): dark keeps four core prototype
+   * hexes and --entrada-teal itm, and re-steps equity and retention so the
+   * six core hues clear OKLab dE 15 (CVD 6) and equity stands off the data
+   * ink; light values are new (the prototype never drew segments on white).
+   * Dark hexes mirror the gold registry (gold_segment_population.sql meta
+   * VALUES; tests/unit/test_segment_palette_parity.py). */
   --seg-itm:        #5CE1E6;  /* Prime Refi Candidates — teal */
   --seg-listed:     #F59E0B;  /* Listed for Sale — amber */
   --seg-permit:     #A78BFA;  /* HELOC Intent — violet */
   --seg-investor:   #F472B6;  /* Investor / Multi-Property — rose */
-  --seg-equity:     #66C5FF;  /* Home Equity Candidate — bright blue */
-  --seg-retention:  #34D399;  /* Retention — green */
-  /* S1.3 overlay segments — hex values mirror the gold registry in
-     sql/transformations/gold_segment_population.sql (meta VALUES). */
+  --seg-equity:     #2985DF;  /* Home Equity Candidate — blue */
+  --seg-retention:  #3FD073;  /* Retention — green */
+  /* S1.3 overlay segments (the same registry). */
   --seg-second-lien:      #E879F9;  /* Second-Lien Consolidation — fuchsia */
   --seg-heloc-draw:       #FB923C;  /* HELOC Draw Ending — orange */
   --seg-equity-history:   #A3E635;  /* Home Equity History — lime */
@@ -375,6 +381,24 @@
   --map-region-fill: #E4EDF4;
 }
 
+/* Light segment palette (deviation:segment-palette; segmentPalette.test.ts):
+ * the core six clear dE 15 / CVD 6 and 3:1 on --bg-0..2; overlays keep hue. */
+[data-theme="light"] {
+  --seg-itm: #11998E;
+  --seg-listed: #B97330;
+  --seg-permit: #652EE6;
+  --seg-investor: #8B356E;
+  --seg-equity: #3E89F7;
+  --seg-retention: #1C6425;
+  --seg-second-lien: #B35DC1;
+  --seg-heloc-draw: #C76904;
+  --seg-equity-history: #669507;
+  --seg-refi-propensity: #6E77E9;
+  --seg-related-itm: #0B91C4;
+  --seg-payoff-loss: #D95155;
+  --seg-permit-activity: #8C6CE0;
+}
+
 /* ---------- Accent overrides applied at runtime ---------- */
 [data-accent="red"] {
   --accent: #FF3621; --accent-hover: #FF5A47; --accent-soft: rgba(255,54,33,0.14); --accent-contrast: #FFF;
@@ -403,6 +427,9 @@
  * losing the "active" accent affordance on the chip/border (which is
  * still drawn from --accent and --accent-soft). */
 :root { --accent-ink: var(--accent); }
+/* Solid CTA fill under --accent-contrast text (.btn--primary, .sr-skip-link);
+ * the accent itself everywhere but dark + red (a11y-01, below). */
+:root { --accent-fill: var(--accent); --accent-fill-hover: var(--accent-hover); }
 [data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }
 [data-theme="light"][data-accent="teal"]   { --accent-ink: #045D62; }
 [data-theme="light"][data-accent="red"]    { --accent-ink: #B42318; }
@@ -428,13 +455,19 @@
  * it while --accent itself stays verbatim. */
 [data-theme="dark"][data-accent="navy"]    { --accent-ink: #66C5FF; }
 [data-theme="dark"][data-accent="red"]     { --accent-ink: #FF5A47; }
+/* Dark + red CTA fill (a11y-01): white on #FF3621 read 3.62:1; #D92D1A reads
+ * 4.84:1 at rest (OKLCH hue 30.5 vs brand 30.3) and #C8281A 5.56:1 on hover.
+ * Hover goes darker: the prototype's #FF5A47 (design_files/index.html:164-166,
+ * :388-392) fails white at 3.09:1. Declared departure (deviation:cta-fill-dark-red). */
+[data-theme="dark"][data-accent="red"]     { --accent-fill: #D92D1A; --accent-fill-hover: #C8281A; }
 /* Print stays monochrome (print.css, "paper binders"). print.css remaps the
  * accent family at (0,1,0), which the (0,2,0) compounds above outrank, and it
  * never sets --accent-ink: without this reset dark + navy printed accent-ink
  * text #66C5FF on white paper (1.91:1), dark + red #FF5A47 (3.09:1), and the
  * light red / teal chips printed tinted (2026-09-21 audit css-01). Same
  * specificity as the compounds and later in source, so every theme x accent
- * pair prints what print.css asks for; --accent-ink joins it as CanvasText.
+ * pair prints what print.css asks for; --accent-ink joins it as CanvasText,
+ * and so does the per-theme --accent-data (data marks print black).
  * tokenUsage.test.ts requires every property a compound sets to be reset
  * here; theme.fixture.spec.ts proves the printed colours per pair. */
 @media print {
@@ -442,6 +475,9 @@
     --accent: CanvasText;
     --accent-hover: CanvasText;
     --accent-ink: CanvasText;
+    --accent-data: CanvasText;
+    --accent-fill: CanvasText;
+    --accent-fill-hover: CanvasText;
     --accent-soft: Canvas;
     --accent-contrast: Canvas;
     --chip-bg: Canvas;
@@ -535,11 +571,13 @@ input[type="checkbox"] {
   accent-color: var(--accent);
 }
 
-/* ---------- Focus ---------- */
+/* ---------- Focus ----------
+ * Outlines follow the element's own radius; the prototype rule
+ * (design_files/index.html:214) also set border-radius, which mutated a
+ * square element's shape on focus (css-06; deviation:focus-ring-keeps-shape). */
 :focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
-  border-radius: var(--r-sm);
 }
 
 /* ---------- Scrollbar (subtle) ---------- */
@@ -617,22 +655,21 @@ input[type="checkbox"] {
  * One four-step fill ramp for the state map, the ZIP tiles, the legend and
  * the table swatches (2026-09-21 audit dataviz-02 / responsive-05). Step 0 is
  * "no borrowers / no data" (the prototype's unfilled region); steps 1-4 mix
- * the AA-tuned accent ink into it in OKLab at equal distances, so adjacent
- * classes sit >= 0.076 OKLab L apart in every theme x accent (the prototype's
+ * the fixed data hue (--accent-data) into it in OKLab at equal distances, so
+ * adjacent classes sit >= 0.076 OKLab L apart in each theme (the prototype's
  * 15/30/50/70% --accent mix measured 0.009-0.038, and 1.6:1 at the top of
- * the light theme). The light theme runs the top step to 85% so white text
- * on it clears AA with the red accent too.
+ * the light theme). The light theme runs the top step to 85%.
  *
  * DECLARED ACCESSIBILITY DEVIATION from the prototype ramp,
  * design_files/Module 0 Prototype.html:863-866 (.map-region.lvl-1..4) and
- * :1864-1871 (legend bar), and design_files/index.html:863-866.
+ * :1864-1871 (legend bar), and design_files/index.html:863-866
+ * (deviation:choropleth-ramp).
  *
  * --map-ramp-ink-N is the text colour on step N (ZIP tile codes and counts,
- * state labels): >= 4.5:1 on its step in every theme x accent. The red
- * accent's step 3 keeps the light ink because its ramp is darker.
+ * state labels): >= 4.5:1 on its step in each theme.
  */
 :root {
-  --map-ramp-hue: var(--accent-ink);
+  --map-ramp-hue: var(--accent-data);
   --map-ramp-0: var(--map-region-fill);
   --map-ramp-1: color-mix(in oklab, var(--map-ramp-hue) 20%, var(--map-ramp-0));
   --map-ramp-2: color-mix(in oklab, var(--map-ramp-hue) 40%, var(--map-ramp-0));
@@ -648,9 +685,6 @@ input[type="checkbox"] {
   --map-ramp-4: color-mix(in oklab, var(--map-ramp-hue) 85%, var(--map-ramp-0));
   --map-ramp-ink-3: var(--text-1);
   --map-ramp-ink-4: var(--bg-1);
-}
-[data-accent="red"] {
-  --map-ramp-ink-3: var(--text-1);
 }
 
 /* ---------- Shell feedback (audit states-05 / states-07) ----------
@@ -753,19 +787,17 @@ input[type="checkbox"] {
   --score-part-evidence: #C4457A;
 }
 
-/* ---------- Data ink (wave 4, dataviz-09 / visual-08 item 3) ----------
+/* ---------- Data ink (dataviz-09 / visual-08; 2026-09-30 ruling) ----------
  * The colour of a single-series data mark: line strokes, the chart hover
  * dot, histogram bars past a threshold, Sankey stage bars, the analytics
- * bar fill's end stop, KPI sparklines and the Genie line and bar charts.
- * Those marks painted --accent, which the default `bright` accent overrides
- * to #66C5FF even on the light theme's white surface (1.91:1), and which
- * dark + navy / dark + red paint at 1.9:1 / 4.4:1 on the dark cards. It
- * aliases the AA-tuned --accent-ink, so it still follows [data-accent] and
- * prints CanvasText through the ink's print reset above.
+ * bar fill's end stop, KPI sparklines, the Genie line and bar charts and the
+ * geography ramp. Fixed per theme; it never follows [data-accent]: red
+ * painted the choropleth and up-trends in the --signal-danger family, teal
+ * made data equal --seg-itm, evidence screenshots must read the same for
+ * every viewer, and each theme has one validated ramp. The default accent
+ * (bright) painted exactly these values, so its pixels do not move.
  * DECLARED ACCESSIBILITY DEVIATION from design_files/index.html:34-38 and
- * :164 (marks drawn in the raw accent): light pairs, dark + navy and
- * dark + red paint the ink, not the accent. No categorical --chart-* layer:
- * no multi-series chart exists, and decoupling data colour from the accent
- * is an owner decision (report section 10, item 10).
+ * :164-176 and Module 0 Prototype.html:863-866 (deviation:data-ink-fixed).
  */
-:root { --accent-data: var(--accent-ink); }
+:root, [data-theme="dark"] { --accent-data: var(--entrada-bright); }
+[data-theme="light"] { --accent-data: #014E80; }

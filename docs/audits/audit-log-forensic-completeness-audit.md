@@ -191,6 +191,7 @@ did the rule see when it happened?" from the ledger row itself.
 | What evidence was cited? | Yes - immutable `evidence_ids[]` |
 | What request/log trail triggered it? | Yes - `correlation_id` |
 | Was a borrower surfaced in a queue? | Yes - `VIEW_LEADS.payload_json.rendered_borrower_ids` |
+| What did the approver see on the approval surface? | Yes - `RECOMMEND_OFFER` per Offer open (fail-closed) + `APPROVE.decision_inputs` |
 
 ## Validation
 

@@ -243,6 +243,8 @@ function vendorModules(chunks: Record<string, string[]> = {}): ChunkModules {
       'assets/lead-C.js': ['src/routes/lead.tsx'],
       'assets/table-D.js': ['src/components/LeadTable.tsx', 'node_modules/@tanstack/react-virtual/dist/esm/index.js', VIRTUAL_CORE, ...LAZY_MUTATIONS],
       'assets/map-M.js': ['src/components/USStateMapData.ts', 'node_modules/topojson-client/src/feature.js', 'node_modules/us-atlas/states-albers-10m.json'],
+      // The persisted aggregate cache (delivery-05): loaded after the actor gate opens.
+      'assets/queryPersist-P.js': ['src/lib/queryPersist.ts', `${QUERY_CORE}hydration.js`, 'node_modules/@tanstack/query-persist-client-core/build/modern/persist.js'],
       ...chunks,
     },
     entryStaticModules: [

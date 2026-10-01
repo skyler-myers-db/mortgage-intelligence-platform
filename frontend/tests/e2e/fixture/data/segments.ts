@@ -12,6 +12,8 @@ import type {
   ZipRollupResponse,
 } from '../../../../src/types';
 import type { GeoAssignmentOverlayResponse } from '../../../../src/lib/apiTypes';
+import type { SegmentCombination, SegmentCombinationResponse } from '../../../../src/types/segmentCombinations';
+import type { ContractSample } from '../contractSamples';
 import { fixture, json, type FixtureEntry } from '../mockApi';
 import { LEADS } from './borrowers';
 import { SNAPSHOT_DATE, STATES, TOTALS, stateByCode } from './reference';
@@ -54,11 +56,60 @@ export const SEGMENTS: readonly SegmentSummary[] = [
   segment('retention', 'Retention Risk', 3471, 398, '+4%', 88, 'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.'),
 ];
 
+/**
+ * Signal stack (audit wow-stage-5): exact core-segment combinations chosen so
+ * every core code's INCLUSIVE count (the sum over the rows containing it)
+ * equals its SEGMENTS card, addressable and contactable: itm 12,840 / 1,286;
+ * listed 1,840 / 214; permit 2,405 / 301; investor 1,892 / 187; equity
+ * 6,320 / 742; retention 3,471 / 398. Two 3-signal rows and one 4-signal row:
+ * 795 borrowers fire three or more signals (92 contactable), and the largest
+ * triple is itm + permit + equity (520, 61 contactable).
+ */
+const exact = (segment_codes: SegmentCombination['segment_codes'], addressable: number, contactable: number): SegmentCombination => ({
+  segment_codes,
+  signal_count: segment_codes.length,
+  addressable,
+  contactable,
+});
+export const SEGMENT_COMBINATIONS: SegmentCombinationResponse = {
+  built: true,
+  core_codes: ['itm', 'listed', 'permit', 'investor', 'equity', 'retention'],
+  combinations: [
+    exact(['itm'], 9305, 874),
+    exact(['equity'], 3195, 377),
+    exact(['retention'], 2936, 336),
+    exact(['itm', 'equity'], 2100, 240),
+    exact(['investor'], 1712, 168),
+    exact(['listed'], 1485, 171),
+    exact(['permit'], 835, 108),
+    exact(['itm', 'permit'], 640, 80),
+    exact(['itm', 'permit', 'equity'], 520, 61),
+    exact(['permit', 'equity'], 410, 52),
+    exact(['listed', 'retention'], 260, 31),
+    exact(['itm', 'investor', 'retention'], 180, 19),
+    exact(['itm', 'listed', 'equity', 'retention'], 95, 12),
+  ],
+  provenance: {
+    source: 'mip.gold.segment_combination_rollup',
+    contactable_source: 'mip.gold.borrower_360 (live eligibility predicate, per request)',
+    refreshed_at: '2026-07-14 12:00:00',
+    note: 'Exact combinations of the six core segments (fixture).',
+  },
+};
+/** The payload before the gold refresh has built the table. */
+export const SEGMENT_COMBINATIONS_NOT_BUILT: SegmentCombinationResponse = {
+  ...SEGMENT_COMBINATIONS,
+  built: false,
+  combinations: [],
+  provenance: { ...SEGMENT_COMBINATIONS.provenance, refreshed_at: null },
+};
+
 /** Twelve ZIP tiles whose addressable counts sum back to the state tile. */
 const ZIP_WEIGHTS = [18, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 1] as const;
 const ZIP_SEGMENTS = ['itm', 'equity', 'listed'] as const;
 
 export const segmentFixtures: FixtureEntry[] = [
+  fixture('GET', '/api/segments/combinations', () => json<SegmentCombinationResponse>(SEGMENT_COMBINATIONS)),
   fixture('GET', '/api/segments', ({ query }) => {
     const selected = (query.get('segment_codes') ?? '').split(',').filter(Boolean);
     const divisor = selected.length === 0 ? 1 : query.get('segment_mode') === 'all' ? 8 : 3;
@@ -151,3 +202,18 @@ export const segmentFixtures: FixtureEntry[] = [
     });
   }),
 ];
+
+/** Curated bodies for the fixture contract exporter (wow-stage-5): the not-built answer. */
+export function contractSamples(): ContractSample[] {
+  return [
+    {
+      source: 'SEGMENT_COMBINATIONS_NOT_BUILT',
+      method: 'GET',
+      pattern: '/api/segments/combinations',
+      path: '/api/segments/combinations',
+      query: '',
+      status: 200,
+      body: SEGMENT_COMBINATIONS_NOT_BUILT,
+    },
+  ];
+}

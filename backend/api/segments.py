@@ -6,11 +6,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.schemas.lead import SEGMENT_CODE_VALUES, SegmentSummary
 from backend.schemas.portfolio import PortfolioCriteria
-from backend.services.repositories import SegmentRepository, get_segment_repository
+from backend.schemas.segment_combinations import SegmentCombinationResponse
+from backend.services.repositories import (
+    SegmentCombinationRepository,
+    SegmentRepository,
+    get_segment_combination_repository,
+    get_segment_repository,
+)
 
 router = APIRouter(tags=["segments"])
 
 RepoDep = Annotated[SegmentRepository, Depends(get_segment_repository)]
+CombinationRepoDep = Annotated[SegmentCombinationRepository, Depends(get_segment_combination_repository)]
 
 
 def _parse_segment_codes(raw: str | None) -> list[str] | None:
@@ -142,3 +149,17 @@ def list_segments(
         segment_mode=segment_mode,
         portfolio_criteria=portfolio_criteria,
     )
+
+
+@router.get("/segments/combinations", response_model=SegmentCombinationResponse)
+def segment_combinations(repo: CombinationRepoDep) -> SegmentCombinationResponse:
+    """Where several Cotality signals fire on the same borrower (audit wow-stage-5).
+
+    One row per non-empty exact set of the six core segment codes, whole book
+    and never narrowed by a filter, with the addressable count from
+    ``mip.gold.segment_combination_rollup`` and a live contactable subset.
+    ``built`` is False until the gold refresh job has built the table. A cold
+    warehouse surfaces as the resilience layer's 503 ``warming_up``; there is
+    no fallback, and the route writes no audit row.
+    """
+    return repo.combinations()

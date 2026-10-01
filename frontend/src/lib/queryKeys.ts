@@ -13,6 +13,15 @@ export const queryKeys = {
   analytics: (scope: string, criteria: readonly unknown[] = []) => ['mip', 'analytics', scope, ...criteria] as const,
   segments: (criteria: readonly unknown[]) => ['mip', 'segments', ...criteria] as const,
   leads: (criteria: readonly unknown[]) => ['mip', 'leads', ...criteria] as const,
+  /**
+   * The audit-free Lead Queue aggregates and the saved views (W5a). Outside
+   * the ['mip','leads'] and ['mip','workspace'] prefixes on purpose: a leads
+   * invalidation never refetches a closed menu's counts, and none of them is
+   * ever persisted.
+   */
+  leadCount: (criteria: readonly unknown[]) => ['mip', 'lead-count', ...criteria] as const,
+  leadFacets: (dimension: string, criteria: readonly unknown[]) => ['mip', 'lead-facets', dimension, ...criteria] as const,
+  savedViews: () => ['mip', 'saved-views'] as const,
   borrower: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? ''] as const,
   borrowerProof: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? '', 'proof'] as const,
   borrowerLifecycle: (borrowerId: string | null | undefined) =>
@@ -64,6 +73,7 @@ export const queryKeys = {
   genieStart: () => ['mip', 'genie', 'start'] as const,
   growthAgent: () => ['mip', 'growth-agent'] as const,
   growthAgentCapabilities: () => ['mip', 'growth-agent', 'capabilities'] as const,
+  growthAgentRuns: (limit: number) => ['mip', 'growth-agent', 'runs', limit] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {

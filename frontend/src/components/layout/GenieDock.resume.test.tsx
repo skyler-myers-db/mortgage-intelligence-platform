@@ -7,11 +7,17 @@
  * (through the chat's chunk, which it never mounts) only when there is one,
  * resumes, and its FAB and sr-only description follow the signal until the
  * chat mounts.
+ *
+ * Since the actor gate (lib/actorScope, D-identity-review-b) the record
+ * belongs to no one until the first trusted observation: nothing is imported
+ * or resumed while the gate is pending, and a record another actor left is
+ * removed by the gate, never resumed.
  */
 import { act, useEffect, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GENIE_IN_FLIGHT_TURN_KEY } from '../../lib/genieConversation';
+import { ACTOR_A, ACTOR_B } from '../../test/actorKeys';
 
 const signal = vi.hoisted(() => ({ imports: 0, ensure: vi.fn(), resume: vi.fn() }));
 
@@ -71,6 +77,7 @@ describe('GenieDock resumes a turn before the first open', () => {
   let session: Map<string, string>;
   let GenieDock: typeof import('./GenieDock').GenieDock;
   let turnStatus: typeof import('../../lib/genieTurnStatus');
+  let scope: typeof import('../../lib/actorScope');
 
   beforeEach(async () => {
     // A fresh module graph per test, so each test counts its own import of
@@ -83,6 +90,11 @@ describe('GenieDock resumes a turn before the first open', () => {
     session = installSessionStorage();
     GenieDock = (await import('./GenieDock')).GenieDock;
     turnStatus = await import('../../lib/genieTurnStatus');
+    // The fresh graph's gate: a new document, pending, this tab stamped A.
+    scope = await import('../../lib/actorScope');
+    scope._resetActorScopeForTests({ status: 'pending', owner: scope.NOBODY });
+    session.clear();
+    session.set('mip.actorCacheKey', ACTOR_A);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -103,9 +115,15 @@ describe('GenieDock resumes a turn before the first open', () => {
   const fab = () => container.querySelector<HTMLButtonElement>('button.genie__fab');
   const description = () => document.getElementById(turnStatus.GENIE_LAUNCHER_STATUS_ID);
 
+  /** A trusted observation reaches the gate (what AppShell does). */
+  async function observe(key: string | null): Promise<void> {
+    act(() => scope.observeActor({ key }));
+    await settle();
+  }
+
   it('with no record: no import, no resume, an idle launcher', async () => {
     render(false);
-    await settle();
+    await observe(ACTOR_A);
     expect(signal.imports).toBe(0);
     expect(signal.ensure).not.toHaveBeenCalled();
     expect(signal.resume).not.toHaveBeenCalled();
@@ -114,10 +132,28 @@ describe('GenieDock resumes a turn before the first open', () => {
     expect(description()?.textContent).toBe('');
   }, MODULE_GRAPH_BUDGET_MS);
 
-  it('with a record: one import, one resume, no chat; the FAB and its description follow the signal until the open', async () => {
+  it("a stamp mismatch removes the record: no import, no resume, no note", async () => {
     session.set(GENIE_IN_FLIGHT_TURN_KEY, JSON.stringify({ v: 2, phase: 'completing' }));
     render(false);
+    await observe(ACTOR_B);
+    await settle();
+    expect(session.has(GENIE_IN_FLIGHT_TURN_KEY)).toBe(false);
+    expect(signal.imports).toBe(0);
+    expect(signal.resume).not.toHaveBeenCalled();
+    expect(description()?.textContent).toBe('');
+  }, MODULE_GRAPH_BUDGET_MS);
+
+  it('with a record: nothing until the gate opens, then one import, one resume, no chat; the FAB and its description follow the signal until the open', async () => {
+    session.set(GENIE_IN_FLIGHT_TURN_KEY, JSON.stringify({ v: 2, phase: 'completing' }));
+    render(false);
+    await settle();
+    await settle();
+    expect(scope.actorScopeStatus()).toBe('pending');
+    expect(signal.imports, 'no chunk import while pending').toBe(0);
+    expect(signal.resume).not.toHaveBeenCalled();
+    await observe(ACTOR_A);
     await waitFor(() => signal.resume.mock.calls.length > 0);
+    expect(session.has(GENIE_IN_FLIGHT_TURN_KEY), 'the gate kept the owner record').toBe(true);
     expect(signal.imports).toBe(1);
     expect(signal.ensure).toHaveBeenCalledTimes(1);
     expect(signal.resume).toHaveBeenCalledTimes(1);
@@ -145,4 +181,49 @@ describe('GenieDock resumes a turn before the first open', () => {
     expect(description()).toBeNull();
     expect(signal.resume).toHaveBeenCalledTimes(1);
   }, MODULE_GRAPH_BUDGET_MS);
+});
+
+/**
+ * The panel (GenieChat) and /ask-genie resume through the same store call on
+ * mount, resumeGenieTurnFromSession (lib/genieInFlightTurn). Mounted while
+ * the gate is pending, that call is recorded once and runs on the first
+ * 'opened': the record is read only after the gate kept it for its owner.
+ */
+describe('a Genie surface mounted while the gate is pending resumes once it opens', () => {
+  let turns: typeof import('../../lib/genieInFlightTurn');
+  let scope: typeof import('../../lib/actorScope');
+  let session: Map<string, string>;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    session = installSessionStorage();
+    scope = await import('../../lib/actorScope');
+    turns = await import('../../lib/genieInFlightTurn');
+    turns.__resetGenieTurnStoreForTests();
+    // After the turn store's reset: the gate reset also drops the removal
+    // that reset queued while the fresh gate was pending.
+    scope._resetActorScopeForTests({ status: 'pending', owner: scope.NOBODY });
+    session.clear();
+    session.set('mip.actorCacheKey', ACTOR_A);
+    // A record written before completion jobs: resuming it removes it and
+    // leaves an "interrupted" note, both observable without a network.
+    session.set(GENIE_IN_FLIGHT_TURN_KEY, JSON.stringify({ v: 1, phase: 'polling' }));
+  }, MODULE_GRAPH_BUDGET_MS);
+
+  it('the same actor: nothing while pending, the resume on the first opened', () => {
+    turns.resumeGenieTurnFromSession();
+    turns.resumeGenieTurnFromSession();
+    expect(session.has(GENIE_IN_FLIGHT_TURN_KEY), 'untouched while pending').toBe(true);
+    expect(turns.getGenieTurnSnapshot().notes).toHaveLength(0);
+    scope.observeActor({ key: ACTOR_A });
+    expect(session.has(GENIE_IN_FLIGHT_TURN_KEY)).toBe(false);
+    expect(turns.getGenieTurnSnapshot().notes).toHaveLength(1);
+  });
+
+  it('another actor: the gate removes the record first, so the deferred resume finds nothing and adds no note', () => {
+    turns.resumeGenieTurnFromSession();
+    scope.observeActor({ key: ACTOR_B });
+    expect(session.has(GENIE_IN_FLIGHT_TURN_KEY)).toBe(false);
+    expect(turns.getGenieTurnSnapshot().notes).toHaveLength(0);
+  });
 });

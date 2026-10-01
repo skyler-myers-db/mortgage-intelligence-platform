@@ -7,7 +7,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { seedBootQueries } from "./lib/bootPrime";
 import { installClientErrorListeners, rootErrorOptions } from "./lib/clientErrorLog";
 import { hasRenderBlockedChunkLoad } from "./lib/lazyPreload";
-import { createMipQueryClient } from "./lib/queryClient";
+import { createMipQueryClient, installQueryPersistence } from "./lib/queryClient";
 import { prefetchRouteData } from "./lib/routeDataPrefetch";
 import { setRumRouteSource } from "./lib/rumBridge";
 import { installStaleChunkRecovery } from "./lib/staleChunkRecovery";
@@ -26,6 +26,10 @@ const queryClient = createMipQueryClient();
 // before render, consuming the reads the boot module (src/boot/primeBoot)
 // already started beside this chunk; every provider joins them (lib/bootPrime).
 seedBootQueries(queryClient);
+
+// The persisted aggregate cache (lib/queryPersist, audit delivery-05): a lazy
+// restore and save, started once the actor gate first opens.
+installQueryPersistence(queryClient);
 
 // A data router with one catch-all route around the unchanged <Routes> tree
 // in app.tsx, so the unsaved-changes guard can use useBlocker (audit

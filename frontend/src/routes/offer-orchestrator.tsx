@@ -275,6 +275,7 @@ export default function OfferOrchestrator() {
       follow_up_in_days: followUpDays > 0 ? followUpDays : null,
       campaign_id: campaignBinding?.campaign_id ?? null,
       variant_name: campaignBinding?.variant_name ?? null,
+      review_mode: 'individual',
     };
     const intent = intentFingerprint('approve', id, JSON.stringify(body));
     const variables = { decision: 'approve' as const, borrowerId: id, requestId: requestIds.idFor(intent), body };

@@ -67,6 +67,15 @@ _SAFE_PROPERTY_RE = re.compile(
 )
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CACHE_KEY_PREFIX = "asset:"
+# App SQL is gold-only: Delta detail, the COUNT(*) fallback and table
+# properties are read from the App's own catalog in these schemas only. Silver,
+# first_party and provider-catalog assets still get their information_schema
+# metadata; their freshness comes from gold.source_readiness.
+_APP_READABLE_SCHEMAS = frozenset({"gold", "ref", "semantics"})
+_ETL_ONLY_DETAIL_GAP = (
+    "Delta detail is read for gold and ref assets only; source freshness comes "
+    "from gold.source_readiness"
+)
 
 
 class AssetMetadataService:
@@ -97,6 +106,8 @@ class AssetMetadataService:
         gaps: list[str] = []
         object_info, observation_source = self._load_object_info(descriptor, gaps)
         readiness = self._load_readiness(descriptor, gaps)
+        if not _app_readable(descriptor) and descriptor.object_type != "function":
+            gaps.append(_ETL_ONLY_DETAIL_GAP)
         detail = self._load_detail(descriptor, gaps)
         columns = self._load_columns(descriptor, gaps)
         tags = self._load_tags(descriptor, gaps)
@@ -220,7 +231,7 @@ class AssetMetadataService:
         return (rows[0] if rows else {}), source
 
     def _load_detail(self, descriptor: AssetDescriptor, gaps: list[str]) -> dict[str, Any]:
-        if descriptor.object_type != "table":
+        if descriptor.object_type != "table" or not _app_readable(descriptor):
             return {}
         try:
             rows = self._sql.execute(f"DESCRIBE DETAIL {_quoted_fqn(descriptor)}")
@@ -230,7 +241,11 @@ class AssetMetadataService:
         return rows[0] if rows else {}
 
     def _load_count(self, descriptor: AssetDescriptor, gaps: list[str]) -> int | None:
-        if descriptor.object_type == "function" or not descriptor.allow_count_fallback:
+        if (
+            descriptor.object_type == "function"
+            or not descriptor.allow_count_fallback
+            or not _app_readable(descriptor)
+        ):
             return None
         try:
             rows = self._sql.execute(
@@ -346,7 +361,7 @@ class AssetMetadataService:
         return tags[:20]
 
     def _load_properties(self, descriptor: AssetDescriptor, gaps: list[str]) -> list[AssetProperty]:
-        if descriptor.object_type != "table":
+        if descriptor.object_type != "table" or not _app_readable(descriptor):
             return []
         try:
             rows = self._sql.execute(f"SHOW TBLPROPERTIES {_quoted_fqn(descriptor)}")
@@ -475,6 +490,11 @@ def _split_fqn(fqn: str) -> tuple[str, str, str]:
     if len(parts) != 3:
         raise ValueError(f"Expected three-part UC name, got {fqn!r}")
     return parts[0], parts[1], parts[2]
+
+
+def _app_readable(descriptor: AssetDescriptor) -> bool:
+    """The App's own catalog, schema gold / ref / semantics (App SQL is gold-only)."""
+    return descriptor.catalog_name is None and descriptor.schema_name in _APP_READABLE_SCHEMAS
 
 
 def _quoted_fqn(descriptor: AssetDescriptor) -> str:

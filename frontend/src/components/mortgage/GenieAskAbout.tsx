@@ -15,7 +15,7 @@ import { Icon } from '../Icon';
  * text.
  *
  * Provider-free (a plain `openGenie` call, no `useApp`), so a KPI card
- * rendered on its own in a unit test or Storybook still carries it.
+ * rendered on its own in a unit test or fixture spec still carries it.
  *
  * `.genie-ask-about` is a documented BEM extension: the prototype's `.kpi`
  * and `.seg-card` blocks (design_files/index.html) carry no assistant

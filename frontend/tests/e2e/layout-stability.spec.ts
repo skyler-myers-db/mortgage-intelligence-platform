@@ -162,6 +162,12 @@ async function installMockApi(
       await fulfillJson(route, { saved_leads: [], saved_drafts: [] });
       return;
     }
+    // Wave 5a (filters): opening a Lead Queue filter menu reads its
+    // audit-free facet counts; an empty count set keeps the menu as-is.
+    if (path === '/api/leads/facets') {
+      await fulfillJson(route, { dimension: url.searchParams.get('dimension') ?? 'state', total_matching: 0, buckets: [] });
+      return;
+    }
     if (path === '/api/config/options') {
       await fulfillJson(route, {
         lender_name: 'Summit Mortgage',
@@ -205,6 +211,20 @@ async function installMockApi(
         offer_rules_version: 'layout-fixture-v1',
         rules_edited_at: '2026-07-14T12:00:00Z',
         thresholds: [],
+      });
+      return;
+    }
+    // Wave 5a (geo-foundation, wow-stage-5): Segment Intelligence's signal
+    // stack reads the whole-book exact combinations on load.
+    if (path === '/api/segments/combinations') {
+      await fulfillJson(route, {
+        built: true,
+        core_codes: ['itm', 'listed', 'permit', 'investor', 'equity', 'retention'],
+        combinations: [
+          { segment_codes: ['itm', 'equity'], signal_count: 2, addressable: 120, contactable: 15 },
+          { segment_codes: ['itm', 'equity', 'retention'], signal_count: 3, addressable: 40, contactable: 6 },
+        ],
+        provenance: { source: 'mip.gold.segment_combination_rollup', contactable_source: 'live', refreshed_at: '2026-07-14 12:00:00', note: 'layout fixture' },
       });
       return;
     }

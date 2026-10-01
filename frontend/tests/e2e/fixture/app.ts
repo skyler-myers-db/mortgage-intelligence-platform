@@ -33,11 +33,16 @@ export const ERROR_SURFACE_SELECTOR = [
   '[role="alert"]',
 ].join(', ');
 
-/** The app's own storage key per preference, and this driver's once-per-tab seed marker. */
+/**
+ * The app's own storage key per preference, its choice marker (a seeded theme
+ * or accent is a user's explicit pick: lib/themePreference only honours a
+ * stored 'dark' / 'system' theme or 'bright' accent with the marker), and
+ * this driver's once-per-tab seed marker.
+ */
 const SEEDS = {
-  theme: { key: 'mip.theme', marker: 'mip.fixture.themeSeed' },
-  accent: { key: 'mip.accent', marker: 'mip.fixture.accentSeed' },
-  density: { key: 'mip.density', marker: 'mip.fixture.densitySeed' },
+  theme: { key: 'mip.theme', choice: 'mip.themeChosen', marker: 'mip.fixture.themeSeed' },
+  accent: { key: 'mip.accent', choice: 'mip.accentChosen', marker: 'mip.fixture.accentSeed' },
+  density: { key: 'mip.density', choice: null, marker: 'mip.fixture.densitySeed' },
 } as const;
 const QUIET_WINDOW_MS = 300;
 
@@ -87,18 +92,19 @@ export class AppDriver {
    * changes through the UI survives a reload instead of being re-seeded.
    */
   private async seed(preference: keyof typeof SEEDS, value: string): Promise<void> {
-    const { key, marker } = SEEDS[preference];
+    const { key, choice, marker } = SEEDS[preference];
     await this.page.addInitScript(
-      ([storageKey, storedValue, seedMarker]) => {
+      ([storageKey, choiceKey, storedValue, seedMarker]) => {
         try {
           if (window.sessionStorage.getItem(seedMarker) === storedValue) return;
           window.localStorage.setItem(storageKey, storedValue);
+          if (choiceKey) window.localStorage.setItem(choiceKey, 'true');
           window.sessionStorage.setItem(seedMarker, storedValue);
         } catch {
           // Storage is unavailable on about:blank; the next document seeds it.
         }
       },
-      [key, value, marker] as const,
+      [key, choice, value, marker] as const,
     );
   }
 

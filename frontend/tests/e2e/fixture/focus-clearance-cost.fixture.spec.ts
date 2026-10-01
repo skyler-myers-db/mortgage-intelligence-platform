@@ -125,6 +125,22 @@ async function styleCost(browser: Browser, page: Page): Promise<StyleCost> {
   return { scroll, insert, scrollMs };
 }
 
+/**
+ * The largest count of three passes per condition. A scroll's count depends on
+ * how many frames the engine renders while it runs, so a loaded runner that
+ * coalesces frames under-counts one pass (W5a CI: a control pass of 158 where
+ * the same tree measures ~540); the maximum is each condition's full cost.
+ */
+async function stableStyleCost(browser: Browser, page: Page): Promise<StyleCost> {
+  const passes: StyleCost[] = [];
+  for (let pass = 0; pass < 3; pass += 1) passes.push(await styleCost(browser, page));
+  return {
+    scroll: Math.max(...passes.map((cost) => cost.scroll)),
+    insert: Math.max(...passes.map((cost) => cost.insert)),
+    scrollMs: Math.max(...passes.map((cost) => cost.scrollMs)),
+  };
+}
+
 test('the route-nav clearance re-styles only what a scroll or an insertion changed, as no clearance does', async ({ app, browser, mockApi, page }) => {
   registerVirtualQueue(mockApi);
   await app.gotoRoute('/lead-queue');
@@ -135,15 +151,15 @@ test('the route-nav clearance re-styles only what a scroll or an insertion chang
 
   // A warm-up pass, so each measured pass starts from the same state.
   await styleCost(browser, page);
-  const shipped = await styleCost(browser, page);
+  const shipped = await stableStyleCost(browser, page);
 
   expect(await deleteClearanceRules(page), 'the clearance\'s rules were found and deleted').toBeGreaterThan(0);
   expect(await navMargin()).toBe('0px');
-  const without = await styleCost(browser, page);
+  const without = await stableStyleCost(browser, page);
 
   await page.addStyleTag({ content: ANCESTOR_HAS_RULE });
   expect(await navMargin(), 'the first shape applies too').toBe('61px');
-  const ancestorHas = await styleCost(browser, page);
+  const ancestorHas = await stableStyleCost(browser, page);
 
   const report = (cost: StyleCost) => `scroll ${cost.scroll} (${cost.scrollMs} ms), insert ${cost.insert}`;
   const counts = `shipped ${report(shipped)}; without ${report(without)}; ancestor :has ${report(ancestorHas)}`;

@@ -165,5 +165,9 @@ describe('turn -> message adapter', () => {
 async function hydrateFresh(): Promise<GenieTurn[]> {
   vi.resetModules();
   const fresh = await import('./genieConversationStore');
+  // The fresh module graph has a fresh actor gate, 'pending' like a real
+  // document start: re-apply the setup seam (src/test/setup.ts) on it.
+  const scope = await import('./actorScope');
+  scope._resetActorScopeForTests({ status: 'open', owner: scope.NOBODY });
   return fresh.getGenieTurns();
 }

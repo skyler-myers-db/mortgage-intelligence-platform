@@ -1,5 +1,5 @@
 import { formatCount } from '../../lib/formatters';
-import { bulkRunSummary, type BulkRunProgress, type BulkRunResult } from './useLeadBulkRun';
+import { bulkRunSummary, bulkRunVerb, type BulkRunProgress, type BulkRunResult } from './useLeadBulkRun';
 
 /**
  * A bulk run's progress and result when the lazy bulk chunk (which ships
@@ -9,6 +9,7 @@ import { bulkRunSummary, type BulkRunProgress, type BulkRunResult } from './useL
  * a static line from the LeadTable chunk, in the same `.bulk-actions` BEM,
  * with plain `.btn` markup (the Button primitive is not needed for two
  * buttons). The live region still speaks the start, quarters and result.
+ * Every line names the run's kind (approve or reject, tables-07).
  */
 export function LeadBulkRunProgressFallback({
   progress,
@@ -20,7 +21,7 @@ export function LeadBulkRunProgressFallback({
   return (
     <div className="bulk-actions__run" data-testid="lead-bulk-run-fallback">
       <span className="bulk-actions__label">
-        Approving {formatCount(progress.settled)} of {formatCount(progress.total)}
+        {bulkRunVerb(progress.kind)} {formatCount(progress.settled)} of {formatCount(progress.total)}
       </span>
       <button
         type="button"

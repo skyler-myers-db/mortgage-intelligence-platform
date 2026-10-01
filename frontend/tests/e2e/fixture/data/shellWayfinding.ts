@@ -13,6 +13,7 @@ export const SIGNED_IN_APPROVER: SessionResponse = {
   actor_email: 'jane.doe@summit-mortgage.example',
   actor_display_name: 'Jane Doe',
   role_labels: ['Administrator', 'Approver'],
+  actor_cache_key: null,
 };
 
 export function sessionReply(session: SessionResponse = SIGNED_IN_APPROVER): FixtureReply<SessionResponse> {

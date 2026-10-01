@@ -28,6 +28,17 @@ export interface LeadExportContext {
   rowOrder?: string;
 }
 
+/**
+ * The queue's filters as a Portfolio Builder URL (audit tables-07 /
+ * tables-02, D-approval-flow-a3): the honest way to work every matching
+ * borrower, since bulk actions apply only to the rows loaded here.
+ * `notCarried` names the queue filters Portfolio Builder cannot apply.
+ */
+export interface LeadTableCampaignHandoff {
+  href: string;
+  notCarried: string[];
+}
+
 export interface LeadTableProps {
   leads: LeadSummary[];
   totalMatching?: number | null;
@@ -67,6 +78,8 @@ export interface LeadTableProps {
    * "Fetched 3 min ago · Refresh" or "Queue updated · Refresh".
    */
   headerStatus?: ReactNode;
+  /** "Build a campaign from these filters" (lead-queue.handoff.ts); absent elsewhere. */
+  campaignHandoff?: LeadTableCampaignHandoff | null;
 }
 
 export type RejectReasonCode =

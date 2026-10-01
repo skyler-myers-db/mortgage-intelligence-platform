@@ -20,6 +20,7 @@ from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 from tests.unit.growth_refusal_contract import (
     GROWTH_REFUSAL_MESSAGE_RE,
     assert_only_refusal_audit_events,
+    post_growth_execute,
 )
 from tests.unit.test_growth_agent_api import _FakeLakebaseClient, _FakeSqlClient
 
@@ -156,10 +157,8 @@ def test_round18_unsafe_objectives_reject_before_planners_and_side_effects(
             },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": objective, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
         )
 
     assert run_response.status_code == 422, run_response.text

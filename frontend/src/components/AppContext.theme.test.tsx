@@ -1,10 +1,12 @@
 /**
  * @vitest-environment happy-dom
  *
- * AppProvider theme model (2026-09-21 audit css-02 / responsive-03): the
- * provider resolves a `system` preference through prefers-color-scheme,
- * follows OS flips live, persists the PREFERENCE (not the resolved theme),
- * and keeps <html data-theme> plus <meta name="theme-color"> in step.
+ * AppProvider theme model (2026-09-21 audit css-02 / responsive-03; the
+ * 2026-09-30 ruling, report 12.4 #4): a first visit boots dark and writes
+ * nothing; only an explicit pick persists, with its choice marker; a chosen
+ * `system` resolves through prefers-color-scheme and follows OS flips live;
+ * the PREFERENCE (not the resolved theme) is stored; <html data-theme> and
+ * <meta name="theme-color"> stay in step.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -60,11 +62,19 @@ function installMatchMedia(initial: boolean): { flip: (next: boolean) => void } 
   };
 }
 
+/** The five keys a theme / accent / density pick may write. */
+const PREFERENCE_KEYS = ['mip.theme', 'mip.themeChosen', 'mip.accent', 'mip.accentChosen', 'mip.density'] as const;
+const storedPreferences = () =>
+  Object.fromEntries(PREFERENCE_KEYS.map((key) => [key, window.localStorage.getItem(key)]).filter(([, value]) => value !== null));
+
 function Probe() {
-  const { theme, themePreference, setTheme, setThemePreference } = useApp();
+  const { theme, themePreference, setTheme, setThemePreference, accent, setAccent, density, setDensity } = useApp();
   return (
     <>
       <output data-testid="probe">{`${themePreference}/${theme}`}</output>
+      <output data-testid="look">{`${accent}/${density}`}</output>
+      <button type="button" data-testid="accent-teal" onClick={() => setAccent('teal')}>teal</button>
+      <button type="button" data-testid="density-compact" onClick={() => setDensity('compact')}>compact</button>
       <button type="button" data-testid="pin-dark" onClick={() => setTheme('dark')}>dark</button>
       <button type="button" data-testid="pin-light" onClick={() => setTheme('light')}>light</button>
       <button type="button" data-testid="follow-system" onClick={() => setThemePreference('system')}>system</button>
@@ -114,16 +124,47 @@ describe('AppProvider theme preference', () => {
 
   const probe = () => document.querySelector('[data-testid="probe"]')?.textContent;
 
-  it('defaults to system and resolves it through prefers-color-scheme', async () => {
+  it('mounts dark with nothing stored, even under an OS-light scheme, and writes none of the five keys', async () => {
     const media = installMatchMedia(false);
     await mount();
+    expect(probe()).toBe('dark/dark');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(document.documentElement.getAttribute('data-accent')).toBe('bright');
+    expect(storedPreferences()).toEqual({});
+
+    await act(async () => media.flip(true));
+    await act(async () => media.flip(false));
+    expect(probe()).toBe('dark/dark');
+    expect(storedPreferences()).toEqual({});
+  });
+
+  it('a chosen System writes the preference and its marker, then follows OS flips', async () => {
+    const media = installMatchMedia(false);
+    await mount();
+    await act(async () => press('follow-system'));
     expect(probe()).toBe('system/light');
-    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
-    expect(window.localStorage.getItem('mip.theme')).toBe('system');
+    expect(storedPreferences()).toEqual({ 'mip.theme': 'system', 'mip.themeChosen': 'true' });
 
     await act(async () => media.flip(true));
     expect(probe()).toBe('system/dark');
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+  });
+
+  it('boots an unmarked stored System (auto-written by fa4c944f..0a30fca2) dark', async () => {
+    window.localStorage.setItem('mip.theme', 'system');
+    installMatchMedia(false);
+    await mount();
+    expect(probe()).toBe('dark/dark');
+  });
+
+  it('setAccent writes the accent and its marker; setDensity writes density only', async () => {
+    installMatchMedia(true);
+    await mount();
+    await act(async () => press('accent-teal'));
+    expect(document.querySelector('[data-testid="look"]')?.textContent).toBe('teal/comfortable');
+    expect(storedPreferences()).toEqual({ 'mip.accent': 'teal', 'mip.accentChosen': 'true' });
+    await act(async () => press('density-compact'));
+    expect(storedPreferences()).toEqual({ 'mip.accent': 'teal', 'mip.accentChosen': 'true', 'mip.density': 'compact' });
   });
 
   it('honours a stored explicit theme and ignores OS flips for it', async () => {
@@ -143,18 +184,18 @@ describe('AppProvider theme preference', () => {
     await mount();
     await act(async () => press('pin-dark'));
     expect(probe()).toBe('dark/dark');
-    expect(window.localStorage.getItem('mip.theme')).toBe('dark');
+    expect(storedPreferences()).toEqual({ 'mip.theme': 'dark', 'mip.themeChosen': 'true' });
 
     await act(async () => press('follow-system'));
     expect(probe()).toBe('system/light');
     expect(window.localStorage.getItem('mip.theme')).toBe('system');
   });
 
-  it('ignores garbage in storage', async () => {
+  it('ignores garbage in storage and boots dark', async () => {
     window.localStorage.setItem('mip.theme', 'neon');
-    installMatchMedia(true);
+    installMatchMedia(false);
     await mount();
-    expect(probe()).toBe('system/dark');
+    expect(probe()).toBe('dark/dark');
   });
 
   it('mirrors the painted theme into meta theme-color when the token is computable', async () => {
@@ -258,7 +299,13 @@ describe('AppProvider theme cross-fade', () => {
     await mount();
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
 
-    await pressAndSettle('pin-light');
+    // The pick is stored synchronously, before the transition's callback runs.
+    act(() => press('pin-light'));
+    expect(themeInsideCallback).toEqual([]);
+    expect(storedPreferences()).toEqual({ 'mip.theme': 'light', 'mip.themeChosen': 'true' });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 10));
+    });
     expect(startViewTransition()).toHaveBeenCalledTimes(1);
     expect(themeInsideCallback).toEqual(['light']);
     expect(probe()).toBe('light/light');

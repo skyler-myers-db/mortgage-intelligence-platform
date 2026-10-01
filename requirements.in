@@ -59,7 +59,14 @@ pyarrow>=24.0.0
 # GHSA-2gx3-rcp4-g85q, GHSA-hxm8-2xgr-2p9m, GHSA-8wjv-2p76-3863 (medium).
 # databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
 # so pip-audit failures have a first-party dependency contract to resolve.
-pyjwt==2.14.0
+# 2026-10-01: GHSA-42vr-xj54-vc7v (first_patched_version 2.15.0) moved the
+# floor again.
+pyjwt==2.15.0
+# Security floor for GHSA-8988-9cw3-xx77, GHSA-gh4c-6fx4-qh6g and
+# GHSA-vxq7-64xx-v4gw (all first patched in 2.8.0, published 2026-10-01).
+# urllib3 is transitive (requests, botocore, databricks-sdk); keep the fix
+# explicit so a lock refresh cannot reintroduce the vulnerable release.
+urllib3==2.8.0
 # Security floor for PYSEC-2026-2253 through PYSEC-2026-2257. Matplotlib
 # depends on Pillow; keep the transitive fix explicit so lock refreshes cannot
 # silently reintroduce the vulnerable image decoder.

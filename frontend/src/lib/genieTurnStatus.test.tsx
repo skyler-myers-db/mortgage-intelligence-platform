@@ -76,14 +76,17 @@ describe('topbar Genie toggle reflects the turn behind a closed panel', () => {
   it('carries no status while idle', () => {
     const toggle = toggleMarkup();
     expect(toggle).not.toContain('is-genie-');
-    expect(toggle).not.toContain('aria-describedby');
+    // The toggle's tooltip description stays (ui/Tooltip, critic-08); only
+    // the launcher status id is absent while idle.
+    expect(toggle).not.toContain(GENIE_LAUNCHER_STATUS_ID);
   });
 
   it('shows the running ring and points at the launcher description', () => {
     setGenieTurnStatus('running');
     const toggle = toggleMarkup();
     expect(toggle).toContain('is-genie-running');
-    expect(toggle).toContain(`aria-describedby="${GENIE_LAUNCHER_STATUS_ID}"`);
+    // First in the merged list, before the tooltip's description id.
+    expect(toggle).toMatch(new RegExp(`aria-describedby="${GENIE_LAUNCHER_STATUS_ID} [^"]+"`));
   });
 
   it('shows the answer-ready badge', () => {

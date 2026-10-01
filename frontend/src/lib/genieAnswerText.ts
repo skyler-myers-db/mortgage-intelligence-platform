@@ -4,11 +4,12 @@ import type { PinnedInsight } from './pinnedInsights';
 
 /**
  * Genie answer text: the pin builder and the follow-up fallback, moved out of
- * lib/pinnedInsights.ts (audit 2026-09-21 `stack-02`). pinnedInsights.ts is in
- * the INITIAL closure (AppShell -> actorScopedBrowserState -> the pin store's
- * reset), so everything that only a rendered Genie answer needs lives here and
- * loads with the Genie answer chunk instead of on first paint. Import this
- * module only from Genie answer files.
+ * lib/pinnedInsights.ts (audit 2026-09-21 `stack-02`). pinnedInsights.ts is
+ * shared by the Home pins card and the Genie surfaces (and was in the INITIAL
+ * closure until the actor gate, lib/actorScope, replaced the shell's direct
+ * pin reset), so everything that only a rendered Genie answer needs lives here
+ * and loads with the Genie answer chunk. Import this module only from Genie
+ * answer files.
  */
 
 const MAX_SUMMARY = 220;

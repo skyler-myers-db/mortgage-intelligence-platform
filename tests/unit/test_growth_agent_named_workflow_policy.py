@@ -14,6 +14,7 @@ from backend.schemas.growth_agent_objective_intent import (
     classify_growth_objective_intent,
 )
 from backend.services.growth_agent_workflows import planned_workflow
+from tests.unit.growth_refusal_contract import post_growth_execute
 from tests.unit.test_growth_agent_api import (
     _clear_overrides,
     _client,
@@ -299,10 +300,8 @@ def test_named_workflow_policy_rejects_before_planners_and_stores(
             },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": objective, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
         )
     finally:
         _clear_overrides()

@@ -38,6 +38,15 @@ describe('api_call route templating', () => {
     expect(templateApiPath('/api/v1/campaigns/cmp-summit-01/outcomes')).toBe('/api/campaigns/:id/outcomes');
   });
 
+  it('keeps the W5a aggregate and saved-view segments and templates a saved-view id', () => {
+    expect(templateApiPath('/api/v1/leads/count?state=IL')).toBe('/api/leads/count');
+    expect(templateApiPath('/api/v1/leads/facets?dimension=state&state=IL')).toBe('/api/leads/facets');
+    expect(templateApiPath('/api/v1/workspace/saved-views')).toBe('/api/workspace/saved-views');
+    expect(templateApiPath('/api/v1/workspace/saved-views/5a1e0000-0000-4000-8000-000000000001')).toBe(
+      '/api/workspace/saved-views/:id',
+    );
+  });
+
   it('drops the query string and hash, and keeps at most ten segments', () => {
     expect(templateApiPath('/api/leads?state=TX&q=jane@summit.example')).toBe('/api/leads');
     expect(templateApiPath('/api/v1/leads#top')).toBe('/api/leads');

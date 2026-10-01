@@ -3,13 +3,16 @@
 The ``gold.source_readiness`` snapshot sits in a ``GoldAggregateCache``
 (audit ``delivery-06``): past its soft TTL it is served stale while one
 background refresh re-reads it, and a failed refresh keeps last-good
-(``stale_if_error``). The build no longer swallows a failure, so a failure is
-never stored: a COLD failure logs ``segment_source_readiness_unavailable``
-and gates nothing (every segment stays "connected") for that one call, and
-the next call reads again. Before this it was negative-cached for the TTL;
-with a missing table failing fast (one statement, no breaker failure) the
-realistic cold failure is one quick statement. The factory reads only the
-SQL client and never writes an audit row.
+(``stale_if_error``), which the staleness scope reports so the segment list
+built from it carries ``X-Data-Last-Good-At``.
+
+Fail closed (decision record e1): a COLD failure logs
+``segment_source_readiness_unavailable`` and RE-RAISES, so the segment list
+answers the router's 503 and nothing is cached as good. It used to gate
+nothing (every segment "connected") for that call. An empty readiness
+snapshot likewise no longer skips the gates: every mapped segment whose
+source has no row reads ``not_connected``. The factory reads only the SQL
+client and never writes an audit row.
 """
 
 from __future__ import annotations
@@ -80,7 +83,7 @@ def _source_statuses(
             ttl_s=cache_ttl_s,
             stale_if_error=True,
         )
-    except Exception as exc:  # noqa: BLE001 -- gating is presentational
+    except Exception as exc:
         emit(
             log,
             "segment_source_readiness_unavailable",
@@ -90,7 +93,7 @@ def _source_statuses(
             exc_type=type(exc).__name__,
             exc_msg=str(exc)[:500],
         )
-        return {}
+        raise
     return statuses
 
 
@@ -101,10 +104,12 @@ def apply_source_gates(
     cache: AggregateCache,
     cache_ttl_s: float,
 ) -> list[SegmentSummary]:
-    """Apply source readiness labels without suppressing real counts."""
+    """Apply source readiness labels without suppressing real counts.
+
+    Every mapped segment is gated, even against an empty snapshot: a source
+    with no readiness row reads ``not_connected``, never "connected".
+    """
     statuses = _source_statuses(client, cache, cache_ttl_s)
-    if not statuses:
-        return segments
     gated: list[SegmentSummary] = []
     for segment in segments:
         source_name = _SEGMENT_SOURCE_REQUIREMENTS.get(segment.code)
