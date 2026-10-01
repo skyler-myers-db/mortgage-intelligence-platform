@@ -238,8 +238,15 @@
   stroke: var(--text-1);
   stroke-width: 1;
 }
+/* deviation:map-tip-top-layer (css-03 / runtime-07): the tip is a
+   popover="manual" element in the top layer (USChoroplethMapTooltip.tsx), so
+   the UA popover box is reset here as EvidenceHoverCard.css does; left / top
+   are written per frame by useMapHover. The z-index below is the fallback
+   where the Popover API is missing. */
 .map-tip {
-  position: absolute; pointer-events: none;
+  position: fixed; inset: auto; margin: 0; overflow: visible;
+  color: var(--text-1);
+  pointer-events: none;
   background: var(--bg-1);
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);

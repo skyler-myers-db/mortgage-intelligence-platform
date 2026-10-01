@@ -17,6 +17,18 @@ import { analyzeFile } from '../../../../tools/react_compiler_coverage.mjs';
 
 const MAP_FILE = 'frontend/src/components/mortgage/USChoroplethMap.tsx';
 
+/** The map's other compiled units (components and hooks), by file. */
+const MAP_UNITS = [
+  'USChoroplethMapStates.tsx',
+  'USChoroplethMapZipLevel.tsx',
+  'USChoroplethMapTooltip.tsx',
+  'USChoroplethMapTipBody.tsx',
+  'USChoroplethMapHeader.tsx',
+  'USChoroplethMapLegend.tsx',
+  'USChoroplethMapTable.tsx',
+  'useMapHover.ts',
+];
+
 interface CompiledFunction { name: string; emitted: boolean; memoSlots: number }
 interface CompileError { reason: string; line: number | null }
 interface CoverageReport {
@@ -52,6 +64,17 @@ describe('USChoroplethMap under the production React Compiler configuration', ()
     expect(component).toBeDefined();
     expect(component?.emitted).toBe(true);
     expect(component?.memoSlots).toBeGreaterThan(0);
+  }, COMPILE_TIMEOUT_MS);
+
+  // Every compiled unit of the map (wave 5a): the stages, the card, the
+  // header / legend / table, and the hooks the hover and the URL ride on.
+  it.each(MAP_UNITS)('%s emits a memo cache with no bailout and no opt-out', (file) => {
+    const report = analyze(`frontend/src/components/mortgage/${file}`);
+    expect(report.optOutPragmas).toEqual([]);
+    expect(report.compileErrors).toEqual([]);
+    expect(report.emitsMemoCache).toBe(true);
+    expect(report.compiledFunctions.length).toBeGreaterThan(0);
+    expect(report.compiledFunctions.every((fn) => fn.emitted)).toBe(true);
   }, COMPILE_TIMEOUT_MS);
 
   // The runtime-03 hoist moved with the campaign link into a plain function

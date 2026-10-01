@@ -12,13 +12,14 @@
  * private alpha ramp the legend never showed.
  */
 
-import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup, ZipRollup } from '../../types';
-import { claimDrillFocus, moveRovingFocus, showCardOnFocus, zipAriaLabel } from './USChoroplethMap.a11y';
+import { claimDrillFocus, moveRovingFocus, zipAriaLabel } from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale } from './USChoroplethMap.scale';
-import { densestZips, type HoverState } from './USChoroplethMap.utils';
+import { densestZips } from './USChoroplethMap.utils';
+import type { MapHoverStage } from './useMapHover';
 import { formatCount } from '../../lib/formatters';
 
 interface USChoroplethMapZipLevelProps {
@@ -39,7 +40,8 @@ interface USChoroplethMapZipLevelProps {
   autoFocus?: boolean;
   /** Called once the rung has a focus target, so a later Back navigation does not steal focus. */
   onAutoFocused?: () => void;
-  setHover: Dispatch<SetStateAction<HoverState | null>>;
+  /** The map's delegated hover / focus card handlers (useMapHover), spread on the <ul>. */
+  hover: MapHoverStage;
   /** Select the ZIP and deep-link to its filtered Lead Queue. */
   onSelectZip: (zip: string) => void;
   /** Open the whole drilled state in the Lead Queue. */
@@ -56,7 +58,7 @@ export function USChoroplethMapZipLevel({
   selectedZip,
   autoFocus = false,
   onAutoFocused,
-  setHover,
+  hover,
   onSelectZip,
   onOpenStateQueue,
 }: USChoroplethMapZipLevelProps) {
@@ -70,6 +72,8 @@ export function USChoroplethMapZipLevel({
     ?? visible[0]?.zip
     ?? null;
   const listRef = useRef<HTMLUListElement | null>(null);
+  // One set of handlers on the <ul> (D-dataviz-geo-d1): no per-tile closures.
+  const stageHandlers = hover.handlers('zip', setActiveZip);
   const emptyActionRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!autoFocus) return;
@@ -132,6 +136,7 @@ export function USChoroplethMapZipLevel({
       aria-label={`ZIPs in ${drillStateName}`}
       // Escape (hide the card) is handled once, by the map's .map-levels.
       onKeyDown={moveRovingFocus}
+      {...stageHandlers}
     >
       {visible.map((rollup, tileIndex) => {
         const count = rollup.addressable_borrowers ?? null;
@@ -149,25 +154,6 @@ export function USChoroplethMapZipLevel({
         ]
           .filter(Boolean)
           .join(' ');
-        const hover = (x: number, y: number): HoverState => ({
-          x,
-          y,
-          name: `ZIP ${rollup.zip}, ${drillStateName}`,
-          count,
-          avgScore,
-          topSegment,
-          sourceHint: 'mip.gold.zip_rollup',
-          overlay: overlayUnit
-            ? {
-                leadCount: overlayUnit.lead_count,
-                assignedCount: overlayUnit.assigned_count,
-                unattendedCount: overlayUnit.unattended_count,
-                coveringOfficerCount: overlayUnit.covering_officer_count,
-                coveringOfficers:
-                  isSelected ? overlayUnit.covering_officers : undefined,
-              }
-            : undefined,
-        });
         return (
           <li key={rollup.zip} className="zip-tiles__item">
             <button
@@ -186,16 +172,6 @@ export function USChoroplethMapZipLevel({
                 topSegment,
                 unattended: overlayActive ? unattended : undefined,
               })}
-              onMouseEnter={(e) => setHover(hover(e.clientX, e.clientY))}
-              onMouseMove={(e) =>
-                setHover((h) => (h ? { ...h, x: e.clientX, y: e.clientY } : h))
-              }
-              onMouseLeave={() => setHover(null)}
-              onFocus={(e) => {
-                setActiveZip(rollup.zip);
-                showCardOnFocus(e.currentTarget, (anchor) => setHover(hover(anchor.x, anchor.y)));
-              }}
-              onBlur={() => setHover(null)}
               onClick={() => onSelectZip(rollup.zip)}
             >
               <span className="zip-tile__code">{rollup.zip}</span>

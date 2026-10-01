@@ -7,7 +7,6 @@ import {
   ZIP_TILE_CAP,
   buildLeadQueuePath,
   densestZips,
-  type HoverState,
   type Level,
   type UsaSvgMapLocation,
 } from './USChoroplethMap.utils';
@@ -26,6 +25,8 @@ import { MapUnavailable } from './USChoroplethMapUnavailable';
 import { buildMapTableRows } from './USChoroplethMap.table';
 import { campaignPrefillPath as buildCampaignPath } from './USChoroplethMap.campaign';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
+import { buildMapCard } from './USChoroplethMap.hover';
+import { useMapHover } from './useMapHover';
 import { USChoroplethMapZipLevel } from './USChoroplethMapZipLevel';
 import { useChoroplethLiveFacts, type GeoRead } from './useChoroplethLiveFacts';
 import { indexRateScenario, scenarioView } from './rateScenario.logic';
@@ -145,7 +146,9 @@ export function USChoroplethMap({
   const drillStateId = current.state ? current.state.toLowerCase() : null;
   const level: Level = drillStateId ? 'zip' : 'state';
 
-  const [hover, setHover] = useState<HoverState | null>(null);
+  // The hover / focus card: only the hovered unit's id is state; the tip
+  // follows the pointer outside React (useMapHover, D-dataviz-geo-d1).
+  const { hovered, stage: hoverStage, hide: hideCard, tipRef, placeTip } = useMapHover();
   const [mode, setMode] = useState<MapColorMode>('borrowers');
   // The rate grid is the whole book: under any cohort filter it would recolour
   // a different population than the one on screen, so the mode falls back.
@@ -250,8 +253,8 @@ export function USChoroplethMap({
   // layout effect, so it runs before a keyboard drill's autofocus (a passive
   // effect in the ZIP rung) opens the card on the first tile.
   useLayoutEffect(() => {
-    setHover(null);
-  }, [level, current.state, current.zip, view, stateFacts, overlayActive]);
+    hideCard();
+  }, [hideCard, level, current.state, current.zip, view, stateFacts, overlayActive]);
 
   // Borrowers in view; null (rendered "—") until the level's rollup is known.
   const totalCount = useMemo(() => {
@@ -330,6 +333,20 @@ export function USChoroplethMap({
     [activateState, drillBehavior, level, overlayActive, overlayByUnit, scale, shownScenario, stateFacts, usaMap, zipFacts],
   );
 
+  // The card for the hovered unit, built once per unit (USChoroplethMap.hover).
+  const card = hovered
+    ? buildMapCard(hovered.level, hovered.id, {
+        usaMap,
+        stateFacts,
+        overlayByUnit: overlayActive ? overlayByUnit : null,
+        footprintStates,
+        selectedId: drillBehavior === 'navigate' ? null : drillStateId,
+        drillStateName,
+        zipFacts,
+        selectedZip: current.zip,
+      })
+    : null;
+
   const renderStage = () => {
     if (!usaMap) {
       return <div className="map-stage map-stage--empty">Loading geography…</div>;
@@ -377,7 +394,7 @@ export function USChoroplethMap({
           scenario={shownScenario}
           footprintStates={footprintStates}
           selectedId={drillBehavior === 'navigate' ? null : drillStateId}
-          setHover={setHover}
+          hover={hoverStage}
           onActivate={activateState}
         />
       );
@@ -396,7 +413,7 @@ export function USChoroplethMap({
         selectedZip={current.zip}
         autoFocus={drillFocus}
         onAutoFocused={onDrillFocused}
-        setHover={setHover}
+        hover={hoverStage}
         onSelectZip={(zip) => {
           // Record the ZIP on this entry, then open its queue: Back returns
           // to this drill with the tile selected.
@@ -447,8 +464,8 @@ export function USChoroplethMap({
         // never also closes a menu that listens on window; with no card it
         // passes through.
         onKeyDown={(event) => {
-          if (event.key !== 'Escape' || hover === null) return;
-          setHover(null);
+          if (event.key !== 'Escape' || hovered === null) return;
+          hideCard();
           event.stopPropagation();
         }}
       >
@@ -489,10 +506,19 @@ export function USChoroplethMap({
         } : null}
       />
 
-      {/* Hover / focus card, portaled to document.body so `.map-wrap
-          { overflow: hidden }` can never clip it. The per-state count is
-          segment-aware (the state rollup re-reads with `segment_codes`). */}
-      {hover && <USChoroplethMapTooltip hover={hover} activeSegNames={activeSegNames} />}
+      {/* Hover / focus card, a top-layer popover portaled to document.body
+          so `.map-wrap { overflow: hidden }` can never clip it and no overlay
+          covers it. The per-state count is segment-aware (the state rollup
+          re-reads with `segment_codes`). */}
+      {card && hovered && (
+        <USChoroplethMapTooltip
+          card={card}
+          unitKey={`${hovered.level}:${hovered.id}`}
+          tipRef={tipRef}
+          placeTip={placeTip}
+          activeSegNames={activeSegNames}
+        />
+      )}
     </div>
   );
 }

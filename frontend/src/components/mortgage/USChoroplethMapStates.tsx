@@ -19,14 +19,15 @@
  * cue (opacity 0.3) painted colours the legend never showed and hid states
  * that hold many borrowers of the selected segment.
  */
-import { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useMemo, useState } from 'react';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup } from '../../types';
 import type { MapScenarioView } from './rateScenario.logic';
-import { moveRovingFocus, showCardOnFocus, stateAriaLabel } from './USChoroplethMap.a11y';
+import { moveRovingFocus, stateAriaLabel } from './USChoroplethMap.a11y';
 import { classify, type ChoroplethScale, type MapClass } from './USChoroplethMap.scale';
-import type { HoverState, UsaSvgMap, UsaSvgMapLocation } from './USChoroplethMap.utils';
+import type { UsaSvgMap, UsaSvgMapLocation } from './USChoroplethMap.utils';
+import type { MapHoverStage } from './useMapHover';
 
 interface USChoroplethMapStatesProps {
   usaMap: UsaSvgMap;
@@ -41,7 +42,8 @@ interface USChoroplethMapStatesProps {
   footprintStates: Record<string, string>;
   /** Lowercase id of the selected state, if any. */
   selectedId: string | null;
-  setHover: Dispatch<SetStateAction<HoverState | null>>;
+  /** The map's delegated hover / focus card handlers (useMapHover), spread on the <svg>. */
+  hover: MapHoverStage;
   /** Click / Enter / Space on a state. `viaKeyboard` lets the drill move focus on. */
   onActivate: (location: UsaSvgMapLocation, hasFacts: boolean, viaKeyboard: boolean) => void;
 }
@@ -55,9 +57,6 @@ interface StateView {
   inFootprint: boolean;
 }
 
-const SOURCE_IN_SCOPE = 'mip.gold.funnel_snapshot_daily + mip.gold.state_top_segment';
-const SOURCE_OUT_OF_SCOPE = 'Outside Cotality evaluation scope';
-
 export function USChoroplethMapStates({
   usaMap,
   stateFacts,
@@ -66,7 +65,7 @@ export function USChoroplethMapStates({
   scenario = null,
   footprintStates,
   selectedId,
-  setHover,
+  hover,
   onActivate,
 }: USChoroplethMapStatesProps) {
   const loading = stateFacts === null;
@@ -101,34 +100,10 @@ export function USChoroplethMapStates({
     ?? views[0]?.location.id
     ?? null;
 
-  const hoverFor = (view: StateView, x: number, y: number): HoverState => {
-    const { location, rollup, overlayUnit } = view;
-    return {
-      x,
-      y,
-      name: location.name,
-      count: rollup ? rollup.addressable : null,
-      avgScore: rollup ? rollup.avg_score : null,
-      topSegment: view.topSegment,
-      // In-footprint states surface the live rollup; out-of-footprint states
-      // an honest "outside the evaluation scope" card, so no hover is blank.
-      sourceHint: view.inFootprint ? SOURCE_IN_SCOPE : SOURCE_OUT_OF_SCOPE,
-      // Both gaps are disclosed on the tile before the click: `contactable`
-      // is the subset the Lead Queue behind this tile shows, `zipUnassigned`
-      // the subset the ZIP drill cannot show.
-      contactable: rollup?.contactable ?? null,
-      zipUnassigned: rollup?.zip_unassigned_count ?? null,
-      overlay: overlayUnit
-        ? {
-            leadCount: overlayUnit.lead_count,
-            assignedCount: overlayUnit.assigned_count,
-            unattendedCount: overlayUnit.unattended_count,
-            coveringOfficerCount: overlayUnit.covering_officer_count,
-            coveringOfficers: selectedId === location.id ? overlayUnit.covering_officers : undefined,
-          }
-        : undefined,
-    };
-  };
+  // One set of handlers on the <svg> (D-dataviz-geo-d1): the card follows
+  // the unit under the pointer or focus, and focusing a state makes it the
+  // roving tab stop.
+  const stageHandlers = hover.handlers('state', setActiveId);
 
   return (
     <svg
@@ -139,6 +114,7 @@ export function USChoroplethMapStates({
       aria-label="States: use the arrow keys to move between states"
       // Escape (hide the card) is handled once, by the map's .map-levels.
       onKeyDown={moveRovingFocus}
+      {...stageHandlers}
     >
       {views.map((view) => {
         const { location, rollup, cls } = view;
@@ -178,14 +154,6 @@ export function USChoroplethMapStates({
               view.inFootprint,
             )}
             aria-keyshortcuts="Enter"
-            onMouseEnter={(event) => setHover(hoverFor(view, event.clientX, event.clientY))}
-            onMouseMove={(event) => setHover((h) => (h ? { ...h, x: event.clientX, y: event.clientY } : h))}
-            onMouseLeave={() => setHover(null)}
-            onFocus={(event) => {
-              setActiveId(location.id);
-              showCardOnFocus(event.currentTarget, (anchor) => setHover(hoverFor(view, anchor.x, anchor.y)));
-            }}
-            onBlur={() => setHover(null)}
             onClick={() => activate(false)}
             onKeyDown={(event) => {
               if (event.key !== 'Enter' && event.key !== ' ') return;

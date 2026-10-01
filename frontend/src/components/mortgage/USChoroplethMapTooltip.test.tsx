@@ -1,11 +1,11 @@
 /**
  * @vitest-environment happy-dom
  */
-import { act } from 'react';
+import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
-import type { HoverState } from './USChoroplethMap.utils';
+import type { MapCard } from './USChoroplethMap.hover';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -34,16 +34,16 @@ describe('USChoroplethMapTooltip contactable disclosure', () => {
     document.body.innerHTML = '';
   });
 
-  function render(overrides: Partial<HoverState>) {
-    const hover: HoverState = {
-      x: 100,
-      y: 100,
+  function render(overrides: Partial<MapCard>) {
+    const card: MapCard = {
       name: 'Illinois',
       count: 1851040,
       avgScore: 38,
       ...overrides,
     };
-    act(() => root.render(<USChoroplethMapTooltip hover={hover} activeSegNames={null} />));
+    act(() => root.render(
+      <USChoroplethMapTooltip card={card} unitKey="state:il" tipRef={createRef()} placeTip={() => {}} activeSegNames={null} />,
+    ));
   }
 
   function tipText(): string {
@@ -89,3 +89,67 @@ describe('USChoroplethMapTooltip contactable disclosure', () => {
   });
 
 });
+
+/**
+ * deviation:map-tip-top-layer (css-03 / runtime-07). The tip is a manual
+ * popover promoted to the top layer, so the floating Genie panel or the
+ * drawer never covers it, and it is placed BEFORE it is promoted so it never
+ * paints at the previous unit's point. happy-dom has no Popover API, so the
+ * test defines the method the component feature-detects.
+ */
+describe('USChoroplethMapTooltip top layer (D-dataviz-geo-d1)', () => {
+  let root: Root;
+  let calls: string[];
+  const proto = HTMLElement.prototype as HTMLElement & { showPopover?: () => void };
+  const hadShowPopover = Object.prototype.hasOwnProperty.call(proto, 'showPopover');
+  const originalShowPopover = proto.showPopover;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    calls = [];
+    proto.showPopover = vi.fn(function showPopover(this: HTMLElement) {
+      calls.push(`show@${this.style.left}`);
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+    if (hadShowPopover) proto.showPopover = originalShowPopover;
+    else Reflect.deleteProperty(proto, 'showPopover');
+  });
+
+  const card: MapCard = { name: 'Texas', count: 2148, avgScore: 82 };
+
+  it('renders a manual popover in document.body, placed before it is promoted', () => {
+    const tipRef = createRef<HTMLDivElement>();
+    let left = 300;
+    const placeTip = (element: HTMLElement) => {
+      calls.push(`place@${left}px`);
+      element.style.left = `${left}px`;
+    };
+    act(() => root.render(
+      <USChoroplethMapTooltip card={card} unitKey="state:tx" tipRef={tipRef} placeTip={placeTip} activeSegNames={null} />,
+    ));
+    const tip = document.querySelector<HTMLElement>('.map-tip');
+    expect(tip?.getAttribute('popover')).toBe('manual');
+    expect(tip?.parentElement).toBe(document.body);
+    expect(tipRef.current).toBe(tip);
+    // Placement first, then the top layer, at the placed point.
+    expect(calls).toEqual(['place@300px', 'show@300px']);
+
+    // Another unit re-places the open tip; the same unit does not.
+    left = 420;
+    act(() => root.render(
+      <USChoroplethMapTooltip card={{ ...card, name: 'Illinois' }} unitKey="state:il" tipRef={tipRef} placeTip={placeTip} activeSegNames={null} />,
+    ));
+    expect(calls.slice(2)).toEqual(['place@420px', 'show@420px']);
+    act(() => root.render(
+      <USChoroplethMapTooltip card={{ ...card, name: 'Illinois' }} unitKey="state:il" tipRef={tipRef} placeTip={placeTip} activeSegNames={null} />,
+    ));
+    expect(calls).toHaveLength(4);
+    expect(document.querySelector('.map-tip__name')?.textContent).toBe('Illinois');
+  });
+});
+
