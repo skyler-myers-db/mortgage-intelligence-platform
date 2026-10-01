@@ -77,7 +77,16 @@
   color: var(--text-2);
   font-family: var(--font-sans);
 }
+.genie-bars__row {
+  min-block-size: var(--sp-6);
+}
+/* A 24px-tall target (WCAG 2.5.8) that keeps the label's ellipsis. */
 .genie-bars__link {
+  display: block;
+  min-block-size: var(--sp-6);
+  line-height: var(--sp-6);
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--accent-ink);
 }
 .genie-bars__track {
