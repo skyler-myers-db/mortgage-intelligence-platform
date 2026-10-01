@@ -24,6 +24,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from backend.schemas.approval_request import (
+    APPROVAL_REQUEST_NOTE_MAX_LENGTH,
     ApprovalRequestCreate,
     ApprovalRequestCreated,
     ApprovalRequestList,
@@ -63,6 +64,9 @@ REQUEST_KEY_CONFLICT = "request_key already belongs to a different approval requ
 OPEN_SCOPE_FORBIDDEN = "Only approvers can list every open approval request."
 REQUEST_NOT_FOUND = "Approval request not found"
 REQUEST_NOT_YOURS = "Only the requester can withdraw this approval request."
+RATIONALE_TOO_LONG_REDACTED = (
+    "rationale is too long once personal details are redacted; shorten it and leave them out"
+)
 
 
 def _lakebase_503(exc: LakebaseError) -> HTTPException:
@@ -82,7 +86,12 @@ def request_outreach_approval(
         raise HTTPException(status_code=409, detail=APPROVER_DECIDES_DIRECTLY)
     note = scrub_free_text(payload.rationale)
     # The note is stored exactly as the audit row's rationale carries it, and
-    # refused before any read or write when the ledger would refuse it.
+    # refused before any read or write when the ledger would refuse it. A
+    # redaction token can be longer than what it replaced, and the batch's
+    # length CHECK would then fail inside the commit (a 503 that also trips
+    # the Lakebase breaker), so the scrubbed length is checked here too.
+    if len(note) > APPROVAL_REQUEST_NOTE_MAX_LENGTH:
+        raise HTTPException(status_code=422, detail=RATIONALE_TOO_LONG_REDACTED)
     refuse_ungoverned_text({"rationale": note})
     try:
         return create_approval_request(

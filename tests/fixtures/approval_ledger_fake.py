@@ -233,6 +233,11 @@ class FakeApprovalLedger:
         return []
 
     def _sql_insert_batch(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        note = str(params["note"])
+        if not (len(note.strip(" ")) >= 1 and len(note) <= 500):
+            # CHECK (length(btrim(note)) >= 1 AND length(note) <= 500): the
+            # resilient client surfaces the CheckViolation as a LakebaseError.
+            raise LakebaseError("Lakebase transaction failed")
         if self._sql_batch_by_key(params):
             return []
         self.batches[_uuid(params["batch_id"])] = {

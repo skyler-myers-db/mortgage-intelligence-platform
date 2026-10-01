@@ -236,6 +236,25 @@ def test_a_refused_note_answers_422_before_any_read_or_write(
     assert ledger.statements == [] and leads.calls == [] and ledger.writes() == 0
 
 
+def test_a_note_that_redaction_pushes_past_the_cap_is_422_not_a_503(
+    client: TestClient, ledger: FakeApprovalLedger, leads: _Leads
+) -> None:
+    # 500 characters on the wire; the email becomes [EMAIL-REDACTED] (longer),
+    # so the stored note would break the batch's length CHECK inside the commit.
+    note = ("Ping a@b.io first. " + "Rate-sensitive refinance candidates. " * 14)[:500]
+    assert len(note) == 500
+    response = _create(client, [OK_1], note=note)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == (
+        "rationale is too long once personal details are redacted; shorten it and leave them out"
+    )
+    assert ledger.statements == [] and leads.calls == [] and ledger.writes() == 0
+    # The same note with the address removed fits once redacted, and is held.
+    fits = note.replace("Ping a@b.io first. ", "Review first, then ")
+    assert len(fits) == 500
+    assert _create(client, [OK_1], note=fits).status_code == 200
+
+
 def test_a_replayed_key_returns_the_stored_body_and_a_changed_payload_conflicts(
     client: TestClient, ledger: FakeApprovalLedger
 ) -> None:
