@@ -665,6 +665,7 @@ export interface ResponseSchemas {
     approver: string;
     audit_event_id: string;
     borrower_id: string | null;
+    bulk_id: string | null;
     campaign_id: string | null;
     channel: string | null;
     copy_generation_id: string | null;
@@ -679,6 +680,7 @@ export interface ResponseSchemas {
     offer_label: string | null;
     rationale_code: string | null;
     request_id: string | null;
+    review_mode: string | null;
     variant_name: string | null;
   };
   /** One (value, count) facet cell inside a SegmentCard mix (S1.6). */
@@ -2477,6 +2479,7 @@ export interface RequestSchemas {
     offer_code?: "refi" | "heloc" | "cash_out" | "purchase" | "retention" | "recapture" | "refi_plus_heloc" | "investor" | "nurture" | null;
     rationale?: string | null;
     request_id?: string | null;
+    review_mode?: "individual" | "triage" | "bulk_sample" | "bulk_cohort" | null;
     variant_name?: string | null;
   };
   OutreachDraftRequest: {
@@ -2497,6 +2500,7 @@ export interface RequestSchemas {
   OutreachRejectRequest: {
     actor?: string;
     borrower_id: string;
+    bulk_id?: string | null;
     campaign_id?: string | null;
     channel?: "email" | "sms" | "direct_mail";
     evidence_ids?: string[];
