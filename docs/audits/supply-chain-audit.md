@@ -131,7 +131,7 @@ a batch lands, check each of these:
   `frontend/.oxlintrc.json` explicitly and re-runs `node
   tools/oxlint_ratchet.mjs --ratchet frontend/oxlint-baseline.json`, which
   records the new version.
-- **typescript-eslint gates TypeScript 7.** typescript-eslint 8.71.0 (as 8.70.1) peers
+- **typescript-eslint gates TypeScript 7.** typescript-eslint 8.71.0, like 8.70.1, still peers
   `typescript >=4.8.4 <6.1.0`. TypeScript 7 waits until a typescript-eslint
   release admits it; check the peer range with `npm view
   @typescript-eslint/parser peerDependencies`.
