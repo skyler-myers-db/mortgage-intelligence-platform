@@ -1209,7 +1209,7 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 
 ---
 
-**Wave-5 status.** W5a (2026-10-01): admin-gated, audit-free explorer facets and count, and an AUDIT_EXPORT receipt. The Auditor role and VIEW_AUDIT_LEDGER surfaces go to W5b w5-audit-ledger-presenter, the explorer UX to W5d w5-print-glossary-sales-manager. W5b (2026-10-01): facets and count moved behind the ledger reader gate and are recorded as VIEW_AUDIT_LEDGER surfaces (w5-audit-ledger-presenter); the explorer UX for facets, count and the export receipt stays with W5d w5-print-glossary-sales-manager.
+**Wave-5 status.** W5a (2026-10-01): admin-gated, audit-free explorer facets and count, and an AUDIT_EXPORT receipt. The Auditor role and VIEW_AUDIT_LEDGER surfaces go to W5b w5-audit-ledger-presenter, the explorer UX to W5d w5-print-glossary-sales-manager. W5b (2026-10-01): facets and count moved behind the ledger reader gate and are recorded as VIEW_AUDIT_LEDGER surfaces (w5-audit-ledger-presenter); the explorer UX for facets, count and the export receipt stays with W5d w5-print-glossary-sales-manager. The explorer's 'Page CSV' still downloads without POST /audit/export-receipt, so no AUDIT_EXPORT row precedes it; wiring it, and whether auditors may export, is part of that work.
 
 ## Data visualization and geography (`dataviz`) — grade C+
 
@@ -1904,7 +1904,7 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** session.py returns can_approve; workspace.ts omits it; grep can_approve in frontend/src = 0; Topbar has no identity. Worse: /outreach/draft is not approver-gated, so a non-approver's click writes a DRAFT_OUTREACH audit row before the 403. 'Request approval' adds a table and endpoint: M.
 - **Constraint conflict:** The prototype topbar has no identity/avatar element (grep avatar in design_files matches only .genie__avatar); the identity chip is an additive departure that must be justified in the commit.
 
-**Wave-5 status.** W5b (2026-10-01): the maker-checker backend is built (w5-approval-ledger-api): migration 2026_10_01_approval_requests; POST and GET /outreach/approval-requests and withdraw; a verified decision link with server-refused self-approval; /leads?approval_request_batch. Every attempt that reaches classification is audited, and a zero-eligible one writes APPROVAL_REQUEST_REFUSED and answers a counts-only 409 (ruling R1). Client plumbing goes to W5c w5-lead-queue-paging and the UI to W5d w5-lq-requests-binding, which sends `rationale`, not `note`.
+**Wave-5 status.** W5b (2026-10-01): the maker-checker backend is built (w5-approval-ledger-api): migration 2026_10_01_approval_requests; POST and GET /outreach/approval-requests and withdraw; a verified decision link with server-refused self-approval; /leads?approval_request_batch. Every attempt that reaches classification is audited, and a zero-eligible one writes APPROVAL_REQUEST_REFUSED and answers a counts-only 409 (ruling R1). Client plumbing goes to W5c w5-lead-queue-paging and the UI to W5d w5-lq-requests-binding, which sends `rationale`, not `note`. A valid masked id whose digits read as a phone number is refused as PII inside the borrower_ids list, so create, refusal and withdraw answer 500 for that borrower (fail-closed); the reviewed audit-policy fix goes to W5c w5-refusal-capture-sales.
 
 ### `flow-03` Approval can be blind: row, hotkey and bulk approve never show the copy being approved, and give no receipt
 
@@ -1930,7 +1930,7 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** app.tsx gates /admin-config; Console shows only my-events; AdminAuditExplorer keeps filters in useState with no export. Borrower 360 and Offer render no decision history (lifecycle feeds status only). Backend /audit/events already accepts actor, since, until. Endpoint plus route plus CSV plus timelines is L.
 - **Constraint conflict:** Non-admin audit visibility moves an intentional RBAC boundary (home.tsx comment: 'Audit exploration is admin-only'; /audit/events is admin-gated); needs an owner governance decision, not just UI work.
 
-**Wave-5 status.** W5b (2026-10-01): the ledger moved to /audit-ledger for administrators and the new read-only Auditor role (MIP_AUDITOR_*); every served ledger read and every cross-actor receipt read writes VIEW_AUDIT_LEDGER (w5-audit-ledger-presenter). The borrower decision history goes to W5c w5-dossier-decisions.
+**Wave-5 status.** W5b (2026-10-01): the ledger moved to /audit-ledger for administrators and the new read-only Auditor role (MIP_AUDITOR_*); every served ledger read and every cross-actor receipt read writes VIEW_AUDIT_LEDGER (w5-audit-ledger-presenter). The borrower decision history goes to W5c w5-dossier-decisions, and RefusalReportsPanel with GET /audit/refusal-reports to W5c w5-refusal-capture-sales. Residual: the row's filter_fingerprint is an unkeyed SHA-256, so an actor-only filter can be recovered by hashing candidate emails; only ledger readers, who already see actor emails, can read it, and keying it goes to W5c w5-lead-queue-paging.
 
 ### `flow-05` Home asks 'who, why now, what offer' but answers with four population counts and three competing primary CTAs
 
@@ -2285,6 +2285,8 @@ The live Databricks deployment was not inspected.
 - **Tech:** Intl.NumberFormat notation:'compact', signDisplay, style:'percent'/'unit' (Baseline widely available); ESLint 10 no-restricted-syntax; cached formatters avoid per-cell construction.
 - **Verifier:** Reproduced: fmt() compact 2dp (analytics.lib.ts:77-104) vs KpiCard toLocaleString; exactly 87 bare toLocaleString and 43 toFixed; `$1000K` and `$-4.41M` follow from the code. But lib/formatters.ts already is the tested home; EvidenceDrawer:156 and admin-config:95 are not compact-USD. 130 call sites is L.
 
+**Wave-5 status.** W5b (2026-10-01): signedCount joined signedBps and signedPct in lib/formatters (w5-home-geo-lever) with ASCII minus pins; the U+2212 sweep over all three goes to W5d w5-test-harness-deps-report, which updates those pins.
+
 ### `responsive-03` No first-paint theme bootstrap, no color-scheme, no OS-preference following
 
 `medium` · `defect` · effort `S` · corrected
@@ -2593,7 +2595,7 @@ The live Databricks deployment was not inspected.
 - **Tech:** Existing StaleWhileRevalidateCache.get_or_refresh; snapshot-versioned cache keys; no new dependency.
 - **Verifier:** All cited call sites use hard-expiry get_or_set; the SWR cache is health-only. Two flaws: mip-swr has three workers shared with the three health probes (resilience.py:594), and preview embeds live approval counts with no mutation invalidation anywhere.
 
-**Wave-5 status.** W5a (2026-10-01): one footprint snapshot per decision (Genie guards and config options), the segment list on stale-while-error with X-Data-Last-Good-At and fail-closed readiness gates, SCHEMA_NOT_FOUND and UNRESOLVED_ROUTINE fail fast. The client half goes to W5b w5-home-geo-lever, the gold snapshot id in cache keys to W5c w5-field-vitals, cross-process lifecycle observation to W5b w5-home-geo-lever. W5b (2026-10-01): the client half landed (w5-home-geo-lever): the retained-value note on Segments and the map legend, with X-Data-Last-Good-At ignored on non-2xx and a 2xx-only server belt. Cross-process lifecycle observation moved to W5c w5-field-vitals with lifecycle_run_watch.py and job_trigger.py.
+**Wave-5 status.** W5a (2026-10-01): one footprint snapshot per decision (Genie guards and config options), the segment list on stale-while-error with X-Data-Last-Good-At and fail-closed readiness gates, SCHEMA_NOT_FOUND and UNRESOLVED_ROUTINE fail fast. The client half goes to W5b w5-home-geo-lever, the gold snapshot id in cache keys to W5c w5-field-vitals, cross-process lifecycle observation to W5b w5-home-geo-lever. W5b (2026-10-01): the client half landed (w5-home-geo-lever): the retained-value note on Segments and the map legend, with X-Data-Last-Good-At ignored on non-2xx and a 2xx-only server belt. Cross-process lifecycle observation moved to W5c w5-field-vitals with lifecycle_run_watch.py and job_trigger.py; apiClients/leads.ts adopting headers.ts and Lead Queue's zipRollups read on the {data, lastGoodAt} shape go to W5c w5-lead-queue-paging.
 
 ### `delivery-01` Routine serverless resume trips the red Degraded pill and Reconnecting banner (3 s binary health budget); the Home hero collapses only on real retryable 503s
 
@@ -2811,7 +2813,7 @@ The live Databricks deployment was not inspected.
 - **Tech:** Settings flag (for example MIP_PRESENTER_MODE) in app.yaml and the .env.local template, surfaced through /api/config/options; no new infrastructure.
 - **Verifier:** All four sites verified verbatim. BuyerReadinessPanel and CapabilityPanel sit behind the admin guard, so exposure is admin-only; the PROTOTYPE borrower mock is reachable by any approver. No presenter flag exists (grep). Flag plus settings, app.yaml, deploy payload, config endpoint and tests is M.
 
-**Wave-5 status.** W5b (2026-10-01): MIP_PRESENTER_MODE is built (refused for -t prod; the Offer's PROTOTYPE borrower preview is gated and lazy; the vendor copy reads Deployment readiness) (w5-audit-ledger-presenter). The rail M1-M4 slot gating and the OFF copy go to W5c w5-shell-nav-followups.
+**Wave-5 status.** W5b (2026-10-01): MIP_PRESENTER_MODE is built (refused for -t prod; the Offer's PROTOTYPE borrower preview is gated and lazy; the vendor copy reads Deployment readiness) (w5-audit-ledger-presenter). The rail M1-M4 slot gating and the OFF copy go to W5c w5-shell-nav-followups. The prod refusal runs at App promotion, after the bundle, UC and Lakebase steps; moving it into the deploy preflight gates goes to W5c w5-refusal-capture-sales.
 
 ### `critic-06` Assignment lifecycle control reads as a status, and the outcome picker has no cancel
 
@@ -3027,7 +3029,7 @@ The live Databricks deployment was not inspected.
 - **Risk:** Every card viewed is an audited draft generation, including skips. Commit must bind to the draft shown and handle a stale draft proof. Rubber-stamping optics: record time-per-decision.
 - **Already exists?** No — Partly. No triage surface (grep triage|useOptimistic|<Activity over frontend/src: none). The extraction the proposal asks for is already done on main: approveLead and bulkApprove live in frontend/src/components/mortgage/useLeadApprovalActions.ts:121 and :346, hotkeys in useLeadTableHotkeys.ts. Confirmed gap: approveLead calls api.draftOutreach then api.approve with draft_subject/draft_body and the copy is never rendered (useLeadApprovalActions.ts:150-185); LeadRowPreview.tsx contains no draft.
 
-**Wave-5 status.** W5b (2026-10-01): Triage deck at /lead-queue?mode=triage (w5-lead-triage-export): approver-only and lazy, one borrower at a time; it writes only on A (the draft), Confirm (APPROVE with review_mode triage) and R.
+**Wave-5 status.** W5b (2026-10-01): Triage deck at /lead-queue?mode=triage (w5-lead-triage-export): approver-only and lazy, one borrower at a time; it writes only on A (the draft), Confirm (APPROVE with review_mode triage) and R. tabindex=0 on the draft-body region goes to W5d w5-compiler-lint with its reviewed region-scroller option (a11y-05).
 
 ### `wow-power-6` Filter omnibox: type the cohort, see the count before Enter (merges wow-ai-6)
 
@@ -3113,7 +3115,7 @@ The live Databricks deployment was not inspected.
 - **Risk:** With the scheduler paused by default the briefing is stale on every fresh deploy: show run age and the paused state honestly. Membership snapshots grow: cap and expire. One card, never toasts.
 - **Already exists?** No — No Home watchlist surface (grep watchlist|monitor in frontend/src/routes/home.tsx: none). 'scheduler paused' is hard-coded at frontend/src/routes/ask-genie.saved-monitors.tsx:42. Runs store counts and averages (lakebase/schema.sql:2395-2400) but carry no monitor_id (schema.sql:2376-2412); monitors hold last_run_id only (backend/services/growth_agent_ledger_sql.py:85-92), so the claimed 'Phase 1 needs no schema change' does not hold. The scheduler ships PAUSED (databricks.yml:969-980), as does every bundle schedule (:870-878).
 
-**Wave-5 status.** W5b (2026-10-01): Home watchlist briefings (w5-home-geo-lever); the series link record for runs saved into an existing watchlist and new-entrant replay go to W5c w5-zcta-watchlist.
+**Wave-5 status.** W5b (2026-10-01): Home watchlist briefings (w5-home-geo-lever); the series link record for runs saved into an existing watchlist (with the WATCHLIST_SUMMARY_SQL OR-join plan fix), new-entrant replay and the card's slot reservation in home.tsx go to W5c w5-zcta-watchlist.
 
 ### `wow-ai-5` Living Genie tiles: pin an answer and keep it alive
 

@@ -170,6 +170,19 @@ read is polled, prefetched or refetched on window focus. `tools/verify_live.py`'
 ledger probes now write attributable `VIEW_AUDIT_LEDGER` rows; that is
 expected.
 
+Residuals (recorded 2026-10-01, owners in the 2026-09-21 UI/UX audit report,
+12.3). The `filter_fingerprint` is an unkeyed SHA-256 of the filter set
+(`audit_pagination.audit_filter_fingerprint`, also the cursor binding), so an
+actor-only filter can be recovered by hashing candidate emails. Only ledger
+readers can see these rows, and they already see actor emails, so the added
+exposure is small. Keying the stored copy with an HMAC (the cursor already
+derives one from the action secret) goes to W5c `w5-lead-queue-paging`
+before `VIEW_LEADS` adds a fingerprint of the same shape. The explorer's
+'Page CSV' downloads the loaded page without `POST /audit/export-receipt`, so
+no `AUDIT_EXPORT` row precedes it (the read that loaded that page wrote its
+own `VIEW_AUDIT_LEDGER` row); W5d `w5-print-glossary-sales-manager` wires the receipt and
+settles whether auditors may export.
+
 **Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
 keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`
 is the approval-surface open record: it is written only by
