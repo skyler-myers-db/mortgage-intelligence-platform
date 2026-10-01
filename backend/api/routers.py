@@ -10,6 +10,7 @@ router without touching app assembly.
 from backend.api import (
     activation,
     admin,
+    admin_sse_probe,
     analytics,
     analytics_rate_window,
     assets,
@@ -75,4 +76,5 @@ API_ROUTERS = [
     audit_receipt.router,
     telemetry.router,
     workspace.router,
+    admin_sse_probe.router,
 ]

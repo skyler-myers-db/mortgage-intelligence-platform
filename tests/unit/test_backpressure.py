@@ -284,3 +284,17 @@ def test_only_session_gets_leave_the_genie_budget(method: str, path: str) -> Non
 
     assert budget is not None
     assert (budget.scope, budget.dependency) == ("genie", "genie")
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/admin/sse-probe", "/api/v1/admin/sse-probe", "/api/v1/admin/sse-probe/0123456789abcdef"],
+)
+def test_the_admin_sse_probe_holds_no_dependency_slot(path: str) -> None:
+    # delivery-04: the probe streams for up to five minutes; it must never sit
+    # in the /api/admin warehouse branch and hold a warehouse slot meanwhile.
+    budget = BackpressureController().classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("admin-diagnostic", None)
+    assert BackpressureController().classify("GET", "/api/admin/rules").dependency == "warehouse"

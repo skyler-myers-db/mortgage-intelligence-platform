@@ -155,6 +155,10 @@ class BackpressureController:
             return None
         if path in {"/api/health", "/api/admin/health"}:
             return RouteBudget("health", settings.mip_rate_limit_default_per_minute, None)
+        if path.startswith("/api/admin/sse-probe"):
+            # The admin SSE ingress probe (audit delivery-04) streams for up to
+            # five minutes and reads nothing: no dependency slot, ever.
+            return RouteBudget("admin-diagnostic", settings.mip_rate_limit_default_per_minute, None)
         if path.startswith("/api/telemetry"):
             return RouteBudget("telemetry", settings.mip_rate_limit_telemetry_per_minute, None)
         if path == "/api/genie/message/progress":
