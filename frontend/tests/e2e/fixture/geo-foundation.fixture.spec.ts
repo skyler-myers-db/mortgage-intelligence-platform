@@ -59,15 +59,16 @@ async function setConsole(page: Page, open: boolean): Promise<void> {
 
 /**
  * Each state is its own load: drop the tab's persisted aggregate snapshot
- * (lib/queryPersist, 'mip.queryCache.v1') so a value a previous state served
- * cannot be restored into this one.
+ * (lib/queryPersist, 'mip.queryCache.v1') at the start of every document, so
+ * a value a previous state served (or a save on its pagehide) is never
+ * restored into this one.
  */
 async function forgetPersistedAggregates(page: Page): Promise<void> {
-  await page.evaluate(() => {
+  await page.addInitScript(() => {
     try {
       window.sessionStorage.removeItem('mip.queryCache.v1');
     } catch {
-      // about:blank before the first navigation has no storage.
+      // A document without storage has nothing to restore.
     }
   });
 }
@@ -79,6 +80,7 @@ test.describe('measured lever slot (D-dataviz-geo-d2 2(iv))', () => {
   test('the slot reserves the tallest state of the control, on Home and Segments, both themes, Console open and closed', async ({ app, mockApi, page }) => {
     test.setTimeout(300_000);
     const measured: Array<{ route: string; theme: FixtureTheme; console: boolean; state: LeverState; control: number; slot: number }> = [];
+    await forgetPersistedAggregates(page);
     for (const route of ['/', SEGMENTS_CLEARED]) {
       for (const theme of THEMES) {
         for (const consoleOpen of [false, true]) {
@@ -88,7 +90,6 @@ test.describe('measured lever slot (D-dataviz-geo-d2 2(iv))', () => {
             if (state === 'warming') restore = app.degrade(RATE_PATH, WAREHOUSE_WARMING_UP);
             if (state === 'failed') restore = app.degrade(RATE_PATH, { status: 500, body: { detail: 'fixture failure' } });
             mockApi.register('GET', RATE_PATH, () => ({ body: state === 'not-built' ? RATE_LEVER_NOT_BUILT : RATE_LEVER }));
-            await forgetPersistedAggregates(page);
             await app.gotoRoute(route);
             await setConsole(page, consoleOpen);
             if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TEXT_EMULATION });
@@ -122,7 +123,13 @@ test.describe('measured lever slot (D-dataviz-geo-d2 2(iv))', () => {
     expect(new Set(measured.map((row) => row.slot)).size, 'one reserved size in every state').toBe(1);
     const sp2 = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sp-2')));
     for (const row of measured) expect(row.slot, JSON.stringify(row)).toBeGreaterThanOrEqual(row.control);
-    expect(slot - max, `slot ${slot} against the tallest control ${max}`).toBeLessThan(sp2);
+    // Tightness is pinned where the slot was measured: Linux Chromium (CI).
+    // The off-Linux Geist Mono emulation under-measures the slider's tallest
+    // state by one wrapped line (131.06 vs 147.56px), so off Linux only the
+    // reservation (slot >= every state) is checked.
+    if (process.platform === 'linux') {
+      expect(slot - max, `slot ${slot} against the tallest control ${max}`).toBeLessThan(sp2);
+    }
   });
 
   test('a held control chunk does not move the stage when it arrives', async ({ app, page }) => {

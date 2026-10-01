@@ -27,16 +27,30 @@ function tableWrap(page: Page): Locator {
   return page.getByRole('region', { name: 'Ranked borrowers table scroll region' });
 }
 
-/** focus() the control at `start`; scrollLeft right after, and two frames later. */
-async function focusAt(control: Locator, start: number): Promise<{ settled: number }> {
+/**
+ * focus() the control at `start`; scrollLeft two frames later, plus the trail
+ * of offsets around the focus (the set, each scroll event, right after focus()
+ * and settled) so a failure says which side moved the table.
+ */
+async function focusAt(control: Locator, start: number): Promise<{ settled: number; trail: string }> {
   return control.evaluate(async (element, left) => {
     const wrap = element.closest<HTMLElement>('.tbl-wrap');
     if (!wrap) throw new Error('the control is not in the table scroller');
+    const trail: string[] = [];
+    const onScroll = () => trail.push(`scroll ${wrap.scrollLeft}`);
+    wrap.addEventListener('scroll', onScroll);
     wrap.scrollLeft = left;
+    trail.push(`set ${left} -> ${wrap.scrollLeft} (overflow ${wrap.scrollWidth - wrap.clientWidth})`);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    trail.push(`before focus ${wrap.scrollLeft}`);
     (element as HTMLElement).focus();
+    trail.push(`after focus() ${wrap.scrollLeft}`);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    return { settled: wrap.scrollLeft };
+    wrap.removeEventListener('scroll', onScroll);
+    const box = element.getBoundingClientRect();
+    const port = wrap.getBoundingClientRect();
+    trail.push(`settled ${wrap.scrollLeft}; control ${box.left.toFixed(1)}-${box.right.toFixed(1)} in port ${(port.left + wrap.clientLeft).toFixed(1)}-${(port.left + wrap.clientLeft + wrap.clientWidth).toFixed(1)}`);
+    return { settled: wrap.scrollLeft, trail: trail.join(' | ') };
   }, start);
 }
 
@@ -52,9 +66,9 @@ test('a focus on a pinned Approve or Reject leaves the table where it was, Conso
     const control = page.getByTestId(testId);
     // The middle first: the last focus is at scrollLeft 0, where the id shows.
     for (const start of [middle, 0]) {
-      const { settled } = await focusAt(control, start);
+      const { settled, trail } = await focusAt(control, start);
       await expect(control).toBeFocused();
-      expect(Math.abs(settled - start), `${testId} focused at scrollLeft ${start}`).toBeLessThanOrEqual(1);
+      expect(Math.abs(settled - start), `${testId} focused at scrollLeft ${start}: ${trail}`).toBeLessThanOrEqual(1);
     }
   }
   // The row's borrower id is still inside the scrollport.
