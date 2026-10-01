@@ -247,7 +247,7 @@ export interface ResponseSchemas {
     size_in_bytes: number | null;
     size_label: string | null;
     source_note: string | null;
-    status: "live" | "demo_synthetic" | "configured_empty" | "not_configured" | "roadmap" | "permission_denied" | "error" | "unknown";
+    status: "live" | "demo_synthetic" | "configured_empty" | "not_configured" | "roadmap" | "permission_denied" | "error" | "unavailable" | "unknown";
     tags: ResponseSchemas['AssetTag'][];
     title: string;
     uc_object: string;
@@ -275,6 +275,13 @@ export interface ResponseSchemas {
     assignment: ResponseSchemas['LeadAssignment'];
     audit_event_id: string | null;
   };
+  /** How many ledger rows match the explorer filters, counted up to ``cap``. */
+  AuditCountResponse: {
+    cap: number;
+    /** True when more rows match than the cap counts. */
+    capped: boolean;
+    count: number;
+  };
   AuditEvent: {
     action: string;
     actor: string;
@@ -294,6 +301,37 @@ export interface ResponseSchemas {
   AuditEventPage: {
     items: ResponseSchemas['AuditEvent'][];
     next_cursor: string | null;
+  };
+  /** The ``AUDIT_EXPORT`` ledger entry the explorer download waits for. */
+  AuditExportReceipt: {
+    actor: string;
+    audit_event_id: string;
+    csv_sha256: string;
+    event_ids_sha256: string;
+    event_type: "AUDIT_EXPORT";
+    filter_fingerprint: string;
+    recorded_at: string;
+    row_count: number;
+  };
+  /** One distinct ledger value and how many rows carry it in the window. */
+  AuditFacetValue: {
+    count: number;
+    value: string;
+  };
+  /** Distinct event types, actions and actors in the ledger window, most frequent first. */
+  AuditFacetsResponse: {
+    actions: ResponseSchemas['AuditFacetValue'][];
+    actors: ResponseSchemas['AuditFacetValue'][];
+    event_types: ResponseSchemas['AuditFacetValue'][];
+    since: string;
+    truncated: ResponseSchemas['AuditFacetsTruncated'];
+    until: string | null;
+  };
+  /** Per facet: true when more distinct values exist than were returned. */
+  AuditFacetsTruncated: {
+    actions: boolean;
+    actors: boolean;
+    event_types: boolean;
   };
   AuditRollupResponse: {
     bucket_start: string;
@@ -602,7 +640,7 @@ export interface ResponseSchemas {
     name: string;
     note: string;
     row_count: number | null;
-    status: "live" | "demo_synthetic" | "configured_empty" | "not_configured" | "roadmap" | "permission_denied" | "error";
+    status: "live" | "demo_synthetic" | "configured_empty" | "not_configured" | "roadmap" | "permission_denied" | "error" | "unavailable";
     synthetic_demo: boolean;
     uc_object: string | null;
   };
@@ -610,7 +648,7 @@ export interface ResponseSchemas {
     assets: ResponseSchemas['DataEstateAsset'][];
     description: string;
     id: string;
-    status: "live" | "demo_synthetic" | "configured_empty" | "not_configured" | "roadmap" | "permission_denied" | "error";
+    status: "live" | "demo_synthetic" | "configured_empty" | "not_configured" | "roadmap" | "permission_denied" | "error" | "unavailable";
     title: string;
   };
   DataEstateResponse: {
@@ -2188,6 +2226,18 @@ export interface RequestSchemas {
     subject_clip?: string | null;
     subject_segment?: string | null;
   };
+  /** What the explorer declares about the ledger CSV it is about to download. */
+  AuditExportReceiptRequest: {
+    /** SHA-256 (hex) of the exact CSV bytes handed to the download. */
+    csv_sha256: string;
+    /** Audit event ids in the order the file holds them. */
+    event_ids: string[];
+    /** SHA-256 (hex) of the compact JSON array of event_ids, computed client-side; the server recomputes it and refuses the receipt on a mismatch. The ids themselves are not stored. */
+    event_ids_sha256: string;
+    /** The explorer query parameters the exported rows were read with. Only their fingerprint is written to the ledger. */
+    filters?: { [key: string]: string };
+    row_count: number;
+  };
   /** Optional exact treatment-count contract for Portfolio Builder previews. */
   CampaignBuildPreviewConfig: {
     household_dedup?: RequestSchemas['HouseholdDedupConfig'];
@@ -2843,6 +2893,23 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['SignalAnalyticsResponse'];
   };
+  "GET /api/v1/audit/count": {
+    pathParams: Record<string, never>;
+    query: {
+      actor?: string | null;
+      action?: string | null;
+      entity_id?: string | null;
+      borrower_id?: string | null;
+      subject_clip?: string | null;
+      event_type?: string | null;
+      correlation_id?: string | null;
+      since?: string | null;
+      until?: string | null;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['AuditCountResponse'];
+  };
   "GET /api/v1/audit/events": {
     pathParams: Record<string, never>;
     query: {
@@ -2882,6 +2949,16 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['AuditEventPage'];
+  };
+  "GET /api/v1/audit/facets": {
+    pathParams: Record<string, never>;
+    query: {
+      since?: string | null;
+      until?: string | null;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['AuditFacetsResponse'];
   };
   "GET /api/v1/audit/my-events": {
     pathParams: Record<string, never>;
@@ -3447,6 +3524,13 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['AuditEventCreateRequest'];
     ok: ResponseSchemas['AuditEvent'];
+  };
+  "POST /api/v1/audit/export-receipt": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['AuditExportReceiptRequest'];
+    ok: ResponseSchemas['AuditExportReceipt'];
   };
   "POST /api/v1/genie/actions": {
     pathParams: Record<string, never>;
