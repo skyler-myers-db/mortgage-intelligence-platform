@@ -7,7 +7,7 @@ This repo runs four workflows:
 | [`ci.yml`](ci.yml) | `pull_request`, `push` to `main` / `feature/*` | **None.** Every job is credential-free. |
 | [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | Required — see below. |
 | [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` | Required — Databricks dev deployment credentials. |
-| [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | **None. Non-deploying scaffold gate only.** |
+| [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | **GITHUB_TOKEN (actions: read) only, for the live-validation age check. Non-deploying scaffold gate only.** |
 
 The PR workflow (`ci.yml`) is designed to stay green for any contributor
 including fork-based PRs: it uses placeholder BUNDLE_VARs and pytest
@@ -76,6 +76,16 @@ to a production workspace. It is an explicit scaffold-only placeholder. The
 only implemented mutable workflow is the governed dev deployment above;
 production requires a separately reviewed environment contract before a real
 workflow may call `scripts/deploy.sh -t prod`.
+
+Its second job, `live-validation-age`, is the release gate on live evidence
+(audit quality-03 item 3): it runs `python -m tools.live_validation_gate
+--release-sha "$GITHUB_SHA" --max-age-days 14` with the workflow's own
+read-only `GITHUB_TOKEN` (`contents: read`, `actions: read`) and no other
+credential. It passes only when the newest completed `nightly.yml` run on
+`main` whose code is runtime-equivalent to the release commit is green, at
+most 14 days old, and its parity, Playwright and simulated-drill jobs all
+succeeded. A FAIL names the fix: dispatch `deploy-dev.yml` on that commit,
+then `nightly.yml` on the same commit.
 
 ---
 

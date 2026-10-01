@@ -2,6 +2,9 @@ name: prod-readiness-gate
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   non-deploying-prod-gate:
     name: Non-deploying production scaffold gate
@@ -10,3 +13,25 @@ jobs:
       - uses: actions/checkout@v6
       - run: python tools/verify_scaffold.py
       - run: echo "No production deployment occurred; this workflow validates repository scaffolding only."
+
+  # The release gate on the last green live-validation run (audit quality-03
+  # item 3): a runtime-equivalent nightly.yml run on main, 14 days old or
+  # newer, with its three release jobs green. GitHub's own token, read-only;
+  # nothing here deploys or authenticates to Databricks.
+  live-validation-age:
+    name: Live validation age and runtime equivalence
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Live-validation release gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m tools.live_validation_gate --release-sha "$GITHUB_SHA" --max-age-days 14
