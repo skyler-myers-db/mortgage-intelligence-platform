@@ -19,7 +19,10 @@ from backend.services.audit_store import get_audit_store
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
-from tests.unit.growth_refusal_contract import assert_only_refusal_audit_events
+from tests.unit.growth_refusal_contract import (
+    assert_only_refusal_audit_events,
+    post_growth_execute,
+)
 from tests.unit.test_growth_agent_api import _FakeLakebaseClient, _FakeSqlClient
 
 _UNSAFE_OBJECTIVES = (
@@ -106,10 +109,8 @@ def test_round15_unsafe_objectives_reject_before_planners_and_side_effects(
             },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": objective, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
         )
 
     assert run_response.status_code == 422

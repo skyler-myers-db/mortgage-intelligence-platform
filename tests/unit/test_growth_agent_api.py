@@ -32,6 +32,7 @@ from backend.services.growth_agent_drafts import create_notification_drafts
 from backend.services.growth_agent_workflows import custom_workflow
 from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.unit.growth_refusal_contract import post_growth_execute
 
 
 def _handoff_token(route: str) -> str:
@@ -3335,10 +3336,8 @@ def test_uncommon_lowercase_name_rejection_precedes_run_and_compose_side_effects
             },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": objective, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
         )
     finally:
         _clear_overrides()
@@ -3401,10 +3400,8 @@ def test_round16_shared_growth_semantics_precede_both_planners_and_stores(
             json=run_body,
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
-        compose_response = client.post(
-            "/api/growth-agent/agent/compose",
-            json={"objective": objective, "execute": True},
-            headers={"X-Forwarded-Email": "operator@example.com"},
+        compose_response = post_growth_execute(
+            client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
         )
     finally:
         _clear_overrides()

@@ -15,8 +15,10 @@ incidental ValidationError.
 
 from __future__ import annotations
 
+import json
+import os
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import ValidationError
@@ -60,6 +62,92 @@ def assert_refused_with_audit(response: Any, *, code: str | None = None) -> str:
         assert reason == code, body
     assert body.get("audit_event_id"), body
     return str(reason)
+
+
+# The reviewed-plan execute path (audit 2026-09-21 critic-01). A refused
+# objective must be refused BEFORE the plan or its digest is looked at, so the
+# batteries post a minimal, schema-valid plan with a well-formed but unsigned
+# digest: a guard that let the objective through would fail the battery with
+# a 409/503, never a silent pass.
+PLAN_EXECUTE_PATH = "/api/growth-agent/agent/plan/execute"
+LEGACY_COMPOSE_PATH = "/api/growth-agent/agent/compose"
+PARITY_PROBE_PLAN: dict[str, Any] = {
+    "objective_summary": "Refusal parity probe.",
+    "steps": [{"step_id": "step-1", "tool": "fn_build_cohort", "params": {}, "rationale": ""}],
+    "expected_outcome": "",
+    "risk_notes": "",
+    "requires_approval": False,
+}
+PARITY_PROBE_DIGEST = "v1.v1.1790000000." + "A" * 43
+# Names a scratch JSONL file that collects every objective the batteries post
+# (the tree-swap differential's corpus). Unset means no write; the file is
+# never committed.
+EXECUTE_PARITY_CORPUS_ENV = "MIP_EXECUTE_PARITY_CORPUS"
+
+
+def execute_body(objective: str, states: Sequence[str] | None = None) -> dict[str, Any]:
+    """The /agent/plan/execute body a refusal battery posts."""
+
+    return {
+        "objective": objective,
+        "states": list(states or []),
+        "plan": json.loads(json.dumps(PARITY_PROBE_PLAN)),
+        "plan_digest": PARITY_PROBE_DIGEST,
+    }
+
+
+def _record_parity_objective(objective: str, states: Sequence[str] | None) -> None:
+    path = os.environ.get(EXECUTE_PARITY_CORPUS_ENV, "").strip()
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as corpus:
+        corpus.write(json.dumps({"objective": objective, "states": list(states or [])}) + "\n")
+
+
+def post_growth_execute(
+    client: Any,
+    objective: str,
+    *,
+    headers: Mapping[str, str],
+    states: Sequence[str] | None = None,
+) -> Any:
+    """Post a refused objective to BOTH execute paths and prove they agree.
+
+    Parity harness, before the one-shot execute is retired: the batteries'
+    ``{objective, execute: true}`` post to ``/agent/compose`` and the same
+    objective on ``/agent/plan/execute`` must both be governed refusals with
+    an audit row and the SAME ``refusal_reason``. Returns the compose
+    response, so each caller keeps its own assertions on it.
+    """
+
+    _record_parity_objective(objective, states)
+    compose = client.post(
+        LEGACY_COMPOSE_PATH,
+        json={"objective": objective, "states": list(states or []), "execute": True},
+        headers=dict(headers),
+    )
+    execute = client.post(PLAN_EXECUTE_PATH, json=execute_body(objective, states), headers=dict(headers))
+    assert refusal_signature(compose) == refusal_signature(execute), (compose.text, execute.text)
+    return compose
+
+
+def refusal_signature(response: Any) -> tuple[int, str | None, str | None]:
+    """``(status, refusal_reason, detail)`` of a refused co-pilot request.
+
+    A guard-family refusal must carry its audit row (``assert_refused_with_
+    audit``) and is compared on its reason. A non-guard 422 (the named-
+    workflow and shared-semantics policies raise plain validation errors with
+    no refusal reason) is compared on its fixed public detail instead.
+    """
+
+    assert response.status_code == 422, response.text
+    body = response.json()
+    reason = body.get("refusal_reason")
+    if reason is not None:
+        assert_refused_with_audit(response)
+        return (422, str(reason), None)
+    detail = body.get("detail")
+    return (422, None, json.dumps(detail, sort_keys=True))
 
 
 def assert_refusal_isolation(dependencies: Sequence[Any]) -> None:

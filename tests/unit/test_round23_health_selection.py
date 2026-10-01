@@ -32,6 +32,7 @@ from backend.services.lakebase import get_lakebase_client
 from tests.unit.growth_refusal_contract import (
     GROWTH_REFUSAL_MESSAGE_RE,
     assert_refusal_isolation,
+    post_growth_execute,
 )
 
 _DISCLOSURE = MagicMock(
@@ -191,10 +192,8 @@ def test_unseen_formation_stops_before_planners_models_or_audit_writes(
         json={"prompt": objective, "save_monitor": True, "cadence": "daily"},
         headers={"X-Forwarded-Email": "operator@example.com"},
     )
-    compose_response = client.post(
-        "/api/growth-agent/agent/compose",
-        json={"objective": objective, "execute": True},
-        headers={"X-Forwarded-Email": "operator@example.com"},
+    compose_response = post_growth_execute(
+        client, objective, headers={"X-Forwarded-Email": "operator@example.com"}
     )
 
     assert run_response.status_code == 422, run_response.text
