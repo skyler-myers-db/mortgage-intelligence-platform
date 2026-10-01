@@ -51,6 +51,8 @@ GOLD_DDL_FILES: tuple[str, ...] = (
     "gold_rate_sensitivity_rollup.sql",
     # wow-stage-1: the Rate Lever's gated notes, so the App reads gold only.
     "gold_rate_sensitivity_book.sql",
+    # wow-stage-5: the signal stack's exact core-segment combinations.
+    "gold_segment_combination_rollup.sql",
 )
 
 GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
@@ -69,6 +71,7 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
     "gold_rate_window_weekly.sql",
     "gold_rate_sensitivity_rollup.sql",
     "gold_rate_sensitivity_book.sql",
+    "gold_segment_combination_rollup.sql",
 )
 
 # Target UC paths. The manifest (003_gold_tables.sql) must reference each.
@@ -93,6 +96,7 @@ GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.rate_window_weekly",
     "mip.gold.rate_sensitivity_rollup",
     "mip.gold.rate_sensitivity_book",
+    "mip.gold.segment_combination_rollup",
 )
 
 FORBIDDEN_PII_COLUMNS: tuple[str, ...] = (
@@ -379,6 +383,7 @@ _TIMESTAMP_SHARED_CTAS_FILES: tuple[str, ...] = (
     "gold_rate_window_weekly.sql",
     "gold_rate_sensitivity_rollup.sql",
     "gold_rate_sensitivity_book.sql",
+    "gold_segment_combination_rollup.sql",
 )
 
 

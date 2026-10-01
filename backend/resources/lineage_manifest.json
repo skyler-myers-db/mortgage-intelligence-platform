@@ -607,6 +607,16 @@
           "note": "Predicate, mode, geography, count, and average score per segment."
         },
         {
+          "id": "gold_segment_combination_rollup",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "segment_combination_rollup",
+          "label": "Gold segment combination rollup",
+          "note": "Signal stack: borrowers per exact set of the six core segments, from borrower_360 segment membership; contactable is joined live."
+        },
+        {
           "id": "mv_segment_performance",
           "layer": "metric_view",
           "object_type": "view",

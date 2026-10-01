@@ -64,6 +64,7 @@ export const ASSET_KEYS_BY_SOURCE: Readonly<Record<string, string>> = {
   'mip.silver.refi_propensity': 'refi_propensity',
   'mip.gold.lead_population': 'lead_population',
   'mip.gold.segment_population': 'segment_population',
+  'mip.gold.segment_combination_rollup': 'segment_combination_rollup',
   'mip.gold.lead_scores': 'lead_scores',
   'mip.gold.borrower_360': 'borrower_360',
   'mip.gold.borrower_dossier': 'borrower_dossier',

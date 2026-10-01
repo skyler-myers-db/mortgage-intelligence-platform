@@ -492,6 +492,7 @@ resources:
     #  14. rate_window_weekly            (needs borrower_360 + silver.lien_current + silver.market_rates_weekly -- why-now rate window)
     #  15. rate_sensitivity_rollup       (needs borrower_360 + silver.lien_current -- Rate Lever scenario grid)
     #  16. rate_sensitivity_book         (needs borrower_360 + silver.lien_current -- Rate Lever gated notes, so the App reads gold only)
+    #  17. segment_combination_rollup    (needs borrower_360 -- signal stack: borrowers per exact set of the six core segments)
     #
     # The DDL manifest (003_gold_tables.sql) is CREATE TABLE IF NOT EXISTS,
     # so running it on every refresh is safe and picks up any newly-added
@@ -777,6 +778,18 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_state_top_segment.sql
+        # Signal stack (2026-09-21 UI/UX audit, wow-stage-5): borrowers per
+        # exact set of the six core segment codes (at most 63 rows). Reads
+        # gold.borrower_360 behind the freshness sentinel; writes its own
+        # sibling table, so it parallelizes with the rollups.
+        - task_key: ctas_segment_combination_rollup
+          description: "Rebuild mip.gold.segment_combination_rollup via CTAS (signal stack: borrowers per exact core segment set)."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_segment_combination_rollup.sql
         # Rate Lever scenario grid (2026-09-21 UI/UX audit, wow-stage-1):
         # per state and par-rate step (-100 .. +100 bps), the addressable
         # borrowers that clear the refi screen with fn_rate_spread /

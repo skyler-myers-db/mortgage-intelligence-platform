@@ -14328,6 +14328,156 @@
         "title": "SegmentByStateRow",
         "type": "object"
       },
+      "SegmentCombination": {
+        "description": "Borrowers carrying EXACTLY these core segment codes (and no other core code).",
+        "properties": {
+          "addressable": {
+            "description": "Borrowers in gold.borrower_360 carrying exactly this set.",
+            "minimum": 0.0,
+            "title": "Addressable",
+            "type": "integer"
+          },
+          "contactable": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The contact-eligible subset of addressable (live eligibility predicate, clamped to addressable). None means not reported, never zero.",
+            "title": "Contactable"
+          },
+          "segment_codes": {
+            "description": "The exact set of core segment codes, distinct and in core order.",
+            "items": {
+              "enum": [
+                "itm",
+                "listed",
+                "permit",
+                "investor",
+                "equity",
+                "retention",
+                "second_lien_itm",
+                "heloc_draw_to_payback",
+                "home_equity_history",
+                "refi_propensity",
+                "itm_on_related_property",
+                "payoff_loss_leads",
+                "permit_activity"
+              ],
+              "type": "string"
+            },
+            "title": "Segment Codes",
+            "type": "array"
+          },
+          "signal_count": {
+            "description": "Number of codes in segment_codes.",
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Signal Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "segment_codes",
+          "signal_count",
+          "addressable"
+        ],
+        "title": "SegmentCombination",
+        "type": "object"
+      },
+      "SegmentCombinationProvenance": {
+        "description": "Evidence manifest for the signal stack.",
+        "properties": {
+          "contactable_source": {
+            "description": "Where the live contactable subset comes from.",
+            "title": "Contactable Source",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Refresh anchor of the gold rows.",
+            "title": "Refreshed At"
+          },
+          "source": {
+            "description": "The precomputed gold table the exact rows come from.",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "contactable_source",
+          "note"
+        ],
+        "title": "SegmentCombinationProvenance",
+        "type": "object"
+      },
+      "SegmentCombinationResponse": {
+        "properties": {
+          "built": {
+            "description": "False until the gold refresh has built mip.gold.segment_combination_rollup.",
+            "title": "Built",
+            "type": "boolean"
+          },
+          "combinations": {
+            "description": "Exact combinations, largest addressable first, then by combination key.",
+            "items": {
+              "$ref": "#/components/schemas/SegmentCombination"
+            },
+            "title": "Combinations",
+            "type": "array"
+          },
+          "core_codes": {
+            "description": "The six core segment codes the rows are drawn from, in core order.",
+            "items": {
+              "enum": [
+                "itm",
+                "listed",
+                "permit",
+                "investor",
+                "equity",
+                "retention",
+                "second_lien_itm",
+                "heloc_draw_to_payback",
+                "home_equity_history",
+                "refi_propensity",
+                "itm_on_related_property",
+                "payoff_loss_leads",
+                "permit_activity"
+              ],
+              "type": "string"
+            },
+            "title": "Core Codes",
+            "type": "array"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/SegmentCombinationProvenance"
+          }
+        },
+        "required": [
+          "built",
+          "core_codes",
+          "combinations",
+          "provenance"
+        ],
+        "title": "SegmentCombinationResponse",
+        "type": "object"
+      },
       "SegmentMetricRow": {
         "properties": {
           "segment_code": {
@@ -23341,6 +23491,29 @@
         ]
       }
     },
+    "/api/segments/combinations": {
+      "get": {
+        "deprecated": true,
+        "description": "Where several Cotality signals fire on the same borrower (audit wow-stage-5).\n\nOne row per non-empty exact set of the six core segment codes, whole book\nand never narrowed by a filter, with the addressable count from\n``mip.gold.segment_combination_rollup`` and a live contactable subset.\n``built`` is False until the gold refresh job has built the table. A cold\nwarehouse surfaces as the resilience layer's 503 ``warming_up``; there is\nno fallback, and the route writes no audit row.",
+        "operationId": "get_api_segments_combinations_segment_combinations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentCombinationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Segment Combinations",
+        "tags": [
+          "segments"
+        ]
+      }
+    },
     "/api/session": {
       "get": {
         "deprecated": true,
@@ -31242,6 +31415,28 @@
           }
         },
         "summary": "List Segments",
+        "tags": [
+          "segments"
+        ]
+      }
+    },
+    "/api/v1/segments/combinations": {
+      "get": {
+        "description": "Where several Cotality signals fire on the same borrower (audit wow-stage-5).\n\nOne row per non-empty exact set of the six core segment codes, whole book\nand never narrowed by a filter, with the addressable count from\n``mip.gold.segment_combination_rollup`` and a live contactable subset.\n``built`` is False until the gold refresh job has built the table. A cold\nwarehouse surfaces as the resilience layer's 503 ``warming_up``; there is\nno fallback, and the route writes no audit row.",
+        "operationId": "get_api_v1_segments_combinations_segment_combinations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentCombinationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Segment Combinations",
         "tags": [
           "segments"
         ]
