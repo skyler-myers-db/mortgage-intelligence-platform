@@ -17,6 +17,7 @@
 
 export const API_ROUTE_SEGMENTS = [
   'actions', 'activation', 'admin', 'agent', 'aging', 'analytics', 'approve',
+  'approval-requests',
   'assets', 'assign', 'assignment', 'assignment-overlay', 'assignments', 'audit',
   'borrowers', 'campaign-performance', 'campaign-recommendation', 'campaigns',
   'cancel',
@@ -39,6 +40,7 @@ export const API_ROUTE_SEGMENTS = [
   'run-due', 'run-due-all', 'sales', 'search', 'segments', 'session', 'sessions',
   'settings', 'signals', 'sources', 'stage', 'standup', 'start', 'state-rollups',
   'status', 'submit', 'summary', 'team', 'telemetry', 'workflows', 'workspace',
+  'withdraw',
   'zip-rollups',
 ] as const;
 

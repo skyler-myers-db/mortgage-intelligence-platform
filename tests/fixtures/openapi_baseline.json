@@ -1315,6 +1315,274 @@
         "title": "ApprovalFunnelStage",
         "type": "object"
       },
+      "ApprovalRequestBatchView": {
+        "description": "One request as a reader may see it.",
+        "properties": {
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "is_mine": {
+            "title": "Is Mine",
+            "type": "boolean"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "requested_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The requester's own identity, present only in their own scope=mine list.",
+            "title": "Requested By"
+          },
+          "requested_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A readable label derived from the requester's identity, never looked up.",
+            "title": "Requested By Display"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRequestRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_id",
+          "requested_by_display",
+          "is_mine",
+          "note",
+          "created_at",
+          "rows"
+        ],
+        "title": "ApprovalRequestBatchView",
+        "type": "object"
+      },
+      "ApprovalRequestCreate": {
+        "additionalProperties": false,
+        "description": "POST /outreach/approval-requests: ask an approver to review named borrowers.",
+        "properties": {
+          "borrower_ids": {
+            "description": "The masked borrower ids to request approval for, each named once.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Borrower Ids",
+            "type": "array"
+          },
+          "note": {
+            "description": "Why these borrowers: required, without personal details. It is screened by the governed text policy and recorded on the audit row.",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Note",
+            "type": "string"
+          },
+          "request_key": {
+            "description": "Client idempotency key (a UUID); a retry with the same key replays the stored answer.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_ids",
+          "note",
+          "request_key"
+        ],
+        "title": "ApprovalRequestCreate",
+        "type": "object"
+      },
+      "ApprovalRequestCreated": {
+        "description": "The stored answer to one request; a replay of its key returns it unchanged.",
+        "properties": {
+          "audit_event_id": {
+            "description": "The APPROVAL_REQUESTED audit row written with the request.",
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "batch_id": {
+            "description": "Server-issued request id (UUID).",
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "requested": {
+            "description": "The borrowers the request now holds open.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Requested",
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRequestSkip"
+            },
+            "title": "Skipped",
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_id",
+          "audit_event_id",
+          "requested",
+          "skipped"
+        ],
+        "title": "ApprovalRequestCreated",
+        "type": "object"
+      },
+      "ApprovalRequestList": {
+        "description": "GET /outreach/approval-requests: audit-free, Lakebase app state only.",
+        "properties": {
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRequestBatchView"
+            },
+            "title": "Batches",
+            "type": "array"
+          },
+          "scope": {
+            "enum": [
+              "open",
+              "mine"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "batches"
+        ],
+        "title": "ApprovalRequestList",
+        "type": "object"
+      },
+      "ApprovalRequestRow": {
+        "description": "One requested borrower and the state derived for it.",
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The linked approvals row, for approved and rejected only.",
+            "title": "Approval Id"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "state": {
+            "description": "approved / rejected: an approver decided it through this request; decided_outside: decided without the request link; withdrawn: the requester withdrew it; expired: older than 30 days or reopened by a revoke; open: awaiting an approver.",
+            "enum": [
+              "open",
+              "approved",
+              "rejected",
+              "decided_outside",
+              "withdrawn",
+              "expired"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "state"
+        ],
+        "title": "ApprovalRequestRow",
+        "type": "object"
+      },
+      "ApprovalRequestSkip": {
+        "description": "A selected borrower the request did not include, and why.",
+        "properties": {
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "reason": {
+            "description": "not_found: no such borrower; not_contactable: not marketing eligible, do-not-contact, no opt-in consent or suppressed; already_decided: an approval decision exists; already_requested: another open request already holds the borrower.",
+            "enum": [
+              "not_found",
+              "not_contactable",
+              "already_decided",
+              "already_requested"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "reason"
+        ],
+        "title": "ApprovalRequestSkip",
+        "type": "object"
+      },
+      "ApprovalRequestWithdrawn": {
+        "description": "The requester's withdraw: open borrowers close; a repeat changes nothing.",
+        "properties": {
+          "already_closed": {
+            "description": "Borrowers that were no longer open.",
+            "title": "Already Closed",
+            "type": "integer"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The APPROVAL_REQUEST_WITHDRAWN audit row, only when this call withdrew any.",
+            "title": "Audit Event Id"
+          },
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "withdrawn_now": {
+            "description": "Borrowers this call withdrew.",
+            "title": "Withdrawn Now",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id",
+          "withdrawn_now",
+          "already_closed"
+        ],
+        "title": "ApprovalRequestWithdrawn",
+        "type": "object"
+      },
       "ApproverActivityRow": {
         "description": "Who approved what \u2014 one row per human approve decision.",
         "properties": {
@@ -25084,6 +25352,167 @@
         ]
       }
     },
+    "/api/outreach/approval-requests": {
+      "get": {
+        "deprecated": true,
+        "description": "Audit-free: Lakebase workflow app state, no borrower attribute.",
+        "operationId": "get_api_outreach_approval_requests_list_outreach_approval_requests",
+        "parameters": [
+          {
+            "description": "open: every open request (approvers only); mine: your own. Defaults by role.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "mine"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "open: every open request (approvers only); mine: your own. Defaults by role.",
+              "title": "Scope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Outreach Approval Requests",
+        "tags": [
+          "outreach"
+        ]
+      },
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_outreach_approval_requests_request_outreach_approval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Outreach Approval",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
+    "/api/outreach/approval-requests/{batch_id}/withdraw": {
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_outreach_approval_requests_batch_id_withdraw_withdraw_outreach_approval_request",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestWithdrawn"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Outreach Approval Request",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
     "/api/outreach/approve": {
       "post": {
         "deprecated": true,
@@ -35071,6 +35500,164 @@
         "summary": "Recommend Offer",
         "tags": [
           "offers"
+        ]
+      }
+    },
+    "/api/v1/outreach/approval-requests": {
+      "get": {
+        "description": "Audit-free: Lakebase workflow app state, no borrower attribute.",
+        "operationId": "get_api_v1_outreach_approval_requests_list_outreach_approval_requests",
+        "parameters": [
+          {
+            "description": "open: every open request (approvers only); mine: your own. Defaults by role.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "mine"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "open: every open request (approvers only); mine: your own. Defaults by role.",
+              "title": "Scope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Outreach Approval Requests",
+        "tags": [
+          "outreach"
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_outreach_approval_requests_request_outreach_approval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Outreach Approval",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
+    "/api/v1/outreach/approval-requests/{batch_id}/withdraw": {
+      "post": {
+        "operationId": "post_api_v1_outreach_approval_requests_batch_id_withdraw_withdraw_outreach_approval_request",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestWithdrawn"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Outreach Approval Request",
+        "tags": [
+          "outreach"
         ]
       }
     },

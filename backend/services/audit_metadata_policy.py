@@ -206,6 +206,16 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # audit explorer's CSV. It reuses exported_row_count, csv_sha256 and
         # filter_fingerprint above; the event ids are only hashed, not stored.
         "event_ids_sha256",
+        # Maker-checker approval requests (backend/api/approval_requests.py):
+        # the server-issued request id, three bounded counts, and the skipped
+        # borrowers grouped under the four closed skip reasons. The note rides
+        # on ``rationale`` (free-text policy). APPROVE / OUTREACH_REJECT carry
+        # approval_request_batch_id when the decision names a request.
+        "approval_request_batch_id",
+        "requested_count",
+        "skipped_count",
+        "withdrawn_count",
+        "skipped_by_reason",
         # SAVE_QUEUE_VIEW / DELETE_QUEUE_VIEW (backend/api/workspace.py): the
         # server-issued view id only. The view's name and params never reach
         # the ledger; filter_fingerprint (above) is their SHA-256.
@@ -467,6 +477,7 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "draft_generation_id",
         "growth_agent_run_id",
         "genie_job_id",
+        "approval_request_batch_id",
     }
 )
 _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(

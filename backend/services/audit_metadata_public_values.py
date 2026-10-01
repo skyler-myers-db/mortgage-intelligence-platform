@@ -89,6 +89,43 @@ _PUBLIC_CEILING_FLOOR_TWINS: tuple[tuple[str, str], ...] = (
 )
 
 
+# The closed reasons a requested borrower can be skipped for (the
+# ApprovalRequestSkip.reason vocabulary).
+_APPROVAL_REQUEST_SKIP_REASONS: frozenset[str] = frozenset(
+    {"not_found", "not_contactable", "already_decided", "already_requested"}
+)
+_MAX_APPROVAL_REQUEST_BORROWERS = 500
+
+
+def _assert_approval_request_values(metadata: dict[str, Any]) -> None:
+    """Approval-request ledger values: bounded counts and reason-grouped ids."""
+
+    for field, value in _metadata_values_for(
+        metadata, {"requested_count", "skipped_count", "withdrawn_count"}
+    ):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"skipped_by_reason"}):
+        if value is None:
+            continue
+        if not isinstance(value, dict) or set(value) - _APPROVAL_REQUEST_SKIP_REASONS:
+            raise AuditMetadataValueViolation(field, "must group ids under the closed skip reasons")
+        for ids in value.values():
+            if not isinstance(ids, list) or len(ids) > _MAX_APPROVAL_REQUEST_BORROWERS:
+                raise AuditMetadataValueViolation(field, "must hold bounded borrower id lists")
+            for item in ids:
+                try:
+                    validate_public_borrower_id(str(item))
+                except ValueError as exc:
+                    raise AuditMetadataValueViolation(
+                        field, "must contain only app-scoped public borrower ids"
+                    ) from exc
+
+
 def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     """Validate reviewed free-ish values that have their own public policy."""
     if not metadata:
@@ -485,6 +522,7 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             or not 0 <= value <= _MAX_DRAFT_AGE_SECONDS
         ):
             raise AuditMetadataValueViolation(field, "must be a bounded whole number of seconds")
+    _assert_approval_request_values(metadata)
     for field, value in _metadata_values_for(metadata, {"exported_row_count"}):
         if value is None:
             continue

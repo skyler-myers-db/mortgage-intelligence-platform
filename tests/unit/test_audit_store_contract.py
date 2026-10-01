@@ -228,6 +228,12 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # inserted by the same statement (tests/unit/test_saved_views_store.py).
     "create_saved_view": ("store.create(",),
     "delete_saved_view": ("store.delete(",),
+    # Maker-checker approval requests: APPROVAL_REQUESTED (or, for a
+    # zero-eligible attempt, APPROVAL_REQUEST_REFUSED) and
+    # APPROVAL_REQUEST_WITHDRAWN are written by the service in Lakebase
+    # transactions (tests/unit/test_approval_requests_api.py).
+    "request_outreach_approval": ("create_approval_request(",),
+    "withdraw_outreach_approval_request": ("withdraw_approval_request(",),
     "stage_activation": ("store.stage_borrower(", "_assert_activation_eligible("),
 }
 

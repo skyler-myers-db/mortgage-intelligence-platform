@@ -194,6 +194,57 @@ export interface ResponseSchemas {
     stage: "population" | "high_opportunity" | "approved" | "actioned" | "outcome_recorded";
     stage_order: number;
   };
+  /** One request as a reader may see it. */
+  ApprovalRequestBatchView: {
+    batch_id: string;
+    created_at: string;
+    is_mine: boolean;
+    note: string;
+    /** The requester's own identity, present only in their own scope=mine list. */
+    requested_by: string | null;
+    /** A readable label derived from the requester's identity, never looked up. */
+    requested_by_display: string | null;
+    rows: ResponseSchemas['ApprovalRequestRow'][];
+  };
+  /** The stored answer to one request; a replay of its key returns it unchanged. */
+  ApprovalRequestCreated: {
+    /** The APPROVAL_REQUESTED audit row written with the request. */
+    audit_event_id: string;
+    /** Server-issued request id (UUID). */
+    batch_id: string;
+    /** The borrowers the request now holds open. */
+    requested: string[];
+    skipped: ResponseSchemas['ApprovalRequestSkip'][];
+  };
+  /** GET /outreach/approval-requests: audit-free, Lakebase app state only. */
+  ApprovalRequestList: {
+    batches: ResponseSchemas['ApprovalRequestBatchView'][];
+    scope: "open" | "mine";
+  };
+  /** One requested borrower and the state derived for it. */
+  ApprovalRequestRow: {
+    /** The linked approvals row, for approved and rejected only. */
+    approval_id: string | null;
+    borrower_id: string;
+    /** approved / rejected: an approver decided it through this request; decided_outside: decided without the request link; withdrawn: the requester withdrew it; expired: older than 30 days or reopened by a revoke; open: awaiting an approver. */
+    state: "open" | "approved" | "rejected" | "decided_outside" | "withdrawn" | "expired";
+  };
+  /** A selected borrower the request did not include, and why. */
+  ApprovalRequestSkip: {
+    borrower_id: string;
+    /** not_found: no such borrower; not_contactable: not marketing eligible, do-not-contact, no opt-in consent or suppressed; already_decided: an approval decision exists; already_requested: another open request already holds the borrower. */
+    reason: "not_found" | "not_contactable" | "already_decided" | "already_requested";
+  };
+  /** The requester's withdraw: open borrowers close; a repeat changes nothing. */
+  ApprovalRequestWithdrawn: {
+    /** Borrowers that were no longer open. */
+    already_closed: number;
+    /** The APPROVAL_REQUEST_WITHDRAWN audit row, only when this call withdrew any. */
+    audit_event_id: string | null;
+    batch_id: string;
+    /** Borrowers this call withdrew. */
+    withdrawn_now: number;
+  };
   /** Who approved what — one row per human approve decision. */
   ApproverActivityRow: {
     actor_email: string;
@@ -2298,6 +2349,15 @@ export interface RequestSchemas {
     reason?: "operator_refresh" | "release_validation" | "source_update" | "support_triage" | null;
     request_id?: string | null;
   };
+  /** POST /outreach/approval-requests: ask an approver to review named borrowers. */
+  ApprovalRequestCreate: {
+    /** The masked borrower ids to request approval for, each named once. */
+    borrower_ids: string[];
+    /** Why these borrowers: required, without personal details. It is screened by the governed text policy and recorded on the audit row. */
+    note: string;
+    /** Client idempotency key (a UUID); a retry with the same key replays the stored answer. */
+    request_key: string;
+  };
   AssignLeadRequest: {
     assigned_to_email: string;
     expires_in_hours?: number | null;
@@ -3669,6 +3729,16 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['LoanOfficerAssignment'][];
   };
+  "GET /api/v1/outreach/approval-requests": {
+    pathParams: Record<string, never>;
+    query: {
+      /** open: every open request (approvers only); mine: your own. Defaults by role. */
+      scope?: "open" | "mine" | null;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['ApprovalRequestList'];
+  };
   "GET /api/v1/portfolio": {
     pathParams: Record<string, never>;
     query: {
@@ -4087,6 +4157,22 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['OfferRecommendRequest'];
     ok: ResponseSchemas['OfferRecommendation'];
+  };
+  "POST /api/v1/outreach/approval-requests": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['ApprovalRequestCreate'];
+    ok: ResponseSchemas['ApprovalRequestCreated'];
+  };
+  "POST /api/v1/outreach/approval-requests/{batch_id}/withdraw": {
+    pathParams: {
+      batch_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['ApprovalRequestWithdrawn'];
   };
   "POST /api/v1/outreach/approve": {
     pathParams: Record<string, never>;
