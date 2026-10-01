@@ -33,6 +33,15 @@ answer's prose scan (a nine-sentence narrative plus three follow-up questions,
 about 970 characters) on the same counters is the narrative baseline. Wall time
 is printed with the load average and is informational only.
 
+The baseline covers exactly one function: `genie_visible_text_unsafe` in its
+default prose mode (`structured_value=False`, no governed cell values), called
+once on the narrative and once on each follow-up question. It does not include
+the rest of a real answer's path: that answer's own SQL trust check, row
+redaction and cell scan, `governed_row_literals`, the claims verifier, or the
+prompt-side guards. The ratio below therefore compares the tile row path with
+one prose scan, not with the cost of a whole answer, and must not be read as
+"a tile refresh costs 104 answers".
+
 ## Offline numbers (2026-10-01, load average about 33-44)
 
 | Rows per tile (6 tiles) | Guard calls | Calls per row | C calls | Characters scanned |
@@ -51,8 +60,9 @@ the fail-closed behaviour the build must keep.
 ## Pass criteria (binding for the build)
 
 1. Row-path guard work is linear in rows, and for six maximum-size tiles is no
-   more than one answer's prose scan on the same counter. **Offline: FAIL**
-   (linear, but 104x the prose baseline). A build must cap rows per tile or
+   more than one answer's prose scan on the same counter (the
+   `genie_visible_text_unsafe` baseline above). **Offline: FAIL** (linear, but
+   104x that one-function baseline). A build must cap rows per tile or
    prove a cheaper fail-closed row scan before it may proceed.
 2. COMPLETED attachments stay executable for at least 7 days. Otherwise tiles
    can only be dated snapshots, which is a FAIL. *Live probe, not yet run.*
