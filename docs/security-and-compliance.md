@@ -56,6 +56,48 @@ derived from trusted answer rows or source filters and the user confirms the
 action. The destination route must preserve those filters, and the action must
 be audited.
 
+## Roles and access
+
+Five tiers, decided server-side by `backend/services/rbac.py` and mirrored to
+the UI by `/api/v1/session` (`can_access_admin`, `can_approve`,
+`can_read_audit`, from the same decisions the routes enforce). The three
+privileged tiers are exact identities in their allowlists (`MIP_ADMIN_*`,
+`MIP_APPROVER_*`, `MIP_AUDITOR_*`); the sales team is the Lakebase roster
+(`mip_app.sales_team`) and carries no extra authorization. Empty lists admit
+nobody, and a deployed
+`X-Forwarded-Groups` header grants nothing (group names are a local/test
+compatibility path only). An auditor is also a workspace user: they may do
+what any workspace user may, including creating approval requests, but never
+approve, reject or revoke.
+
+| Surface | Workspace user | Sales team | Approver | Auditor | Administrator |
+| --- | --- | --- | --- | --- | --- |
+| Ranked leads, Borrower 360, Offer reads | yes | yes | yes | yes | yes |
+| Approve / reject outreach | no | no | yes | no | yes |
+| Bulk approve / reject | no | no | yes | no | yes |
+| Lead assign, disposition, outcome | yes | yes | yes | yes | yes |
+| Own activity (`/audit/my-events`) and own decision receipts | yes | yes | yes | yes | yes |
+| Another actor's decision receipt | no | no | no | yes | yes |
+| Full audit ledger (`/audit/events`, `/events/page`, `/rollups`, `/facets`, `/count`) | no | no | no | yes | yes |
+| Ledger CSV receipt (`POST /audit/export-receipt`) | no | no | no | no | yes |
+| Refusal reports list and question (from W5c) | no | no | no | yes | yes |
+| `POST /audit/event` | no | no | no | no | yes |
+| `/admin/*` (rules 410, operations run, force-degraded, settings, asset metadata) | no | no | no | no | yes |
+| Lead Queue marketing override and `include_suppressed_for_analytics` | no | no | no | no | yes |
+
+**Segregation of duties (D-audit-reads-c3).** The Auditor role exists so that
+the people who read the ledger are not the people whose actions it records.
+An administrator is an approver by construction (`rbac._approver_access`
+admits every admin), can write `POST /audit/event`, can start data jobs and
+force degraded mode (`POST /admin/operations/run`, `POST
+/admin/force-degraded`) and can widen the Lead Queue past marketing
+suppression; an approver makes the decisions the ledger holds. `PUT
+/admin/rules` answers 410 for everyone, so it is not part of this basis. An
+identity configured as auditor AND administrator or approver is therefore
+flagged, never refused: `./scripts/deploy.sh` step 0 prints the auditor count
+and a warning with the overlap count (never an identity), and the admin
+health body (`GET /api/v1/admin/health`) carries `auditor_role_overlap`.
+
 ## Read-audit semantics by surface
 
 Which read writes which audit event, and how the write behaves when Lakebase
@@ -78,11 +120,21 @@ the pull request that ships the behaviour, never earlier.
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
 | Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
-| Admin ledger explorer (`audit.list_events`, `audit.list_event_page`, `audit.audit_rollups`) | none | every read | audit-free until D-audit-reads-c3 ships `VIEW_AUDIT_LEDGER` |
-| Admin ledger explorer filters (`audit.audit_facets`, `audit.count_events`) | none | on an explicit filter-menu open / filter change | audit-free (admin-gated) until D-audit-reads-c3 |
+| Audit ledger (`audit.list_events`, `list_event_page`, `audit_rollups`, `audit_facets`, `count_events`) | `VIEW_AUDIT_LEDGER` (`ledger_surface` events / events_page / rollups / facets / count) | once per served read by an admin or auditor | background, fail-open (`audit.dropped`) |
+| Another actor's decision receipt (`audit_receipt.read_decision_receipt`) | `VIEW_AUDIT_LEDGER` (`receipt`, `read_audit_event_id`) | once per served cross-actor read | background, fail-open |
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
+
+A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
+only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the
+SHA-256 `filter_fingerprint` and, for a receipt, `read_audit_event_id`: never
+ledger row contents, an actor filter in clear, or an email. Opening
+Administration reads nothing from the ledger (its old "last event" probe
+went with the explorer, which now lives on `/audit-ledger`), and no ledger
+read is polled, prefetched or refetched on window focus. `tools/verify_live.py`'s
+ledger probes now write attributable `VIEW_AUDIT_LEDGER` rows; that is
+expected.
 
 **Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
 keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`
