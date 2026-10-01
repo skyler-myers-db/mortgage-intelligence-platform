@@ -27,11 +27,9 @@ STORIES = re.compile(r"(^|/)[^/]+\.stories\.[^/]+$")
 WALK_SKIP = {"node_modules", "dist", "test-results", "playwright-report", ".git", ".venv", "__pycache__", ".claude"}
 
 # Files that may still say the word, each with its reason:
-#   CLAUDE.md: its line-89 wording is changed by the integrator, never by a
-#     lane (W5a integrator decision 1);
 #   docs/audits/**: the audit record quotes the finding and its ruling;
 #   this test file, which has to name the word.
-EXEMPT_FILES = {"CLAUDE.md", SELF}
+EXEMPT_FILES = {SELF}
 EXEMPT_PREFIXES = ("docs/audits/",)
 
 # Shrink-only: files another lane owns this wave whose comment still says the
@@ -125,6 +123,7 @@ def test_the_scan_rejects_planted_cases() -> None:
     )
     assert problems == [
         ".storybook/main.ts: a tracked Storybook artefact",
+        "CLAUDE.md: mentions storybook",
         "docs/guide.md: mentions storybook",
         "frontend/.storybook/preview.ts: a tracked Storybook artefact",
         "frontend/src/components/x.stories.tsx: a tracked Storybook artefact",
