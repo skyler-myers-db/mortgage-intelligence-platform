@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMipQueryClient } from '../../lib/queryClient';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMap } from './USChoroplethMap';
 import type { StateRollupResponse, ZipRollupResponse } from '../../types';
 import { genieStatePrompt } from '../../lib/genieContext';
@@ -158,12 +158,23 @@ describe('USChoroplethMap state -> ZIP drill', () => {
   // Intelligence) owns the note, so the legend shows none.
   const legendNote = () => document.querySelector('.map-legend [data-testid="stale-data-note"]');
 
+  // The note is its own chunk (StaleDataNote.lazy): transform it once up
+  // front, so a loaded machine cannot push its first import past the wait.
+  beforeAll(async () => {
+    await import('../ui/StaleDataNote');
+  }, 60_000);
+
   it('shows the stale note in the legend when only the map read is retained', async () => {
     apiMocks.fresh.states = '2026-06-19T08:00:00Z';
     await act(async () => {
       root.render(<Providers><USChoroplethMap /></Providers>);
     });
-    for (let i = 0; i < 80 && !legendNote(); i += 1) await settle();
+    for (let i = 0; i < 80 && !legendNote(); i += 1) {
+      await settle();
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+    }
     expect(legendNote()?.querySelector('time')?.getAttribute('dateTime')).toBe('2026-06-19T08:00:00.000Z');
   });
 
