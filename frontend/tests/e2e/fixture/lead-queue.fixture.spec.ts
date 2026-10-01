@@ -826,6 +826,8 @@ test.describe('(h) single-row failures raise a shell toast', () => {
     const recorder = registerRejectRecorder(mockApi, { failIds: [ELIGIBLE] });
     await app.gotoRoute('/lead-queue');
     await page.getByTestId(`lead-reject-${ELIGIBLE}`).click();
+    // No default reason (D-approval-flow-d item 13): the reviewer picks one.
+    await page.getByTestId('lead-reject-reason').selectOption('low_intent');
     await page.getByRole('button', { name: 'Confirm reject' }).click();
 
     const toast = page.locator('.toast[role="alert"]');

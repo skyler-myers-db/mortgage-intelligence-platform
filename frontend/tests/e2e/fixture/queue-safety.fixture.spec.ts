@@ -151,11 +151,18 @@ test.describe('approver gate', () => {
     await expect(bulk).toHaveText(/^Approve \d+ eligible$/);
     await expect(bulk).toBeDisabled();
     await expect(bulk).toHaveAttribute('title', /Requires approver role/);
+    // Reject N (tables-07) is gated the same way, explained by the same status.
+    const bulkReject = page.getByTestId('lead-bulk-reject');
+    await expect(bulkReject).toHaveText(/^Reject \d+$/);
+    await expect(bulkReject).toBeDisabled();
+    await expect(bulkReject).toHaveAttribute('aria-describedby', /approver-role-status/);
 
     await page.getByRole('region', { name: 'Ranked borrowers table scroll region' }).focus();
     await page.keyboard.press('a');
     await page.keyboard.press('r');
+    await page.keyboard.press('Shift+R');
     await expect(approve).toHaveText('Approve');
+    await expect(page.getByTestId('lead-bulk-reject-gate')).toHaveCount(0);
     expect(draftCalls(mockApi)).toBe(0);
     expect(approveCalls(mockApi)).toBe(0);
     await expect(page.locator('.table-error')).toHaveCount(0);
