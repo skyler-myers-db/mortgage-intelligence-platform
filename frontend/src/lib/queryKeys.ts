@@ -74,6 +74,8 @@ export const queryKeys = {
   growthAgent: () => ['mip', 'growth-agent'] as const,
   growthAgentCapabilities: () => ['mip', 'growth-agent', 'capabilities'] as const,
   growthAgentRuns: (limit: number) => ['mip', 'growth-agent', 'runs', limit] as const,
+  /** Home's watchlist briefings (wow-ai-4): audit-free, never persisted. */
+  growthAgentWatchlistSummary: () => ['mip', 'growth-agent', 'monitors', 'summary'] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {

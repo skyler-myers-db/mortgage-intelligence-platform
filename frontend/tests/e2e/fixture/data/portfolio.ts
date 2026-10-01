@@ -12,6 +12,7 @@ import type {
   PortfolioPreview,
   SalesTeamMember,
 } from '../../../../src/types';
+import type { GrowthAgentWatchlistSummaryResponse } from '../../../../src/types/growthAgent';
 import { fixture, json, type FixtureEntry, type FixtureRequest } from '../mockApi';
 import { SNAPSHOT_AT, TOTALS } from './reference';
 
@@ -149,6 +150,51 @@ export const HOME_SUMMARY: HomeSummary = {
   baseline_source: 'mip_app.kpi_snapshots',
 };
 
+/**
+ * Home's watchlist briefings (wow-ai-4): two saved watchlists, one with a
+ * three-run series and one paused on its first run, under a scheduler that
+ * ships paused (the honest default of every bundle schedule).
+ */
+export const HOME_WATCHLIST_SUMMARY: GrowthAgentWatchlistSummaryResponse = {
+  scheduler: { state: 'paused', reason: 'job_schedule' },
+  watchlists: [
+    {
+      monitor_id: 'fixture-home-monitor-0001',
+      workflow_id: 'daily_refi_brief',
+      name: 'Daily refi brief',
+      cadence: 'daily',
+      status: 'active',
+      run_count: 3,
+      last_run_at: SNAPSHOT_AT,
+      previous_run_at: SNAPSHOT_AT,
+      actionable_total: TOTALS.contactableInTheMoney,
+      previous_actionable_total: TOTALS.contactableInTheMoney - 12,
+      actionable_delta: 12,
+      actionable_avg_score: 84.6,
+      previous_actionable_avg_score: 83.9,
+      avg_score_delta: 0.7,
+      recent_actionable_totals: [TOTALS.contactableInTheMoney - 20, TOTALS.contactableInTheMoney - 12, TOTALS.contactableInTheMoney],
+    },
+    {
+      monitor_id: 'fixture-home-monitor-0002',
+      workflow_id: 'listing_watch',
+      name: 'Listed homes, purchase path',
+      cadence: 'weekly',
+      status: 'paused',
+      run_count: 1,
+      last_run_at: SNAPSHOT_AT,
+      previous_run_at: null,
+      actionable_total: 211,
+      previous_actionable_total: null,
+      actionable_delta: null,
+      actionable_avg_score: 71.2,
+      previous_actionable_avg_score: null,
+      avg_score_delta: null,
+      recent_actionable_totals: [211],
+    },
+  ],
+};
+
 export const SALES_TEAM: SalesTeamMember[] = [
   { email: 'lo.alpha@summit.example', display_label: 'Loan Officer A', role: 'loan_officer', region: 'Midwest', manager_email: 'manager@summit.example', capacity_per_day: 25, active: true },
   { email: 'lo.bravo@summit.example', display_label: 'Loan Officer B', role: 'loan_officer', region: 'South', manager_email: 'manager@summit.example', capacity_per_day: 20, active: true },
@@ -210,4 +256,6 @@ export const portfolioFixtures: FixtureEntry[] = [
   ),
   fixture('GET', '/api/sales/team', () => json<SalesTeamMember[]>(SALES_TEAM)),
   fixture('GET', '/api/home/summary', () => json<HomeSummary>(HOME_SUMMARY)),
+  fixture('GET', '/api/growth-agent/monitors/summary', () =>
+    json<GrowthAgentWatchlistSummaryResponse>(HOME_WATCHLIST_SUMMARY)),
 ];

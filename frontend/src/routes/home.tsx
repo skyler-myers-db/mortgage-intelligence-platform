@@ -5,6 +5,7 @@ import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { useMapSelectionParams } from '../components/mortgage/useMapSelectionParams';
 import { useMapModeParams } from '../components/mortgage/useMapModeParams';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
+import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { HomeAnswerBand } from '../components/mortgage/HomeAnswerBand';
 import { Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
@@ -25,6 +26,13 @@ import type { HomeSummary, KpiTrend, PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { ApprovalQueueBanner } from './home.approval-banner';
 import './home.css';
+
+/**
+ * The watchlist briefings card (wow-ai-4), its own chunk with its client:
+ * nothing of it is in the Home closure, and a chunk that fails to load (a
+ * redeploy retired it) drops the card alone, never the route.
+ */
+const WATCHLIST_BRIEFINGS = lazyModule(() => import('../components/mortgage/WatchlistBriefings'));
 
 /** Home's one primary action: the ranked queue the answer band previews. */
 export const HOME_PRIMARY_CTA = { label: "Review today's top leads", href: '/lead-queue' } as const;
@@ -129,6 +137,9 @@ export default function Home() {
   // criteria that matched zero borrowers on a populated workspace),
   // so the banner could lie. Removed; we trust the server.
   const isDayZero = preview?.day_zero === true;
+  // One audit-free GET /growth-agent/monitors/summary inside the card; it
+  // never POSTs, so loading Home never starts a run.
+  const WatchlistBriefings = useLazyModule(WATCHLIST_BRIEFINGS, true).module?.default ?? null;
 
   return (
     <PageShell
@@ -281,6 +292,7 @@ export default function Home() {
               approvedCount={preview?.approved_count ?? 0}
               inOutreachCount={preview?.in_outreach_count ?? 0}
             />
+            {WatchlistBriefings && <WatchlistBriefings />}
             {/* Pinned insights (Buyer-Wow #9): operator's pinned Genie
                 answers — renders nothing when empty. */}
             <PinnedInsights />
