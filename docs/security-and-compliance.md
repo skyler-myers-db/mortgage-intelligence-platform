@@ -58,24 +58,43 @@ be audited.
 
 ## Roles and access
 
-Five tiers, decided server-side by `backend/services/rbac.py` and mirrored to
-the UI by `/api/v1/session` (`can_access_admin`, `can_approve`,
-`can_read_audit`, from the same decisions the routes enforce). The three
+Four tiers are decided server-side by `backend/services/rbac.py` and
+mirrored to the UI by `/api/v1/session` (`can_access_admin`, `can_approve`,
+`can_read_audit`, from the same decisions the routes enforce); the fifth
+column, the sales team, is the Lakebase roster described below. The three
 privileged tiers are exact identities in their allowlists (`MIP_ADMIN_*`,
-`MIP_APPROVER_*`, `MIP_AUDITOR_*`); the sales team is the Lakebase roster
-(`mip_app.sales_team`) and carries no extra authorization. Empty lists admit
-nobody, and a deployed
+`MIP_APPROVER_*`, `MIP_AUDITOR_*`). Empty lists admit nobody, and a deployed
 `X-Forwarded-Groups` header grants nothing (group names are a local/test
 compatibility path only). An auditor is also a workspace user: they may do
 what any workspace user may, including creating approval requests, but never
 approve, reject or revoke.
+
+The sales team is the Lakebase roster (`mip_app.sales_team`), and its roster
+role and manager scope are what authorize the sales-state writes; no
+`rbac.py` tier grants them. An identity that is not an active roster member
+is refused lead assign, disposition and outcome whatever its tier
+(`backend/services/sales_state_core.py`):
+
+- **Assign** (single and distribute): a roster `sales_manager` for their own
+  loan officers, or a roster `admin` for any loan officer
+  (`require_manager_actor`, `require_assignee_in_scope`).
+- **Disposition**: the loan officer themself, their roster `sales_manager`,
+  or a roster `admin` (`require_disposition_scope`), and only against an
+  active assignment to that loan officer
+  (`sales_state_writes.log_disposition`).
+- **Outcome**: a roster `sales_manager` against an active assignment in
+  their scope, or a roster `admin` (`require_manager_actor`,
+  `require_outcome_scope`).
+
+A roster `admin` is a sales-roster role, not the `MIP_ADMIN_*` Administrator
+tier; neither implies the other.
 
 | Surface | Workspace user | Sales team | Approver | Auditor | Administrator |
 | --- | --- | --- | --- | --- | --- |
 | Ranked leads, Borrower 360, Offer reads | yes | yes | yes | yes | yes |
 | Approve / reject outreach | no | no | yes | no | yes |
 | Bulk approve / reject | no | no | yes | no | yes |
-| Lead assign, disposition, outcome | yes | yes | yes | yes | yes |
+| Lead assign, disposition, outcome | only if also on the sales roster | by roster role and scope: assign and outcome a `sales_manager` (own loan officers) or roster `admin`; disposition the loan officer, their manager or a roster `admin` | only if also on the sales roster | only if also on the sales roster | only if also on the sales roster |
 | Own activity (`/audit/my-events`) and own decision receipts | yes | yes | yes | yes | yes |
 | Another actor's decision receipt | no | no | no | yes | yes |
 | Full audit ledger (`/audit/events`, `/events/page`, `/rollups`, `/facets`, `/count`) | no | no | no | yes | yes |
