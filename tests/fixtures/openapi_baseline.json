@@ -498,6 +498,12 @@
             ],
             "title": "App Env"
           },
+          "auditor_role_overlap": {
+            "default": 0,
+            "description": "Identities configured as auditor that are also configured as administrator or approver (segregation-of-duties signal). A count only.",
+            "title": "Auditor Role Overlap",
+            "type": "integer"
+          },
           "boundary_warning": {
             "anyOf": [
               {
@@ -594,6 +600,11 @@
           "mode": {
             "title": "Mode",
             "type": "string"
+          },
+          "presenter_mode": {
+            "default": false,
+            "title": "Presenter Mode",
+            "type": "boolean"
           },
           "recent_errors_count": {
             "default": 0,
@@ -15517,6 +15528,12 @@
             "title": "Can Approve",
             "type": "boolean"
           },
+          "can_read_audit": {
+            "default": false,
+            "description": "Same fail-closed decision the audit-ledger reads enforce: an administrator or a configured auditor may read the full audit ledger. Grants no administrator or approver capability.",
+            "title": "Can Read Audit",
+            "type": "boolean"
+          },
           "lender_name": {
             "anyOf": [
               {
@@ -15529,8 +15546,14 @@
             "description": "The configured lender's display name (settings.mip_lender_name), the same value /api/config/options returns. Served here too so the shell's tenant label rides this zero-dependency call instead of the warehouse-backed options call (audit delivery-07).",
             "title": "Lender Name"
           },
+          "presenter_mode": {
+            "default": false,
+            "description": "Demo-only: gates demo affordances in product surfaces. Never an authorization input.",
+            "title": "Presenter Mode",
+            "type": "boolean"
+          },
           "role_labels": {
-            "description": "Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), else 'Workspace user' for a forwarded identity that holds neither tier. Empty only when the session holds neither tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract.",
+            "description": "Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), 'Auditor' (a configured auditor, read-only), else 'Workspace user' for a forwarded identity that holds no tier. Empty only when the session holds no tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract.",
             "items": {
               "type": "string"
             },
@@ -18103,7 +18126,7 @@
     "/api/audit/count": {
       "get": {
         "deprecated": true,
-        "description": "How many ledger rows match the /events/page filters, up to a cap (audit-free).",
+        "description": "How many ledger rows match the /events/page filters, up to a cap (a recorded read).",
         "operationId": "get_api_audit_count_count_events",
         "parameters": [
           {
@@ -18861,7 +18884,7 @@
     "/api/audit/facets": {
       "get": {
         "deprecated": true,
-        "description": "Distinct event types, actions and actors for the explorer's pickers (audit-free).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
+        "description": "Distinct event types, actions and actors for the explorer's pickers (a recorded read).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
         "operationId": "get_api_audit_facets_audit_facets",
         "parameters": [
           {
@@ -28162,7 +28185,7 @@
     },
     "/api/v1/audit/count": {
       "get": {
-        "description": "How many ledger rows match the /events/page filters, up to a cap (audit-free).",
+        "description": "How many ledger rows match the /events/page filters, up to a cap (a recorded read).",
         "operationId": "get_api_v1_audit_count_count_events",
         "parameters": [
           {
@@ -28915,7 +28938,7 @@
     },
     "/api/v1/audit/facets": {
       "get": {
-        "description": "Distinct event types, actions and actors for the explorer's pickers (audit-free).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
+        "description": "Distinct event types, actions and actors for the explorer's pickers (a recorded read).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
         "operationId": "get_api_v1_audit_facets_audit_facets",
         "parameters": [
           {

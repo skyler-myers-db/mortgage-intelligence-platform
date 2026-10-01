@@ -36,6 +36,8 @@ export const LO_EMAIL = SALES_TEAM[0].email;
 export const LO_SESSION: SessionResponse = {
   can_access_admin: false,
   can_approve: true,
+  can_read_audit: false,
+  presenter_mode: false,
   actor_email: LO_EMAIL,
   actor_cache_key: null,
 };

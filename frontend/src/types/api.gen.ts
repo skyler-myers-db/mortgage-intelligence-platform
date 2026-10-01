@@ -71,6 +71,8 @@ export interface ResponseSchemas {
     actor_cache_key: string | null;
     agent_gateway_binding_sha256: string | null;
     app_env: string | null;
+    /** Identities configured as auditor that are also configured as administrator or approver (segregation-of-duties signal). A count only. */
+    auditor_role_overlap: number;
     boundary_warning: ResponseSchemas['BoundaryWarning'] | null;
     breaker_state_changes_last_hour: number;
     campaign_treatment_runtime: string | null;
@@ -85,6 +87,7 @@ export interface ResponseSchemas {
     git_sha: string | null;
     log_export: string;
     mode: string;
+    presenter_mode: boolean;
     recent_errors_count: number;
     status: string;
     warehouse_id: string | null;
@@ -2081,9 +2084,13 @@ export interface ResponseSchemas {
     actor_email: string | null;
     can_access_admin: boolean;
     can_approve: boolean;
+    /** Same fail-closed decision the audit-ledger reads enforce: an administrator or a configured auditor may read the full audit ledger. Grants no administrator or approver capability. */
+    can_read_audit: boolean;
     /** The configured lender's display name (settings.mip_lender_name), the same value /api/config/options returns. Served here too so the shell's tenant label rides this zero-dependency call instead of the warehouse-backed options call (audit delivery-07). */
     lender_name: string | null;
-    /** Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), else 'Workspace user' for a forwarded identity that holds neither tier. Empty only when the session holds neither tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract. */
+    /** Demo-only: gates demo affordances in product surfaces. Never an authorization input. */
+    presenter_mode: boolean;
+    /** Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), 'Auditor' (a configured auditor, read-only), else 'Workspace user' for a forwarded identity that holds no tier. Empty only when the session holds no tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract. */
     role_labels: string[];
     /** Whether the browser may install the opt-in RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). */
     rum_enabled: boolean | null;

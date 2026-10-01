@@ -39,6 +39,18 @@ export interface SessionResponse {
   /** Same fail-closed decision `require_approver` enforces server-side. */
   can_approve: boolean;
   /**
+   * Same fail-closed decision the audit-ledger reads enforce
+   * (`require_audit_reader`): an administrator or a configured read-only
+   * auditor (D-audit-reads-c3). Grants no admin or approver capability.
+   * Absent from an older backend, which reads as false.
+   */
+  can_read_audit?: boolean;
+  /**
+   * Demo-only presenter flag (D-shell-deviations-e1): gates demo affordances,
+   * never an authorization input. Absent from an older backend (off).
+   */
+  presenter_mode?: boolean;
+  /**
    * The caller's own forwarded identity — the name an approval's audit row
    * is recorded under. Null when the edge forwarded none. Display only:
    * never send it to telemetry.
@@ -52,8 +64,9 @@ export interface SessionResponse {
   actor_display_name?: string | null;
   /**
    * Capability tiers as display labels, most privileged first
-   * ("Administrator", "Approver", else "Workspace user"). The can_* flags
-   * stay the authorization contract; these are for the identity menu.
+   * ("Administrator", "Approver", "Auditor", else "Workspace user"). The
+   * can_* flags stay the authorization contract; these are for the identity
+   * menu.
    */
   role_labels?: string[];
   /**
