@@ -495,9 +495,11 @@ describe('PortfolioBuilder save-build flow', () => {
     await waitUntil(() => container.querySelector('[role="alert"]') !== null);
 
     expect(nameInput.value).toBe('Distinct Illinois refinance cohort');
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      'Save failed — your name is kept; try again.',
-    );
+    // states-04: the failure is worded from the caught error in the shared
+    // vocabulary, never its message ('Lakebase unavailable').
+    await waitUntil(() => container.querySelector('[role="alert"]')?.textContent
+      === 'Save failed: Something went wrong. Your name is kept; try again.');
+    expect(container.querySelector('[role="alert"]')?.textContent).not.toContain('Lakebase unavailable');
     const firstRequestId = portfolioCreate.mock.calls[0][2].request_id;
 
     act(() => confirm.click());

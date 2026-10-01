@@ -1,15 +1,16 @@
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { useApp } from '../components/AppContext';
 import { Icon } from '../components/Icon';
 import { Button, SurfaceTitle } from '../components/Primitives';
+import { AsyncStatus, type AsyncQuery } from '../components/ui/AsyncState';
 import { Field } from '../components/ui/Field';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { campaignMutationKeys, useArchiveCampaign } from '../lib/mutations/campaigns';
 import { formatCount } from '../lib/formatters';
 import { formatDate, parseBackendTimestamp } from '../lib/time';
-import type { CampaignSummary, PortfolioPreview } from '../types';
+import type { CampaignListResponse, CampaignSummary, PortfolioPreview } from '../types';
 import {
   campaignCriteriaSummary,
   groupSavedCampaigns,
@@ -99,17 +100,21 @@ export function CampaignBuildGuard({ preview }: { preview: PortfolioPreview }) {
   );
 }
 
-export function SavedCampaignsPanel({
-  campaigns,
-  loading,
-  error,
-  onRefresh,
-}: {
-  campaigns: CampaignSummary[];
-  loading: boolean;
-  error: string | null;
-  onRefresh: () => Promise<unknown>;
-}) {
+/** The saved-campaign read in AsyncStatus's shape (states-04): no warming loop, one Retry = one refetch. */
+function savedCampaignsStatus(query: UseQueryResult<CampaignListResponse>): AsyncQuery<CampaignListResponse> {
+  return {
+    data: query.data ?? null,
+    warmingUp: null,
+    error: query.error,
+    manualRetry: () => void query.refetch(),
+    isFetching: query.isFetching,
+    isPlaceholderData: query.isPlaceholderData,
+    errorUpdatedAt: query.errorUpdatedAt || null,
+  };
+}
+
+export function SavedCampaignsPanel({ query }: { query: UseQueryResult<CampaignListResponse> }) {
+  const campaigns: CampaignSummary[] = query.data?.campaigns ?? [];
   const { setDrawer } = useApp();
   const queryClient = useQueryClient();
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({});
@@ -142,7 +147,7 @@ export function SavedCampaignsPanel({
           variant="ghost"
           size="sm"
           icon="tweak"
-          onClick={() => void onRefresh()}
+          onClick={() => void query.refetch()}
           aria-label="Refresh saved campaigns"
         >
           Refresh
@@ -159,10 +164,10 @@ export function SavedCampaignsPanel({
             {archiveFeedback.message}
           </div>
         )}
-        {loading ? (
+        {query.isPending ? (
           <div className="muted fs-12">Loading campaigns…</div>
-        ) : error ? (
-          <div className="status-callout status-callout--danger">{error}</div>
+        ) : query.isError ? (
+          <AsyncStatus query={savedCampaignsStatus(query)} subject="Saved campaigns" compact />
         ) : campaigns.length === 0 ? (
           <div className="muted fs-12">No saved campaigns.</div>
         ) : (
