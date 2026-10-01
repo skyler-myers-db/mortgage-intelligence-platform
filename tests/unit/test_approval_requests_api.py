@@ -241,7 +241,7 @@ def test_a_note_that_redaction_pushes_past_the_cap_is_422_not_a_503(
 ) -> None:
     # 500 characters on the wire; the email becomes [EMAIL-REDACTED] (longer),
     # so the stored note would break the batch's length CHECK inside the commit.
-    note = ("Ping a@b.io first. " + "Rate-sensitive refinance candidates. " * 14)[:500]
+    note = ("Ping a@example.com first. " + "Rate-sensitive refinance candidates. " * 14)[:500]
     assert len(note) == 500
     response = _create(client, [OK_1], note=note)
     assert response.status_code == 422, response.text
@@ -250,7 +250,7 @@ def test_a_note_that_redaction_pushes_past_the_cap_is_422_not_a_503(
     )
     assert ledger.statements == [] and leads.calls == [] and ledger.writes() == 0
     # The same note with the address removed fits once redacted, and is held.
-    fits = note.replace("Ping a@b.io first. ", "Review first, then ")
+    fits = note.replace("Ping a@example.com first. ", "Review first, then decide ")
     assert len(fits) == 500
     assert _create(client, [OK_1], note=fits).status_code == 200
 
