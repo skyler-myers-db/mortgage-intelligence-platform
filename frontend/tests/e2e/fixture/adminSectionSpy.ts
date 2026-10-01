@@ -65,11 +65,12 @@ export async function expectSectionSpyMarksLandings(page: Page): Promise<void> {
   // The landing line is measured, not derived: where a followed section that
   // can reach it (Data operations) actually lands. Appearance cannot reach
   // it (the page end), so it is wheeled up from the end. The wheel is over
-  // the sticky section nav, which scrolls only sideways, so it scrolls .main;
-  // no link is followed and the hash does not change.
-  const wheelAway = async (label: string, delta: number, line: number) => {
+  // the followed section's own top-left padding (no inner scroller there, and
+  // not the sideways-scrolling section nav), so it scrolls .main; no link is
+  // followed and the hash does not change.
+  const wheelAway = async (id: string, label: string, delta: number, line: number) => {
     const hash = new URL(page.url()).hash;
-    await sections.hover({ position: { x: 2, y: 2 } });
+    await page.locator(`#${id}`).hover({ position: { x: 8, y: 8 } });
     await page.mouse.wheel(0, delta);
     await expect(async () => {
       const { marked, candidates } = await sectionsAtLine(page, line);
@@ -85,9 +86,9 @@ export async function expectSectionSpyMarksLandings(page: Page): Promise<void> {
     const main = el.closest('.main') as HTMLElement;
     return el.getBoundingClientRect().top - main.getBoundingClientRect().top - main.clientTop;
   });
-  await wheelAway('Data operations', -450, line);
+  await wheelAway('data-operations', 'Data operations', -450, line);
 
   await link('Appearance').click();
   await expect(link('Appearance')).toHaveAttribute('aria-current', 'location');
-  await wheelAway('Appearance', -600, line);
+  await wheelAway('appearance', 'Appearance', -600, line);
 }
