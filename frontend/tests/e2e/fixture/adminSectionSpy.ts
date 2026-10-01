@@ -20,8 +20,12 @@ import { expect } from './test';
  * spy's one-pixel slack (its band starts at ceil(line) + 1), so a section
  * edge within a pixel or two of the line cannot make oracle and spy disagree.
  */
-async function sectionsAtLine(page: Page, line: number): Promise<{ marked: string | null; candidates: string[] }> {
-  return page.locator('.main').evaluate((main, at) => {
+async function sectionsAtLine(
+  page: Page,
+  line: number,
+  followed: string,
+): Promise<{ marked: string | null; candidates: string[]; followedInView: boolean }> {
+  return page.locator('.main').evaluate((main, [at, id]) => {
     const top = main.getBoundingClientRect().top + main.clientTop;
     const links = [...main.querySelectorAll<HTMLAnchorElement>('.admin-section-nav a')];
     const firstBelow = (y: number) =>
@@ -30,8 +34,13 @@ async function sectionsAtLine(page: Page, line: number): Promise<{ marked: strin
         return box !== undefined && box.bottom - top > y;
       })?.textContent ?? '';
     const marked = links.find((link) => link.getAttribute('aria-current') === 'location');
-    return { marked: marked?.textContent ?? null, candidates: [firstBelow(at - 1), firstBelow(at + 3)] };
-  }, line);
+    const followedTop = (document.getElementById(id)?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY) - top;
+    return {
+      marked: marked?.textContent ?? null,
+      candidates: [firstBelow(at - 1), firstBelow(at + 3)],
+      followedInView: followedTop < main.clientHeight,
+    };
+  }, [line, followed] as const);
 }
 
 export async function expectSectionSpyMarksLandings(page: Page): Promise<void> {
@@ -67,14 +76,27 @@ export async function expectSectionSpyMarksLandings(page: Page): Promise<void> {
   // it (the page end), so it is wheeled up from the end. The wheel is over
   // the followed section's own top-left padding (no inner scroller there, and
   // not the sideways-scrolling section nav), so it scrolls .main; no link is
-  // followed and the hash does not change.
-  const wheelAway = async (id: string, label: string, delta: number, line: number) => {
+  // followed and the hash does not change. The scroll is capped so the
+  // followed section stays partly in view (pushed down, 40px still showing):
+  // a section that left the view lost the marker before this fix too, so
+  // only a still-visible one proves the release. Appearance, the short last
+  // section, therefore moves less than the 600px asked for.
+  const wheelAway = async (id: string, label: string, upTo: number, line: number) => {
     const hash = new URL(page.url()).hash;
-    await page.locator(`#${id}`).hover({ position: { x: 8, y: 8 } });
-    await page.mouse.wheel(0, delta);
+    const section = page.locator(`#${id}`);
+    const room = await section.evaluate((el) => {
+      const main = el.closest('.main') as HTMLElement;
+      const top = el.getBoundingClientRect().top - main.getBoundingClientRect().top - main.clientTop;
+      return main.clientHeight - top;
+    });
+    const up = Math.min(upTo, Math.floor(room - 40));
+    expect(up, `${label} has room to be scrolled down and stay in view`).toBeGreaterThan(60);
+    await section.hover({ position: { x: 8, y: 8 } });
+    await page.mouse.wheel(0, -up);
     await expect(async () => {
-      const { marked, candidates } = await sectionsAtLine(page, line);
-      expect(marked, `after following ${label} and wheeling ${delta}px it no longer holds the marker`).not.toBe(label);
+      const { marked, candidates, followedInView } = await sectionsAtLine(page, line, id);
+      expect(followedInView, `${label} is still partly in view`).toBe(true);
+      expect(marked, `after following ${label} and wheeling up ${up}px it no longer holds the marker`).not.toBe(label);
       expect(candidates, `the marked section is the one at the landing line (${line}px)`).toContain(marked);
     }).toPass({ timeout: 10_000 });
     expect(new URL(page.url()).hash, 'a user scroll follows no link').toBe(hash);
@@ -86,9 +108,13 @@ export async function expectSectionSpyMarksLandings(page: Page): Promise<void> {
     const main = el.closest('.main') as HTMLElement;
     return el.getBoundingClientRect().top - main.getBoundingClientRect().top - main.clientTop;
   });
-  await wheelAway('data-operations', 'Data operations', -450, line);
+  await wheelAway('data-operations', 'Data operations', 450, line);
+
+  await link('Deployment readiness').click();
+  await expect(link('Deployment readiness')).toHaveAttribute('aria-current', 'location');
+  await wheelAway('buyer-readiness', 'Deployment readiness', 300, line);
 
   await link('Appearance').click();
   await expect(link('Appearance')).toHaveAttribute('aria-current', 'location');
-  await wheelAway('appearance', 'Appearance', -600, line);
+  await wheelAway('appearance', 'Appearance', 600, line);
 }
