@@ -44,6 +44,7 @@ describe('main.tsx boot', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    document.documentElement.removeAttribute('data-mip-boot');
   });
 
   it('renders a page-level recovery surface instead of an empty #root when the shell throws', async () => {
@@ -51,10 +52,14 @@ describe('main.tsx boot', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const addEventListener = vi.spyOn(window, 'addEventListener');
     document.body.innerHTML = '<div id="root"></div>';
+    document.documentElement.removeAttribute('data-mip-boot');
 
     await act(async () => {
       await import('./main');
     });
+    // The entry ran, so public/boot-watchdog.js stands down, even though the
+    // shell threw: the root boundary owns that failure.
+    expect(document.documentElement.getAttribute('data-mip-boot')).toBe('ready');
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
@@ -148,6 +153,7 @@ describe('main.tsx boot', () => {
     });
 
     expect(pathsAtFirstRender, 'seeded and prefetched before render').toEqual(BOOT_AND_HOME_READS);
+    expect(document.documentElement.getAttribute('data-mip-boot')).toBe('ready');
     expect(fetchSpy.mock.calls.map((call) => String((call as unknown[])[0]).split('?')[0]).sort()).toEqual(BOOT_AND_HOME_READS);
   }, 60_000);
 });

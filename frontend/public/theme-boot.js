@@ -16,7 +16,12 @@
  * 'bright' accent only with mip.accentChosen, because earlier builds wrote
  * those values on mount without the user choosing them. A chosen System
  * follows prefers-color-scheme, dark when the platform cannot say. Garbage
- * is ignored. frontend/src/lib/themeBoot.test.ts executes this file against
+ * is ignored. With no explicit choice, a deploy's tenant default comes next:
+ * the build writes <meta name="mip-default-theme"> / "mip-default-accent"
+ * before this tag only off the product defaults (responsive-10, 12.4 #9;
+ * deviation:tenant-default-appearance), and a meta value outside the
+ * accepted lists is ignored. Density has no tenant default.
+ * frontend/src/lib/themeBoot.test.ts executes this file against
  * that module's constants, and index.html references it with a content-hash
  * query (?v=...) that the same test pins, so an edit here cannot ship stale
  * or drift from the React side.
@@ -31,6 +36,8 @@
   var CONSOLE_KEY = 'mip.consoleOpen';
   var THEME_CHOICE_KEY = 'mip.themeChosen';
   var ACCENT_CHOICE_KEY = 'mip.accentChosen';
+  var TENANT_THEME_META = 'mip-default-theme';
+  var TENANT_ACCENT_META = 'mip-default-accent';
   var DEFAULT_THEME = 'dark';
   var DEFAULT_ACCENT = 'bright';
   var THEME_PREFERENCES = ['dark', 'light', 'system'];
@@ -48,6 +55,13 @@
     }
   }
 
+  /* A build-written tenant default, only when it is an accepted value. */
+  function metaValue(name, allowed) {
+    var meta = document.querySelector('meta[name="' + name + '"]');
+    var value = meta ? meta.getAttribute('content') : null;
+    return value !== null && allowed.indexOf(value) !== -1 ? value : null;
+  }
+
   function prefersDark() {
     try {
       return typeof window.matchMedia !== 'function'
@@ -61,11 +75,13 @@
     var root = document.documentElement;
     var rawTheme = stored(THEME_KEY, THEME_PREFERENCES);
     var preference = (rawTheme === 'light'
-      || (rawTheme !== null && stored(THEME_CHOICE_KEY, ['true']) === 'true')) ? rawTheme : DEFAULT_THEME;
+      || (rawTheme !== null && stored(THEME_CHOICE_KEY, ['true']) === 'true'))
+      ? rawTheme : (metaValue(TENANT_THEME_META, THEME_PREFERENCES) || DEFAULT_THEME);
     var theme = preference === 'system' ? (prefersDark() ? 'dark' : 'light') : preference;
     var rawAccent = stored(ACCENT_KEY, ACCENTS);
     var accent = (rawAccent !== null
-      && (rawAccent !== DEFAULT_ACCENT || stored(ACCENT_CHOICE_KEY, ['true']) === 'true')) ? rawAccent : DEFAULT_ACCENT;
+      && (rawAccent !== DEFAULT_ACCENT || stored(ACCENT_CHOICE_KEY, ['true']) === 'true'))
+      ? rawAccent : (metaValue(TENANT_ACCENT_META, ACCENTS) || DEFAULT_ACCENT);
     root.setAttribute('data-theme', theme);
     root.setAttribute('data-accent', accent);
     root.setAttribute('data-density', stored(DENSITY_KEY, DENSITIES) || 'comfortable');

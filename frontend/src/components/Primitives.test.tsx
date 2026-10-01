@@ -3,6 +3,11 @@
  */
 import { act, useRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// unit test reads one Playwright source under Vitest only.
+import { readFileSync } from 'node:fs';
+
+declare const process: { cwd(): string };
 import { mount } from '../test/render';
 import { Button, Chip, freshnessBucket } from './Primitives';
 // Installs the delegated tooltip listeners the shell loads at idle.
@@ -132,3 +137,108 @@ describe('Chip and Button tooltip prop', () => {
     expect(button.hasAttribute('aria-describedby')).toBe(false);
   });
 });
+
+/**
+ * motion-08 slice 2: the Button `loading` prop. Pending is aria-busy plus
+ * aria-disabled, never native disabled (a focused button that turns
+ * disabled drops focus), and the label stays in place for the accessible
+ * name. Keyboard Enter / Space reach a button as a click, so the click
+ * cases cover them; the rendered width, opacity and spinner are pinned in
+ * tests/e2e/fixture/theme-white-label.fixture.spec.ts.
+ */
+describe('Button loading', () => {
+  it('marks the button busy and aria-disabled, never natively disabled', async () => {
+    const { container } = await mount(<Button variant="primary" icon="check" loading>Approve</Button>);
+    const button = container.querySelector<HTMLButtonElement>('button')!;
+
+    expect(button.className).toBe('btn btn--primary btn--loading');
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(button.querySelector('.btn__label')?.textContent).toBe('Approve');
+    expect(button.querySelector('.btn__label svg')).not.toBeNull();
+    expect(button.querySelector('.btn__spinner')?.getAttribute('aria-hidden')).toBe('true');
+    // The accessible name is the label's text; the spinner adds none.
+    expect(button.textContent).toBe('Approve');
+  });
+
+  it('keeps focus on the button when loading turns on, and back off', async () => {
+    const { container, rerender } = await mount(<Button>Save</Button>);
+    const button = container.querySelector<HTMLButtonElement>('button')!;
+    act(() => button.focus());
+    await rerender(<Button loading>Save</Button>);
+    expect(container.querySelector('button')).toBe(button);
+    expect(document.activeElement).toBe(button);
+    await rerender(<Button>Save</Button>);
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('never calls onClick and never submits its form while loading', async () => {
+    const onClick = vi.fn();
+    const onSubmit = vi.fn((event: SubmitEvent) => event.preventDefault());
+    const { container, rerender } = await mount(
+      <form onSubmit={(event) => onSubmit(event.nativeEvent as SubmitEvent)}>
+        <Button type="submit" onClick={onClick} loading>Save</Button>
+      </form>,
+    );
+    const button = container.querySelector<HTMLButtonElement>('button')!;
+    act(() => button.click());
+    expect(onClick).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    // Non-vacuity: the same button, not loading, clicks and submits.
+    await rerender(
+      <form onSubmit={(event) => onSubmit(event.nativeEvent as SubmitEvent)}>
+        <Button type="submit" onClick={onClick}>Save</Button>
+      </form>,
+    );
+    act(() => button.click());
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('is exactly the markup the rendered CSS contract (theme-white-label.fixture) injects', async () => {
+    const spec = readFileSync(`${process.cwd()}/tests/e2e/fixture/theme-white-label.fixture.spec.ts`, 'utf8') as string;
+    const literal = (name: string) => spec.match(new RegExp(`const ${name} = '([^']+)';`))?.[1];
+    const { container } = await mount(
+      <>
+        <Button variant="primary">Approve outreach</Button>
+        <Button variant="primary" loading>Approve outreach</Button>
+      </>,
+    );
+    const [plain, loading] = [...container.querySelectorAll('button')];
+    expect(literal('PLAIN_BUTTON')).toBe(plain?.outerHTML);
+    expect(literal('LOADING_BUTTON')).toBe(loading?.outerHTML);
+  });
+
+  it('renders exactly the plain markup when not loading', async () => {
+    const { container } = await mount(
+      <>
+        <Button variant="ghost" icon="check" iconEnd="chevright" onClick={() => undefined}>Open</Button>
+        <Button variant="ghost" icon="check" iconEnd="chevright" onClick={() => undefined} loading={false}>Open</Button>
+      </>,
+    );
+    const [plain, unloaded] = [...container.querySelectorAll('button')];
+    expect(unloaded?.outerHTML).toBe(plain?.outerHTML);
+    expect(plain?.querySelector('.btn__label, .btn__spinner')).toBeNull();
+    expect(plain?.hasAttribute('aria-busy')).toBe(false);
+  });
+});
+
+/** responsive-10: the Console tenant chip leads with LenderMark through `leading`, in place of the icon. */
+describe('Chip leading', () => {
+  it('renders the leading node where the icon goes, before the label', async () => {
+    const { container } = await mount(
+      <>
+        <Chip variant="neutral" leading={<img className="lead-probe" alt="" />}>Fixture Test Lending</Chip>
+        <Chip variant="neutral" icon="building">Plain</Chip>
+      </>,
+    );
+    const [led, plain] = [...container.querySelectorAll('span.chip')];
+    expect(led?.firstElementChild?.className).toBe('lead-probe');
+    expect(led?.querySelector('svg')).toBeNull();
+    expect(led?.querySelector('.chip__label')?.textContent).toBe('Fixture Test Lending');
+    expect(plain?.firstElementChild?.tagName.toLowerCase()).toBe('svg');
+  });
+});
+

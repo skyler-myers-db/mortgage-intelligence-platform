@@ -175,13 +175,10 @@ test.describe('Firefox forced colors (a11y-10 item 4 / css-06 item 3)', () => {
 
       test('Highlight states fill with readable text and glyphs', async ({ app, page }) => {
         // First CI run (W5a, 2026-10-01): Firefox paints no Canvas backplate
-        // behind forced text, so the active filter chip, drawer tab and the
-        // other Highlight-filled states draw their forced ink (rgb 251,251,254)
-        // straight on Highlight (rgb 177,244,255) at 1.18:1. Chromium is fine
-        // only because of its backplate. Fix in 33-contrast-modes.css: on those
-        // states, forced-color-adjust: none with background Highlight and
-        // color HighlightText on the element and its descendants.
-        test.fixme(true, 'w5-theme-white-label (W5b, owns 33-contrast-modes.css) · a11y-10 item 4 / css-06 item 3 · Firefox forced colors: text on the Highlight fill at 1.18:1 (no backplate)');
+        // behind forced text, so these states drew their forced ink straight
+        // on Highlight at 1.18:1. Since W5b (w5-theme-white-label) they opt out
+        // of forcing and paint HighlightText on Highlight themselves
+        // (33-contrast-modes.css).
         await app.gotoRoute('/lead-queue?state=IL');
         await forcedPalette(page);
         const fill = await paintedSystemFill(page, 'Highlight');

@@ -26,6 +26,8 @@ frontend/dist/
 # ships them.
 frontend/build-meta/
 frontend/sourcemaps/
+# The deploy-time lender mark copy (tools/branding/lender_mark.py stage); the image never enters the repo.
+frontend/.branding-stage/
 coverage/
 .coverage
 coverage.xml

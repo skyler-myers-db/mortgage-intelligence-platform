@@ -251,12 +251,12 @@ test.describe('axe', () => {
       await commandBar(page).getByRole('button', { name: 'Plan reviewed workflow' }).click();
       await page.locator(RUN_CARD).getByRole('button', { name: 'Save as watchlist' }).click();
       await expect(page.locator(RUN_CARD).getByRole('status')).toBeVisible();
-      // Scoped to the new save row: the run card's pre-existing success CTA is out of this lane.
+      // The whole run card, its success CTA included (--success-fill, W5b).
       await expectAxeClean(page, {
         key: { route: 'ask-genie', state: 'run-saved' },
         theme,
         known: {},
-        include: `${RUN_CARD} .growth-agent-run__save`,
+        include: RUN_CARD,
       });
 
       await page.getByRole('tablist', { name: 'Ask Genie views' }).getByRole('tab', { name: 'Saved monitors', exact: true }).click();

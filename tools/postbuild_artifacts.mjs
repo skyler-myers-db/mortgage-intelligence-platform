@@ -25,6 +25,11 @@
 // bundle sync (git-tracked files plus frontend/dist/**) and
 // scripts/package_source.sh (git archive) never ship them.
 //
+// Lender co-branding (audit responsive-10): the build emits dist/branding/
+// only for a mark preflight validated, so the build also FAILS when
+// dist/branding exists while MIP_LENDER_MARK_SHA256 is unset, or holds
+// anything but one lender-mark.png / lender-mark.webp.
+//
 // Wired into `npm --prefix frontend run build` between `vite build` and
 // tools/precompress_assets.mjs. Node built-ins only.
 // ---------------------------------------------------------------------------
@@ -86,6 +91,29 @@ export function distLeftovers(distDir) {
   return problems;
 }
 
+/** The lender mark lib/tenantAppearancePlugin.ts emits (responsive-10). */
+export const BRANDING_DIR = 'branding';
+const LENDER_MARK_FILE = /^lender-mark\.(png|webp)$/;
+
+/**
+ * Lender co-branding guard: a dist/branding directory is only right for a
+ * build whose mark preflight validated (`env.MIP_LENDER_MARK_SHA256` set),
+ * and then holds exactly one lender-mark.png or lender-mark.webp. Pure.
+ */
+export function brandingProblems(distDir, env) {
+  const dir = path.join(distDir, BRANDING_DIR);
+  if (!existsSync(dir)) return [];
+  const problems = [];
+  if (!String(env.MIP_LENDER_MARK_SHA256 ?? '').trim()) {
+    problems.push(`dist/${BRANDING_DIR} exists but MIP_LENDER_MARK_SHA256 is unset: no lender mark ships without preflight validation`);
+  }
+  const files = walkFiles(dir);
+  if (files.length !== 1 || !LENDER_MARK_FILE.test(files[0])) {
+    problems.push(`dist/${BRANDING_DIR} must hold exactly one lender-mark.png or lender-mark.webp, found: ${files.join(', ') || 'nothing'}`);
+  }
+  return problems;
+}
+
 /**
  * Move the build metadata files into a freshly emptied `metaDir` and every
  * source map into a freshly emptied `mapsDir` (same relative path), then
@@ -121,6 +149,8 @@ export function relocateBuildArtifacts({ distDir, metaDir, mapsDir }) {
 function main() {
   try {
     const result = relocateBuildArtifacts(DEFAULT_DIRS);
+    const branding = brandingProblems(DEFAULT_DIRS.distDir, process.env);
+    if (branding.length > 0) throw new Error(`postbuild: dist is not deployable:\n  - ${branding.join('\n  - ')}`);
     console.log(
       `postbuild: ${META_FILES.join(' + ')} -> ${path.relative(repoRoot, DEFAULT_DIRS.metaDir)}/; ` +
         `${result.maps.length} source maps -> ${path.relative(repoRoot, DEFAULT_DIRS.mapsDir)}/`,
