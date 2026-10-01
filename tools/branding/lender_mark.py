@@ -11,6 +11,8 @@ only the file's sha256 to stdout (nothing when no mark is configured).
 ``frontend/.branding-stage``, re-validates the file, checks it is still the
 file preflight validated (``--expect-sha256``) and copies it there as
 ``lender-mark.png`` or ``lender-mark.webp`` for the Vite build to emit.
+deploy.sh's ``run`` echoes every argument, so Step 1 names the file with
+``--file-env MIP_LENDER_MARK_FILE`` (the variable, never the path).
 
 Exit codes are 0 (accepted, or nothing configured) and 2 (refused). Human
 lines go to stderr and show only the hash prefix, media type and size; the
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import stat
 import sys
@@ -43,6 +46,7 @@ EXIT_OK = 0
 EXIT_REFUSED = 2
 STAGE_RELATIVE = Path("frontend") / ".branding-stage"
 _EXTENSIONS = {"image/png": "png", "image/webp": "webp"}
+_FILE_ENV_RE = re.compile(r"MIP_[A-Z0-9_]{1,60}")
 
 
 class Refused(Exception):
@@ -114,8 +118,18 @@ def _checked_mark(lender: str, nmls: str, file_text: str) -> tuple[ReviewedLende
     return mark, data
 
 
+def _file_text(args: argparse.Namespace) -> str:
+    """--file, or the path held by the environment variable --file-env names."""
+
+    if args.file_env is None:
+        return str(args.file)
+    if _FILE_ENV_RE.fullmatch(args.file_env) is None:
+        raise Refused("--file-env must name an MIP_* environment variable")
+    return os.environ.get(args.file_env, "")
+
+
 def _validate(args: argparse.Namespace) -> int:
-    checked = _checked_mark(args.lender, args.nmls, args.file)
+    checked = _checked_mark(args.lender, args.nmls, _file_text(args))
     if checked is None:
         _say("lender mark: none")
         return EXIT_OK
@@ -142,7 +156,7 @@ def _purge(out: Path) -> None:
 def _stage(args: argparse.Namespace) -> int:
     out = _stage_dir(args.out)
     _purge(out)
-    checked = _checked_mark(args.lender, args.nmls, args.file)
+    checked = _checked_mark(args.lender, args.nmls, _file_text(args))
     if checked is None:
         _say("lender mark: none staged")
         return EXIT_OK
@@ -163,7 +177,9 @@ def _parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name)
         command.add_argument("--lender", required=True)
         command.add_argument("--nmls", required=True)
-        command.add_argument("--file", default="")
+        source = command.add_mutually_exclusive_group()
+        source.add_argument("--file", default="")
+        source.add_argument("--file-env", default=None)
         if name == "validate":
             command.add_argument("--print-sha256", action="store_true")
         else:

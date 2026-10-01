@@ -331,6 +331,23 @@ def test_stage_purges_and_writes_only_the_validated_mark(capsys: pytest.CaptureF
     assert code == 2 and "MIP_LENDER_MARK_FILE is unset" in err
 
 
+def test_stage_reads_the_path_from_an_env_variable_so_deploy_never_echoes_it(
+    capsys: pytest.CaptureFixture[str], fixture_lender, repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = make_png()
+    entry = fixture_lender(entry_for(data, "image/png", 64, 32))
+    mark_file = tmp_path / "env-held-secret.png"
+    mark_file.write_bytes(data)
+    monkeypatch.setenv("MIP_LENDER_MARK_FILE", str(mark_file))
+    args = ("stage", "--lender", LENDER, "--nmls", NMLS, "--file-env", "MIP_LENDER_MARK_FILE", "--out", "frontend/.branding-stage")
+    code, out, err = _run(capsys, *args, "--expect-sha256", entry.sha256)
+    assert code == 0
+    assert (repo / "frontend" / ".branding-stage" / "lender-mark.png").read_bytes() == data
+    assert "env-held-secret" not in out + err
+    code, _, err = _run(capsys, *args[:5], "--file-env", "HOME", "--out", "frontend/.branding-stage")
+    assert code == 2 and "--file-env must name an MIP_* environment variable" in err
+
+
 def test_stage_refuses_any_out_but_the_stage_dir(capsys: pytest.CaptureFixture[str], repo: Path, tmp_path: Path) -> None:
     victim = tmp_path / "victim"
     victim.mkdir()

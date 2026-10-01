@@ -106,6 +106,46 @@ if [[ -z "$MIP_LENDER_NAME" || -z "$MIP_LENDER_NMLS_ID" || -z "$MIP_TENANT_ID" ]
   echo "${RED}[deploy] lender disclosure identity did not resolve completely.${RST}" >&2
   exit 2
 fi
+# Optional lender co-branding (audit responsive-10, report 12.4 #9). The mark
+# file is checked against the reviewed registry (backend/schemas/
+# lender_branding.py) before any workspace mutation; only its sha256 travels
+# on, to Step 1's stage and the frontend build. The path is never logged.
+# The theme and accent are tenant defaults for users who have not chosen;
+# the product defaults (dark, bright) emit nothing.
+MIP_LENDER_MARK_FILE="$(deployment_control_value MIP_LENDER_MARK_FILE)"
+MIP_DEFAULT_THEME="$(deployment_control_value MIP_DEFAULT_THEME dark)"
+MIP_DEFAULT_ACCENT="$(deployment_control_value MIP_DEFAULT_ACCENT bright)"
+if [[ ! "$MIP_DEFAULT_THEME" =~ ^(dark|light|system)$ ]]; then
+  echo "${RED}[deploy] MIP_DEFAULT_THEME must be dark, light or system.${RST}" >&2
+  exit 2
+fi
+if [[ ! "$MIP_DEFAULT_ACCENT" =~ ^(bright|teal|navy|red)$ ]]; then
+  echo "${RED}[deploy] MIP_DEFAULT_ACCENT must be bright, teal, navy or red.${RST}" >&2
+  exit 2
+fi
+if [[ -f tools/branding/lender_mark.py ]]; then
+  if ! MIP_LENDER_MARK_SHA256="$(
+      "$PYTHON" -m tools.branding.lender_mark validate --lender "$MIP_LENDER_NAME" \
+        --nmls "$MIP_LENDER_NMLS_ID" --file "$MIP_LENDER_MARK_FILE" --print-sha256
+    )" || [[ -n "$MIP_LENDER_MARK_SHA256" && ! "$MIP_LENDER_MARK_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "${RED}[deploy] lender mark did not pass the reviewed lender-mark registry.${RST}" >&2
+    exit 2
+  fi
+else
+  # Isolated shell-contract copies carry no branding tool (as the lender
+  # identity fallback above): the only safe answer there is no mark.
+  if [[ -n "$MIP_LENDER_MARK_FILE" ]]; then
+    echo "${RED}[deploy] lender mark tool is unavailable; unset MIP_LENDER_MARK_FILE.${RST}" >&2
+    exit 2
+  fi
+  MIP_LENDER_MARK_SHA256=''
+fi
+if [[ -n "$MIP_LENDER_MARK_SHA256" ]]; then
+  echo "[deploy] lender mark: ${MIP_LENDER_MARK_SHA256:0:12}"
+else
+  echo "[deploy] lender mark: none"
+fi
+export MIP_LENDER_MARK_FILE MIP_DEFAULT_THEME MIP_DEFAULT_ACCENT MIP_LENDER_MARK_SHA256
 _LAKEBASE_INSTANCE_NAME="$(deployment_control_value LAKEBASE_INSTANCE_NAME)"
 _MIP_LAKEBASE_INSTANCE="$(deployment_control_value MIP_LAKEBASE_INSTANCE)"
 if [[ -n "$_LAKEBASE_INSTANCE_NAME" && -n "$_MIP_LAKEBASE_INSTANCE" && \
