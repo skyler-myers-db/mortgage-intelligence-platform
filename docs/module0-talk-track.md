@@ -296,6 +296,23 @@ Talk track:
 Only click approval in a rehearsal/demo workspace where writing an audit row is
 expected.
 
+Maker-checker beat (optional, 30 seconds):
+
+> "Most lenders split the person who builds a list from the person who
+> releases it. An analyst without the approver role selects borrowers and
+> asks for approval with a short note; nothing is drafted or sent. An approver
+> opens that request in the Lead Queue, reviews each borrower's draft in the
+> same review sheet, and decides. The ledger shows both sides: who asked, why,
+> and who approved. The server refuses the person who raised a request when
+> they try to approve it themselves, and an approver can revoke an approval
+> while outreach is still queued, which writes its own audit row."
+
+Claim boundary: the request, decision link and revoke endpoints and their
+audit rows are live from the W5b backend; the Lead Queue request and revoke
+controls ship with the W5d UI. Until then, demo this beat from the audit
+explorer (`APPROVAL_REQUESTED`, `APPROVE` with its request id,
+`OUTREACH_REVOKE`), not from a button.
+
 ## Close
 
 > "Module 0 answers the practical growth question: who should we contact, why

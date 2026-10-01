@@ -27,6 +27,7 @@ _DECISION_BY_EVENT_TYPE: dict[str, DecisionOutcome] = {
     "OUTREACH_APPROVE": "approved",
     "OUTREACH_REJECT": "rejected",
     "REJECT": "rejected",
+    "OUTREACH_REVOKE": "revoked",
     "OUTREACH_HOLD": "held",
     "HOLD": "held",
 }
@@ -36,6 +37,7 @@ _REVIEW_MODES = frozenset({"individual", "triage", "bulk_sample", "bulk_cohort",
 _DECISION_BY_ACTION: dict[str, DecisionOutcome] = {
     "outreach.approve": "approved",
     "outreach.reject": "rejected",
+    "outreach.revoke": "revoked",
     "outreach.hold": "held",
 }
 

@@ -14,12 +14,17 @@ handoff to Portfolio Builder).
 These pins fail if a decision request grows a cohort shape:
 
 1. The /outreach operation set in the committed OpenAPI baseline is exactly
-   POST draft, approve and reject, under /api/outreach and /api/v1/outreach.
-   (A later, separately ruled 'Request approval' slice extends it.)
-2. OutreachApproveRequest and OutreachRejectRequest each have a required
-   ``borrower_id: str``, and ``evidence_ids`` is their only list field.
-3. No field name of either contains borrower_ids, filter, fingerprint, cohort,
-   matching or criteria.
+   POST draft, approve, reject and revoke (flow-v2: one borrower's current
+   approval, never a cohort), plus the separately ruled maker-checker
+   request operations (12.4 #10: POST and GET approval-requests and POST
+   approval-requests/{batch_id}/withdraw), under /api/outreach and
+   /api/v1/outreach. A request never decides a borrower; its batch id is
+   optional single-valued context on a per-borrower approve or reject.
+2. OutreachApproveRequest, OutreachRejectRequest and OutreachRevokeRequest
+   each have a required ``borrower_id: str``; ``evidence_ids`` is the only
+   list field of approve and reject, and revoke has none.
+3. No field name of any of them contains borrower_ids, filter, fingerprint,
+   cohort, matching or criteria.
 """
 
 from __future__ import annotations
@@ -31,14 +36,20 @@ from pathlib import Path
 import pytest
 
 from backend.schemas.offer import OutreachApproveRequest, OutreachRejectRequest
+from backend.schemas.outreach_revoke import OutreachRevokeRequest
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = ROOT / "tests" / "fixtures" / "openapi_baseline.json"
-DECISION_MODELS = (OutreachApproveRequest, OutreachRejectRequest)
+DECISION_MODELS = (OutreachApproveRequest, OutreachRejectRequest, OutreachRevokeRequest)
+LIST_FIELDS: dict[type, list[str]] = {
+    OutreachApproveRequest: ["evidence_ids"],
+    OutreachRejectRequest: ["evidence_ids"],
+    OutreachRevokeRequest: [],
+}
 COHORT_FIELD_FRAGMENTS = ("borrower_ids", "filter", "fingerprint", "cohort", "matching", "criteria")
 
 
-def test_the_outreach_operations_are_exactly_draft_approve_and_reject() -> None:
+def test_the_outreach_operations_are_exactly_the_ruled_set() -> None:
     paths = json.loads(BASELINE.read_text(encoding="utf-8"))["paths"]
     operations = {
         (method.upper(), path)
@@ -47,9 +58,17 @@ def test_the_outreach_operations_are_exactly_draft_approve_and_reject() -> None:
         for method in item
     }
     expected = {
-        ("POST", f"{prefix}/outreach/{verb}")
+        (method, f"{prefix}/outreach/{verb}")
         for prefix in ("/api", "/api/v1")
-        for verb in ("draft", "approve", "reject")
+        for method, verb in (
+            ("POST", "draft"),
+            ("POST", "approve"),
+            ("POST", "reject"),
+            ("POST", "revoke"),
+            ("POST", "approval-requests"),
+            ("GET", "approval-requests"),
+            ("POST", "approval-requests/{batch_id}/withdraw"),
+        )
     }
     assert operations == expected
 
@@ -64,7 +83,7 @@ def test_a_decision_names_exactly_one_borrower(model: type) -> None:
         for name, info in model.model_fields.items()
         if typing.get_origin(info.annotation) is list or info.annotation is list
     )
-    assert list_fields == ["evidence_ids"]
+    assert list_fields == LIST_FIELDS[model]
 
 
 @pytest.mark.parametrize("model", DECISION_MODELS, ids=lambda model: model.__name__)

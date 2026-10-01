@@ -3841,3 +3841,160 @@ VALUES (
     'Growth Agent watchlist series: nullable growth_agent_runs.monitor_id (set at INSERT, append-only kept) with its partial index, and growth_agent_monitors.seed_run_id backfilled from last_run_id'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Approval requests (maker-checker), revoke and decided_at ---------------
+-- Audit 2026-09-21 flow-02 / shell-06 (report 12.4 #10, D-approval-flow-c),
+-- flow-v2 and states-09. A non-approver asks an approver to review named
+-- borrowers: one batch row (the requester, a required screened note, the
+-- idempotency key and its intent hash, and the stored response) and one item
+-- per borrower. The batch is born with response and audit_event_id NULL and
+-- is finalized once, in the same transaction as its APPROVAL_REQUESTED audit
+-- row. An item only ever moves open -> withdrawn | expired. Neither table is
+-- ever deleted from (no DELETE grant, no-remove triggers). Whether an item
+-- was approved or rejected is never stored here: it is derived from the
+-- finalized mip_app.approvals rows that carry the batch id in their decision
+-- intent. Lakebase workflow app state; masked borrower ids only, never PII.
+CREATE TABLE IF NOT EXISTS mip_app.approval_request_batches (
+    batch_id            UUID PRIMARY KEY,
+    requested_by        TEXT NOT NULL,
+    request_key         TEXT NOT NULL CHECK (length(request_key) BETWEEN 1 AND 64),
+    request_intent_hash TEXT NOT NULL CHECK (request_intent_hash ~ '^[0-9a-f]{64}$'),
+    note                TEXT NOT NULL CHECK (length(btrim(note)) >= 1 AND length(note) <= 500),
+    response            JSONB,
+    audit_event_id      UUID REFERENCES mip_app.action_audit(audit_id),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ck_approval_request_batches_finalized
+        CHECK ((response IS NULL) = (audit_event_id IS NULL)),
+    CONSTRAINT uq_approval_request_batches_key UNIQUE (requested_by, request_key)
+);
+DROP TRIGGER IF EXISTS trg_approval_request_batches_finalize_only
+    ON mip_app.approval_request_batches;
+DROP TRIGGER IF EXISTS trg_approval_request_batches_no_remove
+    ON mip_app.approval_request_batches;
+CREATE INDEX IF NOT EXISTS idx_approval_request_batches_requester
+    ON mip_app.approval_request_batches (requested_by, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_approval_request_batches_created
+    ON mip_app.approval_request_batches (created_at);
+
+CREATE TABLE IF NOT EXISTS mip_app.approval_request_items (
+    batch_id    UUID NOT NULL REFERENCES mip_app.approval_request_batches(batch_id),
+    borrower_id TEXT NOT NULL CHECK (borrower_id ~ '^B-[0-9A-Z]{13}$'),
+    status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','withdrawn','expired')),
+    closed_at   TIMESTAMPTZ,
+    CONSTRAINT ck_approval_request_items_closed
+        CHECK ((status = 'open') = (closed_at IS NULL)),
+    PRIMARY KEY (batch_id, borrower_id)
+);
+DROP TRIGGER IF EXISTS trg_approval_request_items_transition
+    ON mip_app.approval_request_items;
+DROP TRIGGER IF EXISTS trg_approval_request_items_no_remove
+    ON mip_app.approval_request_items;
+-- One open request per borrower at a time. The create transaction inserts
+-- with ON CONFLICT (borrower_id) WHERE status = 'open' DO NOTHING, so two
+-- concurrent requests for one borrower cannot both hold it open.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_approval_request_items_open_borrower
+    ON mip_app.approval_request_items (borrower_id)
+    WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_approval_request_items_borrower
+    ON mip_app.approval_request_items (borrower_id);
+
+CREATE OR REPLACE FUNCTION mip_app.enforce_approval_request_batch_finalize_only()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+BEGIN
+    IF (to_jsonb(NEW) - ARRAY['response', 'audit_event_id'])
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - ARRAY['response', 'audit_event_id'])
+       OR OLD.response IS NOT NULL
+       OR OLD.audit_event_id IS NOT NULL
+       OR NEW.response IS NULL
+       OR NEW.audit_event_id IS NULL THEN
+        RAISE EXCEPTION
+            'mip_app.approval_request_batches is immutable except for its one-time audit finalization'
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.enforce_approval_request_item_transition()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+BEGIN
+    IF (to_jsonb(NEW) - ARRAY['status', 'closed_at'])
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - ARRAY['status', 'closed_at'])
+       OR OLD.status IS DISTINCT FROM 'open'
+       OR NEW.status NOT IN ('withdrawn', 'expired')
+       OR NEW.closed_at IS NULL THEN
+        RAISE EXCEPTION
+            'mip_app.approval_request_items only moves from open to withdrawn or expired'
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_approval_request_batches_finalize_only
+    BEFORE UPDATE ON mip_app.approval_request_batches
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_approval_request_batch_finalize_only();
+
+CREATE TRIGGER trg_approval_request_batches_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.approval_request_batches
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+CREATE TRIGGER trg_approval_request_items_transition
+    BEFORE UPDATE ON mip_app.approval_request_items
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_approval_request_item_transition();
+
+CREATE TRIGGER trg_approval_request_items_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.approval_request_items
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+-- flow-v2: an approver may revoke an APPROVE while outreach is none/queued.
+-- The revoke is a NEW approvals row (action 'revoke'); the approve row it
+-- supersedes is never updated or deleted, and the finalize-only, no-remove
+-- and campaign-lifecycle triggers are unchanged. The approvals CREATE TABLE
+-- above keeps its original inline CHECK literal; this guarded block replaces
+-- that auto-named constraint, approvals_action_check, with one that also
+-- admits 'revoke', and is a no-op once it does.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'approvals_action_check'
+          AND conrelid = 'mip_app.approvals'::regclass
+          AND pg_get_constraintdef(oid) LIKE '%''revoke''%'
+    ) THEN
+        ALTER TABLE mip_app.approvals
+            DROP CONSTRAINT IF EXISTS approvals_action_check;
+        ALTER TABLE mip_app.approvals
+            ADD CONSTRAINT approvals_action_check
+            CHECK (action IN ('approve','reject','hold','revoke'));
+    END IF;
+END $$;
+
+-- states-09: the queue version and the approval-request state read approvals
+-- by recency.
+CREATE INDEX IF NOT EXISTS idx_approvals_decided_at
+    ON mip_app.approvals (decided_at DESC);
+
+COMMENT ON TABLE mip_app.approval_request_batches IS
+    'Maker-checker approval requests (Lakebase workflow app state): who asked, the screened note, the idempotency key and its intent hash, and the stored response; finalized once with its APPROVAL_REQUESTED audit row, never deleted. Masked borrower ids only, never PII.';
+COMMENT ON TABLE mip_app.approval_request_items IS
+    'One borrower of an approval request: open until withdrawn by the requester or expired (30 days, or a revoke); approved/rejected is derived from the linked approvals rows, never stored. Masked borrower ids only, never PII.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_01_approval_requests',
+    'Approval requests (maker-checker): approval_request_batches (finalize-only) and approval_request_items (open -> withdrawn|expired, one open per borrower), no DELETE; approvals_action_check admits revoke; idx_approvals_decided_at'
+)
+ON CONFLICT (version) DO NOTHING;

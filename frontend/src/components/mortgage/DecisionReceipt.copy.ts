@@ -59,8 +59,16 @@ export const DECISION_RECEIPT_COPY = {
  * `decision_outcome_for` does; tests/unit/test_decision_receipt_event_parity.py
  * pins the parity by reading this file.
  */
-export const DECISION_RECEIPT_EVENT_TYPES = ['APPROVE', 'OUTREACH_APPROVE', 'OUTREACH_REJECT', 'REJECT', 'OUTREACH_HOLD', 'HOLD'] as const;
-export const DECISION_RECEIPT_ACTIONS = ['outreach.approve', 'outreach.reject', 'outreach.hold'] as const;
+export const DECISION_RECEIPT_EVENT_TYPES = [
+  'APPROVE',
+  'OUTREACH_APPROVE',
+  'OUTREACH_REJECT',
+  'REJECT',
+  'OUTREACH_REVOKE',
+  'OUTREACH_HOLD',
+  'HOLD',
+] as const;
+export const DECISION_RECEIPT_ACTIONS = ['outreach.approve', 'outreach.reject', 'outreach.revoke', 'outreach.hold'] as const;
 
 export function isDecisionReceiptEvent(event: { event_type?: string | null; action?: string | null }): boolean {
   const eventType = (event.event_type ?? '').trim().toUpperCase();
@@ -106,6 +114,8 @@ export function decisionChip(decision: DecisionOutcome): {
 } {
   if (decision === 'rejected') return { variant: 'danger', icon: 'cross', label: 'Rejected' };
   if (decision === 'held') return { variant: 'warning', icon: 'shield', label: 'Held' };
+  // A revoke (audit flow-v2) supersedes an approval; never read it as one.
+  if (decision === 'revoked') return { variant: 'warning', icon: 'cross', label: 'Revoked' };
   return { variant: 'success', icon: 'check', label: 'Approved' };
 }
 

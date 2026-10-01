@@ -5,6 +5,9 @@ from __future__ import annotations
 SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "ACTIVATION_STAGE",
+        "APPROVAL_REQUEST_REFUSED",
+        "APPROVAL_REQUEST_WITHDRAWN",
+        "APPROVAL_REQUESTED",
         "APPROVE",
         "AUDIT_EXPORT",
         "CALL_DISPOSITION",
@@ -31,6 +34,7 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "LEAD_OUTCOME_RECORDED",
         "OUTREACH_APPROVE",
         "OUTREACH_REJECT",
+        "OUTREACH_REVOKE",
         "PORTFOLIO_CREATE",
         "PROPERTY_LOOKUP",
         "RECOMMEND_OFFER",

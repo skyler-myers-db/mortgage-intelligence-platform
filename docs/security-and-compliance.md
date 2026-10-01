@@ -68,21 +68,24 @@ the pull request that ships the behaviour, never earlier.
 
 | Surface | Event | When | Write mode |
 | --- | --- | --- | --- |
-| Lead Queue list (`leads.list_leads`) | `VIEW_LEADS` | once per served `GET /leads` | background, fail-open (`audit.dropped`) |
+| Lead Queue list (`leads.list_leads`) | `VIEW_LEADS` | once per served `GET /leads`; carries `approval_request_batch_id` when the list is scoped to an approval request (a request with no open borrower answers an empty list and writes none) | background, fail-open (`audit.dropped`) |
 | Borrower 360 open (`borrowers.get_borrower`) | `VIEW_BORROWER` | once per served `GET /borrowers/{id}` | background, fail-open |
 | Proof drawer (`borrowers.get_borrower_proof`) | `VIEW_BORROWER_PROOF` | once per served `GET /borrowers/{id}/proof` | background, fail-open |
 | Offer open (the approval surface) | `VIEW_BORROWER` | its own `GET /borrowers/{id}` (the Offer never reuses the Borrower 360 cache entry) | background, fail-open |
 | Offer open (the approval surface) | `RECOMMEND_OFFER` | once per `POST /offers/recommend` (`offers.recommend_offer`): the approval-surface open record, carrying offer code, confidence, thresholds, `decision_inputs`, source freshness, evidence ids and subject CLIP | synchronous, fail-closed (503) |
 | Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`) | committed in the same transaction as the draft row, fail-closed |
-| Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof |
+| Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, and `approval_request_batch_id` when the decision answers an approval request |
+| Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
 | Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
 | Admin ledger explorer (`audit.list_events`, `audit.list_event_page`, `audit.audit_rollups`) | none | every read | audit-free until D-audit-reads-c3 ships `VIEW_AUDIT_LEDGER` |
 | Admin ledger explorer filters (`audit.audit_facets`, `audit.count_events`) | none | on an explicit filter-menu open / filter change | audit-free (admin-gated) until D-audit-reads-c3 |
-| Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` (422) | audit-free |
+| Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` or `approval_request_batch` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
+| Approval request list (`approval_requests.list_outreach_approval_requests`) | none | when a request panel opens | audit-free (Lakebase workflow state, no borrower attribute) |
+| Approval request create / withdraw (`/outreach/approval-requests`) | `APPROVAL_REQUESTED` / `APPROVAL_REQUEST_REFUSED` / `APPROVAL_REQUEST_WITHDRAWN` | every create attempt that reaches classification (a zero-eligible one writes `APPROVAL_REQUEST_REFUSED` with each id's reason and answers counts only); a withdraw that closed at least one borrower | same Lakebase transaction as the batch (or its own, for a refusal), fail-closed |
 
 **Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
 keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`
