@@ -213,7 +213,9 @@ export function USChoroplethMapLegend({
           <div className="map-legend__lever-slot">
             {rate.controlFailed ? (
               <div className="map-legend__caption map-legend__caption--degraded" role="status">
-                Rate scenarios could not load. Showing borrower counts.{' '}
+                {/* Rate Lever #57: the control's own chunk failed, not the read (whose
+                    line, with Retry, lives in RateScenarioControl), so it says so. */}
+                The rate scenario control could not load. Showing borrower counts.{' '}
                 <button type="button" className="btn btn--ghost btn--sm" onClick={() => window.location.reload()}>
                   Reload
                 </button>

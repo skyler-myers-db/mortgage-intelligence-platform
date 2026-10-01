@@ -168,7 +168,7 @@ describe('USChoroplethMap rate scenario', () => {
 
     await act(async () => button('Rate scenario')?.click());
     const lever = () => document.querySelector('.map-legend__lever')?.textContent ?? '';
-    await until(() => lever().includes('Rate scenarios could not load. Showing borrower counts.'));
+    await until(() => lever().includes('The rate scenario control could not load. Showing borrower counts.'));
     // The grid would paint IL 3 / TX 2 and total 1,000: none of it shows.
     await settle();
     expect([cls('il'), cls('tx')]).toEqual(borrowerClasses);

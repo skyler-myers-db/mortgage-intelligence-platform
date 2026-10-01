@@ -193,7 +193,10 @@ describe('USChoroplethMapLegend in rate mode', () => {
   it('says a control chunk that failed to load could not load, with Reload, and draws no number', async () => {
     const out = await renderRate({ ...base, read: read({ data: GRID }), control: null, controlFailed: true });
     expect(out.label).toEqual(['Scenario, not a forecast']);
-    expect(out.lever).toContain('Rate scenarios could not load. Showing borrower counts.');
+    // Rate Lever #57: the chunk's failure is not the read's ('Rate scenarios
+    // could not load.', with Retry, in the control).
+    expect(out.lever).toContain('The rate scenario control could not load. Showing borrower counts.');
+    expect(out.lever).not.toContain('Rate scenarios could not load');
     expect(out.total).toBe('—');
     expect(out.slider).toBeNull();
     const reload = [...document.querySelectorAll('.map-legend__lever button')].map((button) => button.textContent);
