@@ -20,6 +20,7 @@ vi.mock('../../lib/api', async () => {
 vi.mock('../HealthProvider', () => ({ useWorkspaceHost: () => null }));
 
 import { GenieAnswer } from './GenieAnswer';
+import { GenieAnswerSections } from './GenieAnswer.sections';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -224,5 +225,47 @@ describe('GenieAnswer deep-research sections', () => {
     // Top-level rows still render their own table under the prose.
     expect(container.querySelectorAll('.genie-answer__table')).toHaveLength(1);
     expect(container.textContent).toContain('Top Level Only');
+  });
+});
+
+describe('GenieAnswerSections preview (genie-01 phase 1b partial research)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function renderSections(preview: boolean) {
+    const sections = [section({ row_count: 40 }), section({ title: 'Second', row_count: 3 })];
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieAnswerSections summary={null} sections={sections} exportBase={null} preview={preview} />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it('hides row actions, CSV and cell links, and says the rows were trimmed', () => {
+    renderSections(true);
+
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+    expect(container.querySelector('.genie-answer__rows-actions, .genie-answer__toolbar')).toBeNull();
+    expect(container.textContent).not.toMatch(/Show all|CSV/);
+    const notes = Array.from(container.querySelectorAll('.genie-answer__preview-note')).map((n) => n.textContent);
+    expect(notes).toEqual(['Preview: the first 3 of 40 rows. Every row arrives with the recorded answer.']);
+  });
+
+  it('keeps the links and the row actions on the recorded answer (control)', () => {
+    renderSections(false);
+
+    expect(container.querySelectorAll('a[href^="/lead-queue"]').length).toBeGreaterThan(0);
+    expect(container.querySelector('.genie-answer__preview-note')).toBeNull();
   });
 });

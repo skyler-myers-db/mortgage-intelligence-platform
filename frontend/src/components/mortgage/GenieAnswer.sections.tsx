@@ -59,6 +59,7 @@ export function GenieRowsVisual({
   dense = false,
   exportTarget = null,
   onAnnounce,
+  preview = false,
 }: {
   rows: Array<Record<string, unknown>>;
   plan: GenieVisualizationPlan;
@@ -74,6 +75,9 @@ export function GenieRowsVisual({
   exportTarget?: GenieRowsExportTarget | null;
   /** The surface's one announcer (a11y-06). */
   onAnnounce?: (text: string) => void;
+  /** Partial research (genie-01 phase 1b): no row actions, no CSV, no cell
+   *  or chart links; every row arrives with the recorded answer. */
+  preview?: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
   const chart = plan.chart;
@@ -202,7 +206,7 @@ export function GenieRowsVisual({
                         // geography map navigates to on a state click.
                         // Everything else (including city — no route filters
                         // by city) renders as plain text.
-                        const href = genieCellHref(c, v, cellCohort, row);
+                        const href = preview ? null : genieCellHref(c, v, cellCohort, row);
                         return (
                           <td key={c} className={isNum ? 'num' : undefined}>
                             {href ? (
@@ -224,8 +228,13 @@ export function GenieRowsVisual({
           </>
         )
       )}
+      {preview && reportedRowCount !== null && reportedRowCount > rows.length && (
+        <div className="genie-answer__more genie-answer__preview-note">
+          Preview: the first {rows.length} of {reportedRowCount} rows. Every row arrives with the recorded answer.
+        </div>
+      )}
       {/* The inert "+N more rows" became the control that shows them. */}
-      {rows.length > 0 && (
+      {!preview && rows.length > 0 && (
         <GenieAnswerRowsActions extent={extent} expanded={showAll} onToggle={() => setShowAll((open) => !open)}>
           {exportTarget && (
             <GenieRowsCsvDownload
@@ -254,12 +263,14 @@ export function GenieSectionVisual({
   dense = false,
   exportTarget = null,
   onAnnounce,
+  preview = false,
 }: {
   section: GenieAnswerSection;
   cellCohort?: GenieAnswerCohort;
   dense?: boolean;
   exportTarget?: GenieRowsExportTarget | null;
   onAnnounce?: (text: string) => void;
+  preview?: boolean;
 }) {
   const rows = Array.isArray(section.table_rows) ? section.table_rows : [];
   if (rows.length === 0) return null;
@@ -278,6 +289,7 @@ export function GenieSectionVisual({
       dense={dense}
       exportTarget={exportTarget}
       onAnnounce={onAnnounce}
+      preview={preview}
     />
   );
 }
@@ -305,6 +317,7 @@ export function GenieAnswerSections({
   dense = false,
   exportBase = null,
   onAnnounce,
+  preview = false,
 }: {
   summary?: string | null;
   sections: GenieAnswerSection[];
@@ -315,6 +328,8 @@ export function GenieAnswerSections({
   /** Set on a trusted, live answer: each section offers the audited CSV. */
   exportBase?: GenieAnswerExportBase | null;
   onAnnounce?: (text: string) => void;
+  /** Partial research (genie-01 phase 1b): see GenieRowsVisual. */
+  preview?: boolean;
 }) {
   const summaryText = (summary ?? '').trim();
   const collapsible = sections.length >= GENIE_ACCORDION_MIN_SECTIONS;
@@ -354,6 +369,7 @@ export function GenieAnswerSections({
               dense={dense}
               exportTarget={exportBase ? { ...exportBase, scope: 'section', sectionIndex: i + 1 } : null}
               onAnnounce={onAnnounce}
+              preview={preview}
             />
           </>
         );
