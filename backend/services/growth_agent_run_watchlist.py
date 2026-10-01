@@ -19,6 +19,13 @@ In one Lakebase transaction it:
 
 Never called: the planner, the metrics loader, the SQL warehouse, the
 composer.
+
+Series gap (wow-ai-4, for the W5b briefing card): runs are append-only, so a
+run saved here into an EXISTING watchlist name cannot be tagged with that
+watchlist's ``monitor_id``. ``WATCHLIST_SUMMARY_SQL`` still counts it while it
+is the watchlist's ``last_run_id``; after the next Run now it leaves the
+series, so "change since the previous run" skips it. Closing that needs a
+link record, not an UPDATE of the run.
 """
 
 from __future__ import annotations

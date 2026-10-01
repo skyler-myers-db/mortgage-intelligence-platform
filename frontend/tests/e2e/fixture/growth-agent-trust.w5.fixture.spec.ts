@@ -7,8 +7,10 @@
  * 2. while a reviewed plan runs, Run keeps focus (aria-disabled) and every
  *    input whose edit would drop the answer is locked; focus then moves to
  *    the Execution trace;
- * 3. the command-bar hint sits under the buttons, and the bar stacks at 768px;
- * 4. Save as watchlist saves exactly the run shown, with no second plan;
+ * 3. the command-bar hint sits under the buttons, and the bar stacks at 768px
+ *    (both themes);
+ * 4. Save as watchlist saves exactly the run shown, with no second plan, and
+ *    its confirmation takes focus;
  * 5. a saved watchlist says whether scheduled runs are on, per server state;
  * 7. the new surfaces are axe-clean in both themes.
  * (Case 6, the run history list, moved to W5b with genie-09 part 3.)
@@ -156,27 +158,30 @@ test.describe('compose, review, run: trust in the plan that runs', () => {
     await expect.poll(() => lockedControls(page)).toEqual([false, false, false, false, false]);
   });
 
-  test('the command-bar hint sits under the buttons, and the bar stacks at 768px', async ({ app, page }) => {
-    await app.gotoRoute('/ask-genie?tab=workflows');
-    const hint = commandBar(page).locator('.growth-agent-command__hint');
-    const actions = commandBar(page).locator('.growth-agent-command__actions');
-    const objective = page.getByLabel('Mortgage Growth Agent prompt');
-    await expect(hint).toBeVisible();
-    const [hintBox, actionsBox, objectiveBox] = await Promise.all([hint.boundingBox(), actions.boundingBox(), objective.boundingBox()]);
-    if (!hintBox || !actionsBox || !objectiveBox) throw new Error('command bar not laid out');
-    expect(hintBox.y).toBeGreaterThanOrEqual(actionsBox.y + actionsBox.height - 0.5);
-    expect(hintBox.x).toBeGreaterThanOrEqual(objectiveBox.x + objectiveBox.width - 0.5);
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: the command-bar hint sits under the buttons, and the bar stacks at 768px`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/ask-genie?tab=workflows');
+      const hint = commandBar(page).locator('.growth-agent-command__hint');
+      const actions = commandBar(page).locator('.growth-agent-command__actions');
+      const objective = page.getByLabel('Mortgage Growth Agent prompt');
+      await expect(hint).toBeVisible();
+      const [hintBox, actionsBox, objectiveBox] = await Promise.all([hint.boundingBox(), actions.boundingBox(), objective.boundingBox()]);
+      if (!hintBox || !actionsBox || !objectiveBox) throw new Error('command bar not laid out');
+      expect(hintBox.y).toBeGreaterThanOrEqual(actionsBox.y + actionsBox.height - 0.5);
+      expect(hintBox.x).toBeGreaterThanOrEqual(objectiveBox.x + objectiveBox.width - 0.5);
 
-    await page.setViewportSize({ width: 768, height: 900 });
-    await expect(async () => {
-      const [h, a, o] = await Promise.all([hint.boundingBox(), actions.boundingBox(), objective.boundingBox()]);
-      if (!h || !a || !o) throw new Error('command bar not laid out');
-      expect(a.y).toBeGreaterThanOrEqual(o.y + o.height - 0.5);
-      expect(h.y).toBeGreaterThanOrEqual(a.y + a.height - 0.5);
-    }).toPass();
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    expect(overflow).toBeLessThanOrEqual(0);
-  });
+      await page.setViewportSize({ width: 768, height: 900 });
+      await expect(async () => {
+        const [h, a, o] = await Promise.all([hint.boundingBox(), actions.boundingBox(), objective.boundingBox()]);
+        if (!h || !a || !o) throw new Error('command bar not laid out');
+        expect(a.y).toBeGreaterThanOrEqual(o.y + o.height - 0.5);
+        expect(h.y).toBeGreaterThanOrEqual(a.y + a.height - 0.5);
+      }).toPass();
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(0);
+    });
+  }
 });
 
 test.describe('Save as watchlist and scheduled-run status', () => {
@@ -196,6 +201,8 @@ test.describe('Save as watchlist and scheduled-run status', () => {
     await expect(runCard.getByRole('status')).toHaveText(
       `Saved as watchlist “${saveReply().name}”. Find it under Saved monitors.`,
     );
+    // The pressed button is replaced by the confirmation, which takes focus.
+    await expect(runCard.getByRole('status')).toBeFocused();
     expect(recorder.saves).toHaveLength(1);
     expect(recorder.saves[0].runId).toBe(plannedRun().run_id);
     const { request_id: requestId, ...saveBody } = recorder.saves[0].body;
