@@ -22,7 +22,7 @@ export interface GenieJobTurn {
 /** The ids a cancel names; never the question. */
 export type GenieCancelTurn = Omit<GenieJobTurn, 'question'>;
 
-interface GenieCancelBody {
+export interface GenieCancelBody {
   conversation_id: string;
   message_id: string;
   progress_token: string;
@@ -37,6 +37,20 @@ interface GenieJobTurnBody {
   question: string;
 }
 
+/** `POST /api/genie/message/complete` with `respond_async` (audit genie-01).
+ *  Not schema-named: genie.ts owns the schema name for the sync shape. */
+export interface GenieCompleteAsyncJobBody extends GenieJobTurnBody {
+  respond_async: true;
+}
+
+/** `POST /api/genie/message/status`: one poll of the caller's own job. */
+export interface GenieCompletionJobStatusRequest extends GenieJobTurnBody {
+  job_id: string;
+}
+
+/** 202 + the job's status, or an older server's 200 with the answer itself. */
+export type GenieCompleteAsyncResult = GenieCompletionJobStatus | GenieResult;
+
 function turnBody(turn: GenieJobTurn): GenieJobTurnBody {
   return {
     conversation_id: turn.conversationId,
@@ -50,7 +64,7 @@ export const genieJobsApi = {
   /** 202 + the job's status; an older server ignores `respond_async` and
    *  answers 200 with the governed answer itself. */
   genieCompleteAsync: (turn: GenieJobTurn, signal?: AbortSignal) =>
-    postJson<GenieCompletionJobStatus | GenieResult, GenieJobTurnBody & { respond_async: true }>(
+    postJson<GenieCompleteAsyncResult, GenieCompleteAsyncJobBody>(
       '/api/genie/message/complete',
       { ...turnBody(turn), respond_async: true },
       signal,
@@ -58,7 +72,7 @@ export const genieJobsApi = {
 
   /** One poll of the caller's own job (a POST: the token never lands in a URL). */
   genieJobStatus: (turn: GenieJobTurn, jobId: string, signal?: AbortSignal) =>
-    postJson<GenieCompletionJobStatus, GenieJobTurnBody & { job_id: string }>(
+    postJson<GenieCompletionJobStatus, GenieCompletionJobStatusRequest>(
       '/api/genie/message/status',
       { ...turnBody(turn), job_id: jobId },
       signal,
