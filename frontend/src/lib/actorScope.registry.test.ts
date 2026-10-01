@@ -106,9 +106,9 @@ const INDIRECTION: readonly IndirectionRow[] = [
       'persistAccent',
       'persistDensity',
       'writeStoredChoice',
+      'storedValue',
     ],
     keys: [THEME, THEME_CHOSEN, ACCENT, ACCENT_CHOSEN, DENSITY],
-    pendingLane: 'w5-design-contract',
   },
   { file: 'src/hooks/scrollOffsetStore.ts', functions: ['readOffsets', 'writeOffsets'], keys: ['mip.mainScroll.v1', 'mip.leadTableScroll.v1'] },
   { file: 'src/lib/rumApiRoute.ts', functions: ['isApiCallSampled'], keys: ['mip.rumApiSample'] },
@@ -132,6 +132,8 @@ const UC_NAME = /^mip\.(gold|silver|ref|semantics|first_party)(\.|$)/;
 const VIEW_TRANSITION_NAMES = new Set(['mip-route-enter', 'mip-route-exit']);
 /** lib/genieTurnLock.ts: `mip-genie-turn:<messageId>` is a Web Lock name, not a storage key. */
 const WEB_LOCK_HEADS = new Set(['mip-genie-turn:']);
+/** components/ui/tooltipController.ts: the shared tooltip popup's DOM id, not a storage key. */
+const DOM_IDS = new Set(['mip-tooltip']);
 
 const PRIVILEGED_CLASSES: ReadonlySet<KeyClass> = new Set([
   'PRIVATE_LOCAL',
@@ -294,7 +296,7 @@ function mipLiteral(node: ts.Node): string | null {
 }
 
 function isReviewedNonKey(node: ts.Node, text: string): boolean {
-  if (UC_NAME.test(text) || VIEW_TRANSITION_NAMES.has(text) || text.endsWith('.csv')) return true;
+  if (UC_NAME.test(text) || VIEW_TRANSITION_NAMES.has(text) || DOM_IDS.has(text) || text.endsWith('.csv')) return true;
   if (!ts.isTemplateHead(node)) return false;
   if (WEB_LOCK_HEADS.has(text)) return true;
   const template = node.parent as ts.TemplateExpression;
@@ -454,10 +456,10 @@ describe('the storage registry (lib/actorScope)', () => {
     }
   });
 
-  it('(v) non-vacuity: every registered key but the pre-registered ones is found as a literal (at least 21)', () => {
+  it('(v) non-vacuity: every registered key but the pre-registered ones is found as a literal (at least 23)', () => {
     const expected = [...CLASSES.keys()].filter((key) => !(key in PREREGISTERED));
     expect(expected.filter((key) => !REAL.foundKeys.has(key)), 'registered keys no source spells').toEqual([]);
-    expect(expected.filter((key) => REAL.foundKeys.has(key)).length).toBeGreaterThanOrEqual(21);
+    expect(expected.filter((key) => REAL.foundKeys.has(key)).length).toBeGreaterThanOrEqual(23);
   });
 
   describe('(v) non-vacuity: injected sources each fail', () => {

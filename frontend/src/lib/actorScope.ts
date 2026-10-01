@@ -94,8 +94,6 @@ export const ACTOR_SCOPE_REGISTRY = Object.freeze({
 
 /** Registered ahead of the lane that writes them; absent from source until then. */
 export const PREREGISTERED: Readonly<Record<string, string>> = Object.freeze({
-  'mip.themeChosen': 'w5-design-contract',
-  'mip.accentChosen': 'w5-design-contract',
   'mip.actorResetNotice': 'w5-identity-reset-portfolio',
   'mip.actorResetAt': 'w5-identity-reset-portfolio',
 });
