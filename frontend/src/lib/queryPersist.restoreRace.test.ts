@@ -27,17 +27,11 @@ const T0 = Date.parse('2026-09-30T08:00:00Z');
 const SNAPSHOT = { total: 12_480 };
 
 let session: Map<string, string>;
-/** Called when the restore reads the snapshot (the moment it starts landing). */
-let onSnapshotRead: (() => void) | null;
 
 beforeEach(() => {
   session = new Map();
-  onSnapshotRead = null;
   const storage = (values: Map<string, string>) => ({
-    getItem: (key: string) => {
-      if (key.endsWith(QUERY_CACHE_KEY)) onSnapshotRead?.();
-      return values.get(key) ?? null;
-    },
+    getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => {
       values.set(key, value);
     },
@@ -61,13 +55,16 @@ afterEach(() => {
 const client = () => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
 const failing = () => Promise.reject(new Error('warehouse warming up'));
 
-/** A tab that read the Home summary and saved it; then a reload, one minute later. */
+/** A fresh tab that read the Home summary and saved it; then a reload, one minute later. */
 async function savedThenReloaded(): Promise<QueryClient> {
+  session.clear();
+  vi.setSystemTime(T0);
+  _resetQueryPersistenceForTests();
   const first = client();
   await startQueryPersistence(first, BUSTER);
   first.setQueryData(queryKeys.homeSummary(), SNAPSHOT);
   await vi.advanceTimersByTimeAsync(QUERY_CACHE_SAVE_THROTTLE_MS);
-  expect(session.size, 'precondition: a snapshot was saved').toBeGreaterThan(0);
+  expect(session.get(QUERY_CACHE_KEY) ?? '', 'precondition: the summary was saved').toContain('"summary"');
   vi.setSystemTime(T0 + 60_000);
   _resetQueryPersistenceForTests();
   return client();
@@ -104,17 +101,22 @@ describe('a read that failed before the snapshot restore landed', () => {
     expect(reloaded.getQueryData(queryKeys.homeSummary())).toBeUndefined();
   });
 
-  it('a read that fails while the snapshot is landing never keeps the restored figures', async () => {
-    const reloaded = await savedThenReloaded();
-    // The first read starts as the restore reads the snapshot and fails a few
-    // microtasks later: after the screen, around the hydrate.
-    onSnapshotRead = () => {
-      onSnapshotRead = null;
+  it('a read that fails while the snapshot is landing never keeps the restored figures, whichever microtask it lands on', async () => {
+    // The first read fails at once; the restore starts `lead` microtasks
+    // after it. Sweeping the lead lands the failure before the screen,
+    // between the screen and the hydrate, between the hydrate and the end of
+    // the restore, and after it, whatever the library's hop counts are.
+    for (let lead = 0; lead <= 16; lead += 1) {
+      const reloaded = await savedThenReloaded();
       void reloaded.fetchQuery({ queryKey: queryKeys.homeSummary(), queryFn: failing }).catch(() => undefined);
-    };
-    await startQueryPersistence(reloaded, BUSTER);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(reloaded.getQueryData(queryKeys.homeSummary())).toBeUndefined();
+      for (let tick = 0; tick < lead; tick += 1) await Promise.resolve();
+      await startQueryPersistence(reloaded, BUSTER);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reloaded.getQueryState(queryKeys.homeSummary())?.fetchStatus, `settled (lead ${lead})`).toBe('idle');
+      expect(reloaded.getQueryData(queryKeys.homeSummary()), `a failure ${lead} microtasks ahead of the restore`).toBeUndefined();
+      // Flush this tab's trailing save before the next one starts.
+      await vi.advanceTimersByTimeAsync(QUERY_CACHE_SAVE_THROTTLE_MS);
+    }
   });
 
   it('control: a read still on its first attempt is bridged by the snapshot, which then settles', async () => {
