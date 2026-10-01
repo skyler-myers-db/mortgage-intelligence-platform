@@ -108,28 +108,49 @@ export function GenieMapChart({
   );
 }
 
-export function GenieBorrowerList({ rows }: { rows: Array<Record<string, unknown>> }) {
+export function GenieBorrowerList({
+  rows,
+  preview = false,
+}: {
+  rows: Array<Record<string, unknown>>;
+  /** Partial research (genie-01 phase 1b): the cards are plain text, never
+   *  a Borrower 360 link; the drill arrives with the recorded answer. */
+  preview?: boolean;
+}) {
   const borrowers = rows
     .filter((r) => typeof r.borrower_id === 'string')
     .slice(0, 10);
   if (borrowers.length === 0) return null;
   return (
     <div className="genie-board">
-      <div className="eyebrow genie-chart__title">Borrower drill-down</div>
+      <div className="eyebrow genie-chart__title">{preview ? 'Borrowers' : 'Borrower drill-down'}</div>
       <div className="genie-board__grid">
         {borrowers.map((row) => {
           const id = String(row.borrower_id);
           const score = coerceNumber(row.opportunity_score ?? row.score);
+          const place = [row.city, row.state, row.zip].filter(Boolean).join(', ');
+          const body = (
+            <>
+              <div className="genie-board__title">{id}</div>
+              {(place || !preview) && (
+                <div className="genie-board__meta">{place || 'Open borrower evidence'}</div>
+              )}
+              {score !== null && <div className="genie-board__value">{formatGenieNumber(score)}</div>}
+            </>
+          );
+          if (preview) {
+            return (
+              <div key={id} className="genie-board__card">
+                {body}
+              </div>
+            );
+          }
           return (
             // Router <Link>, not a raw <a>: the card used to hard-navigate,
             // dropping the SPA state (and the open Genie panel) on every
             // borrower drill-down.
             <Link key={id} className="genie-board__card" to={borrower360Path(id)}>
-              <div className="genie-board__title">{id}</div>
-              <div className="genie-board__meta">
-                {[row.city, row.state, row.zip].filter(Boolean).join(', ') || 'Open borrower evidence'}
-              </div>
-              {score !== null && <div className="genie-board__value">{formatGenieNumber(score)}</div>}
+              {body}
             </Link>
           );
         })}

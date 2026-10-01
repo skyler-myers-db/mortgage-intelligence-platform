@@ -268,4 +268,45 @@ describe('GenieAnswerSections preview (genie-01 phase 1b partial research)', () 
     expect(container.querySelectorAll('a[href^="/lead-queue"]').length).toBeGreaterThan(0);
     expect(container.querySelector('.genie-answer__preview-note')).toBeNull();
   });
+
+  // A shortlist-shaped sub-analysis (string borrower_id rows) plans as a
+  // borrower_list, whose board used to emit a Borrower 360 <Link> per card
+  // even inside Partial research.
+  function renderBorrowerSections(preview: boolean) {
+    const borrowerRows = [
+      { borrower_id: 'B-0000000000001', state: 'TX', opportunity_score: 91 },
+      { borrower_id: 'B-0000000000002', state: 'CA', opportunity_score: 88 },
+      { borrower_id: 'B-0000000000003', opportunity_score: 85 },
+    ];
+    const sections = [
+      section({ title: 'Who to call first', row_count: 3, table_rows: borrowerRows }),
+      section({ title: 'Second shortlist', row_count: 3, table_rows: borrowerRows }),
+    ];
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieAnswerSections summary={null} sections={sections} exportBase={null} preview={preview} />
+        </MemoryRouter>,
+      );
+    });
+  }
+
+  it('renders borrower cards as plain text with no Borrower 360 link in a preview', () => {
+    renderBorrowerSections(true);
+
+    const cards = container.querySelectorAll('.genie-board__card');
+    expect(cards).toHaveLength(6);
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+    for (const card of cards) {
+      expect(card.tagName).toBe('DIV');
+      expect(card.getAttribute('href')).toBeNull();
+    }
+    expect(container.textContent).not.toMatch(/Open borrower evidence|Borrower drill-down/);
+  });
+
+  it('keeps the Borrower 360 card links on the recorded answer (control)', () => {
+    renderBorrowerSections(false);
+
+    expect(container.querySelectorAll('a.genie-board__card[href^="/borrower-360/B-"]')).toHaveLength(6);
+  });
 });

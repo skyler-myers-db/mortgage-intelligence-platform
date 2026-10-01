@@ -114,7 +114,7 @@ export function GenieRowsVisual({
       {plan.kind === 'strategy_board' && (
         <GenieStrategyBoard rows={rows} x={plan.viz?.x} y={plan.viz?.y} />
       )}
-      {plan.kind === 'borrower_list' && <GenieBorrowerList rows={rows} />}
+      {plan.kind === 'borrower_list' && <GenieBorrowerList rows={rows} preview={preview} />}
       {plan.kind === 'map' && (
         <GenieMapChart rows={rows} x={plan.viz?.x ?? chart?.labelCol} y={plan.viz?.y ?? chart?.valueCol} />
       )}
