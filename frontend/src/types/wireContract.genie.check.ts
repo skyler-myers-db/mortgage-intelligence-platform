@@ -15,7 +15,7 @@ import type { GenieActionRequest, GenieCompleteAsyncRequest, GenieFeedbackReques
 import type { GenieAnswerExportReceipt, GenieAnswerExportReceiptRequest } from '../lib/apiClients/genieExport';
 import type { GenieCancelBody, GenieCompleteAsyncJobBody, GenieCompleteAsyncResult, GenieCompletionJobStatusRequest } from '../lib/apiClients/genieJobs';
 import type { GenieFeedbackResult, GenieLiveProgress, GenieRefusalReportResult, GenieResult, GenieSubmitResult } from '../lib/apiTypes';
-import type { GenieActionResult, GenieActionSuggestion, GenieAnswerSection, GenieNativeVisualization, GenieProof, GenieReasoningStep, GenieSessionDetail, GenieSessionSummary, GenieStartResult } from './genie';
+import type { GenieActionResult, GenieActionSuggestion, GenieAnswerSection, GenieClaimsSummary, GenieNativeVisualization, GenieProof, GenieReasoningStep, GenieSessionDetail, GenieSessionSummary, GenieStartResult, GenieVerifiedClaim } from './genie';
 import type { GenieCancelResult, GenieCompletionJobStatus, GenieJobStage } from './genieJobs';
 
 export type WireContractGenie = [
@@ -56,6 +56,10 @@ export type WireContractGenie = [
   Expect<NoPhantomKeys<GenieCompletionJobStatus, ApiResponse<'GenieCompletionJobStatus'>>>,
   Expect<WireFits<ApiResponse<'GenieJobStage'>, GenieJobStage>>,
   Expect<NoPhantomKeys<GenieJobStage, ApiResponse<'GenieJobStage'>>>,
+  Expect<WireFits<ApiResponse<'GenieClaimsSummary'>, GenieClaimsSummary>>,
+  Expect<NoPhantomKeys<GenieClaimsSummary, ApiResponse<'GenieClaimsSummary'>>>,
+  Expect<WireFits<ApiResponse<'GenieVerifiedClaim'>, GenieVerifiedClaim>>,
+  Expect<NoPhantomKeys<GenieVerifiedClaim, ApiResponse<'GenieVerifiedClaim'>>>,
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'POST /api/v1/genie/message'>, GenieResult>>,
   Expect<NoPhantomKeys<GenieResult, ApiOk<'POST /api/v1/genie/message'>>>,

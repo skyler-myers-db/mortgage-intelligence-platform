@@ -19,6 +19,7 @@ import type { CampaignPerformanceFunnelResponse } from './campaignPerformance';
 import type { AnalyticsThresholds, EquitySpreadBin, EquitySpreadOverview, EquitySpreadPoint, EquitySpreadPointsResponse, EquitySpreadViewport } from './economicsScatter';
 import type { ExecutiveAnalyticsResponse, ExecutiveProvenance, FunnelStage, FunnelTotals, ScoreBucket } from './executiveAnalytics';
 import type { CountyRollup, CountyRollupResponse, StateRollup, StateRollupResponse, ZipRollup, ZipRollupResponse } from './geo';
+import type { HomeAttributionRate, HomeAttributionState, HomeSummaryAttributionResponse } from './homeAttribution';
 import type { HomeSummary, HomeSummaryHighlight } from './homeSummary';
 import type { ProofMargin } from './proofMargins';
 import type { RateSensitivityProvenance, RateSensitivityResponse, RateSensitivityState, RateSensitivityThresholds } from './rateScenario';
@@ -121,6 +122,12 @@ export type WireContractAnalytics = [
   Expect<NoPhantomKeys<ZipRollupResponse, ApiResponse<'ZipRollupResponse'>>>,
   Expect<WireFits<ApiResponse<'HomeSummaryHighlight'>, HomeSummaryHighlight>>,
   Expect<NoPhantomKeys<HomeSummaryHighlight, ApiResponse<'HomeSummaryHighlight'>>>,
+  Expect<WireFits<ApiResponse<'HomeAttributionRate'>, HomeAttributionRate>>,
+  Expect<NoPhantomKeys<HomeAttributionRate, ApiResponse<'HomeAttributionRate'>>>,
+  Expect<WireFits<ApiResponse<'HomeAttributionState'>, HomeAttributionState>>,
+  Expect<NoPhantomKeys<HomeAttributionState, ApiResponse<'HomeAttributionState'>>>,
+  Expect<WireFits<ApiResponse<'HomeSummaryAttributionResponse'>, HomeSummaryAttributionResponse>>,
+  Expect<NoPhantomKeys<HomeSummaryAttributionResponse, ApiResponse<'HomeSummaryAttributionResponse'>>>,
   Expect<WireFits<ApiResponse<'ProofMargin'>, ProofMargin>>,
   Expect<NoPhantomKeys<ProofMargin, ApiResponse<'ProofMargin'>>>,
   Expect<WireFits<ApiResponse<'RateSensitivityProvenance'>, RateSensitivityProvenance>>,
