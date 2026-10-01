@@ -106,7 +106,15 @@
 @container map-wrap (max-width: 1100px) {
   .map-legend > .map-legend__lever { inline-size: auto; }
 }
-.map-legend__lever-slot { min-block-size: calc(var(--sp-16) + var(--sp-6)); }
+/* The slot reserves the TALLEST state of the loaded control (D-dataviz-geo-d2
+   2(iv)), measured at 1440x900 on Home and on Segment Intelligence (filters
+   cleared), both themes, Console open and closed, in the warming, failed,
+   not-built and slider states, with Linux's wider Geist Mono emulated off
+   Linux: the slider on Segments' wide legend (384px, Console closed) at its
+   longest sentence measured 131.06px; the status lines 13.5-28.2px.
+   geo-foundation.fixture.spec.ts logs every measurement and pins
+   slot >= each state and slot - max < var(--sp-2). */
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 2 + var(--sp-1)); }
 .map-wrap:has(.map-legend__lever) .map-levels {
   flex: 1 0 auto;
   min-block-size: calc(var(--sp-16) * 5);
