@@ -26,6 +26,46 @@ import {
   waitUntil,
 } from './ask-genie.growth-agent.test-support';
 
+/**
+ * What POST /agent/run answers when no reviewed workflow matches the objective
+ * (backend growth_agent_live_analysis.py): a read-only Genie analysis with no
+ * run-ledger row, a 32-hex hash and the policy check "No state written". The
+ * server's workflow Literal includes 'live_analysis'; the hand-written TS union
+ * does not, hence the cast.
+ */
+const LIVE_ANALYSIS_RUN = {
+  ...RUN,
+  workflow: {
+    ...RUN.workflow,
+    id: 'live_analysis',
+    title: 'Live analysis',
+    action_label: 'Review the governed analysis; no state was written.',
+    default_route: '/ask-genie',
+  },
+  run_id: '33333333-3333-4333-8333-333333333333',
+  monitor: null,
+  execution_mode: 'genie_conversation',
+  trace_kind: 'genie_conversation',
+  planner_label: 'Live Genie analysis (read-only fallback)',
+  tool_result_hash: 'c'.repeat(32),
+  broad_total: 12,
+  actionable_total: 0,
+  route: '/ask-genie',
+  criteria: { prompt: 'Find refinance opportunities for branch follow-up.' },
+  policy_checks: [
+    {
+      label: 'No state written',
+      status: 'passed',
+      detail: 'Read-only analysis; campaigns, monitors, and Lead Queue were not modified.',
+    },
+  ],
+  audit_event_id: null,
+} as unknown as GrowthAgentRunResponse;
+
+function saveStatus(): HTMLElement | null {
+  return activePanel().querySelector<HTMLElement>('.growth-agent-run__save [role="status"]');
+}
+
 describe('AskGenie Growth Agent saved watchlists', () => {
   registerGrowthAgentRoutePanelHooks();
 
@@ -89,10 +129,12 @@ describe('AskGenie Growth Agent saved watchlists', () => {
       RUN.run_id,
       { tool_result_hash: RUN.tool_result_hash, cadence: 'weekly' },
     ]);
-    await waitUntil(() => activePanel().querySelector('.growth-agent-run__save [role="status"]') !== null);
-    expect(activePanel().querySelector('.growth-agent-run__save [role="status"]')?.textContent).toBe(
+    await waitUntil(() => saveStatus() !== null);
+    expect(saveStatus()?.textContent).toBe(
       'Saved as watchlist “Daily Refi Opportunity Brief - IL”. Find it under Saved monitors.',
     );
+    // The pressed button is gone; focus lands on its confirmation, not on <body>.
+    expect(document.activeElement).toBe(saveStatus());
     expect(activePanel().textContent).not.toContain('Save as watchlist');
     expect(runMortgageGrowthAgent).toHaveBeenCalledTimes(1);
     await waitUntil(() => growthAgent.mock.calls.length >= 2);
@@ -120,6 +162,44 @@ describe('AskGenie Growth Agent saved watchlists', () => {
     );
     expect(growthAgent).toHaveBeenCalledTimes(1);
     expect(runMortgageGrowthAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no Save as watchlist on a read-only live-analysis answer', async () => {
+    runMortgageGrowthAgent.mockResolvedValueOnce(LIVE_ANALYSIS_RUN);
+    mount();
+    await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
+    act(() => button(/^Plan reviewed workflow$/).click());
+    await waitUntil(() => activePanel().querySelector('[aria-label="Latest Growth Agent run"]') !== null);
+    const card = activePanel().querySelector('[aria-label="Latest Growth Agent run"]');
+    expect(card?.textContent).toContain('Live analysis');
+    expect(card?.textContent).toContain('No state written');
+    // No ledger row backs it, so the save route could only refuse it: nothing is offered.
+    expect(card?.textContent).not.toContain('Save as watchlist');
+    expect(card?.querySelector('.growth-agent-run__save')).toBeNull();
+    expect(saveGrowthAgentRunWatchlist).not.toHaveBeenCalled();
+  });
+
+  it('shows a 422 as the refused sentence, never the validation text', async () => {
+    saveGrowthAgentRunWatchlist.mockRejectedValueOnce(
+      new ApiError("tool_result_hash: String should match pattern '^[0-9a-f]{64}$'", {
+        path: `/api/growth-agent/runs/${RUN.run_id}/monitors`,
+        status: 422,
+        validationIssues: [
+          { field: 'tool_result_hash', message: "String should match pattern '^[0-9a-f]{64}$'", location: ['body', 'tool_result_hash'] },
+        ],
+      }),
+    );
+    mount();
+    await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
+    act(() => button(/^Plan reviewed workflow$/).click());
+    await waitUntil(() => activePanel().querySelector('[aria-label="Latest Growth Agent run"]') !== null);
+    act(() => button(/^Save as watchlist$/).click());
+    await waitUntil(() => activePanel().querySelector('.growth-agent-run__save [role="alert"]') !== null);
+    expect(activePanel().querySelector('.growth-agent-run__save [role="alert"]')?.textContent).toBe(
+      "This run can't be saved as shown. Run it again, then save.",
+    );
+    expect(container.textContent).not.toContain('tool_result_hash');
+    expect(container.textContent).not.toContain('should match pattern');
   });
 
   it('re-runs saved watchlists without replaying raw prompt text', async () => {

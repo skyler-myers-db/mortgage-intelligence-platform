@@ -184,6 +184,44 @@ describe('GrowthAgentRunCard', () => {
       );
     });
 
+    it('moves focus to the confirmation after its own Save, and never on a remount', () => {
+      const save = saveControls();
+      renderRun(RUN, save);
+      const button = saveButton();
+      act(() => button?.focus());
+      act(() => button?.click());
+      expect(save.onSave).toHaveBeenCalledTimes(1);
+      renderRun(RUN, saveControls({ savedName: 'Daily Refi Opportunity Brief - IL' }));
+      const status = container.querySelector<HTMLElement>('.growth-agent-run__save [role="status"]');
+      expect(status).not.toBeNull();
+      expect(document.activeElement).toBe(status);
+
+      act(() => root.unmount());
+      root = createRoot(container);
+      renderRun(RUN, saveControls({ savedName: 'Daily Refi Opportunity Brief - IL' }));
+      expect(container.querySelector('.growth-agent-run__save [role="status"]')).not.toBeNull();
+      expect(container.contains(document.activeElement)).toBe(false);
+    });
+
+    it.each([
+      [
+        'a read-only live-analysis answer',
+        {
+          workflow: { ...RUN.workflow, id: 'live_analysis', title: 'Live analysis', default_route: '/ask-genie' },
+          tool_result_hash: 'c'.repeat(32),
+          route: '/ask-genie',
+          audit_event_id: null,
+        },
+      ],
+      ['a run without the 64-hex result hash', { tool_result_hash: 'c'.repeat(32) }],
+      ['a run without its audit row', { audit_event_id: null }],
+    ])('offers no Save, and renders no empty row, for %s', (_label, overrides) => {
+      // 'live_analysis' is in the server's workflow Literal but not the TS union.
+      renderRun({ ...RUN, monitor: null, ...overrides } as unknown as GrowthAgentRunResponse, saveControls());
+      expect(saveButton()).toBeUndefined();
+      expect(container.querySelector('.growth-agent-run__save')).toBeNull();
+    });
+
     it('shows a refused save as an alert', () => {
       renderRun(RUN, saveControls({ errorMessage: "This run can't be saved as shown. Run it again, then save." }));
       expect(container.querySelector('.growth-agent-run__save [role="alert"]')?.textContent).toBe(
@@ -211,6 +249,7 @@ describe('GrowthAgentRunCard', () => {
         saveControls(),
       );
       expect(saveButton()).toBeUndefined();
+      expect(container.querySelector('.growth-agent-run__save')).toBeNull();
     });
   });
 
