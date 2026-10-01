@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
@@ -13,32 +13,13 @@ import { useFootprint } from '../FootprintProvider';
 import { api, type HealthPayload } from '../../lib/api';
 import { hasOpenModal, registerKeyBinding } from '../../lib/keymap';
 import { lenderMarkUrl } from '../../lib/themePreference';
-import type { LenderMarkProps } from './LenderMark';
 import {
   GENIE_LAUNCHER_STATUS_ID,
   genieLauncherStateClass,
   useGenieTurnStatus,
 } from '../../lib/genieTurnStatus';
 import type { LeadSummary } from '../../types';
-
-/** The tenant pill's building glyph: what LenderMark draws whenever there is no mark to show. */
-function TenantGlyph({ iconSize }: LenderMarkProps) {
-  return <Icon name="building" size={iconSize} />;
-}
-
-// The reviewed lender mark (responsive-10) loads only on a co-branded build,
-// so a default build's first paint carries none of its code (bundle cap).
-// The mark is decorative and the Topbar sits under the root boundary only:
-// a failed chunk (network blip, stale chunk after a redeploy) resolves to the
-// glyph instead of throwing in render and taking the whole shell down. The
-// `module?.` guard covers a `vite:preloadError` preventDefault, which resolves
-// the import to undefined. Deliberately not lazyWithPreload: a decorative mark
-// is never a render-blocked load that may reload the page.
-const LenderMark = lazy(() =>
-  import('./LenderMark')
-    .then((module: typeof import('./LenderMark') | undefined) => ({ default: module?.LenderMark ?? TenantGlyph }))
-    .catch(() => ({ default: TenantGlyph })),
-);
+import { LazyLenderMark } from './lenderMarkLoader';
 
 // Platform-aware command-palette shortcut label. Mac shows ⌘K; everyone else
 // Ctrl K. Computed once at module load (the platform doesn't change at runtime).
@@ -480,7 +461,7 @@ export function Topbar() {
         >
           {lenderMarkUrl() ? (
             <Suspense fallback={<Icon name="building" size={12} />}>
-              <LenderMark iconSize={12} sessionLender={sessionStatus === 'ready' ? lender : null} />
+              <LazyLenderMark iconSize={12} sessionLender={sessionStatus === 'ready' ? lender : null} />
             </Suspense>
           ) : (
             <Icon name="building" size={12} />

@@ -133,8 +133,8 @@ describe('LenderMark', () => {
       }
     };
     walk(src);
-    // The Topbar only asks whether a mark exists, to load LenderMark at all.
-    expect(readers.sort()).toEqual(['components/layout/LenderMark.tsx', 'components/layout/Topbar.tsx', 'lib/themePreference.ts']);
+    // The Topbar and the Console only ask whether a mark exists, to load LenderMark at all.
+    expect(readers.sort()).toEqual(['components/layout/Console.tsx', 'components/layout/LenderMark.tsx', 'components/layout/Topbar.tsx', 'lib/themePreference.ts']);
     expect(readFileSync(join(src, 'components', 'AppContext.tsx'), 'utf8')).not.toMatch(/lenderMark/);
   });
 });

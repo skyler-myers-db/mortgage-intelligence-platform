@@ -177,29 +177,65 @@ test('a mark built for another lender never shows, in the pill or the Console ch
   await expect(page.locator('img.lender-mark')).toHaveCount(0);
 });
 
-test('a failed lender-mark chunk leaves the shell up with the building glyph in the pill', async ({ app, hygiene, mockApi, page }, testInfo) => {
-  // The one chunk this test fails on purpose (a network blip, or a stale chunk
-  // after a redeploy), and the browser's and the client error log's lines for it.
-  hygiene.allow('request-failed', /\/assets\/LenderMark-[\w-]+\.js failed/);
-  hygiene.allow('console.error', /\/assets\/LenderMark-[\w-]+\.js/);
-  mockApi.register('GET', '/api/session', () => json({ ...SESSION, lender_name: LENDER }));
-  await serveBuildMetas(page, testInfo, CO_BRANDED);
-  const aborted: string[] = [];
-  await page.route(/\/assets\/LenderMark-[\w-]+\.js$/, async (route) => {
-    aborted.push(route.request().url());
-    await route.abort('failed');
-  });
-  await app.gotoRoute('/');
+/** lib/staleChunkRecovery's once-per-window reload stamp. */
+const STALE_CHUNK_RELOAD_KEY = 'mip.staleChunkReloadAt';
 
-  await expect(pill(page).locator('.topbar__pill-tenant')).toBeVisible();
-  await expect(pill(page).locator('.topbar__pill-tenant')).toHaveText(LENDER);
-  // Non-vacuity: the co-branded build really asked for the chunk this test failed.
-  await expect.poll(() => aborted.length, { message: 'the LenderMark chunk was requested and aborted' }).toBeGreaterThan(0);
-  await expect(pill(page).locator('svg')).toHaveCount(1);
-  await expect(pill(page).locator('img.lender-mark')).toHaveCount(0);
-  await expect(page.locator('.error-surface--page')).toHaveCount(0);
-  await expect(page.getByRole('main')).toBeVisible();
-});
+// A failed LenderMark chunk (a network blip, or a stale chunk after a
+// redeploy) reaches the import in one of two ways, and both must leave the
+// shell up with the glyph. 'rejected': the import rejects. 'prevented': a
+// `vite:preloadError` listener called preventDefault(), as the stale-chunk
+// listener does whenever a route load is in flight, and Vite resolves the
+// import to undefined instead. Each path is pinned on its own: the reload
+// stamp is spent, so the app's listener never reloads mid-test and never
+// prevents the event itself; 'prevented' adds a listener that does.
+for (const path of ['rejected', 'prevented'] as const) {
+  test(`a failed lender-mark chunk (${path}) leaves the shell up with the building glyph in the pill and the Console chip`, async ({ app, hygiene, mockApi, page }, testInfo) => {
+    // The one chunk this test fails on purpose, and the browser's and the client error log's lines for it.
+    hygiene.allow('request-failed', /\/assets\/LenderMark-[\w-]+\.js failed/);
+    hygiene.allow('console.error', /\/assets\/LenderMark-[\w-]+\.js/);
+    mockApi.register('GET', '/api/session', () => json({ ...SESSION, lender_name: LENDER }));
+    await page.addInitScript(
+      ({ key, prevent }) => {
+        window.sessionStorage.setItem(key, String(Date.now()));
+        if (prevent) window.addEventListener('vite:preloadError', (event) => event.preventDefault());
+      },
+      { key: STALE_CHUNK_RELOAD_KEY, prevent: path === 'prevented' },
+    );
+    await serveBuildMetas(page, testInfo, CO_BRANDED);
+    const aborted: string[] = [];
+    await page.route(/\/assets\/LenderMark-[\w-]+\.js$/, async (route) => {
+      aborted.push(route.request().url());
+      await route.abort('failed');
+    });
+    await app.gotoRoute('/');
+    // A marker on this document: a reload would drop it.
+    await page.evaluate(() => {
+      (window as unknown as { __mipSameDocument?: boolean }).__mipSameDocument = true;
+    });
+
+    await expect(pill(page).locator('.topbar__pill-tenant')).toBeVisible();
+    await expect(pill(page).locator('.topbar__pill-tenant')).toHaveText(LENDER);
+    // Non-vacuity: the co-branded build really asked for the chunk this test failed.
+    await expect.poll(() => aborted.length, { message: 'the LenderMark chunk was requested and aborted' }).toBeGreaterThan(0);
+    await expect(pill(page).locator('svg')).toHaveCount(1);
+    await expect(pill(page).locator('img.lender-mark')).toHaveCount(0);
+    await expect(page.locator('.error-surface--page')).toHaveCount(0);
+    await expect(page.getByRole('main')).toBeVisible();
+
+    // The Console chip takes the same loader: the Console chunk does not
+    // depend on the mark's, so the panel opens and its tenant chip keeps the glyph.
+    const panel = await app.openConsole();
+    const chip = panel.locator('.chip', { hasText: LENDER });
+    await expect(chip).toBeVisible();
+    await expect(chip.locator('svg')).toHaveCount(1);
+    await expect(chip.locator('img.lender-mark')).toHaveCount(0);
+    await expect(page.locator('.error-surface')).toHaveCount(0);
+    expect(
+      await page.evaluate(() => (window as unknown as { __mipSameDocument?: boolean }).__mipSameDocument),
+      'the page never reloaded',
+    ).toBe(true);
+  });
+}
 
 test('print shows no lender mark', async ({ app, mockApi, page }, testInfo) => {
   mockApi.register('GET', '/api/session', () => json({ ...SESSION, lender_name: LENDER }));
@@ -210,16 +246,23 @@ test('print shows no lender mark', async ({ app, mockApi, page }, testInfo) => {
   await expect(page.locator('img.lender-mark:visible')).toHaveCount(0);
 });
 
-test('a default build draws the building glyph and never requests a mark', async ({ app, mockApi, page }) => {
+test('a default build draws the building glyph and never requests a mark or its code', async ({ app, mockApi, page }) => {
   mockApi.register('GET', '/api/session', () => json({ ...SESSION, lender_name: LENDER }));
   const branding: string[] = [];
+  const markCode: string[] = [];
   page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/branding/')) branding.push(request.url());
+    const { pathname } = new URL(request.url());
+    if (pathname.startsWith('/branding/')) branding.push(request.url());
+    if (/^\/assets\/LenderMark-[\w-]+\.js$/.test(pathname)) markCode.push(pathname);
   });
   await app.gotoRoute('/');
   await expect(page.locator('meta[name^="mip-"]')).toHaveCount(0);
   await expect(pill(page).locator('svg')).toHaveCount(1);
   await expect(page.locator('img.lender-mark')).toHaveCount(0);
   await expect(page.locator('html')).toHaveAttribute('data-accent', 'bright');
+  // The Console chip draws the glyph too, and its chunk does not pull in the mark's.
+  const panel = await app.openConsole();
+  await expect(panel.locator('.chip', { hasText: LENDER }).locator('svg')).toHaveCount(1);
   expect(branding).toEqual([]);
+  expect(markCode, 'the LenderMark chunk is never fetched on a default build').toEqual([]);
 });

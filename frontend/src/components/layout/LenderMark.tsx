@@ -18,9 +18,10 @@ import { lenderMarkLender, lenderMarkUrl } from '../../lib/themePreference';
  * mismatch and after a failed image load it is the building glyph.
  *
  * It reads the session through the caller instead of its own session query,
- * and the Topbar loads it lazily, only on a co-branded build: both keep the
- * default build's first paint free of its code (W5b initial-JS cap; an own
- * query import reshuffled the shared chunks, +0.33 KiB br measured).
+ * and the Topbar and the Console load it through lenderMarkLoader, only on a
+ * co-branded build, falling back to the glyph if its chunk fails: both keep
+ * the default build free of its code (W5b initial-JS cap; an own query import
+ * reshuffled the shared chunks, +0.33 KiB br measured).
  */
 export interface LenderMarkProps {
   iconSize: number;

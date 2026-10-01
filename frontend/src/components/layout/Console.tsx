@@ -1,15 +1,16 @@
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { useApp, type Accent, type Density } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { PropertyLookupPanel } from '../mortgage/PropertyLookupPanel';
-import { LenderMark } from './LenderMark';
+import { LazyLenderMark } from './lenderMarkLoader';
 import { ThemePreferenceControl } from './ThemePreferenceControl';
 import { api, type ActorAuditEventSummary } from '../../lib/api';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
+import { lenderMarkUrl } from '../../lib/themePreference';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
 
 /**
@@ -272,7 +273,18 @@ export function Console() {
         <div className="tweak-row">
           <label>Configured tenant</label>
           <div className="stack-sm">
-            <Chip variant="neutral" leading={<LenderMark iconSize={10} sessionLender={sessionStatus === 'ready' ? lender : null} />}>{lender}</Chip>
+            <Chip
+              variant="neutral"
+              leading={lenderMarkUrl() ? (
+                <Suspense fallback={<Icon name="building" size={10} />}>
+                  <LazyLenderMark iconSize={10} sessionLender={sessionStatus === 'ready' ? lender : null} />
+                </Suspense>
+              ) : (
+                <Icon name="building" size={10} />
+              )}
+            >
+              {lender}
+            </Chip>
             <div className="muted fs-12">
               Read-only in Module 0; lender configuration is applied server-side.
             </div>
