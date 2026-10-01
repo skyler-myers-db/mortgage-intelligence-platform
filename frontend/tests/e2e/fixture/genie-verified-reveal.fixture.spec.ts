@@ -4,7 +4,7 @@
  *
  *  (1) genie-01 phase 1b on /ask-genie: a count line below the floor, then
  *      three verified sections as "Partial research" (no Show all, no CSV,
- *      no cell or chart links), kept across a same-revision poll whose body
+ *      no cell, chart or borrower-card links), kept across a same-revision poll whose body
  *      carries sections_rev, replaced by the recorded answer on success;
  *  (2) a job that expires after revealing withdraws the sections;
  *  (3) the floating panel on Home renders the reveal dense, without
@@ -33,7 +33,16 @@ import type { MockApi } from './mockApi';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 
 const STAGE_WAIT = { timeout: 20_000 };
-const THREE = genieRevealSectionsFixture(3);
+// The third sub-analysis is a shortlist (string borrower_id rows), which
+// plans as a borrower_list board: its cards must stay plain text in a preview.
+const SHORTLIST_ROWS = [
+  { borrower_id: 'B-REVEAL0000001', state: 'IL', opportunity_score: 91 },
+  { borrower_id: 'B-REVEAL0000002', state: 'TX', opportunity_score: 88 },
+  { borrower_id: 'B-REVEAL0000003', state: 'FL', opportunity_score: 85 },
+];
+const THREE = genieRevealSectionsFixture(3).map((section, index) =>
+  index === 2 ? { ...section, title: 'Who to call first', table_rows: SHORTLIST_ROWS } : section,
+);
 const REVEAL_STEPS: readonly GenieJobStep[] = [
   { stage: 'queued' },
   { stage: 'researching', parts: [1, 7], reveal: { verified: 1, rev: 1, sections: null } },
@@ -83,6 +92,7 @@ test.describe('verified sections as Partial research (genie-01 phase 1b)', () =>
       const group = revealGroup(main(page));
       await expect(group).toBeVisible(STAGE_WAIT);
       await expect(group.locator('h3')).toHaveText(THREE.map((section) => section.title));
+      await expect(group.locator('.genie-board__card')).toHaveCount(SHORTLIST_ROWS.length);
       await expect(group.locator('a')).toHaveCount(0);
       await expect(group).not.toContainText(/Show all|CSV/);
       await expect(group).toContainText('Preview: the first 3 of 40 rows.');
