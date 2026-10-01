@@ -587,22 +587,28 @@ The browser shows `X-Data-Last-Good-At` instead of only logging it
   them, and each map read exposes `lastGoodAt` (null for the overlay and the
   Rate Lever).
 - Where it renders. One `StaleDataNote` ("Showing counts last read …") per
-  page. Segment Intelligence shows the OLDEST of the catalog and the map read
-  on screen beside the ranked table's FetchedAt, as the one-line compact form
-  ("Refresh failed; counts from …", the next-refresh sentence read to
-  assistive technology) so the header keeps its height (above the EmptyState
-  when a measured zero replaces the table, in the full form); Home shows the
-  map's in the legend. It clears on the first response without the header,
-  and never offers a Refresh of its own.
+  surface that shows retained data. Segment Intelligence shows one: the
+  OLDEST of the catalog and the map read on screen beside the ranked table's
+  FetchedAt, as the one-line compact form ("Refresh failed; counts from …",
+  the next-refresh sentence read to assistive technology) so the header
+  keeps its height (above the EmptyState when a measured zero replaces the
+  table, in the full form). Home can show two at once: the map's in the
+  legend, and the hero's at the top of the page when a hero refresh failed
+  over the briefing on screen (below). It clears on the first response
+  without the header, and never offers a Refresh of its own.
 - Persisted aggregates. A restored snapshot shows its true age (FetchedAt on
   Home) while it bridges the load, and a restored value whose first refresh
   fails is reset (lib/queryPersist), so the surface shows its warming or
   error state instead. A Home hero read whose manual refresh fails over data
-  on screen shows the note with that data's age. Known gap (W5b, open): a
-  read whose every retry fails BEFORE the lazy snapshot restore lands is
-  overwritten by the newer-wins hydrate, so the restored value comes back as
-  a success with no marker; home-geo-lever.fixture.spec.ts reproduces it as
-  a `test.fixme` for the lib/queryPersist owner.
+  on screen shows the note with that data's age. A read that already failed
+  BEFORE the lazy snapshot restore lands (its final error, or a failed
+  attempt whose retry is in flight) is screened out of the snapshot right
+  before the newer-wins hydrate, so the restored value never replaces its
+  error with a success; a failure that lands while the restore is in
+  progress is settled like any first-refresh failure once it has finished
+  (`frontend/src/lib/queryPersist.restoreRace.test.ts`, and at the rendered
+  layer home-geo-lever.fixture.spec.ts "a refresh that fails before the
+  snapshot restore lands never brings the restored figures back").
 - A list built from retained readiness stays marked until its own next
   refresh, up to the 300 s soft TTL: one successful readiness read does not
   clear a list already built from a retained one.
