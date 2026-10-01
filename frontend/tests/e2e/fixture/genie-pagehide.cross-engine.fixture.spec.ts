@@ -31,14 +31,16 @@ const PROGRESS_POLL_MS = 1_500;
 const ANSWER_TEXT = /leads the footprint with/;
 const INTERRUPTED =
   'Interrupted by a reload while the answer was being verified. It may still be recorded: check History, or Ask again.';
-/**
- * Found by this spec on WebKit 26.6 (local, 2/3 runs): WebKit rejects the
- * reload-cancelled complete fetch while the old document is still alive, so
- * the turn settles as unreachable and the reloaded page shows "Genie session
- * reset: The app could not be reached" instead of the interrupted note.
+/*
+ * History of (b): found by this spec on WebKit 26.6 (local, 2/3 runs; WebKit
+ * rejects the reload-cancelled complete fetch after beforeunload but before
+ * pagehide, so the turn settled as unreachable and the reloaded page showed
+ * "Genie session reset: The app could not be reached") and in Firefox on the
+ * first W5a CI cross-engine run (the interrupted note never showed). It was
+ * a named fixme until W5b w5-identity-reset fixed lib/genieInFlightTurn
+ * (lib/genieTurnUnload: a failure soon after a beforeunload heard while
+ * completing waits for pagehide).
  */
-const RELOAD_MID_COMPLETE_FIXME =
-  'w5-identity-reset-portfolio (W5b, owns lib/genieInFlightTurn.ts) · runtime-01 (wave-3 remainder) · WebKit and Firefox (first CI run, W5a): a reload during the complete call never shows the interrupted note (WebKit shows "The app could not be reached": the cancelled fetch rejects before pagehide)';
 
 function thread(page: Page) {
   return page.locator('#main-content .genie-thread');
@@ -107,7 +109,6 @@ test.describe('a Genie turn across a pagehide (runtime-01, every engine)', () =>
 
   test('(b) a reload during the complete call never completes again and shows the interrupted note', async ({ app, browserName, hygiene, mockApi, page }, testInfo) => {
     allowNavigationCancel(hygiene, browserName);
-    test.fixme(browserName === 'webkit' || browserName === 'firefox', RELOAD_MID_COMPLETE_FIXME);
     const turn = registerGenieTurn(mockApi, { holdComplete: true });
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);
