@@ -150,6 +150,9 @@ test.describe('one turn that survives the route', () => {
     const healthBefore = healthCalls();
     await page.clock.runFor(8_000);
     await expect.poll(healthCalls, { timeout: 15_000 }).toBeGreaterThan(healthBefore);
+    // D-identity-review-a3 (W5b): a proven mid-session change resets the tab to '/'.
+    await page.waitForURL((url) => url.pathname === '/', { timeout: 15_000 });
+    await app.settle();
     await expect.poll(() => inFlightRecord(page)).toBeNull();
     await expect(thread(page).locator('.genie-progress')).toHaveCount(0);
     await expect(main(page).locator('.genie__msg--user')).toHaveCount(0);

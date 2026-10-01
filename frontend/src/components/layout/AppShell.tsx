@@ -1,4 +1,12 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, type PropsWithChildren } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+  type PropsWithChildren,
+} from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AppProvider, useApp } from '../AppContext';
 import { HealthProvider, useHealth } from '../HealthProvider';
@@ -15,8 +23,9 @@ import { ShellToaster } from '../feedback/ShellToaster';
 import { UnsavedChangesGuard } from '../feedback/UnsavedChangesGuard';
 import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
-import { observeActor, subscribeActorScope } from '../../lib/actorScope';
+import { actorResetHeld, observeActor, subscribeActorScope } from '../../lib/actorScope';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
+import { RouteFallback } from './RouteFallback';
 import { useExitRetained } from '../../hooks/useExitRetained';
 import { useMainScroll } from '../../hooks/useMainScroll';
 import { useRouteAnnouncer } from '../../hooks/useRouteAnnouncer';
@@ -112,22 +121,44 @@ function AppShellInner({ children }: PropsWithChildren) {
 
   // The in-memory half of the actor boundary (lib/actorScope owns storage).
   // Declared before the observer below so it is subscribed first. On
-  // 'cleared' (another actor's data was removed) and, as the W5a nobody
-  // bridge, on 'closed' (a trusted nobody after a real owner: a 401, 403 or
-  // anonymous body), drop the query cache, the shell's actor state (last
-  // borrower, approvals, drawer, workspace) and the route-local caches. While
-  // closed the stores' storage survives and their reads return null, so a
-  // same-actor reopen shows it again.
+  // 'cleared' (another actor's data was removed) and, per
+  // D-identity-review-a2, on 'closed' (a trusted nobody after a real owner: a
+  // 401, 403 or anonymous body), drop the query cache, the shell's actor
+  // state (last borrower, approvals, drawer, workspace) and the route-local
+  // caches. While closed the stores' storage survives and their reads return
+  // null, so a same-actor reopen shows it again.
+  //
+  // A HELD reset (D-identity-review-a3: a proven actor change within 30 s of
+  // the last reset) also emits 'closed', but nothing may re-fetch under the
+  // new cookie while the tab waits: a mounted reader rebuilds its query on
+  // the re-render a clear causes, and a routed read is audited (VIEW_*). So
+  // the routed page (and the Console, whose read passes `enabled`) is swapped
+  // for its placeholder first; the clear runs in the effect after the commit
+  // that unmounted them, once every remaining shell reader is disabled.
+  const resetHeld = useSyncExternalStore(subscribeActorScope, actorResetHeld, actorResetHeld);
+  const clearActorMemory = useCallback(() => {
+    queryClient.clear();
+    clearActorScopedState();
+    clearActorScopedMemoryCaches();
+  }, [clearActorScopedState, queryClient]);
   useEffect(
     () =>
       subscribeActorScope(({ reason }) => {
         if (reason !== 'cleared' && reason !== 'closed') return;
-        queryClient.clear();
-        clearActorScopedState();
-        clearActorScopedMemoryCaches();
+        if (actorResetHeld()) return;
+        clearActorMemory();
       }),
-    [clearActorScopedState, queryClient],
+    [clearActorMemory],
   );
+  useEffect(() => {
+    if (!resetHeld) return;
+    // The document goes at the 30 s boundary: the shell's own readers (the
+    // workspace, the footprint) stay disabled until then, so the clear's
+    // re-render cannot send them under the new cookie.
+    const defaults = queryClient.getDefaultOptions();
+    queryClient.setDefaultOptions({ ...defaults, queries: { ...defaults.queries, enabled: false } });
+    clearActorMemory();
+  }, [clearActorMemory, queryClient, resetHeld]);
 
   // Every trusted actor observation goes to the gate. HealthProvider's
   // `actorIdentity` is set only by a TRUSTED probe (lib/healthTrust) or, before
@@ -156,7 +187,8 @@ function AppShellInner({ children }: PropsWithChildren) {
     <div className="app-shell">
       {/*
         Skip-links. Keyboard users first get "Skip to main content". The
-        workspace-console shortcut exists only while its destination is open.
+        workspace-console shortcut exists only while its destination is open
+        (never during a held reset, whose Console placeholder is aria-hidden).
         Links are visually hidden until focused, per the standard pattern in
         frontend/src/design-system/components.css; targets use tabIndex=-1 so
         the anchor jump shifts focus rather than only scrolling.
@@ -164,7 +196,7 @@ function AppShellInner({ children }: PropsWithChildren) {
       <a href="#main-content" className="sr-skip-link">
         Skip to main content
       </a>
-      {consoleOpen && (
+      {consoleOpen && !resetHeld && (
         <a href="#workspace-console" className="sr-skip-link">
           Skip to workspace console
         </a>
@@ -186,7 +218,9 @@ function AppShellInner({ children }: PropsWithChildren) {
       <main ref={mainRef} id="main-content" tabIndex={-1} className="main">
         <DegradedBanner />
         <VersionNotice />
-        {children}
+        {/* A held actor reset (see the boundary effects above): nothing
+            routed stays mounted to re-read under the new cookie. */}
+        {resetHeld ? <RouteFallback /> : children}
       </main>
       {/* Panel boundaries (audit states-01): a throw in the drawer, the
           Console or the Genie chat stays inside that panel's frame instead of
@@ -207,7 +241,7 @@ function AppShellInner({ children }: PropsWithChildren) {
             />
           )}
         >
-          {consoleMounted ? (
+          {consoleMounted && !resetHeld ? (
             <LazyConsole />
           ) : (
             <aside

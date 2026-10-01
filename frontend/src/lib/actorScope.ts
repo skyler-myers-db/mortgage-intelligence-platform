@@ -25,18 +25,39 @@
  *   6. s '~nobody', k null: keep. Open for nobody.
  * Before the rows, a document-level check: once this document has opened for
  * a real actor A (documentOwnerKey), a different real k that is not an alias
- * of A is a PROVEN change and goes to the replaceable proven-change handler
- * (the interim default runs the rows and makes k the document owner), so a
- * cross-tab restamp of the shared local stamp cannot hide it.
+ * of A is a PROVEN change (D-identity-review-a3), so a cross-tab restamp of
+ * the shared local stamp cannot hide it. The document is RESET, never
+ * reopened in place: the gate closes for good (no later observation, storage
+ * event or stamp check runs again here), unsaved work is dropped, every area
+ * not stamped k (or an alias) loses its private keys, both stamps become k,
+ * and the tab reloads at '/' with a one-time notice (takeActorResetNotice).
+ * Only 'restamped' is emitted: a 'cleared' or 'closed' would clear the query
+ * cache, and the re-render would send audited refetches under k's cookie
+ * before the page goes. A second reset within 30 s of the last one is HELD
+ * until that boundary ('restamped' then 'closed'; actorResetHeld() is true and
+ * the shell swaps the routed page for its placeholder before it clears).
+ * A FIRST observation (no document owner yet) only runs the rows: a reload as
+ * another actor is that actor's own navigation.
+ *
+ * Cross-tab (the W5a integrator ruling): another tab restamping the shared
+ * local stamp SUSPENDS an open gate (closed, 'restamped' only, then a health
+ * recheck through lib/healthRecheck): a probe answering the owner reopens it,
+ * another actor is a proven change, and nobody emits 'closed' as row 5 does
+ * from open (the shell's containment runs then). While open, a local read
+ * returns null and a local write is dropped when the stored local stamp is
+ * present and is not this document's owner; either queues one suspend. An
+ * absent stamp is not foreign.
  *
  * Events, in order, after the status is set: 'cleared' (a PRESENT private key
- * was removed, or the proven-change default ran), 'restamped' (a stamp now
- * names another owner: row 2 with s !== k, or rows 1/3/4), then 'opened' /
- * 'closed' on a status change. The shell clears in-memory state on 'cleared'
- * and 'closed' only, so a first visit never clears the boot prefetches;
- * stores drop their caches on every event. Storage that throws holds values
- * (stamps included) in memory for the document, so row 1 applies at every
- * document start.
+ * was removed), 'restamped' (a stamp now names another owner: row 2 with
+ * s !== k, or rows 1/3/4, a suspend, a reset), then 'opened' / 'closed' on a
+ * status change (and 'closed' when the observation answering a suspend
+ * leaves the gate closed). The shell clears in-memory state on 'cleared' and
+ * 'closed' only, so a first visit never clears the boot prefetches; stores
+ * drop their caches on every event. Storage that throws holds values (stamps
+ * included) in memory for the document, so row 1 applies at every document
+ * start, and the reset notice and its loop guard are lost with the old
+ * document.
  *
  * Preference map ('mip.shortcuts.singleKey'): JSON {actorKey | '~nobody':
  * value}, at most 8 entries, most recently written first; never cleared.
@@ -92,11 +113,15 @@ export const ACTOR_SCOPE_REGISTRY = Object.freeze({
   LEGACY,
 });
 
-/** Registered ahead of the lane that writes them; absent from source until then. */
-export const PREREGISTERED: Readonly<Record<string, string>> = Object.freeze({
-  'mip.actorResetNotice': 'w5-identity-reset-portfolio',
-  'mip.actorResetAt': 'w5-identity-reset-portfolio',
-});
+/** Keys registered ahead of the lane that writes them (key: lane). None today. */
+export const PREREGISTERED: Readonly<Record<string, string>> = Object.freeze({});
+
+/** DEVICE_SESSION: the one-time notice a reset leaves for the next document. */
+const RESET_NOTICE_KEY = 'mip.actorResetNotice';
+/** DEVICE_SESSION: when this tab last reset for a proven change (epoch ms). */
+const RESET_AT_KEY = 'mip.actorResetAt';
+/** A second reset within this long of the last one is held until it passes. */
+const RESET_LOOP_MS = 30_000;
 
 export type ActorScopedKey<A extends ActorScopeArea> = A extends 'local'
   ? (typeof PRIVATE_LOCAL)[number]
@@ -109,12 +134,39 @@ const AREAS: readonly ActorScopeArea[] = ['local', 'session'];
 const PRIVATE: Readonly<Record<ActorScopeArea, readonly string[]>> = { local: PRIVATE_LOCAL, session: PRIVATE_SESSION };
 const PREFERENCE_CAP = 8;
 
+/**
+ * What a reset and a suspend call outside the gate: hooks/useUnsavedGuard's
+ * clearUnsavedWork and lib/healthRecheck's requestHealthRecheck. Each module
+ * registers itself here when it loads (both are in the shell's initial
+ * closure), so this module imports neither: the bundler keeps this module in
+ * a chunk shared with lazy routes, and an import from here pulled both into
+ * it (measured +0.48 KiB br of initial JS in chunk overhead).
+ */
+export interface ActorScopeHooks {
+  clearUnsavedWork?: () => void;
+  requestHealthRecheck?: () => void;
+}
+const hooks: Required<ActorScopeHooks> = { clearUnsavedWork: () => undefined, requestHealthRecheck: () => undefined };
+
+export function registerActorScopeHooks(next: ActorScopeHooks): void {
+  Object.assign(hooks, next);
+}
+
 let status: ActorScopeStatus = 'pending';
 /** The last resolution's owner (k or NOBODY); null before the first. */
 let owner: string | null = null;
 let docOwner: string | null = null;
 let resolvedOnce = false;
 let queue: Array<() => void> = [];
+/** A proven change ran: this document never resolves again (B1 (i)). */
+let resetting = false;
+/** The reset waits for the loop guard's boundary (actorResetHeld). */
+let resetHeld = false;
+let heldTimer: ReturnType<typeof setTimeout> | null = null;
+/** One suspend is queued from a read or write under a foreign local stamp. */
+let suspendQueued = false;
+/** A suspend closed an OPEN gate, and no observation has resolved since. */
+let suspendedOpen = false;
 const listeners = new Set<(event: ActorScopeEvent) => void>();
 const memory = new Map<string, string>();
 
@@ -209,11 +261,13 @@ function removePrivate(area: ActorScopeArea): boolean {
   return removed;
 }
 
-/** `forced`: the proven-change default clears in-memory state even when no
- *  private key was stored (the document's caches hold the old actor's data). */
-function runRows(key: string | null, aliases: readonly string[], forced = false): void {
+function runRows(key: string | null, aliases: readonly string[]): void {
+  // A suspend closed an open gate without 'closed'; the observation that
+  // answers it decides as row 5 would have from open (see the emit below).
+  const wasSuspended = suspendedOpen;
+  suspendedOpen = false;
   const next = key ?? NOBODY;
-  let cleared = forced;
+  let cleared = false;
   let restamped = false;
   let closed = false;
   for (const area of AREAS) {
@@ -252,19 +306,119 @@ function runRows(key: string | null, aliases: readonly string[], forced = false)
   }
   if (cleared) emit('cleared');
   if (restamped) emit('restamped');
-  if (before !== status) emit(status === 'open' ? 'opened' : 'closed');
+  // After a suspend the status was already 'closed', but nothing has been
+  // contained yet: a trusted nobody answering it emits 'closed' as row 5 does
+  // from open, so the shell clears its in-memory state and Genie resets.
+  if (before !== status || (wasSuspended && status === 'closed')) emit(status === 'open' ? 'opened' : 'closed');
 }
 
-/** Interim default until D-identity-review-a3 replaces it (W5b): the rows in
- *  place, always reported as 'cleared' (the shell then drops the old actor's
- *  query cache and in-memory state, as it did before the gate), and k
- *  becomes the document owner. */
-function defaultProvenChange(key: string, aliases: readonly string[]): void {
-  runRows(key, aliases, true);
-  docOwner = key;
+/** Replace the document: a full load of '/', so every module, cache and
+ *  mounted reader of the old actor goes with it (test seam below). */
+function browserResetDocument(): void {
+  window.location.replace('/');
 }
 
-let provenChange: ProvenChangeHandler = defaultProvenChange;
+let resetDocument: () => void = browserResetDocument;
+
+/** Leave the notice for the next document and stamp the loop guard, then go. */
+function leaveDocument(): void {
+  rawWrite('session', RESET_NOTICE_KEY, '1');
+  rawWrite('session', RESET_AT_KEY, String(Date.now()));
+  resetDocument();
+}
+
+/**
+ * Ms left until RESET_LOOP_MS has passed since this tab's last reset, else 0.
+ * An absent, unparsable (NaN) or non-positive stamp gives a NaN or huge age,
+ * which reads as no recent reset (staleChunkRecovery's claim pattern).
+ */
+function loopGuardWait(): number {
+  const age = Date.now() - Number(rawRead('session', RESET_AT_KEY));
+  return age >= 0 && age < RESET_LOOP_MS ? RESET_LOOP_MS - age : 0;
+}
+
+/**
+ * D-identity-review-a3: a proven actor change resets the document (see the
+ * module note). Synchronous and in this order: close for good, drop unsaved
+ * work, remove what k does not own and stamp k, then leave (or hold).
+ */
+function resetForProvenChange(key: string, aliases: readonly string[]): void {
+  status = 'closed';
+  resetting = true;
+  suspendedOpen = false;
+  queue = [];
+  hooks.clearUnsavedWork();
+  for (const area of AREAS) {
+    const stamp = rawRead(area, STAMPS[area]);
+    if (stamp !== key && !(stamp !== null && aliases.includes(stamp))) removePrivate(area);
+  }
+  for (const area of AREAS) rawWrite(area, STAMPS[area], key);
+  const wait = loopGuardWait();
+  // Set before 'restamped', so the shell's swap reads it on that event.
+  resetHeld = wait > 0;
+  emit('restamped');
+  if (!resetHeld) {
+    leaveDocument();
+    return;
+  }
+  emit('closed');
+  // The only timer: `resetting` makes every later observation a no-op.
+  heldTimer = setTimeout(() => {
+    heldTimer = null;
+    leaveDocument();
+  }, wait);
+}
+
+let provenChange: ProvenChangeHandler = resetForProvenChange;
+
+/**
+ * Another tab may have changed the actor: close an open gate at once, drop
+ * nothing, and ask for a trusted probe. 'restamped', never 'cleared' or
+ * 'closed': stores drop their caches and read null, the query cache stays.
+ * The probe decides: the owner reopens ('opened'), another actor is a proven
+ * change, and nobody emits 'closed' (runRows, through `suspendedOpen`).
+ */
+function suspend(): void {
+  if (status === 'pending' || resetting) return;
+  if (status === 'open') {
+    status = 'closed';
+    suspendedOpen = true;
+    emit('restamped');
+  }
+  hooks.requestHealthRecheck();
+}
+
+/** Present and not this document's owner: another tab restamped the area. */
+function foreignLocalStamp(): boolean {
+  const stamp = rawRead('local', STAMPS.local);
+  return stamp !== null && stamp !== owner;
+}
+
+/** One suspend per microtask; never emitted from a read, which can run in render. */
+function queueSuspend(): void {
+  if (suspendQueued) return;
+  suspendQueued = true;
+  queueMicrotask(() => {
+    suspendQueued = false;
+    suspend();
+  });
+}
+
+/** Cross-tab: another document wrote (or cleared) the shared local stamp. */
+function onStorage(event: StorageEvent): void {
+  try {
+    if (event.storageArea !== window.localStorage) return;
+  } catch {
+    return;
+  }
+  if (event.key !== null && event.key !== STAMPS.local) return;
+  if (status === 'pending' || resetting || owner === null || event.newValue === owner) return;
+  suspend();
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', onStorage);
+}
 
 // ------------------------------------------------------------ public API
 
@@ -288,8 +442,24 @@ export function documentOwnerKey(): string | null {
   return docOwner;
 }
 
-/** A trusted actor observation (key null = nobody). */
+/** True while a proven change waits for the loop guard's 30 s boundary. */
+export function actorResetHeld(): boolean {
+  return resetHeld;
+}
+
+/**
+ * The notice a proven-change reset left for this document: read and removed
+ * at once, so it is shown once. The shell calls it when the gate first opens.
+ */
+export function takeActorResetNotice(): boolean {
+  const left = rawRead('session', RESET_NOTICE_KEY) === '1';
+  if (left) rawWrite('session', RESET_NOTICE_KEY, null);
+  return left;
+}
+
+/** A trusted actor observation (key null = nobody). A no-op once a reset ran. */
 export function observeActor({ key, aliases = [] }: { key: string | null; aliases?: readonly string[] }): void {
+  if (resetting) return;
   if (!resolvedOnce) {
     resolvedOnce = true;
     for (const legacy of LEGACY) rawWrite('local', legacy, null);
@@ -301,20 +471,30 @@ export function observeActor({ key, aliases = [] }: { key: string | null; aliase
   runRows(key, aliases);
 }
 
-/** A private value, or null unless the gate is open. */
+/** Open, but the shared local area is stamped for another owner: refuse, and suspend. */
+function refusedAsForeign(area: ActorScopeArea): boolean {
+  if (area !== 'local' || !foreignLocalStamp()) return false;
+  queueSuspend();
+  return true;
+}
+
+/** A private value, or null unless the gate is open (and the area is this owner's). */
 export function readActorScoped<A extends ActorScopeArea>(area: A, key: ActorScopedKey<A>): string | null {
-  return status === 'open' ? rawRead(area, key) : null;
+  if (status !== 'open' || refusedAsForeign(area)) return null;
+  return rawRead(area, key);
 }
 
 /**
  * Write through `updater` over the raw stored string (null removes): applied
- * now while open, the UPDATER queued while pending (replayed against the
- * post-resolution value), dropped while closed.
+ * now while open (dropped under another owner's local stamp), the UPDATER
+ * queued while pending (replayed against the post-resolution value), dropped
+ * while closed.
  */
 export function updateActorScoped<A extends ActorScopeArea>(area: A, key: ActorScopedKey<A>, updater: Updater): void {
   const run = () => rawWrite(area, key, updater(rawRead(area, key)));
-  if (status === 'open') run();
-  else if (status === 'pending') queue.push(run);
+  if (status === 'open') {
+    if (!refusedAsForeign(area)) run();
+  } else if (status === 'pending') queue.push(run);
 }
 
 export function writeActorScoped<A extends ActorScopeArea>(area: A, key: ActorScopedKey<A>, value: string): void {
@@ -343,15 +523,22 @@ export function writeActorPreference(key: ActorPreferenceKey, value: string): vo
 // ------------------------------------------------------------ tests
 
 export function _setProvenChangeHandlerForTests(handler: ProvenChangeHandler | null): void {
-  provenChange = handler ?? defaultProvenChange;
+  provenChange = handler ?? resetForProvenChange;
+}
+
+/** Test seam: what a reset calls instead of a full load of '/' (null restores it). */
+export function _setResetDocumentForTests(fn: (() => void) | null): void {
+  resetDocument = fn ?? browserResetDocument;
 }
 
 /**
- * Test seam (src/test/setup.ts runs it before every test as open for nobody).
- * Sets the status, both stamps and the document owner (null for nobody, and
- * for 'pending': a fresh document has none yet), clears the queue and the
- * memory, KEEPS every subscriber (stores subscribe once at module
- * evaluation) and emits one 'restamped' so store caches drop. Never 'cleared'.
+ * Test seam (src/test/setup.ts runs it before every test as open for nobody,
+ * then installs a no-op resetDocument). Sets the status, both stamps and the
+ * document owner (null for nobody, and for 'pending': a fresh document has
+ * none yet), clears the queue, the memory and any reset (its held timer
+ * too, and resetDocument is restored), KEEPS every subscriber (stores
+ * subscribe once at module evaluation) and emits one 'restamped' so store
+ * caches drop. Never 'cleared'.
  */
 export function _resetActorScopeForTests({ status: next, owner: who }: { status: ActorScopeStatus; owner: string }): void {
   status = next;
@@ -360,7 +547,14 @@ export function _resetActorScopeForTests({ status: next, owner: who }: { status:
   resolvedOnce = next !== 'pending';
   queue = [];
   memory.clear();
-  provenChange = defaultProvenChange;
+  resetting = false;
+  resetHeld = false;
+  suspendQueued = false;
+  suspendedOpen = false;
+  if (heldTimer !== null) clearTimeout(heldTimer);
+  heldTimer = null;
+  resetDocument = browserResetDocument;
+  provenChange = resetForProvenChange;
   for (const area of AREAS) rawWrite(area, STAMPS[area], who);
   emit('restamped');
 }

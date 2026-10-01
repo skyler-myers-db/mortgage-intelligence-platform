@@ -1,7 +1,6 @@
 {
   "frontend/src/components/ErrorBoundaryFallback.tsx": 1,
   "frontend/src/components/EvidenceHoverCard.css": 1,
-  "frontend/src/components/feedback/Toaster.css": 1,
   "frontend/src/components/layout/RouteNav.tsx": 1,
   "frontend/src/components/mortgage/ApprovalBanner.tsx": 1,
   "frontend/src/components/mortgage/LeadApproveReview.css": 1,

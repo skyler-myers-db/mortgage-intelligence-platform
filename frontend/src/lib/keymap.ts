@@ -265,6 +265,19 @@ let nextOrder = 1;
 let version = 0;
 let listening = false;
 
+/** F1-F24 with no modifier: not a character key, so WCAG 2.1.4 (and the
+ *  single-key switch) does not cover it (the toast region's F8). */
+const FUNCTION_KEY_RE = /^F([1-9]|1[0-9]|2[0-4])$/;
+
+function isFunctionKeyChord(chord: KeyChord): boolean {
+  return FUNCTION_KEY_RE.test(chord.key) && !isModifierChord(chord);
+}
+
+/** A chord the single-key switch leaves on: a modifier chord or a bare function key. */
+export function survivesSingleKeySwitch(chord: KeyChord): boolean {
+  return isModifierChord(chord) || isFunctionKeyChord(chord);
+}
+
 function candidatesFor(event: KeyboardEvent): RegisteredKeyBinding[] {
   const target = event.target instanceof Element ? event.target : null;
   const active = typeof document === 'undefined' ? null : document.activeElement;
@@ -272,7 +285,7 @@ function candidatesFor(event: KeyboardEvent): RegisteredKeyBinding[] {
   const singleKeys = singleKeyShortcutsEnabled();
   return bindings
     .filter((binding) => binding.chords.some((chord) => (
-      matchesChord(chord, event) && (singleKeys || isModifierChord(chord))
+      matchesChord(chord, event) && (singleKeys || survivesSingleKeySwitch(chord))
     )))
     .filter((binding) => !editable || binding.allowInEditable === true)
     .sort((a, b) => (

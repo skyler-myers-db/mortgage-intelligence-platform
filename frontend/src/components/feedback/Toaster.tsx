@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -10,10 +11,13 @@ import {
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router';
 import { AUDIT_EVENT_ID_PARAM, AUDIT_EXPLORER_PATH, auditEventHref } from '../../lib/auditLinks';
+import { registerKeyBinding } from '../../lib/keymap';
 import { subscribeModalLayers, topModalLayer } from '../../lib/modalLayers';
-import { dismissToast, getToasts, subscribeToasts, type Toast } from '../../lib/toast';
+import { dismissToast, getToasts, subscribeToasts, type Toast, type ToastAction } from '../../lib/toast';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
+import { useActorResetNotice } from '../layout/useActorResetNotice';
+import { ToastActionRow } from './ToastActionRow';
 import './Toaster.css';
 
 /**
@@ -68,10 +72,80 @@ import './Toaster.css';
  *     modal the hand-off stays in that dialog: never onto the inert page.
  *   - Success toasts dismiss after `SUCCESS_TOAST_MS`; the timer pauses while
  *     the pointer is over the region or focus is inside it (WCAG 2.2.1).
- *     Failures stay until dismissed.
+ *     Failures and info toasts stay until dismissed.
+ *
+ * The platform (W5b; deviation:toast-actions-and-path): an `info` tone (the
+ * neutral edge and the info glyph, in the polite list, never timed), one
+ * optional action per toast (ToastActionRow: it runs once and dismisses the
+ * toast with the Close hand-off, held aria-disabled behind a countdown while
+ * a Retry-After runs), and a keyboard path: F8 focuses the newest toast's
+ * live action, else its Close, from anywhere (listed in the `?` sheet). Over
+ * a modal the region's portal container stops pointer, click and key events
+ * from bubbling past it (Tab excepted; see `stopAtModalPortal`).
  */
 
 export const SUCCESS_TOAST_MS = 8000;
+
+export const TOAST_REGION_SHORTCUT = 'Move focus to the newest notification';
+
+/**
+ * Re-hosted in a modal dialog, the toast portal sits inside that dialog's DOM,
+ * and React's listener on the DIALOG's portal container (BorrowerProofDrawer
+ * renders through createPortal(..., document.body)) dispatched a click or a
+ * key on a toast control a second time, along the dialog's own React
+ * ancestors. React's listener for the toast portal is on this same node and
+ * has already run when these bubble-phase listeners stop the event, so the
+ * toast's own handlers are untouched. Tab is never stopped: useFocusTrap's
+ * Tab wrap is a window bubble listener, and stopping it here would let a
+ * keyboard user tab out of the modal (WCAG 2.4.3 / 2.1.2). Escape is a window
+ * capture listener (lib/escapeStack) and focus events are left alone. Known
+ * consequence: the keymap's window listener does not see a non-Tab key typed
+ * while focus is on a toast control inside a modal.
+ */
+const MODAL_STOPPED_EVENTS = [
+  'click',
+  'auxclick',
+  'dblclick',
+  'contextmenu',
+  'pointerdown',
+  'pointerup',
+  'mousedown',
+  'mouseup',
+  'keydown',
+  'keyup',
+] as const;
+
+function stopAtModalPortal(event: Event): void {
+  if ((event.type === 'keydown' || event.type === 'keyup') && (event as KeyboardEvent).key === 'Tab') return;
+  event.stopPropagation();
+}
+
+/** Run a toast's action. A consumer's throw never keeps the toast up: it is
+ *  rethrown in a microtask (outside the component, which the React Compiler
+ *  would not compile around a catch-bound closure). */
+function runToastAction(action: ToastAction): void {
+  try {
+    action.onAction();
+  } catch (err) {
+    queueMicrotask(() => {
+      throw err;
+    });
+  }
+}
+
+/** F8: focus the newest toast's live action, else its Close; false when there is none. */
+function focusNewestToast(region: HTMLElement | null): boolean {
+  const all = getToasts();
+  const newest = all[all.length - 1];
+  if (!region || !newest) return false;
+  const card = region.querySelector<HTMLElement>(`[data-toast-id="${newest.id}"]`);
+  const target =
+    card?.querySelector<HTMLElement>('.toast__action:not([aria-disabled="true"])') ??
+    card?.querySelector<HTMLElement>('.toast__close');
+  if (!target) return false;
+  target.focus();
+  return true;
+}
 
 function supportsPopover(element: HTMLElement): boolean {
   return typeof element.showPopover === 'function';
@@ -169,16 +243,27 @@ interface ToastCardProps {
 
 function ToastCard({ toast, paused, canOpenAudit, announce, onDismiss }: ToastCardProps) {
   useAutoDismiss(toast, paused);
+  const titleId = useId();
+  // The action runs once: a second activation before the card leaves (a
+  // double click, Enter then Space) is ignored.
+  const ranRef = useRef(false);
   const failed = toast.tone === 'error';
+  const { action } = toast;
+  const runAction = (clickDetail: number) => {
+    if (ranRef.current || !action) return;
+    ranRef.current = true;
+    runToastAction(action);
+    onDismiss(toast.id, clickDetail);
+  };
   return (
     <div
       className={`toast toast--${toast.tone}`}
       role={failed && announce ? 'alert' : undefined}
       data-toast-id={toast.id}
     >
-      <Icon name={failed ? 'cross' : 'check'} size={16} className="toast__ico" />
+      <Icon name={failed ? 'cross' : toast.tone === 'info' ? 'info' : 'check'} size={16} className="toast__ico" />
       <div className="toast__body">
-        <div className="toast__title">
+        <div className="toast__title" id={titleId}>
           {toast.title}
           {toast.count > 1 && (
             <span className="chip chip--neutral chip--compact toast__count">
@@ -198,6 +283,9 @@ function ToastCard({ toast, paused, canOpenAudit, announce, onDismiss }: ToastCa
               Audit event <span className="mono">{toast.auditEventId}</span>
             </div>
           )
+        )}
+        {action && (
+          <ToastActionRow action={action} readyAt={toast.actionReadyAt} titleId={titleId} onActivate={runAction} />
         )}
       </div>
       <button
@@ -224,6 +312,9 @@ function noModalLayer(): null {
 }
 
 export function Toaster() {
+  // The one-time notice after an actor reset (D-identity-review-a3): raised
+  // from this lazy shell chunk, so the initial bundle does not carry it.
+  useActorResetNotice();
   const toasts = useSyncExternalStore(subscribeToasts, getToasts, getToasts);
   const { canAccessAdmin } = useApp();
   // The topmost open modal dialog, or null for the shell (see the module note).
@@ -258,9 +349,22 @@ export function Toaster() {
   // closing dialog hands focus back, and shows the popover again after each
   // move: inside a modal it is shown AFTER the dialog, which puts it on top.
   useLayoutEffect(() => {
+    // Whether the container's modal stop listeners are attached (see
+    // stopAtModalPortal): only while it is hosted in a modal dialog.
+    let stopping = false;
+    const stopInModal = (inModal: boolean) => {
+      if (inModal === stopping) return;
+      stopping = inModal;
+      for (const type of MODAL_STOPPED_EVENTS) {
+        if (inModal) portal.addEventListener(type, stopAtModalPortal);
+        else portal.removeEventListener(type, stopAtModalPortal);
+      }
+    };
     const place = () => {
-      const host = topModalLayer() ?? document.body;
+      const layer = topModalLayer();
+      const host = layer ?? document.body;
       if (portal.parentNode !== host) host.appendChild(portal);
+      stopInModal(layer !== null);
       const region = regionRef.current;
       if (region && supportsPopover(region) && !region.matches(':popover-open')) region.showPopover();
     };
@@ -268,9 +372,27 @@ export function Toaster() {
     const unsubscribe = subscribeModalLayers(place);
     return () => {
       unsubscribe();
+      stopInModal(false);
       portal.remove();
     };
   }, [portal]);
+
+  // wave-3 review #13: a keyboard path to the region (it is already the
+  // named 'Notifications' landmark). A function key, so it fires with the
+  // single-key shortcuts off (lib/keymap) and while typing; with no toast it
+  // declines and F8 falls through to the browser.
+  useEffect(
+    () =>
+      registerKeyBinding({
+        id: 'toast-region',
+        scope: 'global',
+        keys: ['F8'],
+        description: TOAST_REGION_SHORTCUT,
+        allowInEditable: true,
+        run: () => focusNewestToast(regionRef.current),
+      }),
+    [],
+  );
 
   const onFocus = (event: FocusEvent<HTMLElement>) => {
     setFocusWithin(true);
@@ -347,6 +469,7 @@ export function Toaster() {
 
   const paused = hovered || focusWithin;
   const failures = toasts.filter((toast) => toast.tone === 'error');
+  // Success and info toasts share the persistent polite list.
   const confirmations = toasts.filter((toast) => toast.tone !== 'error');
   const card = (toast: Toast) => (
     <ToastCard

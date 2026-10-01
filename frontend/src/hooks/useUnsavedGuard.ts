@@ -1,4 +1,5 @@
 import { useEffect, useId, useSyncExternalStore } from 'react';
+import { registerActorScopeHooks } from '../lib/actorScope';
 
 /**
  * useUnsavedGuard — keep a page's unsaved work from vanishing on a route
@@ -81,6 +82,21 @@ export function registerUnsavedWork(id: string, message: string): () => void {
     }
   };
 }
+
+/**
+ * Forget every page's unsaved work at once: the registry empties and the
+ * `beforeunload` listener comes off, so neither the "Leave without saving?"
+ * dialog nor the browser's "Leave site?" prompt can hold the page. Called by
+ * lib/actorScope when a proven actor change resets the document: another
+ * actor's unsaved work must not survive into, or block, the reset. This
+ * module registers it with the gate when it loads (the gate imports nothing
+ * back, so there is no cycle).
+ */
+export function clearUnsavedWork(): void {
+  if (entries.length > 0) publish([]);
+}
+
+registerActorScopeHooks({ clearUnsavedWork });
 
 /** The message of the most recently dirtied page, or null when nothing is dirty. */
 export function unsavedWorkMessage(): string | null {

@@ -8,7 +8,17 @@ describe('toast store (audit states-07)', () => {
   it('raises a toast with its tone, detail and audit event', () => {
     const id = toast.success('Build saved', { detail: 'IL refi cohort', auditEventId: 'evt-1' });
     expect(getToasts()).toEqual([
-      { id, tone: 'success', title: 'Build saved', detail: 'IL refi cohort', auditEventId: 'evt-1', count: 1, revision: 0 },
+      {
+        id,
+        tone: 'success',
+        title: 'Build saved',
+        detail: 'IL refi cohort',
+        auditEventId: 'evt-1',
+        count: 1,
+        revision: 0,
+        action: null,
+        actionReadyAt: null,
+      },
     ]);
   });
 
@@ -55,6 +65,45 @@ describe('toast store (audit states-07)', () => {
     unsubscribe();
     toast.success('After unsubscribe');
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('raises an info toast (the shell platform, deviation:toast-actions-and-path)', () => {
+    const id = toast.info('The signed-in user changed, so this tab was reset.');
+    expect(getToasts()).toEqual([expect.objectContaining({ id, tone: 'info', action: null, actionReadyAt: null })]);
+  });
+
+  it('never coalesces a toast with an action, nor coalesces into one', () => {
+    const retry = vi.fn();
+    const first = toast.error('Approve failed', { action: { label: 'Retry', onAction: retry } });
+    const second = toast.error('Approve failed', { action: { label: 'Retry', onAction: retry } });
+    expect(second).not.toBe(first);
+    const plain = toast.error('Approve failed');
+    expect(getToasts().map((item) => item.id)).toEqual([first, second, plain]);
+    expect(getToasts().every((item) => item.count === 1)).toBe(true);
+  });
+
+  it('holds an action until a positive retryAfterMs has passed; ignores retryAfterMs without an action', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-01T12:00:00Z'));
+      const action = { label: 'Retry', onAction: () => undefined };
+      toast.error('Rate limited', { action, retryAfterMs: 12_000 });
+      toast.error('Rate limited again', { action, retryAfterMs: 0 });
+      toast.error('No action', { retryAfterMs: 12_000 });
+      expect(getToasts().map((item) => item.actionReadyAt)).toEqual([Date.now() + 12_000, null, null]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('evicts the oldest success, then the oldest info, then the oldest failure', () => {
+    toast.error('Failed');
+    toast.info('Notice');
+    toast.success('Saved');
+    toast.error('Failed again');
+    expect(getToasts().map((item) => item.title), 'the success goes first').toEqual(['Failed', 'Notice', 'Failed again']);
+    toast.error('Third failure');
+    expect(getToasts().map((item) => item.title), 'then the info').toEqual(['Failed', 'Failed again', 'Third failure']);
   });
 
   it('drops every toast when the signed-in actor changes', () => {

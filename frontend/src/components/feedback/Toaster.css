@@ -1,5 +1,6 @@
 /* ============================================================
-   TOAST REGION (2026-09-21 audit states-07, slice 1)
+   TOAST REGION (2026-09-21 audit states-07, slice 1;
+   deviation:toast-actions-and-path for the W5b platform rules below)
    ============================================================
    DECLARED EXTENSION. The prototype (design_files/index.html) defines no
    transient-feedback pattern; the `.toast` block is built only from
@@ -48,6 +49,15 @@
 .toast__title { font-size: var(--fs-13); font-weight: 600; display: flex; align-items: center; gap: var(--sp-2); }
 .toast__detail { font-size: var(--fs-12); color: var(--text-2); overflow-wrap: anywhere; }
 .toast__link { font-size: var(--fs-12); color: var(--accent-ink); justify-self: start; }
+
+/* deviation:toast-actions-and-path (W5b shell toast platform). The base
+   .toast edge is the success line, so an info toast needs its own neutral
+   edge and glyph, or it reads as a success. One action per toast, with the
+   Retry-After wait in front of it. */
+.toast--info { border-color: var(--line-2); }
+.toast--info .toast__ico { color: var(--text-2); }
+.toast__actions { display: flex; align-items: center; gap: var(--sp-2); justify-self: start; }
+.toast__wait { font-size: var(--fs-12); }
 
 @media (prefers-reduced-motion: reduce) {
   .toast { transition: none; }

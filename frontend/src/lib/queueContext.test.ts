@@ -7,7 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { observeActor } from './actorScope';
+import { _resetActorScopeForTests, observeActor } from './actorScope';
 import { ACTOR_A, ACTOR_B } from '../test/actorKeys';
 import { MASKED_BORROWER_ID_RE } from './routeMeta';
 import {
@@ -71,6 +71,9 @@ describe('queue context', () => {
     observeActor({ key: ACTOR_A });
     const before = publishQueueContext({ search: '?state=IL', label: 'IL', ids: IDS });
     expect(before).not.toBeNull();
+    // The change, as a NEW document (a mid-session change resets the tab,
+    // D-identity-review-a3): pending over A's stamps, then B first.
+    _resetActorScopeForTests({ status: 'pending', owner: ACTOR_A });
     observeActor({ key: ACTOR_B });
     expect(window.sessionStorage.getItem(QUEUE_CONTEXT_STORAGE_KEY)).toBeNull();
     expect(resolveQueueContext({ queue: before }, IDS[0])).toBeNull();

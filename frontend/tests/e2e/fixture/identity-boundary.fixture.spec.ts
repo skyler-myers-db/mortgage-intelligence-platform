@@ -15,7 +15,11 @@
  * reads the stored conversation id as null (the gate is pending); it re-reads
  * the id when the gate opens, so the owner's next question continues it.
  *
- * Page 1's own reaction to the flip belongs to D-identity-review-a3 (W5b).
+ * Page 1's own reaction to the flip (D-identity-review-a3, W5b): a proven
+ * mid-session change resets the document to '/' with a one-time notice, and
+ * no audited read leaves under the new cookie; another tab restamping the
+ * shared stamp suspends page 1 at once (its pin hides) until a trusted probe
+ * proves the change.
  */
 import type { Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
@@ -120,6 +124,107 @@ test.describe('a new tab after an actor change (D-identity-review-b)', () => {
     await tab.app.askGenie(GENIE_QUESTION);
     await expect.poll(() => submits.length).toBe(1);
     expect(submits[0]).toBe(A_CONVERSATION);
+    await tab.page.close();
+  });
+});
+
+const RESET_NOTICE = 'The signed-in user changed, so this tab was reset. Nothing from the previous session carries over.';
+const DRAFT_KEY = 'mip.portfolio.campaignDraft.v1';
+/** The audit-free reads every new document primes at boot. */
+const BOOT_PRIMES = [/^\/api(\/v1)?\/session$/, /^\/api(\/v1)?\/config\/options$/, /^\/api(\/v1)?\/config\/footprint$/, /^\/api(\/v1)?\/health$/];
+const HEALTH_CALL = /^\/api(\/v1)?\/health$/;
+
+const toastRegion = (page: Page) => page.locator('section.toast-region[aria-label="Notifications"]');
+const pathname = (page: Page) => new URL(page.url()).pathname;
+
+/** Flip the served actor to B and run page 1's clock past its 8 s poll until the reset lands on '/'. */
+async function flipAndReset(page: Page, app: AppDriver, mockApi: MockApi, flip: () => void): Promise<number> {
+  const from = mockApi.calls.length;
+  flip();
+  const healthBefore = mockApi.calls.filter((call) => HEALTH_CALL.test(call.path)).length;
+  await page.clock.runFor(8_000);
+  await expect.poll(() => mockApi.calls.filter((call) => HEALTH_CALL.test(call.path)).length, { timeout: 15_000 }).toBeGreaterThan(healthBefore);
+  await page.waitForURL((url) => url.pathname === '/', { timeout: 15_000 });
+  await app.settle();
+  return from;
+}
+
+test.describe('a proven mid-session actor change resets the document (D-identity-review-a3)', () => {
+  for (const theme of ['dark', 'light'] as const) {
+    test(`(1a) ${theme}: /lead-queue as A, then B: the tab resets to '/' with the notice, and no audited read leaves after the flip`, async ({ app, page, mockApi }) => {
+      let actor = FIXTURE_ACTOR_A;
+      serveActor(mockApi, () => actor);
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      await expect(page.locator('tr[data-borrower-row]').first()).toBeVisible();
+
+      const from = await flipAndReset(page, app, mockApi, () => {
+        actor = FIXTURE_ACTOR_B;
+      });
+      expect(pathname(page)).toBe('/');
+      const after = mockApi.calls.slice(from).map((call) => call.path);
+      expect(after.filter((path) => AUDITED_READ.test(path)), 'no audited read after the flip').toEqual([]);
+      for (const prime of BOOT_PRIMES) {
+        expect(after.some((path) => prime.test(path)), `the new document primed ${prime}`).toBe(true);
+      }
+      await expect(toastRegion(page)).toContainText(RESET_NOTICE);
+      await expectAxeClean(page, { key: { route: 'home', state: 'default' }, theme, known: KNOWN_VIOLATIONS });
+    });
+  }
+
+  test('(1b) /portfolio-builder with unsaved work as A, then B: no "Leave site?" dialog, the tab resets to "/" with the notice and the draft is gone', async ({ app, page, mockApi }, testInfo) => {
+    let actor = FIXTURE_ACTOR_A;
+    serveActor(mockApi, () => actor);
+    const dialogs: string[] = [];
+    page.on('dialog', (dialog) => {
+      dialogs.push(dialog.type());
+      void dialog.accept();
+    });
+    await app.gotoRoute('/portfolio-builder');
+    // A typed budget (feedback-guard's dirtyPortfolio pattern): a real click
+    // first, so Chromium would show a beforeunload prompt for this page.
+    const budget = page.getByRole('spinbutton', { name: 'Budget', exact: true });
+    await budget.click();
+    await budget.fill('25000');
+    await budget.blur();
+    await expect(budget).toHaveValue('25000');
+    const beforeFlip = await page.evaluate((key) => window.sessionStorage.getItem(key), DRAFT_KEY);
+    if (beforeFlip === null) {
+      testInfo.annotations.push({ type: 'draft-key', description: 'absent before the flip; w5-portfolio-forms not merged' });
+    }
+
+    await flipAndReset(page, app, mockApi, () => {
+      actor = FIXTURE_ACTOR_B;
+    });
+    expect(dialogs, 'no page dialog (the unsaved work was dropped first)').toEqual([]);
+    expect(pathname(page)).toBe('/');
+    await expect(toastRegion(page)).toContainText(RESET_NOTICE);
+    expect(await page.evaluate((key) => window.sessionStorage.getItem(key), DRAFT_KEY), "A's draft is gone").toBeNull();
+  });
+
+  test("(2) another tab signs in as B: page 1's pin hides at once, then page 1 resets to '/' with the notice", async ({ app, page, mockApi }) => {
+    let actor = FIXTURE_ACTOR_A;
+    serveActor(mockApi, () => actor);
+    await seedActorA(page);
+    await app.gotoRoute('/');
+    await expect(pinsCard(page)).toContainText(A_PIN.question);
+    const resets: string[] = [];
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) resets.push(new URL(frame.url()).pathname);
+    });
+
+    actor = FIXTURE_ACTOR_B;
+    const tab = await newTab(page, mockApi);
+    await tab.app.gotoRoute('/');
+    await expect(pinsCard(tab.page)).toHaveCount(0);
+
+    // The storage event: page 1 hides the pin with no probe needed...
+    await expect(pinsCard(page)).toHaveCount(0);
+    // ...then its recheck probe proves B: the document is replaced at '/'.
+    await expect.poll(() => resets, { timeout: 15_000 }).toContain('/');
+    await app.settle();
+    await expect(toastRegion(page)).toContainText(RESET_NOTICE);
+    await expect(pinsCard(page)).toHaveCount(0);
     await tab.page.close();
   });
 });

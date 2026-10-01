@@ -4,6 +4,7 @@ import { isAbortError, type HealthPayload } from '../lib/api';
 import type { HealthHint } from '../lib/apiTypes';
 import { subscribeNetworkFailures } from '../lib/apiFailure';
 import { readHealthPrime, takeHealthPrime } from '../lib/bootPrime';
+import { subscribeHealthRecheck } from '../lib/healthRecheck';
 import { healthActorObservation, type ActorIdentity } from '../lib/healthTrust';
 import { isSessionExpired, subscribeSessionStatus } from '../lib/sessionStatus';
 import { recoveredDependencies, refetchRecoveredQueries } from './healthRecovery';
@@ -185,6 +186,14 @@ export function startHealthPoll({
   let inFlight = false;
   let lastProbeEndedAt = Number.NEGATIVE_INFINITY;
   let bootPrimeChecked = false;
+  // lib/healthRecheck (D-identity-review-a3): the actor gate's requests for a
+  // fresh trusted observation, counted (a clamped performance.now() can give
+  // a request and a probe start the same instant, so order is a count, not a
+  // time), how many a trusted probe has answered, and whether one more probe
+  // runs when the in-flight one ends.
+  let rechecksRequested = 0;
+  let rechecksAnswered = 0;
+  let recheckAfterProbe = false;
 
   const isHidden = () =>
     typeof document !== 'undefined' && document.visibilityState === 'hidden';
@@ -248,6 +257,8 @@ export function startHealthPoll({
     }
     inFlight = true;
     const t0 = performance.now();
+    // The recheck requests made before this probe started: the ones it answers.
+    const covers = rechecksRequested;
     try {
       // The page's first probe takes the boot module's health prime
       // (lib/bootPrime) instead of a second request; an unusable or stale
@@ -260,9 +271,16 @@ export function startHealthPoll({
       observeConnection(rawPayload.status !== 'unreachable');
       // Only a trusted observation may say who the actor is (lib/healthTrust):
       // a transport failure keeps the last actor, and the object is replaced
-      // only when the key changes, so the shell's actor effect runs once per change.
+      // only when the key changes, so the shell's actor effect runs once per
+      // change. Except the first trusted probe STARTED after a recheck request
+      // (lib/healthRecheck): it publishes a fresh object even for an unchanged
+      // key, or a suspended gate would never hear "still the same actor".
       const actor = healthActorObservation(rawPayload);
-      if (actor.trusted) setActorIdentity((prior) => (prior !== null && prior.key === actor.key ? prior : { key: actor.key }));
+      if (actor.trusted) {
+        const fresh = covers > rechecksAnswered;
+        if (fresh) rechecksAnswered = covers;
+        setActorIdentity((prior) => (!fresh && prior !== null && prior.key === actor.key ? prior : { key: actor.key }));
+      }
       const elapsed = primed?.probeMs ?? Math.round(performance.now() - t0);
       const { payload, next } = applyDownUpDebounce(
         rawPayload,
@@ -319,6 +337,35 @@ export function startHealthPoll({
       lastProbeEndedAt = performance.now();
     }
     scheduleNext();
+    // A recheck asked for while this probe was in flight: this probe started
+    // before the request, so one more runs now.
+    if (recheckAfterProbe) {
+      recheckAfterProbe = false;
+      if (rechecksRequested !== rechecksAnswered && mayProbe()) void tick();
+    }
+  };
+
+  // One probe for an open recheck request: now when it may, else exactly one
+  // scheduled tick (when the in-flight probe ends, or once the nudge gap has
+  // elapsed). Hidden, offline or expired: nothing now; the visibility, online
+  // or reload path probes later, and that probe answers the request.
+  const runRecheck = () => {
+    if (rechecksRequested === rechecksAnswered || !mayProbe()) return;
+    if (inFlight) {
+      recheckAfterProbe = true;
+      return;
+    }
+    const wait = NUDGE_MIN_GAP_MS - (performance.now() - lastProbeEndedAt);
+    if (wait <= 0) {
+      void tick();
+      return;
+    }
+    // The next poll, brought forward to the end of the gap: still one timer,
+    // so a second request inside the gap schedules nothing more.
+    clearTimer();
+    timer = setTimeout(() => {
+      void tick();
+    }, wait);
   };
 
   void tick();
@@ -347,6 +394,10 @@ export function startHealthPoll({
     if (inFlight || performance.now() - lastProbeEndedAt < NUDGE_MIN_GAP_MS) return;
     void tick();
   });
+  const unsubscribeRecheck = subscribeHealthRecheck(() => {
+    rechecksRequested += 1;
+    runRecheck();
+  });
   return () => {
     cancelled = true;
     ctrl.abort();
@@ -354,6 +405,7 @@ export function startHealthPoll({
     unsubscribeOnline();
     unsubscribeSession();
     unsubscribeFailures();
+    unsubscribeRecheck();
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     }
