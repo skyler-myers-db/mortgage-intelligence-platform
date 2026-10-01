@@ -9,6 +9,7 @@
  * tests/e2e/fixture/queue-layout.fixture.spec.ts.
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -100,25 +101,28 @@ describe('LeadTableRow one-line cells', () => {
   const renderRow = (lead: LeadSummary, { isOpen = false, view = 'default' as 'default' | 'sales-ops' } = {}) => {
     act(() => {
       root.render(
-        <LeadTableRow
-          lead={lead}
-          virtualIndex={0}
-          view={view}
-          isOpen={isOpen}
-          approval={undefined}
-          isSelected={false}
-          isSelectable
-          isApprovalEligible
-          bulkApproving={false}
-          salesBusy={false}
-          salesTeamCount={2}
-          onToggleRow={onToggleRow}
-          onToggleSelect={vi.fn()}
-          onApprove={vi.fn()}
-          onReject={vi.fn()}
-          onOpenDisposition={onOpenDisposition}
-          onAssignmentUpdate={vi.fn()}
-        />,
+        // The lifecycle control writes through a keyed mutation (states-09).
+        <QueryClientProvider client={new QueryClient()}>
+          <LeadTableRow
+            lead={lead}
+            virtualIndex={0}
+            view={view}
+            isOpen={isOpen}
+            approval={undefined}
+            isSelected={false}
+            isSelectable
+            isApprovalEligible
+            bulkApproving={false}
+            salesBusy={false}
+            salesTeamCount={2}
+            onToggleRow={onToggleRow}
+            onToggleSelect={vi.fn()}
+            onApprove={vi.fn()}
+            onReject={vi.fn()}
+            onOpenDisposition={onOpenDisposition}
+            onAssignmentUpdate={vi.fn()}
+          />
+        </QueryClientProvider>,
       );
     });
   };

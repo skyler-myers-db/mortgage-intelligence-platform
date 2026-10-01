@@ -7,6 +7,7 @@
  * is asserted, not a mock.
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -84,23 +85,26 @@ const baseLead: LeadSummary = {
 function renderRow(root: Root, lead: LeadSummary, isOpen = true) {
   act(() => {
     root.render(
-      <LeadTableRow
-        lead={lead}
-        virtualIndex={0}
-        isOpen={isOpen}
-        approval={undefined}
-        isSelected={false}
-        isSelectable={false}
-        isApprovalEligible={false}
-        bulkApproving={false}
-        salesBusy={false}
-        salesTeamCount={1}
-        onToggleRow={noop}
-        onToggleSelect={noop}
-        onApprove={noop}
-        onReject={noop}
-        onOpenDisposition={noop}        onAssignmentUpdate={noop}
-      />,
+      // The lifecycle control writes through a keyed mutation (states-09).
+      <QueryClientProvider client={new QueryClient()}>
+        <LeadTableRow
+          lead={lead}
+          virtualIndex={0}
+          isOpen={isOpen}
+          approval={undefined}
+          isSelected={false}
+          isSelectable={false}
+          isApprovalEligible={false}
+          bulkApproving={false}
+          salesBusy={false}
+          salesTeamCount={1}
+          onToggleRow={noop}
+          onToggleSelect={noop}
+          onApprove={noop}
+          onReject={noop}
+          onOpenDisposition={noop}        onAssignmentUpdate={noop}
+        />
+      </QueryClientProvider>,
     );
   });
 }
