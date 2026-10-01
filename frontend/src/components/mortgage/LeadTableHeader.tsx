@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { Button, SurfaceTitle } from '../Primitives';
@@ -23,6 +23,12 @@ export interface LeadTableHeaderProps {
   csvExportNoun: string;
   /** Rows in scope the marketing-eligibility gate excluded from the file. */
   csvExportExcluded: number;
+  /**
+   * D-approval-flow-b: how many borrowers match when the export would write
+   * only the loaded rows of a larger cohort (no selection); else null. The
+   * button then reads "Export k loaded" and describes the match count.
+   */
+  csvExportTruncatedOf?: number | null;
   exportBlockedReason: string | null;
   onExport: () => void;
 }
@@ -45,6 +51,7 @@ export function LeadTableHeader({
   csvExportCount,
   csvExportNoun,
   csvExportExcluded,
+  csvExportTruncatedOf = null,
   exportBlockedReason,
   onExport,
 }: LeadTableHeaderProps) {
@@ -54,6 +61,9 @@ export function LeadTableHeader({
   'use no memo';
 
   const exporting = exportState.status === 'pending';
+  const scopeNoteId = useId();
+  const partial = csvExportTruncatedOf !== null;
+  const exportNoun = partial ? 'loaded' : csvExportNoun;
   return (
     <div className="surface__hdr surface__hdr--split">
       <div className="surface__hdr-main">
@@ -111,15 +121,21 @@ export function LeadTableHeader({
           data-testid="lead-export"
           aria-label={exporting
             ? 'Recording the export in the audit ledger'
-            : `Export ${formatCount(csvExportCount)} ${csvExportNoun} as CSV`}
+            : `Export ${formatCount(csvExportCount)} ${exportNoun} as CSV`}
+          aria-describedby={partial ? scopeNoteId : undefined}
           title={exportBlockedReason ?? (csvExportCount === 0 && csvExportExcluded > 0
             ? 'Every row in scope is excluded by the marketing-eligibility gate'
             : undefined)}
         >
           {exporting
             ? 'Recording export…'
-            : `Export ${formatCount(csvExportCount)} ${csvExportNoun}`}
+            : `Export ${formatCount(csvExportCount)} ${exportNoun}`}
         </Button>
+        {partial && (
+          <span id={scopeNoteId} className="sr-only" data-testid="lead-export-scope-note">
+            {`${formatCount(csvExportTruncatedOf)} match these filters; only loaded leads are exported.`}
+          </span>
+        )}
       </div>
     </div>
   );

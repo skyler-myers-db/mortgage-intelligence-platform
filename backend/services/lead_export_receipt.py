@@ -16,6 +16,9 @@ What the row proves:
   ``handoff_filters_fingerprint`` uses for the Growth Agent handoff, so an
   auditor recomputes it from the CSV's ``# filters=`` metadata line.
 * ``exported_row_count`` -- what the file holds, post eligibility gate.
+* ``matching_row_count`` -- how many borrowers matched the filters, when the
+  client knew it (a loaded-rows export is partial; D-approval-flow-b). Absent
+  from the row when the client did not send it.
 * ``csv_sha256``         -- the file bytes, hashed in the browser. The server
   never sees the bytes, so this is RECORDED, not verified.
 * ``borrower_ids_sha256`` -- the id list, hashed in the browser AND recomputed
@@ -82,19 +85,22 @@ def write_lead_export_receipt(
 
     verify_lead_export_declaration(payload)
     fingerprint = lead_export_filter_fingerprint(payload.filters)
+    payload_json: dict[str, object] = {
+        "export_scope": payload.scope,
+        "exported_row_count": payload.row_count,
+        "csv_sha256": payload.csv_sha256,
+        "borrower_ids_sha256": payload.borrower_ids_sha256,
+        "filter_fingerprint": fingerprint,
+        "borrower_ids": list(payload.borrower_ids),
+    }
+    if payload.matching_row_count is not None:
+        payload_json["matching_row_count"] = payload.matching_row_count
     event: AuditEvent = store.write(
         actor=actor,
         action=LEAD_EXPORT_ACTION,
         entity_type=LEAD_EXPORT_ENTITY_TYPE,
         entity_id=f"export-{fingerprint[:16]}",
-        payload_json={
-            "export_scope": payload.scope,
-            "exported_row_count": payload.row_count,
-            "csv_sha256": payload.csv_sha256,
-            "borrower_ids_sha256": payload.borrower_ids_sha256,
-            "filter_fingerprint": fingerprint,
-            "borrower_ids": list(payload.borrower_ids),
-        },
+        payload_json=payload_json,
         event_type=LEAD_EXPORT_EVENT_TYPE,
     )
     return LeadExportReceipt(
@@ -106,4 +112,5 @@ def write_lead_export_receipt(
         borrower_ids_sha256=payload.borrower_ids_sha256,
         filter_fingerprint=fingerprint,
         recorded_at=event.created_at or datetime.now(UTC).isoformat(),
+        matching_row_count=payload.matching_row_count,
     )

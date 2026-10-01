@@ -57,6 +57,24 @@ export function planLeadCsvExport(
   };
 }
 
+/**
+ * The matching-borrower count an export may state (D-approval-flow-b): known
+ * and covering the file, else null (the file says `unknown` and the receipt
+ * omits the field, so a stale count can never refuse the receipt).
+ */
+export function exportMatchingRows(matching: number | null | undefined, rowCount: number): number | null {
+  return typeof matching === 'number' && Number.isFinite(matching) && matching >= rowCount ? matching : null;
+}
+
+/** M when a loaded-rows export is partial: more borrowers match than are loaded. */
+export function loadedExportTruncatedOf(
+  scope: LeadCsvExportPlan['scope'],
+  matching: number | null | undefined,
+  loadedCount: number,
+): number | null {
+  return scope === 'loaded_rows' && typeof matching === 'number' && matching > loadedCount ? matching : null;
+}
+
 /** The confirmation line: the real row count, scope, order and exclusions. */
 export function describeLeadCsvExport(plan: LeadCsvExportPlan, rowOrder: string): string {
   const count = plan.rows.length;
@@ -129,7 +147,9 @@ export function buildLeadCsv(
     ['export_scope', context.scope ?? 'loaded_rows'],
     ['row_order', context.rowOrder ?? 'rank'],
     ['exported_rows', exportableLeads.length],
+    ['matching_rows', exportMatchingRows(context.matchingRows, exportableLeads.length) ?? 'unknown'],
     ['suppression_policy', 'eligible_only_default; non-eligible visible rows are excluded from client CSV'],
+    ['contact_policy', 'human_approval_required; only rows with approval_status=approved are cleared for outreach'],
     ['consent_provenance', 'synthetic-by-design demo consent fields; eligibility_source column carries the per-row source'],
     ['refreshed_at', context.refreshedAt ?? 'unknown'],
     ['rules_version', context.rulesVersion ?? 'unknown'],

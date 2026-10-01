@@ -17,6 +17,12 @@
  * Wave 1a added the LEAD_EXPORT receipt the download waits for; here the
  * receipt resolves immediately so these tests keep pinning scope and counts.
  * LeadTable.exportReceipt.test.tsx pins the receipt ordering itself.
+ *
+ * D-approval-flow-b (export honesty): with no selection and more borrowers
+ * matching than are loaded, the button reads "Export k loaded" and describes
+ * the match count; the file states `# matching_rows` and the contact policy;
+ * the confirmation says only the loaded leads were exported and links to the
+ * campaign handoff, and it does not retire while hovered or focused.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -27,7 +33,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LeadTable } from './LeadTable';
 import { describeLeadCsvExport, planLeadCsvExport } from './LeadTable.csv';
 import { LEAD_EXPORT_NOTICE_MS, RULES_VERSION_TIMEOUT_MS } from './useLeadCsvExport';
-import type { LeadExportContext } from './LeadTable.types';
+import type { LeadExportContext, LeadTableProps } from './LeadTable.types';
 import type { LeadSummary } from '../../types';
 
 vi.mock('../AppContext', () => ({
@@ -178,13 +184,13 @@ describe('LeadTable CSV export', () => {
     vi.restoreAllMocks();
   });
 
-  function mount(leads: LeadSummary[], context: LeadExportContext = {}) {
+  function mount(leads: LeadSummary[], context: LeadExportContext = {}, props: Partial<LeadTableProps> = {}) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     act(() => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <MemoryRouter>
-            <LeadTable leads={leads} exportContext={{ generatedAt: '2026-09-21T00:00:00.000Z', ...context }} />
+            <LeadTable leads={leads} exportContext={{ generatedAt: '2026-09-21T00:00:00.000Z', ...context }} {...props} />
           </MemoryRouter>
         </QueryClientProvider>,
       );
@@ -310,6 +316,118 @@ describe('LeadTable CSV export', () => {
       expect(container.querySelector('[data-testid="lead-export-notice"]')?.textContent).toBe(
         'Exported 1 selected lead in rank order.',
       );
+    });
+  });
+
+  describe('honest scope (D-approval-flow-b)', () => {
+    const notice = () => container.querySelector('[data-testid="lead-export-notice"]');
+
+    it('labels a partial loaded export "Export k loaded" and describes the match count', () => {
+      mount(MIXED, {}, { totalMatching: 2340 });
+
+      expect(exportButton().textContent).toContain('Export 2 loaded');
+      // The accessible name starts with the visible text.
+      expect(exportButton().getAttribute('aria-label')).toBe('Export 2 loaded as CSV');
+      const describedBy = exportButton().getAttribute('aria-describedby');
+      expect(describedBy).toBeTruthy();
+      const note = document.getElementById(describedBy ?? '');
+      expect(note?.textContent).toBe('2,340 match these filters; only loaded leads are exported.');
+      expect(note?.className).toBe('sr-only');
+      expect(exportButton().hasAttribute('title')).toBe(false);
+    });
+
+    it('keeps the selection label, and the plain label when everything matching is loaded', () => {
+      mount(MIXED, {}, { totalMatching: 4 });
+      expect(exportButton().textContent).toContain('Export 2 leads');
+      expect(exportButton().hasAttribute('aria-describedby')).toBe(false);
+
+      mount(MIXED, {}, { totalMatching: 2340 });
+      act(() => container.querySelector<HTMLInputElement>(`[data-testid="lead-select-${B}"]`)!.click());
+      expect(exportButton().textContent).toContain('Export 1 selected');
+      expect(exportButton().getAttribute('aria-label')).toBe('Export 1 selected as CSV');
+      expect(exportButton().hasAttribute('aria-describedby')).toBe(false);
+    });
+
+    it('states the matching count and the contact policy in the file', async () => {
+      mount(MIXED, {}, { totalMatching: 2340 });
+      const csv = await exportedCsv();
+      const lines = csv.split('\n');
+      const at = (key: string) => lines.findIndex((line) => line.startsWith(`# ${key}=`));
+
+      expect(lines[at('matching_rows')]).toBe('# matching_rows=2340');
+      expect(at('matching_rows'), 'right after exported_rows').toBe(at('exported_rows') + 1);
+      expect(lines[at('contact_policy')]).toBe(
+        '# contact_policy=human_approval_required; only rows with approval_status=approved are cleared for outreach',
+      );
+      expect(at('contact_policy'), 'right after suppression_policy').toBe(at('suppression_policy') + 1);
+      // ?hide= or any view never changes the CSV columns: the header row is fixed.
+      expect(dataRowIds(csv)).toEqual([A, B]);
+    });
+
+    it('says "unknown" when the match count is unknown or below the file', async () => {
+      mount(MIXED);
+      expect(await exportedCsv()).toContain('# matching_rows=unknown');
+      blobs.length = 0;
+      mount(MIXED, {}, { totalMatching: 1 });
+      expect(await exportedCsv()).toContain('# matching_rows=unknown');
+    });
+
+    it('says only the loaded leads were exported and links to the campaign handoff', async () => {
+      mount(MIXED, {}, {
+        totalMatching: 2340,
+        campaignHandoff: { href: '/portfolio-builder?states=IL', notCarried: [] },
+      });
+      await exportedCsv();
+      await vi.waitFor(() => expect(notice()).not.toBeNull());
+
+      expect(notice()?.textContent).toBe(
+        'Exported 2 leads in rank order. 2 excluded by the marketing-eligibility gate.'
+        + ' Only the loaded leads were exported. To work all 2,340, build a campaign.',
+      );
+      const link = notice()?.querySelector('a');
+      expect(link?.textContent).toBe('build a campaign');
+      expect(link?.getAttribute('href')).toBe('/portfolio-builder?states=IL');
+    });
+
+    it('says it without a link where there is no campaign handoff (Segment Intelligence)', async () => {
+      mount(MIXED, {}, { totalMatching: 2340 });
+      await exportedCsv();
+      await vi.waitFor(() => expect(notice()).not.toBeNull());
+
+      expect(notice()?.textContent).toContain('To work all 2,340, build a campaign.');
+      expect(notice()?.querySelector('a')).toBeNull();
+    });
+
+    it('does not retire while it holds the pointer or focus (WCAG 2.2.1)', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      mount(MIXED, {}, {
+        totalMatching: 2340,
+        campaignHandoff: { href: '/portfolio-builder?states=IL', notCarried: [] },
+      });
+      await act(async () => {
+        exportButton().click();
+        await vi.waitFor(() => expect(blobs).toHaveLength(1));
+      });
+      expect(notice()).not.toBeNull();
+
+      act(() => notice()!.dispatchEvent(new Event('pointerenter')));
+      act(() => {
+        vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS * 2);
+      });
+      expect(notice(), 'held by the pointer').not.toBeNull();
+
+      act(() => notice()!.dispatchEvent(new Event('pointerleave')));
+      act(() => notice()!.querySelector<HTMLAnchorElement>('a')!.focus());
+      act(() => {
+        vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS * 2);
+      });
+      expect(notice(), 'held by keyboard focus').not.toBeNull();
+
+      act(() => exportButton().focus());
+      act(() => {
+        vi.advanceTimersByTime(LEAD_EXPORT_NOTICE_MS);
+      });
+      expect(notice(), 'released: it retires').toBeNull();
     });
   });
 

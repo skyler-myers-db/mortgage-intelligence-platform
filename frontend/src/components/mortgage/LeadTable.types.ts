@@ -26,6 +26,12 @@ export interface LeadExportContext {
   scope?: 'selected_rows' | 'loaded_rows';
   /** On-screen order the rows were written in, e.g. `rank` or `equity desc`. */
   rowOrder?: string;
+  /**
+   * How many borrowers matched the filters (D-approval-flow-b): the file's
+   * `# matching_rows=` line. Stated only when known and not below the file's
+   * row count; otherwise the line reads `unknown`.
+   */
+  matchingRows?: number | null;
 }
 
 /**

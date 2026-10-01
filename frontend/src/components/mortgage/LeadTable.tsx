@@ -6,7 +6,8 @@ import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
 import { queryKeys } from '../../lib/queryKeys';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
-import { planLeadCsvExport } from './LeadTable.csv';
+import { loadedExportTruncatedOf, planLeadCsvExport } from './LeadTable.csv';
+import { LeadExportNotice } from './LeadExportNotice';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.constants';
 import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
@@ -416,9 +417,13 @@ export function LeadTable({
 
   /**
    * Export as CSV. The bytes are built client-side from the real /api/leads
-   * payload the parent route already narrowed; there is no server-streamed
-   * export (an owner decision, audit tables-08 step 2) and no synthesized
-   * field — so PII stays suppressed by construction.
+   * payload the parent route already narrowed; a server-streamed export was
+   * declined on the merits (wave-5 ruling 2026-09-30):
+   * governance-real-data-review.md §2 per-borrower redistribution, Design
+   * System Principle 03, scale and egress of the approval bypass (audit
+   * tables-08 step 2). No field is synthesized, so PII stays suppressed by
+   * construction. A partial loaded-rows export says so in its label, its
+   * file (# matching_rows) and its receipt (D-approval-flow-b).
    *
    * Audit tables-08 (2026-09-21): the export used to serialise the raw
    * `leads` prop — ignoring the selection AND the sort — and its label
@@ -433,12 +438,15 @@ export function LeadTable({
   const csvExportNoun = csvExport.scope === 'selected_rows'
     ? 'selected'
     : csvExportCount === 1 ? 'lead' : 'leads';
-  const { state: exportState, exportCsv: runExport } = useLeadCsvExport();
+  const csvExportTruncatedOf = loadedExportTruncatedOf(csvExport.scope, totalMatching, leads.length);
+  const { state: exportState, exportCsv: runExport, holdNotice } = useLeadCsvExport();
   const exportBlockedReason = exportContext?.exportBlockedReason ?? null;
   function exportCsv() {
     if (csvExportCount === 0 || exportBlockedReason) return;
     const rowOrder = sortKey === 'rank' ? 'rank' : `${sortKey} ${sortDir}`;
-    void runExport({ plan: csvExport, approvals, exportContext, rowOrder });
+    void runExport({
+      plan: csvExport, approvals, exportContext, rowOrder, matchingRows: totalMatching, loadedCount: leads.length,
+    });
   }
 
   function toggleSort(key: SortKey) {
@@ -472,6 +480,7 @@ export function LeadTable({
         csvExportCount={csvExportCount}
         csvExportNoun={csvExportNoun}
         csvExportExcluded={csvExport.excluded}
+        csvExportTruncatedOf={csvExportTruncatedOf}
         exportBlockedReason={exportBlockedReason}
         onExport={exportCsv}
       />
@@ -506,9 +515,12 @@ export function LeadTable({
         />
       )}
       {exportState.status === 'done' && exportState.notice && (
-        <div role="status" aria-live="polite" className="table-success" data-testid="lead-export-notice">
-          {exportState.notice}
-        </div>
+        <LeadExportNotice
+          notice={exportState.notice}
+          truncatedOf={exportState.truncatedOf}
+          campaignHref={campaignHandoff?.href ?? null}
+          onHold={holdNotice}
+        />
       )}
       {exportState.status === 'error' && (
         <div role="alert" className="table-error" data-testid="lead-export-error">

@@ -24,6 +24,8 @@ import {
   buildLeadCsv,
   describeLeadCsvExport,
   downloadLeadCsv,
+  exportMatchingRows,
+  loadedExportTruncatedOf,
   type LeadCsvExportPlan,
 } from './LeadTable.csv';
 import type { LeadExportContext } from './LeadTable.types';
@@ -31,8 +33,12 @@ import type { LeadExportContext } from './LeadTable.types';
 export type LeadCsvExportState =
   | { status: 'idle' }
   | { status: 'pending'; rowCount: number }
-  /** `notice` is the confirmation strip; null once it has retired. */
-  | { status: 'done'; rowCount: number; notice: string | null; receipt: LeadExportReceipt }
+  /**
+   * `notice` is the confirmation strip; null once it has retired.
+   * `truncatedOf`: how many borrowers matched when only the loaded ones were
+   * exported (no selection and more matching than loaded); else null.
+   */
+  | { status: 'done'; rowCount: number; notice: string | null; receipt: LeadExportReceipt; truncatedOf: number | null }
   | { status: 'error'; message: string };
 
 export interface LeadCsvExportRequest {
@@ -41,6 +47,10 @@ export interface LeadCsvExportRequest {
   exportContext: LeadExportContext | undefined;
   /** On-screen order, e.g. `rank` or `equity desc`. */
   rowOrder: string;
+  /** How many borrowers matched the filters (the route's total), when known. */
+  matchingRows?: number | null;
+  /** How many rows are loaded on screen. */
+  loadedCount?: number;
 }
 
 const EXPORT_NOT_DOWNLOADED = 'Nothing was downloaded.';
@@ -96,20 +106,24 @@ export function resolveExportRulesVersion(context: LeadExportContext | undefined
 
 export function useLeadCsvExport() {
   const [state, setState] = useState<LeadCsvExportState>({ status: 'idle' });
+  // The strip holds the pointer or focus: it does not retire (WCAG 2.2.1).
+  const [noticeHeld, setNoticeHeld] = useState(false);
   // One receipt per click: a second click while the first is in flight would
   // otherwise write a second LEAD_EXPORT row for the same file.
   const inflight = useRef(false);
 
   // The confirmation strip retires on its own; the receipt line does not.
   useEffect(() => {
-    if (state.status !== 'done' || state.notice === null) return undefined;
+    if (state.status !== 'done' || state.notice === null || noticeHeld) return undefined;
     const timer = window.setTimeout(() => {
       setState((current) => (current.status === 'done' ? { ...current, notice: null } : current));
     }, LEAD_EXPORT_NOTICE_MS);
     return () => window.clearTimeout(timer);
-  }, [state]);
+  }, [state, noticeHeld]);
 
-  async function exportCsv({ plan, approvals, exportContext, rowOrder }: LeadCsvExportRequest): Promise<void> {
+  async function exportCsv({
+    plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount = plan.rows.length,
+  }: LeadCsvExportRequest): Promise<void> {
     if (inflight.current || plan.rows.length === 0) return;
     // Placeholder rows belong to the previous filters: never declare them
     // under the new ones.
@@ -120,13 +134,16 @@ export function useLeadCsvExport() {
       // Stamped before the bytes are built and hashed: the receipt's digest
       // covers the rules_version line the file carries.
       const rulesVersion = await resolveExportRulesVersion(exportContext);
+      // Decided once: the file's `# matching_rows=` line and the receipt agree.
+      const matching = exportMatchingRows(matchingRows, plan.rows.length);
       const csv = buildLeadCsv(plan.rows, approvals, {
         ...exportContext,
         rulesVersion,
         scope: plan.scope,
         rowOrder,
+        matchingRows: matching,
       });
-      const declaration = await buildLeadExportDeclaration(csv, plan, exportContext?.filters);
+      const declaration = await buildLeadExportDeclaration(csv, plan, exportContext?.filters, matching);
       const receipt = await api.leadExportReceipt(declaration);
       downloadLeadCsv(csv);
       setState({
@@ -134,6 +151,7 @@ export function useLeadCsvExport() {
         rowCount: plan.rows.length,
         notice: describeLeadCsvExport(plan, rowOrder),
         receipt,
+        truncatedOf: loadedExportTruncatedOf(plan.scope, matching, loadedCount),
       });
     } catch (error) {
       if (isAbortError(error)) {
@@ -146,5 +164,5 @@ export function useLeadCsvExport() {
     }
   }
 
-  return { state, exportCsv };
+  return { state, exportCsv, holdNotice: setNoticeHeld };
 }
