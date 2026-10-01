@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GenieCompletionJobStatus } from '../types/genieJobs';
-import { _resetActorScopeForTests, NOBODY, observeActor, subscribeActorScope } from './actorScope';
+import { _resetActorScopeForTests, _setResetDocumentForTests, NOBODY, observeActor, subscribeActorScope } from './actorScope';
 import {
   GENIE_REVEAL_FLOOR,
   beginGenieReveal,
@@ -97,13 +97,23 @@ describe('genieVerifiedReveal', () => {
     try {
       // A new document is pending, then its first observation opens it.
       _resetActorScopeForTests({ status: 'pending', owner: 'actor-a' });
+      // The mid-test gate reset restores the browser's resetDocument
+      // (window.location.replace): re-install a stub before the proven change.
+      const resetDocument = vi.fn();
+      _setResetDocumentForTests(resetDocument);
       beginGenieReveal(JOB);
       observeActor({ key: 'actor-a' });
       expect(reasons.slice(-1)).toEqual(['opened:kept']);
 
       observeActor({ key: 'actor-b' });
       expect(genieRevealSnapshot()).toBeNull();
+      expect(resetDocument, 'a proven change after a real open resets the document').toHaveBeenCalledOnce();
 
+      // That document is gone: B's new document is pending, then opens, and
+      // a sign-out there closes it.
+      _resetActorScopeForTests({ status: 'pending', owner: 'actor-b' });
+      _setResetDocumentForTests(vi.fn());
+      observeActor({ key: 'actor-b' });
       beginGenieReveal(JOB);
       observeActor({ key: null });
       expect(reasons.slice(-1)).toEqual(['closed:cleared']);
