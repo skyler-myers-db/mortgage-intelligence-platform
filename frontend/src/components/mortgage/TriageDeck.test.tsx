@@ -14,7 +14,10 @@
  *  - J / K / Skip write nothing; after five decisions Esc returns to the
  *    table with ?row= naming the last card and focus on that row;
  *  - the keys are inert outside the deck and with the single-key switch off;
- *  - a non-approver never sees the deck: the mode is stripped;
+ *  - a fresh review after a 409 (J, K, A) is not offered "Review draft
+ *    again"; Esc with the reject panel open closes the panel only;
+ *  - a non-approver never sees the deck: the mode is stripped; a failed
+ *    session check keeps the deep link and says why the deck is shut;
  *  - a filter change while the deck is open never re-snapshots it: the
  *    placeholder rows keep it mounted, an approve returning meanwhile is
  *    counted, and the settled rows only drop cards (brief 6.4).
@@ -396,6 +399,46 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     expect(draftOutreach).toHaveBeenCalledTimes(2);
   });
 
+  it('a fresh review after a 409 is never offered "Review draft again"', async () => {
+    approve.mockImplementation(() => Promise.reject(new ApiError('Draft is stale', { path: '/api/v1/outreach/approve', status: 409 })));
+    mount();
+    await enterDeck();
+    press('a');
+    await waitForReview();
+    enterOnConfirm();
+    await flush(3);
+    const redraft = () => q<HTMLButtonElement>('[data-testid="lead-approve-review-redraft"]');
+    await vi.waitFor(() => expect(redraft()).not.toBeNull());
+    // J closes the stale review (no write), K returns, A opens a new review with a new draft.
+    press('j');
+    expect(position()).toBe('Borrower 2 of 6');
+    press('k');
+    expect(position()).toBe('Borrower 1 of 6');
+    press('a');
+    await waitForReview();
+    expect(draftOutreach).toHaveBeenCalledTimes(2);
+    expect(redraft(), 'the new draft is not the stale one').toBeNull();
+  });
+
+  it('Esc with the reject panel open closes the panel, as its Cancel does, and stays in the deck', async () => {
+    mount();
+    await enterDeck();
+    press('r');
+    await flush();
+    expect(q('.decision-panel')).not.toBeNull();
+    press('Escape');
+    await flush();
+    expect(q('.decision-panel')).toBeNull();
+    expect(q('[data-testid="triage-deck"]')).not.toBeNull();
+    expect(search().get('mode')).toBe('triage');
+    expect(document.activeElement?.classList.contains('triage__name')).toBe(true);
+    expect(reject).not.toHaveBeenCalled();
+    // A second Esc leaves the deck.
+    press('Escape');
+    await flush(3);
+    expect(search().get('mode')).toBeNull();
+  });
+
   it('R then Enter with no reason sends nothing; a chosen reason rejects and advances', async () => {
     mount();
     await enterDeck();
@@ -501,6 +544,24 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     expect(q('[data-testid="triage-deck"]')).toBeNull();
     expect(q('[data-testid="lead-triage-enter"]')).toBeNull();
     expect(q('.tbl-wrap')?.hidden).toBe(false);
+  });
+
+  it('a failed session check keeps the deep link: the deck stays shut, says why, and Back to table leaves', async () => {
+    session.sessionStatus = 'error';
+    session.canApprove = false;
+    mount('/lead-queue?mode=triage&state=IL');
+    await flush(3);
+    expect(search().get('mode'), 'only a definitive non-approver loses the mode').toBe('triage');
+    expect(q('[data-testid="triage-deck"]')).toBeNull();
+    const shut = q('[data-testid="triage-deck-failed"]');
+    expect(shut?.textContent).toContain('Approver role could not be verified, so the triage deck did not open.');
+    expect(q('.tbl-wrap')?.hidden).toBe(true);
+    act(() => shut!.querySelector('button')!.click());
+    await flush(2);
+    expect(search().get('mode')).toBeNull();
+    expect(search().get('state')).toBe('IL');
+    expect(q('.tbl-wrap')?.hidden).toBe(false);
+    expect(draftOutreach).not.toHaveBeenCalled();
   });
 
   it('a deep link opens the deck for an approver once the session is known', async () => {

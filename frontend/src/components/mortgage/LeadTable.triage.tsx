@@ -4,8 +4,10 @@
  * what the deck gets from the table's own flow. The deck itself
  * (TriageDeck, its own chunk) is code only: nothing here reads or writes.
  *
- *   - A definitive non-approver (or a failed session check) never sees the
- *     deck: the table strips the mode from the URL (replace).
+ *   - A definitive non-approver never sees the deck: the table strips the
+ *     mode from the URL (replace). A failed session check keeps the mode
+ *     (the deep link, brief 6.2) and says why the deck is shut, with a way
+ *     back; a recovered check opens it.
  *   - The deck opens once the session says approver and the rows are the
  *     current filters' (not placeholder rows), then stays open for its
  *     session: a later filter change's placeholder rows never unmount it,
@@ -51,6 +53,8 @@ export interface LeadTableTriageState {
   active: boolean;
   Deck: ComponentType<TriageDeckProps> | null;
   failed: boolean;
+  /** The approver check failed (no session): why the deck stays shut. */
+  blocked: string | null;
   approvedSignal: TriageApprovedSignal;
   setApprovedSignal: (update: (previous: TriageApprovedSignal) => TriageApprovedSignal) => void;
   /** The last card shown (the row the table returns to). */
@@ -118,10 +122,13 @@ export interface TriageDeckRenderInput {
 export function renderTriageDeck(state: LeadTableTriageState, input: TriageDeckRenderInput) {
   const { Deck, triage } = state;
   if (!state.hideTable) return null;
-  if (state.failed && !Deck) {
+  const shut = state.blocked !== null
+    ? `${state.blocked}, so the triage deck did not open.`
+    : state.failed && !Deck ? 'The triage deck could not load.' : null;
+  if (shut) {
     return (
       <div role="alert" className="table-error" data-testid="triage-deck-failed">
-        The triage deck could not load. Nothing was drafted or approved.{' '}
+        {shut} Nothing was drafted or approved.{' '}
         <Button size="sm" variant="ghost" onClick={() => triage?.onModeChange(null)}>Back to table</Button>
       </div>
     );

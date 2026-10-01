@@ -263,9 +263,10 @@ export function LeadTable({
     bulkRuns: BULK_REVIEW_CHUNK.current,
   });
   // The Triage deck (D-approval-flow-a2): `?mode=triage`, approvers only. A
-  // failed or negative approver check strips the mode; a loading one waits.
+  // definitive non-approver's check strips the mode; a loading one waits; a
+  // failed one keeps the deep link and says why the deck is shut.
   const triageMode = triage?.mode ?? null;
-  const triageRefused = approverGate !== null && sessionStatus !== 'loading';
+  const triageRefused = approverGate !== null && sessionStatus === 'ready';
   const triageOn = triageMode === 'triage' && !triageRefused;
   // The deck first opens on settled rows, then stays open for its session: a
   // filter change's placeholder rows never unmount it, so it never
@@ -285,6 +286,7 @@ export function LeadTable({
     active: triageActive,
     Deck: (triageChunk.module ?? TRIAGE_CHUNK.current())?.TriageDeck ?? null,
     failed: triageChunk.failed,
+    blocked: sessionStatus === 'error' ? approverGate : null,
     approvedSignal: triageSignal,
     setApprovedSignal: setTriageSignal,
     lastShown: triageLastShown,

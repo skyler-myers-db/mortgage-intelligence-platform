@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react';
 import { Link } from 'react-router';
 import type { LeadSummary } from '../../types';
+import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { auditEventHref } from '../../lib/auditLinks';
 import { pushEscapeLayer } from '../../lib/escapeStack';
 import { hasOpenOverlay, isEditableElement, registerKeyBinding } from '../../lib/keymap';
@@ -80,8 +81,10 @@ export function TriageDeck(props: TriageDeckProps) {
   // change took it out of the loaded rows. Only decided cards outlive them.
   const [entryLeads] = useState(() => new Map(leadsById));
   const [rejectingId, setRejectingId] = useState<string | null>(null);
-  // The card whose approve answered 409: "Review draft again", never automatic.
-  const [staleId, setStaleId] = useState<string | null>(null);
+  // The draft whose approve answered 409: "Review draft again", never
+  // automatic. Keyed by the draft itself, so a fresh review (a new draft for
+  // the same card, after J / K / A) is never offered a re-draft.
+  const [staleDraft, setStaleDraft] = useState<OutreachDraftResult | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const rootRef = useRef<HTMLElement | null>(null);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
@@ -171,9 +174,20 @@ export function TriageDeck(props: TriageDeckProps) {
     onExit(currentId);
   }
 
+  /** Esc: an open reject panel closes first (as its Cancel does), else back to the table. */
+  function escape() {
+    if (pendingReject === null) {
+      exit();
+      return;
+    }
+    if (busy) return;
+    setPendingReject(null);
+    headingRef.current?.focus({ preventScroll: true });
+  }
+
   // Keys (scope 'triage'), live only with focus inside the deck; Escape is
   // the escape stack's, listed on the sheet by a display-only binding.
-  const actions: TriageKeymapActions & { exit: () => void } = {
+  const actions: TriageKeymapActions & { escape: () => void } = {
     review: startReview,
     reject: startReject,
     skip: () => move('skip'),
@@ -181,7 +195,7 @@ export function TriageDeck(props: TriageDeckProps) {
     openOffer: () => {
       if (currentId) rootRef.current?.querySelector<HTMLAnchorElement>(`[data-testid="lead-build-offer-${currentId}"]`)?.click();
     },
-    exit,
+    escape,
   };
   const actionsRef = useRef(actions);
   useLayoutEffect(() => {
@@ -219,7 +233,7 @@ export function TriageDeck(props: TriageDeckProps) {
     const popEscape = pushEscapeLayer(() => {
       const focused = document.activeElement;
       if (focused !== null && focused !== document.body && !inDeck(rootRef.current, focused)) return false;
-      actionsRef.current.exit();
+      actionsRef.current.escape();
       return true;
     });
     return () => {
@@ -282,20 +296,20 @@ export function TriageDeck(props: TriageDeckProps) {
                 review={review}
                 actorEmail={actorEmail}
                 onConfirm={() => {
-                  const id = review.borrowerId;
-                  void reviewApi.confirm({ reviewMode: 'triage', onConflict: () => setStaleId(id) });
+                  const shown = review.draft;
+                  void reviewApi.confirm({ reviewMode: 'triage', onConflict: () => setStaleDraft(shown) });
                 }}
                 onCancel={() => {
                   if (!reviewApi.cancel()) return;
                   headingRef.current?.focus({ preventScroll: true });
                 }}
                 onRetryDraft={reviewApi.retryDraft}
-                stale={staleId === review.borrowerId}
+                stale={review.draft !== null && review.draft === staleDraft}
                 onRedraft={() => {
                   // A new explicit intent: the same guarded open as A (eligible,
                   // nothing in flight, no bulk run), drafting once.
                   if (!reviewApi.cancel()) return;
-                  setStaleId(null);
+                  setStaleDraft(null);
                   flow.openTriageReview(review.borrowerId);
                 }}
                 confirmRef={flow.confirmRef}
