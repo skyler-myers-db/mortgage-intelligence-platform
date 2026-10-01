@@ -134,12 +134,12 @@ test.describe('audited lead CSV export', () => {
     const receiptLine = page.getByTestId('lead-export-receipt');
     await expect(receiptLine).toHaveText(`Exported 2 rows · audit ${EXPORT_RECEIPT_ID}`);
     const receiptLink = receiptLine.getByRole('link', { name: EXPORT_RECEIPT_ID });
-    await expect(receiptLink).toHaveAttribute('href', `/admin-config?audit_event_id=${EXPORT_RECEIPT_ID}#audit`);
+    await expect(receiptLink).toHaveAttribute('href', `/audit-ledger?audit_event_id=${EXPORT_RECEIPT_ID}#audit`);
 
     // The audit id opens the explorer on that one LEAD_EXPORT row, in-app.
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage([]));
     await receiptLink.click();
-    await expect(page).toHaveURL(new RegExp(`/admin-config\\?audit_event_id=${EXPORT_RECEIPT_ID}#audit$`));
+    await expect(page).toHaveURL(new RegExp(`/audit-ledger\\?audit_event_id=${EXPORT_RECEIPT_ID}#audit$`));
     const explorer = page.locator('#audit');
     await expect(explorer.getByRole('button', { name: `Collapse audit event ${EXPORT_RECEIPT_ID}` }))
       .toHaveAttribute('aria-expanded', 'true');
@@ -262,7 +262,7 @@ test.describe('audit explorer', () => {
   test('filters round-trip through the URL and reach the API', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     const explorer = page.locator('#audit');
 
     await explorer.getByLabel('ACTOR', { exact: true }).fill(EXPORT_ACTOR);
@@ -303,7 +303,7 @@ test.describe('audit explorer', () => {
   test('an inverted day window is refused by the governed alert, on the date inputs', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     const explorer = page.locator('#audit');
     await expect(explorer.locator('table[aria-label="Audit events"] tbody tr[data-audit-event-id]'))
       .toHaveCount(EXPLORER_ROWS.length);
@@ -335,7 +335,7 @@ test.describe('audit explorer', () => {
   test('a day the URL cannot hold is refused on its own input, not silently dropped', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     const explorer = page.locator('#audit');
     await expect(explorer.locator('table[aria-label="Audit events"] tbody tr[data-audit-event-id]'))
       .toHaveCount(EXPLORER_ROWS.length);
@@ -363,7 +363,7 @@ test.describe('audit explorer', () => {
   test('removing a filter chip hands focus to the next chip, then to Apply', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute(`/admin-config?audit_actor=${encodeURIComponent(EXPORT_ACTOR)}&audit_event_type=APPROVE#audit`);
+    await app.gotoRoute(`/audit-ledger?audit_actor=${encodeURIComponent(EXPORT_ACTOR)}&audit_event_type=APPROVE#audit`);
     const explorer = page.locator('#audit');
     const chips = explorer.getByLabel('Applied audit filters');
     await expect(chips).toContainText('event = Outreach approved · APPROVE');
@@ -383,7 +383,7 @@ test.describe('audit explorer', () => {
   test('a deep link opens its event; its correlation id opens the whole request', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute(`/admin-config?audit_event_id=${EXPORT_RECEIPT_ID}#audit`);
+    await app.gotoRoute(`/audit-ledger?audit_event_id=${EXPORT_RECEIPT_ID}#audit`);
     const explorer = page.locator('#audit');
 
     expect(requests[requests.length - 1].get('event_id')).toBe(EXPORT_RECEIPT_ID);
@@ -415,7 +415,7 @@ test.describe('audit explorer', () => {
 
   test('rows read as human labels with the raw code in a mono chip', async ({ app, page, mockApi }) => {
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage([]));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     const rows = page.locator('#audit table[aria-label="Audit events"] tbody tr[data-audit-event-id]');
     await expect(rows).toHaveCount(EXPLORER_ROWS.length);
 
@@ -437,7 +437,7 @@ test.describe('audit explorer', () => {
 
   test('the current page downloads as CSV with its header row', async ({ app, page, mockApi }) => {
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage([]));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     await expect(page.locator('#audit table[aria-label="Audit events"] tbody tr[data-audit-event-id]'))
       .toHaveCount(EXPLORER_ROWS.length);
 
