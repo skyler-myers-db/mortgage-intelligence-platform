@@ -27,6 +27,10 @@ import { FetchedAt, RefreshButton } from '../components/ui/FetchedAt';
  *     is absorbed; FetchedAt still shows the age.
  *   - The version is global (single-tenant deploy), so the pill says the
  *     queue was updated, never that this reader's rows changed.
+ *   - A reading ASKED FOR before this mount is no reading (states-09): the
+ *     version query's cache outlives the queue (gcTime), so a remount would
+ *     otherwise take a cached pre-write version as its baseline and raise a
+ *     lasting pill at the next poll.
  */
 
 /** When an own write's re-read is due: past the server cache, plus a second for the server's own read. */
@@ -111,7 +115,10 @@ export function useLeadQueueFreshness({ enabled, dataUpdatedAt, isFetching, onRe
   const [store] = useState(() => createOwnWriteStore(queryClient.getMutationCache()));
   const ownWrites = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const versionQuery = useQueueVersion({ enabled });
-  const reading = versionQuery.data ?? null;
+  const [mountedAt] = useState(() => Date.now());
+  const cached = versionQuery.data ?? null;
+  // Never a baseline and never 'changed': only readings asked for since mount count.
+  const reading = cached !== null && cached.requestedAt >= mountedAt ? cached : null;
   const latest = reading?.version ?? null;
   // Only a reading asked for a full server-cache TTL after the latest own
   // write is certain to include it; an earlier one may be the cached
