@@ -314,8 +314,39 @@ export const budgets = {
   // across 100 chunks (502.18 br before). Every lane reported its growth;
   // none of it is initial JS (144.50 -> 146.41 br, still under the 152
   // gate held for wave 5). ~5% headroom.
-  totalJsBytes: 1882 * KiB, // actual 1792.25 (wave-5a integration)
-  totalJsGzipBytes: 646 * KiB, // actual 615.23 (wave-5a integration)
+  // Re-baselined 2026-10-01 at the wave-5b integration, every first-parent
+  // merge step of ux/wave-5b built and measured on one host (br deltas;
+  // base 531.12 br, the nine lanes' shared build of 8343364e):
+  //  - w5-wire-contract-deps -0.02: the non-major dependency batch is
+  //    byte-neutral once @tanstack/react-virtual is held at 3.13.24 (3.14.13
+  //    added +2.28 br to the LeadTable chunk; see supply-chain-audit.md).
+  //  - w5-approval-ledger-api -0.02 (backend; chunk-hash churn).
+  //  - w5-identity-reset +2.03: the reset-document gate, the toast platform
+  //    (info tone, one action, Retry-After countdown, F8) and the Genie
+  //    pagehide decision window.
+  //  - w5-portfolio-forms +1.74: the per-tab campaign draft, Field affixes /
+  //    readouts / states and AsyncStatus on Portfolio Builder.
+  //  - w5-audit-ledger-presenter +5.62: the /audit-ledger route and its 403
+  //    page (the explorer moved out of admin-config), the section nav, the
+  //    Run confirm and the lazy PROTOTYPE preview chunk.
+  //  - w5-theme-white-label +1.29: the selector store and keyed useApp
+  //    facade, the lazy lender mark, Button loading / Chip leading (and the
+  //    integrator's auditor palette entry, lazy).
+  //  - w5-lead-triage-export +7.81: three new lazy chunks (the Triage deck,
+  //    the lifecycle stepper, a split) plus the export honesty notice and
+  //    the canary helper (ruled: accepted with attribution).
+  //  - w5-home-geo-lever +13.33: the Delta Explainer, watchlist briefings,
+  //    the map table / scale split, the stale-data note and FetchedAt as its
+  //    own chunk, the Rate Lever change columns (ruled: the lane's +12.95
+  //    accepted with attribution).
+  //  - w5-genie-verified-reveal +3.36: the verified-sections reveal, the
+  //    Figures claims list and the Genie line / bar charts on the shared
+  //    chart kit.
+  // Totals: 1888.41 raw / 655.91 gzip / 566.26 br across 118 chunks (100
+  // before). Initial JS 146.40 -> 148.56 br (+2.16, inside the 3.0 KiB batch
+  // cap; the 152 gate is held). ~5% headroom.
+  totalJsBytes: 1983 * KiB, // actual 1888.41 (wave-5b integration)
+  totalJsGzipBytes: 689 * KiB, // actual 655.91 (wave-5b integration)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -344,8 +375,14 @@ export const budgets = {
   // 44.56 gzip / 36.33 -> 37.96 br, almost all w5-approval-core (+5.98 raw /
   // +2.21 gz / +1.59 br: the arming status line, kind-aware runs, the canary
   // and the WebKit pinned-focus guard), 0.7% raw left. ~5% headroom.
-  maxLazyJsBytes: 144 * KiB, // actual 137.01 (LeadTable chunk, wave-5a integration)
-  maxLazyJsGzipBytes: 47 * KiB, // actual 44.56 (LeadTable chunk, wave-5a integration)
+  // wave-5b integration: the LeadTable chunk 137.41 -> 139.46 raw / 44.75 ->
+  // 45.69 gzip / 38.03 -> 38.67 br. w5-lead-triage-export +3.03 raw / +1.33
+  // gz / +0.91 br (the Triage entry, the export label and notice wiring; the
+  // deck, stepper and canary are lazy), then w5-home-geo-lever split
+  // FetchedAt into its own chunk (-0.98 / -0.39 / -0.23). 2.8% gzip left;
+  // ~5% headroom restored before W5c's w5-lead-queue-paging.
+  maxLazyJsBytes: 147 * KiB, // actual 139.46 (LeadTable chunk, wave-5b integration)
+  maxLazyJsGzipBytes: 48 * KiB, // actual 45.69 (LeadTable chunk, wave-5b integration)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -372,12 +409,27 @@ export const budgets = {
   // Bold / Courier New Bold face per family, so bold text during the font
   // swap is not a synthesized bold): +0.69 raw / +0.05 gzip / +0.07 br, which
   // left it 4.3%. Measured: 22.96 br; +~5% rounded up to a whole KiB.
-  initialJsBrBytes: 152 * KiB, // actual 143.92 (5 chunks; 142.81 before the vendor split)
+  // wave-5b integration (per merge step, br): wire-contract-deps -0.05,
+  // approval-ledger-api -0.06, identity-reset +0.96 (the reset gate in the
+  // actorScope chunk, healthPoll recheck, toast store fields, the F-key
+  // rule; its +0.08 Console skip-link fix 38e67d79 is ruled accepted),
+  // portfolio-forms -0.03, audit-ledger-presenter +0.41 (the route registry
+  // and preload entries for two lazy routes, the shared SessionRouteGate;
+  // its +0.15 over the lane cap is ruled accepted), theme-white-label +0.63
+  // (selector store, keyed facade, tenant defaults, lazy mark gate),
+  // lead-triage-export -0.01, home-geo-lever +0.29 (geo path builders,
+  // headers.ts), genie-verified-reveal +0.02. 146.40 -> 148.56 (+2.16, inside
+  // the 3.0 KiB batch cap). The gate is HELD at 152: an initial-chunk
+  // regression is made lazy, never paid for by raising this number.
+  initialJsBrBytes: 152 * KiB, // actual 148.56 (8 chunks, wave-5b integration)
   // wave-4b integration: 24.17 -> 24.32 br (see initialCssBytes), which left
   // 2.7%. Re-baselined to ~5%.
-  initialCssBrBytes: 26 * KiB, // actual 24.32 (wave-4b integration; 22.96 on 2026-09-24)
-  totalJsBrBytes: 558 * KiB, // actual 530.74 (100 chunks, wave-5a integration; see totalJsBytes)
-  maxLazyJsBrBytes: 40 * KiB, // actual 37.96 (LeadTable chunk, wave-5a integration; see maxLazyJsBytes)
+  // wave-5b integration: 24.53 -> 24.74 br (theme-white-label +0.23: the
+  // success-fill, spin and mark-plate tokens and the forced-colors Highlight
+  // states; genie-verified-reveal -0.05 dead rules), 4.9% left: unchanged.
+  initialCssBrBytes: 26 * KiB, // actual 24.74 (wave-5b integration; 24.32 at wave 4b)
+  totalJsBrBytes: 595 * KiB, // actual 566.26 (118 chunks, wave-5b integration; see totalJsBytes)
+  maxLazyJsBrBytes: 41 * KiB, // actual 38.67 (LeadTable chunk, wave-5b integration; see maxLazyJsBytes)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
@@ -388,15 +440,23 @@ export const budgets = {
   routes: {
     // wave-3 integration: 4.52 -> 5.01, w3-motion-nav's icon stroke floor
     // and audit glyph in the shared Icon module. ~5% headroom.
-    'src/routes/admin-config.access-denied.tsx': 6 * KiB, // actual 5.01
+    // wave-5b: 5.28 -> 5.39 (audit-ledger-presenter +0.05 copy,
+    // theme-white-label +0.07 shared Primitives). Gate unchanged.
+    'src/routes/admin-config.access-denied.tsx': 6 * KiB, // actual 5.39
     // wave-4a: 33.75 -> 34.63 (error-surfaces +0.84: AsyncState/describeApiError).
-    'src/routes/admin-config.tsx': 37 * KiB, // actual 34.63
+    // wave-5b: ratcheted DOWN, 35.40 -> 24.80 (w5-audit-ledger-presenter
+    // -10.76: the explorer moved to /audit-ledger; the section nav and the
+    // Run confirm came in; theme-white-label +0.05). ~5% headroom.
+    'src/routes/admin-config.tsx': 27 * KiB, // actual 24.80
     // wave-4a: 42.32 -> 43.24 (error-surfaces +0.95).
     // wave-4b: 43.30 -> 46.71 (w4-charts +3.42: the compiled ChartFrame kit,
     // histograms with governed thresholds, Evidence per day on the kit; its
     // cuts (a)-(b) applied; the per-tab lazy step needs a routes entry and
     // +1.1-1.2 total, recorded for wave 5).
-    'src/routes/analytics.tsx': 50 * KiB, // actual 46.71
+    // wave-5b: 47.54 -> 49.01 (genie-verified-reveal +1.10: the chart kit
+    // chunk is now shared with the Genie answer, so it re-split; lead-
+    // triage-export +0.34; theme-white-label +0.07). ~5% headroom.
+    'src/routes/analytics.tsx': 52 * KiB, // actual 49.01
     // wave-2 integration: 50.03 -> 53.12, the w2-genie-turn lane's in-flight
     // turn store, route Stop and single announcer. ~5% headroom.
     // wave-3 integration: 53.01 -> 59.82, w3-genie-reading +5.13 (markdown
@@ -409,21 +469,41 @@ export const budgets = {
     // wave-5a: 64.06 -> 69.42 (w5-growth-agent-trust +3.89 plan diff, run
     // save and focus; w5-identity-foundation +1.06 actorScope readers in
     // the Genie stores; platform-backend +0.26).
-    'src/routes/ask-genie.tsx': 73 * KiB, // actual 69.42
-    'src/routes/asset.tsx': 8 * KiB, // actual 7.08
+    // wave-5b: 69.40 -> 76.43 (w5-genie-verified-reveal +6.76: the shared
+    // chart kit enters the closure, CountChart JS 3.05 + CSS 0.51; the
+    // genie-answer chunk +2.30 with line and bar charts, drill, claims,
+    // reveal and preview, minus the old SVG charts; the rest is chunk
+    // re-splitting and lazy sheets; identity-reset +0.17 pagehide window;
+    // home-geo-lever +0.10). ~5% headroom.
+    'src/routes/ask-genie.tsx': 81 * KiB, // actual 76.43
+    // wave-5b: 7.87 -> 7.94 (theme-white-label +0.06), 0.7% left. ~5%.
+    'src/routes/asset.tsx': 9 * KiB, // actual 7.94
+    // wave-5b (w5-audit-ledger-presenter): the ledger's 403 page, a second
+    // measured route module beside admin-config's (theme-white-label +0.07).
+    'src/routes/audit-ledger.access-denied.tsx': 6 * KiB, // actual 5.37
+    // wave-5b (w5-audit-ledger-presenter): the audit ledger route, the
+    // explorer moved from admin-config (12 files). ~5% headroom.
+    'src/routes/audit-ledger.tsx': 23 * KiB, // actual 21.18
     // wave-4a: 36.x -> 37.44 (delivery-boot +0.4, error-surfaces +0.37).
-    'src/routes/borrower-360.tsx': 40 * KiB, // actual 37.44
+    // wave-5b: 38.26 -> 38.53 (audit-ledger-presenter +0.20 ledger access in
+    // the receipt, portfolio-forms +0.06, theme-white-label +0.03).
+    'src/routes/borrower-360.tsx': 41 * KiB, // actual 38.53
     // w4 pre-cut: 8.42 -> 8.99 on the CI (Linux) build, which measures ~0.1
     // KiB br more per route than the macOS builds these gates were set on;
     // SurfaceTitle folded into the shared Primitives chunk adds ~0.1 (a
     // separate chunk cost +0.29). Re-baselined from the CI number, ~5%.
-    'src/routes/glossary.tsx': 10 * KiB, // actual 8.99 (CI build)
+    // wave-5b: 9.17 -> 9.24 (theme-white-label +0.07). Gate unchanged.
+    'src/routes/glossary.tsx': 10 * KiB, // actual 9.24 (macOS build)
     // wave-3 integration: 40.40 -> 43.24, w3-rate-lever +2.37 (the Rate
     // Lever on the geography hero), w3-motion-nav +0.49. ~5% headroom.
     // wave-4a: 43.14 -> 44.17 (error-surfaces +1.16 AsyncState on Home).
     // wave-5a: 44.26 -> 48.03 (w5-geo-foundation +2.75 delegated hover,
     // map split and table groups; identity +0.60; platform-backend +0.30).
-    'src/routes/home.tsx': 51 * KiB, // actual 48.03
+    // wave-5b: 48.06 -> 51.09 (w5-home-geo-lever +2.93: FetchedAt in the
+    // hero, the WHY NOW rate move, the briefings card host, the stale note;
+    // the map table and the note were made lazy first; theme-white-label
+    // +0.08). ~5% headroom.
+    'src/routes/home.tsx': 54 * KiB, // actual 51.09
     // wave-3 integration: 66.10 -> 67.13 net: w3-score-anatomy moved the
     // proof out (-4.23), w3-queue-place added place + bulk progress (+4.22).
     // wave-4a: 67.13 -> 69.44 (error-surfaces +1.90 FetchedAt, EmptyState,
@@ -432,12 +512,18 @@ export const budgets = {
     // shared mutation chunks), 0.4% left.
     // wave-5a: 72.67 -> 79.85 (w5-filters-saved-views +4.50 range
     // filters and facet counts, w5-approval-core +2.34, platform +0.21).
-    'src/routes/lead-queue.tsx': 84 * KiB, // actual 79.85
+    // wave-5b: 80.02 -> 82.42 (lead-triage-export +1.11 Triage entry and
+    // export honesty, portfolio-forms +0.64 the shared Field chunk,
+    // home-geo-lever +0.51 FetchedAt chunk and headers, theme-white-label
+    // +0.16, audit-ledger-presenter +0.04). ~5% headroom.
+    'src/routes/lead-queue.tsx': 87 * KiB, // actual 82.42
     // wave-5a (w5-filters-saved-views): the Saved views panel, a lazy route
     // module whose closure statically reaches the lead-queue chunk.
-    'src/routes/lead-queue.savedViews.tsx': 87 * KiB, // actual 82.61
+    // wave-5b: 82.79 -> 85.18, the lead-queue closure's growth above.
+    'src/routes/lead-queue.savedViews.tsx': 90 * KiB, // actual 85.18
     // w4 pre-cut: 3.93 (wave 3) -> 4.00 on the CI build (see glossary above).
-    'src/routes/not-found.tsx': 5 * KiB, // actual 4.00 (CI build)
+    // wave-5b: 4.18 -> 4.25 (theme-white-label +0.07). Gate unchanged.
+    'src/routes/not-found.tsx': 5 * KiB, // actual 4.25 (macOS build)
     // wave-3 integration: ratcheted DOWN, 34.29 -> 31.29 (w3-score-anatomy
     // moved the proof surfaces into lazy chunks). ~5% headroom.
     // wave-4a: 31.40 -> 31.77 (error-surfaces +0.37).
@@ -446,11 +532,19 @@ export const budgets = {
     // +1.2, the QueuePager chunk +1.25, the query-layer reads and writes;
     // test-infra-pr2's ActivationLoopPanel move was dropped). The
     // queue-context-only QueuePager load is a wave-5 lever.
-    'src/routes/offer-orchestrator.tsx': 41 * KiB, // actual 38.47
+    // wave-5b: 38.97 -> 38.40 (audit-ledger-presenter -0.79: the PROTOTYPE
+    // preview is its own lazy chunk; lead-triage-export +0.25 the shared
+    // roster read). Gate unchanged.
+    'src/routes/offer-orchestrator.tsx': 41 * KiB, // actual 38.40
     // wave-4b: 32.88 -> 37.48 (w4-workflow +4.61: compiler memo code for
     // the newly compiled route about +2.6, campaign mutations, the Field
     // primitive on the numeric editors).
-    'src/routes/portfolio-builder.tsx': 40 * KiB, // actual 37.48
+    // wave-5b: 38.41 -> 42.47 (w5-portfolio-forms +3.94, ruled accepted:
+    // AsyncStatus brings the shared AsyncState + useLazyModule chunks 1.52,
+    // DescribedError 0.54, the Field affixes / readouts / states 0.62, the
+    // route chunk +1.26 of which the per-tab draft is about 0.97;
+    // theme-white-label +0.05). ~5% headroom.
+    'src/routes/portfolio-builder.tsx': 45 * KiB, // actual 42.47
     // wave-3 integration: 82.46 -> 83.57 (w3-rate-lever map facts +1.95,
     // w3-queue-place +2.39, w3-score-anatomy -4.24), 0.5% left: restored
     // to ~5% headroom.
@@ -460,6 +554,9 @@ export const budgets = {
     // chunk, w4-workflow +0.89 shared mutation chunks), 1.6% left.
     // wave-5a: 89.57 -> 98.03 (w5-geo-foundation +5.90 Signal Stack and the
     // map, w5-approval-core +1.76 shared LeadTable chunk, filters +0.41).
-    'src/routes/segment-intelligence.tsx': 103 * KiB, // actual 98.03
+    // wave-5b: 98.20 -> 99.55 (lead-triage-export +0.71 via the shared
+    // LeadTable chunk, home-geo-lever +0.49 the stale note and FetchedAt
+    // chunk, theme-white-label +0.13). ~5% headroom.
+    'src/routes/segment-intelligence.tsx': 105 * KiB, // actual 99.55
   },
 };

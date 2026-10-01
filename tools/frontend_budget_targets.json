@@ -47,6 +47,16 @@
         "finding": "quality-08",
         "waiver": null
       },
+      "src/routes/audit-ledger.access-denied.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
+      "src/routes/audit-ledger.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
       "src/routes/borrower-360.tsx": {
         "targetKiB": null,
         "finding": "quality-08",
