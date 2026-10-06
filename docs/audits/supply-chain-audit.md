@@ -40,6 +40,14 @@ this remediation pass.
   `.github/workflows/ci.yml`): a high or critical advisory fails CI;
   moderate and low advisories in dev-only tooling are tolerated and reviewed
   at the next dependency batch.
+- Backend `pip-audit`, 2026-10-06, after the multidict, werkzeug and mako
+  pins (see the 2026-10-06 addendum below): CI's command, `pip-audit -r
+  requirements.txt --strict` with its three ignores, reports no known
+  vulnerabilities from the default PyPI service (1 ignored) and none from
+  `-s osv` (2 ignored). Over the `uv.lock` pins with no ignores, `-s osv`
+  reports only the two ignored oauthlib advisories, under their PYSEC aliases
+  (PYSEC-2026-4113 for GHSA-hj66-6f7g-4r5v, PYSEC-2026-4114 for
+  GHSA-xpv3-w29h-x7cv).
 - Backend `pip-audit`, 2026-09-29, over the `uv.lock` pins
   (`pip-audit -r uv.lock --no-deps --disable-pip --strict`): one known
   vulnerability from the default PyPI service, GHSA-xpv3-w29h-x7cv (oauthlib
@@ -397,3 +405,65 @@ correction C3). Both `GITLEAKS_VERSION` literals in `ci.yml` are now 8.30.1:
 the host's gitleaks 8.30.1 scanned all refs (`gitleaks detect --source .
 --config .gitleaks.toml --redact --log-opts="--all"`, 2,264 commits) with no
 finding, so `.gitleaks.toml` is unchanged.
+
+## 2026-10-06 addendum: multidict 6.9.1, werkzeug 3.1.9 and mako 1.4.2
+
+Two advisories published on 2026-10-05 turned the security job's pip-audit
+step red on PR #267 (CI run 37521773357): `Found 2 known vulnerabilities,
+ignored 1 in 2 packages`. Re-running CI's command with `-s osv` found a
+third, for mako, that PyPI's feed did not list yet. Each has a patched
+release that resolves cleanly, so all three are pins, not ignores.
+
+| Advisory | Package | First patched | Action |
+|---|---|---|---|
+| GHSA-54p9-h82j-f925 (medium, CVE-2026-104874): a reference leak in the C extension's `operand \| md.items()` and `md.items() - operand` | `multidict` 6.7.1 (range `>=6.7.0, <=6.9.0`) | 6.9.1 | `multidict==6.9.1`. Transitive through aiohttp (which caps it `<7`, so 7.0.0 is out of reach) and yarl. |
+| GHSA-g6x2-hccm-hh4m (medium, CVE-2026-102598): `safe_join` on Windows admitted special device names | `werkzeug` 3.1.8 (range `<3.1.9`) | 3.1.9 | `werkzeug==3.1.9`. Transitive through flask and flask-cors, which mlflow pulls in for its tracking server. |
+| GHSA-5639-2j2p-m4mx (medium, CVE-2026-102991): a drive-letter `TemplateLookup` URI escaped the template directory on Windows | `mako` 1.3.12 (range `<=1.4.1`) | 1.4.2 | `mako==1.4.2`. Transitive through alembic, which mlflow pulls in. Listed by OSV but not yet by PyPI's feed for 1.3.12 on 2026-10-06; without the pin, CI would go red again when the feed caught up. |
+
+- **The fix versions come from the advisories.** `gh api
+  /advisories/<id>` reports a `first_patched_version` for each of the three
+  (6.9.1, 3.1.9, 1.4.2), so none is a range artifact. Listing advisories by
+  package (`gh api '/advisories?ecosystem=pip&affects=<pkg>'`) found no other
+  open advisory against the new pins.
+- **No first-party code uses these packages.** Over backend, tools, jobs,
+  pipelines, scripts and tests, `grep -rhoE
+  '\b(multidict|werkzeug|mako)(\.[A-Za-z_][A-Za-z0-9_]*)+'` returns 0 dotted
+  tokens and there are 0 import lines. The same grep for `mlflow` returns 36
+  tokens, so the 0 is a real result. To check compatibility, every name the
+  installed consumers (aiohttp, yarl, flask, flask-cors, alembic, mlflow and
+  websockets) take from the three packages was resolved with importlib in a
+  private venv built from `requirements.txt`: 55 names, none unresolved. A
+  made-up name fails the same check.
+- **Upstream changelogs, checked against what the consumers use.** multidict
+  6.8.0 to 6.9.1 drops Python 3.9 and free-threaded 3.13 (this repo runs
+  3.11). Lookup and removal methods now reject extra keyword arguments with
+  `TypeError`; nothing in the repo calls multidict. The rest is C-extension
+  memory and threading fixes. werkzeug 3.1.9 is a patch release: the
+  `safe_join` fix plus parsing fixes (`get_host` port range, basic-auth
+  characters, `Range: -0`, urlencoded forms bounded by `max_content_length`
+  only) and faster header parsing. mako 1.4.0 to 1.4.2 raises the floors to
+  Python 3.10 and MarkupSafe 2.0 (the lock has 3.0.3). It also changes where
+  compile-time `SyntaxWarning`s and multi-line `SyntaxException`s are
+  reported, and makes the traversal check use `posixpath`. alembic uses mako
+  only to write migration files (`mako.template.Template` for its revision
+  template, `mako.pygen.PythonPrinter` for autogenerate output), never
+  `TemplateLookup`. The App and the deploy tools track to `databricks`; the
+  only local SQL store is the sqlite registry in
+  `tests/integration/test_gateway_mlflow_registry.py`, whose schema upgrade
+  imports mako through alembic and passes on 1.4.2.
+- **Lock refresh:** `uv pip compile requirements.in --python-version 3.11
+  --format requirements.txt --output-file uv.lock --upgrade-package multidict
+  --upgrade-package werkzeug`, then `--upgrade-package mako`. Only those three
+  packages move in uv.lock, each gaining a `-r requirements.in` provenance
+  line, and test_supply_chain_licenses pins all three in both files.
+- **Proof** (CI's literal command, run through the symlink-forcing driver
+  with pip-audit 2.9.0): before the change, the PyPI run reproduces CI's two
+  findings exactly, and `-s osv` adds mako. After it, `No known
+  vulnerabilities found, 1 ignored` (PyPI) and `No known vulnerabilities
+  found, 2 ignored` (`-s osv`). The lock-only read (`-r uv.lock --no-deps
+  --disable-pip`) and an installed-mode read of the private venv agree.
+  A targeted pytest run against that venv passes: the supply-chain test, the
+  mlflow-importing gateway and agent-eval suites,
+  `tests/integration/test_gateway_mlflow_registry.py`, the health endpoint
+  and the error sanitizer, 456 tests. The run loaded mako 1.4.2 through
+  alembic.
