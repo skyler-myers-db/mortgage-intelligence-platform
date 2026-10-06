@@ -67,6 +67,23 @@ pyjwt==2.15.0
 # urllib3 is transitive (requests, botocore, databricks-sdk); keep the fix
 # explicit so a lock refresh cannot reintroduce the vulnerable release.
 urllib3==2.8.0
+# Security floor for GHSA-54p9-h82j-f925 (first patched in 6.9.1, published
+# 2026-10-05): a reference leak in the C extension's items-view `|` and `-`.
+# multidict is transitive (aiohttp, which caps it <7, and yarl); keep the fix
+# explicit so a lock refresh cannot reintroduce 6.7.1.
+multidict==6.9.1
+# Security floor for GHSA-g6x2-hccm-hh4m (first patched in 3.1.9, published
+# 2026-10-05): safe_join on Windows admitted special device names. werkzeug is
+# transitive (flask and flask-cors, via mlflow's tracking server); keep the fix
+# explicit so a lock refresh cannot reintroduce 3.1.8.
+werkzeug==3.1.9
+# Security floor for GHSA-5639-2j2p-m4mx (first patched in 1.4.2, published
+# 2026-10-05): a drive-letter TemplateLookup URI escaped the template directory
+# on Windows. OSV lists it for 1.3.12 while PyPI's feed, pip-audit's default
+# service, did not yet on 2026-10-06; pinning now keeps CI green when the feed
+# catches up. mako is transitive (alembic, via mlflow); 1.4 needs Python>=3.10
+# and MarkupSafe>=2.0, both already met.
+mako==1.4.2
 # Security floor for PYSEC-2026-2253 through PYSEC-2026-2257. Matplotlib
 # depends on Pillow; keep the transitive fix explicit so lock refreshes cannot
 # silently reintroduce the vulnerable image decoder.
