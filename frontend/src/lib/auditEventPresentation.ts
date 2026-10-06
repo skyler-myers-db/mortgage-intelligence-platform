@@ -6,6 +6,7 @@
  * components/layout/Console.tsx.
  */
 import type { IconName } from '../components/Icon';
+import type { BorrowerDecisionEvent } from './apiClients/borrowerDecisions';
 import type { ActorAuditEventSummary } from './apiTypes';
 
 export const ACTIVITY_LABELS: Record<string, string> = {
@@ -29,7 +30,31 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   VIEW_BORROWER: 'Borrower reviewed',
   VIEW_LEADS: 'Lead queue reviewed',
   VIEW_AUDIT_LEDGER: 'Audit ledger read',
+  // W5b / W5c event types (D-audit-reads-c2, D-audit-reads-d). Later lanes
+  // append theirs below.
+  LEAD_ASSIGNMENT_STATUS: 'Lead assignment status changed',
+  ACTIVATION_STAGE: 'Activation staged',
+  SUPPRESS_CONTACT: 'Contact blocked',
+  OUTREACH_REVOKE: 'Outreach approval revoked',
+  APPROVAL_REQUESTED: 'Approval requested',
+  APPROVAL_REQUEST_REFUSED: 'Approval request refused',
+  APPROVAL_REQUEST_WITHDRAWN: 'Approval request withdrawn',
+  LEAD_UNASSIGN: 'Lead assignment released',
+  VIEW_REFUSAL_REPORT_TEXT: 'Refusal question read',
+  GENIE_SECTION_REVEALED: 'Genie verified section made available',
 };
+
+export type DecisionTone = 'green' | 'amber' | 'red';
+
+/**
+ * The decision history row's icon tone. The row's label always carries the
+ * outcome word too, so the tone is never the only signal (WCAG 1.4.1).
+ */
+export function decisionTone(outcome: BorrowerDecisionEvent['outcome']): DecisionTone {
+  if (outcome === 'approved' || outcome === 'assigned') return 'green';
+  if (outcome === 'rejected' || outcome === 'revoked' || outcome === 'contact_blocked') return 'red';
+  return 'amber';
+}
 
 export function recentActivityPresentation(event: ActorAuditEventSummary): {
   label: string;
