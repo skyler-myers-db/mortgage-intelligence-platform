@@ -87,8 +87,11 @@ export interface GenieCancelResult {
   status: GenieJobStatusValue;
 }
 
-/** Genie's own (last) progress, plus the completion job once there is one. */
-export type GenieTurnProgress = GenieLiveProgress & { job?: GenieJobProgress };
+/** Genie's own (last) progress, plus the completion job once there is one.
+ *  `deep` is NOT on the progress wire (quality-04 P2): the client stamps the
+ *  submit response's flag onto every update so the rail can label the long
+ *  completion wait honestly on both Genie surfaces. */
+export type GenieTurnProgress = GenieLiveProgress & { deep?: boolean; job?: GenieJobProgress };
 
 /** Submit's live response: `completion_jobs` when the server runs jobs. */
 export type GenieSubmitResultWithJobs = GenieSubmitResult & { completion_jobs?: boolean };

@@ -336,6 +336,14 @@ describe('requestGenieCompletion (genie-01)', () => {
     expect(completeAsync).toHaveBeenNthCalledWith(1, { ...IDS, question: 'question?' }, expect.any(AbortSignal));
   });
 
+  it('legacy (no jobs): a job body on the sync call is refused, never shown as an answer (quality-04 P2)', async () => {
+    vi.spyOn(api, 'genieComplete').mockResolvedValue(jobOf({ status: 'queued', stage: 'queued' }));
+
+    await expect(requestGenieCompletion(IDS, 'question?', { asyncComplete: false })).rejects.toThrow(
+      new GenieLiveError('Genie answered in a form this page did not ask for. Ask the question again.'),
+    );
+  });
+
   it('legacy (no jobs) is today\'s single blocking complete, with no timeout', async () => {
     const complete = vi.spyOn(api, 'genieComplete').mockResolvedValue(ANSWER);
     const completeAsync = vi.spyOn(genieJobsApi, 'genieCompleteAsync');

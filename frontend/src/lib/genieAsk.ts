@@ -38,7 +38,7 @@
  * audit `genie-03`) with the server's canned hint.
  */
 
-import type { GenieCompletionJobStatus, GenieSubmitResultWithJobs } from '../types/genieJobs';
+import type { GenieCompletionJobStatus, GenieSubmitResultWithJobs, GenieTurnProgress } from '../types/genieJobs';
 import {
   ApiError,
   api,
@@ -109,7 +109,7 @@ type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>;
 
 export interface PollGenieTurnOptions {
   signal?: AbortSignal;
-  onProgress?: (progress: GenieLiveProgress) => void;
+  onProgress?: (progress: GenieTurnProgress) => void;
   /** Epoch ms after which a non-terminal turn gives up. */
   deadline: number;
   /** The submit response's deep flag, stamped onto every progress update. */
@@ -121,7 +121,7 @@ export interface PollGenieTurnOptions {
 
 export interface AskGenieLiveOptions {
   signal?: AbortSignal;
-  onProgress?: (progress: GenieLiveProgress) => void;
+  onProgress?: (progress: GenieTurnProgress) => void;
   /** Test seam; production callers keep the default cadence. */
   pollMs?: number;
   sleep?: Sleep;
@@ -292,6 +292,11 @@ export async function requestGenieCompletion(
   const { asyncComplete, signal, timeoutMs = COMPLETE_ASYNC_TIMEOUT_MS } = options;
   if (!asyncComplete) {
     const response = await api.genieComplete(ids.conversationId, ids.messageId, ids.progressToken, question, signal);
+    // The sync call never sends respond_async, so a job body is a server
+    // that answered a question this page did not ask (quality-04 P2).
+    if (isGenieJobStatus(response)) {
+      throw new GenieLiveError('Genie answered in a form this page did not ask for. Ask the question again.');
+    }
     return { kind: 'answer', response };
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {

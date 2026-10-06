@@ -195,10 +195,6 @@ export interface GenieLiveProgress {
   reasoning_trace: Array<{ kind: string; content: string }>;
   sql_preview?: string | null;
   error_hint?: string | null;
-  /** NOT on the progress wire: `askGenieLive` stamps the submit response's
-   *  `deep` flag onto every progress update so the rail can label the long
-   *  completion wait honestly on both Genie surfaces. */
-  deep?: boolean;
 }
 
 export interface AuditEventRow {
