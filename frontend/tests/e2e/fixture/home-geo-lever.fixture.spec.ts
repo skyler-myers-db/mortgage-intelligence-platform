@@ -16,8 +16,10 @@
  *  - The Delta Explainer (wow-ai-3) opens from the refi trigger's chip, its
  *    table reconciles with its total, and nothing reads the attribution
  *    endpoint before the drawer opens (not on load, not on hover).
- *  - Home still never reads GET /api/leads or a borrower, the hero's right
- *    column stays one line, and exactly one primary button sits above the fold.
+ *  - Home still never reads GET /api/leads or a borrower; the hero's actions
+ *    sit beside the title (the gold refresh chip over the briefing's age and
+ *    the primary action, so the hero keeps its title row's height), and
+ *    exactly one primary button sits above the fold.
  */
 import type { Locator, Page } from '@playwright/test';
 import { HOME_SUMMARY, HOME_WATCHLIST_SUMMARY } from './data/portfolio';
@@ -247,19 +249,36 @@ test.describe('Home reads and hero', () => {
     expect(reads.filter((call) => BORROWER_READ.test(call.path)), 'borrower reads write VIEW_BORROWER').toEqual([]);
   });
 
-  test('the hero actions stay one line and exactly one primary button is above the fold', async ({ app, page }) => {
+  test('the hero actions sit beside the title: the gold chip over the briefing age and one primary above the fold', async ({ app, page }) => {
     await app.gotoRoute('/');
     await expect(page.locator('.proto-hero__actions [data-testid="fetched-at"] .fetched-at__label')).toBeVisible();
-    const rows = await page.locator('.proto-hero__actions > *').evaluateAll((nodes) =>
+    const chip = page.locator('.proto-hero__actions .chip', { hasText: 'Refreshed' });
+    await expect(chip).toBeVisible();
+    // The briefing's age, its Refresh and the primary action centre on one line...
+    const controls = await page.locator('.proto-hero__actions .home-hero__controls > *').evaluateAll((nodes) =>
       nodes
         .map((node) => node.getBoundingClientRect())
         .filter((rect) => rect.width > 0)
         .map((rect) => ({ top: rect.top, bottom: rect.bottom, height: rect.height })),
     );
-    expect(rows.length).toBeGreaterThanOrEqual(3);
-    const minHeight = Math.min(...rows.map((row) => row.height));
-    const tops = rows.map((row) => row.top + row.height / 2);
-    expect(Math.max(...tops) - Math.min(...tops), 'every hero action centres on one row').toBeLessThan(minHeight / 2);
+    expect(controls.length).toBe(2);
+    const minHeight = Math.min(...controls.map((row) => row.height));
+    const centres = controls.map((row) => row.top + row.height / 2);
+    expect(Math.max(...centres) - Math.min(...centres), 'the hero controls centre on one row').toBeLessThan(minHeight / 2);
+    // ...under the gold table's refresh chip.
+    const chipBox = (await chip.boundingBox())!;
+    expect(chipBox.y + chipBox.height, 'the gold chip sits over the controls').toBeLessThanOrEqual(
+      Math.min(...controls.map((row) => row.top)),
+    );
+    // The slot never drops under the title: one past the room beside it wrapped
+    // the hero to a second row (+61px), and the tallest answer band crossed the fold.
+    const hero = await page.locator('#main-content .proto-hero').evaluate((node) => {
+      const box = (element: Element) => element.getBoundingClientRect();
+      const [title, actions] = [node.firstElementChild!, node.querySelector('.proto-hero__actions')!];
+      return { hero: box(node).height, title: box(title).height, titleRight: box(title).right, actionsLeft: box(actions).left };
+    });
+    expect(hero.actionsLeft, 'the actions sit beside the title block').toBeGreaterThan(hero.titleRight);
+    expect(hero.hero, 'the hero is as tall as its title block').toBeLessThanOrEqual(hero.title + 0.5);
     const primaries = await page.locator('#main-content .btn--primary').evaluateAll((nodes, fold) =>
       nodes
         .filter((node) => {

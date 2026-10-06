@@ -30,3 +30,39 @@
   flex-direction: column;
   gap: var(--gap-grid);
 }
+
+/* ============================================================
+   HERO ACTIONS (deviation:home-fetched-at). The hero's right slot
+   stacks two rows, as the Lead Queue's does (.lead-queue-hero in
+   lead-queue.css): the gold table's "Refreshed" chip over the
+   briefing's own fetch age, its Refresh and the single primary
+   action. The chip, FetchedAt and the action on one row measured
+   540px at 1440x900, past the 529px left beside the title, so the
+   whole slot dropped under the title, the hero grew 61px and the
+   tallest answer band ended below the fold
+   (home-answer.fixture.spec.ts). The stack is about 345px
+   wide and 70px tall, under the 76px title block, so the hero keeps
+   its one-row height.
+   ============================================================ */
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  min-inline-size: 0;
+}
+.home-hero__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  min-inline-size: 0;
+}
+/* The row's gap spaces FetchedAt; its own start margin is for a table title. */
+.home-hero__controls .fetched-at { margin-inline-start: 0; }
+/* A stacked hero (10-native-analytics.css, <= 640px) starts its actions. */
+@container main (max-width: 640px) {
+  .home-hero { align-items: flex-start; }
+  .home-hero__controls { justify-content: flex-start; }
+}

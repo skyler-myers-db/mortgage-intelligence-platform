@@ -148,7 +148,11 @@ export default function Home() {
       lede="Today's briefing answers all three; each evidence chip opens the source behind its figure."
       wideMap
       heroRight={
-        <>
+        // deviation:home-fetched-at: a two-row stack (home.css .home-hero),
+        // the gold refresh chip over the briefing's age and the one primary
+        // action, so the hero keeps its title row at 1440x900 and the answer
+        // band clears the fold.
+        <div className="home-hero">
           {/* Freshness reads as relative age ("Refreshed 3 hours ago"); the
               <time> carries the instant and an absolute-UTC title, so two
               operators in different timezones can still disambiguate a
@@ -158,26 +162,28 @@ export default function Home() {
               Refreshed <Timestamp value={preview?.data_refreshed_at} />
             </Chip>
           )}
-          {/* deviation:home-fetched-at: the briefing's own fetch age and
-              its one Refresh, beside the gold table's refresh time. */}
-          <FetchedAt
-            at={fetchedAt}
-            subject="today's briefing"
-            isFetching={previewQuery.isFetching || summaryQuery.isFetching}
-            onRefresh={() => {
-              previewQuery.manualRetry();
-              summaryQuery.manualRetry();
-            }}
-          />
-          {/* Exactly one primary action on Home (2026-09-21 audit flow-05):
-              the ranked queue the answer band previews. Building a portfolio
-              comes after reviewing leads, so it moved to the side panel's
-              secondary actions. */}
-          <Link to={HOME_PRIMARY_CTA.href} className="btn btn--primary">
-            {HOME_PRIMARY_CTA.label}
-            <Icon name="chevright" size={14} />
-          </Link>
-        </>
+          <div className="home-hero__controls">
+            {/* deviation:home-fetched-at: the briefing's own fetch age and
+                its one Refresh, under the gold table's refresh time. */}
+            <FetchedAt
+              at={fetchedAt}
+              subject="today's briefing"
+              isFetching={previewQuery.isFetching || summaryQuery.isFetching}
+              onRefresh={() => {
+                previewQuery.manualRetry();
+                summaryQuery.manualRetry();
+              }}
+            />
+            {/* Exactly one primary action on Home (2026-09-21 audit flow-05):
+                the ranked queue the answer band previews. Building a portfolio
+                comes after reviewing leads, so it moved to the side panel's
+                secondary actions. */}
+            <Link to={HOME_PRIMARY_CTA.href} className="btn btn--primary">
+              {HOME_PRIMARY_CTA.label}
+              <Icon name="chevright" size={14} />
+            </Link>
+          </div>
+        </div>
       }
     >
       {/* One grid wraps the whole stack so every card sits --gap-grid from
