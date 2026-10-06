@@ -16,15 +16,22 @@ database.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import psycopg
 import pytest
+from psycopg.rows import dict_row
 
+from backend.services import genie_refusal_report as refusal_report
+from backend.services import genie_refusal_report_reads as reads
+from backend.services.genie_refusal_reason import refusal_report_hash
 from jobs import lakebase_migrate
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
@@ -242,3 +249,118 @@ def test_the_checks_refuse_oversized_text_and_a_backwards_expiry(conn_kwargs: di
         (str(uuid4()),),
         "23503",
     )
+
+
+# -- the service SQL against the real tables -----------------------------------
+
+
+class _Pg:
+    """The LakebaseClient surface the refusal services use, over psycopg."""
+
+    def __init__(self, conn_kwargs: dict[str, str]) -> None:
+        self.conn_kwargs = conn_kwargs
+
+    @contextmanager
+    def transaction(self) -> Iterator[psycopg.Connection[dict[str, Any]]]:
+        with psycopg.connect(**self.conn_kwargs, row_factory=dict_row) as conn:
+            yield conn
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        with self.transaction() as conn:
+            return conn.execute(sql, params).fetchone()  # type: ignore[arg-type]
+
+    def fetchall(self, sql: str, params: dict[str, Any] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        with self.transaction() as conn:
+            return conn.execute(sql, params).fetchmany(limit)  # type: ignore[arg-type]
+
+
+def _ledger_refusal(conn_kwargs: dict[str, str], actor: str, question: str) -> None:
+    with psycopg.connect(**conn_kwargs) as conn:
+        conn.execute(
+            "INSERT INTO mip_app.action_audit (event_type, actor_email, entity_type, entity_id, metadata) "
+            "VALUES ('RUN_GENIE', %s, 'genie_message', 'genie', %s::jsonb)",
+            (
+                actor,
+                json.dumps(
+                    {"question_hash": refusal_report_hash(question)[:16], "action_type": "refused_prompt"}
+                ),
+            ),
+        )
+
+
+def test_the_report_probe_insert_page_question_and_sweep_sql_run_on_postgres(
+    conn_kwargs: dict[str, str],
+) -> None:
+    pg = _Pg(conn_kwargs)
+    actor = f"lo-{uuid4().hex[:8]}@example.com"
+    question = "Which zyrplax borrowers are eligible for a HELOC?"
+    _ledger_refusal(conn_kwargs, actor, question)
+    report = refusal_report.record_genie_refusal_report(
+        pg,  # type: ignore[arg-type]
+        actor=actor,
+        question_hash=refusal_report_hash(question),
+        refusal_reason="unreviewed_criterion",
+        conversation_id=None,
+        message_id=None,
+        offered_text=refusal_report.OfferedRefusalText(scrubbed=question, redacted=False),
+    )
+    assert report.question_captured is True and report.report_id is not None
+    replay = refusal_report.record_genie_refusal_report(
+        pg,  # type: ignore[arg-type]
+        actor=actor,
+        question_hash=refusal_report_hash(question),
+        refusal_reason="unreviewed_criterion",
+        conversation_id=None,
+        message_id=None,
+        offered_text=refusal_report.OfferedRefusalText(scrubbed=question, redacted=False),
+    )
+    assert (replay.duplicate, replay.report_id, replay.question_captured) == (True, report.report_id, True)
+    assert replay.audit_event_id == report.audit_event_id
+    unbound = refusal_report.record_genie_refusal_report(
+        pg,  # type: ignore[arg-type]
+        actor=f"other-{actor}",
+        question_hash=refusal_report_hash(question),
+        refusal_reason="unreviewed_criterion",
+        conversation_id=None,
+        message_id=None,
+        offered_text=refusal_report.OfferedRefusalText(scrubbed=question, redacted=False),
+    )
+    assert (unbound.question_captured, unbound.declined) == (False, "no_matching_refusal")
+
+    page = reads.read_refusal_report_page(
+        pg, since=datetime.now(UTC) - timedelta(days=90), family=None, limit=1, cursor=None,
+        filter_fingerprint="f",
+    )
+    assert len(page.rows) == 1 and page.next_cursor is not None
+    second = reads.read_refusal_report_page(
+        pg, since=datetime.now(UTC), family=None, limit=1, cursor=page.next_cursor, filter_fingerprint="f",
+    )
+    assert {page.rows[0]["report_id"], second.rows[0]["report_id"]} == {report.report_id, unbound.report_id}
+    by_id = {row["report_id"]: row for row in (page.rows[0], second.rows[0])}
+    assert by_id[report.report_id]["has_text"] is True and by_id[unbound.report_id]["has_text"] is False
+    family = reads.read_refusal_report_page(
+        pg, since=datetime.now(UTC) - timedelta(days=90), family="out_of_scope", limit=5, cursor=None,
+        filter_fingerprint="g",
+    )
+    assert family.rows == [] and {row["refusal_reason"] for row in family.family_counts} >= {"unreviewed_criterion"}
+    held = reads.read_refusal_question(pg, report.report_id)
+    assert held is not None and held["question_text"] == question
+
+    # Expire it in place (as the clock would), then the sweep nulls it.
+    with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+        conn.execute("ALTER TABLE mip_app.genie_refusal_report_texts DISABLE TRIGGER trg_genie_refusal_report_texts_purge_only")
+        conn.execute(
+            "UPDATE mip_app.genie_refusal_report_texts SET captured_at = now() - interval '91 days', "
+            "expires_at = now() - interval '1 day' WHERE report_id = %s",
+            (report.report_id,),
+        )
+        conn.execute("ALTER TABLE mip_app.genie_refusal_report_texts ENABLE TRIGGER trg_genie_refusal_report_texts_purge_only")
+    assert reads.read_refusal_question(pg, report.report_id) is None
+    with pg.transaction() as conn:
+        assert refusal_report.sweep_expired_refusal_texts(conn) >= 1
+    with psycopg.connect(**conn_kwargs) as conn:
+        row = conn.execute(
+            "SELECT question_text, purged_at FROM mip_app.genie_refusal_report_texts WHERE report_id = %s",
+            (report.report_id,),
+        ).fetchone()
+    assert row is not None and row[0] is None and row[1] is not None

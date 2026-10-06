@@ -295,6 +295,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "conversation_id",
         "message_id",
         "question_hash",
+        # GENIE_REFUSAL_REPORT (D-audit-reads-d): whether the reporter's
+        # consented question text was stored, and the closed reason when it
+        # was offered but declined. Never the text itself.
+        "question_text_captured",
+        "question_text_declined",
         # Genie completion job cancelled by its owner (audit genie-03): the
         # job's server-issued UUID. Not ``job_id``, which carries Databricks
         # job ids.

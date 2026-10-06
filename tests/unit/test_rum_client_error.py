@@ -101,6 +101,19 @@ def test_accepts_an_api_call_with_its_server_timing_fields(
     assert _post(client, API_CALL).json() == {"accepted": 1, "enabled": True}
 
 
+@pytest.mark.parametrize(
+    "api_route",
+    ["/api/audit/refusal-reports", "/api/audit/refusal-reports/:id/question"],
+)
+def test_accepts_the_refusal_report_read_templates(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, api_route: str
+) -> None:
+    """D-audit-reads-d: the auditor reads template to closed segments; the
+    report id is always `:id`, never the UUID."""
+    monkeypatch.setattr(telemetry_mod.settings, "mip_rum_enabled", True)
+    assert _post(client, _with_details(API_CALL, api_route=api_route)).status_code == 202
+
+
 def test_the_sink_stays_off_by_default(client: TestClient) -> None:
     response = _post(client, CLIENT_ERROR)
     assert response.status_code == 202

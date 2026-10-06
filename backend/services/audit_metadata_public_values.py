@@ -96,6 +96,9 @@ _APPROVAL_REQUEST_SKIP_REASONS: frozenset[str] = frozenset(
     {"not_found", "not_contactable", "already_decided", "already_requested"}
 )
 _MAX_APPROVAL_REQUEST_BORROWERS = 500
+_REFUSAL_TEXT_DECLINE_REASONS: frozenset[str] = frozenset(
+    {"capture_disabled", "personal_details", "no_matching_refusal"}
+)
 
 
 def _assert_approval_request_values(metadata: dict[str, Any]) -> None:
@@ -698,9 +701,14 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"ledger_surface"}):
         if value is not None and str(value) not in LEDGER_SURFACES:
             raise AuditMetadataValueViolation(field, "must be a governed ledger surface")
-    for field, value in _metadata_values_for(metadata, {"has_cursor"}):
+    for field, value in _metadata_values_for(metadata, {"has_cursor", "question_text_captured"}):
         if value is not None and not isinstance(value, bool):
             raise AuditMetadataValueViolation(field, "must be a boolean")
+    # GENIE_REFUSAL_REPORT (D-audit-reads-d): why offered question text was
+    # kept hash-only, from a closed set; the text never lands.
+    for field, value in _metadata_values_for(metadata, {"question_text_declined"}):
+        if value is not None and str(value) not in _REFUSAL_TEXT_DECLINE_REASONS:
+            raise AuditMetadataValueViolation(field, "must be a governed decline reason")
     for field, value in _metadata_values_for(metadata, {"returned_row_count"}):
         if value is None:
             continue
