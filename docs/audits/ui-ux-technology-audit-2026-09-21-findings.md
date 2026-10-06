@@ -1156,7 +1156,7 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** toggleSelect ignores shiftKey, select-all covers loaded rows, no progress or cancel, two POSTs per approve: verified. Phantom selection is label-only; approve and assign intersect with current ids (:474, :598). Server batch contradicts the documented per-borrower draft-proof design (:573-576).
 - **Constraint conflict:** Approving by filter fingerprint through a server batch approves borrowers no human saw and bypasses the per-borrower draft proof; conflicts with the 'human approval always required' posture unless the owner explicitly accepts it.
 
-**Wave-5 status.** W5a (2026-10-01): bulk Reject with a bulk_id on every OUTREACH_REJECT row, a human-chosen reason (consent reasons refused in bulk), a required shared note, a canary row and kind-aware progress; no "select all N matching" and no server batch endpoint (12.4 #9 ruling).
+**Wave-5 status.** W5a (2026-10-01): bulk Reject with a bulk_id on every OUTREACH_REJECT row, a human-chosen reason (consent reasons refused in bulk), a required shared note, a canary row and kind-aware progress; no "select all N matching" and no server batch endpoint (12.4 #9 ruling). W5b re-verification (2026-10-06): `approval-core.fixture.spec.ts` (4) bulk Reject is flaky on the reason select's focus once the gate opens ("Received: inactive"; 1 of 12 runs on main, 4 of 12 on `ux/wave-5b`, spec unchanged since main). W5c `w5-lead-queue-paging` makes that focus deterministic (a layout-effect focus, or an assertion after the open transition settles) and re-measures with `--repeat-each=24` on both trees.
 
 ### `tables-09` No saved views, recent filters or copy-link; sort state never reaches the URL
 
