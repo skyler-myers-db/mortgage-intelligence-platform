@@ -23,7 +23,7 @@
 import { act, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TABLE_HEAD_BLOCK_VAR, useTableScrollClearance } from './useTableScrollClearance';
+import { AT_BLOCK_START_ATTR, TABLE_HEAD_BLOCK_VAR, useTableScrollClearance } from './useTableScrollClearance';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -80,6 +80,22 @@ function PinnedTable() {
             <td className="tbl-cell--approval"><button type="button" data-testid="approve">Approve</button></td>
           </tr>
         </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SortableTable() {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  useTableScrollClearance(wrapRef, 'default');
+  return (
+    <div ref={wrapRef} className="tbl-wrap">
+      <table className="lead-table__table">
+        <thead>
+          <tr>
+            <th><button type="button" data-testid="sort">Lead score</button></th>
+          </tr>
+        </thead>
       </table>
     </div>
   );
@@ -346,6 +362,51 @@ describe('useTableScrollClearance', () => {
       await flushMicrotasks();
       expect(table.scrollLeft).toBe(284);
       expect(frames).toHaveLength(0);
+    });
+  });
+
+  describe('the block-start flag (WebKit 26: no scroll-state queries)', () => {
+    let scrollTop = 0;
+    const sort = () => document.querySelector<HTMLButtonElement>('[data-testid="sort"]')!;
+    function mountSortable(scrollStateQueries: boolean) {
+      vi.stubGlobal('CSS', { supports: () => scrollStateQueries });
+      scrollTop = 0;
+      act(() => root.render(<SortableTable />));
+      // A script scroll: the offset moves, and its scroll event has not landed.
+      Object.defineProperty(wrap(), 'scrollTop', { configurable: true, get: () => scrollTop });
+    }
+
+    it('a header control focus re-reads the offset before the reveal, ahead of a script scroll\'s event', () => {
+      mountSortable(false);
+      expect(wrap().hasAttribute(AT_BLOCK_START_ATTR), 'at its block start on mount').toBe(true);
+      scrollTop = 200;
+      expect(wrap().hasAttribute(AT_BLOCK_START_ATTR), 'non-vacuity: stale until an event').toBe(true);
+
+      act(() => sort().focus());
+
+      expect(wrap().hasAttribute(AT_BLOCK_START_ATTR), 'the reveal reads no clearance margin').toBe(false);
+      scrollTop = 0;
+      act(() => {
+        wrap().dispatchEvent(new Event('scroll'));
+      });
+      expect(wrap().hasAttribute(AT_BLOCK_START_ATTR), 'the scroll event still syncs').toBe(true);
+    });
+
+    it('is a no-op where scroll-state queries exist', () => {
+      mountSortable(true);
+      act(() => sort().focus());
+      expect(wrap().hasAttribute(AT_BLOCK_START_ATTR)).toBe(false);
+    });
+
+    it('removes the flag and its listeners with the table', () => {
+      mountSortable(false);
+      const table = wrap();
+      const control = sort();
+      act(() => root.render(<div />));
+      expect(table.hasAttribute(AT_BLOCK_START_ATTR)).toBe(false);
+      control.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      table.dispatchEvent(new Event('scroll'));
+      expect(table.hasAttribute(AT_BLOCK_START_ATTR)).toBe(false);
     });
   });
 });

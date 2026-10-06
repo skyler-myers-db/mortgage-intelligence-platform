@@ -127,6 +127,12 @@ export const AT_BLOCK_START_ATTR = 'data-at-block-start';
  * `data-at-block-start` while it sits at its block start (a passive scroll
  * listener), and the sheet mirrors the rule on it. A no-op elsewhere.
  *
+ * It is also re-synced on a capturing focusin, which fires before the focus
+ * reveal reads scroll-margin: a script scroll's event lands a frame later,
+ * so `scrollTop = 200` then a header control's focus() in one task read the
+ * flag from scrollTop 0 and the reveal moved the table 200 -> 154 (W5b
+ * integration, cross-engine WebKit run).
+ *
  * @returns the detach.
  */
 function flagBlockStart(wrap: HTMLElement): () => void {
@@ -134,8 +140,10 @@ function flagBlockStart(wrap: HTMLElement): () => void {
   const sync = () => wrap.toggleAttribute(AT_BLOCK_START_ATTR, wrap.scrollTop <= 0);
   sync();
   wrap.addEventListener('scroll', sync, { passive: true });
+  wrap.addEventListener('focusin', sync, { capture: true });
   return () => {
     wrap.removeEventListener('scroll', sync);
+    wrap.removeEventListener('focusin', sync, { capture: true });
     wrap.removeAttribute(AT_BLOCK_START_ATTR);
   };
 }
