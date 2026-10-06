@@ -4,6 +4,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { AccessDenied } from '../components/ui/AccessDenied';
+import { AsyncStatus, type AsyncQuery } from '../components/ui/AsyncState';
 import { Skeleton } from '../components/ui/Skeleton';
 import { api, ApiError } from '../lib/api';
 import { assetHrefForSource } from '../lib/drawerSources';
@@ -52,6 +53,19 @@ export default function AssetRoute() {
   });
   const error = query.error instanceof ApiError ? query.error : null;
   const asset = query.data;
+  // The shared failure surface (audit 2026-09-21 states-04 / states-03): a
+  // 404, an outage or a network failure reads in the describeApiError
+  // vocabulary with one Retry and the correlation id, never raw error text.
+  // A 403 keeps its AccessDenied page with the way back to the evidence.
+  const forbidden = error?.status === 403;
+  const asyncQuery: AsyncQuery<AssetMetadataResponse> = {
+    data: asset ?? null,
+    warmingUp: null,
+    error: forbidden ? null : query.error,
+    manualRetry: () => void query.refetch(),
+    isFetching: query.isFetching,
+    isPlaceholderData: false,
+  };
 
   return (
     <PageShell
@@ -81,7 +95,7 @@ export default function AssetRoute() {
       {/* The buyer personas are not admins. Their proof journey used to end
           here with "Return home" as the only exit (2026-09-21 audit
           critic-03): name the role and offer the way back to the evidence. */}
-      {query.isError && error?.status === 403 && (
+      {forbidden && (
         <AccessDenied
           title="Administrator access required"
           requiredRole="Administrator"
@@ -93,24 +107,7 @@ export default function AssetRoute() {
         </AccessDenied>
       )}
 
-      {query.isError && error?.status !== 403 && (
-        <section className="surface">
-          <div className="surface__hdr">
-            <Icon name="shield" size={14} className="icon-accent" />
-            <SurfaceTitle>Asset unavailable</SurfaceTitle>
-          </div>
-          <div className="surface__body">
-            <p className="body flush">
-              This asset is not in the Module 0 trusted registry, or the warehouse metadata endpoint is unavailable.
-            </p>
-            <div className="chip-row mt-3">
-              <Link className="btn btn--primary btn--sm" to="/">
-                Return home
-              </Link>
-            </div>
-          </div>
-        </section>
-      )}
+      {!forbidden && <AsyncStatus query={asyncQuery} subject="Asset detail" />}
 
       {asset && (
         <div className="asset-layout">
