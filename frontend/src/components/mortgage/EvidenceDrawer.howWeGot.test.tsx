@@ -168,6 +168,9 @@ describe('EvidenceDrawer How we got and Under the hood', () => {
     await openTab('under-the-hood');
 
     const panel = document.getElementById('drawer-panel-under-the-hood') as HTMLElement;
+    // A focusable tabpanel: it may hold no control, and the drawer body scrolls it.
+    expect(panel.getAttribute('role')).toBe('tabpanel');
+    expect(panel.tabIndex).toBe(0);
     const text = panel.textContent ?? '';
     const order = [
       'Copy this statement into a Databricks SQL workspace',

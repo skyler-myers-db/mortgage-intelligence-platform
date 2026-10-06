@@ -520,7 +520,10 @@ export function EvidenceDrawerBody() {
             </div>
           ) : null}
           {tab === 'under-the-hood' ? (
-            <div {...panelProps('under-the-hood')}>
+            // A focusable tabpanel (the WAI-ARIA tabs pattern): this panel can
+            // hold no control at all (a non-KPI source for a non-admin), and
+            // the drawer body still scrolls it (axe scrollable-region-focusable).
+            <div {...panelProps('under-the-hood')} role="tabpanel" tabIndex={0}>
               {proofKey && <EvidenceKpiProof title={d.title} proof={proofQuery} />}
 
               <div className="eyebrow mt-4 mb-2">How these assets are listed</div>
