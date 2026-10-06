@@ -204,6 +204,7 @@ const ATTRIBUTION_LABELS: Readonly<Record<HomeAttributionMeasure, string>> = {
   high_opportunity: 'high-opportunity',
   offers_recommended: 'primary offer paths',
   listed_for_sale: 'listed for sale',
+  competitor_lien: 'competitor liens',
 };
 
 /**
@@ -213,6 +214,7 @@ const ATTRIBUTION_LABELS: Readonly<Record<HomeAttributionMeasure, string>> = {
  */
 export function homeAttribution(measureParam: string | null, baseline: string | null): HomeSummaryAttributionResponse {
   const measure = (measureParam && measureParam in ATTRIBUTION_LABELS ? measureParam : 'refi_economics_screen') as HomeAttributionMeasure;
+  if (measure === 'competitor_lien') return notSnapshottedAttribution(measure, baseline);
   const states = STATES.map((state) => {
     const change = ATTRIBUTION_CHANGES[state.code] ?? 0;
     return { state: state.code, baseline_count: state.inTheMoney - change, current_count: state.inTheMoney, change };
@@ -238,6 +240,34 @@ export function homeAttribution(measureParam: string | null, baseline: string | 
     offer_rules_changed_since_baseline: true,
     sources: ['mip.gold.funnel_snapshot_daily', 'mip.gold.rate_window_weekly', 'mip.ref.offer_rules_config'],
     note: 'These coincided with the change; they are not shown as causes.',
+    snapshotted: true,
+  };
+}
+
+/**
+ * The route's answer for a measure gold.funnel_snapshot_daily does not attribute
+ * per state yet (competitor liens, wow-ai-3): nothing read, `snapshotted: false`.
+ */
+export function notSnapshottedAttribution(measure: HomeAttributionMeasure, baseline: string | null): HomeSummaryAttributionResponse {
+  return {
+    measure,
+    label: ATTRIBUTION_LABELS[measure],
+    population: 'addressable',
+    requested_baseline_date: baseline ?? '2026-07-09',
+    baseline_snapshot_date: null,
+    current_snapshot_date: null,
+    nearest_snapshot: false,
+    baseline_total: null,
+    current_total: null,
+    total_change: null,
+    states: [],
+    unattributed_change: null,
+    rate: { series_id: 'MORTGAGE30US', baseline_week: null, baseline_pct: null, latest_week: null, latest_pct: null },
+    offer_rules_last_updated: null,
+    offer_rules_changed_since_baseline: null,
+    sources: [],
+    note: 'These coincided with the change; they are not shown as causes.',
+    snapshotted: false,
   };
 }
 

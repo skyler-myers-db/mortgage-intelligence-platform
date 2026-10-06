@@ -10318,7 +10318,8 @@
               "refi_economics_screen",
               "high_opportunity",
               "offers_recommended",
-              "listed_for_sale"
+              "listed_for_sale",
+              "competitor_lien"
             ],
             "title": "Measure",
             "type": "string"
@@ -10369,6 +10370,11 @@
             "format": "date",
             "title": "Requested Baseline Date",
             "type": "string"
+          },
+          "snapshotted": {
+            "default": true,
+            "title": "Snapshotted",
+            "type": "boolean"
           },
           "sources": {
             "items": {
@@ -23168,7 +23174,8 @@
                 "refi_economics_screen",
                 "high_opportunity",
                 "offers_recommended",
-                "listed_for_sale"
+                "listed_for_sale",
+                "competitor_lien"
               ],
               "title": "Measure",
               "type": "string"
@@ -33598,7 +33605,8 @@
                 "refi_economics_screen",
                 "high_opportunity",
                 "offers_recommended",
-                "listed_for_sale"
+                "listed_for_sale",
+                "competitor_lien"
               ],
               "title": "Measure",
               "type": "string"

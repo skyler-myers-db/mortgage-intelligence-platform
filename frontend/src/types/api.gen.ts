@@ -1447,7 +1447,7 @@ export interface ResponseSchemas {
     current_snapshot_date: string | null;
     current_total: number | null;
     label: string;
-    measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+    measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale" | "competitor_lien";
     nearest_snapshot: boolean;
     note: string;
     offer_rules_changed_since_baseline: boolean | null;
@@ -1455,6 +1455,7 @@ export interface ResponseSchemas {
     population: "addressable";
     rate: ResponseSchemas['HomeAttributionRate'];
     requested_baseline_date: string;
+    snapshotted: boolean;
     sources: string[];
     states: ResponseSchemas['HomeAttributionState'][];
     total_change: number | null;
@@ -3595,7 +3596,7 @@ export interface ApiOperations {
   "GET /api/v1/home/summary/attribution": {
     pathParams: Record<string, never>;
     query: {
-      measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+      measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale" | "competitor_lien";
       baseline: string;
     };
     headers: Record<string, never>;

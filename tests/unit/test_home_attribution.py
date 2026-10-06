@@ -303,7 +303,7 @@ def test_a_baseline_inside_the_lookback_is_answered(days: int) -> None:
 
 def test_an_unknown_measure_is_a_422() -> None:
     _install(_service(_FakeSql()))
-    response = TestClient(app).get(f"/api/v1/home/summary/attribution?measure=competitor_lien&baseline={_recent_baseline()}")
+    response = TestClient(app).get(f"/api/v1/home/summary/attribution?measure=not_a_measure&baseline={_recent_baseline()}")
     assert response.status_code == 422
 
 

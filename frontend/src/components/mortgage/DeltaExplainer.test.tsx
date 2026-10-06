@@ -54,6 +54,7 @@ function body(overrides: Partial<HomeSummaryAttributionResponse> = {}): HomeSumm
     offer_rules_changed_since_baseline: true,
     sources: ['mip.gold.funnel_snapshot_daily', 'mip.gold.rate_window_weekly', 'mip.ref.offer_rules_config'],
     note: 'These coincided with the change; they are not shown as causes.',
+    snapshotted: true,
     ...overrides,
   };
 }
