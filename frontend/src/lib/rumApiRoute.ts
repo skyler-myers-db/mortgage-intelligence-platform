@@ -26,6 +26,7 @@ export const API_ROUTE_SEGMENTS = [
   'draft', 'drafts', 'economics', 'event', 'events', 'evidence', 'executive',
   'execute',
   'export-receipt', 'facets', 'feedback', 'footprint', 'force-degraded', 'funnel', 'genie',
+  'freshness',
   'geo', 'geography', 'growth-agent', 'health', 'home', 'leads', 'lifecycle',
   'lineage', 'loan-officers', 'lookup', 'manifest', 'message', 'metadata',
   'monitors', 'my-events', 'notification-drafts', 'offers', 'operations', 'options',

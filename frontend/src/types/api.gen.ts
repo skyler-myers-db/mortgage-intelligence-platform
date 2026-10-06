@@ -265,6 +265,24 @@ export interface ResponseSchemas {
     ordinal_position: number | null;
     redacted: boolean;
   };
+  /**
+   * Freshness of one registered asset, readable by every authenticated user.
+   *
+   * Read from the reviewed source-readiness row behind the asset (its own row
+   * or its primary input's): the band, the business refresh, when the row was
+   * checked, its status and which row answered. Schema internals stay on the
+   * administrator metadata read.
+   */
+  AssetFreshnessResponse: {
+    asset_key: string;
+    basis: string | null;
+    checked_at: string | null;
+    freshness: "fresh" | "aging" | "stale" | "unavailable";
+    last_updated: string | null;
+    source: "source_readiness" | "unavailable" | "not_tracked";
+    status: "live" | "demo_synthetic" | "configured_empty" | "not_configured" | "roadmap" | "permission_denied" | "error" | "unavailable" | "unknown";
+    title: string;
+  };
   AssetLineageNode: {
     asset_path: string;
     catalog_explorer_url: string | null;
@@ -3198,6 +3216,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['SignalAnalyticsResponse'];
+  };
+  "GET /api/v1/assets/{asset_key}/freshness": {
+    pathParams: {
+      asset_key: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['AssetFreshnessResponse'];
   };
   "GET /api/v1/audit/count": {
     pathParams: Record<string, never>;

@@ -1698,6 +1698,102 @@
         "title": "AssetColumn",
         "type": "object"
       },
+      "AssetFreshnessResponse": {
+        "description": "Freshness of one registered asset, readable by every authenticated user.\n\nRead from the reviewed source-readiness row behind the asset (its own row\nor its primary input's): the band, the business refresh, when the row was\nchecked, its status and which row answered. Schema internals stay on the\nadministrator metadata read.",
+        "properties": {
+          "asset_key": {
+            "title": "Asset Key",
+            "type": "string"
+          },
+          "basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "freshness": {
+            "default": "unavailable",
+            "enum": [
+              "fresh",
+              "aging",
+              "stale",
+              "unavailable"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "last_updated": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Updated"
+          },
+          "source": {
+            "enum": [
+              "source_readiness",
+              "unavailable",
+              "not_tracked"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "live",
+                  "demo_synthetic",
+                  "configured_empty",
+                  "not_configured",
+                  "roadmap",
+                  "permission_denied",
+                  "error",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              }
+            ],
+            "default": "unknown",
+            "title": "Status"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_key",
+          "title",
+          "source"
+        ],
+        "title": "AssetFreshnessResponse",
+        "type": "object"
+      },
       "AssetLineageNode": {
         "properties": {
           "asset_path": {
@@ -18975,6 +19071,50 @@
         ]
       }
     },
+    "/api/assets/{asset_key}/freshness": {
+      "get": {
+        "deprecated": true,
+        "description": "Freshness band, last refresh and readiness basis of a registered asset.\n\nReads one reviewed source-readiness row; an asset outside the fixed\nregistry is a 404 before any SQL runs. A warehouse failure is a 503 and\nis never cached, so the next open asks again.",
+        "operationId": "get_api_assets_asset_key_freshness_get_asset_freshness",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "title": "Asset Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetFreshnessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Asset Freshness",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
     "/api/audit/count": {
       "get": {
         "deprecated": true,
@@ -29362,6 +29502,49 @@
         "summary": "Signals",
         "tags": [
           "analytics"
+        ]
+      }
+    },
+    "/api/v1/assets/{asset_key}/freshness": {
+      "get": {
+        "description": "Freshness band, last refresh and readiness basis of a registered asset.\n\nReads one reviewed source-readiness row; an asset outside the fixed\nregistry is a 404 before any SQL runs. A warehouse failure is a 503 and\nis never cached, so the next open asks again.",
+        "operationId": "get_api_v1_assets_asset_key_freshness_get_asset_freshness",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "title": "Asset Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetFreshnessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Asset Freshness",
+        "tags": [
+          "assets"
         ]
       }
     },

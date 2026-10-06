@@ -298,3 +298,16 @@ def test_the_admin_sse_probe_holds_no_dependency_slot(path: str) -> None:
     assert budget is not None
     assert (budget.scope, budget.dependency) == ("admin-diagnostic", None)
     assert BackpressureController().classify("GET", "/api/admin/rules").dependency == "warehouse"
+
+
+@pytest.mark.parametrize("path", ["/api/assets/x/freshness", "/api/v1/assets/x/freshness"])
+def test_asset_freshness_is_a_warehouse_read(path: str) -> None:
+    # critic-03: every authenticated user's freshness read is one
+    # source-readiness SELECT on the warehouse; the admin metadata read keeps
+    # its /api/admin branch.
+    budget = BackpressureController().classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("warehouse-read", "warehouse")
+    admin = BackpressureController().classify("GET", "/api/v1/admin/assets/x/metadata")
+    assert admin is not None and (admin.scope, admin.dependency) == ("warehouse-read", "warehouse")
