@@ -418,3 +418,206 @@ def test_bundle_recovery_is_queued_retriable_and_has_no_full_seed_task() -> None
     assert tasks["sync_from_lakebase"]["retry_on_timeout"] is True
     assert tasks["sync_from_lakebase"]["min_retry_interval_millis"] == 10_000
     assert tasks["record_funnel_snapshot"]["depends_on"] == [{"task_key": "sync_from_lakebase"}]
+
+
+# --- audit wow-ai-3: the funnel snapshot's competitor_lien_borrowers column ---
+#
+# gold.funnel_snapshot_daily is MERGE-maintained, so an existing table gains
+# the column only from the ensure step. The deploy identity (deploy step 9,
+# the bundle job) runs the ALTER; the App's own paths hold only MODIFY, so a
+# refused ALTER skips ONLY the funnel snapshot write and never 503s the mirror.
+
+_FUNNEL_SQL = REPO / "sql" / "transformations" / "gold_funnel_snapshot_daily.sql"
+
+
+class _FunnelClient:
+    """Fake warehouse: both schema probes, the ALTERs, the MERGEs and a count."""
+
+    def __init__(self, *, alter_error: BaseException | None = None) -> None:
+        self.statements: list[str] = []
+        self.funnel_columns: set[str] = set()
+        self.alter_error = alter_error
+
+    def execute(self, statement: str) -> list[dict[str, Any]]:
+        self.statements.append(statement)
+        if "information_schema" in statement and "'funnel_snapshot_daily'" in statement:
+            return [{"column_name": column} for column in sorted(self.funnel_columns)]
+        if "information_schema" in statement:
+            return _schema_rows()
+        if "ALTER TABLE" in statement and "funnel_snapshot_daily" in statement:
+            if self.alter_error is not None:
+                raise self.alter_error
+            self.funnel_columns.add("competitor_lien_borrowers")
+        return []
+
+    def execute_one(self, statement: str) -> dict[str, Any] | None:
+        self.statements.append(statement)
+        return {"n": 3}
+
+
+def _funnel_merges(statements: list[str]) -> list[str]:
+    return [s for s in statements if "MERGE INTO" in s and "funnel_snapshot_daily AS t" in s]
+
+
+def _lifecycle_merges(statements: list[str]) -> list[str]:
+    return [s for s in statements if "MERGE INTO" in s and "borrower_lifecycle_state" in s]
+
+
+def test_the_funnel_ensure_adds_the_column_once_before_the_funnel_merge(monkeypatch) -> None:
+    from backend.services import lifecycle_sync
+
+    monkeypatch.setattr(lifecycle_sync, "_resolve_connection", lambda: {"fake": True})
+    monkeypatch.setattr(lifecycle_sync, "_fetch_lakebase_rows", lambda _: _one_event())
+    client = _FunnelClient()
+
+    first = lifecycle_sync.sync_lifecycle_state_via_warehouse(
+        sql_client=client,  # type: ignore[arg-type]
+        funnel_sql_path=_FUNNEL_SQL,
+    )
+    alters = [s for s in client.statements if "ALTER TABLE" in s]
+    assert len(alters) == 1 and "competitor_lien_borrowers INT COMMENT" in alters[0]
+    assert client.statements.index(alters[0]) < client.statements.index(
+        _funnel_merges(client.statements)[0]
+    ), "the ALTER lands before the MERGE that writes the column"
+    assert first.funnel_snapshot_rows == 3
+
+    client.statements.clear()
+    second = lifecycle_sync.sync_lifecycle_state_via_warehouse(
+        sql_client=client,  # type: ignore[arg-type]
+        funnel_sql_path=_FUNNEL_SQL,
+    )
+    assert not [s for s in client.statements if "ALTER TABLE" in s], "twice-applied: no ALTER"
+    assert len(_funnel_merges(client.statements)) == 1
+    assert second.funnel_snapshot_rows == 3
+
+
+def test_an_app_path_permission_refusal_skips_only_the_funnel_write(monkeypatch, caplog) -> None:
+    import logging
+
+    from backend.services import lifecycle_sync
+    from backend.services.databricks_sql import DatabricksSqlPermissionError
+    from backend.services.resilience_breaker import DependencyDownError
+
+    monkeypatch.setattr(lifecycle_sync, "_resolve_connection", lambda: {"fake": True})
+    monkeypatch.setattr(lifecycle_sync, "_fetch_lakebase_rows", lambda _: _one_event())
+    refusal = DependencyDownError(
+        "warehouse",
+        reason="refused",
+        last_error=DatabricksSqlPermissionError("[INSUFFICIENT_PERMISSIONS] SQLSTATE: 42501"),
+        kind=DependencyDownError.KIND_PERMISSION_DENIED,
+    )
+    client = _FunnelClient(alter_error=refusal)
+
+    with caplog.at_level(logging.WARNING):
+        result = lifecycle_sync.sync_lifecycle_state_via_warehouse(
+            sql_client=client,  # type: ignore[arg-type]
+            funnel_sql_path=_FUNNEL_SQL,
+        )
+
+    assert result.lakebase_rows == 1
+    assert result.funnel_snapshot_rows is None
+    assert len(_lifecycle_merges(client.statements)) == 1, "the mirror still lands"
+    assert _funnel_merges(client.statements) == [], "the funnel MERGE would hit a missing column"
+    denied = [
+        record
+        for record in caplog.records
+        if getattr(record, "mip_event", None) == "funnel_snapshot_schema_denied"
+    ]
+    assert len(denied) == 1
+
+
+def test_a_bare_client_permission_refusal_is_tolerated_the_same_way(monkeypatch) -> None:
+    from backend.services import lifecycle_sync
+    from backend.services.databricks_sql import DatabricksSqlPermissionError
+
+    monkeypatch.setattr(lifecycle_sync, "_resolve_connection", lambda: {"fake": True})
+    monkeypatch.setattr(lifecycle_sync, "_fetch_lakebase_rows", lambda _: _one_event())
+    client = _FunnelClient(
+        alter_error=DatabricksSqlPermissionError("[INSUFFICIENT_PERMISSIONS] SQLSTATE: 42501")
+    )
+
+    result = lifecycle_sync.sync_lifecycle_state_via_warehouse(
+        sql_client=client,  # type: ignore[arg-type]
+        funnel_sql_path=_FUNNEL_SQL,
+    )
+
+    assert result.funnel_snapshot_rows is None
+    assert _funnel_merges(client.statements) == []
+
+
+def test_any_other_funnel_ensure_failure_still_propagates(monkeypatch) -> None:
+    import pytest
+
+    from backend.services import lifecycle_sync
+    from backend.services.resilience_breaker import DependencyDownError
+
+    monkeypatch.setattr(lifecycle_sync, "_resolve_connection", lambda: {"fake": True})
+    monkeypatch.setattr(lifecycle_sync, "_fetch_lakebase_rows", lambda _: _one_event())
+    outage = DependencyDownError(
+        "warehouse", reason="down", kind=DependencyDownError.KIND_RETRIES_EXHAUSTED
+    )
+    client = _FunnelClient(alter_error=outage)
+
+    with pytest.raises(DependencyDownError):
+        lifecycle_sync.sync_lifecycle_state_via_warehouse(
+            sql_client=client,  # type: ignore[arg-type]
+            funnel_sql_path=_FUNNEL_SQL,
+        )
+
+
+def test_approval_triggered_syncs_never_probe_the_funnel_table(monkeypatch) -> None:
+    from backend.services import lifecycle_sync
+
+    monkeypatch.setattr(lifecycle_sync, "_resolve_connection", lambda: {"fake": True})
+    monkeypatch.setattr(lifecycle_sync, "_fetch_lakebase_rows", lambda _: _one_event())
+    client = _FunnelClient()
+
+    lifecycle_sync.sync_lifecycle_state_via_warehouse(
+        sql_client=client,  # type: ignore[arg-type]
+        record_funnel_snapshot=False,
+    )
+
+    assert not [s for s in client.statements if "funnel_snapshot_daily" in s]
+
+
+def test_the_bundle_job_ensures_the_funnel_column_before_its_snapshot_task(monkeypatch) -> None:
+    class FakeRow:
+        def __init__(self, column: str) -> None:
+            self.column = column
+
+        def asDict(self, *, recursive: bool) -> dict[str, Any]:
+            return {"column_name": self.column}
+
+    class FakeResult:
+        def __init__(self, columns: list[str]) -> None:
+            self.columns = columns
+
+        def collect(self) -> list[FakeRow]:
+            return [FakeRow(column) for column in self.columns]
+
+    class FakeSpark:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+            self.funnel_columns: list[str] = []
+
+        def sql(self, statement: str) -> FakeResult:
+            self.statements.append(statement)
+            if "'funnel_snapshot_daily'" in statement:
+                return FakeResult(self.funnel_columns)
+            if "ALTER TABLE" in statement and "funnel_snapshot_daily" in statement:
+                self.funnel_columns = ["competitor_lien_borrowers"]
+                return FakeResult([])
+            return FakeResult(list(sync_lifecycle._LIFECYCLE_SCHEMA_MIGRATIONS))
+
+    spark = FakeSpark()
+    monkeypatch.setattr(sync_lifecycle, "_get_spark", lambda: spark)
+    monkeypatch.setattr(sync_lifecycle, "_resolve_connection", lambda **_: {"fake": True})
+    monkeypatch.setattr(sync_lifecycle, "_fetch_lakebase_rows", lambda _: _one_event())
+
+    sync_lifecycle.main(["--catalog", "mip"])
+    sync_lifecycle.main(["--catalog", "mip"])
+
+    alters = [s for s in spark.statements if "ALTER TABLE" in s and "funnel_snapshot_daily" in s]
+    assert len(alters) == 1, "twice-applied: the second run issues no ALTER"
+    lifecycle_merge = sync_lifecycle._build_lifecycle_merge(_one_event(), catalog="mip")
+    assert spark.statements.index(lifecycle_merge) < spark.statements.index(alters[0])

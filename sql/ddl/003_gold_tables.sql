@@ -579,7 +579,11 @@ CREATE TABLE IF NOT EXISTS mip.gold.funnel_snapshot_daily (
   approved_borrowers            INT       NOT NULL COMMENT 'COUNT of approved lifecycle states at snapshot time.',
   actioned_borrowers            INT       NOT NULL COMMENT 'COUNT of outreach_status = "actioned" at snapshot time.',
   avg_opportunity_score         INT       NOT NULL COMMENT 'AVG(opportunity_score) for the cell.',
-  snapshot_at                   TIMESTAMP NOT NULL COMMENT 'Precise refresh timestamp.'
+  snapshot_at                   TIMESTAMP NOT NULL COMMENT 'Precise refresh timestamp.',
+  -- Last on purpose (audit wow-ai-3): an existing table gains it from
+  -- jobs/sync_lifecycle_state._ensure_funnel_snapshot_schema, whose ALTER
+  -- TABLE ADD COLUMNS appends, so fresh and upgraded installs agree.
+  competitor_lien_borrowers     INT                COMMENT 'COUNT where is_competitor_lien = TRUE: the headline SUM(is_competitor_lien) carried per (state, segment) cell. NULL on snapshots recorded before the column existed; never backfilled with 0.'
 )
 USING DELTA
 CLUSTER BY (snapshot_date, state)
