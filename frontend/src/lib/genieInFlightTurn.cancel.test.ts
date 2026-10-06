@@ -300,28 +300,62 @@ describe('Stop on a job turn', () => {
   });
 });
 
-describe('no cancel is sent', () => {
-  it('for a Stop in the polling phase', async () => {
+describe('a Stop before the 202 named the job sends ONE turn-keyed cancel (W5c pre-cancel)', () => {
+  it('in the polling phase: job_id null, never the question, and the note confirms', async () => {
     mocks.genieSubmit.mockResolvedValue(submitted());
     mocks.genieProgress.mockResolvedValue(progress(false));
+    mocks.genieCancel.mockResolvedValue(cancelResult('cancelled', 'cancelled'));
     startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
     await flush();
 
     expect(stopGenieTurn()).toBe(QUESTION);
-    expect(mocks.genieCancel).not.toHaveBeenCalled();
+    expect(mocks.genieCancel).toHaveBeenCalledTimes(1);
+    expect(mocks.genieCancel.mock.calls[0]).toEqual([IDS, null, LABEL]);
+    expect(JSON.stringify(mocks.genieCancel.mock.calls[0])).not.toContain(QUESTION);
+    await flush();
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOP_CONFIRMED_REASON]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.genieCompleteAsync).not.toHaveBeenCalled();
+    expect(mocks.genieCancel).toHaveBeenCalledTimes(1);
   });
 
-  it('for a job turn stopped before its 202 named the job', async () => {
+  it('while the complete is held before its 202', async () => {
     mocks.genieSubmit.mockResolvedValue(submitted());
     mocks.genieProgress.mockResolvedValue(progress(true));
     mocks.genieCompleteAsync.mockImplementation(() => never());
+    mocks.genieCancel.mockResolvedValue(cancelResult('cancelled', 'cancelled'));
     startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
     await flush();
 
     expect(mocks.genieCompleteAsync).toHaveBeenCalledTimes(1);
     expect(stopGenieTurn()).toBe(QUESTION);
-    expect(mocks.genieCancel).not.toHaveBeenCalled();
+    expect(mocks.genieCancel.mock.calls).toEqual([[IDS, null, LABEL]]);
+    await flush();
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOP_CONFIRMED_REASON]);
+    expect(mocks.genieJobStatus).not.toHaveBeenCalled();
+  });
+
+  it('a reply naming no job UUID keeps the unconfirmed note', async () => {
+    mocks.genieSubmit.mockResolvedValue(submitted());
+    mocks.genieProgress.mockResolvedValue(progress(false));
+    mocks.genieCancel.mockResolvedValue({ ...cancelResult('cancelled', 'cancelled'), job_id: 'job-1' });
+    startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
+    await flush();
+
+    stopGenieTurn();
+    await flush();
     expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOPPED_REASON]);
+  });
+});
+
+describe('no cancel is sent', () => {
+  it('for a Stop while the submit is still in flight (no ids yet)', async () => {
+    mocks.genieSubmit.mockImplementation(() => never());
+    startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
+    await flush();
+
+    expect(stopGenieTurn()).toBe(QUESTION);
+    expect(mocks.genieCancel).not.toHaveBeenCalled();
   });
 
   it('for a turn without completion jobs', async () => {

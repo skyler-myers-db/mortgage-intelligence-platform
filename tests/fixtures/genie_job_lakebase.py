@@ -171,6 +171,7 @@ class FakeJobLakebase:
             "recorded_at": None,
             "deep": params.get("deep"),
             "sections_json": None,
+            "precancelled_at": None,
             "created_at": self.now,
         }
 
@@ -184,6 +185,7 @@ class FakeJobLakebase:
             "recorded_at",
             "created_at",
             "sections_json",
+            "precancelled_at",
         }
     )
 
@@ -201,6 +203,13 @@ class FakeJobLakebase:
             raise LakebaseError("genie_completion_jobs_cancel_or_record_chk (fake)")
         if row["status"] == "cancelled" and (row["cancel_requested_at"] is None or row["result_json"] is not None):
             raise LakebaseError("genie_completion_jobs_cancelled_shape_chk (fake)")
+        if row["precancelled_at"] is not None and (
+            row["status"] != "cancelled"
+            or row["cancel_requested_at"] is None
+            or row["recorded_at"] is not None
+            or row["result_json"] is not None
+        ):
+            raise LakebaseError("genie_completion_jobs_precancel_shape_chk (fake)")
 
     def _by_turn(self, params: dict[str, Any]) -> dict[str, Any] | None:
         for row in self.rows.values():
@@ -328,10 +337,11 @@ class FakeJobLakebase:
             return self._write_sections(params)
         if sql is cancel._LOCK_SQL:
             self.job_statements.append("cancel_lock")
-            row = self.rows.get(str(params["job_id"]))
-            if row is None or self._by_turn(params) is not row:
+            row = self._by_turn(params)
+            if row is None:
                 return None
             return {
+                "job_id": row["job_id"],
                 "status": row["status"],
                 "stage": row["stage"],
                 "question_hash": row["question_hash"],
@@ -351,9 +361,25 @@ class FakeJobLakebase:
                 return None
             row["cancel_requested_at"] = self.now
             if row["status"] == "queued":
-                row.update(status="cancelled", stage="cancelled", finished_at=self.now)
+                row.update(status="cancelled", stage="cancelled", finished_at=self.now, sections_json=None)
             self._check(row)
             return {"status": row["status"], "lease_owner": row["lease_owner"]}
+        if sql is cancel._PRECANCEL_SQL:
+            self.job_statements.append("cancel_precancel")
+            if self._by_turn(params) is not None:
+                return None
+            row = self._new_row(params)
+            row.update(
+                status="cancelled",
+                stage="cancelled",
+                lease_until=self.now,
+                cancel_requested_at=self.now,
+                finished_at=self.now,
+                precancelled_at=self.now,
+            )
+            self._check(row)
+            self.rows[row["job_id"]] = row
+            return {"job_id": row["job_id"]}
         if "INSERT INTO mip_app.action_audit" in sql:
             if self.fail_audit_inserts:
                 self.fail_audit_inserts -= 1

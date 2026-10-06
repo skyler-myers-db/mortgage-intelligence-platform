@@ -257,10 +257,11 @@ def test_the_sections_migration_adds_one_nullable_jsonb_column_with_a_named_size
         r"'2026_10_01_genie_job_sections',",
         block,
     )
-    assert "'sections_json'" in jobs._PROBE_SQL and ") = 4 AS present" in jobs._PROBE_SQL
+    assert "'sections_json'" in jobs._PROBE_SQL and ") = 5 AS present" in jobs._PROBE_SQL
 
 
 def test_every_terminal_statement_nulls_the_sections() -> None:
+    from backend.services import genie_completion_cancel as cancel
     from backend.services import genie_completion_jobs as jobs
     from backend.services import genie_completion_record as record
 
@@ -272,3 +273,65 @@ def test_every_terminal_statement_nulls_the_sections() -> None:
         ("_END_CANCELLED_SQL", record._END_CANCELLED_SQL),
     ):
         assert "sections_json = NULL" in sql, name
+    # W5c: the accepted cancel ends a queued job at once; that branch NULLs too.
+    assert "sections_json = CASE WHEN status = 'queued' THEN NULL ELSE sections_json END" in cancel._ACCEPT_SQL
+    # The pre-cancel is born terminal: an explicit NULL for every payload column.
+    columns, values = re.search(r"\((.*?)\)\s+VALUES\s+\((.*?)\)\s+ON CONFLICT", cancel._PRECANCEL_SQL, re.DOTALL).groups()  # type: ignore[union-attr]
+    named = dict(zip((c.strip() for c in columns.split(",")), (v.strip() for v in values.split(",")), strict=True))
+    assert (named["sections_json"], named["result_json"], named["deep"]) == ("NULL", "NULL", "NULL")
+    assert (named["status"], named["stage"]) == ("'cancelled'", "'cancelled'")
+
+
+# ------------------------------------------- the pre-cancel block (W5c genie-03)
+
+#: The integrator dates the placeholder at merge (it renumbers this constant).
+PRECANCEL_VERSION = "2026_10_0X_genie_job_precancel"
+
+
+def _precancel_block() -> str:
+    start = _SCHEMA.index("-- Genie completion-job pre-cancel ---")
+    end = _SCHEMA.index("ON CONFLICT (version) DO NOTHING;", start)
+    return _SCHEMA[start:end]
+
+
+def test_the_precancel_block_adds_one_nullable_column_and_a_named_static_check() -> None:
+    from backend.services import genie_completion_jobs as jobs
+
+    block = _precancel_block()
+
+    assert _SCHEMA.index("-- Genie completion-job pre-cancel ---") > _SCHEMA.index("'2026_10_01_genie_job_sections'")
+    assert re.search(
+        r"ALTER TABLE mip_app\.genie_completion_jobs\s+ADD COLUMN IF NOT EXISTS precancelled_at TIMESTAMPTZ;", block
+    )
+    statements = re.sub(r"--[^\n]*", "", block)
+    assert re.search(r"CREATE (UNIQUE )?INDEX|CREATE TABLE|GRANT |TRIGGER|FUNCTION", statements) is None
+    assert re.search(r"\bNOT NULL\b", statements.split("DO $$")[0]) is None, "a nullable column"
+    assert "EXECUTE" not in statements, "static DDL keeps the CHECK inside the replay scanner"
+    check = re.search(
+        r"IF NOT EXISTS \(\s+SELECT 1 FROM pg_constraint\s+"
+        r"WHERE conrelid = 'mip_app\.genie_completion_jobs'::regclass\s+"
+        r"AND conname = 'genie_completion_jobs_precancel_shape_chk'\s+\) THEN\s+"
+        r"ALTER TABLE mip_app\.genie_completion_jobs\s+"
+        r"ADD CONSTRAINT genie_completion_jobs_precancel_shape_chk\s+CHECK \((.*?)\);\s+END IF;",
+        block,
+        flags=re.DOTALL,
+    )
+    assert check is not None
+    assert " ".join(check.group(1).replace("(", " ( ").replace(")", " ) ").split()) == (
+        "precancelled_at IS NULL OR ( status = 'cancelled' AND cancel_requested_at IS NOT NULL "
+        "AND recorded_at IS NULL AND result_json IS NULL )"
+    )
+    # Reviewed operators on same-type operands only (the hook preflight).
+    assert re.search(r"cardinality|array_length|::|<>|\bIN\b", check.group(1)) is None
+    assert "genie_completion_jobs_precancel_shape_chk" in set(
+        re.findall(r"ADD CONSTRAINT\s+([a-z0-9_]+)\s+CHECK\s*\(", _SCHEMA)
+    )
+    comments = re.findall(
+        r"COMMENT ON COLUMN mip_app\.genie_completion_jobs\.precancelled_at IS\s+'(.*?)';", block, flags=re.DOTALL
+    )
+    assert len(comments) == 1 and "question" not in comments[0].lower()
+    assert re.search(
+        rf"INSERT INTO mip_app\.schema_migrations \(version, description\)\s+VALUES \(\s+'{PRECANCEL_VERSION}',",
+        block,
+    )
+    assert "'precancelled_at'" in jobs._PROBE_SQL and ") = 5 AS present" in jobs._PROBE_SQL

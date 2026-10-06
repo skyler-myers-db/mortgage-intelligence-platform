@@ -717,9 +717,11 @@ def genie_message_cancel(
     Token-authorized like the other job calls, with the submit's 16-hex
     question label instead of the question. An accepted cancel is audited as
     GENIE_TURN_CANCELLED in the same transaction as its flag
-    (``request_cancel``); a repeat, a recorded answer or an ended job is a
-    no-op with no audit row. ``cancelled`` means this app will not record
-    the answer, never that Genie's own message was cancelled.
+    (``request_cancel``); a repeat, a too-late Stop (``recorded`` or
+    ``recording``, the History settle) or an ended job is a no-op with no
+    audit row. Without a ``job_id`` (a Stop before the 202) the turn's job is
+    pre-cancelled, audited the same way. ``cancelled`` means this app will
+    not record the answer, never that Genie's own message was cancelled.
     """
     actor = resolve_actor(request)
     claims = verify_genie_progress_token(
@@ -732,7 +734,9 @@ def genie_message_cancel(
     if binding_hash[:16] != payload.question_hash:
         raise HTTPException(status_code=400, detail="question does not match the submitted Genie turn")
     require_completion_jobs(lakebase)  # 404 without the job table, 503 when Lakebase is down
-    return request_cancel(lakebase, actor=actor, payload=payload, binding_hash=binding_hash)
+    return request_cancel(
+        lakebase, actor=actor, payload=payload, binding_hash=binding_hash, expires_at_epoch=int(claims.get("exp") or 0)
+    )
 
 
 @router.post("/actions", response_model=GenieActionResponse, responses=JSON_CONTENT_TYPE_RESPONSE)

@@ -26,7 +26,8 @@ export interface GenieCancelBody {
   conversation_id: string;
   message_id: string;
   progress_token: string;
-  job_id: string;
+  /** The job the 202 named; null for a Stop before it (turn-keyed). */
+  job_id?: string | null;
   question_hash: string;
 }
 
@@ -83,10 +84,11 @@ export const genieJobsApi = {
     ),
 
   /** The owner's Stop on a job turn (audit genie-03). Carries the submit's
-   *  16-hex question label, never the question. `retry: 'default'` is
+   *  16-hex question label, never the question; `jobId` null before the 202
+   *  named the job (a turn-keyed pre-cancel). `retry: 'default'` is
    *  explicit: the call is idempotent server-side, and an unkeyed POST no
    *  longer defaults to it. */
-  genieCancel: (ids: GenieCancelTurn, jobId: string, questionHash: string, signal?: AbortSignal) =>
+  genieCancel: (ids: GenieCancelTurn, jobId: string | null, questionHash: string, signal?: AbortSignal) =>
     postJson<GenieCancelResult, GenieCancelBody>(
       '/api/genie/message/cancel',
       {

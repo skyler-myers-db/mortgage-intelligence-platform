@@ -9,8 +9,15 @@
  * still being written, is an answer History never keeps, or did not finish.
  * `cancelled` and `ended` are the confirmed Stopped copy, never announced
  * (the Stop itself was). Any other combination keeps the unconfirmed note.
+ *
+ * Which Stop asks the server at all (`stopTargetFor`, W5c): every job turn
+ * whose ids and 16-hex label exist, in the polling phase too. Before the
+ * complete's 202 named the job the cancel is turn-keyed (`jobId: null`): the
+ * server records the turn's job row already cancelled, so a complete that is
+ * still on its way joins a stopped job and runs nothing.
  */
-import type { GenieTurnCancelResult } from './genieTurnCancel';
+import type { PersistedTurnRecord } from './genieInFlightRecord';
+import type { GenieTurnCancelResult, GenieTurnCancelTarget } from './genieTurnCancel';
 import {
   GENIE_STOP_CONFIRMED_REASON,
   GENIE_STOP_INCOMPLETE_REASON,
@@ -35,4 +42,13 @@ export function stopNoteFor(result: GenieTurnCancelResult | null): GenieStopNote
   if (status === 'succeeded') return { reason: GENIE_STOP_NOT_KEPT_REASON, announce: true };
   if (status === 'failed' || status === 'expired') return { reason: GENIE_STOP_INCOMPLETE_REASON, announce: true };
   return null;
+}
+
+/** The cancel a Stop sends, or null: a turn still submitting, a non-job
+ *  turn or one without a usable label sends nothing. */
+export function stopTargetFor(
+  record: Pick<PersistedTurnRecord, 'asyncComplete' | 'ids' | 'jobId' | 'questionHash'> | null | undefined,
+): GenieTurnCancelTarget | null {
+  if (!record?.asyncComplete || !record.ids || !record.questionHash) return null;
+  return { ids: record.ids, jobId: record.jobId ?? null, questionHash: record.questionHash };
 }

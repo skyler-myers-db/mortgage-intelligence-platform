@@ -41,6 +41,7 @@ from tests.fixtures.genie_job_turns import (
     FakeAudit,
     FakeRepo,
     install,
+    post_complete,
     token,
 )
 
@@ -564,3 +565,179 @@ def test_genie_job_id_is_uuid_validated_by_the_metadata_policy(value: str) -> No
 
     accepted = build_safe_audit_metadata({"genie_job_id": DIGIT_HEAVY_JOB_ID}, action="genie.turn_cancelled")
     assert accepted["genie_job_id"] == DIGIT_HEAVY_JOB_ID
+
+
+# ------------------------------------- the pre-cancel: a Stop before the 202
+
+
+def _precancel(client: TestClient, *, omit: bool = False, **overrides: Any) -> Any:
+    body: dict[str, Any] = {
+        "conversation_id": CONV,
+        "message_id": MSG,
+        "progress_token": token(),
+        "question_hash": LABEL,
+        **({} if omit else {"job_id": None}),
+        **overrides,
+    }
+    return client.post(CANCEL_ROUTE, json=body, headers=HEADERS)
+
+
+@pytest.mark.parametrize("omit", [False, True], ids=["job_id_null", "job_id_absent"])
+def test_a_stop_before_the_job_exists_inserts_it_cancelled_with_one_audit_row(monkeypatch: Any, omit: bool) -> None:
+    client, audit, lakebase = _setup(monkeypatch)
+
+    res = _precancel(client, omit=omit)
+
+    assert res.status_code == 200, res.text
+    row = lakebase.only_job()
+    assert res.json() == {
+        "kind": "genie_completion_cancel",
+        "job_id": row["job_id"],
+        "outcome": "cancelled",
+        "status": "cancelled",
+    }
+    assert (row["status"], row["stage"], row["lease_owner"]) == ("cancelled", "cancelled", jobs.PROCESS_ID)
+    assert row["question_hash"] == genie_question_binding_hash(QUESTION)
+    assert row["cancel_requested_at"] is not None and row["precancelled_at"] is not None
+    assert row["finished_at"] is not None
+    assert (row["recorded_at"], row["result_json"], row["sections_json"], row["deep"]) == (None, None, None, None)
+    assert lakebase.job_statements == ["cancel_lock", "cancel_precancel"]
+    [written] = _cancelled_rows(lakebase)
+    assert json.loads(written["metadata"]) == {
+        "action": "genie.turn_cancelled",
+        "conversation_id": CONV,
+        "message_id": MSG,
+        "question_hash": LABEL,
+        "genie_job_id": row["job_id"],
+        "status": "pre_job",
+    }
+    assert QUESTION not in json.dumps(written, default=str)
+    assert audit.writes == []
+    assert not jobs.CANCELS.is_marked(row["job_id"])
+
+
+def test_a_repeat_stop_on_a_precancelled_turn_is_cancelled_with_no_write(monkeypatch: Any) -> None:
+    client, _audit, lakebase = _setup(monkeypatch)
+    first = _precancel(client)
+    before = lakebase.only_job()
+
+    by_turn = _precancel(client)
+    by_job = _cancel(client, first.json()["job_id"])
+
+    assert (by_turn.json()["outcome"], by_turn.json()["status"]) == ("cancelled", "cancelled")
+    assert (by_job.json()["outcome"], by_job.json()["job_id"]) == ("cancelled", first.json()["job_id"])
+    assert len(_cancelled_rows(lakebase)) == 1
+    assert lakebase.only_job() == before
+    assert lakebase.job_statements.count("cancel_precancel") == 1
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["named_job_without_a_row", "named_job_of_another_row", "ineligible_turn_ids"],
+)
+def test_a_stop_that_cannot_name_this_turns_job_is_a_404_and_writes_nothing(monkeypatch: Any, case: str) -> None:
+    client, _audit, lakebase = _setup(monkeypatch)
+    if case == "named_job_without_a_row":
+        res = _cancel(client, DIGIT_HEAVY_JOB_ID)
+    elif case == "named_job_of_another_row":
+        _seed(lakebase)
+        res = _cancel(client, DIGIT_HEAVY_JOB_ID)
+    else:
+        bad = "msg/with.dots"
+        res = _precancel(client, message_id=bad, progress_token=token(message_id=bad))
+
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Genie completion job not found"
+    assert lakebase.audit_rows == []
+    assert all(row["cancel_requested_at"] is None for row in lakebase.rows.values())
+    assert "cancel_precancel" not in lakebase.job_statements
+
+
+def test_an_audit_failure_rolls_the_precancel_insert_back_and_answers_503(monkeypatch: Any) -> None:
+    client, _audit, lakebase = _setup(monkeypatch)
+    lakebase.fail_audit_inserts = 1
+
+    refused = _precancel(client)
+
+    assert refused.status_code == 503
+    assert refused.json()["detail"] == "lakebase is temporarily unavailable"
+    assert lakebase.rows == {}, "the pre-cancelled row rolled back with its audit row"
+    assert lakebase.audit_rows == []
+    retried = _precancel(client)
+    assert (retried.status_code, retried.json()["outcome"]) == (200, "cancelled")
+    assert len(_cancelled_rows(lakebase)) == 1
+
+
+def test_a_later_async_complete_joins_the_precancelled_job_and_runs_nothing(monkeypatch: Any) -> None:
+    client, audit, lakebase = _setup(monkeypatch)
+    repo = FakeRepo()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+    stopped = _precancel(client)
+
+    joined = post_complete(client)
+
+    assert joined.status_code == 202, joined.text
+    assert (joined.json()["job_id"], joined.json()["status"], joined.json()["terminal"]) == (
+        stopped.json()["job_id"],
+        "cancelled",
+        True,
+    )
+    runner._reset_executor_for_tests()  # waits for anything enqueued (nothing)
+    assert repo.calls == [], "no runner ran: the joined row is terminal and never adopted"
+    assert audit.run_query_rows() == [], "no RUN_GENIE row"
+    assert lakebase.only_job()["status"] == "cancelled"
+    assert len(_cancelled_rows(lakebase)) == 1
+
+
+def test_a_later_legacy_complete_joining_a_precancelled_job_is_a_503_and_runs_nothing(monkeypatch: Any) -> None:
+    client, audit, lakebase = _setup(monkeypatch)
+    repo = FakeRepo()
+    install(monkeypatch, repo=repo, audit=audit, lakebase=lakebase)
+    _precancel(client)
+
+    joined = post_complete(client, respond_async=False)
+
+    assert joined.status_code == 503
+    assert repo.calls == []
+    assert audit.run_query_rows() == []
+
+
+def test_adoptable_never_takes_a_precancelled_row(monkeypatch: Any) -> None:
+    client, _audit, lakebase = _setup(monkeypatch)
+    _precancel(client)
+    enrollment = jobs.create_or_join(
+        lakebase,  # type: ignore[arg-type]
+        actor=ACTOR,
+        conversation_id=CONV,
+        message_id=MSG,
+        question_hash=genie_question_binding_hash(QUESTION),
+        expires_at_epoch=int(lakebase.now.timestamp()) + 600,
+        deep=False,
+    )
+
+    assert enrollment.created is False
+    assert enrollment.job.status.value == "cancelled"
+    assert jobs.adoptable(enrollment.job) is False
+    assert jobs.claim(lakebase, enrollment.job.job_id) is False  # type: ignore[arg-type]
+
+
+# ------------------------------------------- the Genie-side cancel tripwire
+
+
+def test_the_pinned_sdk_genie_api_has_no_message_cancel() -> None:
+    """Audit genie-03 residual (W5c): a Stop cancels only this app's record.
+
+    The pinned databricks-sdk GenieAPI has no cancel operation for a
+    chat-mode conversation message (the REST reference's only cancel is the
+    agent-mode response cancel, an API this app does not use), and
+    ``delete_conversation_message`` is a deletion, not a cancel. So the copy
+    keeps 'Genie may keep the question as context'. An SDK bump that adds a
+    cancel method goes red here and forces the decision
+    (docs/observability.md section 9).
+    """
+
+    from databricks.sdk.service.dashboards import GenieAPI
+
+    methods = [name for name in dir(GenieAPI) if not name.startswith("_")]
+    assert "create_message" in methods and "delete_conversation_message" in methods, "the inspected surface"
+    assert [name for name in methods if "cancel" in name.lower()] == []

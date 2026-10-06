@@ -2594,10 +2594,13 @@ export interface RequestSchemas {
   /**
    * ``/message/cancel`` body. There is no ``question`` field: a body that
    * carries one is refused (422), so the prompt never travels on a Stop.
+   * ``job_id`` is the job the complete's 202 named; absent or null means the
+   * Stop came before that 202, and the turn's job is found (or pre-cancelled)
+   * by the turn's own ids.
    */
   GenieCancelRequest: {
     conversation_id: string;
-    job_id: string;
+    job_id?: string | null;
     message_id: string;
     progress_token: string;
     question_hash: string;

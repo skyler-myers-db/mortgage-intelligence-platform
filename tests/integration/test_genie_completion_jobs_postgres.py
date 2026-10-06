@@ -64,6 +64,12 @@ def _sections_block_ddl() -> str:
     return _SCHEMA[start:end]
 
 
+def _precancel_block_ddl() -> str:
+    start = _SCHEMA.index("-- Genie completion-job pre-cancel ---")
+    end = _SCHEMA.index("INSERT INTO mip_app.schema_migrations", start)
+    return _SCHEMA[start:end]
+
+
 def _genie_messages_ddl() -> str:
     start = _SCHEMA.index("CREATE TABLE IF NOT EXISTS mip_app.genie_messages (")
     end = _SCHEMA.index(");", start) + 2
@@ -125,6 +131,7 @@ def pg() -> Iterator[_PgLakebase]:
         cur.execute(_job_table_ddl())  # type: ignore[arg-type]
         cur.execute(_cancel_block_ddl())  # type: ignore[arg-type]
         cur.execute(_sections_block_ddl())  # type: ignore[arg-type]
+        cur.execute(_precancel_block_ddl())  # type: ignore[arg-type]
         cur.execute(_action_audit_ddl())  # type: ignore[arg-type]
     try:
         yield _PgLakebase(dsn)
@@ -379,6 +386,14 @@ def test_the_probe_requires_the_sections_column(pg: _PgLakebase) -> None:
     # completes inline instead of 503ing every job statement.
     assert pg.fetchone(jobs._PROBE_SQL) == {"present": True}
     pg.sql("ALTER TABLE mip_app.genie_completion_jobs DROP COLUMN sections_json")
+    assert pg.fetchone(jobs._PROBE_SQL) == {"present": False}
+
+
+def test_the_probe_requires_the_precancel_column(pg: _PgLakebase) -> None:
+    # W5c genie-03: an App promoted ahead of the pre-cancel migration completes
+    # inline (and its cancel answers 404) instead of failing a pre-cancel INSERT.
+    assert pg.fetchone(jobs._PROBE_SQL) == {"present": True}
+    pg.sql("ALTER TABLE mip_app.genie_completion_jobs DROP COLUMN precancelled_at")
     assert pg.fetchone(jobs._PROBE_SQL) == {"present": False}
 
 

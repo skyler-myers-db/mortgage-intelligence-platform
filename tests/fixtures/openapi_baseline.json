@@ -6724,7 +6724,7 @@
       },
       "GenieCancelRequest": {
         "additionalProperties": false,
-        "description": "``/message/cancel`` body. There is no ``question`` field: a body that\ncarries one is refused (422), so the prompt never travels on a Stop.",
+        "description": "``/message/cancel`` body. There is no ``question`` field: a body that\ncarries one is refused (422), so the prompt never travels on a Stop.\n``job_id`` is the job the complete's 202 named; absent or null means the\nStop came before that 202, and the turn's job is found (or pre-cancelled)\nby the turn's own ids.",
         "properties": {
           "conversation_id": {
             "maxLength": 256,
@@ -6733,9 +6733,16 @@
             "type": "string"
           },
           "job_id": {
-            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-            "title": "Job Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
           },
           "message_id": {
             "maxLength": 256,
@@ -6759,7 +6766,6 @@
           "conversation_id",
           "message_id",
           "progress_token",
-          "job_id",
           "question_hash"
         ],
         "title": "GenieCancelRequest",
@@ -20725,7 +20731,7 @@
     "/api/genie/message/cancel": {
       "post": {
         "deprecated": true,
-        "description": "The owner's Stop on a job-backed turn (audit genie-03).\n\nToken-authorized like the other job calls, with the submit's 16-hex\nquestion label instead of the question. An accepted cancel is audited as\nGENIE_TURN_CANCELLED in the same transaction as its flag\n(``request_cancel``); a repeat, a recorded answer or an ended job is a\nno-op with no audit row. ``cancelled`` means this app will not record\nthe answer, never that Genie's own message was cancelled.",
+        "description": "The owner's Stop on a job-backed turn (audit genie-03).\n\nToken-authorized like the other job calls, with the submit's 16-hex\nquestion label instead of the question. An accepted cancel is audited as\nGENIE_TURN_CANCELLED in the same transaction as its flag\n(``request_cancel``); a repeat, a too-late Stop (``recorded`` or\n``recording``, the History settle) or an ended job is a no-op with no\naudit row. Without a ``job_id`` (a Stop before the 202) the turn's job is\npre-cancelled, audited the same way. ``cancelled`` means this app will\nnot record the answer, never that Genie's own message was cancelled.",
         "operationId": "post_api_genie_message_cancel_genie_message_cancel",
         "requestBody": {
           "content": {
@@ -31090,7 +31096,7 @@
     },
     "/api/v1/genie/message/cancel": {
       "post": {
-        "description": "The owner's Stop on a job-backed turn (audit genie-03).\n\nToken-authorized like the other job calls, with the submit's 16-hex\nquestion label instead of the question. An accepted cancel is audited as\nGENIE_TURN_CANCELLED in the same transaction as its flag\n(``request_cancel``); a repeat, a recorded answer or an ended job is a\nno-op with no audit row. ``cancelled`` means this app will not record\nthe answer, never that Genie's own message was cancelled.",
+        "description": "The owner's Stop on a job-backed turn (audit genie-03).\n\nToken-authorized like the other job calls, with the submit's 16-hex\nquestion label instead of the question. An accepted cancel is audited as\nGENIE_TURN_CANCELLED in the same transaction as its flag\n(``request_cancel``); a repeat, a too-late Stop (``recorded`` or\n``recording``, the History settle) or an ended job is a no-op with no\naudit row. Without a ``job_id`` (a Stop before the 202) the turn's job is\npre-cancelled, audited the same way. ``cancelled`` means this app will\nnot record the answer, never that Genie's own message was cancelled.",
         "operationId": "post_api_v1_genie_message_cancel_genie_message_cancel",
         "requestBody": {
           "content": {

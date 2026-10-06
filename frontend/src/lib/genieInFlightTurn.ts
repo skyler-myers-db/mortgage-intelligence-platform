@@ -28,7 +28,7 @@ import {
   type PersistedTurnRecord,
 } from './genieInFlightRecord';
 import { requestGenieTurnCancel, type GenieTurnCancelTarget } from './genieTurnCancel';
-import { stopNoteFor } from './genieTurnStop';
+import { stopNoteFor, stopTargetFor } from './genieTurnStop';
 import { forgetLeave, leaveWaitMs, unwatchLeave, watchLeave } from './genieTurnUnload';
 import {
   GENIE_RESUME_FAILED_REASON,
@@ -627,20 +627,16 @@ function confirmStop(stopId: number, target: GenieTurnCancelTarget): void {
 
 /**
  * Stop waiting for the in-flight turn. The generation bump makes a reply
- * that still arrives land nowhere. Once a 202 has named the turn's job, the
- * server is also asked not to record the answer (audit `genie-03`); its
- * reply only rewrites the note. Returns the stopped question, or null when
- * nothing (visible) was stopped.
+ * that still arrives land nowhere. On a job turn the server is also asked
+ * not to record the answer (audit `genie-03`), by job once a 202 named it and
+ * turn-keyed before (lib/genieTurnStop); its reply only rewrites the note.
+ * Returns the stopped question, or null when nothing (visible) was stopped.
  */
 export function stopGenieTurn(): string | null {
   const inFlight = snapshot.inFlight;
   if (!inFlight) return null;
   const question = inFlight.revealed ? (active?.question ?? inFlight.question) : '';
-  const record = active?.record;
-  const target: GenieTurnCancelTarget | null =
-    record?.asyncComplete && record.jobId && record.ids && record.questionHash
-      ? { ids: record.ids, jobId: record.jobId, questionHash: record.questionHash }
-      : null;
+  const target = stopTargetFor(active?.record);
   const stopId = inFlight.generation;
   generation += 1;
   controller?.abort();
