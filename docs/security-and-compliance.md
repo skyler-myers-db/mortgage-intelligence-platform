@@ -162,7 +162,7 @@ the pull request that ships the behaviour, never earlier.
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the
-SHA-256 `filter_fingerprint` and, for a receipt, `read_audit_event_id`: never
+keyed `filter_fingerprint` (below) and, for a receipt, `read_audit_event_id`: never
 ledger row contents, an actor filter in clear, or an email. Opening
 Administration reads nothing from the ledger (its old "last event" probe
 went with the explorer, which now lives on `/audit-ledger`), and no ledger
@@ -170,14 +170,23 @@ read is polled, prefetched or refetched on window focus. `tools/verify_live.py`'
 ledger probes now write attributable `VIEW_AUDIT_LEDGER` rows; that is
 expected.
 
-Residuals (recorded 2026-10-01, owners in the 2026-09-21 UI/UX audit report,
-12.3). The `filter_fingerprint` is an unkeyed SHA-256 of the filter set
-(`audit_pagination.audit_filter_fingerprint`, also the cursor binding), so an
-actor-only filter can be recovered by hashing candidate emails. Only ledger
-readers can see these rows, and they already see actor emails, so the added
-exposure is small. Keying the stored copy with an HMAC (the cursor already
-derives one from the action secret) goes to W5c `w5-lead-queue-paging`
-before `VIEW_LEADS` adds a fingerprint of the same shape. The explorer's
+Keyed fingerprints (W5c `w5-lead-queue-paging`, closing the 2026-10-01
+residual in 12.3). Every STORED `filter_fingerprint` -- the
+`VIEW_AUDIT_LEDGER` row (written centrally by
+`audit_ledger_reads.record_ledger_read`), the `AUDIT_EXPORT` row and its
+response, and the `VIEW_LEADS` row -- is an HMAC-SHA256 of the plain filter
+digest under a key derived from `MIP_GENIE_ACTION_SECRET_CURRENT` (then the
+legacy secret), one domain per surface (`backend/services/audit_fingerprint.py`).
+A dictionary of candidate emails hashed without the key never reproduces a
+stored value (`tests/unit/test_audit_fingerprint.py`). With no key outside
+local/test the ledger row omits the value, the export receipt is refused
+with 503 and writes no row, and the Lead Queue serves page 0 unpaged with no
+fingerprint; a plain value is never stored. Two digests stay unkeyed on
+purpose: `audit_pagination.audit_filter_fingerprint` inside the
+HMAC-authenticated ledger cursor (only ledger readers receive it), and
+`LEAD_EXPORT`'s fingerprint, which an auditor recomputes from the CSV's
+`# filters=` line. Residual (recorded 2026-10-01, owner in the 2026-09-21
+UI/UX audit report, 12.3): the explorer's
 'Page CSV' downloads the loaded page without `POST /audit/export-receipt`, so
 no `AUDIT_EXPORT` row precedes it (the read that loaded that page wrote its
 own `VIEW_AUDIT_LEDGER` row); W5d `w5-print-glossary-sales-manager` wires the receipt and
