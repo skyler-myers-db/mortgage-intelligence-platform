@@ -27,6 +27,13 @@ export const queryKeys = {
   borrowerLifecycle: (borrowerId: string | null | undefined) =>
     ['mip', 'borrower', borrowerId ?? '', 'lifecycle'] as const,
   /**
+   * The audit-free borrower decision history (audit flow-04 phase 2). Under
+   * ['mip','borrower'] on purpose: invalidateOperationalQueries marks it stale
+   * after every governed decision. Never persisted.
+   */
+  borrowerDecisions: (borrowerId: string | null | undefined) =>
+    ['mip', 'borrower', borrowerId ?? '', 'decisions'] as const,
+  /**
    * The Offer Orchestrator's one composite read: borrower, recommendation and
    * lifecycle for one open (routes/offer-orchestrator.queries.ts). Never under
    * ['mip','borrower'], so it never shares the Borrower 360 dossier entry (the
