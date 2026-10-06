@@ -12,7 +12,20 @@
  * screenshot, so the verdict is what the user sees.
  */
 import type { Locator, Page } from '@playwright/test';
-import { SAMPLE_SCALE, describeInk, insetRingBand, paintedInks, paintedSystemFill, sameColor, type PaintedInk } from './paintedInk';
+import {
+  INK_FLOOR,
+  SAMPLE_SCALE,
+  describeInk,
+  describePair,
+  highlightInkFaults,
+  insetRingBand,
+  paintedInks,
+  paintedSystemFill,
+  sameColor,
+  systemHighlightPair,
+  type PaintedInk,
+  type SystemPair,
+} from './paintedInk';
 import { contrastRatio, settleTransitions, tokenValue, type Rgb } from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
@@ -23,26 +36,40 @@ const OWNER_LINK = 'Portfolio investor (5+)';
 test.use({ deviceScaleFactor: SAMPLE_SCALE });
 
 /**
- * Every sample clears its floor: 4.5:1 for a text run on its backplate
- * (WCAG 1.4.3), 3:1 for a glyph on the Highlight fill (1.4.11). The state
- * must yield the sample kinds it is known to hold, so it cannot pass empty.
- * A glyph's ground must BE the Highlight fill, which proves the state paints.
+ * A Highlight state (`pair`) paints the system pair: every text run and
+ * glyph inks HighlightText on the Highlight fill, at 4.5:1 (WCAG 1.4.3) and
+ * 3:1 (1.4.11) unless the palette's own pair is weaker (highlightInkFaults;
+ * the same oracle as forced-colors.firefox.fixture.spec.ts, where Firefox's
+ * 2.94:1 standin pair made a bare 4.5:1 measure the palette, not the CSS).
+ * Anything else (`fill`, a Canvas surface) clears the bare floor, a glyph on
+ * that fill. A `nested` control inside a state (R2: it keeps forcing, and
+ * the chip's remove cross idles at opacity 0.7, so it paints a dimmed
+ * HighlightText) is held to that bare floor on the state's fill too; its
+ * own test below walks it at rest, on hover and on focus. The state must
+ * yield the sample kinds it is known to hold, so it cannot pass empty.
  */
 async function expectReadable(
   page: Page,
   state: string,
   target: Locator,
-  expects: { text: boolean; glyph: boolean; fill: Rgb },
+  expects: { text: boolean; glyph: boolean; nested?: readonly string[] } & ({ pair: SystemPair } | { fill: Rgb }),
 ): Promise<PaintedInk[]> {
-  const inks = await paintedInks(page, target, expects.fill);
+  const pairOf = 'pair' in expects ? expects.pair : null;
+  const fill = pairOf ? pairOf.ground : 'fill' in expects ? expects.fill : null;
+  const inks = await paintedInks(page, target, fill);
   const listing = inks.map((ink) => describeInk(state, ink)).join('\n');
   if (expects.text) expect(inks.some((ink) => ink.kind === 'text'), `${state}: a text run is sampled\n${listing}`).toBe(true);
   if (expects.glyph) expect(inks.some((ink) => ink.kind === 'glyph'), `${state}: a glyph is sampled\n${listing}`).toBe(true);
   // Soft, so one run reports every state that fails, not only the first.
   for (const ink of inks) {
-    expect.soft(ink.ratio, describeInk(state, ink)).toBeGreaterThanOrEqual(ink.kind === 'text' ? 4.5 : 3);
-    if (ink.kind === 'glyph') {
-      expect.soft(sameColor(ink.ground, expects.fill), `${describeInk(state, ink)}: glyph sits on the Highlight fill`).toBe(true);
+    const pair = expects.nested?.includes(ink.what.split(' ')[0]) ? null : pairOf;
+    if (pair) {
+      expect.soft(highlightInkFaults(ink, pair), `${describeInk(state, ink)} (system ${describePair(pair)})`).toEqual([]);
+      continue;
+    }
+    expect.soft(ink.ratio, describeInk(state, ink)).toBeGreaterThanOrEqual(INK_FLOOR[ink.kind]);
+    if (ink.kind === 'glyph' && fill) {
+      expect.soft(sameColor(ink.ground, fill), `${describeInk(state, ink)}: glyph sits on its fill`).toBe(true);
     }
   }
   return inks;
@@ -104,8 +131,11 @@ test.describe('forced colors paints every Highlight state legibly (responsive-v3
         // hero chip (with its remove glyph) and the More filters toggle join it.
         await app.gotoRoute(`/lead-queue?state=IL&owner_link=${encodeURIComponent(OWNER_LINK)}`);
         expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), 'precondition: forced colors').toBe(true);
-        const fill = await paintedSystemFill(page, 'Highlight');
-        const both = { text: true, glyph: true, fill };
+        const pair = await systemHighlightPair(page);
+        expect(sameColor(pair.ink, pair.ground), `precondition: HighlightText and Highlight differ (${describePair(pair)})`).toBe(false);
+        test.info().annotations.push({ type: 'forced palette', description: describePair(pair) });
+        const fill = pair.ground;
+        const both = { text: true, glyph: true, pair };
 
         // The route nav keeps its state in an underline, not a fill
         // (visual-05): the current link reads on Canvas and its indicator
@@ -130,7 +160,7 @@ test.describe('forced colors paints every Highlight state legibly (responsive-v3
         };
         for (const [name, chip] of Object.entries(applied)) {
           await expect(chip, name).toHaveClass(/\bis-active\b/);
-          await expectReadable(page, name, chip, both);
+          await expectReadable(page, name, chip, { ...both, nested: ['filter__remove'] });
         }
 
         // The filter menu: its cursor row and the selected row both take the fill.
