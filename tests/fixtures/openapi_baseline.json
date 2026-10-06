@@ -3855,17 +3855,6 @@
             "title": "Lo Email",
             "type": "string"
           },
-          "notes": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Notes"
-          },
           "occurred_at": {
             "format": "date-time",
             "title": "Occurred At",
@@ -5276,6 +5265,7 @@
                 "type": "null"
               }
             ],
+            "description": "Retired 2026-10: must be absent, null or blank; free-text disposition notes are no longer accepted",
             "title": "Notes"
           },
           "occurred_at": {
@@ -7722,7 +7712,7 @@
         "type": "object"
       },
       "GenieRefusalReportRequest": {
-        "description": "Hash-only report body. There is deliberately no field for prompt text.",
+        "description": "Report body. The question text is optional and consented.\n\n``question_text`` is sent only when the reporter chose \"Report with my\nquestion\"; it is checked against ``question_hash`` and stored, if at all,\nonly in ``genie_refusal_report_texts`` (never on the report row).",
         "properties": {
           "conversation_id": {
             "anyOf": [
@@ -7753,6 +7743,19 @@
             "minLength": 1,
             "title": "Question Hash",
             "type": "string"
+          },
+          "question_text": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only when the reporter opts in: the refused question exactly as it was asked. It must hash to question_hash; it is kept, scrubbed and for 90 days, only when capture is enabled, it names no person or borrower, and the reporter's own ledger holds the refusal.",
+            "title": "Question Text"
           },
           "refusal_reason": {
             "enum": [
@@ -7796,6 +7799,12 @@
           },
           "duplicate": {
             "title": "Duplicate",
+            "type": "boolean"
+          },
+          "question_captured": {
+            "default": false,
+            "description": "True when the reporter's question is held for review (stored now, or already held for this report). False for a report without the question or one kept hash-only.",
+            "title": "Question Captured",
             "type": "boolean"
           },
           "report_id": {
@@ -14882,6 +14891,195 @@
         "title": "RateWindowWeek",
         "type": "object"
       },
+      "RefusalReportFamilyCount": {
+        "properties": {
+          "count": {
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "refusal_reason": {
+            "enum": [
+              "protected_class",
+              "unreviewed_criterion",
+              "pii_request",
+              "instruction_override",
+              "outreach_instruction",
+              "scope_bypass",
+              "out_of_scope",
+              "output_policy",
+              "unknown"
+            ],
+            "title": "Refusal Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refusal_reason",
+          "count"
+        ],
+        "title": "RefusalReportFamilyCount",
+        "type": "object"
+      },
+      "RefusalReportItem": {
+        "properties": {
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "has_text": {
+            "description": "A consented question text is held (unpurged and unexpired).",
+            "title": "Has Text",
+            "type": "boolean"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "refusal_reason": {
+            "enum": [
+              "protected_class",
+              "unreviewed_criterion",
+              "pii_request",
+              "instruction_override",
+              "outreach_instruction",
+              "scope_bypass",
+              "out_of_scope",
+              "output_policy",
+              "unknown"
+            ],
+            "title": "Refusal Reason",
+            "type": "string"
+          },
+          "report_id": {
+            "title": "Report Id",
+            "type": "string"
+          },
+          "reported_at": {
+            "format": "date-time",
+            "title": "Reported At",
+            "type": "string"
+          },
+          "reporter": {
+            "description": "The reporting staff member's identity (actor_email).",
+            "title": "Reporter",
+            "type": "string"
+          },
+          "text_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Expires At"
+          }
+        },
+        "required": [
+          "report_id",
+          "reported_at",
+          "refusal_reason",
+          "reporter",
+          "has_text"
+        ],
+        "title": "RefusalReportItem",
+        "type": "object"
+      },
+      "RefusalReportListResponse": {
+        "properties": {
+          "family_counts": {
+            "description": "Reports per refusal family for the whole window (every family filter).",
+            "items": {
+              "$ref": "#/components/schemas/RefusalReportFamilyCount"
+            },
+            "title": "Family Counts",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RefusalReportItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "family_counts"
+        ],
+        "title": "RefusalReportListResponse",
+        "type": "object"
+      },
+      "RefusalReportQuestionResponse": {
+        "properties": {
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "question_text": {
+            "title": "Question Text",
+            "type": "string"
+          },
+          "redacted": {
+            "description": "Contact details were masked before the question was kept.",
+            "title": "Redacted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "question_text",
+          "redacted",
+          "captured_at",
+          "expires_at"
+        ],
+        "title": "RefusalReportQuestionResponse",
+        "type": "object"
+      },
       "RumAcceptedResponse": {
         "properties": {
           "accepted": {
@@ -16402,6 +16600,12 @@
             "default": false,
             "description": "Demo-only: gates demo affordances in product surfaces. Never an authorization input.",
             "title": "Presenter Mode",
+            "type": "boolean"
+          },
+          "refusal_text_capture_enabled": {
+            "default": false,
+            "description": "Whether a refused Genie question may be attached to a 'This was legitimate' report (settings.mip_genie_refusal_text_capture): the effective tenant switch. False offers only the report without the question. Never an authorization input.",
+            "title": "Refusal Text Capture Enabled",
             "type": "boolean"
           },
           "role_labels": {
@@ -19910,6 +20114,156 @@
         ]
       }
     },
+    "/api/audit/refusal-reports": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_audit_refusal_reports_list_refusal_reports",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "family",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "protected_class",
+                    "unreviewed_criterion",
+                    "pii_request",
+                    "instruction_override",
+                    "outreach_instruction",
+                    "scope_bypass",
+                    "out_of_scope",
+                    "output_policy",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Family"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalReportListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Refusal Reports",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/audit/refusal-reports/{report_id}/question": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_audit_refusal_reports_report_id_question_read_refusal_report_question",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalReportQuestionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Refusal Report Question",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/audit/rollups": {
       "get": {
         "deprecated": true,
@@ -20999,7 +21353,7 @@
     "/api/genie/refusal-report": {
       "post": {
         "deprecated": true,
-        "description": "Record a hash-only false-positive report for a governed refusal.\n\nThe actor comes from the edge identity header. The report row and its\n``GENIE_REFUSAL_REPORT`` audit event commit together\n(``record_genie_refusal_report``); a replay for the same actor, hash and\nfamily is acknowledged as a duplicate without a second row.",
+        "description": "Record a false-positive report for a governed refusal.\n\nThe actor comes from the edge identity header. The report row, any\nconsented question text and its ``GENIE_REFUSAL_REPORT`` audit event\ncommit together (``record_genie_refusal_report``); a replay for the same\nactor, hash and family is acknowledged as a duplicate without a second\nreport row.",
         "operationId": "post_api_genie_refusal_report_genie_refusal_report",
         "requestBody": {
           "content": {
@@ -30292,6 +30646,154 @@
         ]
       }
     },
+    "/api/v1/audit/refusal-reports": {
+      "get": {
+        "operationId": "get_api_v1_audit_refusal_reports_list_refusal_reports",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "family",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "protected_class",
+                    "unreviewed_criterion",
+                    "pii_request",
+                    "instruction_override",
+                    "outreach_instruction",
+                    "scope_bypass",
+                    "out_of_scope",
+                    "output_policy",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Family"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalReportListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Refusal Reports",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/refusal-reports/{report_id}/question": {
+      "get": {
+        "operationId": "get_api_v1_audit_refusal_reports_report_id_question_read_refusal_report_question",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalReportQuestionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Refusal Report Question",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/v1/audit/rollups": {
       "get": {
         "description": "Approval/rejection counts by period for committee review.\n\nThe endpoint reads the governed Lakebase audit ledger directly and\nreturns only aggregate counts. It does not invent outreach state or\npull borrower PII into the response.",
@@ -31359,7 +31861,7 @@
     },
     "/api/v1/genie/refusal-report": {
       "post": {
-        "description": "Record a hash-only false-positive report for a governed refusal.\n\nThe actor comes from the edge identity header. The report row and its\n``GENIE_REFUSAL_REPORT`` audit event commit together\n(``record_genie_refusal_report``); a replay for the same actor, hash and\nfamily is acknowledged as a duplicate without a second row.",
+        "description": "Record a false-positive report for a governed refusal.\n\nThe actor comes from the edge identity header. The report row, any\nconsented question text and its ``GENIE_REFUSAL_REPORT`` audit event\ncommit together (``record_genie_refusal_report``); a replay for the same\nactor, hash and family is acknowledged as a duplicate without a second\nreport row.",
         "operationId": "post_api_v1_genie_refusal_report_genie_refusal_report",
         "requestBody": {
           "content": {

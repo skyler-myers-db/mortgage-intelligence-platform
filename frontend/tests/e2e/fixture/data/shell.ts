@@ -87,6 +87,9 @@ export const SESSION: SessionResponse = {
   actor_email: 'approver@summit-mortgage.example',
   lender_name: LENDER_NAME,
   rum_enabled: false,
+  // The deploy payload's default (D-audit-reads-d): the refusal card offers
+  // "Report with my question".
+  refusal_text_capture_enabled: true,
   // Coherent with HEALTH_OK, which carries no key: the default fixture actor
   // is '~nobody' to the actor gate (the session seed and every probe agree).
   actor_cache_key: null,

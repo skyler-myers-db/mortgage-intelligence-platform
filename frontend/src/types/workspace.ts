@@ -78,6 +78,13 @@ export interface SessionResponse {
   /** The opt-in RUM gate, the same settings value /config/options returns. */
   rum_enabled?: boolean | null;
   /**
+   * The effective consented refusal-text capture switch (D-audit-reads-d):
+   * true offers "Report with my question" on a refusal card. Absent from an
+   * older backend, which reads as false (hash-only). Never an authorization
+   * input.
+   */
+  refusal_text_capture_enabled?: boolean;
+  /**
    * Opaque per-actor browser-cache discriminator (the same key the
    * authenticated health body carries): seeds the actor gate before the first
    * health probe (lib/actorScope). Null exactly when actor_email is; absent
