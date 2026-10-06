@@ -7,10 +7,12 @@
  * validation inside the form as an alert (it used to be the table's alert,
  * far from the field) and submits exactly the payload the POST sends.
  */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SalesTeamMember } from '../../types';
+import { outreachMutationKeys } from '../../lib/mutations/outreach';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -77,6 +79,66 @@ describe('Lead Queue decision forms own their fields', () => {
     expect(confirm.getAttribute('aria-disabled')).toBeNull();
     submit();
     expect(onSubmit).toHaveBeenCalledWith('low_intent', '');
+  });
+
+  it('Confirm reject shows the Button loading state while this borrower\'s decision is on the wire (motion-08)', async () => {
+    const client = new QueryClient();
+    let release: () => void = () => undefined;
+    const write = client.getMutationCache().build(client, {
+      mutationKey: outreachMutationKeys.reject,
+      mutationFn: () => new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    });
+    const onSubmit = vi.fn();
+    act(() => root.render(
+      <QueryClientProvider client={client}>
+        <LeadRejectPanel borrowerId={BORROWER} onCancel={vi.fn()} onSubmit={onSubmit} />
+      </QueryClientProvider>,
+    ));
+    setValue(container.querySelector('select')!, 'data_quality');
+    const confirm = () => container.querySelector<HTMLButtonElement>('[data-testid="lead-reject-confirm"]')!;
+    expect(confirm().classList.contains('btn--loading')).toBe(false);
+
+    let settled: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      settled = write.execute({ borrowerId: BORROWER, decision: 'reject' });
+      await Promise.resolve();
+    });
+    expect(confirm().classList.contains('btn--loading')).toBe(true);
+    expect(confirm().getAttribute('aria-busy')).toBe('true');
+    expect(confirm().getAttribute('aria-disabled')).toBe('true');
+    expect(confirm().disabled, 'never native disabled: focus stays on the button').toBe(false);
+    expect(confirm().querySelector('.btn__spinner')).not.toBeNull();
+    expect(confirm().querySelector('.btn__label')?.textContent).toBe('Confirm reject');
+    // A click (and the implicit submission that clicks it) is swallowed while on the wire.
+    act(() => confirm().click());
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await act(async () => {
+      release();
+      await settled;
+    });
+    expect(confirm().classList.contains('btn--loading')).toBe(false);
+    expect(confirm().getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('another borrower\'s decision on the wire leaves this Confirm reject idle', async () => {
+    const client = new QueryClient();
+    const write = client.getMutationCache().build(client, {
+      mutationKey: outreachMutationKeys.reject,
+      mutationFn: () => new Promise<void>(() => undefined),
+    });
+    act(() => root.render(
+      <QueryClientProvider client={client}>
+        <LeadRejectPanel borrowerId={BORROWER} onCancel={vi.fn()} onSubmit={vi.fn()} />
+      </QueryClientProvider>,
+    ));
+    await act(async () => {
+      void write.execute({ borrowerId: 'B-PANELS0000002', decision: 'reject' });
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[data-testid="lead-reject-confirm"]')?.classList.contains('btn--loading')).toBe(false);
   });
 
   it('the disposition form says a missing callback time inside the form and submits nothing', () => {

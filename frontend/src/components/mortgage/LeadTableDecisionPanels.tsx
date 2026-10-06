@@ -1,9 +1,29 @@
-import { useRef, useState, type RefObject } from 'react';
+import { QueryClientContext } from '@tanstack/react-query';
+import { useContext, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import type { CallDisposition, SalesTeamMember } from '../../types';
+import { isDecisionPending } from '../../lib/mutations/outreach';
 import { Button, SurfaceTitle } from '../Primitives';
 import { DISPOSITION_OPTIONS, REJECT_REASONS } from './LeadTable.constants';
 import type { RejectReasonCode } from './LeadTable.types';
 import type { LeadDispositionPayload } from './useLeadSalesActions';
+
+/** A subscribe for no client: nothing to listen to, nothing to undo. */
+const NO_MUTATION_CACHE = () => () => {};
+
+/**
+ * Whether this borrower's approve or reject is on the wire (motion-08 slice 2),
+ * read from the MutationCache so no prop threads through the table. Optional
+ * provider: without a QueryClient nothing is pending.
+ */
+function useDecisionOnTheWire(borrowerId: string): boolean {
+  const client = useContext(QueryClientContext);
+  const subscribe = useMemo(
+    () => (client ? (onChange: () => void) => client.getMutationCache().subscribe(onChange) : NO_MUTATION_CACHE),
+    [client],
+  );
+  const pending = () => (client ? isDecisionPending(client, borrowerId) : false);
+  return useSyncExternalStore(subscribe, pending, pending);
+}
 
 /**
  * The Lead Queue's inline decision forms. Each one owns its fields (audit
@@ -35,6 +55,7 @@ export function LeadRejectPanel({
   const [rationale, setRationale] = useState('');
   const localReasonRef = useRef<HTMLSelectElement | null>(null);
   const selectRef = reasonRef ?? localReasonRef;
+  const rejecting = useDecisionOnTheWire(borrowerId);
   return (
     <form
       className="decision-panel decision-panel--inline"
@@ -94,6 +115,9 @@ export function LeadRejectPanel({
           // aria-disabled, never native `disabled`, until a reason is picked:
           // the submit then moves focus to Reason instead of sending.
           aria-disabled={reasonCode === '' || undefined}
+          // Pending while this borrower's decision is on the wire: same box,
+          // spinner over the label, every activation swallowed (Button loading).
+          loading={rejecting}
           data-testid="lead-reject-confirm"
         >
           Confirm reject
