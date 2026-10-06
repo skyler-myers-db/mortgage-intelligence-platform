@@ -5,9 +5,12 @@ D-approval-flow-a1).
 approval certifies: ``review_mode`` is ``individual`` or ``triage`` (the copy
 was on screen for this borrower), ``bulk_sample`` (a bulk run's previewed
 sample) or ``bulk_cohort`` (approved under the run's shared rationale, never
-individually shown). A client older than the ledger sends none and the row
-records the server-only ``undeclared``. The row also records the draft's age
-at approval (``draft_age_seconds``, read from Lakebase, never from the body).
+individually shown). Since W5c the mode is REQUIRED: a request with none (an
+SPA older than the ledger) is refused with 422 "Reload the app to approve"
+before any read or write, and the write-side value policy no longer admits
+the server-only ``undeclared`` (historic rows stay readable on the receipt).
+The row also records the draft's age at approval (``draft_age_seconds``, read
+from Lakebase, never from the body).
 
 Pinned here:
 
@@ -15,8 +18,8 @@ Pinned here:
    bulk_id; individual modes refuse one; any declared mode needs the full
    generated draft proof) answer 422 and write nothing. So does a token
    outside the four (including the server-only ``undeclared``).
-2. A declared mode is recorded; an omitted one is recorded as
-   ``undeclared``; the value policy refuses a sixth token.
+2. A declared mode is recorded; an omitted one is refused (422, no read,
+   no write); the value policy admits exactly the four declared tokens.
 3. ``draft_age_seconds`` rides the APPROVE row when the lookup returns it,
    is omitted when it does not, and never enters the decision intent.
 4. The decision intent and derived fallback request id for
@@ -37,6 +40,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -50,6 +54,7 @@ from backend.services.audit_metadata_public_values import _assert_public_safe_va
 from backend.services.audit_store import AuditMetadataValueViolation, get_audit_store
 from backend.services.outreach_decision_commit import _derive_fallback_request_id
 from backend.services.outreach_decision_intent import _approval_decision_intent
+from backend.services.repositories import get_outreach_repository
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
@@ -210,34 +215,45 @@ def test_a_bulk_sample_row_is_recorded_with_its_bulk_id(audit: InMemoryAuditStor
     assert row["bulk_id"] == BULK_ID
 
 
-def test_an_omitted_mode_is_recorded_as_undeclared(
-    audit: InMemoryAuditStore, fake_lakebase_client
+def test_an_omitted_mode_is_refused_before_any_read_or_write(
+    monkeypatch: pytest.MonkeyPatch, audit: InMemoryAuditStore, fake_lakebase_client
 ) -> None:
-    # A stale cached SPA (no review_mode, no draft proof in local/test) keeps
-    # approving for one release; the ledger says so instead of guessing.
+    # W5c (D-approval-flow-a1): a stale cached SPA sends no review_mode. It is
+    # told to reload, and nothing is read or written: no replay lookup, no
+    # borrower read, no approvals row, no audit row.
     draft = _draft()
+    looked_up: list[str] = []
+    original = fake_lakebase_client.fetchone
+
+    def _fetchone(sql: str, params: dict[str, Any] | None = None):
+        looked_up.append(sql)
+        return original(sql, params)
+
+    monkeypatch.setattr(fake_lakebase_client, "fetchone", _fetchone)
+    repo = app.dependency_overrides[get_outreach_repository]()
+    monkeypatch.setattr(repo, "find_borrower", MagicMock(side_effect=AssertionError("borrower read")))
     response = client.post(
         "/api/outreach/approve",
-        json=_approval(None, draft_body=draft["body"], draft_subject=draft["subject"]),
+        json=_approval(
+            None, draft_body=draft["body"], draft_subject=draft["subject"], request_id=str(uuid4())
+        ),
         headers=HEADERS,
     )
 
-    assert response.status_code == 200, response.text
-    (row,) = _approve_rows(audit)
-    assert row["review_mode"] == "undeclared"
-    (inserted,) = _approvals_inserts(fake_lakebase_client)
-    assert "review_mode" not in json.loads(inserted["decision_intent"])
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "Reload the app to approve"
+    assert looked_up == []
+    assert _approvals_inserts(fake_lakebase_client) == []
+    assert _approve_rows(audit) == []
 
 
-@pytest.mark.parametrize(
-    "value", ["individual", "triage", "bulk_sample", "bulk_cohort", "undeclared"]
-)
-def test_the_value_policy_admits_the_five_tokens(value: str) -> None:
+@pytest.mark.parametrize("value", ["individual", "triage", "bulk_sample", "bulk_cohort"])
+def test_the_value_policy_admits_the_four_declared_tokens(value: str) -> None:
     _assert_public_safe_values({"review_mode": value})
 
 
-@pytest.mark.parametrize("value", ["blind", "INDIVIDUAL", "", "bulk"])
-def test_the_value_policy_refuses_a_sixth_token(value: str) -> None:
+@pytest.mark.parametrize("value", ["blind", "INDIVIDUAL", "", "bulk", "undeclared"])
+def test_the_value_policy_refuses_any_other_token(value: str) -> None:
     with pytest.raises(AuditMetadataValueViolation):
         _assert_public_safe_values({"review_mode": value})
 
@@ -478,6 +494,7 @@ def test_a_refused_bulk_rationale_answers_422_and_writes_nothing(
 def test_a_refused_rationale_answers_422_before_the_replay_lookup(
     monkeypatch: pytest.MonkeyPatch, audit: InMemoryAuditStore, fake_lakebase_client
 ) -> None:
+    draft = _draft()
     looked_up: list[str] = []
     original = fake_lakebase_client.fetchone
 
@@ -488,7 +505,9 @@ def test_a_refused_rationale_answers_422_before_the_replay_lookup(
     monkeypatch.setattr(fake_lakebase_client, "fetchone", _fetchone)
     response = client.post(
         "/api/outreach/approve",
-        json=_approval(None, rationale=FLAGGED_BULK_RATIONALE, request_id=str(uuid4())),
+        json=_approval(
+            draft, review_mode="individual", rationale=FLAGGED_BULK_RATIONALE, request_id=str(uuid4())
+        ),
         headers=HEADERS,
     )
 

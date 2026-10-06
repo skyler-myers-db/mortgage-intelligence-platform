@@ -2711,8 +2711,12 @@ export interface RequestSchemas {
     csv_sha256: string;
     /** The Lead Queue query parameters the exported rows were read with (the same string the CSV's `# filters=` metadata line carries). Only their fingerprint is written to the ledger. */
     filters?: { [key: string]: string };
+    /** The Lead Queue view the file was built from, as the client declares it. */
+    lead_view_id?: string | null;
     /** How many borrowers matched the filters when the file was built (the CSV's `# matching_rows=` line). Absent when unknown; never below row_count. */
     matching_row_count?: number | null;
+    /** How many pages of that view were loaded when the file was built. */
+    pages_loaded?: number | null;
     row_count: number;
     scope: "selected" | "loaded";
   };
@@ -2748,9 +2752,12 @@ export interface RequestSchemas {
     draft_subject?: string | null;
     evidence_ids?: string[];
     follow_up_in_days?: number | null;
+    /** The Lead Queue view the decision was taken from, as the client declares it. */
+    lead_view_id?: string | null;
     offer_code?: "refi" | "heloc" | "cash_out" | "purchase" | "retention" | "recapture" | "refi_plus_heloc" | "investor" | "nurture" | null;
     rationale?: string | null;
     request_id?: string | null;
+    /** Required: how the approver saw the copy. A request without it is refused with 422. */
     review_mode?: "individual" | "triage" | "bulk_sample" | "bulk_cohort" | null;
     variant_name?: string | null;
   };
@@ -2778,6 +2785,8 @@ export interface RequestSchemas {
     campaign_id?: string | null;
     channel?: "email" | "sms" | "direct_mail";
     evidence_ids?: string[];
+    /** The Lead Queue view the decision was taken from, as the client declares it. */
+    lead_view_id?: string | null;
     offer_code?: "refi" | "heloc" | "cash_out" | "purchase" | "retention" | "recapture" | "refi_plus_heloc" | "investor" | "nurture" | null;
     rationale?: string | null;
     rationale_code: "out_of_footprint" | "do_not_call" | "opt_out" | "fair_lending_review" | "low_intent" | "data_quality" | "other_with_text";

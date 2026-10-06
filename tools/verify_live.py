@@ -342,10 +342,16 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
                 "outreach.approve.real",
                 "POST",
                 "/api/outreach/approve",
+                # review_mode is required (W5c) and certifies the draft's proof.
                 body={
                     "borrower_id": borrower_id,
                     "offer_code": draft_payload.get("offer_code") or "refi",
                     "draft_body": draft_payload.get("body") or "",
+                    "draft_subject": draft_payload.get("subject"),
+                    "draft_generation_id": draft_payload.get("generation_id"),
+                    "draft_response_hash": draft_payload.get("response_hash"),
+                    "draft_source_refreshed_at": draft_payload.get("source_refreshed_at"),
+                    "review_mode": "individual",
                     "request_id": str(uuid.uuid4()),
                 },
             )
@@ -377,6 +383,12 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
                 "borrower_id": unknown_uuid_approve,
                 "offer_code": "refi",
                 "draft_body": "Governed verification draft. To comply with mortgage marketing rules, this is a human-approved test body.",
+                # A well-formed synthetic proof + review_mode (required since
+                # W5c), so the request still reaches the unknown-borrower 404.
+                "draft_generation_id": str(uuid.uuid4()),
+                "draft_response_hash": "0" * 64,
+                "draft_source_refreshed_at": "2026-01-01T00:00:00Z",
+                "review_mode": "individual",
                 "request_id": str(uuid.uuid4()),
             },
             expect_status=404,

@@ -53,6 +53,8 @@ def test_smoke_approves_persisted_email_draft_with_complete_proof() -> None:
         assert f"--arg {proof_field} " in text
         assert f"{proof_field}:${proof_field}" in text
     assert ".draft_generation_id == $generation_id" in text
+    # review_mode is required on approve since W5c (D-approval-flow-a1).
+    assert 'review_mode:"individual"' in text
 
 
 def test_smoke_centralizes_connect_and_total_timeouts_for_every_curl_request() -> None:

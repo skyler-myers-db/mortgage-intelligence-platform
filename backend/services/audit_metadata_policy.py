@@ -97,8 +97,9 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #     draft_generation_id, draft_response_hash, draft_source_refreshed_at,
 #     campaign_treatment_fingerprint,
 #     draft_edited, draft_attribution, rationale, bulk_id, bulk_rationale,
-#     decision_inputs, review_mode (every row; 'undeclared' for an older
-#     client), draft_age_seconds (when a draft proof was verified)
+#     decision_inputs, review_mode (every row; required since W5c, so
+#     'undeclared' is historic only), draft_age_seconds (when a draft proof
+#     was verified), declared_lead_view_id (client-declared Lead Queue view)
 #   backend/api/outreach.py::reject_outreach
 #     approval_id, offer_code, borrower_id, request_id, rationale, rationale_code,
 #     decision_inputs (every row), bulk_id (a bulk rejection run)

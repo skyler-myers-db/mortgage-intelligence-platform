@@ -54,6 +54,7 @@ from backend.services.repositories.databricks_lead_order import LEAD_SORTS, Lead
 from backend.services.repositories.databricks_leads import DatabricksLeadRepository
 from backend.services.sales_state import get_sales_state_store
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.reviewed_approval import reviewed_approval
 from tests.fixtures.sqlite_lead_warehouse import SqliteLeadWarehouse, gold_lead_row, lead_id
 
 ACTOR = "lo.one@summit-mortgage.example"
@@ -562,3 +563,52 @@ def test_the_audit_sort_vocabulary_is_the_order_builders() -> None:
     assert validate_lead_view_values(
         {"view_id": "0" * 32, "page_index": 9, "pages_loaded": 10, "sort_dir": "asc", "total_matching": 0}
     ) == []
+
+
+# -- the decision-to-view join (client-declared) ------------------------------------------
+
+VIEW = "0123456789abcdef0123456789abcdef"
+
+
+@pytest.fixture
+def approver(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "approver_identities", ACTOR)
+    monkeypatch.setattr(settings, "trust_forwarded_headers", True)
+
+
+def test_approve_and_reject_record_the_declared_lead_view(
+    audit: InMemoryAuditStore, approver: None
+) -> None:
+    approve = client.post(
+        "/api/outreach/approve",
+        json=reviewed_approval(client, "B-48291", headers=HEADERS, lead_view_id=VIEW),
+        headers=HEADERS,
+    )
+    reject = client.post(
+        "/api/outreach/reject",
+        json={"borrower_id": "B-48294", "rationale_code": "low_intent", "lead_view_id": VIEW},
+        headers=HEADERS,
+    )
+
+    assert approve.status_code == 200, approve.text
+    assert reject.status_code == 200, reject.text
+    rows = {event.event_type: event.payload_json for event in audit.list(limit=20)}
+    assert rows["APPROVE"]["declared_lead_view_id"] == VIEW
+    assert rows["OUTREACH_REJECT"]["declared_lead_view_id"] == VIEW
+
+
+def test_a_decision_without_a_view_records_none_and_a_malformed_one_is_422(
+    audit: InMemoryAuditStore, approver: None
+) -> None:
+    plain = client.post(
+        "/api/outreach/reject", json={"borrower_id": "B-48294", "rationale_code": "low_intent"}, headers=HEADERS
+    )
+    bad = client.post(
+        "/api/outreach/reject",
+        json={"borrower_id": "B-48295", "rationale_code": "low_intent", "lead_view_id": "not-a-view"},
+        headers=HEADERS,
+    )
+
+    assert plain.status_code == 200, plain.text
+    assert "declared_lead_view_id" not in audit.list(limit=5)[0].payload_json
+    assert bad.status_code == 422

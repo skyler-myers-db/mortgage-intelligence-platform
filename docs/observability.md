@@ -738,7 +738,7 @@ exactly these tokens:
 | `triage` | The same, from the Triage deck. |
 | `bulk_sample` | A bulk run's row whose copy the approver previewed in the gate's samples: what was shown is what the row certifies. |
 | `bulk_cohort` | A bulk run's row drafted during the run and approved under the shared rationale: its copy was not individually shown, and its offer was one the samples showed (the in-run check). |
-| `undeclared` | Written by the server when a request carried no `review_mode` (an older client). |
+| `undeclared` | Historic rows only: written before W5c for a request that carried no `review_mode` (an older client). Since W5c the value is never written; the receipt still reads it. |
 
 `draft_age_seconds` (APPROVE rows). Whole seconds from the generated
 draft's `created_at` to the approval, on the Postgres clock (`now()`),
@@ -766,7 +766,7 @@ ORDER BY 1;
 
 A `bulk_cohort` share that grows while `bulk_sample` dwell shrinks toward
 zero is the signal to look at: runs approved with little time on the
-samples. `undeclared` rows should fall to zero within a release.
+samples. No new `undeclared` row is written since W5c.
 
 OUTREACH_REJECT rows now carry `decision_inputs` (the same governed
 decision inputs an APPROVE row carries) on every rejection, and `bulk_id`
@@ -783,11 +783,16 @@ before the replay lookup and again at commit: a refusal is a 422
 `"<field> failed the governed text policy"` and writes no approval or
 audit row (it was a 503 before).
 
-Follow-up, dated 2026-09-30 (tracked in the audit report's §12.3): one
-release after this SPA ships, make `review_mode` required on
-`POST /api/v1/outreach/approve`. A request without it then gets a 422 whose
-detail tells the reader to reload the app to approve, and the server stops
-writing `undeclared`.
+Done (W5c, `w5-lead-queue-paging`): `review_mode` is required on
+`POST /api/v1/outreach/approve`. A request without it gets a 422 `Reload the
+app to approve` right after the approver check, before the text policy, the
+replay lookup and any Lakebase or warehouse read, so nothing is written; the
+write-side value policy no longer admits `undeclared`.
+
+APPROVE and OUTREACH_REJECT rows from the paged Lead Queue also carry
+`declared_lead_view_id`: the `view_id` of the Lead Queue view the decision
+was taken from, AS THE CLIENT DECLARES IT (D-audit-reads-a). It is never part
+of the decision intent; Offer-originated decisions omit it.
 
 ## 10a. Lead Queue view paging
 

@@ -76,11 +76,10 @@ from backend.services.audit_metadata_value_policy import (
 )
 from backend.services.pii_redaction import normalize_public_lender_ref
 
-# The APPROVE row's review_mode: the four a client may declare plus the
-# server-only 'undeclared' for a client older than the review ledger.
-_REVIEW_MODES: frozenset[str] = frozenset(
-    {"individual", "triage", "bulk_sample", "bulk_cohort", "undeclared"}
-)
+# The APPROVE row's review_mode: the four a client declares. W5c made it
+# required and dropped the server-only 'undeclared' from the WRITE side;
+# historic rows stay readable through audit_store_receipt's own set.
+_REVIEW_MODES: frozenset[str] = frozenset({"individual", "triage", "bulk_sample", "bulk_cohort"})
 _MAX_DRAFT_AGE_SECONDS = 315_360_000
 
 # (ceiling key, the reviewed floor whose range it shares). GET /leads records

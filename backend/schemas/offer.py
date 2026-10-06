@@ -245,10 +245,14 @@ class OfferRecommendRequest(BaseModel):
 
 OutreachChannel = Literal["email", "sms", "direct_mail"]
 
-# How an approver saw the copy an approval certifies. 'undeclared' is
-# server-only (written for a client that sent no review_mode) and is never
-# accepted from a request body.
+# How an approver saw the copy an approval certifies. Required on every
+# approve since W5c; 'undeclared' survives only on historic rows (written for
+# a client that sent none) and is never accepted from a request body.
 ReviewMode = Literal["individual", "triage", "bulk_sample", "bulk_cohort"]
+# The fixed 422 an approve without review_mode gets (an SPA older than W5c).
+REVIEW_MODE_REQUIRED_DETAIL = "Reload the app to approve"
+# A Lead Queue view id as GET /leads mints it (X-Lead-View-Id).
+LEAD_VIEW_ID_PATTERN = r"^[0-9a-f]{32}$"
 _BULK_REVIEW_MODES: frozenset[str] = frozenset({"bulk_sample", "bulk_cohort"})
 _INDIVIDUAL_REVIEW_MODES: frozenset[str] = frozenset({"individual", "triage"})
 
@@ -359,9 +363,12 @@ class OutreachApproveRequest(BaseModel):
     # states-06, D-approval-flow-a1): on screen for this borrower
     # (individual, triage), previewed as a bulk sample (bulk_sample), or
     # approved under a bulk run's shared rationale without being shown
-    # (bulk_cohort). Omitted by a client older than the review_mode ledger;
-    # the APPROVE row then records the server-only token 'undeclared'.
-    review_mode: ReviewMode | None = None
+    # (bulk_cohort). Nullable in the schema (the draft_body precedent below) so
+    # the route answers its own fixed 422 'Reload the app to approve'.
+    review_mode: ReviewMode | None = Field(
+        default=None,
+        description="Required: how the approver saw the copy. A request without it is refused with 422.",
+    )
     # Governance approval boundary: the endpoint requires the final
     # approver-visible draft body to include the configured tenant
     # disclosure before writing the decision. The schema keeps this
@@ -411,6 +418,14 @@ class OutreachApproveRequest(BaseModel):
         default=None,
         pattern=PUBLIC_UUID_PATTERN,
         description="The open approval request this decision answers (unbound queues only).",
+    )
+    # The Lead Queue view the decision was taken from, AS THE CLIENT DECLARES
+    # IT (D-audit-reads-a): recorded as declared_lead_view_id, never part of
+    # the decision intent. Offer-originated decisions omit it.
+    lead_view_id: str | None = Field(
+        default=None,
+        pattern=LEAD_VIEW_ID_PATTERN,
+        description="The Lead Queue view the decision was taken from, as the client declares it.",
     )
 
     @field_validator("borrower_id")
@@ -545,6 +560,14 @@ class OutreachRejectRequest(BaseModel):
         default=None,
         pattern=PUBLIC_UUID_PATTERN,
         description="The open approval request this decision answers (unbound queues only).",
+    )
+    # The Lead Queue view the decision was taken from, AS THE CLIENT DECLARES
+    # IT (D-audit-reads-a): recorded as declared_lead_view_id, never part of
+    # the decision intent. Offer-originated decisions omit it.
+    lead_view_id: str | None = Field(
+        default=None,
+        pattern=LEAD_VIEW_ID_PATTERN,
+        description="The Lead Queue view the decision was taken from, as the client declares it.",
     )
 
     @field_validator("borrower_id")
