@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useExitRetained } from '../hooks/useExitRetained';
 import type { DrawerSource } from './AppContext';
 import { freshnessBucket, FRESHNESS_LABEL } from './freshness';
-import { preloadEvidenceDrawerBody } from './mortgage/evidenceDrawerBodyLoader';
+import { getLoadedDrawerProse, preloadEvidenceDrawerBody } from './mortgage/evidenceDrawerBodyLoader';
 import {
   inReopenGrace,
   markHoverClosed,
@@ -50,7 +50,18 @@ import './EvidenceHoverCard.css';
  * Intent: hovering or focusing a chip preloads the evidence drawer's lazy
  * body chunk (audit bundle-04), so a click opens it without a loading state.
  * The chunk only, never data: the drawer's reads start once it is open.
+ *
+ * Signal row: a registry chip carries no prose in the shell (bundle-04 item
+ * 3), so the card shows the resolved first signal once the body's prose has
+ * loaded (getLoadedDrawerProse), else the source's own first signal, else
+ * nothing.
  */
+
+/** The card's signal row, from the loaded registry prose when there is one; never a fetch. */
+function hoverSignal(source: DrawerSource) {
+  const prose = getLoadedDrawerProse();
+  return (prose ? prose.resolveDrawerProse(source) : source).signals?.[0];
+}
 
 interface OpenCard {
   anchored: boolean;
@@ -162,7 +173,8 @@ export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHov
   useEffect(() => () => clearTimer(), [clearTimer]);
 
   const bucket = freshnessBucket(source?.updatedAt);
-  const signal = source?.signals?.[0];
+  // Read while the card is shown, so a prose load between two shows is seen.
+  const signal = shown && source ? hoverSignal(source) : undefined;
   const placement = shown?.placement ?? null;
   const className = `evidence-hovercard${placement ? ` evidence-hovercard--${placement.side}` : ''}${open === null ? ' is-closing' : ''}`;
 

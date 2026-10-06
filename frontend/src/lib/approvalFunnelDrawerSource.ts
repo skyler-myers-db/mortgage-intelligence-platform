@@ -16,7 +16,13 @@ export function funnelStageDisplayLabel(stage: { stage: string; label: string })
   return stage.label;
 }
 
-/** Evidence for a live approval-funnel stage count. */
+/**
+ * Evidence for a live approval-funnel stage count. Each stage's first
+ * sentence is its `definition` (shown under "How we got N", audit flow-06)
+ * and is not repeated in `description`. The two UC stages spread the
+ * headline view's registry entry, so its signals follow the live count by
+ * key (lib/drawerSourceRegistry.prose resolves them in the drawer body).
+ */
 export function approvalFunnelStageDrawer(stage: {
   stage: string;
   label: string;
@@ -34,19 +40,24 @@ export function approvalFunnelStageDrawer(stage: {
     return enrichAsset({
       ...base,
       title: `${displayLabel} — funnel stage`,
+      definition:
+        stage.stage === 'population'
+          ? 'COUNT(*) over the S1 headline metric view with no contactability gate — the addressable borrower book every funnel stage narrows from.'
+          : 'SUM(is_high_opportunity) over the S1 headline metric view.',
       description:
         stage.stage === 'population'
-          ? 'COUNT(*) over the S1 headline metric view with no contactability gate — the addressable borrower book every funnel stage narrows from. The contact-eligible marketable subset is smaller.'
-          : 'SUM(is_high_opportunity) over the S1 headline metric view. The predicate is mip.gold.fn_high_opportunity — the canonical governed threshold, never a hardcoded literal.',
-      signals: [liveCount, ...(base.signals ?? [])],
+          ? 'The contact-eligible marketable subset is smaller.'
+          : 'The predicate is mip.gold.fn_high_opportunity — the canonical governed threshold, never a hardcoded literal.',
+      signals: [liveCount],
     });
   }
   if (stage.stage === 'approved') {
     return {
       title: 'Approved — funnel stage',
       short: 'mip_app.approvals + mip_app.lead_assignments',
-      description:
-        'Distinct borrowers with a human approve decision in the Lakebase approvals ledger or an active assignment at-or-past the approved lifecycle stage. Every decision row carries the approver identity and its audit event.',
+      definition:
+        'Distinct borrowers with a human approve decision in the Lakebase approvals ledger or an active assignment at-or-past the approved lifecycle stage.',
+      description: 'Every decision row carries the approver identity and its audit event.',
       signals: [liveCount],
     };
   }
@@ -54,16 +65,19 @@ export function approvalFunnelStageDrawer(stage: {
     return {
       title: 'Actioned — funnel stage',
       short: 'mip_app.lead_assignments',
+      definition:
+        'Distinct borrowers whose active loan-officer assignment reached the actioned lifecycle stage (or beyond).',
       description:
-        'Distinct borrowers whose active loan-officer assignment reached the actioned lifecycle stage (or beyond). Transitions are one-step-forward and server-enforced; each writes an audit row in the same transaction.',
+        'Transitions are one-step-forward and server-enforced; each writes an audit row in the same transaction.',
       signals: [liveCount],
     };
   }
   return {
     title: 'Outcome recorded — funnel stage',
     short: 'mip_app.lead_assignments + mip_app.feedback',
+    definition: 'Distinct borrowers whose assignment reached the terminal outcome_recorded stage.',
     description:
-      'Distinct borrowers whose assignment reached the terminal outcome_recorded stage. The recorded outcome (success / no response / declined) is a mip_app.feedback row written in the SAME transaction as the status change and its LEAD_OUTCOME_RECORDED audit event.',
+      'The recorded outcome (success / no response / declined) is a mip_app.feedback row written in the SAME transaction as the status change and its LEAD_OUTCOME_RECORDED audit event.',
     signals: [liveCount],
   };
 }

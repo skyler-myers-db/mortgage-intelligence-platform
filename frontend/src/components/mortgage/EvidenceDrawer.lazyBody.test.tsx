@@ -21,6 +21,7 @@ const appMocks = vi.hoisted(() => ({
   setDrawer: vi.fn(),
 }));
 const apiMocks = vi.hoisted(() => ({ assetMetadata: vi.fn(), lineageManifest: vi.fn() }));
+const laneMocks = vi.hoisted(() => ({ assetFreshness: vi.fn(), kpiProof: vi.fn() }));
 
 vi.mock('../AppContext', () => ({
   useApp: () => ({ drawer: appMocks.drawer, setDrawer: appMocks.setDrawer, canAccessAdmin: true }),
@@ -29,6 +30,8 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: apiMocks,
 }));
+vi.mock('../../lib/apiClients/assets', () => ({ assetsApi: { assetFreshness: laneMocks.assetFreshness } }));
+vi.mock('../../lib/apiClients/kpiProof', () => ({ kpiProofApi: { kpiProof: laneMocks.kpiProof } }));
 // The body chunk is "held": its import never settles during this file.
 vi.mock('./EvidenceDrawerBody', () => new Promise(() => undefined));
 
@@ -87,11 +90,17 @@ describe('EvidenceDrawer frame before its body chunk arrives', () => {
     expect(dialog.open).toBe(true);
     expect(dialog.querySelector('#evidence-drawer-title')?.textContent).toBe('Lead population');
     expect(dialog.querySelector('.drawer__subtitle')?.textContent).toBe('mip.gold.lead_population');
-    expect(dialog.querySelectorAll('[role="tab"]')).toHaveLength(2);
+    expect([...dialog.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)).toEqual([
+      'Overview',
+      'Lineage',
+      'Under the hood',
+    ]);
     const status = dialog.querySelector('.drawer__body [role="status"]');
     expect(status?.textContent).toBe('Loading evidence…');
     expect(apiMocks.assetMetadata).not.toHaveBeenCalled();
     expect(apiMocks.lineageManifest).not.toHaveBeenCalled();
+    expect(laneMocks.assetFreshness).not.toHaveBeenCalled();
+    expect(laneMocks.kpiProof).not.toHaveBeenCalled();
     // Focus is already inside the drawer, on Close.
     await act(async () => {
       await Promise.resolve();

@@ -94,6 +94,30 @@ export interface DrawerSource {
    * mapped" state — the UI never invents nodes.
    */
   lineageFamily?: string;
+  /*
+   * "How we got {value}" (audit 2026-09-21 flow-06): the number the user
+   * clicked, a one-sentence definition, its filter chips and its as-of.
+   * Without `value` the drawer shows no How-we-got block.
+   */
+  value?: string;
+  definition?: string;
+  predicates?: readonly string[];
+  asOf?: string | null;
+  /**
+   * The registry entry this source came from (lib/drawerSourceRegistry),
+   * which resolves its prose (description, signals, "used in") when the
+   * drawer body renders. A plain string, checked by isDrawerSourceKey, so
+   * this type never imports the registry.
+   */
+  registryKey?: string;
+  /** The KPI whose server-emitted reproduce SQL the drawer shows (GET /kpi-proof). */
+  proofKey?: import('../lib/apiTypes').KpiProofKey;
+  /** A "since your last login" number's Delta Explainer (audit wow-ai-3). */
+  deltaExplainer?: {
+    measure: import('../types/homeAttribution').HomeAttributionMeasure;
+    /** The baseline the funnel snapshot is chosen near (YYYY-MM-DD, UTC). */
+    baselineDate: string;
+  };
 }
 
 interface AppCtxValue {

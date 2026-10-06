@@ -79,6 +79,13 @@ export const queryKeys = {
   /** The Delta Explainer's read (wow-ai-3): audit-free; not persisted (only ['mip','home','summary'] is). */
   homeSummaryAttribution: (measure: string, baseline: string) =>
     ['mip', 'home', 'summary', 'attribution', measure, baseline] as const,
+  /**
+   * The evidence drawer's every-user freshness read (critic-03): audit-free,
+   * never persisted, and never a prefix-child of assetMetadata ['mip','asset',key].
+   */
+  assetFreshness: (assetKey: string | null | undefined) => ['mip', 'asset-freshness', assetKey ?? ''] as const,
+  /** One KPI's server-emitted reproduce SQL (flow-06): fixed text, never persisted. */
+  kpiProof: (kpi: string | null | undefined) => ['mip', 'kpi-proof', kpi ?? ''] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {

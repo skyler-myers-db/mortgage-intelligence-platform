@@ -24,10 +24,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrawerSource } from './AppContext';
 import { useEvidenceHoverCard } from './EvidenceHoverCard';
 import { EvidenceChip } from './Primitives';
+import { DRAWER_SOURCES } from '../lib/drawerSources';
 
 const setDrawer = vi.fn();
 vi.mock('./AppContext', () => ({
   useApp: () => ({ setDrawer, showEvidence: true }),
+}));
+
+// Whether the drawer body's registry prose has loaded (bundle-04 item 3) is
+// the loader's module state; the card reads it synchronously.
+const loaderState = vi.hoisted(() => ({ prose: null as typeof import('../lib/drawerSourceRegistry.prose') | null }));
+vi.mock('./mortgage/evidenceDrawerBodyLoader', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./mortgage/evidenceDrawerBodyLoader')>()),
+  getLoadedDrawerProse: () => loaderState.prose,
 }));
 
 const SOURCE: DrawerSource = {
@@ -225,6 +234,35 @@ describe('useEvidenceHoverCard', () => {
       expect(card()).not.toBeNull();
       act(() => window.dispatchEvent(new Event('resize')));
       expect(card()).toBeNull();
+    });
+  });
+
+  describe('content (bundle-04 item 3)', () => {
+    afterEach(() => {
+      loaderState.prose = null;
+    });
+
+    it('shows a registry chip\'s first signal only once the prose has loaded, and fetches nothing', async () => {
+      stubAnchorSupport(false);
+      render(DRAWER_SOURCES.lockinCohort);
+      fire('focus-a');
+      expect(card()!.textContent).toContain('Lock-in cohort');
+      expect(card()!.querySelector('.evidence-hovercard__signal')).toBeNull();
+      fire('blur-a');
+
+      loaderState.prose = await import('../lib/drawerSourceRegistry.prose');
+      act(() => vi.advanceTimersByTime(1000));
+      fire('focus-a');
+      expect(card()!.querySelector('.evidence-hovercard__signal')?.textContent).toBe('Current rateborrower');
+      expect(fetchSpy, 'the card never requests data').not.toHaveBeenCalled();
+    });
+
+    it('keeps a source\'s own first signal ahead of the registry\'s', async () => {
+      stubAnchorSupport(false);
+      loaderState.prose = await import('../lib/drawerSourceRegistry.prose');
+      render({ ...DRAWER_SOURCES.lockinCohort, signals: [{ label: 'Live count', source: 'x', value: '42' }] });
+      fire('focus-a');
+      expect(card()!.querySelector('.evidence-hovercard__signal')?.textContent).toBe('Live count42');
     });
   });
 

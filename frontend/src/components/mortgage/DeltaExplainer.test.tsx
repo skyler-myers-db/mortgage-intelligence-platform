@@ -160,6 +160,23 @@ describe('DeltaExplainer', () => {
     }
     expect(text()).toContain('No daily funnel snapshot covers this period yet');
     expect(document.querySelector('[data-testid="delta-explainer-waterfall"]')).toBeNull();
+    expect(document.querySelector('[data-testid="delta-explainer-not-snapshotted"]')).toBeNull();
+  });
+
+  it('says a measure is not snapshotted when the route says so, before any empty-state logic', async () => {
+    respond(body({
+      baseline_total: null, current_total: null, total_change: null, states: [], unattributed_change: null,
+      baseline_snapshot_date: null, current_snapshot_date: null, snapshotted: false,
+    }));
+    await render();
+    for (let i = 0; i < 40 && !document.querySelector('[data-testid="delta-explainer-not-snapshotted"]'); i += 1) {
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+    }
+    expect(document.querySelector('[data-testid="delta-explainer-not-snapshotted"]')?.textContent).toBe(
+      'Per-state attribution is not snapshotted for this measure yet.',
+    );
+    expect(text()).not.toContain('No daily funnel snapshot covers this period yet');
+    expect(document.querySelector('[data-testid="delta-explainer-waterfall"]')).toBeNull();
   });
 
   it('marks a retained serve with its last good read', async () => {

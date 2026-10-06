@@ -1,0 +1,19 @@
+/*
+ * "How we got {value}" (audit 2026-09-21 flow-06; deviation:evidence-how-we-got).
+ * Lazy and colocated: it loads with the evidence drawer's body chunk, never
+ * with the shell. Tokens only; the card reads as the drawer's lead fact, on
+ * the .source-summary surface vocabulary (05-command-palette.css).
+ */
+.evidence-proof {
+  display: grid;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-inline-start: var(--sp-1) solid var(--accent);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--accent) 5%, var(--bg-2));
+}
+.evidence-proof__title { overflow-wrap: anywhere; }
+.evidence-proof__filters { gap: var(--sp-1); }
+.evidence-proof__asof { color: var(--text-3); }
