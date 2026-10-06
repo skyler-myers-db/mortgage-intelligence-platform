@@ -14,6 +14,7 @@ import { useBorrowerProof } from './useBorrowerProof';
 // Same lazy chunk: ScoreAnatomy is the drawer's only importer.
 import { SCORE_SPINE_COPY } from './scoreSpine.copy';
 import { ProofMargins } from './ProofMargins';
+import { SpreadHistoryChart } from './SpreadHistoryChart';
 
 type ProofTab = 'math' | 'evidence' | 'lineage' | 'reproduce';
 
@@ -259,6 +260,10 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose, focusComponent 
                       prototype drawer carries lineage and raw signals only
                       (deviation:proof-math-margins). */}
                   <ProofMargins proof={proof} titled />
+                  {/* Crossed the line (wow-stage-4): the dossier from the
+                      cache only; the audit-free rate-window read only while
+                      this drawer is open (deviation:spread-history-chart). */}
+                  <SpreadHistoryChart borrowerId={borrowerId} active={open} />
                 </div>
               )}
 

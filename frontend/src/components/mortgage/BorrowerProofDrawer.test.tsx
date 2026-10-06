@@ -457,23 +457,30 @@ describe('BorrowerProofDrawer', () => {
     expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(1);
   });
 
-  it('only the Math tab carries the margins', async () => {
+  it('only the Math tab carries the margins and the rate history', async () => {
     apiMocks.borrowerProof.mockResolvedValue(PROOF_WITH_MARGINS);
     await render(true);
     await settle();
     const drawer = document.querySelector('.proof-drawer') as HTMLElement;
+    expect(drawer.querySelector('[data-testid="spread-history"]')).not.toBeNull();
     for (const tab of ['Evidence', 'Lineage', 'Reproduce']) {
       await act(async () => {
         buttonByText(tab).click();
       });
       expect(drawer.querySelector('[data-testid="score-margins"]'), tab).toBeNull();
+      expect(drawer.querySelector('[data-testid="spread-history"]'), tab).toBeNull();
     }
   });
 
-  it('an older proof without margins hides the section', async () => {
+  it('an older proof without margins hides the section; the Lead Queue drawer reads no dossier and no series', async () => {
     await render(true);
     await settle();
     expect(document.querySelector('.proof-drawer [data-testid="score-margins"]')).toBeNull();
+    expect(document.querySelector('.proof-drawer [data-testid="spread-history-empty"]')?.textContent).toBe(
+      'Open the borrower dossier to see the rate history.',
+    );
+    expect(apiMocks.borrower).not.toHaveBeenCalled();
+    expect(apiMocks.analyticsRateWindow).not.toHaveBeenCalled();
   });
 
   it('a segment-opened drawer still focuses its component card with the margins mounted', async () => {

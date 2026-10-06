@@ -1,0 +1,148 @@
+/* ============================================================
+   Crossed the line (audit wow-stage-4): the borrower's fixed note rate
+   against the weekly 30-year series, in the proof drawer's Math tab.
+   Declared extension (deviation:spread-history-chart): the prototype's
+   drawer (design_files/Module 0 Prototype.html:1250-1293,
+   design_files/index.html:665-688) holds lineage and raw signals only and
+   has no time-series chart. This block composes prototype primitives
+   (.eyebrow, .chip, .btn, .tbl, .proof-callout) with the encoding of the
+   Analytics rate window (analytics.rate-window.css): the market ink is
+   --accent-data, the spread screen the warning ink (darkened toward
+   --text-1 on the light theme), the spread fill --accent-soft. Imported
+   by SpreadHistoryChart.tsx only, so it ships in the lazy proof chunk.
+   ============================================================ */
+.spread-history {
+  --spread-history-market-ink: var(--accent-data);
+  --spread-history-screen-ink: var(--status-warning-ink);
+  --spread-history-spread-fill: var(--accent-soft);
+  --spread-history-note-ink: var(--text-1);
+  --spread-history-crossing-ink: var(--text-2);
+  display: grid;
+  gap: var(--sp-2);
+}
+[data-theme="light"] .spread-history {
+  --spread-history-screen-ink: color-mix(in oklab, var(--signal-warning) 45%, var(--text-1));
+}
+.spread-history__caption {
+  margin: 0;
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+.spread-history__note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.spread-history__plot {
+  display: grid;
+  gap: var(--sp-1);
+}
+.spread-history__svg {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  overflow: visible;
+}
+.spread-history__spread {
+  fill: var(--spread-history-spread-fill);
+  stroke: none;
+}
+.spread-history__note-line {
+  stroke: var(--spread-history-note-ink);
+  stroke-width: 1.5;
+}
+.spread-history__screen {
+  stroke: var(--spread-history-screen-ink);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+.spread-history__market {
+  fill: none;
+  stroke: var(--spread-history-market-ink);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.spread-history__crossing {
+  stroke: var(--spread-history-crossing-ink);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+.spread-history__axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+.spread-history__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+.spread-history__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.spread-history__legend-value {
+  font-family: var(--font-mono);
+}
+.spread-history__swatch {
+  inline-size: var(--sp-4);
+  block-size: var(--sp-1);
+  border-radius: var(--r-pill);
+  background: var(--spread-history-market-ink);
+}
+.spread-history__swatch--note { background: var(--spread-history-note-ink); }
+.spread-history__swatch--screen { background: var(--spread-history-screen-ink); }
+.spread-history__swatch--spread { block-size: var(--sp-2); background: var(--spread-history-spread-fill); }
+.spread-history__swatch--crossing { background: var(--spread-history-crossing-ink); }
+.spread-history__actions {
+  display: flex;
+  justify-content: flex-start;
+}
+.spread-history__table {
+  margin-block-start: var(--sp-1);
+}
+.spread-history__table .tbl {
+  inline-size: 100%;
+}
+.spread-history__table td.num {
+  font-family: var(--font-mono);
+}
+.spread-history__crossing-row td {
+  background: var(--accent-soft);
+}
+.spread-history__crossing-text {
+  margin-inline-start: var(--sp-1);
+  color: var(--text-2);
+  font-size: var(--fs-11);
+}
+/* The draw-in runs only when the viewer has not asked for reduced motion:
+   the market line strokes in over --dur-draw (pathLength="1", so a dash of
+   1 is the whole line) and the spread fades in with it. Without this query
+   the chart is static. */
+@media (prefers-reduced-motion: no-preference) {
+  .spread-history__market {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: spread-history-draw var(--dur-draw) var(--ease-draw) var(--dur-instant) forwards;
+  }
+  .spread-history__spread {
+    opacity: 0;
+    animation: spread-history-fade var(--dur-draw) var(--ease-draw) var(--dur-instant) forwards;
+  }
+}
+@keyframes spread-history-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes spread-history-fade {
+  to { opacity: 1; }
+}
