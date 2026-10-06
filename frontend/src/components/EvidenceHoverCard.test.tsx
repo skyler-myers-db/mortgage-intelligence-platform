@@ -237,9 +237,24 @@ describe('useEvidenceHoverCard', () => {
     });
   });
 
-  describe('content (bundle-04 item 3)', () => {
+  describe('content (bundle-04 item 3, responsive-07 8b)', () => {
     afterEach(() => {
       loaderState.prose = null;
+    });
+
+    it('prints the refresh as a relative age and an event as a date, never the raw string', () => {
+      stubAnchorSupport(false);
+      vi.setSystemTime(new Date('2026-06-13T17:00:00Z'));
+      render({ title: 'Lock-in cohort', updatedAt: '2026-06-11 17:00 UTC' });
+      fire('focus-a');
+      expect(card()!.textContent).toContain('Fresh · refreshed 2 days ago');
+      expect(card()!.textContent).not.toContain('2026-06-11');
+      fire('blur-a');
+
+      render({ title: 'Recent sale', eventDate: '2026-05-06T12:00:00Z' });
+      fire('focus-b');
+      expect(card()!.textContent).toContain('Evidence · event May 6');
+      expect(card()!.textContent).not.toContain('2026-05-06');
     });
 
     it('shows a registry chip\'s first signal only once the prose has loaded, and fetches nothing', async () => {

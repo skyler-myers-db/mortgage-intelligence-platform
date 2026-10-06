@@ -4,6 +4,7 @@ import { useExitRetained } from '../hooks/useExitRetained';
 import type { DrawerSource } from './AppContext';
 import { freshnessBucket, FRESHNESS_LABEL } from './freshness';
 import { getLoadedDrawerProse, preloadEvidenceDrawerBody } from './mortgage/evidenceDrawerBodyLoader';
+import { formatDate, formatRelative } from '../lib/time';
 import {
   inReopenGrace,
   markHoverClosed,
@@ -54,7 +55,8 @@ import './EvidenceHoverCard.css';
  * Signal row: a registry chip carries no prose in the shell (bundle-04 item
  * 3), so the card shows the resolved first signal once the body's prose has
  * loaded (getLoadedDrawerProse), else the source's own first signal, else
- * nothing.
+ * nothing. Times read through lib/time (responsive-07): "refreshed 3 days
+ * ago", "event Jul 14", never the raw wire string.
  */
 
 /** The card's signal row, from the loaded registry prose when there is one; never a fetch. */
@@ -204,9 +206,9 @@ export function useEvidenceHoverCard(source?: DrawerSource, options: EvidenceHov
                 <span>
                   {bucket ? FRESHNESS_LABEL[bucket] : 'Evidence'}
                   {source.updatedAt
-                    ? ` · refreshed ${source.updatedAt}`
+                    ? ` · refreshed ${formatRelative(source.updatedAt)}`
                     : source.eventDate
-                      ? ` · event ${source.eventDate}`
+                      ? ` · event ${formatDate(source.eventDate)}`
                       : ''}
                 </span>
               </div>
