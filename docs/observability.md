@@ -661,7 +661,7 @@ answer, SQL, or exception text; ids are the job UUID only:
 | `genie_jobs_table_absent` | WARNING, once per absence | — | The App runs ahead of the Lakebase migration: submit advertises no jobs and an older tab's completion stays inline (no job) until `mip_lakebase_migrate` has run; the probe re-checks every 60 s. |
 | `genie_complete_async_refused` (logger `mip-genie`) | WARNING | `outcome` refused | An async complete arrived while the turn could not get a job (the probe failed or found no table). It got a non-retryable 503 before any Genie work or audit row: the browser re-sends an async complete, and a job-less run could not be joined, so the re-send would complete the turn twice. |
 | `genie_job_enqueued`, outcome `adopted` | INFO | `outcome` adopted, `job_id` | Audit `genie-01` risk 4: a retried complete joined a queued job this process created but never ran (its creating request failed before enqueueing it) and ran it. A second adopter only loses the compare-and-set claim (`genie_job_claim_lost`), so the turn still completes once. |
-| `genie_job_cancel_requested` | INFO; WARNING when `unavailable` | `outcome` accepted / duplicate / recorded / ended / unavailable, `status` (the job's status before the request), `job_id`, `error_type` (unavailable only) | Audit `genie-03`: the owner pressed Stop on a job turn (`POST /api/v1/genie/message/cancel`). `accepted` set `cancel_requested_at` and wrote the one `GENIE_TURN_CANCELLED` audit row in the same Lakebase transaction; `duplicate`, `recorded` (the answer was already recorded) and `ended` (failed or expired) wrote nothing. `unavailable` rolled the flag back with its audit row (a 503; a retry is safe). |
+| `genie_job_cancel_requested` | INFO; WARNING when `unavailable` | `outcome` accepted / pre_cancelled / duplicate / recorded / recording / ended / unavailable, `status` (the job's status before the request, `pre_job` for a pre-cancel), `job_id`, `error_type` (unavailable only) | Audit `genie-03`: the owner pressed Stop on a job turn (`POST /api/v1/genie/message/cancel`). `accepted` set `cancel_requested_at` and `pre_cancelled` inserted the turn's job row already cancelled; each wrote the one `GENIE_TURN_CANCELLED` audit row in the same Lakebase transaction. `duplicate`, `recorded`, `recording` and `ended` wrote nothing (see "Stop outcomes" below). `unavailable` rolled the flag (or the pre-cancelled row) back with its audit row, or the History settle's first read failed (a 503; a retry is safe). |
 | `genie_job_finished` (logger `mip-genie`), status `cancelled` | INFO | `status` cancelled, `duration_ms`, `job_id`, no `failure_kind` | The runner stopped a job whose cancel came before its governed record (at a stage boundary, or refused by the `recorded_at` commit point): no `genie.run_query` RUN_GENIE row, no action tokens, no session row. The submit's own `genie.message_submitted` RUN_GENIE row stays, so a cancelled turn has exactly one RUN_GENIE row: count `metadata->>'action' = 'genie.run_query'`, not `event_type`. Not a failure. |
 | `genie_job_cancel_end_failed` (logger `mip-genie`) | WARNING | `error_type`, `job_id` | The runner could not mark a stopped job `cancelled`. Nothing was recorded; the lease lapses and the next read expires the job. |
 | `genie_jobs_table_absent`, 2026_09_25 columns | WARNING, once per absence | — | Also logged when the table exists without `cancel_requested_at`, `recorded_at` and `deep` (the App promoted ahead of the 2026_09_25 migration): the App completes inline exactly as without the table. |
@@ -699,6 +699,69 @@ gets a `GENIE_SECTION_REVEALED` audit row in the same transaction (ruling R1);
 the status poll serves the sections from the three-section floor, only for a
 revision the poller does not hold, and never on a terminal or
 cancel-requested job. Every terminal statement NULLs the column.
+
+### Stop outcomes, the History settle and the pre-cancel (genie-03, W5c)
+
+What a Stop answers (`GenieCancelResponse.outcome`, with `status` the job's
+status after the request):
+
+| Outcome | When | Writes |
+| --- | --- | --- |
+| `cancelled` | The cancel was accepted (`cancel_requested_at` set; a queued job ends `cancelled` at once), a pre-cancel inserted the turn's job (below), or a cancel was already requested. This app will not verify or record the answer; Genie's own message is NOT cancelled and Genie may keep the question as context. | An accepted cancel or pre-cancel: one `GENIE_TURN_CANCELLED` row in the same transaction. A repeat: nothing. |
+| `recorded` | Too late: the governed record's commit point passed (`recorded_at` set) or the job succeeded, AND the turn's History row (`mip_app.genie_messages`) exists, whatever the job's status. | Nothing. |
+| `recording` | Too late, but no History row was found. `status` running: it is still being written; succeeded: an answer History never keeps (a `policy_blocked` success); failed or expired: recording did not finish. | Nothing. |
+| `ended` | The job had already failed or expired with nothing recorded. | Nothing. |
+
+Only an ACCEPTED cancel (a pre-cancel included) says anything about the
+RUN_GENIE row: it guarantees none is written for the turn. The History
+settle runs after the cancel transaction: one read (`_HISTORY_SETTLE_SQL`:
+the job's status and whether a History row exists for the turn's message id,
+or for its 16-hex label on a row written at or after the job), re-read up to
+four times 250 ms apart while the job still runs with no row. It reads only.
+If its FIRST read fails the Stop answers 503 (nothing was written; a retry
+is safe); a later read error keeps the last values. It does not use
+`GENIE_MESSAGE_OWNERSHIP_SQL`, which keeps only `source = 'genie'` sessions
+and would deny rows History shows.
+
+The pre-cancel marker. A Stop before the complete's 202 named the job (Genie
+still answering, or the complete not yet answered) carries no `job_id`. The
+route locks the turn by its key (actor, conversation, message); with no row
+it INSERTs the turn's job row already `cancelled` (`precancelled_at`,
+migration `2026_10_0X_genie_job_precancel`, CHECK
+`genie_completion_jobs_precancel_shape_chk`) with `ON CONFLICT DO NOTHING`
+on the turn UNIQUE, and audits it (`status` `pre_job`). A complete that
+arrives later joins that terminal row and runs nothing: a 202 with the
+cancelled status, or the legacy path's immediate 503; no RUN_GENIE row. A
+complete that committed its row first makes the insert wait and insert
+nothing; the Stop is then decided on that row as usual. The status probe
+requires `precancelled_at`, so an App promoted ahead of the migration
+completes inline and its cancel answers 404.
+
+Cooperative cancel. A Stop now reaches a running deep sweep's sub-turns:
+each runs under the runner's cancel predicate (a context-local scope reset
+after every task), and the Genie client's poll loop checks it before every
+sleep, so a running sub-turn stops within one poll interval and one that has
+not started never starts. The owner waits for sub-turns in 1 s slices, so it
+ends a stopped sweep within about a second even while every sub-turn blocks,
+and shuts the pool down without waiting. A stop is never a dependency
+failure:
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `dependency_call_end`, outcome `cancelled` (logger `mip.dependency`) | INFO | `dependency`, `operation`, `duration_ms` | A Genie (or other) call ended because its owner stopped the turn. Not counted in the `/api/health` error counter; the circuit breaker records neither a failure nor a success (a half-open probe slot is returned). |
+| `genie_query_end`, outcome `cancelled` (logger `backend.services.genie_client`) | INFO | `operation` ask / resume, `duration_ms`, `statement_hash` (or the resume id), never question text | A Genie ask or resume stopped by its owner; replaces `genie_query_error` for a stop. |
+| `genie_sweep_cancelled` (logger `mip-genie-sweep`) | INFO | `outcome` cancelled, `duration_ms`, `planned`, `unfinished` | A Stop ended a deep sweep: counts and duration only. |
+
+Genie Conversation cancel: not available. The pinned `databricks-sdk`
+0.103.0 `GenieAPI` has no operation that cancels a chat-mode conversation
+message, and the REST reference (re-checked 2026-10-06) lists only
+"Agent mode: Cancel a response", for the agent-mode responses API this app
+does not use. `delete_conversation_message` removes the message from the
+user's Genie thread irreversibly and its effect on an in-flight message is
+undocumented, so it is not used as a cancel. The Stop therefore stops this
+app's work and record only, and the copy keeps "Genie may keep the question
+as context". `tests/unit/test_genie_cancel.py` fails on an SDK that adds a
+cancel method, which forces the decision then.
 
 ### Admin SSE ingress probe (delivery-04)
 
