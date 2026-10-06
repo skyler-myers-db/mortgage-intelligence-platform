@@ -124,8 +124,9 @@ test.describe('measured lever slot (D-dataviz-geo-d2 2(iv))', () => {
     const sp2 = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sp-2')));
     for (const row of measured) expect(row.slot, JSON.stringify(row)).toBeGreaterThanOrEqual(row.control);
     // Tightness is pinned where the slot was measured: Linux Chromium (CI).
-    // The off-Linux Geist Mono emulation under-measures the slider's tallest
-    // state by one wrapped line (131.06 vs 147.56px), so off Linux only the
+    // The off-Linux Geist Mono emulation is an approximation (at W5a it
+    // under-measured the slider's tallest state by one wrapped line, 131.06
+    // vs 147.56px; at W5b both measure 191.375px), so off Linux only the
     // reservation (slot >= every state) is checked.
     if (process.platform === 'linux') {
       expect(slot - max, `slot ${slot} against the tallest control ${max}`).toBeLessThan(sp2);
