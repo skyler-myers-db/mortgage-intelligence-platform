@@ -35,6 +35,19 @@ serve in the soft window with no failure carries no marker.
 Refreshes run on a dedicated two-worker ``mip-gold-swr`` executor, never the
 three-worker ``mip-swr`` pool the health probes need, and are triggered only by
 a request: there is no timer, so an idle warehouse still auto-stops.
+
+Snapshot generation (delivery-06 remainder): every entry carries the
+``gold_snapshot`` generation current when its value was read, and a lookup
+treats an OLDER-generation entry as a miss: computed inline with single-flight,
+never served as a hit or a plain stale serve (DEBUG ``gold_cache_miss``,
+``reason='snapshot_advanced'``). The entry stays in place, so a failed
+recompute with ``stale_if_error`` still serves it with the
+``X-Data-Last-Good-At`` marker. Identity is (key, generation), not a per-key
+suffix: a suffix would lengthen every key, break ``workflow_key``'s
+``family:generation`` parsing in ``drop_workflow_generations`` and orphan the
+last-good value ``stale_if_error`` needs across a refresh. The snapshot probe
+rides only reads that already go to the warehouse (an inline miss schedules it
+on this executor; a background refresh runs it first).
 Factories must read only process-level state (the SQL client and settings),
 never the request actor or headers, because a refresh runs outside any request.
 
@@ -58,6 +71,7 @@ from typing import Any, Protocol
 
 from backend.config.settings import settings
 from backend.services.cache_staleness import report_stale, run_in_staleness_scope
+from backend.services.gold_snapshot import get_gold_snapshot_watch, snapshot_generation
 from backend.services.observability import emit
 from backend.services.server_timing import record_cache as _record_cache
 
@@ -222,6 +236,8 @@ class _Entry:
     degraded: bool = False
     # The latest background refresh failed; reset only by _store_locked.
     refresh_failed: bool = False
+    # The gold snapshot generation its value was read under (gold_snapshot).
+    generation: int = 0
 
     @property
     def marked(self) -> bool:
@@ -271,15 +287,18 @@ class GoldAggregateCache:
             ttl_s,
             float(hard_ttl_s if hard_ttl_s is not None else settings.mip_gold_cache_max_stale_s),
         )
+        generation = snapshot_generation()
         leader = False
         schedule: object | None = None
         value: Any = None
         event: Event | None = None
         served: _Entry | None = None
+        advanced = False
         with self._lock:
             entry = self._entries.get(key)
             now = self._now()
-            if entry is not None and now < entry.hard_expiry:
+            advanced = entry is not None and entry.generation < generation
+            if entry is not None and now < entry.hard_expiry and not advanced:
                 self._entries.move_to_end(key)
                 if now < entry.soft_expiry:
                     outcome = "hit"
@@ -309,8 +328,18 @@ class GoldAggregateCache:
             return value
         assert event is not None
         if not leader:
-            return self._follow(key, event, factory, ttl_s, hard_s, stale_if_error, wait_timeout_s)
-        return self._lead(key, event, factory, ttl_s, hard_s, stale_if_error)
+            return self._follow(
+                key, event, factory, ttl_s, hard_s, stale_if_error, wait_timeout_s, generation
+            )
+        # An inline miss already goes to the warehouse: the snapshot probe
+        # rides it, on the gold-swr executor, at most once per soft TTL.
+        watch = get_gold_snapshot_watch()
+        if watch is not None:
+            watch.schedule_probe(self._executor())
+        return self._lead(
+            key, event, factory, ttl_s, hard_s, stale_if_error,
+            miss_reason="snapshot_advanced" if advanced else None,
+        )
 
     def _lead(
         self,
@@ -320,7 +349,11 @@ class GoldAggregateCache:
         ttl_s: float,
         hard_s: float,
         stale_if_error: bool,
+        *,
+        miss_reason: str | None = None,
     ) -> Any:
+        # Read just before the factory, after any probe the miss scheduled.
+        generation = snapshot_generation()
         try:
             value, degraded_since = run_in_staleness_scope(factory)
         except Exception:
@@ -332,10 +365,15 @@ class GoldAggregateCache:
         else:
             with self._lock:
                 if self._inflight.get(key) is event:
-                    self._store_locked(key, value, ttl_s, hard_s, degraded_since)
+                    self._store_locked(
+                        key, value, ttl_s, hard_s, degraded_since, generation=generation
+                    )
             if degraded_since is not None:
                 report_stale(min(self._wall(), degraded_since))
-            self._emit("gold_cache_miss", key)
+            if miss_reason is None:
+                self._emit("gold_cache_miss", key)
+            else:
+                self._emit("gold_cache_miss", key, reason=miss_reason)
             _record_cache("miss")
             return value
         finally:
@@ -353,11 +391,18 @@ class GoldAggregateCache:
         hard_s: float,
         stale_if_error: bool,
         wait_timeout_s: float,
+        generation: int,
     ) -> Any:
         if event.wait(timeout=wait_timeout_s):
             with self._lock:
                 entry = self._entries.get(key)
-                fresh = entry is not None and self._now() < entry.hard_expiry
+                # An older-generation entry the leader failed to replace is
+                # not fresh: it goes through _stale_after_error and its marker.
+                fresh = (
+                    entry is not None
+                    and self._now() < entry.hard_expiry
+                    and entry.generation >= generation
+                )
                 value = entry.value if entry is not None else None
             if fresh:
                 if entry is not None and entry.marked:
@@ -371,6 +416,7 @@ class GoldAggregateCache:
             if stale is not _NOTHING:
                 return stale
         # The leader timed out or failed: compute rather than return empty.
+        generation = snapshot_generation()
         try:
             value, degraded_since = run_in_staleness_scope(factory)
         except Exception:
@@ -380,7 +426,7 @@ class GoldAggregateCache:
             _record_cache("miss")
             raise
         with self._lock:
-            self._store_locked(key, value, ttl_s, hard_s, degraded_since)
+            self._store_locked(key, value, ttl_s, hard_s, degraded_since, generation=generation)
         if degraded_since is not None:
             report_stale(min(self._wall(), degraded_since))
         self._emit("gold_cache_miss", key, reason="singleflight_fallback")
@@ -413,6 +459,13 @@ class GoldAggregateCache:
         stale_if_error: bool,
     ) -> None:
         def _refresh() -> None:
+            # A background refresh already goes to the warehouse: probe the
+            # gold snapshot first, so the value stores under the generation
+            # it was read in.
+            watch = get_gold_snapshot_watch()
+            if watch is not None:
+                watch.probe_if_due()
+            generation = snapshot_generation()
             try:
                 value, degraded_since = run_in_staleness_scope(factory)
             except BaseException as exc:  # noqa: BLE001 -- a refresh never raises
@@ -437,7 +490,9 @@ class GoldAggregateCache:
                 if self._refreshing.get(key) is not token:
                     return
                 del self._refreshing[key]
-                self._store_locked(key, value, ttl_s, hard_s, degraded_since)
+                self._store_locked(
+                    key, value, ttl_s, hard_s, degraded_since, generation=generation
+                )
 
         try:
             self._executor().submit(_refresh)
@@ -454,6 +509,8 @@ class GoldAggregateCache:
         ttl_s: float,
         hard_s: float,
         degraded_since: float | None = None,
+        *,
+        generation: int = 0,
     ) -> None:
         """Store a fresh entry: the ONLY place ``refresh_failed`` resets."""
         now = self._now()
@@ -466,6 +523,7 @@ class GoldAggregateCache:
             last_good,
             degraded=degraded_since is not None,
             refresh_failed=False,
+            generation=generation,
         )
         self._entries.move_to_end(key)
         while len(self._entries) > self._max_entries:
