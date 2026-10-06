@@ -25,6 +25,8 @@ from fastapi.testclient import TestClient
 from backend.api import outreach_revoke as revoke_mod
 from backend.main import app
 from backend.services import approval_funnel, sales_state_reporting
+from backend.services import outreach_revoke as revoke_service
+from backend.services.audit_store import AuditPIIError
 from backend.services.lakebase import get_lakebase_client
 from backend.services.outreach_decision_ordering import is_current_approval
 from backend.services.repositories import get_lead_repository, get_outreach_repository
@@ -283,6 +285,25 @@ def test_an_unknown_borrower_is_404_and_an_outage_503(client: TestClient, ledger
     assert missing.status_code == 404
     ledger.down = True
     assert client.post(URL, json=_body(approval_id), headers=APPROVER).status_code == 503
+
+
+def test_a_refused_audit_payload_is_a_fixed_unaudited_422_never_a_500(
+    client: TestClient, ledger: FakeApprovalLedger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # NB-1: the ledger's PII scan refusing the audit payload rolls the revoke
+    # back and answers the fixed detail, never str(exc) (it lists paths).
+    def _refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise AuditPIIError(["metadata.source.note"])
+
+    monkeypatch.setattr(revoke_service, "write_audit_event_in_transaction", _refuse)
+    approval_id = _approve(ledger)
+
+    response = client.post(URL, json=_body(approval_id), headers=APPROVER)
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "The request could not be recorded."
+    assert "metadata" not in response.text
+    assert ledger.audits == [] and len(ledger.approvals) == 1
 
 
 # -- a latest revoke reads pending everywhere, with no change there ----------------------
