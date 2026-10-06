@@ -506,6 +506,7 @@ export function AskGenieAnswerPanel({
       <form
         ref={dockRef}
         className="surface__ft genie-composer"
+        data-rum-target="genie-composer"
         aria-label="Ask Genie composer"
         onSubmit={(e) => {
           e.preventDefault();

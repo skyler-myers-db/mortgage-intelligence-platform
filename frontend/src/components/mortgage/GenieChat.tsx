@@ -502,6 +502,7 @@ export function GenieChat() {
       <div
         ref={panelRef}
         className={`genie ${genieOpen ? 'is-open' : ''} ${pos ? 'is-undocked' : ''}`}
+        data-rum-target="genie-panel"
         // Focusable container: a click on the transcript lands focus inside
         // the panel, which is what "Escape closes Genie" now keys off.
         tabIndex={-1}
@@ -662,6 +663,7 @@ export function GenieChat() {
         />
         <form
           className="genie__input"
+          data-rum-target="genie-composer"
           onSubmit={(e) => {
             e.preventDefault();
             ask(input, undefined, Date.now());
