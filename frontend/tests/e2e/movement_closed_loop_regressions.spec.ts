@@ -86,7 +86,6 @@ test('duplicate disposition request ids replay without opening the Lakebase brea
   const payload = {
     lo_email: 'lo01@summit.example',
     outcome: 'connected',
-    notes: 'Reviewed scenario and next steps.',
     request_id: requestId,
   };
 

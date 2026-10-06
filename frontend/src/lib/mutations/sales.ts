@@ -63,7 +63,6 @@ export interface LogDispositionVariables {
     lo_email: string;
     outcome: CallDisposition['outcome'];
     callback_at: string | null;
-    notes: string | null;
   };
 }
 

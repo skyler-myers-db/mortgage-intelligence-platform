@@ -13,8 +13,9 @@
  *   - The sort runs once per (rows, sort): sortValue is not called again
  *     on a re-render that changes neither.
  *   - Form state lives in the forms (slice 2): a keystroke in the reject
- *     rationale, the disposition notes or the bulk gate's shared rationale
- *     re-renders that form only. The table's renders are counted through
+ *     rationale, a change of the disposition's outcome or callback time (its
+ *     free-text notes are retired, D-shell-deviations-g2) or the bulk gate's
+ *     shared rationale re-renders that form only. The table's renders are counted through
  *     useLeadTableFillHeight, which the shell calls once per render.
  *   - The shell's row callbacks keep one identity (slice 3; the shell itself
  *     stays 'use no memo' under the lane's budget cut 5, so this is
@@ -333,15 +334,28 @@ describe('LeadTable render cost (runtime-04)', () => {
     expect(counts.shellRenders).toBe(before);
   });
 
-  it('a keystroke in the disposition notes never re-renders the table', () => {
+  it('an outcome and callback-time change in the disposition form never re-renders the table', () => {
     render(<LeadTable leads={LEADS} salesTeam={TEAM} />);
     click(container.querySelector(`[aria-label="Toggle preview for lead ${IDS[0]}"]`));
     click(container.querySelector(`[aria-label="Log call disposition for ${IDS[0]}"]`));
-    const notes = [...container.querySelectorAll<HTMLTextAreaElement>('form.decision-panel textarea')][0];
-    if (!notes) throw new Error('the disposition panel did not open');
+    const form = [...container.querySelectorAll<HTMLFormElement>('form.decision-panel')].find(
+      (candidate) => candidate.textContent?.includes('Call disposition'),
+    );
+    if (!form) throw new Error('the disposition panel did not open');
+    expect(form.querySelector('textarea'), 'the retired Notes field is gone').toBeNull();
     const before = counts.shellRenders;
-    typeInto(notes, 'left a message');
-    expect(notes.value).toBe('left a message');
+    const outcome = [...form.querySelectorAll<HTMLSelectElement>('select')][1];
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(outcome, 'callback_scheduled');
+      outcome.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const callback = form.querySelector<HTMLInputElement>('input[type="datetime-local"]');
+    if (!callback) throw new Error('the callback time did not appear');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(callback, '2026-07-15T09:30');
+      callback.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(callback.value).toBe('2026-07-15T09:30');
     expect(counts.shellRenders).toBe(before);
   });
 

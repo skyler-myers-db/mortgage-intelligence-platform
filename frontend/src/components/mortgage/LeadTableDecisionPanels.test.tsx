@@ -94,15 +94,26 @@ describe('Lead Queue decision forms own their fields', () => {
     expect(onSubmit).not.toHaveBeenCalled();
 
     setValue(container.querySelector<HTMLInputElement>('input[type="datetime-local"]')!, '2026-07-15T09:30');
-    setValue(container.querySelector('textarea')!, '  Asked for Friday.  ');
     submit();
     expect(container.querySelector('form [role="alert"]')).toBeNull();
     expect(onSubmit).toHaveBeenCalledWith({
       lo_email: LO_A,
       outcome: 'callback_scheduled',
       callback_at: new Date('2026-07-15T09:30').toISOString(),
-      notes: 'Asked for Friday.',
     });
+  });
+
+  it('the disposition form has no free-text Notes field and sends no notes key (D-shell-deviations-g2)', () => {
+    const onSubmit = vi.fn();
+    act(() => root.render(
+      <LeadDispositionPanel borrowerId={BORROWER} salesTeam={TEAM} salesBusy={false} initialLo={LO_A} onCancel={vi.fn()} onSubmit={onSubmit} />,
+    ));
+    expect(container.querySelector('form textarea')).toBeNull();
+    const labels = [...container.querySelectorAll('.field__label')].map((label) => label.textContent);
+    expect(labels).toEqual(['Loan officer', 'Outcome']);
+    submit();
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(Object.keys(onSubmit.mock.calls[0][0] as object).sort()).toEqual(['callback_at', 'lo_email', 'outcome']);
   });
 
   it('the disposition form asks for a loan officer when none is chosen', () => {

@@ -17,7 +17,6 @@ export interface CallDisposition {
   attempt_number: number;
   occurred_at: string;
   callback_at?: string | null;
-  notes?: string | null;
   audit_event_id?: string | null;
 }
 

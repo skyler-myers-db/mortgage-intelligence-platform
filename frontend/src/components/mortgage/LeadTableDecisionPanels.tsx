@@ -104,6 +104,10 @@ export function LeadRejectPanel({
 }
 
 const CHOOSE_LO = 'Choose the loan officer who worked this lead.';
+
+// The free-text Notes box is retired (D-shell-deviations-g2): it wrote text
+// about a consumer into two append-only ledgers and showed it nowhere. The
+// outcome and callback time carry the operational signal.
 const CALLBACK_TIME_REQUIRED = 'Callback scheduled dispositions require a callback time.';
 
 export function LeadDispositionPanel({
@@ -125,7 +129,6 @@ export function LeadDispositionPanel({
   const [loEmail, setLoEmail] = useState(initialLo);
   const [outcome, setOutcome] = useState<CallDisposition['outcome']>('called_left_voicemail');
   const [callbackAt, setCallbackAt] = useState('');
-  const [notes, setNotes] = useState('');
   // Pre-flight validation, said inside the form (it used to be the table's
   // alert, far from the field). noValidate: this text replaces the
   // browser's own bubble, so the reason is visible and announced.
@@ -145,7 +148,6 @@ export function LeadDispositionPanel({
       lo_email: loEmail,
       outcome,
       callback_at: callbackAt ? new Date(callbackAt).toISOString() : null,
-      notes: notes.trim() || null,
     });
   }
 
@@ -206,15 +208,6 @@ export function LeadDispositionPanel({
           />
         </label>
       )}
-      <label className="decision-panel__field decision-panel__field--wide">
-        <span className="field__label">Notes</span>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          maxLength={500}
-          placeholder="Optional operational note."
-        />
-      </label>
       <div className="decision-panel__actions">
         <Button
           type="button"
