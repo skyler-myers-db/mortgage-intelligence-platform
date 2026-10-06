@@ -211,6 +211,51 @@ test.describe('(e) the typical duration hint', () => {
   });
 });
 
+/** The 2026-09-30 Stop copy ruling (lib/genieTurnOutcome.ts), verbatim. */
+const TOO_LATE = [
+  {
+    jobStatus: 'running',
+    note: 'Too late to stop: the answer was already verified and was still being recorded. Check History in a moment; if it is not there, Ask again.',
+  },
+  {
+    jobStatus: 'succeeded',
+    note: 'Too late to stop: the answer was already complete, but this kind of answer is not kept in History. Ask again to see it.',
+  },
+  {
+    jobStatus: 'failed',
+    note: 'Stopped. The answer was verified, but recording it did not finish, so it may be missing from History. Ask again if you need it.',
+  },
+] as const;
+
+test.describe('(g) a too-late Stop says what History holds', () => {
+  for (const { jobStatus, note: copy } of TOO_LATE) {
+    for (const surface of ['route', 'panel'] as const) {
+      test(`${surface}: recording / ${jobStatus} rewrites the note and the announcer says it`, async ({ app, page, mockApi }) => {
+        const job = registerGenieJob(mockApi, { steps: RUNNING, cancel: { outcome: 'recording', jobStatus } });
+        let scope: Locator;
+        if (surface === 'route') {
+          await app.gotoRoute('/ask-genie');
+          await askOnRoute(page);
+          scope = thread(page);
+        } else {
+          await app.gotoRoute('/');
+          scope = await app.openGenie();
+          await askInPanel(scope);
+        }
+        await expect.poll(() => job.statusPolls, WAIT).toBeGreaterThan(0);
+
+        await scope.getByRole('button', { name: 'Stop this Genie turn' }).click();
+
+        const note = scope.locator('.genie__msg--stopped');
+        await expect(note).toContainText(copy, WAIT);
+        await expect(note).not.toContainText(UNCONFIRMED);
+        await expect(page.locator(`[data-genie-announcer="${surface}"]`)).toHaveText(copy);
+        expect(job.cancels).toBe(1);
+      });
+    }
+  }
+});
+
 test.describe('(f) axe', () => {
   for (const theme of FIXTURE_THEMES) {
     test(`${theme}: the confirmed Stopped note has no WCAG violations`, async ({ app, page, mockApi }) => {

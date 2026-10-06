@@ -64,6 +64,12 @@ def _sections_block_ddl() -> str:
     return _SCHEMA[start:end]
 
 
+def _genie_messages_ddl() -> str:
+    start = _SCHEMA.index("CREATE TABLE IF NOT EXISTS mip_app.genie_messages (")
+    end = _SCHEMA.index(");", start) + 2
+    return _SCHEMA[start:end]
+
+
 def _action_audit_ddl() -> str:
     start = _SCHEMA.index("CREATE TABLE IF NOT EXISTS mip_app.action_audit (")
     end = _SCHEMA.index("-- Audit archival run ledger", start)
@@ -536,3 +542,89 @@ def test_a_delivered_answer_stays_a_duration_sample_after_the_sweep_expires_it(p
         durations._reset_for_tests()
 
     assert typical == 60
+
+
+# ------------------------------ the Stop's History settle (2026-09-30 ruling)
+
+
+def _history_row(pg: _PgLakebase, *, message_id: str = "msg-1", source: str = "genie", age_s: int = 0) -> None:
+    pg.sql(
+        "INSERT INTO mip_app.genie_messages (conversation_id, message_id, actor_email, question_hash, source, "
+        "created_at) VALUES ('conv-1', %s, 'lo@example.com', %s, %s, now() - make_interval(secs => %s))",
+        (message_id, _HASH[:16], source, age_s),
+    )
+
+
+def _stop(pg: _PgLakebase, job_id: str) -> tuple[str, str]:
+    result = request_cancel(pg, actor="lo@example.com", payload=_cancel_payload(job_id), binding_hash=_HASH)  # type: ignore[arg-type]
+    return result.outcome, result.status.value
+
+
+@pytest.fixture
+def history(pg: _PgLakebase, monkeypatch: pytest.MonkeyPatch) -> _PgLakebase:
+    from backend.services import genie_completion_cancel as cancel
+
+    monkeypatch.setattr(cancel, "_SETTLE_INTERVAL_S", 0.0)
+    pg.sql(_genie_messages_ddl())
+    return pg
+
+
+def test_a_stop_after_the_record_and_its_history_row_is_recorded(history: _PgLakebase) -> None:
+    job_id = _running_job(history)
+    assert record.commit_governed_record(history, job_id) == "committed"  # type: ignore[arg-type]
+    _history_row(history)
+    assert jobs.succeed(history, job_id, {"v": 1}) is True  # type: ignore[arg-type]
+
+    assert _stop(history, job_id) == ("recorded", "succeeded")
+    assert _audit_rows(history) == []
+    assert history.row(job_id)["cancel_requested_at"] is None
+
+
+def test_a_policy_blocked_success_is_recording_because_history_never_keeps_it(history: _PgLakebase) -> None:
+    job_id = _running_job(history)
+    assert record.commit_governed_record(history, job_id) == "committed"  # type: ignore[arg-type]
+    assert jobs.succeed(history, job_id, {"v": 1}) is True  # type: ignore[arg-type]
+
+    assert _stop(history, job_id) == ("recording", "succeeded")
+
+
+def test_a_record_that_failed_before_its_history_row_is_recording_failed(history: _PgLakebase) -> None:
+    job_id = _running_job(history)
+    assert record.commit_governed_record(history, job_id) == "committed"  # type: ignore[arg-type]
+    assert jobs.fail(history, job_id, GenieJobFailureKind.DEPENDENCY_DOWN) is True  # type: ignore[arg-type]
+
+    assert _stop(history, job_id) == ("recording", "failed")
+    assert _audit_rows(history) == []
+
+
+def test_a_lease_lost_expiry_after_the_record_and_its_row_is_recorded(history: _PgLakebase) -> None:
+    job_id = _running_job(history)
+    assert record.commit_governed_record(history, job_id) == "committed"  # type: ignore[arg-type]
+    _history_row(history, source="trusted_sql")  # History shows it whatever the session source
+    history.sql(
+        "UPDATE mip_app.genie_completion_jobs SET lease_until = now() - interval '1 second' WHERE job_id = %s::uuid",
+        (job_id,),
+    )
+    assert _read(history, job_id).status.value == "expired"  # type: ignore[union-attr]
+
+    assert _stop(history, job_id) == ("recorded", "expired")
+
+
+def test_a_failure_without_the_commit_point_has_ended(history: _PgLakebase) -> None:
+    job_id = _running_job(history)
+    assert jobs.fail(history, job_id, GenieJobFailureKind.INTERNAL) is True  # type: ignore[arg-type]
+
+    assert _stop(history, job_id) == ("ended", "failed")
+    assert _audit_rows(history) == []
+
+
+@pytest.mark.parametrize(("age_s", "expected"), [(-5, "recorded"), (3600, "recording")], ids=["newer", "older"])
+def test_a_fallback_id_row_counts_only_when_written_after_the_job(
+    history: _PgLakebase, age_s: int, expected: str
+) -> None:
+    job_id = _running_job(history)
+    assert record.commit_governed_record(history, job_id) == "committed"  # type: ignore[arg-type]
+    _history_row(history, message_id=f"trusted_sql-{_HASH[:16]}", age_s=age_s)
+    assert jobs.succeed(history, job_id, {"v": 1}) is True  # type: ignore[arg-type]
+
+    assert _stop(history, job_id) == (expected, "succeeded")

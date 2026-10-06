@@ -70,12 +70,15 @@ export interface GenieJobProgress {
 
 /** `POST /api/genie/message/cancel` (audit genie-03). `cancelled`: this app
  *  will not verify or record the answer (never that Genie's own message was
- *  cancelled). `recorded`: the answer was already recorded. `ended`: the job
- *  had already failed or expired. */
+ *  cancelled). `recorded`: too late, and the answer's History row exists.
+ *  `recording`: too late, and no History row was found; `status` says
+ *  whether it is still being written (running), is never kept (succeeded) or
+ *  did not finish (failed, expired). `ended`: the job had already failed or
+ *  expired with nothing recorded. */
 export interface GenieCancelResult {
   kind: 'genie_completion_cancel';
   job_id: string;
-  outcome: 'cancelled' | 'recorded' | 'ended';
+  outcome: 'cancelled' | 'recorded' | 'recording' | 'ended';
   status: GenieJobStatusValue;
 }
 

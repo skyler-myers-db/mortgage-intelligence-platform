@@ -28,11 +28,10 @@ import {
   type PersistedTurnRecord,
 } from './genieInFlightRecord';
 import { requestGenieTurnCancel, type GenieTurnCancelTarget } from './genieTurnCancel';
+import { stopNoteFor } from './genieTurnStop';
 import { forgetLeave, leaveWaitMs, unwatchLeave, watchLeave } from './genieTurnUnload';
 import {
   GENIE_RESUME_FAILED_REASON,
-  GENIE_STOP_CONFIRMED_REASON,
-  GENIE_STOP_RECORDED_REASON,
   GENIE_STOPPED_REASON,
   genieTurnOutcome,
   genieOutcomeAnnouncement,
@@ -616,12 +615,13 @@ export function startGenieTurn({ question, conversationId, surface, startedAt }:
 /** Replace Stopped note `stopId` with the server's confirmed copy; nothing
  *  when the note is gone (a reset or an actor change) or the call failed. */
 function confirmStop(stopId: number, target: GenieTurnCancelTarget): void {
-  void requestGenieTurnCancel(target).then((outcome) => {
+  void requestGenieTurnCancel(target).then((result) => {
     const index = snapshot.notes.findIndex((note) => note.kind === 'stopped' && note.stopId === stopId);
-    if (outcome === null || index < 0) return;
-    const reason = outcome === 'recorded' ? GENIE_STOP_RECORDED_REASON : GENIE_STOP_CONFIRMED_REASON;
+    const confirmed = stopNoteFor(result);
+    if (confirmed === null || index < 0) return;
+    const { reason, announce } = confirmed;
     const notes = snapshot.notes.map((note, at) => (at === index ? { ...note, reason } : note));
-    update(outcome === 'recorded' ? { notes, ...announcing(reason, snapshot.inFlight) } : { notes });
+    update(announce ? { notes, ...announcing(reason, snapshot.inFlight) } : { notes });
   });
 }
 

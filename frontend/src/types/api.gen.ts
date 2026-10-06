@@ -956,15 +956,20 @@ export interface ResponseSchemas {
    * recorded for the turn (no ``genie.run_query`` audit row, no action
    * tokens, no session row; the submit's ``genie.message_submitted`` row
    * stays). It never means that Genie's own message was cancelled: Genie may
-   * keep the question as context. ``recorded``: the answer was already
-   * verified and recorded before the Stop, so nothing changed. ``ended``: the
-   * job had already failed or expired. ``status`` is the job's status after
-   * the request.
+   * keep the question as context. ``recorded``: the Stop came too late and
+   * the turn's History row exists, whatever the job's status. ``recording``:
+   * the Stop came too late, but no History row was found yet; ``status``
+   * tells whether the record is still being written (``running``), whether
+   * the answer is one History never keeps (``succeeded``) or whether
+   * recording did not finish (``failed`` or ``expired``). ``ended``: the job
+   * had already failed or expired with nothing recorded. Only an ACCEPTED
+   * cancel says anything about the RUN_GENIE audit row: it guarantees none
+   * is written. ``status`` is the job's status after the request.
    */
   GenieCancelResponse: {
     job_id: string;
     kind: "genie_completion_cancel";
-    outcome: "cancelled" | "recorded" | "ended";
+    outcome: "cancelled" | "recorded" | "recording" | "ended";
     status: ResponseSchemas['GenieJobStatus'];
   };
   /** How many of the shipped prose's figures were verified, and which. */

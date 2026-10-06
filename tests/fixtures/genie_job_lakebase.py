@@ -23,6 +23,14 @@ modelled, the sections writer's UPDATE runs inside that transaction (or
 alone) under its running/owner/unrecorded/uncancelled guard, the status
 poll's sections read gates on the poller's revision, and every terminal
 statement NULLs the column. ``sections_writes`` records each stored payload.
+
+The Stop's History settle (the 2026-09-30 copy ruling): ``history_rows``
+models ``mip_app.genie_messages`` (``add_history_row``), the settle read
+matches the turn's message id, or the question label on a row written at or
+after the job's creation; ``settle_reads`` counts the reads,
+``fail_settle_reads`` makes the next N raise, and ``on_settle_read`` (called
+with the read's number before it is answered) lets a test move the job or
+write the row between reads.
 """
 
 from __future__ import annotations
@@ -75,6 +83,11 @@ class FakeJobLakebase:
         self.job_statements: list[str] = []
         self.audit_rows: list[dict[str, Any]] = []
         self.fail_audit_inserts = 0
+        #: ``mip_app.genie_messages`` rows (History), for the Stop's settle.
+        self.history_rows: list[dict[str, Any]] = []
+        self.settle_reads = 0
+        self.fail_settle_reads = 0
+        self.on_settle_read: Callable[[int], None] | None = None
         #: Called with the statement name before each job statement runs.
         self.before: Callable[[str], None] | None = None
         self._lock = threading.RLock()
@@ -107,6 +120,35 @@ class FakeJobLakebase:
             row.update(overrides)
             self.rows[row["job_id"]] = row
             return dict(row)
+
+    def add_history_row(self, **fields: Any) -> dict[str, Any]:
+        """A History row (``genie_messages``); ``source`` is never consulted."""
+
+        with self._lock:
+            row = {"source": "genie", "created_at": self.now, **fields}
+            self.history_rows.append(row)
+            return dict(row)
+
+    def _settle(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        self.settle_reads += 1
+        if self.on_settle_read is not None:
+            self.on_settle_read(self.settle_reads)
+        if self.fail_settle_reads:
+            self.fail_settle_reads -= 1
+            raise LakebaseError("settle read refused (fake)")
+        job = self.rows.get(str(params["job_id"]))
+        if job is None or job["actor_email"] != params["actor_email"]:
+            return None
+        history = any(
+            row["actor_email"] == job["actor_email"]
+            and row["conversation_id"] == job["conversation_id"]
+            and (
+                row["message_id"] == job["message_id"]
+                or (row["question_hash"] == params["question_label"] and row["created_at"] >= job["created_at"])
+            )
+            for row in self.history_rows
+        )
+        return {"status": job["status"], "recorded": job["recorded_at"] is not None, "history_row": history}
 
     def _new_row(self, params: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -192,6 +234,10 @@ class FakeJobLakebase:
                 self._require_table()
                 self.job_statements.append("sections")
                 return self._write_sections(params)
+            if sql is cancel._HISTORY_SETTLE_SQL:
+                self._require_table()
+                self.job_statements.append("settle")
+                return self._settle(params)
             if sql is durations._DURATIONS_SQL:
                 self._require_table()
                 self.job_statements.append("durations")

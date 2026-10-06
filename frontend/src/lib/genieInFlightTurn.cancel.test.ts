@@ -45,7 +45,14 @@ import {
   startGenieTurn,
   stopGenieTurn,
 } from './genieInFlightTurn';
-import { GENIE_STOP_CONFIRMED_REASON, GENIE_STOP_RECORDED_REASON, GENIE_STOPPED_REASON } from './genieTurnOutcome';
+import {
+  GENIE_STOP_CONFIRMED_REASON,
+  GENIE_STOP_INCOMPLETE_REASON,
+  GENIE_STOP_NOT_KEPT_REASON,
+  GENIE_STOP_RECORDED_REASON,
+  GENIE_STOP_RECORDING_REASON,
+  GENIE_STOPPED_REASON,
+} from './genieTurnOutcome';
 
 const QUESTION = 'Which states have the most prime refi candidates?';
 const JOB_ID = '0a1b2c3d-0000-4000-8000-000000000001';
@@ -107,8 +114,11 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
   return { promise, resolve, reject };
 }
 
-function cancelResult(outcome: GenieCancelResult['outcome']): GenieCancelResult {
-  return { kind: 'genie_completion_cancel', job_id: JOB_ID, outcome, status: 'running' };
+function cancelResult(
+  outcome: GenieCancelResult['outcome'],
+  status: GenieCancelResult['status'] = 'running',
+): GenieCancelResult {
+  return { kind: 'genie_completion_cancel', job_id: JOB_ID, outcome, status };
 }
 
 function installStorage(): void {
@@ -216,6 +226,54 @@ describe('Stop on a job turn', () => {
     expect(getGenieTurnSnapshot().announcementSeq).toBe(seq + 1);
     await flush();
     expect(getGenieTurnSnapshot().announcementSeq).toBe(seq + 1);
+  });
+
+  it.each([
+    ['recorded', 'succeeded', GENIE_STOP_RECORDED_REASON],
+    ['recorded', 'expired', GENIE_STOP_RECORDED_REASON],
+    ['recording', 'running', GENIE_STOP_RECORDING_REASON],
+    ['recording', 'succeeded', GENIE_STOP_NOT_KEPT_REASON],
+    ['recording', 'failed', GENIE_STOP_INCOMPLETE_REASON],
+    ['recording', 'expired', GENIE_STOP_INCOMPLETE_REASON],
+  ] as const)('a too-late Stop (%s / %s) rewrites the note and announces it once', async (outcome, status, reason) => {
+    await startedJobTurn();
+    mocks.genieCancel.mockResolvedValue(cancelResult(outcome, status));
+    stopGenieTurn();
+    const seq = getGenieTurnSnapshot().announcementSeq;
+    await flush();
+
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([reason]);
+    expect(getGenieTurnSnapshot().announcement).toBe(reason);
+    expect(getGenieTurnSnapshot().announcementSeq).toBe(seq + 1);
+  });
+
+  it.each([
+    ['cancelled', 'cancelled'],
+    ['ended', 'failed'],
+    ['ended', 'expired'],
+  ] as const)('a confirmed Stop (%s / %s) is the confirmed copy, never announced', async (outcome, status) => {
+    await startedJobTurn();
+    mocks.genieCancel.mockResolvedValue(cancelResult(outcome, status));
+    stopGenieTurn();
+    const seq = getGenieTurnSnapshot().announcementSeq;
+    await flush();
+
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOP_CONFIRMED_REASON]);
+    expect(getGenieTurnSnapshot().announcementSeq).toBe(seq);
+  });
+
+  it.each([
+    ['recording', 'queued'],
+    ['recording', 'cancelled'],
+  ] as const)('an answer the ruling does not cover (%s / %s) keeps the unconfirmed note', async (outcome, status) => {
+    await startedJobTurn();
+    mocks.genieCancel.mockResolvedValue(cancelResult(outcome, status));
+    stopGenieTurn();
+    const seq = getGenieTurnSnapshot().announcementSeq;
+    await flush();
+
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOPPED_REASON]);
+    expect(getGenieTurnSnapshot().announcementSeq).toBe(seq);
   });
 
   it('a failed cancel leaves the unconfirmed note unchanged', async () => {

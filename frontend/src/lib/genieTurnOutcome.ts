@@ -43,6 +43,21 @@ export const GENIE_STOP_CONFIRMED_REASON =
 export const GENIE_STOP_RECORDED_REASON =
   'Stopped here, but the answer had already been verified and recorded. Find it in History.';
 
+/** Too late to stop, and its History row is still being written. */
+export const GENIE_STOP_RECORDING_REASON =
+  'Too late to stop: the answer was already verified and was still being recorded. Check History in a ' +
+  'moment; if it is not there, Ask again.';
+
+/** Too late to stop, and the answer is one History never keeps. */
+export const GENIE_STOP_NOT_KEPT_REASON =
+  'Too late to stop: the answer was already complete, but this kind of answer is not kept in History. Ask ' +
+  'again to see it.';
+
+/** The record's commit point passed, but recording did not finish. */
+export const GENIE_STOP_INCOMPLETE_REASON =
+  'Stopped. The answer was verified, but recording it did not finish, so it may be missing from History. ' +
+  'Ask again if you need it.';
+
 /** A resumed turn that failed before its question could be shown again. */
 export const GENIE_RESUME_FAILED_REASON = 'Could not resume your last question after the reload. Ask it again.';
 
