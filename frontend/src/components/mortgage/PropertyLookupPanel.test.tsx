@@ -2,6 +2,7 @@
  * @vitest-environment happy-dom
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -18,6 +19,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 }));
 
 import { ApiError, type ApiValidationIssue } from '../../lib/api';
+import { auditEventHref } from '../../lib/auditLinks';
 import { PropertyLookupPanel } from './PropertyLookupPanel';
 import { preloadDescribedError } from '../ui/DescribedError';
 
@@ -113,6 +115,47 @@ function fillValidForm(address = '123 Secret Elm St') {
 }
 
 const resultEl = () => container.querySelector('[data-testid="property-lookup-result"]');
+
+describe('PropertyLookupPanel audit link (flow-04)', () => {
+  function renderAs(session: { can_access_admin: boolean; can_read_audit: boolean }) {
+    const client = new QueryClient();
+    client.setQueryData(['session', 'access'], { ...session, can_approve: false });
+    act(() => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <PropertyLookupPanel />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+  }
+
+  it.each([
+    ['an administrator', { can_access_admin: true, can_read_audit: true }],
+    ['an auditor', { can_access_admin: false, can_read_audit: true }],
+  ])('links the lookup audit id into the ledger for %s', async (_who, session) => {
+    propertyLookup.mockResolvedValue(MATCH);
+    renderAs(session);
+    fillValidForm();
+    await submit();
+    const caption = container.querySelector('[data-testid="property-lookup-audit"]');
+    const link = caption?.querySelector<HTMLAnchorElement>('a.mono');
+    expect(link?.getAttribute('href')).toBe(auditEventHref('evt_match_001'));
+    expect(link?.textContent).toBe('evt_match_001');
+    expect(link?.hasAttribute('title')).toBe(false);
+  });
+
+  it('keeps the audit id as mono text for everyone else', async () => {
+    propertyLookup.mockResolvedValue(MISS);
+    renderAs({ can_access_admin: false, can_read_audit: false });
+    fillValidForm();
+    await submit();
+    const caption = container.querySelector('[data-testid="property-lookup-audit"]');
+    expect(caption?.querySelector('a')).toBeNull();
+    expect(caption?.querySelector('span.mono')?.textContent).toBe('evt_miss_002');
+  });
+});
 
 describe('PropertyLookupPanel', () => {
   it('renders masked refs, loan facts, score, and a dossier link on a match', async () => {

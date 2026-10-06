@@ -1,6 +1,8 @@
 import { lazy, Suspense, useState, type ComponentType, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ApiError, api } from '../../lib/api';
+import { auditEventHref } from '../../lib/auditLinks';
+import { useAuditLinkAccess } from '../../lib/optionalQueryReads';
 import type { PropertyLoanLookupResponse } from '../../types';
 import { segmentName } from '../../lib/segmentMetadata';
 import { Button, Chip, SurfaceTitle } from '../Primitives';
@@ -264,6 +266,8 @@ function PropertyLookupResult({
 }) {
   const loan = result.loan;
   const segments = result.segment ?? [];
+  // flow-04: administrators and auditors open the lookup's own ledger row.
+  const auditLinks = useAuditLinkAccess();
   return (
     <div
       className="surface surface--inset stack-sm"
@@ -351,7 +355,14 @@ function PropertyLookupResult({
         )}
 
         <div className="muted fs-11" data-testid="property-lookup-audit">
-          Lookup audited · {result.audit_event_id}
+          Lookup audited ·{' '}
+          {auditLinks ? (
+            <Link className="mono" to={auditEventHref(result.audit_event_id)} onClick={onNavigate}>
+              {result.audit_event_id}
+            </Link>
+          ) : (
+            <span className="mono">{result.audit_event_id}</span>
+          )}
         </div>
       </div>
     </div>
