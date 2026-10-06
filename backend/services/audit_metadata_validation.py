@@ -21,11 +21,11 @@ from backend.schemas._validators_person_names import (
     contains_human_name_shape,
     titlecase_pair_is_non_person,
 )
+from backend.schemas.approval_request import SKIP_REASONS
 from backend.schemas.borrower_copy_claims import (
     contains_unsupported_borrower_qualification_claim,
 )
 from backend.schemas.borrower_copy_names import contains_borrower_copy_contextual_name
-from backend.schemas.approval_request import SKIP_REASONS
 from backend.schemas.borrower_cta_evidence import contains_borrower_cta_contradiction
 from backend.schemas.common import (
     contains_pii_marker,
