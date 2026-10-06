@@ -395,6 +395,11 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `market_rate_fraction` | DOUBLE | N | `market_rates_weekly.rate_fraction` (where `is_latest`) | `why_panel.market_rate` | |
 | `opportunity_score` | INT | N | `mip.gold.fn_lead_score(economic_incentive, intent_trigger, fit, relationship, evidence)` | `opportunity_score` | Computed in `borrower_360`; `lead_scores` is the parallel scoring audit surface. |
 | `confidence` | INT | N | `CAST(ROUND((economic_incentive + intent_trigger + fit + relationship + evidence) / 5.0) AS INT)` | `confidence` | Average of 5 sub-scores, 0..100. Keeps Python parity with `mock_data._build_borrower`. |
+| `economic_incentive_points` | DECIMAL(5,2) | Y | `CAST(0.35 * ss.economic_incentive AS DECIMAL(5,2))` from this CTAS's own `subscores` CTE | `score_points.economic_incentive` (LeadSummary rows) | Weighted sub-score (W5c, wow-stage-2). NULL when the sub-score is NULL, never 0. The five sum, banker-rounded and clipped to 0..100, to `opportunity_score`. |
+| `intent_trigger_points` | DECIMAL(5,2) | Y | `CAST(0.30 * ss.intent_trigger AS DECIMAL(5,2))` from this CTAS's own `subscores` CTE | `score_points.intent_trigger` (LeadSummary rows) | Weighted sub-score (W5c, wow-stage-2). NULL when the sub-score is NULL, never 0. The five sum, banker-rounded and clipped to 0..100, to `opportunity_score`. |
+| `fit_points` | DECIMAL(5,2) | Y | `CAST(0.15 * ss.fit AS DECIMAL(5,2))` from this CTAS's own `subscores` CTE | `score_points.fit` (LeadSummary rows) | Weighted sub-score (W5c, wow-stage-2). NULL when the sub-score is NULL, never 0. The five sum, banker-rounded and clipped to 0..100, to `opportunity_score`. |
+| `relationship_points` | DECIMAL(5,2) | Y | `CAST(0.10 * ss.relationship AS DECIMAL(5,2))` from this CTAS's own `subscores` CTE | `score_points.relationship` (LeadSummary rows) | Weighted sub-score (W5c, wow-stage-2). NULL when the sub-score is NULL, never 0. The five sum, banker-rounded and clipped to 0..100, to `opportunity_score`. |
+| `evidence_points` | DECIMAL(5,2) | Y | `CAST(0.10 * ss.evidence AS DECIMAL(5,2))` from this CTAS's own `subscores` CTE | `score_points.evidence` (LeadSummary rows) | Weighted sub-score (W5c, wow-stage-2). NULL when the sub-score is NULL, never 0. The five sum, banker-rounded and clipped to 0..100, to `opportunity_score`. |
 | `recommended_offer_code` | STRING | N | `mip.gold.fn_next_best_offer(...)` | — | Lowercase code. |
 | `recommended_offer` | STRING | N | in-SQL label map from `recommended_offer_code` | `recommended_offer` | Human label; mirrors `NBO_PRODUCT_LABELS`. |
 | `why_now` | STRING | N | derived template (see §6) | `why_now` | One sentence. Template, no PII. |
@@ -511,6 +516,7 @@ Columns = exact superset of what `LeadSummary` needs, plus `rank_overall` and `r
 | `rank_overall` | INT | N | `DENSE_RANK() OVER (ORDER BY opportunity_score DESC, clip)` | |
 | `rank_within_state` | INT | N | `DENSE_RANK() OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip)` | |
 | `population_version` | STRING | N | `CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1')` | Used in the EvidenceDrawer footer as a provenance chip. |
+| `economic_incentive_points` .. `evidence_points` | DECIMAL(5,2) | Y | `b.*_points` (borrower_360) | The five weighted sub-scores (W5c, wow-stage-2), right after `confidence`. The API projects them into `LeadSummary.score_points` on queue rows and geo drill-down rows (null when absent, NULL or inconsistent with `opportunity_score`). |
 
 ### 3.6 `mip.gold.segment_population`
 
@@ -568,6 +574,29 @@ Primary-contact ranking is deterministic: contact-eligible members (`marketing_e
 | `suppressed_by_household_dedup` | BOOLEAN | N | rank + eligibility | TRUE for eligible co-owners suppressed by opt-in household dedup. |
 | `owner_link_reachable_count` | INT | N | `silver.property_owners` | Count of reachable Owner Links used by the owner-link branch. |
 | `refreshed_at` | TIMESTAMP | N | `mip.ref.refresh_run_state.refresh_at` | Shared gold refresh timestamp. |
+
+### 3.8 W5c gold slot columns (borrower_dossier, funnel_snapshot_daily)
+
+Added by lane w5-gold-slot-cache (audits wow-stage-2, wow-stage-4, wow-ai-3).
+Every column is nullable and declared in lockstep in the CTAS, its per-table
+DDL (where one exists) and `sql/ddl/003_gold_tables.sql`, with byte-identical
+COMMENTs.
+
+| Table | Column | Type | Null | Source | Definition |
+|---|---|---|---|---|---|
+| `gold.borrower_dossier` | `economic_incentive_points` .. `evidence_points` | DECIMAL(5,2) | Y | `b.*_points` (borrower_360) | Right after `confidence`, so the dossier stays a 1:1 superset of borrower_360. The dossier read does not project them: `Borrower360.score_points` stays null and the spine answers from `/proof`. |
+| `gold.borrower_dossier` | `first_pos_date` | DATE | Y | `silver.lien_current.first_pos_date` (gold refresh only; the App never reads silver) | First-lien origination date. `Borrower360.first_pos_date` (YYYY-MM-DD). |
+| `gold.borrower_dossier` | `first_pos_rate_type` | STRING | Y | `CASE UPPER(TRIM(lc.first_pos_rate_type)) WHEN 'FIX' THEN 'FIX' WHEN 'ARM' THEN 'ARM' END` | A closed upper-case code; anything else is NULL. `Borrower360.first_pos_rate_type`. |
+| `gold.borrower_dossier` | `first_itm_week` | DATE | Y | the crossing CTEs in `gold_borrower_dossier.sql` | The Monday the current unbroken in-the-money run began in the weekly MORTGAGE30US series: `fn_in_the_money(fn_rate_spread(note_rate, week_rate), equity_pct, thresholds)`, today's rule and today's equity applied to past weekly rates; not a forecast. Eligibility is `gold_rate_window_weekly`'s book (active FIX first lien, bounded rate inside the 1% / 15% clamp); computed per lossless cell; never before the origination week; the series start when the run reaches it. NULL unless eligible and in the money at the latest week. `Borrower360.first_itm_week`. |
+| `gold.funnel_snapshot_daily` | `competitor_lien_borrowers` | INT | Y | `SUM(CASE WHEN is_competitor_lien THEN 1 ELSE 0 END)` per (state, segment) cell | The headline `SUM(is_competitor_lien)` carried per cell for the Delta Explainer's `competitor_lien` attribution. MERGE-maintained: an existing table gains it from `jobs/sync_lifecycle_state._ensure_funnel_snapshot_schema` (deploy step 9, the bundle job); snapshots recorded before it stay NULL and are never backfilled. |
+
+Genie-reachable classification (all four tables are trusted assets of the
+`mortgage_lead_intelligence` space): every new column is numeric
+(DECIMAL(5,2), INT), a DATE, or, for `first_pos_rate_type`, a closed
+upper-case code {FIX, ARM}. None is a descriptor, so none can take the
+title-case person-name shape. Pinned offline by
+`tests/unit/test_gold_slot_columns_contract.py`; the live `SELECT DISTINCT`
+re-run per new STRING column is a post-deploy proof.
 
 ---
 
