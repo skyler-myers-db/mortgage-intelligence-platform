@@ -173,6 +173,12 @@ _SECRET_TEXT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1<redacted>@",
     ),
     (
+        # A signed page cursor (the Lead Queue view and the ledger explorer)
+        # in an access line's query string is never logged (D-audit-reads-a).
+        re.compile(r"(?i)([?&]cursor=)[^&\s\"']+"),
+        r"\1<redacted>",
+    ),
+    (
         _BORROWER_ID_RE,
         "B-<redacted>",
     ),

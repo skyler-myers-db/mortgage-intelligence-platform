@@ -21,7 +21,6 @@ named ``:params`` all run as Databricks SQL runs them). Pinned:
 from __future__ import annotations
 
 import re
-import sqlite3
 from typing import Any
 
 import pytest
@@ -40,71 +39,18 @@ from backend.services.repositories.databricks_shared import (
     _LEAD_POPULATION_SELECT_FROM_B360,
     _LEAD_POPULATION_SELECT_FROM_LP,
 )
+from tests.fixtures.sqlite_lead_warehouse import SqliteLeadWarehouse, gold_lead_row
 
 PAGE = 500
 ROWS = 1_050
 SORTS = [("rank", None)] + [(sort, d) for sort in ("score", "equity", "rate", "confidence") for d in ("asc", "desc")]
 
 
-def _columns(projection: str, alias: str) -> set[str]:
-    return set(re.findall(rf"\b{alias}\.(\w+)", projection))
+_SqliteWarehouse = SqliteLeadWarehouse
 
 
 def _row(index: int) -> dict[str, Any]:
-    score = 99 - (index % 50)  # heavy ties on score
-    return {
-        "borrower_id": f"B-{index:013d}",
-        "clip": str(1_000_000 + index),
-        "owner_name_hash": f"{index:08x}",
-        "display_name": f"Owner {index:08x}",
-        "state": "IL",
-        "city": "Chicago",
-        "zip": "60617",
-        "opportunity_score": score,
-        # DENSE_RANK by score: ties share a rank, so borrower_id breaks them.
-        "rank_overall": 100 - score,
-        # NULL equity from row 497 on: the 500-row boundary falls INSIDE the
-        # NULL run for every equity order.
-        "equity_estimate": None if index >= 497 else (index * 7919) % 400,
-        # NULL rate on every other row past 760 (906 non-null): page 0 ends
-        # in the non-null run and page 1 crosses into the NULL run.
-        "rate_spread_bps": None if index > 760 and index % 2 == 0 else (index * 31) % 120 - 20,
-        "confidence": index % 10,  # ten values for 1,050 rows: ties everywhere
-        "marketing_eligible": 1,
-        "consent_status": "opt_in",
-        "approval_status": "pending",
-    }
-
-
-class _SqliteWarehouse:
-    """Runs the repository's statements against an in-memory SQLite copy of gold."""
-
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
-        self.db = sqlite3.connect(":memory:")
-        self.db.row_factory = sqlite3.Row
-        self.statements: list[str] = []
-        lp_cols = _columns(_LEAD_POPULATION_SELECT_FROM_LP, "lp") | {"rank_overall"}
-        b_cols = _columns(_LEAD_POPULATION_SELECT_FROM_B360, "b") | {"county_fips_5", "owner_name_hash"}
-        ls_cols = {"borrower_id", "approval_status", "outreach_status", "approved_at", "outreach_at"}
-        for table, cols in (
-            ("lead_population", lp_cols),
-            ("borrower_360", b_cols),
-            ("borrower_lifecycle_state", ls_cols),
-        ):
-            ordered = sorted(cols)
-            self.db.execute(f"CREATE TABLE {table} ({', '.join(ordered)})")
-            if table == "borrower_lifecycle_state":
-                continue
-            for row in rows:
-                self.db.execute(
-                    f"INSERT INTO {table} ({', '.join(ordered)}) VALUES ({', '.join('?' for _ in ordered)})",
-                    [row.get(col) for col in ordered],
-                )
-
-    def execute(self, sql: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
-        self.statements.append(sql)
-        cursor = self.db.execute(sql.replace("mip.gold.", ""), dict(params or {}))
-        return [dict(row) for row in cursor.fetchall()]
+    return gold_lead_row(index)
 
 
 @pytest.fixture
@@ -203,10 +149,10 @@ def test_an_exact_multiple_of_the_page_size_has_no_more(warehouse: _SqliteWareho
 
 
 def test_the_keyset_is_read_from_the_raw_row_never_the_redacted_lead() -> None:
-    row = {"borrower_id": "B-0000000000001", "__rank_order": -3, "equity_estimate": None}
+    row = {"borrower_id": "B-L00001QUEUEXX", "__rank_order": -3, "equity_estimate": None}
 
-    assert keyset_of_row(LeadOrder.of("equity", "desc"), row) == (1, None, -3, "B-0000000000001")
-    assert keyset_of_row(RANK, row) == (-3, "B-0000000000001")
+    assert keyset_of_row(LeadOrder.of("equity", "desc"), row) == (1, None, -3, "B-L00001QUEUEXX")
+    assert keyset_of_row(RANK, row) == (-3, "B-L00001QUEUEXX")
 
 
 def test_every_keyset_value_is_a_bound_parameter() -> None:

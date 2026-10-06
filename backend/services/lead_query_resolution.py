@@ -162,6 +162,7 @@ def resolve_lead_query(
     params: LeadQueryParams,
     *,
     growth_handoff: Sequence[str] | None,
+    verify_handoff: bool = True,
 ) -> ResolvedLeadQuery:
     """Validate, authorize and replay ``params`` into one repository query.
 
@@ -169,7 +170,9 @@ def resolve_lead_query(
     request carried (``request.query_params.getlist``), or None for a read
     that never honours a handoff (the aggregates): a signed handoff binds
     the ranked rows to one agent run, which a count or a facet has no rows
-    to bind.
+    to bind. ``verify_handoff=False`` (a Lead Queue page past 0, whose signed
+    view cursor already binds this exact handoff) keeps every gate the
+    handoff's presence decides and skips only its re-verification.
     """
 
     segment = params.segment
@@ -446,7 +449,7 @@ def resolve_lead_query(
     }
     handoff_proof: GrowthAgentHandoffProof | None = None
     normalized_handoff_filters: dict[str, object] | None = None
-    if handoff:
+    if handoff and verify_handoff:
         try:
             normalized_handoff_filters = normalise_lead_queue_handoff_filters(
                 LeadCohortFilters(

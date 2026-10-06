@@ -406,6 +406,19 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "has_cursor",
         "returned_row_count",
         "read_audit_event_id",
+        # VIEW_LEADS server paging (D-audit-reads-a): the server-minted view
+        # every page row of one Lead Queue view shares, the page index, the
+        # closed sort tokens and the view's total. APPROVE / OUTREACH_REJECT /
+        # LEAD_EXPORT carry the CLIENT-DECLARED view (declared_lead_view_id)
+        # and the export the pages it held. Closed values only
+        # (audit_metadata_value_policy.validate_lead_view_values).
+        "view_id",
+        "page_index",
+        "sort",
+        "sort_dir",
+        "total_matching",
+        "declared_lead_view_id",
+        "pages_loaded",
     }
 )
 

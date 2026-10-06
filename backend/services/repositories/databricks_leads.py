@@ -640,6 +640,38 @@ class DatabricksLeadRepository:
             order=LeadOrder.of(sort, sort_dir),
         )
 
+    def list_with_identity_page(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        limit: int | None = None,
+        *,
+        sort: str = "rank",
+        sort_dir: str | None = None,
+        **filters: Any,
+    ) -> tuple[LeadPage, dict[str, str | int]]:
+        """``list_with_identity`` as a first view page: rows, sentinel, keyset, identity.
+
+        ``has_more`` is the identity total exceeding the delivered rows; the
+        keyset is the delivered last RAW row's.
+        """
+
+        values = lead_page_filters(segment, portfolio_id, filters)
+        order = LeadOrder.of(sort, sort_dir)
+        rows, identity = self._cohort_queries.list_with_identity_rows(
+            LeadCohortFilters(
+                **{key: value for key, value in values.items() if key not in ("portfolio_id", "cohort_id")}
+            ),
+            limit=self._bound_limit(limit),
+            order=order,
+        )
+        page = self._page_of(rows, len(rows), order)
+        return LeadPage(
+            leads=page.leads,
+            has_more=int(identity.get("total") or 0) > len(page.leads),
+            last_keyset=page.last_keyset,
+        ), identity
+
     @staticmethod
     def _criteria_key(criteria: PortfolioCriteria | None) -> dict[str, Any] | None:
         if criteria is None:

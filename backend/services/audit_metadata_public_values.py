@@ -69,6 +69,7 @@ from backend.services.audit_metadata_validation import (
     _growth_agent_reviewed_text_contains_pii,
 )
 from backend.services.audit_metadata_value_policy import (
+    validate_lead_view_values,
     validate_row_count,
     validate_source_assets,
     validate_sql_hash,
@@ -708,3 +709,6 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             validate_row_count(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
+    # VIEW_LEADS paging and the decisions / export that declare a view.
+    for field, reason in validate_lead_view_values(metadata):
+        raise AuditMetadataValueViolation(field, reason)

@@ -23742,6 +23742,60 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "description": "Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "rank",
+              "description": "Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence.",
+              "enum": [
+                "rank",
+                "score",
+                "equity",
+                "rate",
+                "confidence"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Direction of a server sort. Ignored for rank.",
+            "in": "query",
+            "name": "sort_dir",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "Direction of a server sort. Ignored for rank.",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Dir",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -34075,6 +34129,60 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "rank",
+              "description": "Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence.",
+              "enum": [
+                "rank",
+                "score",
+                "equity",
+                "rate",
+                "confidence"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Direction of a server sort. Ignored for rank.",
+            "in": "query",
+            "name": "sort_dir",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "Direction of a server sort. Ignored for rank.",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Dir",
+              "type": "string"
             }
           }
         ],

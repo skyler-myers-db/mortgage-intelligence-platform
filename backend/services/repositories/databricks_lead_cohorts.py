@@ -298,6 +298,22 @@ CROSS JOIN snapshot_validation
     ) -> tuple[list[LeadSummary], dict[str, str | int]]:
         """Return page rows and complete-set identity from one uncached statement."""
 
+        rows, identity = self.list_with_identity_rows(filters, limit=limit, order=order)
+        return [_redacted_lead(row) for row in rows], identity
+
+    def list_with_identity_rows(
+        self,
+        filters: LeadCohortFilters,
+        *,
+        limit: int,
+        order: LeadOrder = RANK,
+    ) -> tuple[list[dict[str, Any]], dict[str, str | int]]:
+        """The ranked RAW rows (``__rank_order`` included) and the identity.
+
+        A paged view mints its first cursor from the last raw row, so the
+        keyset is never read off a redacted lead.
+        """
+
         matched_sql, params, uses_lead_population = self.matched_cohort_sql(
             filters,
             include_lead_columns=True,
@@ -338,16 +354,7 @@ LEFT JOIN ranked ON TRUE
             digest_key="__cohort_digest",
             snapshot_key="__snapshot_id",
         )
-        leads = [
-            LeadSummary(
-                **redact_lead_row(
-                    {key: value for key, value in row.items() if not key.startswith("__")}
-                )
-            )
-            for row in rows
-            if row.get("borrower_id")
-        ]
-        return leads, identity
+        return [row for row in rows if row.get("borrower_id")], identity
 
     def matched_cohort_sql(
         self,
@@ -495,6 +502,10 @@ LEFT JOIN ranked ON TRUE
             lifecycle_params,
             True,
         )
+
+def _redacted_lead(row: Mapping[str, Any]) -> LeadSummary:
+    return LeadSummary(**redact_lead_row({key: value for key, value in row.items() if not key.startswith("__")}))
+
 
 def normalise_growth_agent_handoff_filters(
     criteria: Mapping[str, object],

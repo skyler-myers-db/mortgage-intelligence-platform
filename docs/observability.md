@@ -789,6 +789,26 @@ release after this SPA ships, make `review_mode` required on
 detail tells the reader to reload the app to approve, and the server stops
 writing `undeclared`.
 
+## 10a. Lead Queue view paging
+
+<!-- w5-lead-queue-paging, W5c. Appended beside section 10; the integrator renumbers. -->
+
+`GET /api/v1/leads` serves a VIEW (D-audit-reads-a): page 0 mints a server
+`view_id` (`X-Lead-View-Id`, `X-Page-Index: 0`) and, when its rows continue,
+a signed `X-Next-Cursor` the client sends back on an explicit Load next. Two
+structured events, each carrying no cursor, filter or borrower value:
+
+| Event | When | Fields |
+| --- | --- | --- |
+| `lead_cursor_rejected` | a cursor failed verification; the answer is 422 `lead_view_cursor_invalid` and nothing is written | `reason`: `signature`, `filters`, `expired`, `page_cap` or `malformed` |
+| `lead_cursor_unavailable` | no cursor key (no `MIP_GENIE_ACTION_SECRET_CURRENT` outside local/test): page 0 is served with `X-Lead-Paging: unavailable`, a cursor gets 503 | `outcome` |
+
+A refreshed gold snapshot between pages answers 409 (`The queue refreshed
+since this view loaded`) and the client restarts the view at page 0. An
+access line never carries a cursor: the structured formatter redacts
+`?cursor=` and `&cursor=` values. A `page_index` gap within one `view_id`
+in `mip_app.action_audit` means a dropped background write (`audit.dropped`).
+
 ## 11. Approval requests, revoke and the queue version
 
 <!-- w5-approval-ledger-api, 2026-10-01. Appended as section 11; the integrator renumbers. -->

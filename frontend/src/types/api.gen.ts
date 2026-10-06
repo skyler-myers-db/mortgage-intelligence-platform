@@ -3641,6 +3641,12 @@ export interface ApiOperations {
       approval_request_batch?: string | null;
       /** Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N — refine filters'. */
       limit?: number;
+      /** Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit. */
+      cursor?: string | null;
+      /** Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence. */
+      sort?: "rank" | "score" | "equity" | "rate" | "confidence";
+      /** Direction of a server sort. Ignored for rank. */
+      sort_dir?: "asc" | "desc";
     };
     headers: Record<string, never>;
     body: never;

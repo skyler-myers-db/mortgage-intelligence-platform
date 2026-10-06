@@ -6,13 +6,15 @@ and the list of borrower_ids the user saw. Governance §4 wants this
 so we can reconstruct "which list did the approver see when they
 decided to approve". No PII lands in the audit row -- borrower ids are
 already masked before API egress.
+
+D-audit-reads-a (W5c): a served page is one page of a VIEW. Every served 2xx
+writes exactly one VIEW_LEADS row, grouped by the server-minted ``view_id``
+and ordered by ``page_index`` (``backend/services/lead_view_paging.py``).
 """
 from __future__ import annotations
 
 import dataclasses
 import logging
-import re
-from datetime import UTC
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
@@ -29,6 +31,7 @@ from backend.schemas.lead_query import (
     DEFAULT_LEAD_LIMIT,
     MAX_LEAD_LIMIT,
     LeadLimitDep,
+    LeadPagingParamsDep,
     LeadQueryParams,
     LeadQueryParamsDep,
 )
@@ -37,7 +40,7 @@ from backend.services.approval_requests import (
     ApprovalRequestNotFound,
     open_borrower_ids_for_queue,
 )
-from backend.services.audit_store import AuditStore, get_audit_store
+from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.lead_query_resolution import (
@@ -45,13 +48,19 @@ from backend.services.lead_query_resolution import (
     view_leads_audit_payload,
     without_facet_dimension,
 )
+from backend.services.lead_view_paging import (
+    data_refreshed_at_header,
+    empty_view_audit_fields,
+    lead_view_audit_fields,
+    lead_view_order,
+    open_lead_view,
+    read_lead_view,
+    refuse_a_refreshed_page,
+    stamp_lead_view,
+)
 from backend.services.observability import emit
 from backend.services.rbac import can_access_approver, require_authenticated_actor
 from backend.services.repositories import LeadRepository, get_lead_repository
-from backend.services.repositories.databricks_lead_cohorts import (
-    GrowthAgentHandoffStale,
-    validate_growth_agent_handoff_identity,
-)
 from backend.services.repositories.factory import get_lead_facet_repository
 from backend.services.repositories.protocols import LeadFacetRepository
 from backend.services.sales_state import (
@@ -153,25 +162,38 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
         )
 
 
-# Characters an ISO-8601 UTC timestamp may carry. Anything else (a CR or LF
-# above all) never reaches a response header.
-_DATA_REFRESHED_AT_SAFE = re.compile(r"[0-9TZ:.+-]+")
+# Kept under its old name: tests and readers import the formatter from here.
+_data_refreshed_at_header = data_refreshed_at_header
 
 
-def _data_refreshed_at_header(leads: list[LeadSummary]) -> str | None:
-    """The newest gold refresh time among the returned rows, as ISO-8601 UTC.
+def _empty_view(
+    response: Response,
+    background: BackgroundTasks,
+    audit: AuditStore,
+    *,
+    actor: str,
+    payload: dict[str, object],
+) -> list[LeadSummary]:
+    """An answer read nothing: still one served page of a new view, so one row."""
 
-    Audit delivery-08: the Lead Queue stamped its CSV export with a
-    ``refreshed_at`` it fetched through a whole-book portfolio preview on
-    every mount. The rows already carry it, so the list response states it
-    with no extra statement. None when no row has a value.
-    """
-    stamps = [lead.row_refreshed_at for lead in leads if lead.row_refreshed_at is not None]
-    if not stamps:
-        return None
-    latest = max(stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC) for stamp in stamps)
-    value = latest.astimezone(UTC).isoformat().replace("+00:00", "Z")
-    return value if _DATA_REFRESHED_AT_SAFE.fullmatch(value) else None
+    fields = empty_view_audit_fields()
+    response.headers["X-Total-Matching"] = "0"
+    response.headers["X-Returned-Rows"] = "0"
+    response.headers["X-Lead-View-Id"] = str(fields["view_id"])
+    response.headers["X-Page-Index"] = "0"
+    segment = payload.get("segment")
+    background.add_task(
+        _safe_audit_write,
+        audit,
+        actor=actor,
+        action="view_leads_ranked",
+        entity_type="lead_queue",
+        entity_id=str(segment) if segment else "_all",
+        payload_json={**payload, **fields},
+        event_type="VIEW_LEADS",
+        subject_segment=str(segment) if segment else None,
+    )
+    return []
 
 
 @router.get("/leads", response_model=list[LeadSummary])
@@ -184,74 +206,83 @@ def list_leads(
     sales_state: SalesStateDep,
     params: LeadQueryParamsDep,
     limit: LeadLimitDep,
+    paging: LeadPagingParamsDep,
 ) -> list[LeadSummary]:
+    cursor = paging.cursor
+    order = lead_view_order(paging.sort, paging.sort_dir)
+    growth_handoff = request.query_params.getlist("growth_handoff")
     # One spelling (the pattern admits either case): the service, the
     # VIEW_LEADS row and every later reader see the id as the ledger prints it.
     request_batch = canonical_uuid_text(params.approval_request_batch)
+    request_params = params
     if request_batch is not None:
         open_ids = _approval_request_scope(request, request_batch, params)
         if not open_ids:
             # Never an empty borrower_ids: it parses to None, the whole queue.
-            response.headers["X-Total-Matching"] = "0"
-            response.headers["X-Returned-Rows"] = "0"
-            return []
+            return _empty_view(
+                response,
+                background,
+                audit,
+                actor=resolve_actor(request),
+                payload={
+                    "rendered_borrower_ids": [],
+                    "portfolio_id": params.portfolio_id,
+                    "segment": params.segment,
+                    "limit": limit,
+                    "approval_request_batch_id": request_batch,
+                },
+            )
         params = dataclasses.replace(
             params, borrower_ids=",".join(open_ids), approval_request_batch=request_batch
         )
+    # The preamble (admin gates, assignee checks, cohort replay) runs on EVERY
+    # page; only a page-0 request re-verifies a Growth Agent handoff, which a
+    # later page's signed cursor binds.
     resolved = resolve_lead_query(
         request,
         sales_state,
         params,
-        growth_handoff=request.query_params.getlist("growth_handoff"),
+        growth_handoff=growth_handoff,
+        verify_handoff=cursor is None,
     )
     if resolved.assignment_empty:
-        response.headers["X-Total-Matching"] = "0"
-        response.headers["X-Returned-Rows"] = "0"
-        return []
+        return _empty_view(
+            response,
+            background,
+            audit,
+            actor=resolved.actor,
+            payload=view_leads_audit_payload(resolved, [], limit=limit),
+        )
     actor = resolved.actor
-    repository_args = resolved.repository_args
+    view = open_lead_view(
+        params=request_params,
+        resolved=resolved,
+        cursor=cursor,
+        order=order,
+        limit=limit,
+        growth_handoff=growth_handoff,
+        approval_request_batch=request_batch,
+    )
+    read = read_lead_view(repo, resolved, view, limit=limit)
+    refuse_a_refreshed_page(view, read.leads)
     handoff_proof = resolved.handoff_proof
     include_identity_proof = resolved.include_identity_proof
     cohort_id = resolved.cohort_id
     cohort_stated_count = resolved.cohort_stated_count
     cohort_unreplayable = resolved.cohort_unreplayable
-    identity: dict[str, str | int] | None = None
-    if include_identity_proof or handoff_proof is not None:
-        list_with_identity = getattr(repo, "list_with_identity", None)
-        if not callable(list_with_identity):
-            raise HTTPException(
-                status_code=503,
-                detail="Lead Queue cohort identity proof is unavailable",
-            )
-        try:
-            leads, identity = list_with_identity(limit=limit, **repository_args)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="Lead Queue cohort identity proof is incomplete",
-            ) from exc
-        if handoff_proof is not None:
-            try:
-                validate_growth_agent_handoff_identity(handoff_proof, identity)
-            except GrowthAgentHandoffStale as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-        total_matching = int(identity.get("total") or 0)
-    else:
-        leads = repo.list(limit=limit, **repository_args)
-        count_fn = getattr(repo, "count", None)
-        # Test-local repositories and external connectors may implement only
-        # the list contract. Production reports the complete cohort count.
-        total_matching = count_fn(**repository_args) if callable(count_fn) else len(leads)
+    identity = read.identity
+    total_matching = read.total_matching
 
     try:
-        leads = hydrate_leads_with_sales_state(leads, sales_state, actor=actor)
+        leads = hydrate_leads_with_sales_state(read.leads, sales_state, actor=actor)
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
     response.headers["X-Total-Matching"] = str(total_matching)
     response.headers["X-Returned-Rows"] = str(len(leads))
-    data_refreshed_at = _data_refreshed_at_header(leads)
+    data_refreshed_at = data_refreshed_at_header(leads)
     if data_refreshed_at is not None:
         response.headers["X-Data-Refreshed-At"] = data_refreshed_at
+    stamp_lead_view(response, view, read, actor=actor, refreshed=data_refreshed_at)
     if cohort_id and cohort_stated_count is not None:
         # What the Genie answer said, next to what this queue actually matched.
         # The queue replays only the reviewed geography/segment subset, so an
@@ -294,6 +325,7 @@ def list_leads(
     if len(leads) >= limit:
         response.headers["X-Truncated-At"] = str(limit)
     audit_payload = view_leads_audit_payload(resolved, leads, limit=limit)
+    audit_payload.update(lead_view_audit_fields(view, read, refreshed=data_refreshed_at))
     if request_batch is not None:
         audit_payload["approval_request_batch_id"] = request_batch
     segment = resolved.segment
