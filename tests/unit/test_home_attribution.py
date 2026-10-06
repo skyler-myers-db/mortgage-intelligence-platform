@@ -17,19 +17,21 @@ import re
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.api import home as home_api
 from backend.main import app
-from backend.schemas.home_attribution import ATTRIBUTION_NOTE
+from backend.schemas.home_attribution import ATTRIBUTION_NOTE, HomeAttributionMeasure
 from backend.services import audit_store as audit_store_module
 from backend.services.audit_store import get_audit_store
+from backend.services.databricks_sql import DatabricksSqlColumnMissingError
 from backend.services.home_attribution import (
     MEASURE_COLUMNS,
     HomeAttributionService,
+    _snapshot_dates_sql,
     attribute_states,
     choose_snapshot_dates,
     get_home_attribution_service,
@@ -303,7 +305,9 @@ def test_a_baseline_inside_the_lookback_is_answered(days: int) -> None:
 
 def test_an_unknown_measure_is_a_422() -> None:
     _install(_service(_FakeSql()))
-    response = TestClient(app).get(f"/api/v1/home/summary/attribution?measure=competitor_lien&baseline={_recent_baseline()}")
+    # A genuinely unknown measure: competitor_lien became a real measure in
+    # W5c (its Literal member lands with w5-evidence-drawer).
+    response = TestClient(app).get(f"/api/v1/home/summary/attribution?measure=zyrplax_count&baseline={_recent_baseline()}")
     assert response.status_code == 422
 
 
@@ -317,3 +321,105 @@ def test_a_dependency_outage_is_a_sanitized_503() -> None:
     assert response.status_code == 503
     assert "10.0.0.7" not in response.text
     assert "warehouse" in response.json()["detail"].lower()
+
+
+# -- competitor_lien (wow-ai-3, W5c) -----------------------------------------
+#
+# The Literal member is w5-evidence-drawer's, so the service-layer cases run
+# the competitor_lien COLUMN through an existing measure's slot; the one case
+# that needs the measure itself activates once the member lands.
+
+_MISSING_COMPETITOR_COLUMN = (
+    "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with "
+    "name `competitor_lien_borrowers` cannot be resolved. SQLSTATE: 42703"
+)
+
+
+def test_competitor_lien_maps_to_its_nullable_funnel_column() -> None:
+    assert MEASURE_COLUMNS["competitor_lien"] == ("_ALL", "competitor_lien_borrowers", "competitor liens")
+
+
+@pytest.mark.parametrize("measure", sorted(MEASURE_COLUMNS))
+def test_snapshot_dates_are_chosen_only_among_snapshots_that_recorded_the_measure(measure: str) -> None:
+    _segment, column, _label = MEASURE_COLUMNS[measure]
+    assert _snapshot_dates_sql(column).endswith(f"AND {column} IS NOT NULL")
+
+
+def test_the_service_issues_the_is_not_null_filter() -> None:
+    sql = _FakeSql()
+    _service(sql).attribution("high_opportunity", BASELINE)
+    dates = next(statement for statement, _ in sql.statements if "at_or_before" in statement)
+    assert dates.endswith("AND high_opportunity_borrowers IS NOT NULL")
+
+
+class _ColumnMissingSql(_FakeSql):
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self.error = error
+
+    def execute_one(self, statement: str, parameters: Any = None) -> dict[str, Any] | None:
+        if "at_or_before" in statement:
+            self.statements.append((statement, parameters))
+            raise self.error
+        return super().execute_one(statement, parameters)
+
+
+def _wrapped(error: BaseException) -> DependencyDownError:
+    return DependencyDownError(
+        "warehouse", reason="missing", last_error=error, kind=DependencyDownError.KIND_RETRIES_EXHAUSTED
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _wrapped(DatabricksSqlColumnMissingError(_MISSING_COMPETITOR_COLUMN)),
+        DatabricksSqlColumnMissingError(_MISSING_COMPETITOR_COLUMN),
+    ],
+    ids=["resilient-client", "bare-client"],
+)
+def test_a_read_ahead_of_the_ensure_step_is_the_no_snapshot_shape(
+    monkeypatch: pytest.MonkeyPatch, error: BaseException
+) -> None:
+    monkeypatch.setitem(MEASURE_COLUMNS, "high_opportunity", MEASURE_COLUMNS["competitor_lien"])
+    sql = _ColumnMissingSql(error)
+
+    response = _service(sql).attribution("high_opportunity", BASELINE)
+
+    assert response.baseline_snapshot_date is None and response.current_snapshot_date is None
+    assert response.states == []
+    assert response.baseline_total is None and response.current_total is None
+    assert response.total_change is None and response.unattributed_change is None
+    assert response.rate.latest_pct == 6.22, "the coinciding facts still answer"
+    assert not any(" AS value " in statement for statement, _ in sql.statements)
+
+
+def test_a_missing_not_null_column_is_still_an_outage() -> None:
+    sql = _ColumnMissingSql(_wrapped(DatabricksSqlColumnMissingError(_MISSING_COMPETITOR_COLUMN)))
+    with pytest.raises(DependencyDownError):
+        _service(sql).attribution("refi_economics_screen", BASELINE)
+
+
+def test_per_state_rows_and_the_remainder_reconcile_to_the_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(MEASURE_COLUMNS, "high_opportunity", MEASURE_COLUMNS["competitor_lien"])
+    sql = _FakeSql()
+
+    response = _service(sql).attribution("high_opportunity", BASELINE)
+
+    values = next(statement for statement, _ in sql.statements if " AS value " in statement)
+    assert "competitor_lien_borrowers AS value" in values
+    assert response.total_change == 150
+    attributed = sum(row.change for row in response.states if row.change is not None)
+    assert attributed + (response.unattributed_change or 0) == response.total_change
+
+
+@pytest.mark.skipif(
+    "competitor_lien" not in get_args(HomeAttributionMeasure),
+    reason="the HomeAttributionMeasure member lands with w5-evidence-drawer (integrator merge)",
+)
+def test_the_competitor_lien_measure_answers_no_snapshot_until_one_records_it() -> None:
+    sql = _FakeSql(dates={"at_or_before": None, "after": None, "latest": None}, values=[])
+    response = _service(sql).attribution("competitor_lien", BASELINE)  # type: ignore[arg-type]
+    assert response.measure == "competitor_lien"
+    assert response.label == "competitor liens"
+    assert response.states == [] and response.current_total is None
