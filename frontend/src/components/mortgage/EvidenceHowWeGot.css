@@ -17,3 +17,7 @@
 .evidence-proof__title { overflow-wrap: anywhere; }
 .evidence-proof__filters { gap: var(--sp-1); }
 .evidence-proof__asof { color: var(--text-3); }
+/* The KPI reproduce statement prints in full and scrolls with the drawer body
+   (EvidenceKpiProof): a height-capped <pre> would be a scroll region the
+   keyboard cannot reach (axe scrollable-region-focusable). */
+.evidence-proof__sql { max-block-size: none; overflow: visible; overflow-wrap: anywhere; }

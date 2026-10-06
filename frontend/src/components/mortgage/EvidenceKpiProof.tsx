@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Icon } from '../Icon';
 import type { KpiProofResponse } from '../../lib/apiTypes';
+import './EvidenceHowWeGot.css';
 
 /**
  * The KPI reproduce card on the drawer's Under the hood tab (audit 2026-09-21
@@ -11,7 +12,10 @@ import type { KpiProofResponse } from '../../lib/apiTypes';
  *
  * deviation:evidence-under-the-hood — a third drawer tab carrying the
  * reproduce SQL and the catalog detail, beside the prototype's Overview /
- * Lineage drawer (design_files/index.html:665-681).
+ * Lineage drawer (design_files/index.html:665-681). The statement prints in
+ * full (`.evidence-proof__sql`, EvidenceHowWeGot.css) and scrolls with the
+ * drawer body: a capped `<pre>` is a scroll region no keyboard can reach
+ * (axe scrollable-region-focusable).
  */
 
 /** The shared KPI proof query, as the drawer body holds it (one GET per KPI per document). */
@@ -68,11 +72,11 @@ export function EvidenceKpiProof({ title, proof }: { title: string; proof: KpiPr
           </div>
           <span className="mono proof-sql-card__hash">{data.sql_hash}</span>
         </div>
-        <pre className="proof-sql-card__sql">{data.sql}</pre>
+        <pre className="proof-sql-card__sql evidence-proof__sql">{data.sql}</pre>
         {data.params.length > 0 && (
           <>
             <div className="muted fs-12">Bound parameters</div>
-            <pre className="proof-sql-card__sql">
+            <pre className="proof-sql-card__sql evidence-proof__sql">
               {data.params.map((param) => `:${param.name} = ${param.value}`).join('\n')}
             </pre>
           </>
