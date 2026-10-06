@@ -8,11 +8,23 @@ boundary and must never drift into ``SELECT *``.
 from __future__ import annotations
 
 import json
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Literal
 
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import DimensionFacetCount
+from backend.services.optional_gold_columns import (
+    B360_SCORE_POINTS_FRAGMENT,
+    DOSSIER_SPREAD_HISTORY_FRAGMENT,
+    LP_SCORE_POINTS_FRAGMENT,
+)
 from backend.services.pii_redaction import redact_evidence_row
+
+# The five weighted sub-scores (audit wow-stage-2) and the dossier's
+# Crossed-the-line inputs (wow-stage-4) enter the projections below as the
+# fragments ``optional_gold_columns`` registers (both lead fragments are built
+# from its one SCORE_POINTS_COLUMNS tuple): a read that runs ahead of the gold
+# refresh is re-run once on NULL twins instead of answering 503.
 
 _BORROWER_360_COLUMNS: str = (
     "clip, borrower_id, owner_name_hash, city, state, zip, segment_codes, "
@@ -41,7 +53,10 @@ _BORROWER_360_COLUMNS: str = (
 
 _BORROWER_DOSSIER_COLUMNS: str = (
     _BORROWER_360_COLUMNS
-    + ", trigger_timeline_json, evidence_events, trigger_timeline, refreshed_at"
+    + ", trigger_timeline_json, evidence_events, trigger_timeline, "
+    # Crossed the line (audit wow-stage-4): the registered optional fragment.
+    + DOSSIER_SPREAD_HISTORY_FRAGMENT
+    + "refreshed_at"
 )
 
 _LEAD_POPULATION_COLUMNS: str = (
@@ -81,9 +96,10 @@ _LEAD_POPULATION_SELECT_FROM_LP: str = (
     "lp.loan_product_type, lp.origination_channel, "
     "lp.marketing_eligible, lp.consent_status, lp.suppression_reason, lp.last_touch_at, "
     "lp.eligible_recontact_at, lp.dnc, lp.eligibility_source, "
+    + LP_SCORE_POINTS_FRAGMENT
     # Provenance for the X-Data-Refreshed-At header on /api/leads (audit
     # delivery-08). Last on purpose; LeadSummary never serializes it.
-    "lp.refreshed_at"
+    + "lp.refreshed_at"
 )
 
 _LEAD_POPULATION_SELECT_FROM_B360: str = (
@@ -107,8 +123,9 @@ _LEAD_POPULATION_SELECT_FROM_B360: str = (
     "b.loan_product_type, b.origination_channel, "
     "b.marketing_eligible, b.consent_status, b.suppression_reason, b.last_touch_at, "
     "b.eligible_recontact_at, b.dnc, b.eligibility_source, "
+    + B360_SCORE_POINTS_FRAGMENT
     # Provenance for X-Data-Refreshed-At (see the lead_population twin above).
-    "b.refreshed_at"
+    + "b.refreshed_at"
 )
 
 _EVIDENCE_COLUMNS: str = (
@@ -203,6 +220,31 @@ def _parse_facet_mix(raw: Any) -> list[DimensionFacetCount]:
             continue
         cells.append(DimensionFacetCount(value=value, count=count))
     return cells
+
+
+def _iso_date(value: Any) -> str | None:
+    """A warehouse DATE (``date``, ``datetime`` or ISO text) as YYYY-MM-DD, else None."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()[:10]
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return None
+
+
+def _rate_type(value: Any) -> Literal["FIX", "ARM"] | None:
+    """The dossier's closed first-lien rate type; anything unknown is None."""
+    code = str(value or "").strip().upper()
+    if code == "FIX":
+        return "FIX"
+    if code == "ARM":
+        return "ARM"
+    return None
 
 
 def _coerce_bool(value: Any) -> bool:
