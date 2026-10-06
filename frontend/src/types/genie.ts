@@ -89,6 +89,13 @@ export interface GenieAnswer {
    * panel. Absent on answers and on older backends.
    */
   refusal_report_hash?: string | null;
+  /**
+   * Client-made governed-action bubble only; never on the wire (audit
+   * `flow-04`): the action's audit event id, rendered as the bubble's
+   * receipt (GenieActionReceipt). It rides in the tab's own transcript only;
+   * no request body carries it.
+   */
+  action_audit_event_id?: string | null;
 }
 
 /** Wire families for a withheld Genie turn (audit 2026-09-21 `genie-05`). */

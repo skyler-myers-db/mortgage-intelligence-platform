@@ -10,6 +10,7 @@ import {
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../types';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { GenieActionReceipt } from '../components/mortgage/GenieActionReceipt';
 import { GenieAnswer } from '../components/mortgage/GenieAnswer';
 import { GenieCollapsedTurn } from '../components/mortgage/GenieCollapsedTurn';
 import { GenieHistoryMenu } from '../components/mortgage/GenieHistoryMenu';
@@ -100,6 +101,13 @@ export function sourceChipFor(payload: GenieAnswerShape): SourceChip | null {
   return label ? { label } : null;
 }
 
+/** The status callout under the thread: a governed action's outcome (with
+ *  its audit event id once the server recorded one, flow-04) or a note. */
+export interface GenieActionStatus {
+  text: string;
+  auditEventId: string | null;
+}
+
 export interface AskGenieAnswerPanelProps {
   questionRef: RefObject<HTMLTextAreaElement | null>;
   question: string;
@@ -118,7 +126,7 @@ export interface AskGenieAnswerPanelProps {
   onAction: (action: GenieActionSuggestion, payload: GenieAnswerShape) => void | Promise<void>;
   /** Refusal card "Edit question": restore the refused prompt to the composer. */
   onEditQuestion?: (question: string) => void;
-  actionStatus: string | null;
+  actionStatus: GenieActionStatus | null;
   /** Governed sources Genie reads (from `/api/genie/start`); the empty state
    *  cites them as evidence chips, so every source is one click from its proof. */
   sourceAssets?: readonly string[];
@@ -472,7 +480,13 @@ export function AskGenieAnswerPanel({
           </div>
         )}
         {actionStatus && (
-          <div className="status-callout status-callout--info mt-3">{actionStatus}</div>
+          <div className="status-callout status-callout--info mt-3">
+            {actionStatus.auditEventId ? (
+              <GenieActionReceipt message={actionStatus.text} auditEventId={actionStatus.auditEventId} />
+            ) : (
+              actionStatus.text
+            )}
+          </div>
         )}
         {composerSampleQuestions.length > 0 && (
           <div

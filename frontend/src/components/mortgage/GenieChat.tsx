@@ -440,14 +440,17 @@ export function GenieChat() {
         }
         if (action.action_type === 'save_borrowers') refreshWorkspace();
         const confirmed = genieActionConfirmation(outcome.result);
+        const auditEventId = outcome.result.audit_event_id;
         landActionBubble(
           {
-            answer: confirmed,
+            // The receipt (GenieChatBody) renders the id; spoken in full.
+            answer: auditEventId ? outcome.result.message : confirmed,
             // A governed action result answers no question (its turn's is '').
             question: '',
             source: GOVERNED_ACTION_SOURCE,
             trusted_assets: [],
             conversation_id: payload.conversation_id,
+            ...(auditEventId ? { action_audit_event_id: auditEventId } : {}),
           },
           confirmed,
         );
