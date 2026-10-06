@@ -2155,7 +2155,7 @@ Inventory of `components.css`:
 - **Verifier:** Every cited line reproduces; no spinner, toast region or Button loading prop exists. But NumberFlow is rolling digits, which components.css:816-818 explicitly declined; scaleX squashes the fill's rounded end; and it touches the 1,261-line LeadTable with roughly 20 test files.
 - **Constraint conflict:** `@number-flow/react` conflicts with a recorded owner decision (components.css:816-818: 'Deliberately NOT a number-rolling count-up ... not a casino ticker'). All additions are additive to the prototype.
 
-**Wave-5 status.** W5b (2026-10-01): slice 2, the Button loading prop (aria-busy plus aria-disabled, focus kept), is built (w5-theme-white-label); its consumers (Confirm approval, bulk Approve, row Reject) are W5c.
+**Wave-5 status.** W5b (2026-10-01): slice 2, the Button loading prop (aria-busy plus aria-disabled, focus kept), is built (w5-theme-white-label); its consumers (Confirm approval, bulk Approve, row Reject) are W5c w5-lead-queue-paging, and the Offer and refusal surfaces W5c w5-refusal-capture-sales.
 
 ### `motion-v1` No scroll reset or restoration on navigation: the persistent `.main` scroller keeps its offset across routes
 
