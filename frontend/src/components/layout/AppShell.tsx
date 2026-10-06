@@ -245,7 +245,6 @@ function AppShellInner({ children }: PropsWithChildren) {
             <aside
               id="workspace-console"
               className={`tweaks ${consoleOpen ? 'is-open' : ''}`}
-              role="complementary"
               aria-label="Workspace console"
               aria-hidden={!consoleOpen}
               tabIndex={consoleOpen ? -1 : undefined}
@@ -258,7 +257,6 @@ function AppShellInner({ children }: PropsWithChildren) {
             <aside
               id="workspace-console"
               className="tweaks"
-              role="complementary"
               aria-label="Workspace console"
               aria-hidden="true"
               tabIndex={-1}
