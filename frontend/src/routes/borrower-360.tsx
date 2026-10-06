@@ -32,6 +32,7 @@ import { queryKeys } from '../lib/queryKeys';
 import { useApp } from '../components/AppContext';
 import { LtvEquityValue } from './borrower-360.ltv-field';
 import { BorrowerQueuePager } from './borrower-360.pager';
+import { BorrowerTitle } from './borrower-360.title';
 import { useQueueContext } from '../lib/queueContext';
 
 // The proof drawer ships in the lazy Score anatomy chunk (wow-stage-2): the
@@ -179,7 +180,7 @@ export default function Borrower360() {
     return (
       <PageShell
         eyebrow={warmingUp.label}
-        title={`Loading ${id}…`}
+        title={<BorrowerTitle id={id} />}
         lede={WAREHOUSE_WARMING_BODY}
       >
         {pager}
@@ -197,7 +198,7 @@ export default function Borrower360() {
     return failurePage ? (
       <failurePage.DossierFailure id={id} error={error} pager={pager} onRetry={manualRetry} />
     ) : (
-      <PageShell eyebrow="Borrower 360" title={`Borrower ${id}`} lede={`Borrower ${id} could not load.`}>
+      <PageShell eyebrow="Borrower 360" title={<BorrowerTitle id={id} />} lede={`Borrower ${id} could not load.`}>
         {pager}
         {failurePageFailed && (
           <div className="surface">
@@ -219,7 +220,7 @@ export default function Borrower360() {
     return (
       <PageShell
         eyebrow="Borrower 360"
-        title={<Skeleton width={280} height={30} rounded="md" />}
+        title={<BorrowerTitle id={id} />}
         lede={`Loading borrower ${id}…`}
       >
         {pager}
@@ -320,7 +321,7 @@ export default function Borrower360() {
   return (
     <PageShell
       eyebrow="Borrower 360"
-      title={`Borrower ${b.borrower_id}`}
+      title={<BorrowerTitle id={id} />}
       lede={`${b.city}, ${b.state} ${b.zip} · ${offerLabel}`}
       heroRight={
         <>

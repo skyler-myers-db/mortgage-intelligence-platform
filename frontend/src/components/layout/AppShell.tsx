@@ -8,6 +8,7 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useLocation } from 'react-router';
 import { AppProvider, useApp } from '../AppContext';
 import { HealthProvider, useHealth } from '../HealthProvider';
 import { FootprintProvider } from '../FootprintProvider';
@@ -25,6 +26,7 @@ import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
 import { actorResetHeld, observeActor, subscribeActorScope } from '../../lib/actorScope';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
+import { clearBorrowerMorph, installBorrowerMorph } from '../../lib/borrowerMorph';
 import { RouteFallback } from './RouteFallback';
 import { useExitRetained } from '../../hooks/useExitRetained';
 import { useMainScroll } from '../../hooks/useMainScroll';
@@ -109,6 +111,15 @@ function AppShellInner({ children }: PropsWithChildren) {
     consoleElementRef.current = document.getElementById('workspace-console');
   });
   const consoleMounted = useExitRetained(consoleOpen ? true : null, consoleElementRef) === true;
+
+  // The borrower-id morph (deviation:borrower-id-morph): one capture-phase
+  // click listener names a Lead Queue row id before its link navigates; any
+  // committed location change drops a pending mark.
+  useEffect(() => installBorrowerMorph(), []);
+  const { pathname } = useLocation();
+  useEffect(() => {
+    clearBorrowerMorph();
+  }, [pathname]);
 
   useEffect(() => {
     const cancelConsole = preloadConsole();

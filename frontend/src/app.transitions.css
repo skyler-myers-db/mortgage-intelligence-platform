@@ -41,6 +41,14 @@
   animation-timing-function: var(--ease);
 }
 
+/* The Borrower 360 title id, the target of the Lead Queue row's borrower-id
+   morph (deviation:borrower-id-morph, lib/borrowerMorph): an inline-block,
+   so the named box is never fragmented across lines. The name itself is set
+   inline on the element, never here, and its group runs on the rule above. */
+.page-title__id {
+  display: inline-block;
+}
+
 /* A click during a transition reaches the live page, not the overlay. */
 ::view-transition {
   pointer-events: none;
