@@ -224,6 +224,29 @@ def test_a_repeat_stop_on_a_precancelled_turn_adds_no_second_audit_row(pg: _Pg) 
     assert len(_cancelled_rows(pg)) == 1
 
 
+def test_a_re_run_never_drops_and_re_adds_the_kpi_snapshot_checks(conn_kwargs: dict[str, str]) -> None:
+    # W5c R1 NB-8: the KPI snapshot event-measures block used to DROP and
+    # re-ADD its two CHECKs on every migrate run (a full re-validation each
+    # deploy). Now each is added only when pg_constraint lacks it.
+    def checks() -> dict[str, tuple[int, bool]]:
+        with psycopg.connect(**conn_kwargs) as conn:
+            rows = conn.execute(
+                "SELECT conname, oid::bigint, convalidated FROM pg_constraint "
+                "WHERE conrelid = 'mip_app.kpi_snapshots'::regclass "
+                "AND conname IN ('kpi_snapshots_listed_for_sale_chk', 'kpi_snapshots_competitor_lien_chk')"
+            ).fetchall()
+        return {str(name): (int(oid), bool(valid)) for name, oid, valid in rows}
+
+    _apply(conn_kwargs, _SCHEMA)
+    first = checks()
+    _apply(conn_kwargs, _SCHEMA)
+    second = checks()
+
+    assert set(first) == {"kpi_snapshots_listed_for_sale_chk", "kpi_snapshots_competitor_lien_chk"}
+    assert all(valid for _oid, valid in first.values())
+    assert second == first, "the same constraints (same OIDs), still validated, after a second apply"
+
+
 def _blocked_backends(dsn: str) -> int:
     with psycopg.connect(dsn) as conn:
         row = conn.execute(

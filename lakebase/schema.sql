@@ -3816,21 +3816,35 @@ ON CONFLICT (version) DO NOTHING;
 -- and the summary omits that measure). The CHECKs use comparisons only; no
 -- table, routine, trigger or privilege is added, and the App role keeps
 -- SELECT. Placed before the watchlist series block, which its own contract
--- test pins as the schema's last block.
+-- test pins as the schema's last block. Each CHECK is added only when
+-- pg_constraint lacks it (static ADD CONSTRAINT text, reviewed by the
+-- executable-hook replay scanner): a re-run never drops and re-validates it
+-- (W5c, R1 NB-8).
 ALTER TABLE mip_app.kpi_snapshots
     ADD COLUMN IF NOT EXISTS listed_for_sale BIGINT;
 ALTER TABLE mip_app.kpi_snapshots
     ADD COLUMN IF NOT EXISTS competitor_lien BIGINT;
-ALTER TABLE mip_app.kpi_snapshots
-    DROP CONSTRAINT IF EXISTS kpi_snapshots_listed_for_sale_chk;
-ALTER TABLE mip_app.kpi_snapshots
-    ADD CONSTRAINT kpi_snapshots_listed_for_sale_chk
-    CHECK (listed_for_sale IS NULL OR listed_for_sale >= 0);
-ALTER TABLE mip_app.kpi_snapshots
-    DROP CONSTRAINT IF EXISTS kpi_snapshots_competitor_lien_chk;
-ALTER TABLE mip_app.kpi_snapshots
-    ADD CONSTRAINT kpi_snapshots_competitor_lien_chk
-    CHECK (competitor_lien IS NULL OR competitor_lien >= 0);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.kpi_snapshots'::regclass
+          AND conname = 'kpi_snapshots_listed_for_sale_chk'
+    ) THEN
+        ALTER TABLE mip_app.kpi_snapshots
+            ADD CONSTRAINT kpi_snapshots_listed_for_sale_chk
+            CHECK (listed_for_sale IS NULL OR listed_for_sale >= 0);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.kpi_snapshots'::regclass
+          AND conname = 'kpi_snapshots_competitor_lien_chk'
+    ) THEN
+        ALTER TABLE mip_app.kpi_snapshots
+            ADD CONSTRAINT kpi_snapshots_competitor_lien_chk
+            CHECK (competitor_lien IS NULL OR competitor_lien >= 0);
+    END IF;
+END $$;
 COMMENT ON COLUMN mip_app.kpi_snapshots.listed_for_sale IS
     'Borrowers whose home is listed for sale (SUM(listed_for_sale) over the headline metric view). NULL on rows written before this column existed; never backfilled with 0.';
 COMMENT ON COLUMN mip_app.kpi_snapshots.competitor_lien IS
