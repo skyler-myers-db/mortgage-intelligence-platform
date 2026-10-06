@@ -49,6 +49,14 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "VIEW_LEADS",
         # D-audit-reads-c3: a served cross-actor ledger read (audit_ledger_reads).
         "VIEW_AUDIT_LEDGER",
+        # D-audit-reads-c2: the legacy decision codes no server route writes,
+        # and the enforcement suppression row. Server-owned so POST
+        # /audit/event refuses them: no client-authored row can pose as a
+        # governed decision or contact block.
+        "HOLD",
+        "OUTREACH_HOLD",
+        "REJECT",
+        "SUPPRESS_CONTACT",
     }
 )
 
