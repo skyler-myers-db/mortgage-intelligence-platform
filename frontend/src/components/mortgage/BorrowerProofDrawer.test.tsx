@@ -8,19 +8,30 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BorrowerProofDrawer } from './BorrowerProofDrawer';
+import { ProofMargins } from './ProofMargins';
+import { SAMPLE_MARGINS } from '../../mocks/scoreAnatomyProof';
 import { invalidateOperationalQueries } from '../../lib/queryKeys';
 import { ApiError } from '../../lib/apiTransport';
 import { refetchRecoveredQueries } from '../healthRecovery';
-import type { BorrowerProof, ProofScoreComponentKey } from '../../types';
+import type { BorrowerProof, ProofMargin, ProofScoreComponentKey } from '../../types';
 
 const apiMocks = vi.hoisted(() => ({
   borrowerProof: vi.fn(),
+  borrower: vi.fn(),
+  analyticsRateWindow: vi.fn(),
+}));
+
+// ProofMargins' evidence chips read the app context (as in ScoreSpine.test.tsx).
+vi.mock('../AppContext', () => ({
+  useApp: () => ({ setDrawer: vi.fn(), showEvidence: true, showConfidence: true }),
 }));
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     borrowerProof: apiMocks.borrowerProof,
+    borrower: apiMocks.borrower,
+    analyticsRateWindow: apiMocks.analyticsRateWindow,
   },
 }));
 
@@ -128,6 +139,9 @@ const PROOF: BorrowerProof = {
     },
   ],
 };
+
+const MARGINS: ProofMargin[] = [...SAMPLE_MARGINS];
+const PROOF_WITH_MARGINS: BorrowerProof = { ...PROOF, margins: MARGINS };
 
 function buttonByText(text: string): HTMLButtonElement {
   const button = Array.from(document.querySelectorAll('button')).find((item) =>
@@ -400,5 +414,76 @@ describe('BorrowerProofDrawer', () => {
     await settle();
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Close proof drawer');
     expect(document.querySelector('.proof-component--focused')).toBeNull();
+  });
+
+  it('the Math tab shows every margin in order with the note, the same render as the spine', async () => {
+    apiMocks.borrowerProof.mockResolvedValue(PROOF_WITH_MARGINS);
+    await render(true);
+    await settle();
+
+    const drawer = document.querySelector('.proof-drawer') as HTMLElement;
+    const margins = drawer.querySelector('[data-testid="score-margins"]');
+    expect(margins).not.toBeNull();
+    const rows = Array.from(margins!.querySelectorAll('.score-margins__row'));
+    expect(rows.map((row) => row.getAttribute('data-margin'))).toEqual(MARGINS.map((margin) => margin.key));
+    for (const [index, margin] of MARGINS.entries()) {
+      expect(rows[index].querySelector('.score-margins__label')?.textContent).toBe(margin.label);
+      expect(rows[index].querySelector('.score-margins__value')?.textContent).toContain(margin.value_text);
+      expect(rows[index].querySelector('.score-margins__threshold')?.textContent).toBe(margin.threshold);
+    }
+    expect(margins!.querySelector('[data-testid="score-margins-note"]')?.textContent).toBe(
+      'Marketing prioritization, not a credit decision.',
+    );
+    expect(margins!.querySelector('.score-margins__title')?.textContent).toBe('What would change this?');
+    // It sits after the primary offer branch, in the Math tab's own stack.
+    const stack = Array.from(drawer.querySelectorAll('.stack-md > *'));
+    const branch = stack.findIndex((node) => node.textContent === 'Primary offer branch');
+    expect(branch).toBeGreaterThan(-1);
+    expect(stack.indexOf(margins as Element)).toBeGreaterThan(branch);
+
+    // The same text as the spine's own render of the same proof.
+    const spine = document.createElement('div');
+    document.body.appendChild(spine);
+    const spineRoot = createRoot(spine);
+    await act(async () => {
+      spineRoot.render(
+        <MemoryRouter>
+          <ProofMargins proof={PROOF_WITH_MARGINS} titled />
+        </MemoryRouter>,
+      );
+    });
+    expect(margins!.textContent).toBe(spine.querySelector('[data-testid="score-margins"]')?.textContent);
+    act(() => spineRoot.unmount());
+    expect(apiMocks.borrowerProof).toHaveBeenCalledTimes(1);
+  });
+
+  it('only the Math tab carries the margins', async () => {
+    apiMocks.borrowerProof.mockResolvedValue(PROOF_WITH_MARGINS);
+    await render(true);
+    await settle();
+    const drawer = document.querySelector('.proof-drawer') as HTMLElement;
+    for (const tab of ['Evidence', 'Lineage', 'Reproduce']) {
+      await act(async () => {
+        buttonByText(tab).click();
+      });
+      expect(drawer.querySelector('[data-testid="score-margins"]'), tab).toBeNull();
+    }
+  });
+
+  it('an older proof without margins hides the section', async () => {
+    await render(true);
+    await settle();
+    expect(document.querySelector('.proof-drawer [data-testid="score-margins"]')).toBeNull();
+  });
+
+  it('a segment-opened drawer still focuses its component card with the margins mounted', async () => {
+    apiMocks.borrowerProof.mockResolvedValue(PROOF_WITH_MARGINS);
+    await render(true);
+    await render(false);
+    await render(true, 'economic_incentive');
+    await settle();
+    const card = document.querySelector('[data-component-key="economic_incentive"]');
+    expect(document.activeElement).toBe(card);
+    expect(document.querySelector('.proof-drawer [data-testid="score-margins"]')).not.toBeNull();
   });
 });

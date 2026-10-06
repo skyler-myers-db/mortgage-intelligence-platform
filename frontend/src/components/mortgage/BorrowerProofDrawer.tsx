@@ -13,6 +13,7 @@ import { useTabs } from '../ui/useTabs';
 import { useBorrowerProof } from './useBorrowerProof';
 // Same lazy chunk: ScoreAnatomy is the drawer's only importer.
 import { SCORE_SPINE_COPY } from './scoreSpine.copy';
+import { ProofMargins } from './ProofMargins';
 
 type ProofTab = 'math' | 'evidence' | 'lineage' | 'reproduce';
 
@@ -252,6 +253,12 @@ export function BorrowerProofDrawer({ borrowerId, open, onClose, focusComponent 
                       </div>
                     ))}
                   </div>
+                  {/* The long form of the margins (wow-ai-1): the same
+                      ProofMargins rows and note as the spine, from the proof
+                      already loaded; no new read, no client arithmetic. The
+                      prototype drawer carries lineage and raw signals only
+                      (deviation:proof-math-margins). */}
+                  <ProofMargins proof={proof} titled />
                 </div>
               )}
 
