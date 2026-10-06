@@ -1,6 +1,6 @@
 ---
 name: w5b-integration-lessons
-description: W5b (9-lane) integration traps the lanes could not see - dependency-batch holds proven only on the installed tree, prefix-replay Postgres suites, mid-test actor-gate resets, budget gates file split, zsh path modifier, hash-name brotli noise, repo plan vs orchestrator rebalance lane names
+description: W5b (9-lane) integration traps the lanes could not see - dependency-batch holds proven only on the installed tree, prefix-replay Postgres suites, mid-test actor-gate resets, budget gates file split, zsh path modifier, hash-name brotli noise, repo plan vs orchestrator rebalance lane names, the Home hero slot's 529px room, bash 3.2 first on the agent PATH
 metadata:
   type: project
 ---
@@ -42,5 +42,22 @@ dependency batch is only proven when the integrator installs it.
   **How to apply:** route W5b-era deferrals under the repo plan's lane names
   and let the W5c merge restate re-homed owners; do not mix W5e labels into
   the docs until 12.6 itself is restated.
+- Home's hero right slot has about 529px beside the 756px title block at
+  1440x900 (Console closed). Past that the WHOLE slot wraps under the title
+  (+61px) and the tallest answer band crosses the fold; W5b's FetchedAt made
+  the one-row slot 540px. It went red only after a macOS 27 text-metric shift
+  (round 1 was green on the same tree), so a few px decide it. The lane's pin
+  asserted a proxy ("actions centre on one row"), which stays green while the
+  slot wraps. **How to apply:** pin the property that fails (slot left edge
+  past the title block, hero no taller than the title block) and mutation-
+  check it; the slot is now a two-row stack (`.home-hero`, 343x70 under the
+  76px title block). The map heading bottom keeps only ~5.5px under FOLD
+  after W5b's band growth: any taller band or hero needs a cut elsewhere.
+- The agent shell resolves `/bin/bash` 3.2.57 before Homebrew bash 5.3, so
+  `test_deploy_dev_workflow_contract.py` (19 unbound-variable failures plus
+  the dry-run test) and `test_kill_drill_warehouse_contract.py` (2 parse
+  errors on `case` inside `$()`) fail locally, identically on main, and pass
+  in CI. **How to apply:** run pytest with `PATH=/opt/homebrew/bin:$PATH` for
+  CI-equivalent bash before calling a shell-contract red a regression.
 
 Related: [[project_ui_ux_audit_2026_09]], [[feedback_workflow_resume_prefix_cache]].
