@@ -55,8 +55,9 @@ async function askOnRoute(page: Page): Promise<void> {
 
 /**
  * A reload or close cancels the page's in-flight requests on purpose. The
- * harness ignores only Chromium's name for that (ERR_ABORTED): WebKit reports
- * "cancelled" and Firefox NS_BINDING_ABORTED. WebKit also surfaces the
+ * harness ignores only Chromium's name for that (ERR_ABORTED): WebKit on macOS
+ * reports "cancelled" and Firefox NS_BINDING_ABORTED (WebKit on Linux spells
+ * it differently; see allowHeldCompleteCancel). WebKit also surfaces the
  * cancelled first health poll (`/api/v1/health?idle_s=0`) of the unloading
  * document as a page error; it is recorded as a follow-up for the health
  * transport's owner, not hidden: the allowance matches only that message.
@@ -67,6 +68,19 @@ function allowNavigationCancel(hygiene: Hygiene, browserName: string): void {
   if (browserName === 'webkit') {
     hygiene.allow('pageerror', /^Fetch API cannot load \S+\/api\/v1\/health\?idle_s=0 due to access control checks/);
   }
+}
+
+/**
+ * (b) reloads while the complete POST is held open, so the reload cancels that
+ * one request by construction. WebKit on Linux (the e2e-cross-engine runner)
+ * names the cancellation "Load request cancelled", which the macOS spelling in
+ * allowNavigationCancel does not match (CI run 37521773357). Only (b) calls
+ * this, and it allows exactly that request in that spelling: every other
+ * failed request, and every other hygiene check, still fails the test.
+ */
+function allowHeldCompleteCancel(hygiene: Hygiene, browserName: string): void {
+  if (browserName !== 'webkit') return;
+  hygiene.allow('request-failed', /^POST https?:\/\/[^/\s]+\/api\/v1\/genie\/message\/complete failed: Load request cancelled$/);
 }
 
 /** Whether this engine exposes Web Locks; the unsupported path is annotated. */
@@ -109,6 +123,7 @@ test.describe('a Genie turn across a pagehide (runtime-01, every engine)', () =>
 
   test('(b) a reload during the complete call never completes again and shows the interrupted note', async ({ app, browserName, hygiene, mockApi, page }, testInfo) => {
     allowNavigationCancel(hygiene, browserName);
+    allowHeldCompleteCancel(hygiene, browserName);
     const turn = registerGenieTurn(mockApi, { holdComplete: true });
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);
