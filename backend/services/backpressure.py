@@ -201,6 +201,13 @@ class BackpressureController:
             # the 30/min "genie" budget a reload of a shared link would spend
             # the bucket that gates asks and hold a Genie slot per read.
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "POST" and path == "/api/genie/start":
+            # The Genie surface's open (audit delivery-09): genie_start reads
+            # the caller's latest Lakebase session row, the static trusted
+            # assets and the committed sample-question file. It makes no
+            # Genie call and writes no audit row, so it takes the default
+            # read bucket and a Lakebase slot, never a Genie slot.
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if path.startswith("/api/genie"):
             return RouteBudget("genie", settings.mip_rate_limit_genie_per_minute, "genie")
         if method.upper() == "POST" and path in self._READ_ONLY_POSTS:
