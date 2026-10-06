@@ -15,6 +15,7 @@ import { intentFingerprint, useIntentRequestIds } from '../lib/mutations/request
 import { queueHref, useQueueContext } from '../lib/queueContext';
 import { queuePosition } from '../lib/queuePosition';
 import { offerPath } from '../lib/routeMeta';
+import { queryKeys } from '../lib/queryKeys';
 import { usePresenterMode } from '../lib/presenterMode';
 import { PageShell } from '../components/layout/PageShell';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
@@ -34,6 +35,7 @@ import { useOfferDraft, useOfferSnapshot } from './offer-orchestrator.queries';
 import { draftProofMatchesSnapshot, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
 import { OfferDecisionOutcome } from './offer-orchestrator.decision';
+import { OfferPriorDecisions } from './offer-orchestrator.priorDecisions';
 import { announceApprovalRouting, offerUnsavedMessage } from './offer-orchestrator.feedback';
 import {
   OfferLoadErrorRoute,
@@ -302,6 +304,9 @@ export default function OfferOrchestrator() {
     }
     requestIds.settle(intent);
     setApproval(id, 'approved');
+    // The audit-free decision history re-reads now (exact key: never the
+    // dossier, whose read is an audited VIEW_BORROWER).
+    void queryClient.invalidateQueries({ queryKey: queryKeys.borrowerDecisions(id), exact: true });
     setDecidedHere({
       id,
       generation: loadGeneration,
@@ -355,6 +360,7 @@ export default function OfferOrchestrator() {
     }
     requestIds.settle(intent);
     setApproval(id, 'rejected');
+    void queryClient.invalidateQueries({ queryKey: queryKeys.borrowerDecisions(id), exact: true });
     setDecidedHere({ id, generation: loadGeneration, auditId: res.audit_event_id ?? null, approvalId: null });
     setRejectReviewOpen(false);
     setRejectReasonCode(DEFAULT_REJECT_REASON);
@@ -506,6 +512,7 @@ export default function OfferOrchestrator() {
         queue={queue}
         nextId={queue ? queuePosition(queue, id)?.next ?? null : null}
       />
+      <OfferPriorDecisions borrowerId={b?.borrower_id ?? id} />
       {decisionPending && (
         <OfferActionBar
           borrowerId={b?.borrower_id ?? null}

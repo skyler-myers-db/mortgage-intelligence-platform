@@ -101,6 +101,7 @@ tier; neither implies the other.
 | Lead assign, disposition, outcome | only if also on the sales roster | by roster role and scope: assign and outcome a `sales_manager` (own loan officers) or roster `admin`; disposition the loan officer, their manager or a roster `admin` | only if also on the sales roster | only if also on the sales roster | only if also on the sales roster |
 | Own activity (`/audit/my-events`) and own decision receipts | yes | yes | yes | yes | yes |
 | Another actor's decision receipt | no | no | no | yes | yes |
+| Borrower decision history (GET /borrowers/{id}/decisions) | no | yes (active roster member) | yes | yes | yes |
 | Full audit ledger (`/audit/events`, `/events/page`, `/rollups`, `/facets`, `/count`) | no | no | no | yes | yes |
 | Ledger CSV receipt (`POST /audit/export-receipt`) | no | no | no | no | yes |
 | Refusal reports list and question (from W5c) | no | no | no | yes | yes |
@@ -144,6 +145,7 @@ the pull request that ships the behaviour, never earlier.
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
 | Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
+| Borrower decision history (`borrower_decisions.list_borrower_decisions`) | none | on a Borrower 360 or Offer mount; never polled or prefetched | audit-free |
 | Audit ledger (`audit.list_events`, `list_event_page`, `audit_rollups`, `audit_facets`, `count_events`) | `VIEW_AUDIT_LEDGER` (`ledger_surface` events / events_page / rollups / facets / count) | once per served read by an admin or auditor | background, fail-open (`audit.dropped`) |
 | Another actor's decision receipt (`audit_receipt.read_decision_receipt`) | `VIEW_AUDIT_LEDGER` (`receipt`, `read_audit_event_id`) | once per served cross-actor read | background, fail-open |
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` or `approval_request_batch` (422) | audit-free |

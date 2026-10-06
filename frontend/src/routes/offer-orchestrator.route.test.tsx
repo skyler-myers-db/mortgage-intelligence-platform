@@ -40,6 +40,8 @@ const appMocks = vi.hoisted(() => ({
   actorEmail: 'approver.one@summit.example' as string | null,
 }));
 
+// The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
+vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
 vi.mock('../lib/api', () => {
   // Same constructor shape as the real ApiError (message, { path, status }).
   class ApiError extends Error {

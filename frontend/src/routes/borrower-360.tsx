@@ -41,6 +41,9 @@ import { useQueueContext } from '../lib/queueContext';
 const PROOF_DRAWER_CHUNK = lazyModule(() => import('../components/mortgage/ScoreAnatomy'));
 // A failed read's page (the error vocabulary with it) loads only on a failure.
 const FAILURE_PAGE = lazyModule(() => import('../components/mortgage/DossierFailure'));
+// The decision history (D-audit-reads-c2) is its own chunk, loaded once the
+// dossier has loaded; its audit-free read runs on that mount only.
+const DECISION_HISTORY_CHUNK = lazyModule(() => import('../components/mortgage/BorrowerDecisionHistory'));
 
 /**
  * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
@@ -107,6 +110,8 @@ export default function Borrower360() {
     { enabled: Boolean(id), queryKey: queryKeys.borrower(id) },
   );
   const { module: failurePage, failed: failurePageFailed } = useLazyModule(FAILURE_PAGE, error !== null);
+  const decisionHistory = useLazyModule(DECISION_HISTORY_CHUNK, Boolean(b));
+  const DecisionHistory = decisionHistory.module?.BorrowerDecisionHistory;
   // wow-stage-3: the lifecycle row carries the audit id of the latest
   // decision; when it does, the hero offers the Decision receipt read back
   // from that row. A 403 (actor outside the sales team) simply hides it.
@@ -527,6 +532,8 @@ export default function Borrower360() {
               </div>
             </div>
           </Reveal>
+          {/* The column's last item, so its late arrival shifts nothing above it. */}
+          {DecisionHistory && <DecisionHistory borrowerId={b.borrower_id} variant="surface" />}
         </div>
 
         {/* Right column — Why-now + NBO + CTA */}
