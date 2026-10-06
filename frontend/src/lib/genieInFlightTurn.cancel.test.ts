@@ -35,6 +35,7 @@ vi.mock('./apiClients/genieJobs', () => ({
   },
 }));
 
+import { NOBODY, _resetActorScopeForTests, _setResetDocumentForTests, observeActor } from './actorScope';
 import { GENIE_CONVERSATION_RESET_EVENT, GENIE_IN_FLIGHT_TURN_KEY } from './genieConversation';
 import { clearGenieTurns } from './genieConversationStore';
 import {
@@ -412,5 +413,70 @@ describe('a reload-resumed job turn', () => {
 
     expect(mocks.genieCancel.mock.calls[0]).toEqual([IDS, JOB_ID, LABEL]);
     expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOP_CONFIRMED_REASON]);
+  });
+});
+
+describe('the verified-sections reveal lives in the turn, keyed to its job (W5c)', () => {
+  const OTHER_JOB = '0a1b2c3d-0000-4000-8000-0000000000ff';
+  const sections = [0, 1, 2].map((n) => ({ title: `Part ${n}`, question: `Part ${n}?`, answer: 'Illinois leads.' }));
+
+  /** A job turn whose first status poll revealed three verified sections. */
+  async function revealedJobTurn(...later: GenieCompletionJobStatus[]): Promise<void> {
+    mocks.genieSubmit.mockResolvedValue(submitted());
+    mocks.genieProgress.mockResolvedValue(progress(true));
+    mocks.genieCompleteAsync.mockResolvedValue(running());
+    mocks.genieJobStatus.mockResolvedValueOnce({
+      ...running(),
+      verified_sections: 3,
+      sections_rev: 2,
+      revealed_sections: sections,
+    });
+    for (const status of later) mocks.genieJobStatus.mockResolvedValueOnce(status);
+    mocks.genieJobStatus.mockImplementation(() => never());
+    startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
+    await flush();
+    expect(getGenieTurnSnapshot().inFlight?.progress?.job?.reveal?.sections).toEqual(sections);
+  }
+
+  it('a status of another job never renders: the stage and the reveal stay this job\'s', async () => {
+    await revealedJobTurn({ ...running(), job_id: OTHER_JOB, stage: 'synthesizing', verified_sections: 0 });
+    await vi.advanceTimersByTimeAsync(1_600);
+
+    expect(mocks.genieJobStatus).toHaveBeenCalledTimes(2);
+    const job = getGenieTurnSnapshot().inFlight?.progress?.job;
+    expect(job?.stage).toBe('researching');
+    expect(job?.reveal).toMatchObject({ jobId: JOB_ID, verified: 3, sections });
+  });
+
+  it('a Stop removes the reveal with the turn', async () => {
+    await revealedJobTurn();
+    mocks.genieCancel.mockResolvedValue(cancelResult('cancelled'));
+
+    stopGenieTurn();
+
+    expect(getGenieTurnSnapshot().inFlight).toBeNull();
+  });
+
+  it('an actor sign-out (closed) leaves no reveal, and a proven change leaves the document', async () => {
+    try {
+      _resetActorScopeForTests({ status: 'pending', owner: 'actor-a' });
+      const resetDocument = vi.fn();
+      _setResetDocumentForTests(resetDocument);
+      observeActor({ key: 'actor-a' });
+      await revealedJobTurn();
+
+      observeActor({ key: null });
+
+      expect(getGenieTurnSnapshot().inFlight).toBeNull();
+      expect(getGenieTurnSnapshot().notes).toEqual([]);
+
+      _resetActorScopeForTests({ status: 'pending', owner: 'actor-a' });
+      _setResetDocumentForTests(resetDocument);
+      observeActor({ key: 'actor-a' });
+      observeActor({ key: 'actor-b' });
+      expect(resetDocument, 'the document (and every in-memory reveal) is replaced').toHaveBeenCalledOnce();
+    } finally {
+      _resetActorScopeForTests({ status: 'open', owner: NOBODY });
+    }
   });
 });

@@ -47,7 +47,6 @@ import {
   type GenieResult,
 } from './api';
 import { genieJobsApi } from './apiClients/genieJobs';
-import { beginGenieReveal, endGenieReveal, publishGenieReveal } from './genieVerifiedReveal';
 
 /** Poll cadence for in-flight turns. Fast enough to feel live, slow enough
  * (~40/min) to sit well inside the dedicated `genie-progress` server
@@ -299,7 +298,6 @@ export async function requestGenieCompletion(
     const outcome = await completeAsyncOnce(ids, question, signal, timeoutMs);
     if ('timedOut' in outcome) continue;
     if (!isGenieJobStatus(outcome.body)) return { kind: 'answer', response: outcome.body };
-    beginGenieReveal(outcome.body.job_id);
     return { kind: 'job', job: outcome.body };
   }
   throw new GenieLiveError('Genie did not accept the answer request in time. Ask the question again.');
@@ -329,9 +327,10 @@ export function settledGenieJob(job: GenieCompletionJobStatus): GenieResult | nu
 }
 
 /** Poll a completion job until it is terminal; 400/403/404 are fatal at once.
- *  Every status is published to the verified-sections reveal (genie-01
- *  phase 1b), and the poll sends back the revision it holds; the reveal
- *  ends with the poll (settled on success, ended on anything else). */
+ *  The poll sends back the verified-sections revision it holds (genie-01
+ *  phase 1b), starting from none so a resumed turn re-fetches the sections;
+ *  `onJob` hands every status to the in-flight store, which keeps the
+ *  reveal keyed to its job (lib/genieJobReveal). */
 export async function pollGenieJob(
   ids: GenieTurnIds,
   question: string,
@@ -339,42 +338,32 @@ export async function pollGenieJob(
   options: PollGenieJobOptions,
 ): Promise<GenieResult> {
   const { signal, deadline, onJob, pollMs = JOB_POLL_MS, sleep = defaultSleep } = options;
-  // A resumed turn (after a reload) re-fetches the sections on its first poll.
-  beginGenieReveal(jobId);
   let sectionsRev: number | null = null;
   let consecutiveFailures = 0;
-  let settled = false;
-  try {
-    for (;;) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      let job: GenieCompletionJobStatus | null = null;
-      try {
-        job = await genieJobsApi.genieJobStatus({ ...ids, question }, jobId, signal, sectionsRev);
-        consecutiveFailures = 0;
-      } catch (err) {
-        if (isAbortError(err)) throw err;
-        if (isFatalJobError(err)) throw err;
-        consecutiveFailures += 1;
-        if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
-      }
-      if (job) {
-        sectionsRev = publishGenieReveal(job);
-        onJob?.(job);
-        const answer = settledGenieJob(job);
-        if (answer) {
-          settled = true;
-          return answer;
-        }
-      }
-      if (Date.now() >= deadline) {
-        throw new GenieLiveError(
-          'Genie is taking longer than expected. The turn may still finish — ask again in a moment.',
-        );
-      }
-      await sleep(pollMs, signal);
+  for (;;) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    let job: GenieCompletionJobStatus | null = null;
+    try {
+      job = await genieJobsApi.genieJobStatus({ ...ids, question }, jobId, signal, sectionsRev);
+      consecutiveFailures = 0;
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      if (isFatalJobError(err)) throw err;
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
     }
-  } finally {
-    endGenieReveal(jobId, settled ? 'settled' : 'ended');
+    if (job) {
+      if (!job.terminal) sectionsRev = job.sections_rev ?? sectionsRev;
+      onJob?.(job);
+      const answer = settledGenieJob(job);
+      if (answer) return answer;
+    }
+    if (Date.now() >= deadline) {
+      throw new GenieLiveError(
+        'Genie is taking longer than expected. The turn may still finish — ask again in a moment.',
+      );
+    }
+    await sleep(pollMs, signal);
   }
 }
 

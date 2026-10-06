@@ -27,6 +27,7 @@ import {
   writeRecord,
   type PersistedTurnRecord,
 } from './genieInFlightRecord';
+import { nextJobReveal } from './genieJobReveal';
 import { requestGenieTurnCancel, type GenieTurnCancelTarget } from './genieTurnCancel';
 import { stopNoteFor, stopTargetFor } from './genieTurnStop';
 import { forgetLeave, leaveWaitMs, unwatchLeave, watchLeave } from './genieTurnUnload';
@@ -434,11 +435,15 @@ const COMPLETED_GENIE_PROGRESS: GenieLiveProgress = {
   error_hint: null,
 };
 
-/** Show the job's stage on the rail, keeping Genie's own last progress. A
- *  status poll's 200 (never the 202) reveals a resumed turn's question. */
+/** Show the job's stage on the rail, keeping Genie's own last progress, and
+ *  fold its verified sections into `job.reveal` (lib/genieJobReveal). Only
+ *  the turn's own job renders. A status poll's 200 (never the 202) reveals a
+ *  resumed turn's question. */
 function showJob(gen: number, job: GenieCompletionJobStatus, reveal: boolean): void {
   const inFlight = snapshot.inFlight;
   if (!isCurrent(gen) || !inFlight) return;
+  const named = active?.record.jobId;
+  if (named && job.job_id !== named) return;
   if (job.terminal) {
     // The answer (or the failure) lands next: never flash a terminal stage.
     if (reveal && active) patchTurn(gen, { question: active.question, revealed: true });
@@ -454,6 +459,7 @@ function showJob(gen: number, job: GenieCompletionJobStatus, reveal: boolean): v
       parts_done: job.parts_done,
       parts_planned: job.parts_planned,
       typical_seconds: job.typical_seconds,
+      reveal: nextJobReveal(inFlight.progress?.job?.reveal, job),
     },
   };
   patchTurn(gen, reveal && active ? { progress, question: active.question, revealed: true } : { progress });

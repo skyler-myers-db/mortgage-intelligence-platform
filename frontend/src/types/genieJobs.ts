@@ -8,6 +8,7 @@
  * and the closed vocabularies in `genie_completion_stages.py`.
  */
 import type { GenieLiveProgress, GenieResult, GenieSubmitResult } from '../lib/apiTypes';
+import type { GenieVerifiedRevealState } from '../lib/genieJobReveal';
 import type { GenieAnswerSection } from './genie';
 
 /** Server-owned completion stages; `stage_label` is the words for each. */
@@ -59,13 +60,17 @@ export interface GenieCompletionJobStatus {
   revealed_sections?: GenieAnswerSection[] | null;
 }
 
-/** What the progress rail shows of a running job (no id, no answer). */
+/** What the progress rail shows of a running job (no answer). The verified-
+ *  sections reveal is keyed to its job: a status of another job never
+ *  renders here (lib/genieJobReveal, folded by the in-flight store). */
 export interface GenieJobProgress {
   stage: GenieJobStage;
   stage_label: string;
   parts_done: number | null;
   parts_planned: number | null;
   typical_seconds?: number | null;
+  /** Verified sections so far (genie-01 phase 1b); never announced. */
+  reveal?: GenieVerifiedRevealState | null;
 }
 
 /** `POST /api/genie/message/cancel` (audit genie-03). `cancelled`: this app
