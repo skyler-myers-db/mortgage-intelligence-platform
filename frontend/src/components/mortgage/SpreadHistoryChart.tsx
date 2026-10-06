@@ -112,6 +112,16 @@ export function SpreadHistoryChart({ borrowerId, active }: SpreadHistoryChartPro
   );
 }
 
+const EMPTY: Record<Exclude<SpreadHistoryGate, 'eligible'>, string> = {
+  'needs-dossier': COPY.needsDossier,
+  'fixed-only': COPY.fixedOnly,
+  'no-note-rate': COPY.noNoteRate,
+};
+
+function EmptyNote({ text }: { text: string }) {
+  return <p className="spread-history__note" data-testid="spread-history-empty">{text}</p>;
+}
+
 function SpreadHistoryBody({
   gate,
   borrower,
@@ -121,9 +131,7 @@ function SpreadHistoryBody({
   borrower: Borrower360 | undefined;
   series: UseWarmingUpRetryResult<RateWindowResponse>;
 }) {
-  if (gate === 'needs-dossier') return <p className="spread-history__note" data-testid="spread-history-empty">{COPY.needsDossier}</p>;
-  if (gate === 'fixed-only') return <p className="spread-history__note" data-testid="spread-history-empty">{COPY.fixedOnly}</p>;
-  if (gate === 'no-note-rate' || !borrower) return <p className="spread-history__note" data-testid="spread-history-empty">{COPY.noNoteRate}</p>;
+  if (gate !== 'eligible' || !borrower) return <EmptyNote text={EMPTY[gate === 'eligible' ? 'no-note-rate' : gate]} />;
   if (series.error && !series.data) {
     return (
       <div className="proof-callout proof-callout--warning" data-testid="spread-history-error">
@@ -160,8 +168,15 @@ function SpreadHistoryFigure({ borrower, weeks }: { borrower: Borrower360; weeks
       }),
     [borrower, weeks],
   );
-  if (!model) return <p className="spread-history__note" data-testid="spread-history-empty">{COPY.noWeeks}</p>;
+  if (!model) return <EmptyNote text={COPY.noWeeks} />;
   const crossingX = model.crossing ? model.crossing.x * SX : null;
+  const legend: Array<[string, string, string?]> = [
+    ['note', COPY.legendNote, ratePct(model.noteRatePct)],
+    ['market', COPY.legendMarket],
+    ['screen', COPY.legendScreen, ratePct(model.screenPct)],
+    ['spread', COPY.legendSpread],
+  ];
+  if (model.crossing) legend.push(['crossing', COPY.legendCrossing]);
   return (
     <>
       <p className="spread-history__caption" data-testid="spread-history-caption">{spreadHistoryCaption(model)}</p>
@@ -170,7 +185,6 @@ function SpreadHistoryFigure({ borrower, weeks }: { borrower: Borrower360; weeks
           className="spread-history__svg"
           viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
           aria-hidden="true"
-          focusable="false"
           data-testid="spread-history-svg"
         >
           <polygon className="spread-history__spread" points={spreadPolygon(model, SX, SY)} />
@@ -195,28 +209,13 @@ function SpreadHistoryFigure({ borrower, weeks }: { borrower: Borrower360; weeks
       </div>
       <p className="sr-only" data-testid="spread-history-summary">{srSummary(model)}</p>
       <ul className="spread-history__legend" aria-label="Chart legend">
-        <li className="spread-history__legend-item">
-          <span className="spread-history__swatch spread-history__swatch--note" aria-hidden="true" />
-          {COPY.legendNote} <span className="spread-history__legend-value">{ratePct(model.noteRatePct)}</span>
-        </li>
-        <li className="spread-history__legend-item">
-          <span className="spread-history__swatch" aria-hidden="true" />
-          {COPY.legendMarket}
-        </li>
-        <li className="spread-history__legend-item">
-          <span className="spread-history__swatch spread-history__swatch--screen" aria-hidden="true" />
-          {COPY.legendScreen} <span className="spread-history__legend-value">{ratePct(model.screenPct)}</span>
-        </li>
-        <li className="spread-history__legend-item">
-          <span className="spread-history__swatch spread-history__swatch--spread" aria-hidden="true" />
-          {COPY.legendSpread}
-        </li>
-        {model.crossing && (
-          <li className="spread-history__legend-item">
-            <span className="spread-history__swatch spread-history__swatch--crossing" aria-hidden="true" />
-            {COPY.legendCrossing}
+        {legend.map(([key, label, value]) => (
+          <li key={key} className="spread-history__legend-item">
+            <span className={`spread-history__swatch spread-history__swatch--${key}`} aria-hidden="true" />
+            {label}
+            {value && <span className="spread-history__legend-value"> {value}</span>}
           </li>
-        )}
+        ))}
       </ul>
       <p className="spread-history__note" data-testid="spread-history-note">{COPY.historyNote}</p>
       <div className="spread-history__actions">
@@ -225,7 +224,6 @@ function SpreadHistoryFigure({ borrower, weeks }: { borrower: Borrower360; weeks
           aria-expanded={showTable}
           aria-controls={tableId}
           onClick={() => setShowTable((value) => !value)}
-          data-testid="spread-history-table-toggle"
         >
           {showTable ? COPY.hideTable : COPY.showTable}
         </Button>

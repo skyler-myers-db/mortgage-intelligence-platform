@@ -98,8 +98,8 @@
   inline-size: var(--sp-4);
   block-size: var(--sp-1);
   border-radius: var(--r-pill);
-  background: var(--spread-history-market-ink);
 }
+.spread-history__swatch--market { background: var(--spread-history-market-ink); }
 .spread-history__swatch--note { background: var(--spread-history-note-ink); }
 .spread-history__swatch--screen { background: var(--spread-history-screen-ink); }
 .spread-history__swatch--spread { block-size: var(--sp-2); background: var(--spread-history-spread-fill); }
