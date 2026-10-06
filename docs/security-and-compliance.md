@@ -56,6 +56,44 @@ derived from trusted answer rows or source filters and the user confirms the
 action. The destination route must preserve those filters, and the action must
 be audited.
 
+## Consented Genie refusal questions
+
+A lender who files "This was legitimate" on a governed Genie refusal may
+choose "Report with my question" (D-audit-reads-d). The stored text is a
+**consented refusal question (governed, hash-bound, 90-day, purge-only),
+never a borrower note; it is never rendered on a borrower, Lead Queue or
+Genie surface.** Its posture:
+
+- **Consented and hash-bound.** It is sent only on that explicit choice. The
+  server normalizes it with the Genie question validator and refuses it
+  (a fixed 422, nothing stored) unless it hashes to the report's
+  `question_hash`; it is kept only when the reporter's own ledger holds a
+  RUN_GENIE refusal of that family for the same question within 30 days.
+- **Tenant switch.** `MIP_GENIE_REFUSAL_TEXT_CAPTURE` (`enabled` |
+  `disabled`). The runtime default is `disabled` (fail-closed); the deploy
+  payload ships `enabled` unless the lender sets `disabled`. Off, every report
+  is hash-only.
+- **PII gate.** A refused PII request never keeps its text, and neither does
+  a question that names a person or a borrower (the prompt guards' PII and
+  identity matches, the human-name shape, the borrower-copy contextual name,
+  the identity directive, raw identifier patterns and masked borrower ids).
+  Phone numbers, emails, SSNs and street addresses are masked
+  (`scrub_free_text`) before storage and the row says whether anything was.
+- **Storage.** Only `mip_app.genie_refusal_report_texts`, one row per report,
+  written once in the report's transaction with one `GENIE_REFUSAL_REPORT`
+  audit row per text row (`question_text_captured`, or the closed
+  `question_text_declined` reason). The report row, the audit metadata, logs,
+  URLs, browser storage, RUM, Genie, any prompt or LLM and `genie_messages`
+  never carry it.
+- **Retention.** 90 days, then the text is nulled (an UPDATE, never a
+  DELETE; a trigger admits only that purge and the App role has no DELETE) by
+  a bounded sweep on every report and auditor read and an hourly App loop.
+  Purged text persists in Lakebase backups and point-in-time recovery for the
+  backup window.
+- **Access.** Administrators and configured auditors only, on `/audit-ledger`:
+  the list writes `VIEW_AUDIT_LEDGER` and each question read writes a
+  fail-closed `VIEW_REFUSAL_REPORT_TEXT` before the text leaves.
+
 ## Roles and access
 
 Four tiers are decided server-side by `backend/services/rbac.py` and
@@ -103,7 +141,7 @@ tier; neither implies the other.
 | Another actor's decision receipt | no | no | no | yes | yes |
 | Full audit ledger (`/audit/events`, `/events/page`, `/rollups`, `/facets`, `/count`) | no | no | no | yes | yes |
 | Ledger CSV receipt (`POST /audit/export-receipt`) | no | no | no | no | yes |
-| Refusal reports list and question (from W5c) | no | no | no | yes | yes |
+| Refusal reports list and question (`/audit/refusal-reports`, `/audit/refusal-reports/{id}/question`) | no | no | no | yes | yes |
 | `POST /audit/event` | no | no | no | no | yes |
 | `/admin/*` (rules 410, operations run, force-degraded, settings, asset metadata) | no | no | no | no | yes |
 | Lead Queue marketing override and `include_suppressed_for_analytics` | no | no | no | no | yes |
@@ -146,6 +184,8 @@ the pull request that ships the behaviour, never earlier.
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
 | Audit ledger (`audit.list_events`, `list_event_page`, `audit_rollups`, `audit_facets`, `count_events`) | `VIEW_AUDIT_LEDGER` (`ledger_surface` events / events_page / rollups / facets / count) | once per served read by an admin or auditor | background, fail-open (`audit.dropped`) |
 | Another actor's decision receipt (`audit_receipt.read_decision_receipt`) | `VIEW_AUDIT_LEDGER` (`receipt`, `read_audit_event_id`) | once per served cross-actor read | background, fail-open |
+| Refusal reports list (`refusal_reports_admin.list_refusal_reports`) | `VIEW_AUDIT_LEDGER` (`refusal_reports`) | once per served page by an admin or auditor, only on an explicit "Show refusal reports", a family filter, Load more or Retry; report metadata only, never question text | background, fail-open (`audit.dropped`) |
+| Refusal question read (`refusal_reports_admin.read_refusal_report_question`) | `VIEW_REFUSAL_REPORT_TEXT` (the report's 16-hex `question_hash` label and, when governed, its `refusal_reason` code) | once per served "Show question" click; never on hover, focus, prefetch or poll | synchronous, fail-closed: written before the text is returned, and a failed write answers 503 with no text |
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` or `approval_request_batch` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |

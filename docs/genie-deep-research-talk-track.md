@@ -292,7 +292,13 @@ These are the sweep working as designed, not faults. Each shows under
   says which.
 - **A refusal on a reasonable question.** Reword with the reviewed
   vocabulary above; every refusal is a guard false positive to report, not
-  a data limitation.
+  a data limitation. Report it with "This was legitimate" on the refusal
+  card: one click files the refusal family and the question's digest. When
+  the tenant has capture on, the card first offers "Report with my
+  question": the question (masked, and never one that names a person or a
+  borrower) is kept 90 days for administrators and auditors to triage on
+  the audit ledger's Refusal reports, and every read is logged; "Report
+  without it" files the digest only.
 
 ## Verified evidence (live app, 2026-09-08)
 
