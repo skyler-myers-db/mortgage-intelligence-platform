@@ -2272,7 +2272,9 @@ ON CONFLICT (version) DO NOTHING;
 -- enforced by the write path in backend/api/genie.py and
 -- backend/services/genie_history.py:
 --   * refused / policy_blocked / degraded / data_gap / out_of_footprint
---     turns are never recorded, so a guard-tripping prompt is never stored;
+--     turns are never recorded, so a guard-tripping prompt is never stored
+--     here; a consented, scrubbed, 90-day copy of a REPORTED refusal's
+--     question lives only in genie_refusal_report_texts (D-audit-reads-d);
 --   * a stored question already cleared the PII, identity, protected-class,
 --     scope and injection prompt guards;
 --   * a stored answer already cleared genie_response_has_unsafe_visible_text
@@ -3578,7 +3580,7 @@ CREATE TABLE IF NOT EXISTS mip_app.genie_refusal_reports (
 CREATE INDEX IF NOT EXISTS idx_genie_refusal_reports_reason
     ON mip_app.genie_refusal_reports (refusal_reason, reported_at DESC);
 COMMENT ON TABLE mip_app.genie_refusal_reports IS
-    'Hash-only lender reports that a governed Genie refusal was a false positive; the refused question text is never stored.';
+    'Lender reports that a governed Genie refusal was a false positive: the report row holds no question text, only its digest; a consented, scrubbed, 90-day, purge-only copy may live in genie_refusal_report_texts.';
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
@@ -4069,5 +4071,97 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_10_01_genie_job_sections',
     'Genie completion-job verified sections: nullable sections_json with a named 8 MiB pg_column_size CHECK, NULLed at every terminal state'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Genie refusal report texts (consented, 90 days, purge-only) ---
+-- D-audit-reads-d (audit genie-05). A lender who files "This was legitimate"
+-- on a governed refusal may choose "Report with my question". The server
+-- stores that question only when it hash-matches the report AND a RUN_GENIE
+-- refusal the same actor received within 30 days, the tenant switch
+-- (MIP_GENIE_REFUSAL_TEXT_CAPTURE) is on, and the text names no person or
+-- borrower. It is scrubbed (SSN, phone, email, street address), written once,
+-- nulled 90 days later by a bounded sweep (UPDATE, never DELETE), and read by
+-- administrators and auditors only, each read audited fail-closed. The
+-- report row in genie_refusal_reports never gains a text column; refused
+-- turns are still never written to genie_messages. expires_at has no default:
+-- the insert sets now() + 90 days, so no arithmetic default reaches the
+-- catalog the executable-hook preflight reviews.
+CREATE TABLE IF NOT EXISTS mip_app.genie_refusal_report_texts (
+    report_id      UUID PRIMARY KEY REFERENCES mip_app.genie_refusal_reports(report_id),
+    question_text  TEXT CHECK (question_text IS NULL OR length(question_text) BETWEEN 1 AND 16000),
+    redacted       BOOLEAN NOT NULL,
+    captured_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at     TIMESTAMPTZ NOT NULL,
+    purged_at      TIMESTAMPTZ,
+    CONSTRAINT genie_refusal_report_texts_purge_shape_chk
+        CHECK ((question_text IS NULL) = (purged_at IS NOT NULL)),
+    CONSTRAINT genie_refusal_report_texts_expiry_chk
+        CHECK (expires_at > captured_at)
+);
+DROP TRIGGER IF EXISTS trg_genie_refusal_report_texts_purge_only
+    ON mip_app.genie_refusal_report_texts;
+DROP TRIGGER IF EXISTS trg_genie_refusal_report_texts_no_remove
+    ON mip_app.genie_refusal_report_texts;
+CREATE INDEX IF NOT EXISTS idx_genie_refusal_report_texts_expiry
+    ON mip_app.genie_refusal_report_texts (expires_at)
+    WHERE purged_at IS NULL;
+
+-- The only UPDATE a text row ever takes is its purge: question_text from a
+-- value to NULL and purged_at from NULL to a time, every other column equal.
+CREATE OR REPLACE FUNCTION mip_app.prevent_refusal_text_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+BEGIN
+    IF (to_jsonb(NEW) - ARRAY['question_text', 'purged_at'])
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - ARRAY['question_text', 'purged_at'])
+       OR OLD.question_text IS NULL
+       OR NEW.question_text IS NOT NULL
+       OR OLD.purged_at IS NOT NULL
+       OR NEW.purged_at IS NULL THEN
+        RAISE EXCEPTION
+            'mip_app.genie_refusal_report_texts is immutable except for its one-time purge'
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_genie_refusal_report_texts_purge_only
+    BEFORE UPDATE ON mip_app.genie_refusal_report_texts
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.prevent_refusal_text_mutation();
+
+CREATE TRIGGER trg_genie_refusal_report_texts_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.genie_refusal_report_texts
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+COMMENT ON TABLE mip_app.genie_refusal_report_texts IS
+    'Consented question text of a reported Genie refusal (D-audit-reads-d): scrubbed, written once, nulled at 90 days and never deleted; read by administrators and auditors only, and every read is audited.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_01_genie_refusal_report_texts',
+    'Consented Genie refusal report texts: scrubbed question, 90-day expiry set by the insert, purge-only UPDATE trigger and no-remove trigger, no DELETE grant'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Disposition notes retired ---
+-- D-shell-deviations-g2 (flow-08 adjacent, critic-05). The optional free-text
+-- disposition note was written to two append-only ledgers and shown nowhere,
+-- with no erasure path. New dispositions no longer write it; the column stays
+-- for legacy rows. No constraint: a NOT VALID CHECK would still refuse an
+-- UPDATE of a legacy row.
+COMMENT ON COLUMN mip_app.call_dispositions.notes IS
+    'Retired 2026-10: no longer written; legacy rows only (free text in an append-only ledger has no erasure path).';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_01_disposition_notes_retired',
+    'Retired the free-text call disposition note: column kept for legacy rows, no longer written'
 )
 ON CONFLICT (version) DO NOTHING;

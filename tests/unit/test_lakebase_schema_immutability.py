@@ -602,3 +602,131 @@ def test_approval_request_tables_have_no_destructive_dml_or_unreviewed_hooks() -
     calls = set().union(*(_schema_hook_function_calls(check) for check in checks)) - {"in"}
     assert calls == {"length", "btrim"}
     assert calls <= _SAFE_SCHEMA_HOOK_FUNCTION_NAMES
+
+
+# --- W5c refusal capture: consented texts + retired disposition notes -------
+
+_REFUSAL_TEXTS_MARKER = "-- Genie refusal report texts (consented, 90 days, purge-only) ---"
+_REFUSAL_TEXTS_VERSION = "2026_10_01_genie_refusal_report_texts"
+_NOTES_RETIRED_MARKER = "-- Disposition notes retired ---"
+_NOTES_RETIRED_VERSION = "2026_10_01_disposition_notes_retired"
+
+
+def _block_from(marker: str) -> str:
+    start = _SCHEMA.index(marker)
+    end = _SCHEMA.index("ON CONFLICT (version) DO NOTHING;", start)
+    return _SCHEMA[start:end]
+
+
+@pytest.mark.parametrize(
+    ("marker", "version"),
+    [
+        (_REFUSAL_TEXTS_MARKER, _REFUSAL_TEXTS_VERSION),
+        (_NOTES_RETIRED_MARKER, _NOTES_RETIRED_VERSION),
+    ],
+)
+def test_the_w5c_refusal_blocks_are_post_seed_and_versioned_once(marker: str, version: str) -> None:
+    from jobs import lakebase_migrate
+
+    _pre_seed, post_seed = lakebase_migrate._split_schema_sql(_SCHEMA)
+    block = _block_from(marker)
+    assert _SCHEMA.count(marker) == 1
+    assert block in post_seed
+    assert _SCHEMA.index(marker) > _SCHEMA.index("'2026_10_01_genie_job_sections'")
+    assert block.count("INSERT INTO mip_app.schema_migrations") == 1
+    assert f"'{version}'" in block
+    assert _SCHEMA.count(f"'{version}'") == 1
+
+
+@pytest.mark.parametrize(
+    ("trigger", "function", "level", "events"),
+    [
+        (
+            "trg_genie_refusal_report_texts_purge_only",
+            "prevent_refusal_text_mutation",
+            "ROW",
+            "UPDATE",
+        ),
+        (
+            "trg_genie_refusal_report_texts_no_remove",
+            "prevent_outreach_evidence_mutation",
+            "STATEMENT",
+            "DELETE OR TRUNCATE",
+        ),
+    ],
+)
+def test_the_refusal_text_table_carries_its_two_guard_triggers(
+    trigger: str, function: str, level: str, events: str
+) -> None:
+    block = _block_from(_REFUSAL_TEXTS_MARKER)
+    drop = re.search(
+        rf"DROP TRIGGER IF EXISTS {trigger}\s+ON mip_app\.genie_refusal_report_texts;", block
+    )
+    assert drop is not None, trigger
+    # Dropped only once the table exists (a fresh install has nothing to drop).
+    assert drop.start() > block.index("CREATE TABLE IF NOT EXISTS mip_app.genie_refusal_report_texts")
+    # The newline after the name is what contract_as_of matches.
+    assert f"CREATE TRIGGER {trigger}\n" in block
+    assert re.search(
+        rf"CREATE TRIGGER {trigger}\n\s+BEFORE {events} ON mip_app\.genie_refusal_report_texts\s+"
+        rf"FOR EACH {level}\s+EXECUTE FUNCTION mip_app\.{function}\(\);",
+        block,
+    ), trigger
+
+
+def test_the_refusal_text_guard_allows_only_the_one_time_purge() -> None:
+    block = _block_from(_REFUSAL_TEXTS_MARKER)
+    body = block[block.index("prevent_refusal_text_mutation()") :]
+    body = body[: body.index("$$;")]
+    assert "(to_jsonb(NEW) - ARRAY['question_text', 'purged_at'])" in body
+    assert "(to_jsonb(OLD) - ARRAY['question_text', 'purged_at'])" in body
+    for clause in (
+        "OLD.question_text IS NULL",
+        "NEW.question_text IS NOT NULL",
+        "OLD.purged_at IS NOT NULL",
+        "NEW.purged_at IS NULL",
+        "USING ERRCODE = '42501'",
+        "SECURITY INVOKER",
+    ):
+        assert clause in body, clause
+
+
+def test_the_refusal_text_table_has_no_destructive_dml_or_unreviewed_hooks() -> None:
+    from jobs.lakebase_migration_contracts import _SAFE_SCHEMA_HOOK_FUNCTION_NAMES
+    from jobs.lakebase_migration_schema_hooks import _schema_hook_function_calls
+
+    destructive = re.compile(
+        r"^\s*(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|UPDATE)\s+mip_app\.genie_refusal_report_texts\b",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    assert destructive.search(_SCHEMA) is None
+    assert destructive.search(_SEED) is None
+    ddl = _table_ddl("genie_refusal_report_texts")
+    checks: list[str] = []
+    for match in re.finditer(r"CHECK\s*\(", ddl):
+        depth, position = 1, match.end()
+        while depth:
+            depth += {"(": 1, ")": -1}.get(ddl[position], 0)
+            position += 1
+        checks.append(ddl[match.end() : position - 1])
+    # One column CHECK and the two named table CHECKs.
+    assert len(checks) == 3
+    calls = set().union(*(_schema_hook_function_calls(check) for check in checks))
+    assert calls == {"length"}
+    assert calls <= _SAFE_SCHEMA_HOOK_FUNCTION_NAMES
+    # expires_at is set by the insert: no arithmetic default in the catalog.
+    expires = next(line for line in ddl.splitlines() if line.strip().startswith("expires_at"))
+    assert "DEFAULT" not in expires
+    assert "interval" not in ddl
+
+
+def test_the_disposition_note_column_is_retired_by_comment_only() -> None:
+    block = _block_from(_NOTES_RETIRED_MARKER)
+    assert (
+        "COMMENT ON COLUMN mip_app.call_dispositions.notes IS\n"
+        "    'Retired 2026-10: no longer written; legacy rows only (free text in an "
+        "append-only ledger has no erasure path).';"
+    ) in block
+    assert "ADD CONSTRAINT" not in block and "ALTER TABLE" not in block
+    # The column itself stays for legacy rows.
+    assert re.search(r"^\s+notes\s+TEXT", _table_ddl("call_dispositions"), flags=re.MULTILINE)
