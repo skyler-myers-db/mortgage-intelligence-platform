@@ -10759,6 +10759,102 @@
         "title": "KpiDeltas",
         "type": "object"
       },
+      "KpiProofParam": {
+        "description": "One named bind the statement uses, as the KPI's read binds it.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "title": "KpiProofParam",
+        "type": "object"
+      },
+      "KpiProofResponse": {
+        "description": "The statement behind one KPI card and how to read its number.",
+        "properties": {
+          "databricks_sql_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Databricks Sql Url"
+          },
+          "kpi": {
+            "enum": [
+              "home.addressable_population",
+              "home.in_the_money",
+              "home.high_opportunity",
+              "home.primary_offer_paths",
+              "funnel.population",
+              "funnel.high_opportunity"
+            ],
+            "title": "Kpi",
+            "type": "string"
+          },
+          "measure_column": {
+            "title": "Measure Column",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "params": {
+            "items": {
+              "$ref": "#/components/schemas/KpiProofParam"
+            },
+            "title": "Params",
+            "type": "array"
+          },
+          "predicates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Predicates",
+            "type": "array"
+          },
+          "relations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Relations",
+            "type": "array"
+          },
+          "sql": {
+            "title": "Sql",
+            "type": "string"
+          },
+          "sql_hash": {
+            "title": "Sql Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kpi",
+          "measure_column",
+          "predicates",
+          "sql",
+          "sql_hash",
+          "params",
+          "relations",
+          "note"
+        ],
+        "title": "KpiProofResponse",
+        "type": "object"
+      },
       "KpiTrend": {
         "description": "A single KPI's 7-day history + delta.\n\n``series`` is ordered oldest \u2192 newest; may be shorter than 7 if the\ndaily funnel snapshot hasn't accumulated that much history yet. ``delta_pct``\nis signed percent change from series[0] to series[-1]; ``None`` when the\nseries has fewer than 2 points or the starting value is zero.",
         "properties": {
@@ -23117,6 +23213,58 @@
         ]
       }
     },
+    "/api/kpi-proof": {
+      "get": {
+        "deprecated": true,
+        "description": "The governed statement that produced one KPI card's number.\n\nAUDIT EXEMPT: emits fixed governed SQL text; reads nothing.",
+        "operationId": "get_api_kpi_proof_get_kpi_proof",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kpi",
+            "required": true,
+            "schema": {
+              "enum": [
+                "home.addressable_population",
+                "home.in_the_money",
+                "home.high_opportunity",
+                "home.primary_offer_paths",
+                "funnel.population",
+                "funnel.high_opportunity"
+              ],
+              "title": "Kpi",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KpiProofResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Kpi Proof",
+        "tags": [
+          "evidence"
+        ]
+      }
+    },
     "/api/leads": {
       "get": {
         "deprecated": true,
@@ -33492,6 +33640,57 @@
         "summary": "Home Summary Attribution",
         "tags": [
           "home"
+        ]
+      }
+    },
+    "/api/v1/kpi-proof": {
+      "get": {
+        "description": "The governed statement that produced one KPI card's number.\n\nAUDIT EXEMPT: emits fixed governed SQL text; reads nothing.",
+        "operationId": "get_api_v1_kpi_proof_get_kpi_proof",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kpi",
+            "required": true,
+            "schema": {
+              "enum": [
+                "home.addressable_population",
+                "home.in_the_money",
+                "home.high_opportunity",
+                "home.primary_offer_paths",
+                "funnel.population",
+                "funnel.high_opportunity"
+              ],
+              "title": "Kpi",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KpiProofResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Kpi Proof",
+        "tags": [
+          "evidence"
         ]
       }
     },

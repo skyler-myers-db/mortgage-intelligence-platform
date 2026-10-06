@@ -311,3 +311,12 @@ def test_asset_freshness_is_a_warehouse_read(path: str) -> None:
     assert (budget.scope, budget.dependency) == ("warehouse-read", "warehouse")
     admin = BackpressureController().classify("GET", "/api/v1/admin/assets/x/metadata")
     assert admin is not None and (admin.scope, admin.dependency) == ("warehouse-read", "warehouse")
+
+
+@pytest.mark.parametrize("path", ["/api/kpi-proof", "/api/v1/kpi-proof"])
+def test_kpi_proof_takes_the_default_budget_and_no_slot(path: str) -> None:
+    # flow-06: the route emits fixed SQL text and reads nothing.
+    budget = BackpressureController().classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("default", None)

@@ -106,6 +106,7 @@ tier; neither implies the other.
 | Refusal reports list and question (from W5c) | no | no | no | yes | yes |
 | `POST /audit/event` | no | no | no | no | yes |
 | Asset freshness (band, last refresh, basis; `GET /assets/{key}/freshness`) | yes | yes | yes | yes | yes |
+| KPI reproduce SQL (`GET /kpi-proof`) | yes | yes | yes | yes | yes |
 | `/admin/*` (rules 410, operations run, force-degraded, settings, asset metadata) | no | no | no | no | yes |
 | Lead Queue marketing override and `include_suppressed_for_analytics` | no | no | no | no | yes |
 
@@ -160,6 +161,7 @@ the pull request that ships the behaviour, never earlier.
 | Genie completion-job status poll (`genie.genie_message_status`) | none | every ~1.5 s poll of the caller's own job; while a deep job runs it may carry verified sections as Partial research | audit-free; `genie.run_query` RUN_GENIE stays at the job's single `recorded_at` commit point and no action token is issued for a revealed section |
 | Genie verified section revealed (the job's sections writer, `genie_completion_sections`) | `GENIE_SECTION_REVEALED` | once per section, before it can be served (ruling R1): job and turn ids, plan index, row count, SQL hash, verification verdict; never question text or a row value | same Lakebase transaction as the `sections_json` write, fail-closed: a failed audit write withholds the section until the final answer; a turn that later fails, stops or expires keeps the rows |
 | Admin SSE ingress probe (`admin_sse_probe.sse_probe`, `admin_sse_probe.sse_probe_outcome`) | none | admin-only transport diagnostic (delivery-04) | audit-free; reads no UC or Lakebase data |
+| KPI proof (`kpi_proof.get_kpi_proof`) | none | when a KPI's evidence drawer opens; reads nothing | audit-free (fixed governed SQL text, gold and semantics relations only) |
 | Evidence drawer freshness (`asset_freshness.get_asset_freshness`) | none | when an evidence drawer opens on a mapped asset; never on hover, prefetch or poll | audit-free (one `gold.source_readiness` row; schema internals stay on the admin metadata read) |
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
