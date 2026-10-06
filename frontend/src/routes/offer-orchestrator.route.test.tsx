@@ -488,6 +488,7 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(() => [...container.querySelectorAll('button')].some(
       (candidate) => candidate.textContent?.trim() === 'Confirm reject',
     ));
+    act(() => { const reason = container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select')!; reason.value = 'low_intent'; reason.dispatchEvent(new Event('change', { bubbles: true })); });
     act(() => button('Confirm reject').click());
 
     await waitUntil(() => apiMocks.reject.mock.calls.length === 1);
@@ -565,6 +566,7 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(() => [...container.querySelectorAll('button')].some(
       (candidate) => candidate.textContent?.trim() === 'Confirm reject',
     ));
+    act(() => { const reason = container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select')!; reason.value = 'low_intent'; reason.dispatchEvent(new Event('change', { bubbles: true })); });
     act(() => button('Confirm reject').click());
 
     await waitUntil(() => container.querySelector('[data-testid="decision-receipt"]') !== null);
@@ -759,6 +761,7 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(() => [...container.querySelectorAll('button')].some(
       (candidate) => candidate.textContent?.trim() === 'Confirm reject',
     ));
+    act(() => { const reason = container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select')!; reason.value = 'low_intent'; reason.dispatchEvent(new Event('change', { bubbles: true })); });
     act(() => button('Confirm reject').click());
     await waitUntil(() => container.querySelector('[role="alert"]')?.textContent?.includes(message) === true);
     expect(appMocks.setApproval).not.toHaveBeenCalled();

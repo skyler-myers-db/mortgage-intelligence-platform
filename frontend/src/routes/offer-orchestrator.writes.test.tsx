@@ -427,6 +427,7 @@ describe('Offer Orchestrator writes', () => {
     mount();
     await waitUntil(() => loaded());
     await openRejectReview();
+    choose(container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select')!, 'low_intent');
     const confirm = button('Confirm reject');
     act(() => {
       confirm.click();

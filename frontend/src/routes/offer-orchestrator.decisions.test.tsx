@@ -6,6 +6,11 @@
  * decision history once on mount, collapsed; after a RESOLVED approve or
  * reject (never optimistically) it re-reads that exact key once, and the
  * audited dossier and snapshot reads are never repeated for it.
+ *
+ * The Offer reject has no default reason (D-approval-flow-d item 13, the
+ * Offer half; tables-07 / states-08): the Reason opens on "Choose a reason",
+ * Confirm reject stays aria-disabled (never natively disabled) until one is
+ * chosen, and a submit without one focuses Reason and sends nothing.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -235,5 +240,76 @@ describe('Offer prior decisions', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(decisions.list).toHaveBeenCalledTimes(1);
+  });
+
+  describe('the reject reason has no default', () => {
+    const reason = () => container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select');
+    function choose(value: string) {
+      act(() => {
+        const select = reason()!;
+        select.value = value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
+    async function openReject() {
+      mount();
+      await waitUntil(() => loaded());
+      act(() => findButton('Reject')?.click());
+      await waitUntil(() => findButton('Confirm reject') !== undefined);
+    }
+
+    it('opens on "Choose a reason" and a submit without one focuses Reason and sends nothing', async () => {
+      await openReject();
+      expect(reason()?.value).toBe('');
+      expect(reason()?.options[0].textContent).toBe('Choose a reason');
+      const confirm = findButton('Confirm reject')!;
+      expect(confirm.getAttribute('aria-disabled')).toBe('true');
+      expect(confirm.disabled).toBe(false);
+
+      // Reason took focus on open; move it away so the submit has to bring it back.
+      act(() => (document.activeElement as HTMLElement | null)?.blur());
+      expect(document.activeElement).not.toBe(reason());
+      await act(async () => {
+        confirm.click();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(apiMocks.reject).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(reason());
+      // The bar's own Reject is refused too (the belt in onReject).
+      await act(async () => {
+        findButton('Reject')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(apiMocks.reject).not.toHaveBeenCalled();
+    });
+
+    it('sends the chosen reason with the unchanged body', async () => {
+      await openReject();
+      choose('data_quality');
+      expect(findButton('Confirm reject')?.hasAttribute('aria-disabled')).toBe(false);
+      act(() => findButton('Confirm reject')?.click());
+      await waitUntil(() => apiMocks.reject.mock.calls.length === 1);
+      const { request_id: _requestId, ...body } = apiMocks.reject.mock.calls[0][1] as Record<string, unknown>;
+      expect(body).toEqual({
+        offer_code: 'rate_term_refi',
+        evidence_ids: ['ev-1', 'ev-2'],
+        channel: 'email',
+        rationale_code: 'data_quality',
+        rationale: null,
+        campaign_id: null,
+        variant_name: null,
+      });
+    });
+
+    it('Cancel resets the reason, so a reopened review starts on "Choose a reason" again', async () => {
+      await openReject();
+      choose('low_intent');
+      act(() => findButton('Cancel')?.click());
+      await waitUntil(() => findButton('Confirm reject') === undefined);
+      act(() => findButton('Reject')?.click());
+      await waitUntil(() => findButton('Confirm reject') !== undefined);
+      expect(reason()?.value).toBe('');
+      expect(findButton('Confirm reject')?.getAttribute('aria-disabled')).toBe('true');
+    });
   });
 });

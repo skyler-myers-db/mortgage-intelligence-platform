@@ -292,6 +292,8 @@ test.describe('decision receipt', () => {
     await app.gotoRoute(`/offer-orchestrator/${BORROWER_ID}`);
 
     await page.getByRole('button', { name: 'Reject', exact: true }).click();
+    // There is no default reason (D-approval-flow-d item 13): the reviewer picks one.
+    await page.getByRole('combobox', { name: 'Reason' }).selectOption('low_intent');
     await page.getByRole('button', { name: 'Confirm reject' }).click();
 
     const receipt = page.getByTestId('decision-receipt');

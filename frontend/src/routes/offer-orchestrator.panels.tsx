@@ -58,9 +58,10 @@ export function OfferOrchestratorEmptyHero({ to }: OfferOrchestratorEmptyHeroPro
 }
 
 interface RejectRationalePanelProps {
-  reasonCode: RejectReasonCode;
+  /** '' until the reviewer chooses: there is no default reason. */
+  reasonCode: RejectReasonCode | '';
   rationale: string;
-  onReasonChange: (reason: RejectReasonCode) => void;
+  onReasonChange: (reason: RejectReasonCode | '') => void;
   onRationaleChange: (rationale: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
@@ -94,6 +95,10 @@ export function RejectRationalePanel({
       aria-labelledby={titleId}
       onSubmit={(e) => {
         e.preventDefault();
+        if (reasonCode === '') {
+          reasonRef.current?.focus();
+          return;
+        }
         onSubmit();
       }}
     >
@@ -109,8 +114,9 @@ export function RejectRationalePanel({
           <select
             ref={reasonRef}
             value={reasonCode}
-            onChange={(e) => onReasonChange(e.target.value as RejectReasonCode)}
+            onChange={(e) => onReasonChange(e.target.value as RejectReasonCode | '')}
           >
+            <option value="">Choose a reason</option>
             {REJECT_REASONS.map((reason) => (
               <option key={reason.code} value={reason.code}>{reason.label}</option>
             ))}
@@ -140,6 +146,9 @@ export function RejectRationalePanel({
             size="sm"
             icon="cross"
             disabled={submitDisabled || (reasonCode === 'other_with_text' && rationale.trim().length === 0)}
+            // aria-disabled, never native `disabled`, until a reason is chosen:
+            // the submit then moves focus to Reason instead of sending.
+            aria-disabled={reasonCode === '' || undefined}
           >
             Confirm reject
           </Button>

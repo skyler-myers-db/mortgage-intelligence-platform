@@ -27,7 +27,7 @@ import { useApp } from '../components/AppContext';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { approverGateReason } from '../components/mortgage/approverGate';
 import { offerDisplayLabel } from '../lib/offerLanguage';
-import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } from './offer-orchestrator.constants';
+import type { OutreachChannel, RejectReasonCode } from './offer-orchestrator.constants';
 import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
 import { OfferReviewGrid, RejectRationalePanel } from './offer-orchestrator.panels';
 import { OfferActionBar } from './offer-orchestrator.action-bar';
@@ -94,7 +94,9 @@ export default function OfferOrchestrator() {
   const [approvalRouting, setApprovalRouting] = useState<{ id: string; assignedTo: string | null; followUpAt: string | null } | null>(null);
   const [draftChannel, setDraftChannel] = useState<OutreachChannel>('email');
   const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
-  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>(DEFAULT_REJECT_REASON);
+  // No default reason (D-approval-flow-d item 13): every rationale_code in the
+  // ledger is one a reviewer chose.
+  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode | ''>('');
   const salesTeam = useOfferSalesTeam();
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
@@ -329,6 +331,8 @@ export default function OfferOrchestrator() {
       setRejectReviewOpen(true);
       return;
     }
+    // Belt: the panel moves focus to Reason and sends nothing without one.
+    if (rejectReasonCode === '') return;
     if (rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0) {
       setApproveError('Rejection reason "Other" requires a rationale note.');
       return;
@@ -363,7 +367,7 @@ export default function OfferOrchestrator() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.borrowerDecisions(id), exact: true });
     setDecidedHere({ id, generation: loadGeneration, auditId: res.audit_event_id ?? null, approvalId: null });
     setRejectReviewOpen(false);
-    setRejectReasonCode(DEFAULT_REJECT_REASON);
+    setRejectReasonCode('');
     setRejectRationale('');
   };
 
@@ -539,7 +543,7 @@ export default function OfferOrchestrator() {
               onCancel={() => {
                 setRejectReviewOpen(false);
                 setRejectRationale('');
-                setRejectReasonCode(DEFAULT_REJECT_REASON);
+                setRejectReasonCode('');
               }}
               onSubmit={() => void onReject()}
               submitDisabled={snapshot.reading}
