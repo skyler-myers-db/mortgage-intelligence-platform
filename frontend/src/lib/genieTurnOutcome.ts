@@ -27,8 +27,8 @@ export const GENIE_BUSY_REASON =
   'Genie is still answering. Ask unlocks when this answer lands, or press Stop. Leaving this page does not stop it.';
 
 /** The Stopped note until the server confirms a cancel (audit `genie-03`),
- *  and for good when there is none to confirm (a turn stopped before its
- *  completion job was named, a non-job turn, or a failed cancel request). */
+ *  and for good when there is none to confirm (a turn stopped while its
+ *  submit was in flight, a non-job turn, or a failed cancel request). */
 export const GENIE_STOPPED_REASON =
   'Stopped before the answer arrived. Genie may still finish this turn on the server; that reply is ' +
   'discarded and never shown, but Genie may keep the question as context for the next turn in this thread.';
