@@ -388,7 +388,7 @@ bytes).
 | `@typescript-eslint/eslint-plugin` / `parser` | 8.70.1 | 8.71.0 | 8.71.0 | Still peers `typescript >=4.8.4 <6.1.0`. |
 | `happy-dom` | 20.10.3 | 20.14.5 | **held 20.10.3** | Held 2026-10-01 by the W5b integrator: on the installed tree the full vitest suite goes red in `src/components/EvidenceHoverCard.test.tsx` (W5a platform-backend's anchored hover card): 20.14.5 invokes `CSSStyleDeclaration.prototype.setProperty` with a `this` that is not the element's `style` object (a probe on the bare library reproduces it), so the test's same-object proof of where `anchor-name` lands fails although the value is set. The suite is green on 20.10.3 (454 files / 4674 tests). Re-take it with W5d `w5-test-harness-deps-report`, which may re-model that proof on the observable value. |
 | `web-vitals` | (new) | 6.2.2 | 6.2.2 | Production dependency, Apache-2.0 (licence row added). Nothing imports it in W5b (0 bytes); W5c `w5-field-vitals` consumes it lazily. |
-| `stylelint` | (new) | 17.16.0 | 17.16.0 | Dev only, MIT (licence row added); no script yet: W5d `w5-compiler-lint` calls it from `tools/lint_css_literals.mjs`. |
+| `stylelint` | (new) | 17.16.0 | **removed 2026-10-06** | Dev only, MIT; no script called it. Removed on 2026-10-06 because its `micromatch` -> `braces` path carries GHSA-vfj7-8cjw-p6xm with no patched release (see the 2026-10-06 npm addendum); W5e `w5-compiler-lint` re-adds it. |
 | `oxlint` | 1.85.0 | 1.86.0 | **held 1.85.0** | Held 2026-10-01: `frontend/oxlint-baseline.json` records the installed oxlint version and `--check` fails on a mismatch, and a new version's jsx-a11y rule list must be named in `.oxlintrc.json`; both need the installed binary, and the ratchet files belong to W5d `w5-compiler-lint`. |
 | `typescript` | 6.0.3 | 7.0.2 | **held 6.0.3** | typescript-eslint 8.71.0 peers `<6.1.0`; 6.0.3 is the newest 6.0.x (D-platform-process-a, review_by 2026-11-15). |
 | `vitest` | 4.1.11 | 5.0.3 | **held 4.1.11** | Newest 4.x; vitest 5 held by D-platform-process-a (review_by 2026-11-15). |
@@ -467,3 +467,15 @@ release that resolves cleanly, so all three are pins, not ignores.
   `tests/integration/test_gateway_mlflow_registry.py`, the health endpoint
   and the error sanitizer, 456 tests. The run loaded mako 1.4.2 through
   alembic.
+
+## 2026-10-06 addendum: npm audit, source-map-js 1.2.2 and stylelint removed
+
+PR #267's second CI run turned the `npm --prefix frontend audit --audit-level=high` step red on two high advisories (both published 2026-09-18, surfaced by the npm feed between the run's two pushes):
+
+| Advisory | Package | Range | First patched | Path | Action |
+|---|---|---|---|---|---|
+| GHSA-68fv-2mgg-jv7q | `source-map-js` | `>= 1.0.0, < 1.2.2` | 1.2.2 | `postcss` / `vite` (build time) | Lock-only bump to 1.2.2 (`npm update source-map-js --package-lock-only`); `main` carries 1.2.1 too, so this also clears the ambient red there once W5b merges. |
+| GHSA-vfj7-8cjw-p6xm | `braces` | `<= 3.0.3` | none | `stylelint` -> `micromatch` -> `braces` (dev only) | No patched release exists. `stylelint` was added by the W5b batch with no script calling it, so it is removed (`npm uninstall stylelint --package-lock-only`) rather than excused; `braces` is no longer in the lock. `tests/unit/test_dependency_pins.py::test_stylelint_waits_for_a_patched_braces` pins its absence until W5e `w5-compiler-lint` re-adds it on a patched path. |
+
+After `npm --prefix frontend ci` on the refreshed lock: `npm audit --audit-level=high` reports 0 vulnerabilities. The only other lock change is npm's dedupe re-hoisting `fast-json-stable-stringify` 2.1.0 once stylelint's tree left.
+

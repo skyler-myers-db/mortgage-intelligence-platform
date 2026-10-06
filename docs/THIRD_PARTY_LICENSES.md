@@ -48,7 +48,6 @@ https://openfontlicense.org.
 | `@axe-core/playwright` / `axe-core` | Accessibility test automation | `MPL-2.0` | Dev/test only. No project files derive from or modify the MPL source. |
 | `hypothesis` | Python property/fuzz tests | `MPL-2.0` | Test only. No project files derive from or modify the MPL source. |
 | `lightningcss` | Vite/build-time CSS transform dependency | `MPL-2.0` | Build-time transitive dependency. No project files derive from or modify the MPL source. |
-| `stylelint` | CSS lint for the design-token literal gate | `MIT` | Dev only; never shipped in the browser build or the App source. |
 
 MPL-2.0 is file-level weak copyleft. Because these packages are consumed
 unmodified, the practical obligation is attribution and preservation of the

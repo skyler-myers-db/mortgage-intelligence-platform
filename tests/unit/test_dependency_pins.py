@@ -2,7 +2,8 @@
 
 Exact pins everywhere, the TanStack query packages in lockstep (one
 query-core in the lock), web-vitals as an exact production dependency (W5c
-field vitals consume it), stylelint as an exact dev-only tool (W5d), the held
+field vitals consume it), no stylelint until a patched braces exists (removed
+2026-10-06, GHSA-vfj7-8cjw-p6xm), the held
 majors (D-platform-process-a, review_by 2026-11-15; Playwright held to the VRT
 image), and one gitleaks version across the CI workflow.
 """
@@ -78,12 +79,15 @@ def test_web_vitals_is_an_exact_production_dependency() -> None:
     assert entry["license"] == "Apache-2.0"
 
 
-def test_stylelint_is_an_exact_dev_only_tool() -> None:
-    package = _package()
-
-    assert EXACT.match(package["devDependencies"]["stylelint"])
-    assert "stylelint" not in package["dependencies"]
-    assert _lock_packages()["node_modules/stylelint"].get("dev") is True
+def test_stylelint_waits_for_a_patched_braces() -> None:
+    """stylelint 17 reaches braces through micromatch, and every braces release
+    (<= 3.0.3) carries GHSA-vfj7-8cjw-p6xm (high, no patched version on
+    2026-10-06), which turns CI's npm audit gate red. The W5b batch added
+    stylelint with no script calling it, so it was removed rather than
+    excused. W5e w5-compiler-lint re-adds it once braces is patched or the
+    lint path avoids it, and updates this test with the patched pin."""
+    assert "stylelint" not in _all_deps(_package())
+    assert not [key for key in _lock_packages() if key.endswith("node_modules/braces")]
 
 
 def test_the_held_majors_stay_held() -> None:
