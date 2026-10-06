@@ -4071,3 +4071,32 @@ VALUES (
     'Genie completion-job verified sections: nullable sections_json with a named 8 MiB pg_column_size CHECK, NULLed at every terminal state'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Borrower decision history index -----------------------------------------
+-- Audit 2026-09-21 flow-04 phase 2 (D-audit-reads-c2). GET
+-- /borrowers/{id}/decisions reads one borrower's governed decisions by
+-- entity_id (the borrower, or its approval / activation / approval-request
+-- batch ids), newest first. A partial index over plain columns with a LITERAL
+-- IN predicate, the shape of idx_action_audit_admin_request_actor_event: the
+-- service query repeats the identical literal list
+-- (borrower_decision_history._ENTITY_TYPES_SQL_LIST), so the planner proves
+-- the predicate under a generic plan. LEAD_DISTRIBUTE is absent on purpose:
+-- its one shared row per run is read through idx_action_audit_event_type.
+-- LEAD_UNASSIGN is in the predicate before its writer exists, so that writer
+-- needs no second migration. A FUTURE PREDICATE CHANGE NEEDS A NEW INDEX NAME:
+-- IF NOT EXISTS would keep the old predicate. No jsonb expression, no GIN, no
+-- CONCURRENTLY (the migrate job runs in one transaction), and no new table,
+-- grant or trigger.
+CREATE INDEX IF NOT EXISTS idx_action_audit_decision_entity
+    ON mip_app.action_audit (entity_id, audit_sequence DESC)
+    WHERE event_type IN ('ACTIVATION_STAGE', 'APPROVAL_REQUESTED', 'APPROVE', 'CALL_DISPOSITION', 'LEAD_ASSIGN', 'LEAD_ASSIGNMENT_STATUS', 'LEAD_OUTCOME', 'LEAD_OUTCOME_RECORDED', 'LEAD_UNASSIGN', 'OUTREACH_REJECT', 'OUTREACH_REVOKE', 'SUPPRESS_CONTACT');
+
+COMMENT ON INDEX mip_app.idx_action_audit_decision_entity IS
+    'Borrower decision history (GET /borrowers/{id}/decisions): the governed decision types by entity, newest first. The predicate is the service literal list; change it only under a new index name.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_02_borrower_decision_history_index',
+    'Borrower decision history: partial index idx_action_audit_decision_entity on action_audit (entity_id, audit_sequence DESC) over the governed decision types'
+)
+ON CONFLICT (version) DO NOTHING;

@@ -54,6 +54,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/borrowers/{borrower_id}/evidence"): "tests/unit/test_borrowers_router.py",
     ("GET", "/api/borrowers/{borrower_id}/proof"): "tests/unit/test_borrowers_router.py",
     ("GET", "/api/borrowers/{borrower_id}/lifecycle"): "tests/unit/test_sales_manager_api.py",
+    ("GET", "/api/borrowers/{borrower_id}/decisions"): "tests/unit/test_borrower_decision_history.py",
     ("GET", "/api/campaigns"): "tests/unit/test_campaigns_router.py",
     ("GET", "/api/campaigns/{campaign_id}"): "tests/unit/test_campaigns_router.py",
     ("PATCH", "/api/campaigns/{campaign_id}"): "tests/unit/test_campaigns_router.py",

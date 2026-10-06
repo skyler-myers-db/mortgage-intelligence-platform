@@ -298,3 +298,22 @@ def test_the_admin_sse_probe_holds_no_dependency_slot(path: str) -> None:
     assert budget is not None
     assert (budget.scope, budget.dependency) == ("admin-diagnostic", None)
     assert BackpressureController().classify("GET", "/api/admin/rules").dependency == "warehouse"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/borrowers/B-0123456789ABC/decisions", "/api/v1/borrowers/B-X/decisions"],
+)
+def test_the_borrower_decision_history_is_a_lakebase_read_never_a_warehouse_read(path: str) -> None:
+    # Audit flow-04 phase 2: the history reads the Lakebase ledger only; under
+    # the '/api/borrowers' prefix it would spend the expensive warehouse budget
+    # and hold a warehouse slot.
+    controller = BackpressureController()
+    budget = controller.classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("lakebase-read", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+    # Non-vacuity: the dossier read beside it keeps the warehouse budget.
+    dossier = controller.classify("GET", "/api/v1/borrowers/B-X")
+    assert dossier is not None and dossier.dependency == "warehouse"

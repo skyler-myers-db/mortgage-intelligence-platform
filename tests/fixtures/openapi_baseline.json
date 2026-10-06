@@ -3522,6 +3522,302 @@
         "title": "Borrower360",
         "type": "object"
       },
+      "BorrowerDecisionEvent": {
+        "additionalProperties": false,
+        "description": "One governed decision on the borrower, projected through closed vocabularies.",
+        "properties": {
+          "activation_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "dry_run",
+                  "staged",
+                  "delivered",
+                  "failed",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activation Status"
+          },
+          "actor_display": {
+            "title": "Actor Display",
+            "type": "string"
+          },
+          "actor_kind": {
+            "enum": [
+              "staff",
+              "automation",
+              "unverified"
+            ],
+            "title": "Actor Kind",
+            "type": "string"
+          },
+          "assigned_to_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To Display"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "bulk": {
+            "default": false,
+            "title": "Bulk",
+            "type": "boolean"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "enum": [
+                  "email",
+                  "sms",
+                  "direct_mail"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "contact_block_label": {
+            "anyOf": [
+              {
+                "enum": [
+                  "No marketing consent",
+                  "Contacted within 30 days",
+                  "Suppressed",
+                  "Eligibility not proven"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Block Label"
+          },
+          "disposition_outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "called_no_answer",
+                  "called_left_voicemail",
+                  "connected",
+                  "callback_scheduled",
+                  "application_started",
+                  "not_interested",
+                  "not_now",
+                  "dead"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disposition Outcome"
+          },
+          "event_type": {
+            "enum": [
+              "ACTIVATION_STAGE",
+              "APPROVAL_REQUESTED",
+              "APPROVE",
+              "CALL_DISPOSITION",
+              "LEAD_ASSIGN",
+              "LEAD_ASSIGNMENT_STATUS",
+              "LEAD_DISTRIBUTE",
+              "LEAD_OUTCOME",
+              "LEAD_OUTCOME_RECORDED",
+              "LEAD_UNASSIGN",
+              "OUTREACH_REJECT",
+              "OUTREACH_REVOKE",
+              "SUPPRESS_CONTACT"
+            ],
+            "title": "Event Type",
+            "type": "string"
+          },
+          "from_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "assigned",
+                  "contact_drafted",
+                  "approved",
+                  "actioned",
+                  "outcome_recorded"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Status"
+          },
+          "is_own": {
+            "title": "Is Own",
+            "type": "boolean"
+          },
+          "lead_outcome_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "application_submitted",
+                  "closed_funded",
+                  "lost_to_competitor",
+                  "withdrawn",
+                  "not_qualified"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lead Outcome Type"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "refi",
+                  "heloc",
+                  "cash_out",
+                  "purchase",
+                  "retention",
+                  "recapture",
+                  "refi_plus_heloc",
+                  "investor",
+                  "nurture"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "outcome": {
+            "enum": [
+              "approved",
+              "rejected",
+              "revoked",
+              "requested",
+              "assigned",
+              "unassigned",
+              "distributed",
+              "status_changed",
+              "disposition",
+              "outcome",
+              "activation",
+              "contact_blocked"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "rationale_label": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Out of footprint",
+                  "Contact preference",
+                  "Compliance review",
+                  "Low intent",
+                  "Data quality",
+                  "Other"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale Label"
+          },
+          "receipt_available": {
+            "default": false,
+            "title": "Receipt Available",
+            "type": "boolean"
+          },
+          "to_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "assigned",
+                  "contact_drafted",
+                  "approved",
+                  "actioned",
+                  "outcome_recorded"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Status"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "event_type",
+          "outcome",
+          "occurred_at",
+          "actor_display",
+          "actor_kind",
+          "is_own"
+        ],
+        "title": "BorrowerDecisionEvent",
+        "type": "object"
+      },
+      "BorrowerDecisionHistoryResponse": {
+        "additionalProperties": false,
+        "description": "The latest 50 decisions on one borrower; truncated when older ones exist.",
+        "properties": {
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BorrowerDecisionEvent"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "items",
+          "truncated"
+        ],
+        "title": "BorrowerDecisionHistoryResponse",
+        "type": "object"
+      },
       "BorrowerLifecycleResponse": {
         "properties": {
           "approval_id": {
@@ -20131,6 +20427,50 @@
         ]
       }
     },
+    "/api/borrowers/{borrower_id}/decisions": {
+      "get": {
+        "deprecated": true,
+        "description": "The borrower's latest governed decisions for the working team (audit-free).",
+        "operationId": "get_api_borrowers_borrower_id_decisions_borrower_decisions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BorrowerDecisionHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Borrower Decisions",
+        "tags": [
+          "borrowers"
+        ]
+      }
+    },
     "/api/borrowers/{borrower_id}/evidence": {
       "get": {
         "deprecated": true,
@@ -30505,6 +30845,49 @@
           }
         },
         "summary": "Get Borrower",
+        "tags": [
+          "borrowers"
+        ]
+      }
+    },
+    "/api/v1/borrowers/{borrower_id}/decisions": {
+      "get": {
+        "description": "The borrower's latest governed decisions for the working team (audit-free).",
+        "operationId": "get_api_v1_borrowers_borrower_id_decisions_borrower_decisions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BorrowerDecisionHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Borrower Decisions",
         "tags": [
           "borrowers"
         ]
