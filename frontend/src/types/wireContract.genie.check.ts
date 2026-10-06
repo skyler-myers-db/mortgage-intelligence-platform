@@ -13,6 +13,7 @@ import type { ApiBody, ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
 import type { GenieActionRequest, GenieCompleteAsyncRequest, GenieFeedbackRequest, GenieMessageRequest, GenieProgressRequest, GenieRefusalReportRequest, GenieSessionListResponse, GenieStartBody } from '../lib/apiClients/genie';
 import type { GenieAnswerExportReceipt, GenieAnswerExportReceiptRequest } from '../lib/apiClients/genieExport';
+import type { GenieRefusalReportRequest as GenieRefusalReportTextRequest } from '../lib/apiClients/genieRefusalReport';
 import type { GenieCancelBody, GenieCompleteAsyncJobBody, GenieCompleteAsyncResult, GenieCompletionJobStatusRequest } from '../lib/apiClients/genieJobs';
 import type { GenieFeedbackResult, GenieLiveProgress, GenieRefusalReportResult, GenieResult, GenieSubmitResult } from '../lib/apiTypes';
 import type { GenieActionResult, GenieActionSuggestion, GenieAnswerSection, GenieClaimsSummary, GenieNativeVisualization, GenieProof, GenieReasoningStep, GenieSessionDetail, GenieSessionSummary, GenieStartResult, GenieVerifiedClaim } from './genie';
@@ -32,6 +33,8 @@ export type WireContractGenie = [
   Expect<DeepNoPhantomKeys<GenieProgressRequest, ApiRequest<'GenieProgressRequest'>>>,
   Expect<WireFits<GenieRefusalReportRequest, ApiRequest<'GenieRefusalReportRequest'>>>,
   Expect<DeepNoPhantomKeys<GenieRefusalReportRequest, ApiRequest<'GenieRefusalReportRequest'>>>,
+  Expect<WireFits<GenieRefusalReportTextRequest, ApiRequest<'GenieRefusalReportRequest'>>>,
+  Expect<DeepNoPhantomKeys<GenieRefusalReportTextRequest, ApiRequest<'GenieRefusalReportRequest'>>>,
   Expect<WireFits<ApiResponse<'GenieSessionListResponse'>, GenieSessionListResponse>>,
   Expect<NoPhantomKeys<GenieSessionListResponse, ApiResponse<'GenieSessionListResponse'>>>,
   Expect<WireFits<ApiResponse<'GenieAnswerExportReceipt'>, GenieAnswerExportReceipt>>,
