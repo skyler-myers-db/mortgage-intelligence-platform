@@ -77,6 +77,13 @@ multidict==6.9.1
 # transitive (flask and flask-cors, via mlflow's tracking server); keep the fix
 # explicit so a lock refresh cannot reintroduce 3.1.8.
 werkzeug==3.1.9
+# Security floor for GHSA-5639-2j2p-m4mx (first patched in 1.4.2, published
+# 2026-10-05): a drive-letter TemplateLookup URI escaped the template directory
+# on Windows. OSV lists it for 1.3.12 while PyPI's feed, pip-audit's default
+# service, did not yet on 2026-10-06; pinning now keeps CI green when the feed
+# catches up. mako is transitive (alembic, via mlflow); 1.4 needs Python>=3.10
+# and MarkupSafe>=2.0, both already met.
+mako==1.4.2
 # Security floor for PYSEC-2026-2253 through PYSEC-2026-2257. Matplotlib
 # depends on Pillow; keep the transitive fix explicit so lock refreshes cannot
 # silently reintroduce the vulnerable image decoder.
