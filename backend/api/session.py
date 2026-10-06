@@ -95,6 +95,15 @@ class SessionResponse(BaseModel):
             "returns (audit delivery-07)."
         ),
     )
+    refusal_text_capture_enabled: bool = Field(
+        default=False,
+        description=(
+            "Whether a refused Genie question may be attached to a 'This was "
+            "legitimate' report (settings.mip_genie_refusal_text_capture): the "
+            "effective tenant switch. False offers only the report without the "
+            "question. Never an authorization input."
+        ),
+    )
     actor_cache_key: str | None = Field(
         default=None,
         description=(
@@ -150,5 +159,6 @@ async def get_session(request: Request) -> SessionResponse:
         ),
         lender_name=settings.mip_lender_name,
         rum_enabled=settings.mip_rum_enabled,
+        refusal_text_capture_enabled=settings.mip_genie_refusal_text_capture == "enabled",
         actor_cache_key=actor_cache_key(identity) if identity else None,
     )

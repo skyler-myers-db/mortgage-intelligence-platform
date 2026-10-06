@@ -209,6 +209,10 @@ class Settings(BaseSettings):
             return value
         return isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on"}
 
+    # Consented Genie refusal-text capture (D-audit-reads-d). Fail-closed: a deploy
+    # that drops the payload env (a bare UI deploy) turns capture off, never on.
+    mip_genie_refusal_text_capture: Literal["enabled", "disabled"] = "disabled"
+
     # Default Databricks-hosted model for the orchestrator/specialists.
     mip_agent_model: str = Field(
         default="databricks-claude-sonnet-4-5",
