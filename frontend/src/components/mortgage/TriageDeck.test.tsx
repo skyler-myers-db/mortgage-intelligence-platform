@@ -105,8 +105,8 @@ vi.mock('../AppContext', async () => {
       setDrawer: vi.fn(),
       showEvidence: true,
       showConfidence: true,
-      canAccessAdmin: true,
       actorEmail: 'approver.one@summit.example',
+      // canAccessAdmin rides `session` (true by default; the receipt-gate cases flip it).
       ...session,
     }),
   };
