@@ -12,8 +12,11 @@
  *     a transparent outline on the search makes the check fail);
  *  2. the active rail item, a segmented button, a filter chip, a drawer tab,
  *     the command palette's active row and the filter menu's focused and
- *     selected options fill Highlight with readable text (>= 4.5:1) and
- *     glyphs (>= 3:1);
+ *     selected options paint the system pair: every text run and glyph
+ *     inks HighlightText on the Highlight fill, at 4.5:1 (text) and 3:1
+ *     (glyphs) unless the palette's own pair is weaker (paintedInk.ts
+ *     highlightInkFaults; twin: an authored ink that clears 4.5:1 still
+ *     fails);
  *  3. confidence bars, the status-pill dot, map regions, legend bars and ZIP
  *     tiles keep a visible CanvasText edge;
  *  4. score chips keep their solid / dashed / dotted borders.
@@ -28,8 +31,20 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import { mapAllClassesFixture } from './data/mapEncoding';
-import { SAMPLE_SCALE, describeInk, paintedInks, paintedSystemFill, sameColor, type PaintedInk } from './paintedInk';
-import { asComputedRgb, centerPixel, settleTransitions, type Rgb } from './renderedColor';
+import {
+  INK_FLOOR,
+  SAMPLE_SCALE,
+  describeInk,
+  describePair,
+  highlightInkFaults,
+  paintedInks,
+  paintedSystemFill,
+  sameColor,
+  systemHighlightPair,
+  type PaintedInk,
+  type SystemPair,
+} from './paintedInk';
+import { asComputedRgb, centerPixel, contrastRatio, settleTransitions, type Rgb } from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
@@ -97,21 +112,55 @@ async function ringPixel(page: Page, target: Locator): Promise<Rgb> {
   return dominantColor(page, { x: band.x, y: band.y, width: band.width, height: band.height });
 }
 
-/** Text >= 4.5:1 and glyphs >= 3:1 on the Highlight fill; the state must yield the kinds it holds. */
-async function expectReadable(page: Page, state: string, target: Locator, expects: { text: boolean; glyph: boolean; fill: Rgb }): Promise<PaintedInk[]> {
-  const inks = await paintedInks(page, target, expects.fill);
+/**
+ * The system Highlight pair, proved usable, and recorded on the test.
+ *
+ * Why the oracle is the PAIR, not a bare 4.5:1 (W5b CI, run 37521773357,
+ * PR #267): the light run failed every sample of every state with ink
+ * rgb(255, 255, 255) on rgb(51, 153, 255) at 2.94:1. Its trace shows the
+ * probe resolving Highlight to rgb(51, 153, 255), Canvas to white and
+ * CanvasText to black, and the served CSS giving each state
+ * forced-color-adjust: none and color: HighlightText on itself and every
+ * descendant (33-contrast-modes.css, W5a ruling R2). #3399ff / #ffffff is
+ * Firefox's own light standin pair (nsXPLookAndFeel's
+ * GetStandinForNativeColor, which headless Linux Firefox uses), whose WCAG
+ * ratio is 2.94:1. So a fixed 4.5:1 measured the palette CI's Firefox ships,
+ * not our CSS, and no CSS that honours the user's palette could pass it.
+ * The product owns painting the system pair exactly; the palette owns its
+ * contrast (see highlightInkFaults).
+ */
+async function highlightPair(page: Page): Promise<SystemPair> {
+  const pair = await systemHighlightPair(page);
+  expect(sameColor(pair.ink, pair.ground), `precondition: HighlightText and Highlight differ (${describePair(pair)})`).toBe(false);
+  test.info().annotations.push({ type: 'forced palette', description: describePair(pair) });
+  return pair;
+}
+
+/** Every sample paints the system pair (highlightInkFaults); the state must yield the kinds it holds. */
+async function expectReadable(page: Page, state: string, target: Locator, expects: { text: boolean; glyph: boolean; pair: SystemPair }): Promise<PaintedInk[]> {
+  const inks = await paintedInks(page, target, expects.pair.ground);
   const listing = inks.map((ink) => describeInk(state, ink)).join('\n');
   if (expects.text) expect(inks.some((ink) => ink.kind === 'text'), `${state}: a text run is sampled\n${listing}`).toBe(true);
   if (expects.glyph) expect(inks.some((ink) => ink.kind === 'glyph'), `${state}: a glyph is sampled\n${listing}`).toBe(true);
+  // Soft, so one run reports every state that fails, not only the first.
   for (const ink of inks) {
-    expect.soft(ink.ratio, describeInk(state, ink)).toBeGreaterThanOrEqual(ink.kind === 'text' ? 4.5 : 3);
-    // A glyph has no text backplate, so its ground proves the state paints Highlight.
-    if (ink.kind === 'glyph') {
-      expect.soft(sameColor(ink.ground, expects.fill), `${describeInk(state, ink)}: sits on the Highlight fill`).toBe(true);
-    }
+    expect.soft(highlightInkFaults(ink, expects.pair), `${describeInk(state, ink)} (system ${describePair(expects.pair)})`).toEqual([]);
   }
   return inks;
 }
+
+/**
+ * Inks a non-vacuity twin may author: the first that is NOT the system
+ * HighlightText yet clears 4.5:1 on Highlight with room to spare, so only
+ * the pairing check can fail it (black for CI's #3399ff, yellow on a dark
+ * Highlight such as Windows HC White's #37006e).
+ */
+const AUTHORED_INKS: readonly Rgb[] = [
+  [0, 0, 0],
+  [255, 255, 255],
+  [0, 0, 128],
+  [255, 255, 0],
+];
 
 /** A detached class probe (no drawer or borrower read opens): a state label with a glyph. */
 async function tabProbe(page: Page, className: string): Promise<Locator> {
@@ -176,13 +225,14 @@ test.describe('Firefox forced colors (a11y-10 item 4 / css-06 item 3)', () => {
       test('Highlight states fill with readable text and glyphs', async ({ app, page }) => {
         // First CI run (W5a, 2026-10-01): Firefox paints no Canvas backplate
         // behind forced text, so these states drew their forced ink straight
-        // on Highlight at 1.18:1. Since W5b (w5-theme-white-label) they opt out
-        // of forcing and paint HighlightText on Highlight themselves
-        // (33-contrast-modes.css).
+        // on Highlight (1.18:1 dark; LinkText at 3.20:1 light). Since W5b
+        // (w5-theme-white-label) they opt out of forcing and paint
+        // HighlightText on Highlight themselves (33-contrast-modes.css), so
+        // the check is that they paint the system pair (highlightPair).
         await app.gotoRoute('/lead-queue?state=IL');
         await forcedPalette(page);
-        const fill = await paintedSystemFill(page, 'Highlight');
-        const both = { text: true, glyph: true, fill };
+        const pair = await highlightPair(page);
+        const both = { text: true, glyph: true, pair };
 
         await expectReadable(page, 'active rail item', page.locator('.rail__item.is-active'), both);
         const statePill = page.getByRole('combobox', { name: 'STATE: IL' });
@@ -213,6 +263,30 @@ test.describe('Firefox forced colors (a11y-10 item 4 / css-06 item 3)', () => {
         const row = palette.locator('.cmdk__row.is-active');
         await expect(row).toHaveCount(1);
         await expectReadable(page, 'command palette active row', row, both);
+      });
+
+      test('non-vacuity: a Highlight state inked with an authored colour fails, though it clears 4.5:1', async ({ app, page }) => {
+        await app.gotoRoute('/lead-queue');
+        await forcedPalette(page);
+        const pair = await highlightPair(page);
+        const authored = AUTHORED_INKS.find((rgb) => !sameColor(rgb, pair.ink, 32) && contrastRatio(rgb, pair.ground) >= INK_FLOOR.text + 1);
+        expect(authored, `precondition: an authored ink that is not HighlightText clears 5.5:1 on Highlight (${describePair(pair)})`).toBeDefined();
+        const ink = `rgb(${(authored as Rgb).join(', ')})`;
+        const tab = await tabProbe(page, 'drawer__tab is-active');
+        // Out-ranks R2's `.is-active *:not(svg *)` (0,2,2): forcing stays
+        // off, but the state and its svg ink an authored colour.
+        await page.addStyleTag({
+          content: `[data-forced-firefox-probe] > button.drawer__tab.is-active, [data-forced-firefox-probe] > button.drawer__tab.is-active * { forced-color-adjust: none !important; color: ${ink} !important; }`,
+        });
+        const inks = await paintedInks(page, tab, pair.ground);
+        const listing = inks.map((sample) => describeInk('authored drawer tab', sample)).join('\n');
+        expect(inks.map((sample) => sample.kind).sort(), `both kinds are sampled\n${listing}`).toEqual(['glyph', 'text']);
+        for (const sample of inks) {
+          const line = describeInk('authored drawer tab', sample);
+          // A bare WCAG floor passes this ink: it is readable, just not the user's palette.
+          expect(sample.ratio, `${line}: the bare floor alone would pass`).toBeGreaterThanOrEqual(INK_FLOOR[sample.kind]);
+          expect(highlightInkFaults(sample, pair), `${line}: the pairing check fails`).toContainEqual(expect.stringMatching(/^ink is not the system HighlightText/));
+        }
       });
 
       test('data marks keep a visible CanvasText edge', async ({ app, mockApi, page }) => {
