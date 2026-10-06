@@ -16,8 +16,10 @@
  *  H. read-failed: Lead Queue, Segments                                4
  *  I. W5b: Home's Delta Explainer drawer, Segments' stale note,
  *     Home's WHY NOW rate move and the watchlist briefings card        8
+ *  J. W5c w5-evidence-drawer: a Home KPI drawer's How we got and
+ *     its Under the hood tab                                           4
  *                                                                     --
- *                                                                    112
+ *                                                                    116
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -143,6 +145,9 @@ for (const theme of FIXTURE_THEMES) {
       // W5b w5-home-geo-lever: the Delta Explainer drawer and the retained-value note.
       { route: 'home', state: 'delta-explainer' },
       { route: 'segment-intelligence', state: 'stale-note' },
+      // J (W5c w5-evidence-drawer): How we got and Under the hood.
+      { route: 'home', state: 'evidence-how-we-got' },
+      { route: 'home', state: 'evidence-under-the-hood' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {

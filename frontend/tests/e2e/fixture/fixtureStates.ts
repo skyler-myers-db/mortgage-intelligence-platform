@@ -8,7 +8,8 @@
  *    route's natural load receives, so `prepareState` registers their
  *    fixture BEFORE navigation;
  *  - OVERLAY states (`evidence-drawer`, `command-palette`, `genie`,
- *    `filter-menu`, `expanded-row`, `triage`, `delta-explainer`) are opened
+ *    `filter-menu`, `expanded-row`, `triage`, `delta-explainer`,
+ *    `evidence-how-we-got`, `evidence-under-the-hood`) are opened
  *    after the natural load by
  *    `enterState`, which never opens an audited read: the Borrower 360
  *    proof drawer is not among them, and visual.ts's audited-read guard
@@ -42,7 +43,9 @@ export type FixtureState =
   | 'read-failed'
   | 'run-dialog-open'
   | 'stale-note'
-  | 'delta-explainer';
+  | 'delta-explainer'
+  | 'evidence-how-we-got'
+  | 'evidence-under-the-hood';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -155,6 +158,24 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       const chip = page.locator('.home-answer .login-summary .home-answer__trigger', { hasText: 'refi screen' }).locator('.evidence-chip');
       const drawer = await app.openEvidenceDrawer(chip);
       await expect(drawer.locator('[data-testid="delta-explainer"] table tbody tr').first()).toBeVisible();
+      break;
+    }
+    case 'evidence-how-we-got':
+    case 'evidence-under-the-hood': {
+      // W5c w5-evidence-drawer (flow-06): Home's refi KPI card (the plain
+      // `evidence-drawer` state already opens the first one), its number,
+      // definition and server filter chips; then its reproduce SQL. Both
+      // reads (freshness, the KPI proof) are audit-free and open-only.
+      const drawer = await app.openEvidenceDrawer(
+        page.locator('.kpi .kpi__source .evidence-chip', { hasText: 'Rate + equity screen' }),
+      );
+      const how = drawer.locator('[data-testid="evidence-how-we-got"]');
+      await expect(how.locator('.chip').first()).toBeVisible();
+      await expect(drawer.locator('[data-testid="evidence-freshness-foot"]')).toBeVisible();
+      if (state === 'evidence-under-the-hood') {
+        await drawer.getByRole('tab', { name: 'Under the hood' }).click();
+        await expect(drawer.locator('[data-testid="evidence-kpi-proof"] .proof-sql-card__sql')).toBeVisible();
+      }
       break;
     }
   }

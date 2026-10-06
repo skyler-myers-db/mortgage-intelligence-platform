@@ -92,6 +92,8 @@ test('the evidence chip opens the drawer on the gold table', async ({ app, page 
   await stack(page).locator('.surface__hdr').getByRole('button', { name: /Signal combinations/ }).click();
   const drawer = page.getByRole('dialog').filter({ hasText: 'Signal stack: borrowers per exact set of core signals' });
   await expect(drawer).toBeVisible();
+  // The gold table is its first signal, under the hood (W5c w5-evidence-drawer, flow-10).
+  await drawer.getByRole('tab', { name: 'Under the hood' }).click();
   await expect(drawer).toContainText('mip.gold.segment_combination_rollup');
 });
 
