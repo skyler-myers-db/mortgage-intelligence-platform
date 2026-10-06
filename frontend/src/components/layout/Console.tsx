@@ -2,12 +2,13 @@ import { Suspense, useEffect } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { useApp, type Accent, type Density } from '../AppContext';
-import { Icon, type IconName } from '../Icon';
+import { Icon } from '../Icon';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { PropertyLookupPanel } from '../mortgage/PropertyLookupPanel';
 import { LazyLenderMark } from './lenderMarkLoader';
 import { ThemePreferenceControl } from './ThemePreferenceControl';
-import { api, type ActorAuditEventSummary } from '../../lib/api';
+import { api } from '../../lib/api';
+import { recentActivityPresentation } from '../../lib/auditEventPresentation';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { lenderMarkUrl } from '../../lib/themePreference';
@@ -23,58 +24,9 @@ import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
 const ACCENT_SWATCHES: Accent[] = ['bright', 'teal', 'navy', 'red'];
 const RECENT_ACTIVITY_PAGE_SIZE = 8;
 
-const ACTIVITY_LABELS: Record<string, string> = {
-  APPROVE: 'Outreach approved',
-  OUTREACH_APPROVE: 'Outreach approved',
-  OUTREACH_REJECT: 'Outreach rejected',
-  REJECT: 'Outreach rejected',
-  DRAFT_OUTREACH: 'Outreach draft created',
-  SAVE_DRAFT: 'Outreach draft saved',
-  DELETE_DRAFT: 'Outreach draft removed',
-  SAVE_LEAD: 'Lead saved',
-  UNSAVE_LEAD: 'Lead removed',
-  LEAD_ASSIGN: 'Lead assigned',
-  LEAD_DISTRIBUTE: 'Leads distributed',
-  CALL_DISPOSITION: 'Call disposition recorded',
-  LEAD_OUTCOME: 'Lead outcome recorded',
-  LEAD_OUTCOME_RECORDED: 'Lead outcome recorded',
-  PORTFOLIO_CREATE: 'Portfolio created',
-  RECOMMEND_OFFER: 'Offer recommended',
-  RUN_GENIE: 'Genie analysis run',
-  VIEW_BORROWER: 'Borrower reviewed',
-  VIEW_LEADS: 'Lead queue reviewed',
-  VIEW_AUDIT_LEDGER: 'Audit ledger read',
-};
-
-export function recentActivityPresentation(event: ActorAuditEventSummary): {
-  label: string;
-  icon: IconName;
-  tone: string;
-  context: string;
-} {
-  const fallback = event.event_type
-    .toLowerCase()
-    .split('_')
-    .filter(Boolean)
-    .map((word, index) => index === 0 ? `${word.charAt(0).toUpperCase()}${word.slice(1)}` : word)
-    .join(' ');
-  const rejected = event.event_type.includes('REJECT');
-  const approved = event.event_type.includes('APPROVE');
-  const icon: IconName = rejected
-    ? 'cross'
-    : approved
-      ? 'check'
-      : event.event_type.includes('GENIE')
-        ? 'sparkle'
-        : 'audit';
-  const entity = event.entity_type.replace(/_/g, ' ');
-  return {
-    label: ACTIVITY_LABELS[event.event_type] ?? (fallback || 'Activity recorded'),
-    icon,
-    tone: rejected ? 'red' : approved ? 'green' : '',
-    context: event.subject_id ?? entity,
-  };
-}
+// The activity labels and their presentation live in lib/auditEventPresentation
+// (shared with the borrower decision history); re-exported for this module's tests.
+export { recentActivityPresentation };
 
 export function Console() {
   const {
