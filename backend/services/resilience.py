@@ -36,6 +36,7 @@ import time
 from collections.abc import Callable
 from typing import Generic, TypeVar
 
+from backend.services.cooperative_cancel import CooperativeCancel
 from backend.services.observability import timed_dependency
 from backend.services.resilience_breaker import (
     CircuitBreaker,
@@ -106,10 +107,12 @@ def with_retry(
     for attempt in range(attempts):
         try:
             return fn()
-        except DependencyDownError:
+        except (DependencyDownError, CooperativeCancel):
             # R6-15: never retry a DependencyDownError -- it means a
             # nested Resilient has already exhausted its own retry
             # budget (or the breaker is OPEN). Propagate immediately.
+            # A CooperativeCancel is the owner's stop (genie-03): never
+            # retried, whatever ``retry_on`` says.
             raise
         except BaseException as exc:  # noqa: BLE001 -- re-raised below
             if isinstance(exc, give_up_on) or not isinstance(exc, retry_on):
@@ -224,6 +227,12 @@ class Resilient(Generic[T]):
                     retry_on=self._retry_on,
                     give_up_on=self._permission_denied_on + self._object_missing_on,
                 )
+        except CooperativeCancel:
+            # The owner's stop (genie-03), not a dependency answer: no
+            # breaker success or failure, no wrap. A half-open probe slot
+            # this call held goes back, or the breaker would refuse forever.
+            self._breaker.release_probe()
+            raise
         except BaseException as exc:
             if isinstance(exc, self._permission_denied_on):
                 self._breaker.record_success()

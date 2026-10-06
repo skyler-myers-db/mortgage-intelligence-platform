@@ -193,6 +193,13 @@ class CircuitBreaker:
             # OPEN
             return False
 
+    def release_probe(self) -> None:
+        """Return a half-open probe slot whose call ended with no answer
+        either way (the owner's cooperative cancel, genie-03); no transition."""
+        with self._lock:
+            if self._state == self.HALF_OPEN and self._probes_in_flight > 0:
+                self._probes_in_flight -= 1
+
     def record_success(self) -> None:
         with self._lock:
             if self._state == self.HALF_OPEN:
