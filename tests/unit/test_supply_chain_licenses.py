@@ -134,12 +134,16 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "pyasn1>=0.6.4,<1" in requirements_in
     assert "sqlparse>=0.6.0,<1" in requirements_in
     assert "thrift>=0.24.0,<0.25" in requirements_in
+    assert "multidict==6.9.1" in requirements_in
+    assert "werkzeug==3.1.9" in requirements_in
     for required_pin in (
         "boto3==1.43.50",
         "uvicorn==0.47.0",
         "databricks-sql-connector==4.4.0",
         "pyjwt==2.15.0",
         "urllib3==2.8.0",
+        "multidict==6.9.1",
+        "werkzeug==3.1.9",
         "gitpython==3.1.62",
         "cryptography==50.0.1",
         "mlflow==3.16.0",
