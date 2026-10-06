@@ -23,6 +23,20 @@ from backend.services.repositories.databricks_lead_cohorts import (
     numeric_bound_clause,
     numeric_ceiling_clause,
 )
+from backend.services.repositories.databricks_lead_order import (
+    BORROWER_360_RANK_PROJECTION,
+    BORROWER_360_SOURCE,
+    LEAD_POPULATION_RANK_PROJECTION,
+    LEAD_POPULATION_SOURCE,
+    RANK,
+    LeadKeyset,
+    LeadOrder,
+    LeadPage,
+    keyset_clause,
+    keyset_of_row,
+    lead_page_filters,
+    order_by_sql,
+)
 from backend.services.repositories.databricks_portfolio import build_preview_predicates
 from backend.services.repositories.databricks_shared import (
     _LEAD_POPULATION_SELECT_FROM_B360,
@@ -60,13 +74,17 @@ class DatabricksLeadRepository:
             clock=time,
         )
 
+    # Every list template prepends the ``__rank_order`` projection (the
+    # keyset reads it from the raw row) and takes its ORDER BY and keyset
+    # predicate from databricks_lead_order, the one builder all three
+    # ordered reads share; the projection constants stay verbatim.
     _LIST_BASE_SQL_TEMPLATE = (
-        f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
+        f"SELECT {LEAD_POPULATION_RANK_PROJECTION}, {_LEAD_POPULATION_SELECT_FROM_LP} "
         f"FROM {qualify('gold', 'lead_population')} lp "
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
         "  ON ls.borrower_id = lp.borrower_id "
-        "WHERE 1=1 {lifecycle_clause} "
-        "ORDER BY lp.rank_overall ASC, lp.borrower_id ASC "
+        "WHERE 1=1 {lifecycle_clause} {keyset_clause} "
+        "{order_by} "
         "LIMIT {limit}"
     )
 
@@ -75,12 +93,12 @@ class DatabricksLeadRepository:
     # covers one segment and many alike, so no SQL here may hardcode a
     # segment bind-parameter name.
     _LIST_FILTERED_SQL_TEMPLATE = (
-        f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
+        f"SELECT {LEAD_POPULATION_RANK_PROJECTION}, {_LEAD_POPULATION_SELECT_FROM_LP} "
         f"FROM {qualify('gold', 'lead_population')} lp "
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
         "  ON ls.borrower_id = lp.borrower_id "
-        "WHERE {segment_clause} {lifecycle_clause} "
-        "ORDER BY lp.rank_overall ASC, lp.borrower_id ASC "
+        "WHERE {segment_clause} {lifecycle_clause} {keyset_clause} "
+        "{order_by} "
         "LIMIT {limit}"
     )
 
@@ -105,15 +123,15 @@ class DatabricksLeadRepository:
         # We re-synthesize it here with the same formula so LeadSummary
         # rows stay shape-compatible whether they came from
         # lead_population or borrower_360.
-        f"SELECT {_LEAD_POPULATION_SELECT_FROM_B360} "
+        f"SELECT {BORROWER_360_RANK_PROJECTION}, {_LEAD_POPULATION_SELECT_FROM_B360} "
         f"FROM {qualify('gold', 'borrower_360')} b "
         f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
         "  ON ls.borrower_id = b.borrower_id "
         "WHERE 1=1 {state_clause} {zip_clause} {county_clause} {city_clause} "
         "{borrower_clause} "
         "{segment_clause} {funnel_stage_clause} {lender_clause} {portfolio_clause} "
-        "{lifecycle_clause} {freshness_clause} "
-        "ORDER BY b.opportunity_score DESC, b.borrower_id ASC "
+        "{lifecycle_clause} {freshness_clause} {keyset_clause} "
+        "{order_by} "
         "LIMIT {limit}"
     )
 
@@ -144,15 +162,12 @@ class DatabricksLeadRepository:
         max_opportunity_score: int | None = None,
         max_rate_spread_bps: float | None = None,
     ) -> list[LeadSummary]:
-        _ = (portfolio_id, cohort_id)
-        bounded = self._bound_limit(limit)
-        sql_limit = self._sql_fetch_limit(bounded)
-        cache_key = self._cache_key(
-            "lead_list",
+        """The ranked rows only: every caller but the paged Lead Queue."""
+
+        return self._page(
             {
                 "segment": segment,
                 "portfolio_id": portfolio_id,
-                "limit": bounded,
                 "state": state,
                 "zip_code": zip_code,
                 "county_fips": county_fips,
@@ -166,7 +181,7 @@ class DatabricksLeadRepository:
                 "target_lender_ref": target_lender_ref,
                 "cohort_id": cohort_id,
                 "funnel_stage": funnel_stage,
-                "portfolio_criteria": self._criteria_key(portfolio_criteria),
+                "portfolio_criteria": portfolio_criteria,
                 "approval_status": approval_status,
                 "outreach_status": outreach_status,
                 "aged_days": aged_days,
@@ -175,10 +190,71 @@ class DatabricksLeadRepository:
                 "max_opportunity_score": max_opportunity_score,
                 "max_rate_spread_bps": max_rate_spread_bps,
             },
+            limit=limit,
+            order=RANK,
+            after=None,
+        ).leads
+
+    def list_page(
+        self,
+        segment: str | None,
+        portfolio_id: str | None,
+        limit: int | None = None,
+        *,
+        sort: str = "rank",
+        sort_dir: str | None = None,
+        after: LeadKeyset | None = None,
+        **filters: Any,
+    ) -> LeadPage:
+        """One keyset page of the ranked rows (D-audit-reads-a).
+
+        ``has_more`` is the +1 sentinel row ``_sql_fetch_limit`` already
+        fetches, never a full page, so an exact multiple of the page size
+        mints no next cursor. ``last_keyset`` is the delivered last row's
+        tuple, read from the raw SQL row (``keyset_of_row``).
+        """
+
+        return self._page(
+            lead_page_filters(segment, portfolio_id, filters),
+            limit=limit,
+            order=LeadOrder.of(sort, sort_dir),
+            after=after,
         )
-        cached = self._get_cached_leads(cache_key)
+
+    def _page(
+        self,
+        filters: dict[str, Any],
+        *,
+        limit: int | None,
+        order: LeadOrder,
+        after: LeadKeyset | None,
+    ) -> LeadPage:
+        bounded = self._bound_limit(limit)
+        sql_limit = self._sql_fetch_limit(bounded)
+        portfolio_criteria: PortfolioCriteria | None = filters["portfolio_criteria"]
+        # ``lead_list:`` stays the literal prefix (gold-version TTL scans key on it).
+        cache_key = self._cache_key(
+            "lead_list",
+            {
+                **filters,
+                "limit": bounded,
+                "portfolio_criteria": self._criteria_key(portfolio_criteria),
+                "sort": order.sort,
+                "sort_dir": order.sort_dir,
+                "after": list(after) if after is not None else None,
+            },
+        )
+        cached = self._get_cached_page(cache_key)
         if cached is not None:
             return cached
+        segment = filters["segment"]
+        segment_codes = filters["segment_codes"]
+        segment_mode = filters["segment_mode"]
+        target_lender_ref = filters["target_lender_ref"]
+        approval_status = filters["approval_status"]
+        outreach_status = filters["outreach_status"]
+        aged_days = filters["aged_days"]
+        funnel_stage = filters["funnel_stage"]
         segment_clause, segment_params = self._cohort_queries.segment_filter_clause(
             segment=segment,
             segment_codes=segment_codes,
@@ -188,14 +264,14 @@ class DatabricksLeadRepository:
         # FIX β: geo-filtered path bypasses lead_population so the queue
         # row count matches the map tooltip. See the
         # _LIST_BY_GEO_SQL_TEMPLATE docstring above for the full rationale.
-        normalised_states = self._cohort_queries.normalise_states(state, state_codes)
-        normalised_zips = self._cohort_queries.normalise_zips(zip_code, zip_codes)
+        normalised_states = self._cohort_queries.normalise_states(filters["state"], filters["state_codes"])
+        normalised_zips = self._cohort_queries.normalise_zips(filters["zip_code"], filters["zip_codes"])
         normalised_county = self._cohort_queries.normalise_county_fips(
-            county_fips,
-            county_fipses,
+            filters["county_fips"],
+            filters["county_fipses"],
         )
-        normalised_cities = self._cohort_queries.normalise_city_states(city_states)
-        normalised_borrower_ids = self._cohort_queries.normalise_borrower_ids(borrower_ids)
+        normalised_cities = self._cohort_queries.normalise_city_states(filters["city_states"])
+        normalised_borrower_ids = self._cohort_queries.normalise_borrower_ids(filters["borrower_ids"])
         lifecycle_clause, lifecycle_params = self._cohort_queries.lifecycle_filter_clause(
             source_alias="b",
             approval_status=approval_status,
@@ -221,12 +297,12 @@ class DatabricksLeadRepository:
         # Same builder the count and identity paths use, so the ranked rows and
         # the total can never apply different thresholds.
         replay_clause, replay_params = self._cohort_queries.numeric_floor_clause(
-            min_opportunity_score=min_opportunity_score,
-            min_rate_spread_bps=min_rate_spread_bps,
+            min_opportunity_score=filters["min_opportunity_score"],
+            min_rate_spread_bps=filters["min_rate_spread_bps"],
         )
         ceiling_clause, ceiling_params = numeric_ceiling_clause(
-            max_opportunity_score=max_opportunity_score,
-            max_rate_spread_bps=max_rate_spread_bps,
+            max_opportunity_score=filters["max_opportunity_score"],
+            max_rate_spread_bps=filters["max_rate_spread_bps"],
         )
         if "target_lender_ref" in portfolio_params:
             lender_clause = ""
@@ -281,6 +357,7 @@ class DatabricksLeadRepository:
                 params=params,
             )
             geo_segment_clause = f"AND {segment_clause}" if segment_clause else ""
+            geo_keyset = keyset_clause(order, after, BORROWER_360_SOURCE, params)
             sql = self._LIST_BY_GEO_SQL_TEMPLATE.format(
                 state_clause=state_clause,
                 zip_clause=zip_clause,
@@ -293,13 +370,12 @@ class DatabricksLeadRepository:
                 portfolio_clause=numeric_bound_clause(portfolio_clause, replay_clause, ceiling_clause),
                 lifecycle_clause=lifecycle_clause,
                 freshness_clause=freshness_clause,
+                keyset_clause=geo_keyset,
+                order_by=order_by_sql(order, BORROWER_360_SOURCE),
                 limit=sql_limit,
             )
             rows = self._client.execute(sql, params)
-            return self._store_cached_leads(
-                cache_key,
-                [LeadSummary(**redact_lead_row(r)) for r in rows[:bounded]],
-            )
+            return self._store_cached_page(cache_key, self._page_of(rows, bounded, order))
 
         lifecycle_clause, lifecycle_params = self._cohort_queries.lifecycle_filter_clause(
             source_alias="lp",
@@ -307,6 +383,7 @@ class DatabricksLeadRepository:
             outreach_status=outreach_status,
             aged_days=aged_days,
         )
+        order_by = order_by_sql(order, LEAD_POPULATION_SOURCE)
         if segment_clause:
             if lender_clause:
                 segment_clause = f"{segment_clause} {lender_clause}"
@@ -315,19 +392,30 @@ class DatabricksLeadRepository:
             sql = self._LIST_FILTERED_SQL_TEMPLATE.format(
                 segment_clause=segment_clause,
                 lifecycle_clause=lifecycle_clause,
+                keyset_clause=keyset_clause(order, after, LEAD_POPULATION_SOURCE, segment_params),
+                order_by=order_by,
                 limit=sql_limit,
             )
             rows = self._client.execute(sql, segment_params)
         else:
             sql = self._LIST_BASE_SQL_TEMPLATE.format(
                 lifecycle_clause=lifecycle_clause,
+                keyset_clause=keyset_clause(order, after, LEAD_POPULATION_SOURCE, lifecycle_params),
+                order_by=order_by,
                 limit=sql_limit,
             )
             rows = self._client.execute(sql, lifecycle_params)
-        return self._store_cached_leads(
-            cache_key,
-            [LeadSummary(**redact_lead_row(r)) for r in rows[:bounded]],
+        return self._store_cached_page(cache_key, self._page_of(rows, bounded, order))
+
+    @staticmethod
+    def _page_of(rows: list[dict[str, Any]], bounded: int, order: LeadOrder) -> LeadPage:
+        delivered = rows[:bounded]
+        return LeadPage(
+            leads=[LeadSummary(**redact_lead_row(r)) for r in delivered],
+            has_more=len(rows) > bounded,
+            last_keyset=keyset_of_row(order, delivered[-1]) if delivered else None,
         )
+
 
     def count(
         self,
@@ -514,8 +602,15 @@ class DatabricksLeadRepository:
         min_rate_spread_bps: float | None = None,
         max_opportunity_score: int | None = None,
         max_rate_spread_bps: float | None = None,
+        *,
+        sort: str = "rank",
+        sort_dir: str | None = None,
     ) -> tuple[list[LeadSummary], dict[str, str | int]]:
-        """Return page rows and complete-set identity from one uncached statement."""
+        """Return page rows and complete-set identity from one uncached statement.
+
+        The rows follow the same server sort ``list_page`` applies (one order
+        builder), so a paged view's page 0 is the identity read's page.
+        """
 
         return self._cohort_queries.list_with_identity(
             LeadCohortFilters(
@@ -542,6 +637,7 @@ class DatabricksLeadRepository:
                 aged_days=aged_days,
             ),
             limit=self._bound_limit(limit),
+            order=LeadOrder.of(sort, sort_dir),
         )
 
     @staticmethod
@@ -559,22 +655,18 @@ class DatabricksLeadRepository:
     def _copy_leads(rows: list[LeadSummary]) -> list[LeadSummary]:
         return [row.model_copy(deep=True) for row in rows]
 
-    def _get_cached_leads(self, cache_key: str) -> list[LeadSummary] | None:
+    def _get_cached_page(self, cache_key: str) -> LeadPage | None:
         if self._cache_ttl_s <= 0:
             return None
         cached = self._cache.get(cache_key)
-        if isinstance(cached, list) and all(isinstance(row, LeadSummary) for row in cached):
-            return self._copy_leads(cached)
+        if isinstance(cached, LeadPage):
+            return cached.copy_with(self._copy_leads(cached.leads))
         return None
 
-    def _store_cached_leads(
-        self,
-        cache_key: str,
-        rows: list[LeadSummary],
-    ) -> list[LeadSummary]:
+    def _store_cached_page(self, cache_key: str, page: LeadPage) -> LeadPage:
         if self._cache_ttl_s > 0:
-            self._cache.set(cache_key, self._copy_leads(rows), self._cache_ttl_s)
-        return self._copy_leads(rows)
+            self._cache.set(cache_key, page.copy_with(self._copy_leads(page.leads)), self._cache_ttl_s)
+        return page.copy_with(self._copy_leads(page.leads))
 
     def _store_cached_count(self, cache_key: str, value: int) -> int:
         if self._cache_ttl_s > 0:

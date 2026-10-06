@@ -51,6 +51,12 @@ from backend.services.repositories.databricks_campaign_treatment_preflight impor
 from backend.services.repositories.databricks_lead_cohort_support import (
     LeadCohortQuerySupport,
 )
+from backend.services.repositories.databricks_lead_order import (
+    MATCHED_SOURCE,
+    RANK,
+    LeadOrder,
+    order_by_sql,
+)
 from backend.services.repositories.databricks_portfolio import build_preview_predicates
 from backend.services.repositories.databricks_shared import (
     _LEAD_POPULATION_SELECT_FROM_B360,
@@ -288,6 +294,7 @@ CROSS JOIN snapshot_validation
         filters: LeadCohortFilters,
         *,
         limit: int,
+        order: LeadOrder = RANK,
     ) -> tuple[list[LeadSummary], dict[str, str | int]]:
         """Return page rows and complete-set identity from one uncached statement."""
 
@@ -314,7 +321,7 @@ identity AS (
 ),
 ranked AS (
   SELECT * FROM matched
-  ORDER BY __rank_order DESC, borrower_id ASC
+  {order_by_sql(order, MATCHED_SOURCE)}
   LIMIT {limit}
 )
 SELECT ranked.*, identity.__identity_total, identity.__cohort_digest, identity.__snapshot_id
