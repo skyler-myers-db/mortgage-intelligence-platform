@@ -54,7 +54,66 @@ export const SPREAD_CAPTION = `In the money since the week of ${new Intl.DateTim
   timeZone: 'UTC',
 }).format(new Date(`${SPREAD_FIRST_ITM_WEEK}T00:00:00Z`))}`;
 
-export const SPREAD_FIX_BORROWER: Borrower360 = {
+/**
+ * The keys the real dossier always sends that the default population leaves
+ * out (registry KNOWN_OMISSIONS), at the server's own defaults, so these two
+ * bodies satisfy the fixture contract without growing the omission list.
+ */
+const SERVER_KEYS = {
+  approved_at: null,
+  outreach_at: null,
+  is_former_customer: false,
+  is_competitor_lien: false,
+  second_pos_amount: 0,
+  has_permit: false,
+  listing_status_category: null,
+  listing_status_description: null,
+  listing_date: null,
+  listing_status_date: null,
+  listing_price: null,
+  listing_days_on_market: null,
+  listing_service: null,
+  heloc_propensity_score: null,
+  heloc_propensity_run_date: null,
+  refi_propensity_score: null,
+  refi_propensity_run_date: null,
+  has_refi_propensity_trigger: false,
+  current_lender_ref: null,
+  last_touch_at: null,
+  eligible_recontact_at: null,
+  dnc: false,
+  assigned_to_email: null,
+  assigned_to_label: null,
+  assigned_at: null,
+  assignment_expires_at: null,
+  assignment_status: null,
+  assignment_id: null,
+  latest_disposition_outcome: null,
+  latest_disposition_at: null,
+  latest_callback_at: null,
+  aging_days: null,
+  ltv_basis_is_unreliable: false,
+  situs_cbsa_code: null,
+  first_pos_loan_type: null,
+  is_absentee: false,
+  is_corporate_owner: false,
+  has_first_party_relationship: false,
+  first_party_relationship_depth: 0,
+  first_party_recent_interactions: 0,
+  first_party_recent_application: false,
+  first_party_synthetic_demo: false,
+} satisfies Partial<Borrower360>;
+
+function complete(borrower: Borrower360): Borrower360 {
+  return {
+    ...SERVER_KEYS,
+    current_lien_balance_low: borrower.current_lien_balance,
+    current_lien_balance_high: borrower.current_lien_balance,
+    ...borrower,
+  };
+}
+
+export const SPREAD_FIX_BORROWER: Borrower360 = complete({
   ...PRIMARY_BORROWER,
   current_rate: SPREAD_NOTE_RATE,
   rate_spread_bps: SPREAD_NOW_BPS,
@@ -71,13 +130,13 @@ export const SPREAD_FIX_BORROWER: Borrower360 = {
   first_pos_date: '2019-06-12',
   first_pos_rate_type: 'FIX',
   first_itm_week: SPREAD_FIRST_ITM_WEEK,
-};
+});
 
-export const SPREAD_ARM_BORROWER: Borrower360 = {
+export const SPREAD_ARM_BORROWER: Borrower360 = complete({
   ...BORROWERS[1],
   first_pos_rate_type: 'ARM',
   first_itm_week: null,
-};
+});
 
 const OVERRIDES: ReadonlyMap<string, Borrower360> = new Map([
   [SPREAD_FIX_BORROWER.borrower_id, SPREAD_FIX_BORROWER],
