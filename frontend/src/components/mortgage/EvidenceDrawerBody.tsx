@@ -31,6 +31,13 @@ import { EvidenceKpiProof } from './EvidenceKpiProof';
 const DeltaExplainer = lazy(() => import('./DeltaExplainer'));
 
 /**
+ * The registry prose resolver ships inside this chunk; the loader records it
+ * once the chunk has loaded (evidenceDrawerBodyLoader.getLoadedDrawerProse),
+ * for the evidence hover card's signal row.
+ */
+export { resolveDrawerProse };
+
+/**
  * Data source / evidence drawer — fast context for a source chip.
  * The drawer starts with human explanation and, when the source maps to a
  * trusted Module 0 asset, enriches itself with governed UC metadata.

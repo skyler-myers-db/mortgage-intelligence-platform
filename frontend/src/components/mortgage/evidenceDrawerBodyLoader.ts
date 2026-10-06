@@ -1,6 +1,7 @@
 import { createContext } from 'react';
 import type { DrawerSource } from '../AppContext';
 import type { EvidenceDestination } from '../../lib/drawerSources';
+import { ChunkLoadError } from '../../lib/chunkLoadError';
 import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
 import type { TabPanelProps } from '../ui/useTabs';
@@ -48,40 +49,47 @@ export const EvidenceDrawerBodyContext = createContext<EvidenceDrawerBodyProps |
 /**
  * The registry prose (lib/drawerSourceRegistry.prose, audit `bundle-04` item
  * 3): the descriptions, signals and definitions the slim shell index leaves
- * out. EvidenceDrawerBody imports it statically, so it ships with the body;
+ * out. EvidenceDrawerBody imports it statically and re-exports its resolver,
+ * so it ships INSIDE the body's chunk (one request, one compression window);
  * loading the body (any preload, or the drawer opening) also records it here,
- * so the evidence hover card can read a registry signal synchronously once
+ * so the evidence hover card can resolve a registry signal synchronously once
  * it has loaded. The chunk only: nothing here fetches data.
  */
-type DrawerProseModule = typeof import('../../lib/drawerSourceRegistry.prose');
+type DrawerBodyModule = typeof import('./EvidenceDrawerBody');
+type DrawerProse = Pick<DrawerBodyModule, 'resolveDrawerProse'>;
 
-let loadedProse: DrawerProseModule | null = null;
-let proseLoad: Promise<DrawerProseModule> | null = null;
+let loadedProse: DrawerProse | null = null;
+let bodyLoad: Promise<DrawerBodyModule> | null = null;
 
-/** The prose module, loaded once (a failed load is retried on the next call). */
-export function loadDrawerProse(): Promise<DrawerProseModule> {
-  proseLoad ??= import('../../lib/drawerSourceRegistry.prose').then(
+/** The body module (and its prose), loaded once; a failed load is retried on the next call. */
+function loadBody(): Promise<DrawerBodyModule> {
+  bodyLoad ??= import('./EvidenceDrawerBody').then(
     (module) => {
+      // A `vite:preloadError` listener that calls preventDefault() resolves a
+      // failed import to undefined: treat it as the chunk failure it is.
+      if (!module) throw new ChunkLoadError();
       loadedProse = module;
       return module;
     },
-    (error: unknown) => {
-      proseLoad = null;
-      throw error;
-    },
-  );
-  return proseLoad;
+  ).catch((error: unknown) => {
+    bodyLoad = null;
+    throw error;
+  });
+  return bodyLoad;
 }
 
-/** The prose module once it has loaded, else null (synchronous; never starts a load). */
-export function getLoadedDrawerProse(): DrawerProseModule | null {
+/** The registry prose, with the body chunk it ships in (memoized). */
+export function loadDrawerProse(): Promise<DrawerProse> {
+  return loadBody();
+}
+
+/** The prose resolver once the body has loaded, else null (synchronous; never starts a load). */
+export function getLoadedDrawerProse(): DrawerProse | null {
   return loadedProse;
 }
 
 export const LazyEvidenceDrawerBody = lazyWithPreload(() =>
-  Promise.all([import('./EvidenceDrawerBody'), loadDrawerProse()]).then(([module]) => ({
-    default: module.EvidenceDrawerBody,
-  })),
+  loadBody().then((module) => ({ default: module.EvidenceDrawerBody })),
 );
 
 /** Intent preload (hover, focus, a recovery retry): the chunk only, failures swallowed. */

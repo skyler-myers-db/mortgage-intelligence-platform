@@ -1,10 +1,11 @@
+import { lazy, Suspense } from 'react';
 import { Link, useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { AccessDenied } from '../components/ui/AccessDenied';
-import { AsyncStatus, type AsyncQuery } from '../components/ui/AsyncState';
+import type { AsyncQuery } from '../components/ui/AsyncState';
 import { Skeleton } from '../components/ui/Skeleton';
 import { api, ApiError } from '../lib/api';
 import { assetHrefForSource } from '../lib/drawerSources';
@@ -12,6 +13,15 @@ import { queryKeys } from '../lib/queryKeys';
 import { formatCount } from '../lib/formatters';
 import { formatTimestamp } from '../lib/time';
 import type { AssetFreshness, AssetMetadataResponse } from '../types';
+
+/**
+ * The shared failure surface (audit 2026-09-21 states-04 / states-03), loaded
+ * only once a read has failed, so the route's natural load carries none of it
+ * (the route closure gate in tools/frontend_budget_gates.mjs).
+ */
+const LazyAsyncStatus = lazy(() =>
+  import('../components/ui/AsyncState').then((module) => ({ default: module.AsyncStatus })),
+);
 
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'Unavailable';
@@ -107,7 +117,20 @@ export default function AssetRoute() {
         </AccessDenied>
       )}
 
-      {!forbidden && <AsyncStatus query={asyncQuery} subject="Asset detail" />}
+      {!forbidden && query.isError && (
+        <Suspense
+          fallback={(
+            <div className="status-callout" role="status" data-async-status="pending">
+              Asset detail could not load.{' '}
+              <button type="button" className="btn btn--ghost btn--sm" onClick={asyncQuery.manualRetry}>
+                Retry
+              </button>
+            </div>
+          )}
+        >
+          <LazyAsyncStatus query={asyncQuery} subject="Asset detail" />
+        </Suspense>
+      )}
 
       {asset && (
         <div className="asset-layout">
