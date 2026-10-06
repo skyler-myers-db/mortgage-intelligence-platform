@@ -109,18 +109,16 @@
 /* The slot reserves the TALLEST state of the loaded control (D-dataviz-geo-d2
    2(iv)), measured at 1440x900 on Home and on Segment Intelligence (filters
    cleared), both themes, Console open and closed, in the warming, failed,
-   not-built and slider states. The reference is CI's Linux Chromium (the
-   W5a integration run): the slider on Segments' wide legend (Console closed)
-   at its longest sentence wraps one more line there than the off-Linux Geist
-   Mono emulation predicts, 147.56px against 131.06px; the status lines are
-   13.5-28.2px. W5b (w5-home-geo-lever) adds the largest-changes line and the
-   cohort link under the headline: the emulated maximum is now 191.38px
-   (Segments Console closed, Home Console open), so the Linux maximum is
-   expected near 207.9px; 212px leaves that estimate inside the tightness
-   window until CI re-measures it. geo-foundation.fixture.spec.ts logs every
-   measurement and pins slot >= each state everywhere, and slot - max <
-   var(--sp-2) on Linux. */
-.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 3 + var(--sp-5)); }
+   not-built and slider states. The reference is CI's Linux Chromium (the W5b
+   integration run): with W5b's largest-changes line and cohort link under
+   the headline, the slider at its longest sentence is 191.375px on Home with
+   the Console open and on Segments with it closed (175.19px in the other two
+   layouts), and the status lines are 27-28.19px. The off-Linux Geist Mono
+   emulation measures the same 191.375px maximum. 196px reserves it with
+   4.625px to spare, inside the tightness window. geo-foundation.fixture.spec.ts
+   logs every measurement and pins slot >= each state everywhere, and
+   slot - max < var(--sp-2) on Linux. */
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 3 + var(--sp-1)); }
 .map-wrap:has(.map-legend__lever) .map-levels {
   flex: 1 0 auto;
   min-block-size: calc(var(--sp-16) * 5);
