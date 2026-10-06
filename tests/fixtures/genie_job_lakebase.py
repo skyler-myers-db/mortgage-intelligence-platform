@@ -50,6 +50,7 @@ from backend.services import genie_completion_durations as durations
 from backend.services import genie_completion_jobs as jobs
 from backend.services import genie_completion_record as record
 from backend.services import genie_completion_sections as sections
+from backend.services import genie_turn_record as turn_record
 from backend.services.lakebase import LakebaseError
 
 _LIVE = ("queued", "running")
@@ -129,10 +130,21 @@ class FakeJobLakebase:
             self.history_rows.append(row)
             return dict(row)
 
-    def _settle(self, params: dict[str, Any]) -> dict[str, Any] | None:
-        self.settle_reads += 1
+    def _settle_read(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        """The settle read; its hook runs OUTSIDE the lock, so it may wait for
+        another thread (the runner) to write the History row."""
+
+        with self._lock:
+            self._require_table()
+            self.job_statements.append("settle")
+            self.settle_reads += 1
+            read = self.settle_reads
         if self.on_settle_read is not None:
-            self.on_settle_read(self.settle_reads)
+            self.on_settle_read(read)
+        with self._lock:
+            return self._settle(params)
+
+    def _settle(self, params: dict[str, Any]) -> dict[str, Any] | None:
         if self.fail_settle_reads:
             self.fail_settle_reads -= 1
             raise LakebaseError("settle read refused (fake)")
@@ -236,6 +248,8 @@ class FakeJobLakebase:
         params = params or {}
         if sql in _JOB_SQL and self.before is not None:
             self.before(_JOB_SQL[sql])
+        if sql is cancel._HISTORY_SETTLE_SQL:
+            return self._settle_read(params)
         with self._lock:
             if sql is jobs._PROBE_SQL:
                 return {"present": self.jobs_table and self.cancel_columns and self.sections_column}
@@ -243,10 +257,6 @@ class FakeJobLakebase:
                 self._require_table()
                 self.job_statements.append("sections")
                 return self._write_sections(params)
-            if sql is cancel._HISTORY_SETTLE_SQL:
-                self._require_table()
-                self.job_statements.append("settle")
-                return self._settle(params)
             if sql is durations._DURATIONS_SQL:
                 self._require_table()
                 self.job_statements.append("durations")
@@ -304,6 +314,18 @@ class FakeJobLakebase:
                     self.stage_writes.append((params["stage"], params["parts_done"], params["parts_planned"]))
                 return
             self.executed.append(sql)
+            if sql is turn_record._GENIE_MESSAGE_INSERT_SQL:
+                # The turn's History row, as the settle reads it.
+                self.history_rows.append(
+                    {
+                        "actor_email": params["actor_email"],
+                        "conversation_id": params["conversation_id"],
+                        "message_id": params["message_id"],
+                        "question_hash": params["question_hash"],
+                        "source": params["source"],
+                        "created_at": self.now,
+                    }
+                )
 
     # ------------------------------------------------ the cancel transaction
 
