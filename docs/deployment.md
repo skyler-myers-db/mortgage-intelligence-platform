@@ -832,6 +832,9 @@ the deploy, and a truthy value is refused for `-t prod`. At runtime an
 unparseable value reads as off instead of failing boot. Admin -> Deployment
 readiness and the admin health body (`presenter_mode`) show the current
 state.
+The deploy preflight parses the same values at step 0, before any bundle, UC
+or Lakebase mutation, so an unparseable value, or a truthy one with `-t prod`,
+exits 2 there instead of at App promotion.
 
 `MIP_PREVIEW_MIRROR` is a different flag: it gates the roadmap rows of the
 Admin capability panel (`backend/services/capabilities.py`), and it is not
