@@ -20032,7 +20032,7 @@
     "/api/audit/facets": {
       "get": {
         "deprecated": true,
-        "description": "Distinct event types, actions and actors for the explorer's pickers (a recorded read).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
+        "description": "Distinct event types, actions and actors for the explorer's pickers (a recorded read).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the ten workflow types /rollups groups.",
         "operationId": "get_api_audit_facets_audit_facets",
         "parameters": [
           {
@@ -30460,7 +30460,7 @@
     },
     "/api/v1/audit/facets": {
       "get": {
-        "description": "Distinct event types, actions and actors for the explorer's pickers (a recorded read).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
+        "description": "Distinct event types, actions and actors for the explorer's pickers (a recorded read).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the ten workflow types /rollups groups.",
         "operationId": "get_api_v1_audit_facets_audit_facets",
         "parameters": [
           {

@@ -452,7 +452,7 @@ def audit_facets(
     """Distinct event types, actions and actors for the explorer's pickers (a recorded read).
 
     Reads the ledger itself, so every event type that occurred in the window
-    is offered, not only the seven workflow types /rollups groups.
+    is offered, not only the ten workflow types /rollups groups.
     """
 
     window_start = since if since is not None else datetime.now(UTC) - DEFAULT_FACET_WINDOW
@@ -522,7 +522,8 @@ def audit_rollups(
         "event_type IN ("
         "'APPROVE', 'OUTREACH_APPROVE', 'OUTREACH_REJECT', "
         "'CALL_DISPOSITION', 'LEAD_ASSIGN', 'LEAD_DISTRIBUTE', "
-        "'LEAD_OUTCOME'"
+        "'LEAD_OUTCOME', "
+        "'OUTREACH_REVOKE', 'APPROVAL_REQUESTED', 'LEAD_UNASSIGN'"
         ")"
     ]
     params: dict[str, object] = {"period": period}

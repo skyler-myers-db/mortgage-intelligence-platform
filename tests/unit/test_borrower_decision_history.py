@@ -33,6 +33,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.api import audit as audit_api
 from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.borrower_decisions import BorrowerDecisionEvent, DecisionHistoryEventType
@@ -133,6 +134,27 @@ def test_the_type_list_is_a_literal_never_a_bound_parameter() -> None:
         assert "%(types)s" not in sql and "%s" not in sql
         assert "subject_clip" not in sql
     assert "COALESCE(metadata->>'borrower_id', entity_id) = %(bid)s" in history.DECISION_HISTORY_SQL
+
+
+def test_audit_rollups_group_the_ten_workflow_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[str] = []
+
+    class _Lakebase:
+        def fetchall(self, sql: str, params: dict[str, Any] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+            captured.append(sql)
+            return []
+
+    monkeypatch.setattr(audit_api, "record_ledger_read", lambda *args, **kwargs: None)
+    audit_api.audit_rollups(
+        actor_id="admin@summit.example", lakebase=_Lakebase(), store=InMemoryAuditStore(),  # type: ignore[arg-type]
+        background=SimpleNamespace(), period="week", group_by="event_type", since=None, until=None,  # type: ignore[arg-type]
+    )
+    (sql,) = captured
+    listed = _literal_list(sql[sql.index("event_type IN (") : sql.index(")", sql.index("event_type IN ("))])
+    assert sorted(listed) == sorted({
+        "APPROVE", "OUTREACH_APPROVE", "OUTREACH_REJECT", "CALL_DISPOSITION", "LEAD_ASSIGN",
+        "LEAD_DISTRIBUTE", "LEAD_OUTCOME", "OUTREACH_REVOKE", "APPROVAL_REQUESTED", "LEAD_UNASSIGN",
+    })
 
 
 # -- 3. real writers ----------------------------------------------------------------------
