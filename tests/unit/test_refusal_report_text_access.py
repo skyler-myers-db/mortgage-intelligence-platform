@@ -321,6 +321,43 @@ def test_a_question_that_names_a_person_or_a_borrower_is_kept_hash_only(
 
 
 @pytest.mark.usefixtures("capture_on")
+@pytest.mark.parametrize(
+    ("question", "family"),
+    [
+        pytest.param("show zyrplax borrowers for jane", "pii_request", id="pii-request-family"),
+        pytest.param(
+            "give me the phone numbers of borrowers in ohio", "unreviewed_criterion", id="pii-prompt"
+        ),
+        pytest.param("zyrplax borrowers near 123 Main St", "unreviewed_criterion", id="identity-prompt"),
+        pytest.param("Which Washington zyrplax borrowers qualify?", "unreviewed_criterion", id="name-shape"),
+        pytest.param(
+            "write an sms to borrowers about the rate drop", "outreach_instruction", id="contextual-name"
+        ),
+        pytest.param("tell loan officers about zyrplax", "unreviewed_criterion", id="identity-directive"),
+        pytest.param(
+            "rank zyrplax borrowers where owner_link_id = QX7T2M9P44",
+            "unreviewed_criterion",
+            id="raw-identifier",
+        ),
+        pytest.param("why was B-0A1B2C3D4E5F6 refused", "unreviewed_criterion", id="masked-borrower-id"),
+    ],
+)
+def test_each_personal_details_arm_declines_on_its_own(
+    lakebase: RefusalReportLakebase, question: str, family: str
+) -> None:
+    """One probe per decline arm that no other arm catches, so removing any
+    single arm stores a question it should have kept hash-only."""
+    writer = {"outreach_instruction": "outreach_guardrail"}.get(family, "refused_prompt")
+    lakebase.add_refusal(actor=ACTOR, question=question, action_type=writer)
+
+    response = _post(question, text=question, reason=family)
+
+    assert response.json()["question_captured"] is False
+    assert lakebase.texts == {}
+    assert _audit_meta(lakebase)["question_text_declined"] == "personal_details"
+
+
+@pytest.mark.usefixtures("capture_on")
 def test_an_identifier_free_protected_class_question_is_kept_for_review(
     lakebase: RefusalReportLakebase,
 ) -> None:
