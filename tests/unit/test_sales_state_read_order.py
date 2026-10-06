@@ -45,7 +45,8 @@ def _disposition(
         "occurred_at": occurred_at,
         "created_at": created_at,
         "callback_at": None,
-        "notes": None,
+        # A legacy row: the column is kept, but no read egresses it (D-shell-deviations-g2).
+        "notes": "Legacy free-text note",
         "audit_event_id": None,
     }
 
@@ -225,8 +226,12 @@ def test_single_and_batched_dispositions_use_total_order_on_timestamp_ties() -> 
     assert single.outcome == "connected"
     assert batched["B-TIE-SINGLE"].disposition_id == _HIGH_ID
     assert batched["B-TIE-BATCH"].outcome == "application_started"
+    # The retired free-text note never leaves the store, even for a legacy row.
+    for disposition in (single, *batched.values()):
+        assert "notes" not in disposition.model_dump()
     single_sql = next(sql for sql in client.fetchone_sql if "call_dispositions" in sql)
     batch_sql = next(sql for sql in client.fetchall_sql if "call_dispositions" in sql)
+    assert "notes" not in single_sql and "notes" not in batch_sql
     assert (
         "ORDER BY occurred_at DESC, created_at DESC, disposition_id::text DESC LIMIT 1"
         in _compact(single_sql)

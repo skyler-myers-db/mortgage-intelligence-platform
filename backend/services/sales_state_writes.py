@@ -17,7 +17,6 @@ from backend.schemas.sales import (
     LeadOutcomeType,
 )
 from backend.services.lakebase import LakebaseError
-from backend.services.pii_redaction import scrub_free_text
 from backend.services.sales_state_core import _SalesStateCore
 from backend.services.sales_state_mappers import (
     _assignment_duration_matches,
@@ -318,7 +317,6 @@ class _SalesStateWrites(_SalesStateCore):
         outcome: CallDispositionOutcome,
         occurred_at: datetime | None,
         callback_at: datetime | None,
-        notes: str | None,
         subject_clip: str | None = None,
         request_id: str | None = None,
     ) -> tuple[CallDisposition, str]:
@@ -344,7 +342,6 @@ class _SalesStateWrites(_SalesStateCore):
             raise PermissionError("lead disposition requires an in-scope active assignment")
         if assignment.assigned_to_email != lo.email:
             raise PermissionError("borrower is assigned to another loan officer")
-        clean_notes = scrub_free_text(notes) if notes else None
 
         def _matches_existing(existing: CallDisposition) -> bool:
             occurred_matches = (
@@ -354,7 +351,6 @@ class _SalesStateWrites(_SalesStateCore):
                 existing.borrower_id == borrower_id
                 and existing.lo_email == lo.email
                 and existing.outcome == outcome
-                and existing.notes == clean_notes
                 and _datetimes_equal(existing.callback_at, callback_at)
                 and occurred_matches
             )
@@ -379,15 +375,15 @@ class _SalesStateWrites(_SalesStateCore):
                 """
                 INSERT INTO mip_app.call_dispositions (
                     borrower_id, lo_email, outcome, attempt_number,
-                    occurred_at, callback_at, notes, request_id
+                    occurred_at, callback_at, request_id
                 )
                 VALUES (
                     %(borrower_id)s, %(lo_email)s, %(outcome)s, %(attempt_number)s,
-                    COALESCE(%(occurred_at)s, now()), %(callback_at)s, %(notes)s, %(request_id)s
+                    COALESCE(%(occurred_at)s, now()), %(callback_at)s, %(request_id)s
                 )
                 ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
                 RETURNING disposition_id, borrower_id, lo_email, outcome,
-                          attempt_number, occurred_at, callback_at, notes,
+                          attempt_number, occurred_at, callback_at,
                           audit_event_id
                 """,
                 {
@@ -397,7 +393,6 @@ class _SalesStateWrites(_SalesStateCore):
                     "attempt_number": attempt,
                     "occurred_at": occurred_at,
                     "callback_at": callback_at,
-                    "notes": clean_notes,
                     "request_id": request_id,
                 },
             )
@@ -426,7 +421,6 @@ class _SalesStateWrites(_SalesStateCore):
                     "callback_at": disposition.callback_at.isoformat()
                     if disposition.callback_at
                     else None,
-                    "notes": disposition.notes,
                 },
                 event_type="CALL_DISPOSITION",
                 subject_clip=subject_clip,
