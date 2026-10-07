@@ -15,8 +15,9 @@
  *      chosen reason;
  *  (e) the PROTOTYPE borrower view is presenter-only and never downloaded
  *      otherwise; Deployment readiness reports the mode;
- *  (f) Admin's Audit ledger link card keeps the prototype's own-width link
- *      (W5b VRT review), Console closed and open.
+ *  (f) Admin's Audit ledger link card keeps the prototype's own-width link,
+ *      and its chip-less header divider is on one line with its chip-bearing
+ *      neighbours' (W5b VRT review), Console closed and open.
  */
 import type { Page, Request } from '@playwright/test';
 import type { SessionResponse } from '../../../src/types';
@@ -85,6 +86,29 @@ async function expectOwnWidthLedgerLink(page: Page, state: string): Promise<void
   });
   expect(linkLeft, `${state}: the link starts at the body's content edge`).toBeCloseTo(bodyLeft + padStart, 1);
   expect(linkWidth, `${state}: the link keeps its own width (body ${bodyWidth}px)`).toBeLessThan(bodyWidth / 2);
+}
+
+/**
+ * The first-row panels share one header line: the chip-less Audit ledger
+ * header ends where the chip-bearing Offer rules and Data source readiness
+ * headers end, so the three dividers are one line.
+ */
+async function expectAlignedPanelDividers(page: Page, state: string): Promise<void> {
+  const headers = await page.locator('.admin-grid > .surface > .surface__hdr').evaluateAll((els) =>
+    els.map((el) => ({
+      panel: (el.parentElement as HTMLElement).id,
+      chip: el.querySelector('.chip') !== null,
+      bottom: el.getBoundingClientRect().bottom,
+    })),
+  );
+  expect(headers.map(({ panel, chip }) => `${panel}:${chip}`), `${state}: the first row`).toEqual([
+    'offer-rules:true',
+    'audit:false',
+    'data-sources:true',
+  ]);
+  for (const { panel, bottom } of headers) {
+    expect(bottom, `${state}: the ${panel} divider is on the row's one header line`).toBeCloseTo(headers[0].bottom, 2);
+  }
 }
 
 for (const theme of FIXTURE_THEMES) {
@@ -195,13 +219,15 @@ for (const theme of FIXTURE_THEMES) {
       await expectOneLineNav(page, app);
     });
 
-    test('(f) the Audit ledger link card keeps an own-width link, Console closed and open', async ({ app, page }) => {
+    test('(f) the Audit ledger link card keeps an own-width link and the row\'s header line, Console closed and open', async ({ app, page }) => {
       await app.gotoRoute('/admin-config');
       await expect(page.locator('#audit').getByRole('heading', { name: 'Audit ledger' })).toBeVisible();
       await expectOwnWidthLedgerLink(page, 'Console closed');
+      await expectAlignedPanelDividers(page, 'Console closed');
       await app.openConsole();
       await app.settle();
       await expectOwnWidthLedgerLink(page, 'Console open');
+      await expectAlignedPanelDividers(page, 'Console open');
     });
 
     test('(d) Run opens a confirm; only Start posts, with the chosen reason', async ({ app, mockApi, page }) => {
