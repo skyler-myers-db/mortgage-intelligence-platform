@@ -124,6 +124,8 @@ export function LeadTable({
   paging = null,
   sortScope = 'loaded',
   approvalRequests = null,
+  requestChips = null,
+  requestScopeRow = null,
 }: LeadTableProps) {
   // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
   // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
@@ -275,7 +277,6 @@ export function LeadTable({
     approverGate,
     campaignBound: hasCampaignBindingRequest,
     dropFromSelection: approval.dropFromSelection,
-    tableWrapRef,
   });
   // The Triage deck (D-approval-flow-a2): `?mode=triage`, approvers only. A
   // definitive non-approver's check strips the mode; a loading one waits; a
@@ -356,6 +357,7 @@ export function LeadTable({
     triage: triageFlowInput(triageCtl),
     // states-07 item 1: the approval result is a shell toast (the Toaster speaks it once).
     openRecentActivity: openConsoleRecentActivity,
+    raiseDecisionToast: (input) => REVIEW_CHUNK.current()?.raiseDecisionToast(input),
   });
   const { review } = flow;
   const openReview = review.review;
@@ -540,7 +542,7 @@ export function LeadTable({
         onExport={exportCsv}
         triageEntry={triageEntryNow}
         onEnterTriage={() => enterTriage(triageCtl, triageEntryNow, flow.cancelReview)}
-        requestChips={requests.chips}
+        requestChips={requestChips}
       />
       <LeadTableStatusChips
         growthAgentVerification={growthAgentVerification}
@@ -551,8 +553,7 @@ export function LeadTable({
         approverGate={approverGate}
         actorEmail={actorEmail}
         requestPathOpen={requests.path !== null}
-        requestScope={approvalRequests}
-        onClearRequestScope={requests.clearScope}
+        requestScopeRow={requestScopeRow}
       />
       {/* Keyed by the row: each form owns its fields, and a new row starts clean. */}
       {!triageOn && approval.pendingReject && (

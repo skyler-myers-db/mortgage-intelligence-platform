@@ -20,7 +20,7 @@
 import { useMutation, type QueryClient } from '@tanstack/react-query';
 import type { ApprovalRequestCreated, ApprovalRequestWithdrawn } from '../../types/approvalRequests';
 import { approvalRequestsApi } from '../apiClients/approvalRequests';
-import { invalidateApprovalRequests } from '../queryKeys';
+import { invalidateApprovalRequests } from './outreach';
 import { intentFingerprint, useIntentRequestIds } from './requestIds';
 
 export const approvalRequestMutationKeys = {

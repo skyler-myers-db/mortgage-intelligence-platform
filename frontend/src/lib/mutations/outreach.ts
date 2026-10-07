@@ -36,7 +36,17 @@ import {
 } from '@tanstack/react-query';
 import { api, ApiError, isAbortError } from '../api';
 import type { ApproveResult, OutreachDraftResult, RejectResult, ReviewMode } from '../apiTypes';
-import { invalidateApprovalRequests, invalidateOperationalQueries } from '../queryKeys';
+import { invalidateOperationalQueries, queryKeys } from '../queryKeys';
+
+/**
+ * Refetch the ACTIVE approval-request list (only a mounted Lead Queue reads
+ * it; flow-02). Never through invalidateOperationalQueries: that one must
+ * stay refetchType 'none' for the audited reads, and this list is
+ * audit-free. Here, not in queryKeys, to keep it out of the initial chunk.
+ */
+export function invalidateApprovalRequests(queryClient: QueryClient): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.approvalRequests().slice(0, 2), refetchType: 'active' });
+}
 
 export const outreachMutationKeys = {
   all: ['mip', 'outreach'] as const,

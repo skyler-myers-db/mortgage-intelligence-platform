@@ -146,15 +146,3 @@ export function invalidateOperationalQueries(queryClient: QueryClient): Promise<
     }),
   ]).then(() => undefined);
 }
-
-/**
- * Refetch the ACTIVE approval-request list (only a mounted Lead Queue reads
- * it). Never through invalidateOperationalQueries: that one must stay
- * refetchType 'none' for the audited reads, and this list is audit-free.
- */
-export function invalidateApprovalRequests(queryClient: QueryClient): Promise<void> {
-  return queryClient.invalidateQueries({
-    queryKey: ['mip', 'approval-requests'] satisfies QueryKey,
-    refetchType: 'active',
-  });
-}

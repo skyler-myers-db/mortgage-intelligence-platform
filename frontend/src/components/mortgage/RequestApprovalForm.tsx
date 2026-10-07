@@ -24,7 +24,7 @@ import { sessionQueryOptions } from '../../lib/sessionQuery';
 import { toast } from '../../lib/toast';
 import type { ApprovalRequestCreated, ApprovalRequestSkip, ApprovalRequestSkipReason } from '../../types/approvalRequests';
 import { Button, SurfaceTitle } from '../Primitives';
-import { REQUEST_REASON_LABEL } from './ApprovalRequestChips';
+import { REQUEST_REASON_LABEL } from './approvalRequestCopy';
 import { describeWriteFailure } from './leadWriteFailureToast';
 import './ApprovalRequests.css';
 

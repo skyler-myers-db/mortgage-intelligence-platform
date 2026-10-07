@@ -15,9 +15,6 @@ import { Button } from '../Primitives';
 import type { LeadTableApprovalRequests } from './LeadTable.types';
 import { lazyModule, useLazyModule } from './useLazyModule';
 
-/** The label wherever a request's justification is asked for or shown (owner ruling O3); never "Note". */
-export const REQUEST_REASON_LABEL = 'Reason for the request';
-
 const APPROVER_PANEL = lazyModule(() => import('./ApprovalRequestsPanel'));
 const MY_PANEL = lazyModule(() => import('./MyApprovalRequestsPanel'));
 

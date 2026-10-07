@@ -25,8 +25,8 @@ import { useMutation, type QueryClient } from '@tanstack/react-query';
 import type { SavedDraft, SavedDraftInput } from '../../types';
 import { api } from '../api';
 import type { ApproveResult, RejectResult } from '../apiTypes';
-import { invalidateApprovalRequests, invalidateOperationalQueries } from '../queryKeys';
-import { outreachMutationKeys } from './outreach';
+import { invalidateOperationalQueries } from '../queryKeys';
+import { invalidateApprovalRequests, outreachMutationKeys } from './outreach';
 
 export type OfferChannel = 'email' | 'sms' | 'direct_mail';
 

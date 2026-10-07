@@ -21,6 +21,8 @@ import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
 import { serverOrderOf, useLeadQueuePages } from './lead-queue.pages';
 import { leadQueueFilterInputFromSearchParams, leadQueueLenderRefs, leadsRequestFromSearchParams } from './lead-queue.request';
 import { useLeadQueueApprovalRequests } from './lead-queue.approvalRequests';
+import { ApprovalRequestChips } from '../components/mortgage/ApprovalRequestChips';
+import { ApprovalRequestScopeRow } from '../components/mortgage/ApprovalRequestScopeRow';
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
@@ -50,6 +52,7 @@ import {
   RECENCY_FILTER_OPTIONS,
   SEGMENT_FILTER_OPTIONS,
   SEGMENT_OPTION_TO_CODE,
+  APPROVAL_REQUEST_BATCH_PARAM,
   approvalFilterDisplayValue,
   buildLeadQueueExportFilters,
   isAssignedToMe,
@@ -387,6 +390,12 @@ export default function LeadQueue() {
     ids: visibleLeads.map((lead) => lead.borrower_id),
   } : null);
   const clearAllFilters = () => setSearchParams(searchParamsCleared(searchParams));
+  const clearRequestScope = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete(APPROVAL_REQUEST_BATCH_PARAM);
+    setSearchParams(next);
+    document.querySelector<HTMLElement>('#main-content .tbl-wrap')?.focus();
+  };
   // Copy link (audit tables-09): this origin and path plus the shareable
   // params only. Never the address bar: that holds the open row, maybe an
   // assignee email and a Growth Agent proof bound to this session.
@@ -690,6 +699,11 @@ export default function LeadQueue() {
                   paging={pages.paging}
                   sortScope={order.sort === 'rank' && place.sort ? 'loaded' : 'server'}
                   approvalRequests={approvalRequests}
+                  // The request chips and the scope row ride this route's chunk, not LeadTable's.
+                  requestChips={approvalRequests && <ApprovalRequestChips requests={approvalRequests} />}
+                  requestScopeRow={approvalRequests?.scope && (
+                    <ApprovalRequestScopeRow requests={approvalRequests} onClear={clearRequestScope} />
+                  )}
                   exportContext={exportContext}
                   salesTeam={salesTeam}
                   view={tableView}

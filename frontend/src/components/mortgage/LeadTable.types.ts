@@ -132,6 +132,9 @@ export interface LeadTableProps {
    * only (Segment Intelligence passes none). Null until the session is ready.
    */
   approvalRequests?: LeadTableApprovalRequests | null;
+  /** Its header chips and a scoped queue's scope row, rendered by the route (kept out of this chunk). */
+  requestChips?: ReactNode;
+  requestScopeRow?: ReactNode;
 }
 
 export type RejectReasonCode =

@@ -62,6 +62,8 @@ vi.mock('../lib/api', () => ({
 }));
 
 import { LeadTable } from '../components/mortgage/LeadTable';
+import { ApprovalRequestChips } from '../components/mortgage/ApprovalRequestChips';
+import { ApprovalRequestScopeRow } from '../components/mortgage/ApprovalRequestScopeRow';
 
 beforeAll(async () => {
   await import('../components/mortgage/RequestApprovalForm');
@@ -128,7 +130,13 @@ async function renderTable(approvalRequests: LeadTableApprovalRequests | null, p
   return mount(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
-        <LeadTable leads={IDS.map(lead)} approvalRequests={approvalRequests} />
+        {/* As the Lead Queue route renders it: the chips and scope row are its own. */}
+        <LeadTable
+          leads={IDS.map(lead)}
+          approvalRequests={approvalRequests}
+          requestChips={approvalRequests && <ApprovalRequestChips requests={approvalRequests} />}
+          requestScopeRow={approvalRequests?.scope && <ApprovalRequestScopeRow requests={approvalRequests} onClear={() => undefined} />}
+        />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -229,8 +237,9 @@ describe('useLeadQueueApprovalRequests: one audit-free read per mount', () => {
 describe('the table: Request approval', { timeout: 60_000 }, () => {
   const visibility: Array<[string, Partial<typeof app.state>, 'requester' | 'approver' | null, boolean]> = [
     ['a ready non-approver', {}, 'requester', true],
-    ['a loading session', { sessionStatus: 'loading' }, null, false],
-    ['an errored session', { sessionStatus: 'error' }, null, false],
+    // The prop present too: only the settled non-approver gate opens the path.
+    ['a loading session', { sessionStatus: 'loading' }, 'requester', false],
+    ['an errored session', { sessionStatus: 'error' }, 'requester', false],
     ['an approver', { canApprove: true }, 'approver', false],
     ['Segment Intelligence (no prop)', {}, null, false],
   ];

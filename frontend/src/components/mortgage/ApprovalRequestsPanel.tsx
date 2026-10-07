@@ -16,7 +16,7 @@ import { formatCount } from '../../lib/formatters';
 import { formatRelative } from '../../lib/time';
 import type { ApprovalRequestBatchView } from '../../types/approvalRequests';
 import { Button, SurfaceTitle } from '../Primitives';
-import { REQUEST_REASON_LABEL } from './ApprovalRequestChips';
+import { REQUEST_REASON_LABEL } from './approvalRequestCopy';
 import type { LeadTableApprovalRequests } from './LeadTable.types';
 import './ApprovalRequests.css';
 

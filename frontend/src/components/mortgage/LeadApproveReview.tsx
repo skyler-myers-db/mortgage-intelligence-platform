@@ -10,6 +10,10 @@ import { leadApproveReviewId } from './LeadApproveReview.ids';
 import type { LeadApproveReviewPhase, LeadApproveReviewState } from './useLeadApproveReview';
 import './LeadApproveReview.css';
 
+// The approval's result toast is raised only after an approve made through
+// this review, so it ships in this chunk (loaded by then), not the table's.
+export { raiseDecisionToast } from './leadDecisionToast';
+
 /**
  * The approve-review sheet (audit flow-03, states-06): the governed email a
  * row approval certifies, shown BEFORE the approval, inside the prototype's

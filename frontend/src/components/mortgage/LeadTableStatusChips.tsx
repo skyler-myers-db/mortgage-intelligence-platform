@@ -7,16 +7,15 @@
  * 2); markup, class names, and test ids are unchanged.
  */
 
+import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
-import { Button, Chip } from '../Primitives';
+import { Chip } from '../Primitives';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
 import { formatCount } from '../../lib/formatters';
 import type { CampaignBinding } from './LeadTable.logic';
 import type { CampaignBindingState } from './useLeadApprovalActions';
 import { APPROVER_ROLE_STATUS_ID } from './approverGate';
-import { REQUEST_REASON_LABEL } from './ApprovalRequestChips';
-import type { LeadTableApprovalRequests } from './LeadTable.types';
 
 interface LeadTableStatusChipsProps {
   growthAgentVerification: GrowthAgentCohortVerification | null;
@@ -33,38 +32,8 @@ interface LeadTableStatusChipsProps {
   actorEmail?: string | null;
   /** The request path is open to this non-approver: the gate line says where approval comes from. */
   requestPathOpen?: boolean;
-  /** An approver's queue scoped to one approval request (flow-02): the scope row. */
-  requestScope?: LeadTableApprovalRequests | null;
-  onClearRequestScope?: () => void;
-}
-
-/**
- * The scope row of a request-scoped queue (deviation:request-approval):
- * who asked, how many borrowers are open and the "Reason for the request".
- */
-function RequestScopeRow({ requests, onClear }: { requests: LeadTableApprovalRequests; onClear?: () => void }) {
-  const batch = requests.scope?.batch ?? null;
-  const open = batch ? batch.rows.filter((row) => row.state === 'open').length : 0;
-  return (
-    <div className="table-neutral chip-row" role="status" data-testid="approval-request-scope">
-      <Chip variant="neutral" icon="shield">Approval request</Chip>
-      {batch ? (
-        <>
-          <span>
-            {batch.requested_by_display ?? 'A teammate'} · {formatCount(open)} {open === 1 ? 'borrower' : 'borrowers'}
-          </span>
-          <span>{REQUEST_REASON_LABEL}: {batch.rationale}</span>
-        </>
-      ) : (
-        <span>
-          {requests.status === 'error'
-            ? 'Approval requests unavailable.'
-            : requests.status === 'ready' ? 'This request has no open borrowers.' : 'Reading the request…'}
-        </span>
-      )}
-      <Button variant="ghost" size="sm" onClick={onClear} data-testid="approval-request-scope-clear">Clear</Button>
-    </div>
-  );
+  /** An approver's request-scoped queue (flow-02): its scope row, from the route. */
+  requestScopeRow?: ReactNode;
 }
 
 export function LeadTableStatusChips({
@@ -76,12 +45,11 @@ export function LeadTableStatusChips({
   approverGate = null,
   actorEmail = null,
   requestPathOpen = false,
-  requestScope = null,
-  onClearRequestScope,
+  requestScopeRow = null,
 }: LeadTableStatusChipsProps) {
   return (
     <>
-      {requestScope?.scope && <RequestScopeRow requests={requestScope} onClear={onClearRequestScope} />}
+      {requestScopeRow}
       {approverGate !== null && (
         // The approve / reject / bulk-approve controls point their
         // aria-describedby here: the gate stays visible, with its reason.

@@ -23,7 +23,7 @@ import { publishCommandSelection, type CommandVerb } from '../command/commandSel
 import { isLeadApprovalEligible, isLeadSelectableForSalesOps, isTerminalApproval } from './LeadTable.logic';
 import { isInsideLeadApproveReview, leadApproveReviewId } from './LeadApproveReview.ids';
 import { leadReceiptAnchorId } from './LeadRowPreview';
-import { raiseDecisionToast } from './leadDecisionToast';
+import type { DecisionToastInput } from './leadDecisionToast';
 import type { RejectReasonCode } from './LeadTable.types';
 import type { useLeadApprovalActions } from './useLeadApprovalActions';
 import { useLeadApproveReview } from './useLeadApproveReview';
@@ -73,6 +73,8 @@ export interface UseLeadTableKeyboardFlowInput {
   triage?: { active: boolean; onApproved: (borrowerId: string) => void; lastShown: () => string | null };
   /** The Console's Recent activity: the decision toast's action for a row not listed. */
   openRecentActivity?: () => void;
+  /** Raise the approval's result toast (from the review chunk, loaded by then). */
+  raiseDecisionToast?: (input: DecisionToastInput) => void;
 }
 
 /** Focus an element once it is rendered (a virtualized row may need a frame or two). */
@@ -144,6 +146,7 @@ export function useLeadTableKeyboardFlow({
   urlRowId = null,
   triage,
   openRecentActivity,
+  raiseDecisionToast,
 }: UseLeadTableKeyboardFlowInput) {
   'use no memo';
 
@@ -450,7 +453,7 @@ export function useLeadTableKeyboardFlow({
     const params = new URLSearchParams(window.location.search);
     params.set('row', borrowerId);
     const rowHref = `${window.location.pathname}?${params.toString()}`;
-    raiseDecisionToast({
+    raiseDecisionToast?.({
       borrowerId,
       auditEventId: approval.decisionAuditEventId(borrowerId),
       listed: leadsById.has(borrowerId),
