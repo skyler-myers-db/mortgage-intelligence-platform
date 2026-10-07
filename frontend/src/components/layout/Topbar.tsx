@@ -207,6 +207,13 @@ function SystemStatusPill({ status }: { status: SystemStatusView }) {
  */
 
 export function Topbar() {
+  // BUDGET TRADE (runtime-03, W5d): Topbar compiles clean without this
+  // pragma (its try/catch submit is gone; Topbar.compiler.test.ts proves it),
+  // but the compiled shell topbar measured over the W5d lane's initial-JS cap
+  // (see the allowlist entry). The emission moves to W5e w5-compiler-lint
+  // item 6 (the shell opt-out re-measure).
+  'use no memo';
+
   const { lender, sessionStatus, theme, setTheme, genieOpen, setGenieOpen, consoleOpen, setConsoleOpen } = useApp();
   // A Genie turn keeps running behind the closed panel; this toggle is the
   // only desktop launcher, so it carries the running ring / answer-ready badge.
