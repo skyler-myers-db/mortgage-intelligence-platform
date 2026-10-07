@@ -116,3 +116,22 @@
 .lead-queue-views .filter:hover,
 .lead-queue-views .filter:focus-visible { text-decoration: none; }
 .lead-queue-views__copy { flex-shrink: 0; }
+
+/* ============================================================
+   EIGHT RANKED ROWS ABOVE THE FOLD WITH THE CONSOLE OPEN (W5c,
+   integrator C2; 12.3 R2-N2). At 1440x900 the Console narrows the
+   hero to 985px, and the title block (sized by its one-line lede)
+   plus this action stack no longer fit side by side: the stack
+   wrapped onto its own 104px row and only six rows cleared the fold.
+   The title block now shrinks first (its lede may take a second
+   line), so the stack stays beside it; below a 384px title block the
+   hero still wraps as before (and a 640px container stacks it, as
+   10-native-analytics.css does). Console closed, the title block only
+   widens beyond its content: nothing moves.
+   ============================================================ */
+@container main (min-width: 641px) {
+  .proto-hero:has(> .proto-hero__actions > .lead-queue-hero) > :first-child {
+    flex: 1 1 calc(var(--sp-16) * 6);
+    min-inline-size: 0;
+  }
+}

@@ -450,3 +450,59 @@ test.describe('axe stays clean on the new queue states', () => {
     });
   }
 });
+
+/** Ranked rows whose box ends above the fold (integrator C2's measure). */
+async function rowsAboveFold(page: Page): Promise<number> {
+  return page.locator('tr[data-borrower-row]').evaluateAll(
+    (rows) => rows.filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight).length,
+  );
+}
+
+/** The pre-W5c hero and header rules (lead-queue.css / LeadTable.css), for the non-vacuity twin. */
+const PRE_W5C_LAYOUT = `
+  .proto-hero > :first-child { flex: initial !important; }
+  .surface__hdr--split { display: flex !important; }
+  .surface__hdr--split > .surface__hdr-main { display: flex !important; }
+  .surface__hdr--split > .surface__hdr-main > div:not(.surface__icon) { display: block !important; }
+`;
+
+test.describe('the ranked table fits 1440x900 with the Console open (W5c, integrator C2/C3)', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`at least 8 ranked rows end above the fold (${theme})`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      await app.openConsole();
+      await expect(page.locator(ROWS).nth(7)).toBeVisible();
+      await expect.poll(() => rowsAboveFold(page), 'ranked rows above the fold, Console open').toBeGreaterThanOrEqual(8);
+    });
+  }
+
+  test('non-vacuity: the pre-W5c hero and header rules leave fewer than 8 rows above the fold', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    await app.openConsole();
+    await expect(page.locator(ROWS).nth(7)).toBeVisible();
+    await page.addStyleTag({ content: PRE_W5C_LAYOUT });
+    await expect.poll(() => rowsAboveFold(page)).toBeLessThan(8);
+  });
+
+  test('the ranked-table header keeps one hint line on the Lead Queue and Segment Intelligence', async ({ app, page }) => {
+    const header = page.locator('.surface:has(> .tbl-wrap) > .surface__hdr').first();
+    const height = () => header.evaluate((element) => Math.round(element.getBoundingClientRect().height));
+    const heights: Record<string, number> = {};
+    for (const route of ['/lead-queue', '/segment-intelligence'] as const) {
+      await app.gotoRoute(route);
+      await expect(header).toBeVisible();
+      if (await page.getByRole('complementary', { name: 'Workspace console' }).locator('.tweaks__body').isVisible()) {
+        await page.getByRole('banner').getByRole('button', { name: 'Toggle console' }).click();
+      }
+      heights[`${route} closed`] = await height();
+      await app.openConsole();
+      await expect.poll(height, `${route}: the Console does not wrap the header`).toBe(heights[`${route} closed`]);
+      heights[`${route} open`] = await height();
+    }
+    // Measured at 1440x900 (W5c): 83px on both routes, Console open or closed
+    // (was 83 closed / 101 open on both: the hint wrapped beside the actions).
+    expect(heights['/lead-queue open'], JSON.stringify(heights)).toBeLessThanOrEqual(84);
+    expect(heights['/segment-intelligence open'], JSON.stringify(heights)).toBe(heights['/lead-queue open']);
+  });
+});
