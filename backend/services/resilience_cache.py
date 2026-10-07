@@ -26,10 +26,26 @@ from threading import Event, Lock
 from typing import Any
 
 from backend.services.cache_staleness import report_stale, run_in_staleness_scope
+from backend.services.gold_snapshot import snapshot_generation
 from backend.services.observability import emit
 from backend.services.server_timing import record_cache
 
 log = logging.getLogger(__name__)
+
+# Hard-expiry TTLCache keys that hold a gold read and carry the gold snapshot
+# generation (audit delivery-06 remainder; see gold_snapshot). A CLOSED set:
+# get and get_or_set treat an older-generation entry under these prefixes as a
+# miss, get_stale still serves it, and every other key is unaffected.
+GOLD_VERSIONED_TTL_PREFIXES: tuple[str, ...] = (
+    "borrower_dossier:",
+    "lead_list:",
+    "lead_count:",
+    "lead_facets:",
+)
+
+
+def _generation_for(key: str) -> int:
+    return snapshot_generation() if key.startswith(GOLD_VERSIONED_TTL_PREFIXES) else 0
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +77,9 @@ class TTLCache:
     ``run_in_staleness_scope``). A ``stale_if_error`` serve and a hit of a
     degraded entry call ``report_stale``, so the response carries
     ``X-Data-Last-Good-At``.
+
+    Keys under ``GOLD_VERSIONED_TTL_PREFIXES`` also record the gold snapshot
+    generation; a lookup treats an older-generation entry as a miss.
     """
 
     def __init__(
@@ -72,8 +91,8 @@ class TTLCache:
     ) -> None:
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
-        # key -> (value, expires_at, last_good_wall, degraded)
-        self._entries: OrderedDict[str, tuple[Any, float, float, bool]] = OrderedDict()
+        # key -> (value, expires_at, last_good_wall, degraded, generation)
+        self._entries: OrderedDict[str, tuple[Any, float, float, bool, int]] = OrderedDict()
         self._inflight: dict[str, Event] = {}
         self._lock = Lock()
         self._now = now
@@ -81,15 +100,19 @@ class TTLCache:
         self._max_entries = max_entries
 
     def get(self, key: str) -> Any | None:
+        generation = _generation_for(key)
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
                 self._emit_cache_event("ttl_cache_miss", key, reason="empty")
                 return None
-            value, expires_at, last_good_wall, degraded = entry
+            value, expires_at, last_good_wall, degraded, entry_generation = entry
             self._entries.move_to_end(key)
             if self._now() >= expires_at:
                 self._emit_cache_event("ttl_cache_miss", key, reason="expired")
+                return None
+            if entry_generation < generation:
+                self._emit_cache_event("ttl_cache_miss", key, reason="snapshot_advanced")
                 return None
             self._emit_cache_event("ttl_cache_hit", key)
         if degraded:
@@ -97,9 +120,16 @@ class TTLCache:
         return value
 
     def set(self, key: str, value: Any, ttl_s: float) -> None:
-        self._set(key, value, ttl_s, None)
+        self._set(key, value, ttl_s, None, _generation_for(key))
 
-    def _set(self, key: str, value: Any, ttl_s: float, degraded_since: float | None) -> None:
+    def _set(
+        self,
+        key: str,
+        value: Any,
+        ttl_s: float,
+        degraded_since: float | None,
+        generation: int,
+    ) -> None:
         if ttl_s <= 0:
             # Zero TTL disables caching for this entry entirely; this
             # is the "cache disabled" fast-path (MIP_CACHE_TTL_S=0).
@@ -112,6 +142,7 @@ class TTLCache:
                 self._now() + ttl_s,
                 last_good,
                 degraded_since is not None,
+                generation,
             )
             self._entries.move_to_end(key)
             self._evict_locked()
@@ -131,12 +162,15 @@ class TTLCache:
             return cached
 
         leader = False
+        generation = _generation_for(key)
+        # The entry a follower saw when it joined the flight.
+        joined: tuple[Any, float, float, bool, int] | None = None
         with self._lock:
             entry = self._entries.get(key)
             if entry is not None:
-                value, expires_at, last_good_wall, degraded = entry
+                value, expires_at, last_good_wall, degraded, entry_generation = entry
                 self._entries.move_to_end(key)
-                if self._now() < expires_at:
+                if self._now() < expires_at and entry_generation >= generation:
                     self._emit_cache_event("ttl_cache_hit", key, reason="double_check")
                     record_cache("hit")
                     if degraded:
@@ -147,11 +181,15 @@ class TTLCache:
                 event = Event()
                 self._inflight[key] = event
                 leader = True
+            else:
+                joined = entry
 
         if not leader:
             self._emit_cache_event("ttl_cache_wait", key)
             if event.wait(timeout=wait_timeout_s):
-                cached = self.get(key)
+                cached = self._stored_since(key, joined)
+                if cached is None:
+                    cached = self.get(key)
                 if cached is not None:
                     record_cache("miss")
                     return cached
@@ -177,7 +215,7 @@ class TTLCache:
             record_cache("miss")
             raise
         else:
-            self._set(key, value, ttl_s, degraded_since)
+            self._set(key, value, ttl_s, degraded_since, generation)
             if degraded_since is not None:
                 report_stale(min(self._wall(), degraded_since))
             record_cache("miss")
@@ -188,6 +226,27 @@ class TTLCache:
                     finished = self._inflight.pop(key, None)
                     if finished is not None:
                         finished.set()
+
+    def _stored_since(
+        self, key: str, joined: tuple[Any, float, float, bool, int] | None
+    ) -> Any | None:
+        """The value this flight's leader stored, whatever its generation.
+
+        ``_set`` always stores a new tuple, so an entry that is not the one
+        seen at join is the leader's successful read; a gold snapshot bump
+        while it ran leaves it at the generation the read began under, which
+        is no reason to serve a follower the retained value with a marker.
+        """
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None or entry is joined or self._now() >= entry[1]:
+                return None
+            self._entries.move_to_end(key)
+            value, _expires_at, last_good_wall, degraded, _generation = entry
+            self._emit_cache_event("ttl_cache_hit", key, reason="singleflight_follower")
+        if degraded:
+            report_stale(last_good_wall)
+        return value
 
     def get_stale(self, key: str) -> Any | None:
         with self._lock:

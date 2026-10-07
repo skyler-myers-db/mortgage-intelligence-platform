@@ -3122,6 +3122,18 @@
             "title": "Evidence Ids",
             "type": "array"
           },
+          "first_itm_week": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Week (YYYY-MM-DD, a Monday) the current in-the-money run began, with today's rule applied to past weekly rates; null when not in the money.",
+            "title": "First Itm Week"
+          },
           "first_party_recent_application": {
             "default": false,
             "title": "First Party Recent Application",
@@ -3142,6 +3154,18 @@
             "title": "First Party Synthetic Demo",
             "type": "boolean"
           },
+          "first_pos_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "First-lien origination date (YYYY-MM-DD); null when unknown.",
+            "title": "First Pos Date"
+          },
           "first_pos_loan_type": {
             "anyOf": [
               {
@@ -3152,6 +3176,22 @@
               }
             ],
             "title": "First Pos Loan Type"
+          },
+          "first_pos_rate_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "FIX",
+                  "ARM"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "First-lien rate type: FIX or ARM; null when unknown.",
+            "title": "First Pos Rate Type"
           },
           "has_first_party_relationship": {
             "default": false,
@@ -3502,6 +3542,17 @@
           "related_property_count": {
             "title": "Related Property Count",
             "type": "integer"
+          },
+          "score_points": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LeadScorePoints"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The five weighted sub-scores that sum to opportunity_score; null when unavailable."
           },
           "second_pos_amount": {
             "default": 0,
@@ -11831,6 +11882,50 @@
         "title": "LeadOutcomeResponse",
         "type": "object"
       },
+      "LeadScorePoints": {
+        "description": "The five weighted sub-scores behind one row's opportunity_score.\n\nKeyed by the score-anatomy component vocabulary. Each value is the\nfn_lead_score weight times its 0..100 sub-score; the five sum, rounded half\nto even and clipped to 0..100, to the row's opportunity_score.",
+        "properties": {
+          "economic_incentive": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Economic Incentive",
+            "type": "number"
+          },
+          "evidence": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Evidence",
+            "type": "number"
+          },
+          "fit": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Fit",
+            "type": "number"
+          },
+          "intent_trigger": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Intent Trigger",
+            "type": "number"
+          },
+          "relationship": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Relationship",
+            "type": "number"
+          }
+        },
+        "required": [
+          "economic_incentive",
+          "intent_trigger",
+          "fit",
+          "relationship",
+          "evidence"
+        ],
+        "title": "LeadScorePoints",
+        "type": "object"
+      },
       "LeadSummary": {
         "properties": {
           "aging_days": {
@@ -12339,6 +12434,17 @@
             "default": 1,
             "title": "Related Property Count",
             "type": "integer"
+          },
+          "score_points": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LeadScorePoints"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The five weighted sub-scores that sum to opportunity_score; null when unavailable."
           },
           "second_pos_amount": {
             "default": 0,

@@ -26,6 +26,14 @@
 --            against snapshot_date = CURRENT_DATE() - INTERVAL 7 DAYS (WoW).
 --
 -- Run-order: after gold_borrower_lifecycle_state.sql in the scoring refresh.
+--
+-- competitor_lien_borrowers (audit wow-ai-3): the headline
+--            SUM(is_competitor_lien) per cell, for the Delta Explainer's
+--            per-state attribution. The table is MERGE-maintained, so an
+--            existing install gets the column from
+--            jobs/sync_lifecycle_state._ensure_funnel_snapshot_schema (run by
+--            deploy step 9 and the bundle job before this MERGE); snapshots
+--            recorded before it stay NULL and are never backfilled.
 -- =============================================================================
 
 MERGE INTO mip.gold.funnel_snapshot_daily AS t
@@ -38,6 +46,7 @@ USING (
       b.opportunity_score,
       b.in_the_money,
       b.recommended_offer_code,
+      b.is_competitor_lien,
       COALESCE(ls.approval_status, 'pending')  AS approval_status,
       COALESCE(ls.outreach_status, 'none')     AS outreach_status
     FROM mip.gold.borrower_360 AS b
@@ -64,6 +73,7 @@ USING (
       b.opportunity_score,
       b.in_the_money,
       b.recommended_offer_code,
+      b.is_competitor_lien,
       COALESCE(ls.approval_status, 'pending')   AS approval_status,
       COALESCE(ls.outreach_status, 'none')      AS outreach_status
     FROM mip.gold.borrower_360 AS b
@@ -90,6 +100,7 @@ USING (
       CAST(SUM(CASE WHEN approval_status = 'approved'
                      AND outreach_status = 'actioned' THEN 1 ELSE 0 END) AS INT)  AS actioned_borrowers,
       CAST(ROUND(AVG(opportunity_score)) AS INT)                                  AS avg_opportunity_score,
+      CAST(SUM(CASE WHEN is_competitor_lien THEN 1 ELSE 0 END) AS INT)            AS competitor_lien_borrowers,
       CURRENT_TIMESTAMP()                                                         AS snapshot_at
     FROM unioned
     GROUP BY state, segment_code
@@ -109,6 +120,7 @@ USING (
       CAST(SUM(CASE WHEN approval_status = 'approved'
                      AND outreach_status = 'actioned' THEN 1 ELSE 0 END) AS INT)  AS actioned_borrowers,
       CAST(ROUND(AVG(opportunity_score)) AS INT)                                  AS avg_opportunity_score,
+      CAST(SUM(CASE WHEN is_competitor_lien THEN 1 ELSE 0 END) AS INT)            AS competitor_lien_borrowers,
       CURRENT_TIMESTAMP()                                                         AS snapshot_at
     FROM unioned
     GROUP BY segment_code
@@ -128,15 +140,16 @@ WHEN MATCHED THEN UPDATE SET
   approved_borrowers           = s.approved_borrowers,
   actioned_borrowers           = s.actioned_borrowers,
   avg_opportunity_score        = s.avg_opportunity_score,
+  competitor_lien_borrowers    = s.competitor_lien_borrowers,
   snapshot_at                  = s.snapshot_at
 WHEN NOT MATCHED THEN INSERT (
   snapshot_date, state, segment_code,
   addressable_borrowers, in_the_money_borrowers, high_opportunity_borrowers,
   offer_recommended_borrowers, approved_borrowers, actioned_borrowers,
-  avg_opportunity_score, snapshot_at
+  avg_opportunity_score, competitor_lien_borrowers, snapshot_at
 ) VALUES (
   s.snapshot_date, s.state, s.segment_code,
   s.addressable_borrowers, s.in_the_money_borrowers, s.high_opportunity_borrowers,
   s.offer_recommended_borrowers, s.approved_borrowers, s.actioned_borrowers,
-  s.avg_opportunity_score, s.snapshot_at
+  s.avg_opportunity_score, s.competitor_lien_borrowers, s.snapshot_at
 );

@@ -511,7 +511,11 @@ this cache too since 2026-09-30 (decision record e1): 300 s soft TTL, the
 never MASKS a refresh failure: a cold failure propagates as the 503, and a
 list retained after a failed refresh (or built from retained readiness gates)
 is served with `X-Data-Last-Good-At` (§6), which clears after one successful
-refresh. The source-readiness gates fail closed: a cold failure of the
+refresh. A list built from retained readiness gates stays marked degraded
+(`X-Data-Last-Good-At`) until its OWN next refresh, up to the 300 s soft TTL,
+even after the gate cache recovers: the list entry recorded its retained input
+when it was built, and only the list's own successful refresh replaces it.
+The source-readiness gates fail closed: a cold failure of the
 readiness read logs WARNING `segment_source_readiness_unavailable` and
 RE-RAISES (the list answers 503; nothing is cached as good), and an EMPTY
 readiness snapshot gates every mapped segment `not_connected` instead of
@@ -635,6 +639,98 @@ tables answer 200 `built: false` instead. Since 2026-09-30 a missing schema
 under the same `retries_exhausted` reason; only the error classes match
 (SQLSTATE 42704 / 42883 are shared with other classes), and a missing
 `mip.gold` schema stays a 503 on the Rate Lever too.
+
+### Gold snapshot generation (delivery-06 remainder, W5c)
+
+The soft and hard TTLs alone let a process serve the previous gold snapshot's
+hot aggregates until each key's own soft TTL (and a stale serve) after a gold
+refresh. `backend/services/gold_snapshot.py` learns the current snapshot and
+moves a process-wide GENERATION when it advances.
+
+- Source. `SELECT CAST(MAX(checked_at) AS STRING) FROM gold.source_readiness`.
+  `checked_at` is the refresh run's anchor, stamped by `ctas_source_readiness`,
+  which depends on lead_scores, lead_population, segment_population and
+  borrower_dossier: the id moves only after the hot lead tables are rebuilt.
+  `ref.refresh_run_state.refresh_at` is written at the TOP of the DAG and would
+  advance mid-refresh, so it is not used. source_readiness is a ~20-row gold
+  table, so App SQL stays gold-only.
+- Trigger. The probe runs only on the `mip-gold-swr` executor and only when a
+  `GoldAggregateCache` read already goes to the warehouse: an inline miss
+  schedules it, a background refresh runs it before its factory. At most one
+  probe per `MIP_CACHE_TTL_S`. There is no timer, so an idle warehouse still
+  auto-stops. The first learn sets the id without a bump; a different id bumps
+  the generation and logs INFO `gold_snapshot_advanced` (`generation`,
+  `previous`, `current`: snapshot timestamps only). A failed probe keeps the
+  generation, logs WARNING `gold_snapshot_probe_failed` with the exception
+  type only, and retries after the next soft TTL. The watch is off when
+  `MIP_CACHE_TTL_S <= 0`.
+- The generation, not a key suffix. Every `GoldAggregateCache` entry carries
+  the generation its value was read under and a lookup compares it: an
+  older-generation entry is a MISS, computed inline with single-flight (DEBUG
+  `gold_cache_miss`, `reason=snapshot_advanced`), never a hit or a plain stale
+  serve. The entry stays in place, so a recompute that fails under
+  `stale_if_error` still serves it WITH `X-Data-Last-Good-At`. A per-key
+  suffix was rejected: it lengthens every key, breaks `workflow_key`'s
+  `family:generation` parsing in `drop_workflow_generations`, and orphans the
+  last-good value `stale_if_error` needs across a refresh. The hard-expiry
+  `TTLCache` applies the same rule to the closed prefixes
+  `GOLD_VERSIONED_TTL_PREFIXES` (`borrower_dossier:`, `lead_list:`,
+  `lead_count:`, `lead_facets:`); `get_stale` still serves an older entry and
+  every other key is unaffected.
+- Cost. One advance is a coordinated miss: each hot key a reader touches pays
+  one inline warehouse read once. The cold-cache Locust profile's scenario B
+  (docs/load-baseline.md, "Cold-cache profile") measures it. The inline miss
+  that carries the advancing probe pays one more: the probe runs
+  asynchronously, so the generation can move while that key's own read is in
+  flight, and the read stores under the generation it BEGAN in (it may have
+  read the previous snapshot), so its next read misses once more. One extra
+  warehouse round trip per advance per process, never an old read served as
+  the new generation. A single-flight follower of that read still takes its
+  value with no `X-Data-Last-Good-At`: only a FAILED leader yields a marked
+  serve (`tests/unit/test_gold_cache_snapshot_keys.py`, the `_Deferred`
+  executor cases).
+- The get/set window. The versioned `TTLCache` callers (the dossier, lead
+  list, lead count and lead facets repositories) read with `get`, query the
+  warehouse, then `set`; `set` stamps the generation current when it stores.
+  A query that began before an advance and finished after it is therefore
+  stored under the newer generation and can be served for up to one soft TTL,
+  the same bound as before the generation existed. `get_or_set` callers
+  capture the generation before the read and have no such window.
+- Per process. Each App process learns on its own next warehouse-bound read,
+  so two processes can disagree for up to one soft TTL.
+- The funnel lag. `gold.funnel_snapshot_daily` is recorded at deploy step 9
+  (and by the lifecycle job), AFTER the step-8 refresh that moves the
+  generation, so a Delta Explainer attribution read cached between the two can
+  trail the new snapshot by one soft TTL.
+
+### Optional gold columns (fail-soft projection, W5c)
+
+A roll-forward can promote the App ahead of the gold refresh that adds a
+column (a first install deploys the App before any gold exists; the local
+piecewise recipe can ship it before `mip_refresh_scores`). `UNRESOLVED_COLUMN`
+/ SQLSTATE `42703` is classified as `DatabricksSqlColumnMissingError`, a
+SIBLING of `DatabricksSqlObjectMissingError` (a route that maps a missing lane
+table to "not built" never swallows a missing column): it fails fast like a
+missing table (one statement, a breaker success, the unchanged 503
+`retries_exhausted`). Before W5c it was retried three times and counted as a
+breaker failure.
+
+`backend/services/optional_gold_columns.py` is a CLOSED registry of column
+families: `score_points` (the five `*_points` in the lead_population and
+borrower_360 projections the Lead Queue and its geo drill-down read) and
+`spread_history` (the dossier's `first_pos_date`, `first_pos_rate_type`,
+`first_itm_week`). Each family maps the exact projection fragments to NULL
+twins that alias every column. On a missing registered column whose fragment
+is in the statement, the resilient client latches the family for one
+`MIP_CACHE_TTL_S`, re-runs the statement ONCE on the twins, rewrites every
+statement while the latch holds, and logs one WARNING
+`optional_gold_columns_unavailable` per latch (family and error class only; no
+SQL, no ids). Anything else re-raises unchanged. The rows stay real; only the
+optional fields come back null, never a fabricated value, and every client
+treats a null `score_points` or crossing field as absent. The funnel snapshot's
+`competitor_lien_borrowers` is not in the registry (its read filters on it):
+the attribution read answers the no-snapshot shape on that column's
+`DatabricksSqlColumnMissingError` instead.
 
 ## 9. Genie completion jobs
 

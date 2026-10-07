@@ -273,7 +273,6 @@ def test_genie_session_reads_are_lakebase_reads_outside_the_genie_budget(path: s
         ("POST", "/api/v1/genie/message/complete"),
         ("POST", "/api/v1/genie/message/submit"),
         ("POST", "/api/v1/genie/actions"),
-        ("POST", "/api/v1/genie/start"),
         ("GET", "/api/v1/genie/start"),
         ("GET", "/api/v1/genie/sessionsx"),
         ("POST", "/api/v1/genie/sessions/0123456789abcdef0123456789abcdef"),
@@ -339,3 +338,34 @@ def test_the_borrower_decision_history_is_a_lakebase_read_never_a_warehouse_read
     # Non-vacuity: the dossier read beside it keeps the warehouse budget.
     dossier = controller.classify("GET", "/api/v1/borrowers/B-X")
     assert dossier is not None and dossier.dependency == "warehouse"
+
+
+# --- 2026-09-21 audit delivery-09: the Genie surface's open ---------------------
+
+
+@pytest.mark.parametrize("path", ["/api/genie/start", "/api/v1/genie/start"])
+def test_genie_start_is_a_lakebase_read_outside_the_genie_budget(path: str) -> None:
+    # genie_start reads the caller's latest Lakebase session row, the static
+    # trusted assets and the sample-question file: no Genie call, no audit
+    # row. Inside the Genie budget every surface open would hold a Genie slot.
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("lakebase-read", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/genie/message",
+        "/api/v1/genie/message/complete",
+        "/api/v1/genie/actions",
+        "/api/v1/genie/startx",
+    ],
+)
+def test_the_genie_start_branch_leaves_answer_path_posts_in_the_genie_budget(path: str) -> None:
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("genie", "genie")

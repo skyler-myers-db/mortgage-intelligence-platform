@@ -1119,6 +1119,17 @@ SELECT
   )                                                                                  AS opportunity_score,
   CAST(ROUND((ss.economic_incentive + ss.intent_trigger + ss.fit
                + ss.relationship + ss.evidence) / 5.0) AS INT)                       AS confidence,
+  -- Score anatomy (audit wow-stage-2): the five weighted sub-scores, from
+  -- this CTAS's OWN subscores CTE (never gold.lead_scores, which the job
+  -- builds AFTER this table). No COALESCE: a NULL sub-score is a NULL point,
+  -- never a fabricated 0. The weights equal fn_lead_score's and
+  -- scoring._LEAD_SCORE_WEIGHTS, so the five sum, banker-rounded and clipped
+  -- to 0..100, to opportunity_score on the same row.
+  CAST(0.35 * ss.economic_incentive AS DECIMAL(5,2))                                 AS economic_incentive_points,
+  CAST(0.30 * ss.intent_trigger AS DECIMAL(5,2))                                     AS intent_trigger_points,
+  CAST(0.15 * ss.fit AS DECIMAL(5,2))                                                AS fit_points,
+  CAST(0.10 * ss.relationship AS DECIMAL(5,2))                                       AS relationship_points,
+  CAST(0.10 * ss.evidence AS DECIMAL(5,2))                                           AS evidence_points,
   w.recommended_offer_code,
   -- Human label map: matches NBO_PRODUCT_LABELS in scoring.py. Kept inline
   -- so gold is self-contained -- no runtime join required.
@@ -1308,6 +1319,11 @@ COMMENT ON COLUMN mip.gold.borrower_360.rate_spread_bps IS 'fn_rate_spread(first
 COMMENT ON COLUMN mip.gold.borrower_360.market_rate_fraction IS 'Fractional market rate from silver.market_rates_weekly WHERE is_latest=TRUE. Router maps to WhyPanel.market_rate.';
 COMMENT ON COLUMN mip.gold.borrower_360.opportunity_score IS 'fn_lead_score output. 0..100.';
 COMMENT ON COLUMN mip.gold.borrower_360.confidence IS 'ROUND(mean(5 sub-scores)). 0..100. Matches mock_data._build_borrower.';
+COMMENT ON COLUMN mip.gold.borrower_360.economic_incentive_points IS 'Weighted economic_incentive sub-score: 0.35 * economic_incentive (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.borrower_360.intent_trigger_points IS 'Weighted intent_trigger sub-score: 0.30 * intent_trigger (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.borrower_360.fit_points IS 'Weighted fit sub-score: 0.15 * fit (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.borrower_360.relationship_points IS 'Weighted relationship sub-score: 0.10 * relationship (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.borrower_360.evidence_points IS 'Weighted evidence sub-score: 0.10 * evidence (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
 COMMENT ON COLUMN mip.gold.borrower_360.recommended_offer_code IS 'fn_next_best_offer output (lowercase code). Router resolves to human label via NBO_PRODUCT_LABELS.';
 COMMENT ON COLUMN mip.gold.borrower_360.recommended_offer IS 'Human label for recommended_offer_code (resolved in SQL via product_labels map).';
 COMMENT ON COLUMN mip.gold.borrower_360.why_now IS 'Deterministic one-sentence template per offer_code. No PII. See data-contract §6.';

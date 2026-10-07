@@ -32,6 +32,18 @@ export interface WhyPanel {
   source_labels?: SourceLabel[];
 }
 
+/** The five weighted sub-scores behind a row's opportunity_score
+ *  (audit wow-stage-2). Each is the fn_lead_score weight times its 0..100
+ *  sub-score; the five sum, rounded half to even and clipped to 0..100, to
+ *  opportunity_score. A null `score_points` is absent, never 0. */
+export interface LeadScorePoints {
+  economic_incentive: number;
+  intent_trigger: number;
+  fit: number;
+  relationship: number;
+  evidence: number;
+}
+
 export interface Borrower360 extends LeadSummary {
   source_refreshed_at?: string | null;
   clip_id: string;
@@ -57,6 +69,13 @@ export interface Borrower360 extends LeadSummary {
   trigger_timeline: EvidenceEvent[];
   evidence_events: EvidenceEvent[];
   why_panel: WhyPanel;
+  /** Crossed the line (audit wow-stage-4), from gold.borrower_dossier: the
+   *  first-lien origination date (YYYY-MM-DD), its closed rate type, and the
+   *  Monday the current in-the-money run began (today's rule applied to past
+   *  weekly rates; null when not in the money). Null until gold builds them. */
+  first_pos_date?: string | null;
+  first_pos_rate_type?: 'FIX' | 'ARM' | null;
+  first_itm_week?: string | null;
 }
 
 export interface ProofFormulaLine {

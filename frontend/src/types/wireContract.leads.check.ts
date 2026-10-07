@@ -16,7 +16,7 @@ import type { LeadExportReceipt, LeadExportReceiptRequest } from '../lib/apiClie
 import type { OfferRecommendRequest } from '../lib/apiClients/leads';
 import type { OutreachApproveRequest, OutreachDraftRequest, OutreachRejectRequest } from '../lib/apiClients/outreach';
 import type { ApproveResult, OutreachDraftResult, RejectResult } from '../lib/apiTypes';
-import type { Borrower360, BorrowerLifecycle, BorrowerProof, EvidenceEvent, LeadSummary, OfferAlternative, OfferRecommendation, ProofEvidenceEvent, ProofFormulaLine, ProofOfferBranch, ProofReproduceQuery, ProofScoreComponent, SourceLabel, WhyPanel } from '../types';
+import type { Borrower360, BorrowerLifecycle, BorrowerProof, EvidenceEvent, LeadScorePoints, LeadSummary, OfferAlternative, OfferRecommendation, ProofEvidenceEvent, ProofFormulaLine, ProofOfferBranch, ProofReproduceQuery, ProofScoreComponent, SourceLabel, WhyPanel } from '../types';
 import type { LeadCountResponse, LeadFacetBucket, LeadFacetsResponse, SavedView, SavedViewCreateRequest, SavedViewListResponse, SavedViewMutationResponse } from './leadFilters';
 
 export type WireContractLeads = [
@@ -43,6 +43,8 @@ export type WireContractLeads = [
   Expect<NoPhantomKeys<EvidenceEvent, ApiResponse<'EvidenceEvent'>>>,
   Expect<WireFits<ApiResponse<'LeadSummary'>, LeadSummary>>,
   Expect<NoPhantomKeys<LeadSummary, ApiResponse<'LeadSummary'>>>,
+  Expect<WireFits<ApiResponse<'LeadScorePoints'>, LeadScorePoints>>,
+  Expect<NoPhantomKeys<LeadScorePoints, ApiResponse<'LeadScorePoints'>>>,
   Expect<WireFits<ApiResponse<'OfferAlternative'>, OfferAlternative>>,
   Expect<NoPhantomKeys<OfferAlternative, ApiResponse<'OfferAlternative'>>>,
   Expect<WireFits<ApiResponse<'OfferRecommendation'>, OfferRecommendation>>,

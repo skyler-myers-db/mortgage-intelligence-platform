@@ -442,11 +442,17 @@ export interface ResponseSchemas {
     equity_estimate: number;
     evidence_events: ResponseSchemas['EvidenceEvent'][];
     evidence_ids: string[];
+    /** Week (YYYY-MM-DD, a Monday) the current in-the-money run began, with today's rule applied to past weekly rates; null when not in the money. */
+    first_itm_week: string | null;
     first_party_recent_application: boolean;
     first_party_recent_interactions: number;
     first_party_relationship_depth: number;
     first_party_synthetic_demo: boolean;
+    /** First-lien origination date (YYYY-MM-DD); null when unknown. */
+    first_pos_date: string | null;
     first_pos_loan_type: string | null;
+    /** First-lien rate type: FIX or ARM; null when unknown. */
+    first_pos_rate_type: "FIX" | "ARM" | null;
     has_first_party_relationship: boolean;
     has_heloc_propensity_trigger: boolean;
     has_permit: boolean;
@@ -490,6 +496,8 @@ export interface ResponseSchemas {
     refi_propensity_run_date: string | null;
     refi_propensity_score: number | null;
     related_property_count: number;
+    /** The five weighted sub-scores that sum to opportunity_score; null when unavailable. */
+    score_points: ResponseSchemas['LeadScorePoints'] | null;
     second_pos_amount: number;
     segment_codes: ("itm" | "listed" | "permit" | "investor" | "equity" | "retention" | "second_lien_itm" | "heloc_draw_to_payback" | "home_equity_history" | "refi_propensity" | "itm_on_related_property" | "payoff_loss_leads" | "permit_activity")[];
     situs_cbsa_code: string | null;
@@ -1647,6 +1655,20 @@ export interface ResponseSchemas {
     audit_event_id: string | null;
     outcome: ResponseSchemas['LeadOutcome'];
   };
+  /**
+   * The five weighted sub-scores behind one row's opportunity_score.
+   *
+   * Keyed by the score-anatomy component vocabulary. Each value is the
+   * fn_lead_score weight times its 0..100 sub-score; the five sum, rounded half
+   * to even and clipped to 0..100, to the row's opportunity_score.
+   */
+  LeadScorePoints: {
+    economic_incentive: number;
+    evidence: number;
+    fit: number;
+    intent_trigger: number;
+    relationship: number;
+  };
   LeadSummary: {
     aging_days: number | null;
     approval_status: "pending" | "approved" | "rejected" | "hold";
@@ -1707,6 +1729,8 @@ export interface ResponseSchemas {
     refi_propensity_run_date: string | null;
     refi_propensity_score: number | null;
     related_property_count: number;
+    /** The five weighted sub-scores that sum to opportunity_score; null when unavailable. */
+    score_points: ResponseSchemas['LeadScorePoints'] | null;
     second_pos_amount: number;
     segment_codes: ("itm" | "listed" | "permit" | "investor" | "equity" | "retention" | "second_lien_itm" | "heloc_draw_to_payback" | "home_equity_history" | "refi_propensity" | "itm_on_related_property" | "payoff_loss_leads" | "permit_activity")[];
     state: string;
