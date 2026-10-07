@@ -1163,7 +1163,7 @@ shared open-item CTE in `backend/services/sales_followups_sql.py`; never a
 warehouse statement), is cached per actor for 30 s under the opaque actor
 cache key (never the email), writes no audit row and takes the
 `lakebase-read` backpressure class (the default read bucket and a Lakebase
-slot, like `/api/genie/message/status`). RUM never reports it
+slot, like `/api/v1/genie/message/status`). RUM never reports it
 (`EXCLUDED_TEMPLATES`). `GET /api/v1/admin/field-performance` takes the same
 class (it reads `mip_app.rum_daily` only).
 
