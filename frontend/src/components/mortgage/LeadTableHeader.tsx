@@ -71,8 +71,13 @@ export function LeadTableHeader({
   const triageNoteId = useId();
   const partial = csvExportTruncatedOf !== null;
   const exportNoun = partial ? 'loaded' : csvExportNoun;
+  // A title row of controls (FetchedAt's Refresh, the Triage entry) is a
+  // `.btn--sm` tall; its modifier gives the keycap hint block clearance from
+  // it without growing the header (LeadTable.css,
+  // deviation:lead-table-title-row-clearance).
+  const titleRow = Boolean(headerStatus || triageEntry);
   return (
-    <div className="surface__hdr surface__hdr--split">
+    <div className={`surface__hdr surface__hdr--split${titleRow ? ' lead-table__header--title-row' : ''}`}>
       <div className="surface__hdr-main">
         <div className="surface__icon">
           <Icon name="user" size={14} />
@@ -82,8 +87,8 @@ export function LeadTableHeader({
               title, not in the action row: there they squeezed the keyboard
               hint onto a second line and pushed the 480px scroller past the
               fold at 1440x900. */}
-          {headerStatus || triageEntry ? (
-            <div className="inline-flex">
+          {titleRow ? (
+            <div className="inline-flex lead-table__title-row">
               <SurfaceTitle>Ranked borrowers</SurfaceTitle>
               {headerStatus}
               {triageEntry && (
@@ -107,7 +112,7 @@ export function LeadTableHeader({
           ) : (
             <SurfaceTitle>Ranked borrowers</SurfaceTitle>
           )}
-          <div className="muted fs-12">
+          <div className="muted fs-12 lead-table__hint">
             {/* Keycaps are `<kbd>` (prototype-parity P2); the header's
                 "Keyboard shortcuts" button and `?` list every key. */}
             <LeadTableKeyboardHint singleKeysOn={singleKeysOn} approverActive={approverActive} />

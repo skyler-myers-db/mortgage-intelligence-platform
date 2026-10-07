@@ -622,6 +622,48 @@ test.describe('keyboard hint', () => {
     const bottom = await scrollRegion(page).evaluate((element) => element.getBoundingClientRect().bottom);
     expect(bottom, 'the table scroller ends above the fold').toBeLessThanOrEqual(900);
   });
+
+  // deviation:lead-table-title-row-clearance (W5b VRT): the bordered Triage
+  // entry filled the title row and sat flush on the keycaps.
+  test('clears the title row controls by var(--sp-1), paid out of the header padding: Lead Queue (Console closed and open) and Segment Intelligence', async ({ app, page }) => {
+    const header = page.locator('#main-content .surface__hdr', { has: page.getByRole('heading', { name: 'Ranked borrowers', exact: true }) });
+    const measure = () => header.evaluate((element) => {
+      const px = (value: string) => Number.parseFloat(value);
+      const root = getComputedStyle(document.documentElement);
+      // Structural selectors, so the pin reads the same boxes on both sides of the fix.
+      const hint = element.querySelector('.surface__hdr-main .muted.fs-12');
+      const controls = [...element.querySelectorAll('.surface__hdr-main .btn')].map((button) => button.getBoundingClientRect());
+      const keycaps = [...(hint?.querySelectorAll('kbd') ?? [])].map((key) => key.getBoundingClientRect());
+      const style = getComputedStyle(element);
+      return {
+        controls: controls.length,
+        keycaps: keycaps.length,
+        gap: Math.min(...keycaps.map((key) => key.top)) - Math.max(...controls.map((button) => button.bottom)),
+        spacing: px(style.paddingBlockStart) + px(style.paddingBlockEnd) + (hint ? px(getComputedStyle(hint).marginBlockStart) : Number.NaN),
+        sp1: px(root.getPropertyValue('--sp-1')),
+        sp4: px(root.getPropertyValue('--sp-4')),
+      };
+    });
+    const expectClearance = async (where: string, controls: number) => {
+      const layout = await measure();
+      expect(layout.controls, `${where}: the title row's controls`).toBe(controls);
+      expect(layout.keycaps, `${where}: the hint's keycaps`).toBe(5);
+      expect(layout.gap, `${where}: the keycaps clear the title row's controls`).toBeGreaterThanOrEqual(layout.sp1 - 0.5);
+      expect(layout.spacing, `${where}: the clearance comes out of the header's block padding`).toBeCloseTo(layout.sp4 * 2, 1);
+    };
+
+    await app.gotoRoute('/lead-queue');
+    await expect(page.getByTestId('lead-triage-enter')).toBeVisible();
+    await expectClearance('Lead Queue', 2);
+    const bottom = await scrollRegion(page).evaluate((element) => element.getBoundingClientRect().bottom);
+    expect(bottom, 'the header did not grow: the table scroller ends above the fold').toBeLessThanOrEqual(900);
+    await app.openConsole();
+    await app.settle();
+    await expectClearance('Lead Queue, Console open (the hint wraps)', 2);
+
+    await app.gotoRoute('/segment-intelligence');
+    await expectClearance('Segment Intelligence (Refresh, no Triage entry)', 1);
+  });
 });
 
 test.describe('skip table', () => {
