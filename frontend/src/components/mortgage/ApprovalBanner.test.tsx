@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ApprovalBanner } from './ApprovalBanner';
+import { APPROVE_OUTREACH_LABEL, ApprovalBanner } from './ApprovalBanner';
 
 /**
  * ApprovalBanner busy-state contract (R5-11, 2026-04-23).
@@ -14,6 +14,15 @@ import { ApprovalBanner } from './ApprovalBanner';
  */
 
 describe('ApprovalBanner', () => {
+  it('has one approve label: the overrides are gone (critic-11)', () => {
+    expect(APPROVE_OUTREACH_LABEL).toBe('Approve outreach');
+    // @ts-expect-error approveLabel was removed: every banner reads APPROVE_OUTREACH_LABEL.
+    const html = renderToStaticMarkup(<ApprovalBanner count={1} approveLabel="Approve" rejectLabel="Drop" />);
+    expect(html).toContain('>Approve outreach<');
+    expect(html).not.toContain('>Approve<');
+    expect(html).not.toContain('Drop');
+  });
+
   it('renders enabled Approve/Reject in the default state', () => {
     const html = renderToStaticMarkup(<ApprovalBanner count={3} />);
     expect(html).toContain('approval');

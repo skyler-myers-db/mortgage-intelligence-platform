@@ -421,7 +421,7 @@ export default function OfferOrchestrator() {
     <PageShell
       eyebrow="Offer & Outreach"
       title="Review and approve outreach"
-      lede="Review the selected offer path, alternatives considered, thresholds applied, and borrower-facing draft. Approve to place the decision in the governed internal queue; reject to drop the borrower."
+      lede="Review the selected offer path, alternatives considered, thresholds applied, and borrower-facing draft. Approve outreach places the decision in the governed internal queue; Reject drops the borrower."
       heroRight={
         b && (
           <>

@@ -23,15 +23,20 @@ import { Button } from '../Primitives';
  * identity line is a second `.approval__sub` — no new BEM; the prototype
  * banner (design_files/index.html `.approval`) has no identity element, so
  * this is an additive departure made for the audit-trail promise.
+ *
+ * One approve label (audit critic-11): the primary action always reads
+ * APPROVE_OUTREACH_LABEL, the word the surrounding prose uses too; the
+ * approveLabel / rejectLabel overrides had no caller and are gone.
  */
+
+/** The approve button's one label, everywhere the banner renders. */
+export const APPROVE_OUTREACH_LABEL = 'Approve outreach';
 
 interface ApprovalBannerProps {
   text?: string;
   count?: number;
   onApprove?: () => void | Promise<void>;
   onReject?: () => void | Promise<void>;
-  approveLabel?: string;
-  rejectLabel?: string;
   disabled?: boolean;
   approveDisabled?: boolean;
   rejectDisabled?: boolean;
@@ -56,8 +61,6 @@ export function ApprovalBanner({
   count = 1,
   onApprove,
   onReject,
-  approveLabel = 'Approve outreach',
-  rejectLabel = 'Reject',
   disabled,
   approveDisabled,
   rejectDisabled,
@@ -128,7 +131,7 @@ export function ApprovalBanner({
           aria-describedby={gated ? gateId : undefined}
           title={approverGate ?? undefined}
         >
-          {rejectLabel}
+          Reject
         </Button>
         <Button
           variant="primary"
@@ -139,7 +142,7 @@ export function ApprovalBanner({
           aria-describedby={gated ? gateId : undefined}
           title={approverGate ?? undefined}
         >
-          {busy ? 'Submitting…' : approveLabel}
+          {busy ? 'Submitting…' : APPROVE_OUTREACH_LABEL}
         </Button>
       </div>
     </div>

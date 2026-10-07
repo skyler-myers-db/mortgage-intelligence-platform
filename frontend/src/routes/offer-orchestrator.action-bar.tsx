@@ -179,7 +179,7 @@ export function OfferActionBar({
           </div>
         </div>
         <ApprovalBanner
-          text={`${borrowerId ? `Borrower ${borrowerId}` : 'Borrower'} pending review. Approve writes an audit event and places the decision in the governed internal queue.`}
+          text={`${borrowerId ? `Borrower ${borrowerId}` : 'Borrower'} pending review. Approve outreach writes an audit event and places the decision in the governed internal queue.`}
           onApprove={onApprove}
           onReject={onReject}
           approveDisabled={approveDisabled}
