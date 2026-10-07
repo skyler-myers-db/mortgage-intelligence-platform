@@ -257,10 +257,13 @@ test('(d) the Partial research reveal renders from the turn, and another job\'s 
     job_id: '00000000-0000-4000-8000-0000000000ff',
   };
   let polls = 0;
+  // Every poll after the first answers another job's status, so the leak
+  // window never closes behind an own-job status (W5c review: a single leaked
+  // poll was overwritten by the next one before any assertion ran).
   mockApi.register<GenieJobStatusBody>('POST', '/api/genie/message/status', (request: FixtureRequest) => {
     polls += 1;
     const sent = (request.body as { sections_rev?: unknown } | null)?.sections_rev;
-    return json(polls === 2 ? theirs : ours(typeof sent === 'number' ? sent : null));
+    return json(polls >= 2 ? theirs : ours(typeof sent === 'number' ? sent : null));
   });
   await app.gotoRoute('/ask-genie');
   await askOnRoute(page);
