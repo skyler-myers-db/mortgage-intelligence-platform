@@ -8,8 +8,11 @@
    (.eyebrow, .chip, .btn, .tbl, .proof-callout) with the encoding of the
    Analytics rate window (analytics.rate-window.css): the market ink is
    --accent-data, the spread screen the warning ink (darkened toward
-   --text-1 on the light theme), the spread fill --accent-soft. Imported
-   by SpreadHistoryChart.tsx only, so it ships in the lazy proof chunk.
+   --text-1 on the light theme), the spread fill --accent-soft. On the
+   light theme the spread fill (and the crossing row's tint) is the rate
+   window's light band fill, color-mix(--accent-ink 16%), because
+   --accent-soft measures 1.09:1 on the white panel. Imported by
+   SpreadHistoryChart.tsx only, so it ships in the lazy proof chunk.
    ============================================================ */
 .spread-history {
   --spread-history-market-ink: var(--accent-data);
@@ -22,6 +25,7 @@
 }
 [data-theme="light"] .spread-history {
   --spread-history-screen-ink: color-mix(in oklab, var(--signal-warning) 45%, var(--text-1));
+  --spread-history-spread-fill: color-mix(in oklab, var(--accent-ink) 16%, transparent);
 }
 .spread-history__caption {
   margin: 0;
@@ -118,7 +122,7 @@
   font-family: var(--font-mono);
 }
 .spread-history__crossing-row td {
-  background: var(--accent-soft);
+  background: var(--spread-history-spread-fill);
 }
 .spread-history__crossing-text {
   margin-inline-start: var(--sp-1);

@@ -69,6 +69,16 @@ const SCREEN_INK: Record<AxeTheme, string> = {
   light: 'color-mix(in oklab, var(--signal-warning) 45%, var(--text-1))',
 };
 
+/**
+ * The spread fill (and the crossing row's tint) is the rate window's band
+ * fill (analytics.rate-window.css): --accent-soft measures 1.09:1 on the
+ * light theme's white panel, so the light theme uses the 16% accent-ink mix.
+ */
+const SPREAD_FILL: Record<AxeTheme, string> = {
+  dark: 'var(--accent-soft)',
+  light: 'color-mix(in oklab, var(--accent-ink) 16%, transparent)',
+};
+
 test.describe('gold slot: margins and Crossed the line in the proof drawer', () => {
   for (const theme of ['dark', 'light'] as const) {
     test(`Borrower 360: one proof read, no second dossier, the margins and the crossing caption (${theme})`, async ({ app, page, mockApi }) => {
@@ -106,9 +116,8 @@ test.describe('gold slot: margins and Crossed the line in the proof drawer', () 
       const screen = chart.locator('.spread-history__screen');
       expect(await market.evaluate((node) => getComputedStyle(node).stroke)).toBe(await resolvedInk(chart, 'var(--accent-data)'));
       expect(await screen.evaluate((node) => getComputedStyle(node).stroke)).toBe(await resolvedInk(chart, SCREEN_INK[theme]));
-      expect(await chart.locator('.spread-history__spread').evaluate((node) => getComputedStyle(node).fill)).toBe(
-        await resolvedInk(chart, 'var(--accent-soft)'),
-      );
+      const spreadFill = await resolvedInk(chart, SPREAD_FILL[theme]);
+      expect(await chart.locator('.spread-history__spread').evaluate((node) => getComputedStyle(node).fill)).toBe(spreadFill);
 
       await expectAxeClean(page, { key: { route: 'gold-slot-cache', state: 'proof-drawer-math' }, theme, known: {}, include: '.proof-drawer.is-open' });
       await expectNoSurfaceOverflow(page, { route: 'borrower-360', state: 'proof-drawer-math', theme });
@@ -124,6 +133,9 @@ test.describe('gold slot: margins and Crossed the line in the proof drawer', () 
       await expect(crossingRow).toHaveCount(1);
       await expect(crossingRow.locator('.chip')).toHaveText('Crossed');
       await expect(crossingRow).toContainText('in the money from here');
+      expect(await crossingRow.locator('td').first().evaluate((node) => getComputedStyle(node).backgroundColor), 'the crossing row carries the spread tint').toBe(
+        spreadFill,
+      );
       await expectAxeClean(page, { key: { route: 'gold-slot-cache', state: 'proof-drawer-math-table' }, theme, known: {}, include: '.proof-drawer.is-open' });
 
       expect(proofCalls(mockApi)).toBe(1);
