@@ -10,6 +10,7 @@ router without touching app assembly.
 from backend.api import (
     activation,
     admin,
+    admin_field_performance,
     admin_sse_probe,
     analytics,
     analytics_rate_window,
@@ -81,4 +82,5 @@ API_ROUTERS = [
     telemetry.router,
     workspace.router,
     admin_sse_probe.router,
+    admin_field_performance.router,
 ]
