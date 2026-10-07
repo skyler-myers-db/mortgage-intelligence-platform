@@ -154,6 +154,10 @@ for (const theme of FIXTURE_THEMES) {
       // J (W5c w5-evidence-drawer): How we got and Under the hood.
       { route: 'home', state: 'evidence-how-we-got' },
       { route: 'home', state: 'evidence-under-the-hood' },
+      // N (W5d w5-lq-requests-binding): the request panels, both sessions, and the form.
+      { route: 'lead-queue', state: 'approval-requests' },
+      { route: 'lead-queue', state: 'my-approval-requests' },
+      { route: 'lead-queue', state: 'request-approval-form' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {

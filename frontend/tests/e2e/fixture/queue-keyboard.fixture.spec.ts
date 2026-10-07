@@ -211,7 +211,7 @@ test.describe('approve review', () => {
     await expect(confirm).toBeFocused();
     await page.keyboard.press('Enter');
     await expect.poll(() => held.approveGate.received, 'the approve POST left the browser').toBe(true);
-    await expect(confirm).toHaveText('Approving…');
+    await expect(confirm).toHaveAttribute('aria-busy', 'true'); // motion-08: the kept label under the spinner
     // Held: nothing claims approval, and there is no receipt toast yet.
     const decisionToast = page.locator('.toast-region .toast', { hasText: `Approved ${reviewed.borrower_id}` });
     await expect(decisionToast).toHaveCount(0);
