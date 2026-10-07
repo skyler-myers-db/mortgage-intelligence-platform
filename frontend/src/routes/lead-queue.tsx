@@ -101,6 +101,8 @@ const RULES_VERSION_STALE_MS = 5 * 60_000;
 const EMPTY_STATE = lazyModule(() => import('../components/mortgage/LeadQueueEmptyState'));
 const PROPERTY_LOOKUP = lazyModule(() => import('../components/mortgage/PropertyLookupPanel'));
 const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters';
+// The export receipt's grammar cannot declare an approval-request scope.
+const EXPORT_OFF_WHILE_SCOPED = 'Export is off while the queue shows one approval request. Clear the request to export.';
 
 // The keep-alive slot app.tsx renders the queue in rides this chunk (W5c runtime-08).
 export { default as LeadQueueKeepAlive } from '../components/layout/LeadQueueKeepAlive';
@@ -224,6 +226,7 @@ export default function LeadQueue() {
     () => leadsRequestFromSearchParams(searchParams, targetLenderOptions, actorEmail),
     [searchParams, targetLenderOptions, actorEmail],
   );
+  const requestScopeBatch = leadsRequest.opts?.approvalRequestBatch ?? null;
   const place = parseLeadTablePlace(searchParams);
   const order = serverOrderOf(place.sort);
   const pages = useLeadQueuePages({
@@ -339,7 +342,9 @@ export default function LeadQueue() {
         .then((rules) => rules.offer_rules_version ?? null)
       : undefined,
     // Placeholder rows belong to the previous filters (keepPreviousData).
-    exportBlockedReason: leadsPlaceholderData ? EXPORT_WAITS_FOR_ROWS : null,
+    exportBlockedReason: requestScopeBatch
+      ? EXPORT_OFF_WHILE_SCOPED
+      : leadsPlaceholderData ? EXPORT_WAITS_FOR_ROWS : null,
   };
   // Audit tables-06: the hero lists the active NON-core filters as removable
   // chips (their pills sit collapsed behind "More filters"); core filters

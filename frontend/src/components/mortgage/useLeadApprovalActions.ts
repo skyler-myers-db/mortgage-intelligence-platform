@@ -40,6 +40,7 @@ import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
 import { useLeadBulkRun, type BulkRunCanary, type BulkRunResult } from './useLeadBulkRun';
 import {
   approveWithReport as writeApprove,
+  requestScopeParts,
   type ApproveExtras,
   type DecisionWriteDeps,
 } from './leadDecisionWrites';
@@ -98,6 +99,8 @@ export interface UseLeadApprovalActionsInput {
   bulkRuns?: () => BulkRunsChunk | null;
   /** The paged Lead Queue view every decision declares (D-audit-reads-a); null elsewhere. */
   leadViewId?: string | null;
+  /** The approval request a request-scoped queue answers (flow-02); every decision sends it. */
+  approvalRequestBatchId?: string | null;
 }
 
 export function useLeadApprovalActions({
@@ -113,6 +116,7 @@ export function useLeadApprovalActions({
   tableWrapRef,
   bulkRuns,
   leadViewId = null,
+  approvalRequestBatchId = null,
 }: UseLeadApprovalActionsInput) {
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -243,6 +247,7 @@ export function useLeadApprovalActions({
     leadsById,
     campaignBinding,
     leadViewId,
+    approvalRequestBatchId,
     approve: (variables) => approveMutation.mutateAsync(variables),
     reject: (variables) => rejectMutation.mutateAsync(variables),
     requestIds,
@@ -325,7 +330,7 @@ export function useLeadApprovalActions({
     if (!passesDecisionGate('rejection', borrowerId)) return Promise.resolve(false);
     rowInFlightRef.current[borrowerId] = true;
     const lead = leadsById.get(borrowerId);
-    const intent = intentFingerprint('reject', borrowerId, reasonCode, rationale);
+    const intent = intentFingerprint('reject', borrowerId, reasonCode, rationale, ...requestScopeParts(writeDeps));
     const rejected = rejectMutation.mutateAsync({
       decision: 'reject',
       borrowerId,
@@ -337,6 +342,7 @@ export function useLeadApprovalActions({
       offerCode: lead?.recommended_offer_code ?? null,
       bulkId: null,
       leadViewId,
+      approvalRequestBatchId,
     }).then(
       (res) => {
         if (!res.rejected) {

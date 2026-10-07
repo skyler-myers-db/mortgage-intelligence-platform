@@ -299,6 +299,8 @@ export interface LeadQueryOptions {
   agedDays?: number | null;
   limit?: number;
   growthAgentProof?: GrowthAgentCohortProof | null;
+  /** `?approval_request_batch=`: the open borrowers of one approval request (flow-02, approvers only). */
+  approvalRequestBatch?: string;
 }
 
 export interface GrowthAgentCohortProof {

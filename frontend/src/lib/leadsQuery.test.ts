@@ -84,6 +84,8 @@ const OPTS_VARIANTS: { [K in keyof Required<Opts>]: NonNullable<Opts[K]> } = {
     toolResultHash: 'c'.repeat(64),
     growthHandoff: 'signed-handoff',
   },
+  // flow-02: the approval-request scope reaches the key with no leadsQuery edit.
+  approvalRequestBatch: '0f8fad5b-d9cb-469f-a165-70867728950e',
 };
 
 const baseHash = hashKey(leadsQuery('lead-queue', BASE).queryKey);

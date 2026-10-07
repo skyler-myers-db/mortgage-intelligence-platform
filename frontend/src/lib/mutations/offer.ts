@@ -25,7 +25,7 @@ import { useMutation, type QueryClient } from '@tanstack/react-query';
 import type { SavedDraft, SavedDraftInput } from '../../types';
 import { api } from '../api';
 import type { ApproveResult, RejectResult } from '../apiTypes';
-import { invalidateOperationalQueries } from '../queryKeys';
+import { invalidateApprovalRequests, invalidateOperationalQueries } from '../queryKeys';
 import { outreachMutationKeys } from './outreach';
 
 export type OfferChannel = 'email' | 'sms' | 'direct_mail';
@@ -85,7 +85,10 @@ export function useOfferApprove(queryClient: QueryClient) {
       networkMode: 'always',
       retry: false,
       onSuccess: (result) => {
-        if (result.approved) void invalidateOperationalQueries(queryClient);
+        if (result.approved) {
+          void invalidateOperationalQueries(queryClient);
+          void invalidateApprovalRequests(queryClient);
+        }
       },
     },
     queryClient,
@@ -100,7 +103,10 @@ export function useOfferReject(queryClient: QueryClient) {
       networkMode: 'always',
       retry: false,
       onSuccess: (result) => {
-        if (result.rejected) void invalidateOperationalQueries(queryClient);
+        if (result.rejected) {
+          void invalidateOperationalQueries(queryClient);
+          void invalidateApprovalRequests(queryClient);
+        }
       },
     },
     queryClient,

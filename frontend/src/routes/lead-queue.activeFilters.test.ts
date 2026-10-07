@@ -73,3 +73,11 @@ describe('the Triage deck mode is display state (D-approval-flow-a2)', () => {
     expect(searchParamsCleared(new URLSearchParams('mode=triage&state=IL')).toString()).toBe('mode=triage');
   });
 });
+
+describe('an approval-request scope is a filter (flow-02 / shell-06)', () => {
+  it('Clear all drops approval_request_batch and keeps the display state', () => {
+    const scoped = new URLSearchParams('approval_request_batch=0f8fad5b-d9cb-469f-a165-70867728950e&view=sales-ops');
+    expect(hasLeadQueueFilters(scoped)).toBe(true);
+    expect(searchParamsCleared(scoped).toString()).toBe('view=sales-ops');
+  });
+});

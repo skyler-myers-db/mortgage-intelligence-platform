@@ -11,7 +11,7 @@ import { markUnrecordedWrite } from '../../lib/sessionStatus';
 import { decisionFailure } from '../../lib/mutations/outreach';
 import { intentFingerprint } from '../../lib/mutations/requestIds';
 import type { BulkRowReport } from './useLeadBulkRun';
-import { released, type BulkRejectRow, type DecisionWriteDeps } from './leadDecisionWrites';
+import { released, requestScopeParts, type BulkRejectRow, type DecisionWriteDeps } from './leadDecisionWrites';
 
 /**
  * One row of a bulk rejection run (tables-07, D-approval-flow-d): the
@@ -29,7 +29,7 @@ export function rejectWithReport(
   if (deps.isInFlight(borrowerId)) return Promise.resolve({ outcome: 'duplicate', message: null });
   if (!deps.passesGate('rejection', borrowerId, false)) return Promise.resolve({ outcome: 'backend', message: null });
   deps.latch(borrowerId, true);
-  const intent = intentFingerprint('reject-bulk', run.bulkId, borrowerId, run.reasonCode, run.note);
+  const intent = intentFingerprint('reject-bulk', run.bulkId, borrowerId, run.reasonCode, run.note, ...requestScopeParts(deps));
   return released(deps, borrowerId, deps.reject({
     decision: 'reject',
     borrowerId,
@@ -43,6 +43,7 @@ export function rejectWithReport(
     signal,
     suppressInvalidation: true,
     leadViewId: deps.leadViewId,
+    approvalRequestBatchId: deps.approvalRequestBatchId ?? null,
   }).then(
     (res): BulkRowReport => {
       if (!res.rejected) return { outcome: 'backend', message: 'The endpoint returned rejected=false.' };

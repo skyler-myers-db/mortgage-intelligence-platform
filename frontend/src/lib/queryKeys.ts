@@ -102,6 +102,12 @@ export const queryKeys = {
   assetFreshness: (assetKey: string | null | undefined) => ['mip', 'asset-freshness', assetKey ?? ''] as const,
   /** One KPI's server-emitted reproduce SQL (flow-06): fixed text, never persisted. */
   kpiProof: (kpi: string | null | undefined) => ['mip', 'kpi-proof', kpi ?? ''] as const,
+  /**
+   * The audit-free approval-request list (flow-02 / shell-06): Lakebase
+   * workflow state, read once per Lead Queue mount and after a decision,
+   * create or withdraw. Never persisted, never polled.
+   */
+  approvalRequests: (scope?: 'open' | 'mine') => ['mip', 'approval-requests', scope] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {
@@ -139,4 +145,16 @@ export function invalidateOperationalQueries(queryClient: QueryClient): Promise<
       refetchType: 'none',
     }),
   ]).then(() => undefined);
+}
+
+/**
+ * Refetch the ACTIVE approval-request list (only a mounted Lead Queue reads
+ * it). Never through invalidateOperationalQueries: that one must stay
+ * refetchType 'none' for the audited reads, and this list is audit-free.
+ */
+export function invalidateApprovalRequests(queryClient: QueryClient): Promise<void> {
+  return queryClient.invalidateQueries({
+    queryKey: ['mip', 'approval-requests'] satisfies QueryKey,
+    refetchType: 'active',
+  });
 }

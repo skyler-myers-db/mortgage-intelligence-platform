@@ -71,6 +71,8 @@ export interface DecisionWriteDeps {
   campaignBinding: CampaignBinding | null;
   /** The paged Lead Queue view every decision declares (D-audit-reads-a); null elsewhere. */
   leadViewId: string | null;
+  /** The approval request a request-scoped queue answers (flow-02); null elsewhere. */
+  approvalRequestBatchId?: string | null;
   approve: (variables: ApproveLeadVariables) => Promise<ApproveResult>;
   reject: (variables: RejectLeadVariables) => Promise<RejectResult>;
   requestIds: IntentRequestIds;
@@ -82,6 +84,11 @@ export interface DecisionWriteDeps {
   latch: (borrowerId: string, inFlight: boolean) => void;
   /** The write returned ok: record the decision and its receipt. */
   onDecided: (borrowerId: string, decision: 'approved' | 'rejected', auditEventId: string | null) => void;
+}
+
+/** An intent's request scope: the batch id joins a fingerprint only when set (unscoped ids unchanged). */
+export function requestScopeParts(deps: DecisionWriteDeps): string[] {
+  return deps.approvalRequestBatchId ? [deps.approvalRequestBatchId] : [];
 }
 
 export function released<T>(deps: DecisionWriteDeps, borrowerId: string, report: Promise<T>): Promise<T> {
@@ -125,8 +132,8 @@ export function approveWithReport(
     offerCode: lead?.recommended_offer_code ?? null,
   };
   const intent = extras.bulk_id
-    ? intentFingerprint('approve-bulk', extras.bulk_id, borrowerId)
-    : intentFingerprint('approve', borrowerId, reviewedDraft?.generation_id);
+    ? intentFingerprint('approve-bulk', extras.bulk_id, borrowerId, ...requestScopeParts(deps))
+    : intentFingerprint('approve', borrowerId, reviewedDraft?.generation_id, ...requestScopeParts(deps));
   return released(deps, borrowerId, deps.approve({
     decision: 'approve',
     borrowerId,
@@ -143,6 +150,7 @@ export function approveWithReport(
     signal,
     suppressInvalidation: extras.suppressInvalidation,
     leadViewId: deps.leadViewId,
+    approvalRequestBatchId: deps.approvalRequestBatchId ?? null,
   }).then(
     (res): BulkRowReport => {
       if (!res.approved) {

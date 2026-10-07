@@ -13,10 +13,11 @@
  * closed reads nothing. The count is aria-hidden and wired to its option by
  * aria-describedby, so the option's accessible NAME stays its label.
  *
- * A borrower list (?borrower_ids=) is never counted: counts over named
- * borrowers would read their attributes without the VIEW_LEADS row the list
- * writes, so the server refuses them (BORROWER_LIST_LIST_ONLY_DETAIL) and the
- * menus show their labels only.
+ * A borrower list (?borrower_ids=) or an approval-request scope
+ * (?approval_request_batch=) is never counted: counts over named borrowers
+ * would read their attributes without the VIEW_LEADS row the list writes, so
+ * the server refuses them (BORROWER_LIST_LIST_ONLY_DETAIL,
+ * REQUEST_SCOPE_LIST_ONLY_DETAIL) and the menus show their labels only.
  */
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -78,7 +79,9 @@ export function FilterFacetsProvider({ children }: { children: ReactNode }) {
     leadQueueLenderRefs(configOptions.data?.target_lender_refs),
     actorEmail,
   );
-  const borrowerList = (request.geo?.borrowerIds?.length ?? 0) > 0;
+  // A borrower list or an approval-request scope names borrowers: the server
+  // refuses both on the audit-free counts (422), so neither is ever counted.
+  const borrowerList = (request.geo?.borrowerIds?.length ?? 0) > 0 || Boolean(request.opts?.approvalRequestBatch);
   const facetQuery = dimension === null ? '' : leadFacetsQuery(dimension, request);
   const query = useQuery({
     // Keyed on the exact facet query (own filter already dropped), so a
