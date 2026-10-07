@@ -168,6 +168,41 @@ describe('SpreadHistoryChart', () => {
     expect(apiMocks.analyticsRateWindow).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['null (the gold refresh that adds them is pending)', { first_pos_date: null, first_pos_rate_type: null, first_itm_week: null }],
+    ['absent (an older server)', { first_pos_date: undefined, first_pos_rate_type: undefined, first_itm_week: undefined }],
+  ])('crossing fields %s say the history is not available, never FIX-only, with no series read', async (_label, overrides) => {
+    client.setQueryData(queryKeys.borrower(BORROWER_ID), dossier(overrides));
+    await render();
+    expect(document.querySelector('[data-testid="spread-history-empty"]')?.textContent).toBe(
+      'Rate history is not available for this borrower.',
+    );
+    expect(text()).not.toContain('fixed-rate first liens only');
+    expect(apiMocks.analyticsRateWindow).not.toHaveBeenCalled();
+    expect(apiMocks.borrower).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the 15% cap', 15],
+    ['the 1% floor', 1],
+  ])('a note rate at %s is a clamp artifact: no spread is drawn and no series is read', async (_label, rate) => {
+    client.setQueryData(queryKeys.borrower(BORROWER_ID), dossier({ current_rate: rate, first_itm_week: null }));
+    await render();
+    expect(document.querySelector('[data-testid="spread-history-empty"]')?.textContent).toBe(
+      'The recorded note rate sits at a source bound (1% or 15%), so its true rate is unknown.',
+    );
+    expect(document.querySelector('[data-testid="spread-history-svg"]')).toBeNull();
+    expect(text()).not.toContain('Not in the money at the latest 30-year rate');
+    expect(apiMocks.analyticsRateWindow).not.toHaveBeenCalled();
+  });
+
+  it('a note rate just inside the bounds still draws', async () => {
+    client.setQueryData(queryKeys.borrower(BORROWER_ID), dossier({ current_rate: 14.99 }));
+    await render();
+    expect(apiMocks.analyticsRateWindow).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-testid="spread-history-svg"]')).not.toBeNull();
+  });
+
   it('a closed drawer never reads the series, even for an eligible borrower', async () => {
     client.setQueryData(queryKeys.borrower(BORROWER_ID), dossier());
     await render(false);

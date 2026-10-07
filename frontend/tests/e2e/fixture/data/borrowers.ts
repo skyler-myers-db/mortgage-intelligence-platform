@@ -151,10 +151,16 @@ function buildBorrower(index: number): Borrower360 {
     related_property_count: lead.related_property_count ?? 1,
     trigger_timeline: evidence,
     evidence_events: evidence,
-    // Crossed the line (wow-stage-4) defaults: a 2019 fixed-rate first lien
-    // whose crossing week the default population does not chart.
-    first_pos_date: `2019-0${(index % 9) + 1}-15`,
-    first_pos_rate_type: 'FIX',
+    // Crossed the line (wow-stage-4) defaults: the default population never
+    // charts. Its why panels price the spread against a 4.875% par that the
+    // rate-window series (data/rateWindow.ts) does not share, so no crossing
+    // week could agree with both, and FIX with a null week would caption an
+    // in-the-money borrower "Not in the money". All three fields are null,
+    // as the server sends them before the gold refresh that builds them, so
+    // the Math tab says the history is not available and reads no series.
+    // data/spreadHistory.ts registers the coherent charted dossiers.
+    first_pos_date: null,
+    first_pos_rate_type: null,
     first_itm_week: null,
     why_panel: {
       rate_spread_bps: spreadBps,

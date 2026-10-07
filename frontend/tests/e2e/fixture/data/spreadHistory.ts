@@ -134,6 +134,7 @@ export const SPREAD_FIX_BORROWER: Borrower360 = complete({
 
 export const SPREAD_ARM_BORROWER: Borrower360 = complete({
   ...BORROWERS[1],
+  first_pos_date: '2021-03-15',
   first_pos_rate_type: 'ARM',
   first_itm_week: null,
 });

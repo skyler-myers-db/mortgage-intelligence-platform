@@ -16,7 +16,8 @@
  * 2. The weekly series is the shared audit-free GET /analytics/rate-window
  *    (the key and queryFn routeDataPrefetch and the Analytics route use),
  *    enabled only while the Math tab shows the chart for an eligible borrower
- *    (an open drawer, a FIX first lien, an active note rate).
+ *    (an open drawer, a FIX first lien, an active note rate strictly inside
+ *    the 1% / 15% source bounds).
  *
  * The crossing marker is the server's first_itm_week; the client never
  * decides in-the-money for any week. Captions are history, never a forecast.
@@ -49,13 +50,36 @@ const VIEW_H = 140;
 const SX = VIEW_W / 100;
 const SY = VIEW_H / 100;
 
-export type SpreadHistoryGate = 'needs-dossier' | 'fixed-only' | 'no-note-rate' | 'eligible';
+export type SpreadHistoryGate =
+  | 'needs-dossier'
+  | 'not-available'
+  | 'fixed-only'
+  | 'no-note-rate'
+  | 'rate-at-bound'
+  | 'eligible';
+
+/**
+ * fn_bounded_mortgage_rate clamps a recorded rate into [1%, 15%], and
+ * current_rate is that bounded rate in percent. A rate AT a bound is a clamp
+ * artifact with an unknown true rate: gold_rate_window_weekly's book (and so
+ * the dossier's crossing) keeps only rates strictly inside, so first_itm_week
+ * is always null there and the chart would shade a spread it never judged.
+ */
+const NOTE_RATE_FLOOR_PCT = 1;
+const NOTE_RATE_CAP_PCT = 15;
 
 /** Which state the chart is in before any series read. */
 export function spreadHistoryGate(borrower: Borrower360 | undefined): SpreadHistoryGate {
   if (!borrower) return 'needs-dossier';
+  // All three crossing fields absent: an older server, the gold refresh that
+  // adds them still pending (the fail-soft projection answers them null), or
+  // no first lien on record. None of these says the lien is not fixed-rate.
+  if (borrower.first_pos_rate_type == null && borrower.first_pos_date == null && borrower.first_itm_week == null) {
+    return 'not-available';
+  }
   if (borrower.first_pos_rate_type !== 'FIX') return 'fixed-only';
   if (!(borrower.current_rate > 0)) return 'no-note-rate';
+  if (borrower.current_rate <= NOTE_RATE_FLOOR_PCT || borrower.current_rate >= NOTE_RATE_CAP_PCT) return 'rate-at-bound';
   return 'eligible';
 }
 
@@ -114,8 +138,10 @@ export function SpreadHistoryChart({ borrowerId, active }: SpreadHistoryChartPro
 
 const EMPTY: Record<Exclude<SpreadHistoryGate, 'eligible'>, string> = {
   'needs-dossier': COPY.needsDossier,
+  'not-available': COPY.notAvailable,
   'fixed-only': COPY.fixedOnly,
   'no-note-rate': COPY.noNoteRate,
+  'rate-at-bound': COPY.rateAtBound,
 };
 
 function EmptyNote({ text }: { text: string }) {
