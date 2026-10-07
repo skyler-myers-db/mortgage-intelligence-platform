@@ -185,7 +185,10 @@ export function useLeadApprovalActions({
   // motion-06: the receipt's reveal plays once per decision; markRevealed
   // flips `revealed` so a collapse + re-expand renders it finished.
   const [decisionReceipts, setDecisionReceipts] = useState<Record<string, LeadDecisionReceipt>>({});
+  // The same audit ids, readable synchronously (the decision toast is raised before the state commits).
+  const receiptIdsRef = useRef<Map<string, string | null>>(new Map());
   const recordDecision = (borrowerId: string, receipt: LeadDecisionReceipt) => {
+    receiptIdsRef.current.set(borrowerId, receipt.auditEventId);
     const markRevealed = () => setDecisionReceipts((cur) => {
       const current = cur[borrowerId];
       if (!current || current.auditEventId !== receipt.auditEventId || current.revealed) return cur;
@@ -647,5 +650,6 @@ export function useLeadApprovalActions({
     setBulkToast,
     bulkRunCanary,
     decisionReceipts,
+    decisionAuditEventId: (borrowerId: string) => receiptIdsRef.current.get(borrowerId) ?? null,
   };
 }

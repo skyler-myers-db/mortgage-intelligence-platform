@@ -31,6 +31,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { ApiError } from '../../lib/apiTransport';
+import { clearToasts, getToasts } from '../../lib/toast';
 import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import {
   parseTriageMode,
@@ -205,6 +206,7 @@ describe('Triage deck', { timeout: 30_000 }, () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearToasts();
     store.reset();
     rows.reset();
     session.canApprove = true;
@@ -650,7 +652,7 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     });
     await flush(3);
     expect(progress()).toContain('Approved 2 · Rejected 0 · Skipped 1');
-    expect(q('[data-testid="lead-decision-status"]')?.textContent, 'no table toast for a deck approve').toBe('');
+    expect(getToasts().filter((toast) => toast.title.startsWith('Approved')), 'no decision toast for a deck approve').toEqual([]);
 
     // The filtered rows settle: two snapshot cards and a borrower the deck never had.
     act(() => rows.set({ ids: [IDS[3], OUTSIDE, IDS[5]], blocked: null }));

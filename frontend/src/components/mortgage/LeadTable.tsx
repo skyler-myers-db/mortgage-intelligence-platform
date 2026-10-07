@@ -354,6 +354,8 @@ export function LeadTable({
       setSamplesCoverAllOffers(false);
     },
     triage: triageFlowInput(triageCtl),
+    // states-07 item 1: the approval result is a shell toast (the Toaster speaks it once).
+    openRecentActivity: openConsoleRecentActivity,
   });
   const { review } = flow;
   const openReview = review.review;
@@ -402,9 +404,6 @@ export function LeadTable({
   const online = useIsOnline();
   const ReviewInline = reviewModule?.LeadApproveReviewInline;
   const ReviewDialog = reviewModule?.LeadApproveReviewDialog;
-  // The result line follows an approve made through the review, so it ships
-  // in the review's chunk (loaded by then), not in the table's.
-  const DecisionToast = reviewModule?.LeadTableDecisionToast;
   const bulkModule = bulkChunk.module ?? BULK_REVIEW_CHUNK.current();
   const BulkReview = bulkModule?.LeadBulkApproveReview;
   const BulkRejectGate = bulkModule?.LeadBulkRejectGate;
@@ -587,19 +586,6 @@ export function LeadTable({
           {exportState.message}
         </div>
       )}
-      {!triageOn && flow.toast && DecisionToast && (
-        <DecisionToast
-          toast={flow.toast}
-          hasReceipt={Boolean(approval.decisionReceipts[flow.toast.borrowerId]?.auditEventId)}
-          rowListed={leadsById.has(flow.toast.borrowerId)}
-          onViewReceipt={() => flow.toast && flow.viewReceipt(flow.toast.borrowerId)}
-          onReviewRecentActivity={() => {
-            openConsoleRecentActivity();
-            flow.dismissToast();
-          }}
-          onDismiss={flow.dismissToast}
-        />
-      )}
       {/* Keyboard users skip past the table's rows in one step (tables-03). */}
       <a
         href={`#${skipTargetId}`}
@@ -617,12 +603,6 @@ export function LeadTable({
       </a>
       <span className="sr-only" role="status" aria-live="polite" data-testid="lead-cursor-status">
         {flow.cursor.announcement}
-      </span>
-      {/* The approval result is spoken from a live region that is always
-          mounted (a region inserted already filled can go unannounced); the
-          visible toast carries the "View receipt" action. */}
-      <span className="sr-only" role="status" aria-live="polite" data-testid="lead-decision-status">
-        {flow.toast ? `Approved ${flow.toast.borrowerId}.` : ''}
       </span>
       {/* A bulk run's start, each quarter, a Stop and the result (tables-07). */}
       <span className="sr-only" role="status" aria-live="polite" data-testid="lead-bulk-run-status">

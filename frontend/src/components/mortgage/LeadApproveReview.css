@@ -78,12 +78,3 @@
 }
 .lead-approve-dialog::backdrop { background: var(--surface-scrim); }
 .lead-approve-dialog > .approval--review { border-radius: var(--r-lg); }
-
-/* The approval result line (LeadTableDecisionToast, shipped in this chunk):
-   message, View receipt and Dismiss on one row. */
-.lead-table__decision-toast {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-}

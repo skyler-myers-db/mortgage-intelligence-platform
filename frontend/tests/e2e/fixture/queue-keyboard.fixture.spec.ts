@@ -212,9 +212,9 @@ test.describe('approve review', () => {
     await page.keyboard.press('Enter');
     await expect.poll(() => held.approveGate.received, 'the approve POST left the browser').toBe(true);
     await expect(confirm).toHaveText('Approving…');
-    // Held: nothing claims approval, and there is no receipt link yet.
-    await expect(page.getByTestId('lead-decision-toast')).toHaveCount(0);
-    await expect(page.getByTestId('lead-decision-view-receipt')).toHaveCount(0);
+    // Held: nothing claims approval, and there is no receipt toast yet.
+    const decisionToast = page.locator('.toast-region .toast', { hasText: `Approved ${reviewed.borrower_id}` });
+    await expect(decisionToast).toHaveCount(0);
     await expect(page.getByTestId(`lead-approval-cell-${reviewed.borrower_id}`).locator('.chip--success')).toHaveCount(0);
     // Enter again while the write is in flight is not a second POST: the
     // in-page probe is read after the press's handlers ran.
@@ -230,8 +230,10 @@ test.describe('approve review', () => {
 
     held.approveGate.release();
     await expect(dialog).toHaveCount(0);
-    await expect(page.getByTestId('lead-decision-toast')).toContainText(`Approved ${reviewed.borrower_id}`);
-    const viewReceipt = page.getByTestId('lead-decision-view-receipt');
+    // states-07 item 1: the result is ONE shell toast (info, never
+    // auto-dismissed) whose action is View receipt.
+    await expect(decisionToast).toHaveCount(1);
+    const viewReceipt = decisionToast.locator('.toast__action', { hasText: 'View receipt' });
     await expect(viewReceipt).toBeVisible();
     await expect(page.getByTestId(`lead-approval-cell-${reviewed.borrower_id}`).locator('.chip--success')).toHaveText(/Approved/);
     await expect(cursorRow(page), 'the cursor advanced to the next pending row').toHaveAttribute('data-borrower-row', next.borrower_id);
@@ -239,7 +241,10 @@ test.describe('approve review', () => {
     expect(held.approvals).toHaveLength(1);
     expect(echo.calls).toEqual([reviewed.borrower_id]);
 
-    await viewReceipt.click();
+    // F8 reaches the newest toast's live action from the table.
+    await page.keyboard.press('F8');
+    await expect(viewReceipt).toBeFocused();
+    await page.keyboard.press('Enter');
     const receipt = page.locator(`tr:has([data-testid="lead-approval-cell-${reviewed.borrower_id}"]) + tr.tbl__expand`)
       .getByTestId('decision-receipt');
     await expect(receipt).toHaveAttribute('data-audit-event-id', REVIEW_AUDIT_ID);
