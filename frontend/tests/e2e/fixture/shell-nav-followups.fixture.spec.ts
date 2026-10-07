@@ -18,6 +18,7 @@ import type { Page } from '@playwright/test';
 import type { SessionResponse } from '../../../src/types';
 import { expectAxeClean } from './axe';
 import { AUDITOR_ONLY_SESSION, PRESENTER_SESSION, SESSION, WORKSPACE_USER_SESSION } from './data/shell';
+import { focusNext } from './focusWalk';
 import { json } from './mockApi';
 import { asComputedRgb, parseRgb } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
@@ -353,7 +354,7 @@ test.describe('the roadmap rail slots show only in presenter mode (critic-05, D-
   });
 
   for (const theme of FIXTURE_THEMES) {
-    test(`${theme}: presenter mode shows M1-M4 as Tab-reachable disabled buttons with a keyboard tooltip, going nowhere`, async ({ app, mockApi, page }) => {
+    test(`${theme}: presenter mode shows M1-M4 as Tab-reachable disabled buttons with a keyboard tooltip, going nowhere`, async ({ app, browserName, mockApi, page }) => {
       mockApi.register('GET', '/api/session', () => json<SessionResponse>(PRESENTER_SESSION));
       const requested = roadmapRequests(page);
       await app.setTheme(theme);
@@ -367,9 +368,17 @@ test.describe('the roadmap rail slots show only in presenter mode (critic-05, D-
       await expect(page.locator('#mip-tooltip')).toBeAttached();
 
       // Tab from M0 visits each slot in order; keyboard focus opens its tooltip.
+      // WebKit's Tab skips buttons on macOS and Linux defaults (focusWalk.ts),
+      // so there a keydown marks the keyboard modality and focus moves to the
+      // next tabbable the way sequential navigation does.
       await rail.locator('a.rail__item.is-active').focus();
       for (let index = 0; index < 4; index += 1) {
-        await page.keyboard.press('Tab');
+        if (browserName === 'webkit') {
+          await page.keyboard.press('Shift');
+          expect(await focusNext(page, 'forward', '.rail'), `a tabbable follows slot ${index}`).toBe(true);
+        } else {
+          await page.keyboard.press('Tab');
+        }
         const slot = slots.nth(index);
         await expect(slot).toBeFocused();
         await expect(slot).toHaveAttribute('aria-disabled', 'true');
@@ -445,7 +454,9 @@ test.describe('the Administration section nav shows where it overflows (W5b AL f
       expect(sameRgb(atEnd.end, bg), `at the end, the end edge is plain --bg-1 (${atEnd.end})`).toBe(true);
       expect(sameRgb(atEnd.start, bg), `at the end, the start edge carries the shadow (${atEnd.start})`).toBe(false);
 
-      // Paint only: the block size is the same without the cue.
+      // Documentation, not a detector: a background never changes layout, so
+      // this records the paint-only contract the brief asked for; the edge
+      // pixels above are the proof.
       const withCue = await nav.evaluate((element) => (element as HTMLElement).offsetHeight);
       await page.addStyleTag({ content: '.admin-section-nav { background: var(--bg-1) !important; }' });
       const withoutCue = await nav.evaluate((element) => (element as HTMLElement).offsetHeight);
