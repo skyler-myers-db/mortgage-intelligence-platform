@@ -110,6 +110,7 @@ class BackpressureController:
     """Token-bucket rate limiter + non-blocking dependency semaphores."""
 
     _BORROWER_ID_RE = re.compile(r"/api/borrowers/[^/]+$")
+    _BORROWER_DECISIONS_RE = re.compile(r"^/api/borrowers/[^/]+/decisions$")
     # POSTs that only READ the warehouse (audit delivery-09): budgeted as
     # warehouse reads, not as Lakebase mutations. Verified per route: the
     # preview handler calls repo.preview only (no audit row, no Lakebase
@@ -211,6 +212,11 @@ class BackpressureController:
                 dependency = "genie"
             return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, dependency)
         if path.startswith("/api/audit") or path.startswith("/api/workspace"):
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "GET" and self._BORROWER_DECISIONS_RE.match(path):
+            # The borrower decision history (audit flow-04 phase 2): one
+            # Lakebase ledger read, never a warehouse call, so it must not
+            # spend the expensive warehouse budget '/api/borrowers' gets below.
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if self._BORROWER_ID_RE.match(path):
             return RouteBudget("borrower-dossier", settings.mip_rate_limit_expensive_per_minute, "warehouse")

@@ -23,6 +23,7 @@ export const API_ROUTE_SEGMENTS = [
   'cancel',
   'capabilities', 'combinations', 'complete', 'compose', 'config', 'conversion', 'count', 'county-rollups',
   'create', 'custom', 'data-estate', 'destinations', 'disposition', 'distribute',
+  'decisions',
   'draft', 'drafts', 'economics', 'event', 'events', 'evidence', 'executive',
   'execute',
   'export-receipt', 'facets', 'feedback', 'footprint', 'force-degraded', 'funnel', 'genie',

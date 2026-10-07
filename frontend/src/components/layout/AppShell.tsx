@@ -8,6 +8,7 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useLocation } from 'react-router';
 import { AppProvider, useApp } from '../AppContext';
 import { HealthProvider, useHealth } from '../HealthProvider';
 import { FootprintProvider } from '../FootprintProvider';
@@ -37,6 +38,11 @@ const LazyConsole = lazyWithPreload(() =>
 const LazyGenieChat = lazyWithPreload(() =>
   import('../mortgage/GenieChat').then((module) => ({ default: module.GenieChat })),
 );
+
+// The borrower-id morph (deviation:borrower-id-morph) lives in its own small
+// chunk, kept out of the initial closure; a click before it lands just does
+// not morph.
+const loadBorrowerMorph = () => import('../../lib/borrowerMorph');
 
 const preloadConsole = createIdlePreloader(() => LazyConsole.preload(), 5000);
 const preloadGenieChat = createIdlePreloader(() => LazyGenieChat.preload(), 5000);
@@ -109,6 +115,25 @@ function AppShellInner({ children }: PropsWithChildren) {
     consoleElementRef.current = document.getElementById('workspace-console');
   });
   const consoleMounted = useExitRetained(consoleOpen ? true : null, consoleElementRef) === true;
+
+  // The borrower-id morph: one capture-phase click listener names a Lead
+  // Queue row id before its link navigates; any committed location change
+  // drops a pending mark.
+  useEffect(() => {
+    let live = true;
+    let uninstall: (() => void) | null = null;
+    loadBorrowerMorph().then((morph) => {
+      if (live) uninstall = morph.installBorrowerMorph();
+    }, () => undefined);
+    return () => {
+      live = false;
+      uninstall?.();
+    };
+  }, []);
+  const { pathname } = useLocation();
+  useEffect(() => {
+    loadBorrowerMorph().then((morph) => morph.clearBorrowerMorph(), () => undefined);
+  }, [pathname]);
 
   useEffect(() => {
     const cancelConsole = preloadConsole();
@@ -234,7 +259,6 @@ function AppShellInner({ children }: PropsWithChildren) {
             <aside
               id="workspace-console"
               className={`tweaks ${consoleOpen ? 'is-open' : ''}`}
-              role="complementary"
               aria-label="Workspace console"
               aria-hidden={!consoleOpen}
               tabIndex={consoleOpen ? -1 : undefined}
@@ -247,7 +271,6 @@ function AppShellInner({ children }: PropsWithChildren) {
             <aside
               id="workspace-console"
               className="tweaks"
-              role="complementary"
               aria-label="Workspace console"
               aria-hidden="true"
               tabIndex={-1}

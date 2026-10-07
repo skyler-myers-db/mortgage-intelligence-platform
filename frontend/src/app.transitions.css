@@ -41,6 +41,14 @@
   animation-timing-function: var(--ease);
 }
 
+/* The Borrower 360 title id, the target of the Lead Queue row's borrower-id
+   morph (deviation:borrower-id-morph, lib/borrowerMorph): an inline-block,
+   so the named box is never fragmented across lines. The name itself is set
+   inline on the element, never here, and its group runs on the rule above. */
+.page-title__id {
+  display: inline-block;
+}
+
 /* A click during a transition reaches the live page, not the overlay. */
 ::view-transition {
   pointer-events: none;
@@ -86,7 +94,8 @@
    no pending-navigation indicator. While a held navigation marks the
    painted route aria-busy (app.tsx, hooks/useRoutePending), the route nav
    draws a 2px --accent-ink line on its bottom edge: an inset box-shadow, so
-   nothing shifts and the nav stays static below 40rem. It appears only after
+   nothing shifts and the nav stays static when undocked (no data-docked;
+   D-theme-nav-b). It appears only after
    --dur-base (a preloaded route commits first and never shows it) and never
    loops. */
 .main:has(> .route-transition[aria-busy="true"]) > .route-nav {

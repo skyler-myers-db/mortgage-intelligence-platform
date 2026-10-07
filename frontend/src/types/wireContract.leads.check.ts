@@ -11,6 +11,7 @@
  */
 import type { ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
+import type { BorrowerDecisionEvent, BorrowerDecisionHistoryResponse } from '../lib/apiClients/borrowerDecisions';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from '../lib/apiClients/leadExport';
 import type { OfferRecommendRequest } from '../lib/apiClients/leads';
 import type { OutreachApproveRequest, OutreachDraftRequest, OutreachRejectRequest } from '../lib/apiClients/outreach';
@@ -74,6 +75,10 @@ export type WireContractLeads = [
   Expect<NoPhantomKeys<SavedViewListResponse, ApiResponse<'SavedViewListResponse'>>>,
   Expect<WireFits<ApiResponse<'SavedViewMutationResponse'>, SavedViewMutationResponse>>,
   Expect<NoPhantomKeys<SavedViewMutationResponse, ApiResponse<'SavedViewMutationResponse'>>>,
+  Expect<WireFits<ApiResponse<'BorrowerDecisionEvent'>, BorrowerDecisionEvent>>,
+  Expect<NoPhantomKeys<BorrowerDecisionEvent, ApiResponse<'BorrowerDecisionEvent'>>>,
+  Expect<WireFits<ApiResponse<'BorrowerDecisionHistoryResponse'>, BorrowerDecisionHistoryResponse>>,
+  Expect<NoPhantomKeys<BorrowerDecisionHistoryResponse, ApiResponse<'BorrowerDecisionHistoryResponse'>>>,
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'GET /api/v1/borrowers/{borrower_id}/lifecycle'>, BorrowerLifecycle>>,
   Expect<NoPhantomKeys<BorrowerLifecycle, ApiOk<'GET /api/v1/borrowers/{borrower_id}/lifecycle'>>>,

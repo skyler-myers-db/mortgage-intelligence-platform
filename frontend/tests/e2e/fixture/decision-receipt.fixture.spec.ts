@@ -52,6 +52,7 @@ import {
   ledgerReceipt,
   rejectResult,
 } from './data/decisionReceipt';
+import { OWN_DECISION_AUDIT_ID } from './data/leads';
 import { SNAPSHOT_AT } from './data/reference';
 import { json, type MockApi } from './mockApi';
 import { expect, test } from './test';
@@ -292,6 +293,8 @@ test.describe('decision receipt', () => {
     await app.gotoRoute(`/offer-orchestrator/${BORROWER_ID}`);
 
     await page.getByRole('button', { name: 'Reject', exact: true }).click();
+    // There is no default reason (D-approval-flow-d item 13): the reviewer picks one.
+    await page.getByRole('combobox', { name: 'Reason' }).selectOption('low_intent');
     await page.getByRole('button', { name: 'Confirm reject' }).click();
 
     const receipt = page.getByTestId('decision-receipt');
@@ -435,6 +438,29 @@ test.describe('decision receipt', () => {
       (call) => call.path.endsWith('/audit/events/page') && call.search.includes(`event_id=${APPROVE_AUDIT_ID}`),
     );
     expect(pageCall, 'the explorer asked the ledger for that one row').toBeDefined();
+  });
+
+  test('a Borrower 360 decision-history row opens its own receipt on the click only', async ({ app, page, mockApi }) => {
+    mockApi.register('GET', '/api/audit/receipt/:id', ({ params }) =>
+      json<DecisionReceipt>(ledgerReceipt(params.id, PRIMARY_BORROWER, 'approved')),
+    );
+    await app.gotoRoute(`/borrower-360/${BORROWER_ID}`);
+    const history = page.getByTestId('borrower-decision-history');
+    const own = history.locator('li.audit', { hasText: '· you' });
+    await expect(own).toHaveCount(1);
+    expect(receiptCalls(mockApi), 'the history reads no receipt on its own').toBe(0);
+    // Only the rows the server offers a receipt carry the button.
+    await expect(history.getByRole('button', { name: 'Receipt', exact: true })).toHaveCount(1);
+
+    // Exact: the opened receipt carries its own 'Print receipt'.
+    const open = own.getByRole('button', { name: 'Receipt', exact: true });
+    await open.click();
+    await expect(open).toHaveAttribute('aria-expanded', 'true');
+    const receipt = own.getByTestId('decision-receipt');
+    await expect(receipt).toBeVisible();
+    await expect(receipt).toHaveAttribute('data-audit-event-id', OWN_DECISION_AUDIT_ID);
+    await expect(receipt.getByRole('heading', { level: 3 })).toBeVisible();
+    await expect.poll(() => receiptCalls(mockApi), 'one receipt read, on the click').toBe(1);
   });
 
   for (const control of ['Clear', 'the chip dismiss'] as const) {

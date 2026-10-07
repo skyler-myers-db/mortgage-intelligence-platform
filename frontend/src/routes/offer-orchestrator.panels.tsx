@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
@@ -58,14 +58,17 @@ export function OfferOrchestratorEmptyHero({ to }: OfferOrchestratorEmptyHeroPro
 }
 
 interface RejectRationalePanelProps {
-  reasonCode: RejectReasonCode;
+  /** '' until the reviewer chooses: there is no default reason. */
+  reasonCode: RejectReasonCode | '';
   rationale: string;
-  onReasonChange: (reason: RejectReasonCode) => void;
+  onReasonChange: (reason: RejectReasonCode | '') => void;
   onRationaleChange: (rationale: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
   /** Confirm reject waits while this open's snapshot read is in flight. */
   submitDisabled?: boolean;
+  /** The route's handle on Reason, so the bar's own Reject can focus it too. */
+  reasonRef?: RefObject<HTMLSelectElement | null>;
 }
 
 /**
@@ -82,18 +85,25 @@ export function RejectRationalePanel({
   onCancel,
   onSubmit,
   submitDisabled = false,
+  reasonRef: routeReasonRef,
 }: RejectRationalePanelProps) {
-  const reasonRef = useRef<HTMLSelectElement>(null);
+  const ownReasonRef = useRef<HTMLSelectElement>(null);
+  const reasonRef = routeReasonRef ?? ownReasonRef;
   const titleId = useId();
+  // Both candidates are stable ref objects, so this still runs once, on open.
   useEffect(() => {
     reasonRef.current?.focus();
-  }, []);
+  }, [reasonRef]);
   return (
     <form
       className="surface"
       aria-labelledby={titleId}
       onSubmit={(e) => {
         e.preventDefault();
+        if (reasonCode === '') {
+          reasonRef.current?.focus();
+          return;
+        }
         onSubmit();
       }}
     >
@@ -109,8 +119,9 @@ export function RejectRationalePanel({
           <select
             ref={reasonRef}
             value={reasonCode}
-            onChange={(e) => onReasonChange(e.target.value as RejectReasonCode)}
+            onChange={(e) => onReasonChange(e.target.value as RejectReasonCode | '')}
           >
+            <option value="">Choose a reason</option>
             {REJECT_REASONS.map((reason) => (
               <option key={reason.code} value={reason.code}>{reason.label}</option>
             ))}
@@ -140,6 +151,9 @@ export function RejectRationalePanel({
             size="sm"
             icon="cross"
             disabled={submitDisabled || (reasonCode === 'other_with_text' && rationale.trim().length === 0)}
+            // aria-disabled, never native `disabled`, until a reason is chosen:
+            // the submit then moves focus to Reason instead of sending.
+            aria-disabled={reasonCode === '' || undefined}
           >
             Confirm reject
           </Button>

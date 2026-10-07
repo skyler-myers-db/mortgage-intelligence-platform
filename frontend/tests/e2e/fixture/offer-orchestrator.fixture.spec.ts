@@ -250,8 +250,10 @@ test.describe('decision bar (visual-v1)', () => {
     await page.locator('.main').evaluate((main) => { main.scrollTop = 0; });
     await page.locator('#lo-assign').focus();
     await page.keyboard.press('Shift+Tab');
-    await expect(saveDraft).toBeFocused();
-    expect((await boxOf(saveDraft)).bottom, 'the focused control clears the bar').toBeLessThanOrEqual((await boxOf(bar)).top);
+    // The last control above the bar is now the Prior decisions toggle (D-audit-reads-c2).
+    const lastAbove = page.getByTestId('offer-prior-decisions').getByRole('button', { name: /^Prior decisions/ });
+    await expect(lastAbove).toBeFocused();
+    expect((await boxOf(lastAbove)).bottom, 'the focused control clears the bar').toBeLessThanOrEqual((await boxOf(bar)).top);
 
     // The clearance follows the bar's measured size: the open reject
     // rationale grows it past the stylesheet's pre-measurement fallback.

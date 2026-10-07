@@ -2,8 +2,6 @@ export type OutreachChannel = 'email' | 'sms' | 'direct_mail';
 
 export const OUTREACH_CHANNELS: readonly OutreachChannel[] = ['email', 'sms', 'direct_mail'];
 
-export const DEFAULT_REJECT_REASON = 'low_intent';
-
 /** Human-readable threshold labels. Keeps the "if you raised X here" story tangible. */
 export const THRESHOLD_LABELS: Record<string, string> = {
   min_spread_bps: 'Min spread (bps)',

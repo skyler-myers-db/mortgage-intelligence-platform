@@ -502,6 +502,34 @@ export interface ResponseSchemas {
     why_panel: ResponseSchemas['WhyPanel'];
     zip: string;
   };
+  /** One governed decision on the borrower, projected through closed vocabularies. */
+  BorrowerDecisionEvent: {
+    activation_status: "dry_run" | "staged" | "delivered" | "failed" | "cancelled" | null;
+    actor_display: string;
+    actor_kind: "staff" | "automation" | "unverified";
+    assigned_to_display: string | null;
+    audit_event_id: string;
+    bulk: boolean;
+    channel: "email" | "sms" | "direct_mail" | null;
+    contact_block_label: "No marketing consent" | "Contacted within 30 days" | "Suppressed" | "Eligibility not proven" | null;
+    disposition_outcome: "called_no_answer" | "called_left_voicemail" | "connected" | "callback_scheduled" | "application_started" | "not_interested" | "not_now" | "dead" | null;
+    event_type: "ACTIVATION_STAGE" | "APPROVAL_REQUESTED" | "APPROVE" | "CALL_DISPOSITION" | "LEAD_ASSIGN" | "LEAD_ASSIGNMENT_STATUS" | "LEAD_DISTRIBUTE" | "LEAD_OUTCOME" | "LEAD_OUTCOME_RECORDED" | "LEAD_UNASSIGN" | "OUTREACH_REJECT" | "OUTREACH_REVOKE" | "SUPPRESS_CONTACT";
+    from_status: "assigned" | "contact_drafted" | "approved" | "actioned" | "outcome_recorded" | null;
+    is_own: boolean;
+    lead_outcome_type: "application_submitted" | "closed_funded" | "lost_to_competitor" | "withdrawn" | "not_qualified" | null;
+    occurred_at: string;
+    offer_code: "refi" | "heloc" | "cash_out" | "purchase" | "retention" | "recapture" | "refi_plus_heloc" | "investor" | "nurture" | null;
+    outcome: "approved" | "rejected" | "revoked" | "requested" | "assigned" | "unassigned" | "distributed" | "status_changed" | "disposition" | "outcome" | "activation" | "contact_blocked";
+    rationale_label: "Out of footprint" | "Contact preference" | "Compliance review" | "Low intent" | "Data quality" | "Other" | null;
+    receipt_available: boolean;
+    to_status: "assigned" | "contact_drafted" | "approved" | "actioned" | "outcome_recorded" | null;
+  };
+  /** The latest 50 decisions on one borrower; truncated when older ones exist. */
+  BorrowerDecisionHistoryResponse: {
+    borrower_id: string;
+    items: ResponseSchemas['BorrowerDecisionEvent'][];
+    truncated: boolean;
+  };
   BorrowerLifecycleResponse: {
     approval_id: string | null;
     approval_status: "pending" | "approved" | "rejected" | "hold";
@@ -3436,6 +3464,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['Borrower360'];
+  };
+  "GET /api/v1/borrowers/{borrower_id}/decisions": {
+    pathParams: {
+      borrower_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['BorrowerDecisionHistoryResponse'];
   };
   "GET /api/v1/borrowers/{borrower_id}/evidence": {
     pathParams: {
