@@ -34,10 +34,11 @@ import { fitZctaView } from './zctaLevel.logic';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 declare const process: { cwd(): string };
 
-const geo = vi.hoisted(() => ({ has: vi.fn(), load: vi.fn() }));
+const geo = vi.hoisted(() => ({ has: vi.fn(), load: vi.fn(), states: vi.fn() }));
 vi.mock('./zctaGeometry', () => ({
   hasZctaGeometry: geo.has,
   loadZctaGeometry: geo.load,
+  zctaGeometryStates: geo.states,
   zctaGeometryKey: (usps: string) => ['mip', 'geo', 'zcta-geometry', usps],
 }));
 
@@ -183,6 +184,7 @@ describe('USChoroplethMapZctaLevel', () => {
     Object.values(handlers).forEach((handler) => handler.mockReset());
     geo.has.mockReset().mockReturnValue(true);
     geo.load.mockReset().mockResolvedValue(GEOMETRY);
+    geo.states.mockReset().mockReturnValue(['IL', 'TX']);
     vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList);
     // The svg's on-screen size and the --fs-11 token the labels counter-scale to.
     vi.spyOn(SVGElement.prototype, 'getBoundingClientRect').mockReturnValue({
@@ -394,6 +396,28 @@ describe('USChoroplethMapZctaLevel', () => {
     await render(true);
     await until(() => document.querySelector('.zip-tiles') !== null);
     expect(document.querySelector('.zip-tiles__status[role="status"]')?.textContent).toBe(ZCTA_TILES_STATUS);
+    expect(svg()).toBeNull();
+    expect(geo.load).not.toHaveBeenCalled();
+    expect(handlers.onView).toHaveBeenLastCalledWith({ polygons: false, busy: false, controls: null, caption: null, cardNote: null });
+  });
+
+  it('reports absent, not tiles, while no state has committed geometry (the operator build is pending)', async () => {
+    geo.has.mockReturnValue(false);
+    geo.states.mockReturnValue([]);
+    await render();
+    await until(() => handlers.onRung.mock.calls.length > 0);
+    expect(handlers.onRung).toHaveBeenCalledWith('absent');
+    expect(handlers.onRung).not.toHaveBeenCalledWith('tiles');
+    expect(geo.load).not.toHaveBeenCalled();
+  });
+
+  it('through ZIP_AREAS: with no geometry committed at all, the plain tiles and no status line, since nothing failed', async () => {
+    geo.has.mockReturnValue(false);
+    geo.states.mockReturnValue([]);
+    await render(true);
+    await until(() => document.querySelector('.zip-tiles') !== null);
+    expect(document.querySelector('.zip-tiles__status')).toBeNull();
+    expect(document.body.textContent).not.toContain(ZCTA_TILES_STATUS);
     expect(svg()).toBeNull();
     expect(geo.load).not.toHaveBeenCalled();
     expect(handlers.onView).toHaveBeenLastCalledWith({ polygons: false, busy: false, controls: null, caption: null, cardNote: null });

@@ -55,7 +55,7 @@ import type * as MapA11y from './USChoroplethMap.a11y';
 import type { ZipStageProps } from './USChoroplethMap.zipStage';
 import { classify } from './USChoroplethMap.scale';
 import { MAX_ZOOM, useSvgViewBox, viewBoxAttr, type ViewBox } from './useSvgViewBox';
-import { hasZctaGeometry, loadZctaGeometry, zctaGeometryKey, type ZctaGeometry } from './zctaGeometry';
+import { hasZctaGeometry, loadZctaGeometry, zctaGeometryKey, zctaGeometryStates, type ZctaGeometry } from './zctaGeometry';
 import {
   boxView,
   fitZctaView,
@@ -67,7 +67,14 @@ import {
 } from './zctaLevel.logic';
 import './USChoroplethMapZctaLevel.css';
 
-export type ZipRung = 'polygons' | 'tiles';
+/**
+ * 'tiles': the host draws the fallback tiles under its status line (no file
+ * for this state, or a geometry read that failed its retries). 'absent': no
+ * state's geometry is committed at all (the approved operator build is still
+ * pending), so nothing failed and the host draws the plain tiles with no
+ * status line (W5c integration; the zcta review's deploy-order concern).
+ */
+export type ZipRung = 'polygons' | 'tiles' | 'absent';
 
 /** The map's keyboard and naming helpers, handed down by the host (see Bundling above). */
 export type ZctaKit = Pick<typeof MapA11y, 'claimDrillFocus' | 'moveRovingFocus' | 'zipAriaLabel'>;
@@ -79,7 +86,7 @@ export interface USChoroplethMapZctaLevelProps extends Omit<ZipStageProps, 'onVi
   kit: ZctaKit;
   /** The host's loading stage, shown while the geometry loads (it holds a keyboard drill's focus). */
   loading: ReactNode;
-  /** Which rung is on screen, once it is known ('tiles': the host draws the fallback). */
+  /** Which rung is on screen, once it is known ('tiles' / 'absent': the host draws the tiles). */
   onRung: (rung: ZipRung) => void;
   /** The header's zoom buttons while the polygons show; null when they go. */
   onZoomControls: (controls: ReactNode) => void;
@@ -96,10 +103,11 @@ export function USChoroplethMapZctaLevel({ usps, onRung, loading, ...stage }: US
   });
   const fallback = !available || geometry.isError;
   const data = fallback ? null : geometry.data ?? null;
+  const noneCommitted = zctaGeometryStates().length === 0;
   useLayoutEffect(() => {
-    if (fallback) onRung('tiles');
+    if (fallback) onRung(noneCommitted ? 'absent' : 'tiles');
     else if (data) onRung('polygons');
-  }, [data, fallback, onRung]);
+  }, [data, fallback, noneCommitted, onRung]);
   if (fallback) return null;
   // Replaced by the stage at this position, so focus parked on it moves on.
   if (!data) return loading;

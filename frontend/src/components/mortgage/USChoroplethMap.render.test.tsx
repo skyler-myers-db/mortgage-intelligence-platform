@@ -59,6 +59,8 @@ vi.mock('./zctaGeometry', () => ({
   hasZctaGeometry: zcta.has,
   loadZctaGeometry: zcta.load,
   zctaGeometryKey: (usps: string) => ['mip', 'geo', 'zcta-geometry', usps],
+  // Some geometry is committed: a missing state or a failed read is a real fallback.
+  zctaGeometryStates: () => ['IL', 'TX'],
 }));
 
 vi.mock('./USStateMapData', () => ({

@@ -10,7 +10,9 @@
  * when the national stage is pointed at). The tiles are the degraded
  * fallback, never a mock: the rung's chunk fails, or the rung reports
  * 'tiles' (no committed file for the state, or a geometry read that failed
- * its retries), and the unchanged tiles render under a status line. A state
+ * its retries), and the unchanged tiles render under a status line. While no
+ * state's geometry is committed at all (the rung reports 'absent'), nothing
+ * failed, so the tiles render as on Home with no status line. A state
  * with an empty ZIP rollup is not a fallback: the tiles' empty card renders
  * as it does on Home, with no status line and no rung or geometry load. The view
  * reported to the map makes the legend's scale and caption, the header's zoom
@@ -42,7 +44,8 @@ function ZipAreasStage({ onView, usps, nationalViewBox, ...tiles }: ZipStageProp
   const chunk = useLazyModule(ZCTA_LEVEL, hasRows);
   const [rung, setRung] = useState<ZipRung | null>(null);
   const [controls, setControls] = useState<ReactNode>(null);
-  const tilesOnly = chunk.failed || rung === 'tiles';
+  const absent = !chunk.failed && rung === 'absent';
+  const tilesOnly = chunk.failed || rung === 'tiles' || absent;
   const polygons = hasRows && !tilesOnly && rung === 'polygons';
   const busy = hasRows && !tilesOnly && !polygons;
   const shownControls = polygons ? controls : null;
@@ -51,7 +54,7 @@ function ZipAreasStage({ onView, usps, nationalViewBox, ...tiles }: ZipStageProp
   useLayoutEffect(() => {
     onView({ polygons, busy, controls: shownControls, caption: polygons ? ZCTA_CAPTION : null, cardNote });
   }, [busy, cardNote, onView, polygons, shownControls]);
-  if (!hasRows) return <USChoroplethMapZipLevel {...tiles} />;
+  if (!hasRows || absent) return <USChoroplethMapZipLevel {...tiles} />;
   if (tilesOnly) {
     return (
       <>

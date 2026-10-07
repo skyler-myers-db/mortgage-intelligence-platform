@@ -19,7 +19,8 @@
  *    its Lead Queue action, no status line, no rung load); a keyboard drill
  *    holds focus on the loading stage while the rung loads; a geometry read
  *    that fails (or a state with no file) falls back to the densest-ZIP
- *    tiles with their status line.
+ *    tiles with their status line; while no geometry is committed at all,
+ *    a drill shows the plain tiles with no status line (nothing failed).
  *
  * Every polygon-dependent case is a fixme until the approved operator build
  * commits frontend/src/geo/zcta (it lifts itself once manifest.json exists).
@@ -322,7 +323,19 @@ test.describe('the rung without geometry (always)', () => {
     expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
   });
 
+  test('while no geometry is committed, a ZIP drill shows the plain tiles and no failure line', async ({ app, page }) => {
+    test.skip(GEOMETRY_COMMITTED, 'only while the operator build is pending');
+    await app.gotoRoute(SEGMENTS);
+    await drill(page, 'il');
+    await expect(page.locator('#main-content ul.zip-tiles')).toBeVisible();
+    await expect(page.locator('#main-content .zip-tiles__status')).toHaveCount(0);
+    await expect(page.locator('#main-content .map-wrap')).not.toContainText(TILE_STATUS);
+    await expect(zctaStage(page)).toHaveCount(0);
+  });
+
   test('a geometry read that fails falls back to the densest-ZIP tiles with their status line', async ({ app, hygiene, page }) => {
+    // With no geometry committed no read is made (the case above): this one needs a file to fail.
+    test.fixme(!GEOMETRY_COMMITTED, PENDING);
     // The aborted geometry reads (the first try and its two retries) are the point of the test.
     hygiene.allow('request-failed', /\/assets\/[A-Z]{2}\.topo-[^/]+\.json failed: net::ERR_FAILED/);
     hygiene.allow('console.error', /Failed to load resource: net::ERR_FAILED \(http:\/\/[^)]+\/assets\/[A-Z]{2}\.topo-/);
