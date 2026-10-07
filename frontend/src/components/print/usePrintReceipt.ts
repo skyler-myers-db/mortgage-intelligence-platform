@@ -1,9 +1,8 @@
 import { useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { ApiError } from '../../lib/apiTransport';
 import { createPrintReceipt, type PrintReceipt, type PrintReceiptRequest } from '../../lib/apiClients/printReceipt';
 import { toast } from '../../lib/toast';
-import { toastWriteFailure } from '../mortgage/leadWriteFailureToast';
+import { toastReceiptFailure } from './receiptFailureToast';
 
 /**
  * Export PDF behind a server-owned receipt (audit responsive-08, W5d).
@@ -17,13 +16,12 @@ import { toastWriteFailure } from '../mortgage/leadWriteFailureToast';
  * beforeprint / afterprint.
  *
  * On failure there is NO print: a 429 raises an error toast whose Try again
- * waits out the Retry-After (the Toaster's shared RetryClock), anything else
- * an error toast in describeApiError's words (toastWriteFailure). A second
- * click while a receipt is pending is ignored.
+ * waits out the Retry-After, anything else an error toast in
+ * describeApiError's words (receiptFailureToast). A second click while a
+ * receipt is pending is ignored.
  */
 export const PRINT_RECEIPT_RECORDED = 'Print receipt recorded';
 export const PRINT_NOT_RECORDED = 'Print not recorded';
-const RATE_LIMITED_DETAIL = 'Too many requests right now. Try again when the countdown ends.';
 
 export interface PrintReceiptControl {
   /** True while the receipt request is in flight. */
@@ -53,34 +51,26 @@ export function usePrintReceipt(): PrintReceiptControl {
     inFlight.current = true;
     setPending(true);
     createPrintReceipt(request).then(
-      (recorded) => {
+      (receipt) => {
         inFlight.current = false;
         flushSync(() => {
-          setPrinted({ key: requestKey(request), receipt: recorded });
+          setPrinted({ key: requestKey(request), receipt });
           setPending(false);
         });
-        toast.info(PRINT_RECEIPT_RECORDED, { auditEventId: recorded.audit_event_id });
+        toast.info(PRINT_RECEIPT_RECORDED, { auditEventId: receipt.audit_event_id });
         window.print();
       },
       (error: unknown) => {
         inFlight.current = false;
         setPending(false);
-        if (error instanceof ApiError && error.status === 429) {
-          toast.error(PRINT_NOT_RECORDED, {
-            detail: RATE_LIMITED_DETAIL,
-            action: { label: 'Try again', onAction: () => run(request) },
-            retryAfterMs: error.retryAfterMs,
-          });
-          return;
-        }
-        toastWriteFailure(PRINT_NOT_RECORDED, error, 'the print receipt');
+        toastReceiptFailure(PRINT_NOT_RECORDED, error, 'the print receipt', () => run(request));
       },
     );
   };
 
-  const receiptFor = (request: PrintReceiptRequest): PrintReceipt | null => (
-    printed !== null && printed.key === requestKey(request) ? printed.receipt : null
-  );
-
-  return { pending, receiptFor, run };
+  return {
+    pending,
+    receiptFor: (request) => (printed?.key === requestKey(request) ? printed.receipt : null),
+    run,
+  };
 }

@@ -77,7 +77,8 @@ describe('print.css paper contract (responsive-08)', () => {
   it('shows the provenance block that the screen keeps hidden, and unclips the tables', () => {
     const css = stripComments(printCss());
     expect(css).toMatch(/:root \.print-provenance\[hidden\]\s*\{[^}]*display:\s*block;/s);
-    expect(css).toMatch(/:root \.tbl-wrap,[^{]*:root \.admin-audit-list\s*\{[^}]*overflow:\s*visible;/s);
+    expect(css).toMatch(/:root :is\(\.tbl-wrap\.tbl-wrap--fill, \.tbl-wrap, \.admin-audit-list\)\s*\{[^}]*overflow:\s*visible;/s);
+    expect(css).toMatch(/:root :is\(\.layoutA-grid, \.kpi-row, \.seg-grid, \.kpi-row:has\(> :nth-child\(4\):last-child\)\)\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);/s);
     expect(css).toMatch(/@bottom-right\s*\{[^}]*counter\(page\)[^}]*counter\(pages\)/s);
   });
 });

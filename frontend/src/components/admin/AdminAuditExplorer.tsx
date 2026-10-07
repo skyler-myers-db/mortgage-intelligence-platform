@@ -23,15 +23,20 @@
 import { lazy, Suspense, useRef, useState, type ComponentType } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
-import { GlossaryTerm } from '../GlossaryTerm';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
 import { PrintProvenance } from '../print/PrintProvenance';
+import { toastReceiptFailure } from '../print/receiptFailureToast';
 import { usePrintReceipt } from '../print/usePrintReceipt';
 import type { PrintReceiptRequest } from '../../lib/apiClients/printReceipt';
 import { api, type AuditEventPage } from '../../lib/api';
-import { auditEventPage, auditQueryFilters, type AuditExplorerQuery } from '../../lib/apiClients/auditExplorer';
+import {
+  auditEventPage,
+  auditQueryFilters,
+  createAuditExportReceipt,
+  type AuditExplorerQuery,
+} from '../../lib/apiClients/auditExplorer';
 import { queryKeys } from '../../lib/queryKeys';
 import { toast } from '../../lib/toast';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
@@ -184,13 +189,20 @@ export function AdminAuditExplorer() {
     filters: receiptFilters,
     row_count: events?.length ?? 0,
   };
+  // The audited page CSV (administrators only): the file and its hashes are
+  // built in a click-time chunk; the download waits for the AUDIT_EXPORT row.
   const exportCsv = () => {
     if (!events?.length) return;
     setCsvPending(true);
+    const exported = { events, page, filters: receiptFilters };
     import('./AdminAuditExplorer.export')
-      .then((module) => module.exportAuditPageCsv({ events, page, filters: receiptFilters }))
-      // Only the chunk itself can fail here: the flow toasts its own failures.
-      .catch(() => toast.error('Audit page not exported', { detail: 'Reload the page, then export again.' }))
+      .then(async (csvModule) => {
+        const prepared = await csvModule.prepareAuditPageCsv(exported.events, exported.page, exported.filters);
+        const receipt = await createAuditExportReceipt(prepared.declaration);
+        csvModule.downloadPreparedCsv(prepared);
+        toast.success('Audit page exported', { auditEventId: receipt.audit_event_id });
+      })
+      .catch((error: unknown) => toastReceiptFailure('Audit page not exported', error, 'the audit export receipt', exportCsv))
       .finally(() => setCsvPending(false));
   };
 
@@ -223,8 +235,7 @@ export function AdminAuditExplorer() {
         <div>
           <SurfaceTitle id="audit-explorer-title">Audit explorer</SurfaceTitle>
           <div className="muted fs-12">
-            Filter the <GlossaryTerm term="auditLogging">Lakebase ledger</GlossaryTerm> by actor, day, event
-            type, entity or correlation id.
+            Filter the Lakebase ledger by actor, day, event type, entity or correlation id.
           </div>
         </div>
         <div className="chip-row">

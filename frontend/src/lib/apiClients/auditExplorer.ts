@@ -7,11 +7,11 @@
  * VIEW_AUDIT_LEDGER row per served request (D-audit-reads-c3). So the
  * explorer calls them only on a deliberate act: the page on a filter set or
  * page change, the facets on an explicit menu open, the count on a click.
- * Never on hover, prefetch or a poll.
+ * Never on hover, prefetch or a poll. The CSV declaration (the hashing) is
+ * built in AdminAuditExplorer.export.ts, a click-time chunk.
  */
-import type { AuditEventPage, AuditEventRow } from '../apiTypes';
+import type { AuditEventPage } from '../apiTypes';
 import { getJson, postJson } from '../apiTransport';
-import { sha256Hex } from './leadExport';
 
 /** The /events/page and /count filters (the URL's applied set plus the exclusion). */
 export interface AuditExplorerQuery {
@@ -113,21 +113,4 @@ export function auditCount(query: AuditExplorerQuery, signal?: AbortSignal): Pro
 /** The AUDIT_EXPORT ledger row the explorer's page CSV waits for (admin only). */
 export function createAuditExportReceipt(body: AuditExportReceiptRequest): Promise<AuditExportReceipt> {
   return postJson<AuditExportReceipt, AuditExportReceiptRequest>('/api/audit/export-receipt', body);
-}
-
-/** What the explorer declares about a CSV before it may download it. */
-export async function buildAuditExportDeclaration(
-  csv: string,
-  events: readonly AuditEventRow[],
-  filters: Record<string, string>,
-): Promise<AuditExportReceiptRequest> {
-  const eventIds = events.map((event) => event.event_id);
-  const [csvSha256, eventIdsSha256] = await Promise.all([sha256Hex(csv), sha256Hex(JSON.stringify(eventIds))]);
-  return {
-    row_count: eventIds.length,
-    csv_sha256: csvSha256,
-    event_ids: eventIds,
-    event_ids_sha256: eventIdsSha256,
-    filters,
-  };
 }

@@ -22,14 +22,14 @@ const mocks = vi.hoisted(() => ({
   createPrintReceipt: vi.fn(),
   toastInfo: vi.fn(),
   toastError: vi.fn(),
-  toastWriteFailure: vi.fn(),
+  toastReceiptFailure: vi.fn(),
 }));
 
 vi.mock('../../lib/apiClients/printReceipt', () => ({ createPrintReceipt: mocks.createPrintReceipt }));
 vi.mock('../../lib/toast', () => ({
   toast: { info: mocks.toastInfo, error: mocks.toastError, success: vi.fn() },
 }));
-vi.mock('../mortgage/leadWriteFailureToast', () => ({ toastWriteFailure: mocks.toastWriteFailure }));
+vi.mock('./receiptFailureToast', () => ({ toastReceiptFailure: mocks.toastReceiptFailure }));
 vi.mock('../AppContext', () => ({ useApp: () => ({ lender: 'Summit Mortgage' }) }));
 
 import { PrintProvenance, UNAUDITED_PRINT } from './PrintProvenance';
@@ -138,11 +138,11 @@ describe('usePrintReceipt', () => {
     await act(async () => undefined);
 
     expect(window.print).not.toHaveBeenCalled();
-    expect(mocks.toastWriteFailure).toHaveBeenCalledWith(PRINT_NOT_RECORDED, failure, 'the print receipt');
+    expect(mocks.toastReceiptFailure).toHaveBeenCalledWith(PRINT_NOT_RECORDED, failure, 'the print receipt', expect.any(Function));
     expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
   });
 
-  it('a 429 never prints; its Try again waits out the Retry-After and asks again', async () => {
+  it('a 429 never prints; the failure toast Try again asks for the receipt again', async () => {
     const limited = new ApiError('rate limited', { path: '/api/print-receipt', status: 429, retryAfterMs: 4000 });
     mocks.createPrintReceipt.mockRejectedValueOnce(limited);
 
@@ -150,14 +150,12 @@ describe('usePrintReceipt', () => {
     await act(async () => undefined);
 
     expect(window.print).not.toHaveBeenCalled();
-    expect(mocks.toastWriteFailure).not.toHaveBeenCalled();
-    const [title, options] = mocks.toastError.mock.calls[0] as [string, { action: { label: string; onAction: () => void }; retryAfterMs: number }];
+    const [title, error, , retry] = mocks.toastReceiptFailure.mock.calls[0] as [string, unknown, string, () => void];
     expect(title).toBe(PRINT_NOT_RECORDED);
-    expect(options.retryAfterMs).toBe(4000);
-    expect(options.action.label).toBe('Try again');
+    expect(error).toBe(limited);
 
     mocks.createPrintReceipt.mockResolvedValueOnce(RECEIPT);
-    await act(async () => options.action.onAction());
+    await act(async () => retry());
     expect(mocks.createPrintReceipt).toHaveBeenCalledTimes(2);
     expect(window.print).toHaveBeenCalledTimes(1);
   });

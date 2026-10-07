@@ -63,12 +63,12 @@
     --status-warning-ink: CanvasText;
     --success-fill: CanvasText;
     --success-fill-hover: CanvasText;
-    /* Score anatomy parts: five greys, still told apart in black and white. */
+    /* Score anatomy parts: monochrome; every part keeps its text label. */
     --score-part-economic: CanvasText;
-    --score-part-intent: color-mix(in srgb, CanvasText 82%, Canvas);
-    --score-part-fit: color-mix(in srgb, CanvasText 64%, Canvas);
-    --score-part-relationship: color-mix(in srgb, CanvasText 46%, Canvas);
-    --score-part-evidence: color-mix(in srgb, CanvasText 28%, Canvas);
+    --score-part-intent: CanvasText;
+    --score-part-fit: CanvasText;
+    --score-part-relationship: CanvasText;
+    --score-part-evidence: CanvasText;
     /* Segment ink: every --seg-* tokens.css declares, so no segment prints
        pastel on white (print.test.ts pins the name parity). */
     --seg-itm: CanvasText;
@@ -141,14 +141,7 @@
   :root .print-provenance[hidden] {
     display: block;
     margin-block-end: var(--sp-4);
-    padding-block-end: var(--sp-2);
-    border-block-end: 1pt solid var(--line-2);
-    color: CanvasText;
     font-size: var(--fs-12);
-  }
-
-  :root .print-provenance p {
-    margin: 0;
   }
 
   .surface {
@@ -172,17 +165,11 @@
     border-color: var(--line-2);
   }
 
-  /* One column on paper: the real grids and their screen compounds (the
-     container bands and the four-KPI quantity query). */
-  :root .layoutA-grid,
-  :root .layoutA-grid.analytics-grid--wide-left,
-  :root .layoutA-grid.layoutA-grid--segment-workbench,
-  :root .main__inner > .layoutA-grid,
-  :root .kpi-row,
-  :root .kpi-row:has(> :nth-child(4):last-child),
-  :root .main__inner > .kpi-row,
-  :root .seg-grid,
-  :root .main__inner > .seg-grid {
+  /* One column on paper: the real grids. :is() takes its most specific
+     argument, the four-KPI quantity query (0,3,0), so every grid here
+     outranks its screen compounds (the container bands,
+     .layoutA-grid.analytics-grid--wide-left, .main__inner > .seg-grid). */
+  :root :is(.layoutA-grid, .kpi-row, .seg-grid, .kpi-row:has(> :nth-child(4):last-child)) {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -191,10 +178,9 @@
     flex-direction: column;
   }
 
-  /* Tables print whole: no scroll window clips them. */
-  :root .tbl-wrap,
-  :root .tbl-wrap.tbl-wrap--fill,
-  :root .admin-audit-list {
+  /* Tables print whole: no scroll window clips them (:is() at (0,2,0) beats
+     the lazy .tbl-wrap.tbl-wrap--fill compound). */
+  :root :is(.tbl-wrap.tbl-wrap--fill, .tbl-wrap, .admin-audit-list) {
     max-height: none;
     max-block-size: none;
     overflow: visible;
@@ -227,10 +213,9 @@
     print-color-adjust: exact;
   }
 
-  :root .conf .conf__bar.on,
-  :root .conf--high .conf__bar.on,
-  :root .conf--med .conf__bar.on,
-  :root .conf--low .conf__bar.on {
+  /* (0,4,0): every meter is `.conf .conf--{tier}`, so this outranks the
+     tier compounds. */
+  :root .conf .conf__bar.on {
     background: CanvasText;
     print-color-adjust: exact;
   }

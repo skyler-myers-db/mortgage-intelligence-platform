@@ -1,40 +1,27 @@
 /**
  * @vitest-environment happy-dom
  *
- * The audited page CSV (W5d, tables-10). The defect it closes: 'Page CSV'
- * downloaded the ledger page with no AUDIT_EXPORT row. Now the receipt is
- * written first and only a recorded row releases the file; a refused or
- * rate-limited receipt downloads nothing.
- *
- * Mutation check (lane report): moving `downloadCsvText` above the
- * `createAuditExportReceipt` await fails "downloads only after the receipt
- * is recorded" and "a refused receipt downloads nothing".
+ * The audited page CSV's click-time chunk (W5d, tables-10): it builds the
+ * file of the rows on screen and the declaration the AUDIT_EXPORT receipt
+ * verifies (the CSV hash and the event-id hash), and sends nothing. The
+ * order (receipt first, then the download) is pinned on the rendered
+ * explorer in AdminAuditExplorer.test.tsx.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads the module source under Vitest only.
+import { readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import type { AuditEventRow } from '../../lib/apiTypes';
-import { ApiError } from '../../lib/apiTransport';
 
-const mocks = vi.hoisted(() => ({
-  order: [] as string[],
-  receipt: vi.fn(),
-  download: vi.fn(),
-  toastSuccess: vi.fn(),
-  toastError: vi.fn(),
-  toastWriteFailure: vi.fn(),
-}));
-
-vi.mock('../../lib/apiClients/auditExplorer', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../lib/apiClients/auditExplorer')>()),
-  createAuditExportReceipt: mocks.receipt,
-}));
+const download = vi.hoisted(() => vi.fn());
 vi.mock('../../lib/csv', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/csv')>()),
-  downloadCsvText: mocks.download,
+  downloadCsvText: download,
 }));
-vi.mock('../../lib/toast', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError, info: vi.fn() } }));
-vi.mock('../mortgage/leadWriteFailureToast', () => ({ toastWriteFailure: mocks.toastWriteFailure }));
 
-import { AUDIT_CSV_EXPORTED, AUDIT_CSV_NOT_EXPORTED, exportAuditPageCsv } from './AdminAuditExplorer.export';
+import { downloadPreparedCsv, prepareAuditPageCsv } from './AdminAuditExplorer.export';
 
 const EVENTS: AuditEventRow[] = [1, 2].map((index) => ({
   event_id: `0f8fad5b-d9cb-469f-a165-70867728950${index}`,
@@ -50,56 +37,38 @@ const EVENTS: AuditEventRow[] = [1, 2].map((index) => ({
   correlation_id: null,
 }));
 const FILTERS = { event_type: 'LEAD_EXPORT', exclude_own_ledger_reads: 'true' };
+declare const process: { cwd(): string };
 
-beforeEach(() => {
-  mocks.order.length = 0;
-  Object.values(mocks).forEach((mock) => (typeof mock === 'function' ? mock.mockReset() : undefined));
-  mocks.download.mockImplementation(() => mocks.order.push('download'));
-});
+async function sha256(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
-afterEach(() => vi.restoreAllMocks());
+describe('prepareAuditPageCsv', () => {
+  it('declares exactly the file it built: rows, ids in file order, both hashes and the filters', async () => {
+    const prepared = await prepareAuditPageCsv(EVENTS, 1, FILTERS);
 
-describe('exportAuditPageCsv', () => {
-  it('downloads only after the receipt is recorded, and declares what the file holds', async () => {
-    mocks.receipt.mockImplementation(async () => {
-      mocks.order.push('receipt');
-      return { audit_event_id: 'a1b2c3d4-0000-4000-8000-000000000001' };
+    expect(prepared.csv.split('\n')[0]).toMatch(/^event_id,created_at,/);
+    expect(prepared.filename).toMatch(/^mip-audit-page-2-\d{4}-\d{2}-\d{2}\.csv$/);
+    expect(prepared.declaration).toEqual({
+      row_count: 2,
+      csv_sha256: await sha256(prepared.csv),
+      event_ids: EVENTS.map((event) => event.event_id),
+      event_ids_sha256: await sha256(JSON.stringify(EVENTS.map((event) => event.event_id))),
+      filters: FILTERS,
     });
-
-    await exportAuditPageCsv({ events: EVENTS, page: 1, filters: FILTERS });
-
-    expect(mocks.order).toEqual(['receipt', 'download']);
-    const [declaration] = mocks.receipt.mock.calls[0] as [{ row_count: number; event_ids: string[]; event_ids_sha256: string; csv_sha256: string; filters: Record<string, string> }];
-    expect(declaration.row_count).toBe(2);
-    expect(declaration.event_ids).toEqual(EVENTS.map((event) => event.event_id));
-    expect(declaration.event_ids_sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(declaration.csv_sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(declaration.filters).toEqual(FILTERS);
-    const [csv, filename] = mocks.download.mock.calls[0] as [string, string];
-    expect(csv.split('\n')[0]).toMatch(/^event_id,created_at,/);
-    expect(filename).toMatch(/^mip-audit-page-2-\d{4}-\d{2}-\d{2}\.csv$/);
-    expect(mocks.toastSuccess).toHaveBeenCalledWith(AUDIT_CSV_EXPORTED, { auditEventId: 'a1b2c3d4-0000-4000-8000-000000000001' });
+    expect(download).not.toHaveBeenCalled();
   });
 
-  it('a refused receipt downloads nothing and says why', async () => {
-    const refused = new ApiError('unavailable', { path: '/api/audit/export-receipt', status: 503, dependency: 'lakebase' });
-    mocks.receipt.mockRejectedValue(refused);
-
-    await exportAuditPageCsv({ events: EVENTS, page: 0, filters: {} });
-
-    expect(mocks.download).not.toHaveBeenCalled();
-    expect(mocks.toastWriteFailure).toHaveBeenCalledWith(AUDIT_CSV_NOT_EXPORTED, refused, 'the audit export receipt');
+  it('hands the prepared file to the browser only when asked', async () => {
+    const prepared = await prepareAuditPageCsv(EVENTS, 0, {});
+    downloadPreparedCsv(prepared);
+    expect(download).toHaveBeenCalledWith(prepared.csv, prepared.filename);
   });
 
-  it('a 429 downloads nothing and offers Try again behind the Retry-After', async () => {
-    mocks.receipt.mockRejectedValueOnce(new ApiError('rate limited', { path: '/api/audit/export-receipt', status: 429, retryAfterMs: 3000 }));
-
-    await exportAuditPageCsv({ events: EVENTS, page: 0, filters: {} });
-
-    expect(mocks.download).not.toHaveBeenCalled();
-    const [title, options] = mocks.toastError.mock.calls[0] as [string, { retryAfterMs: number; action: { label: string } }];
-    expect(title).toBe(AUDIT_CSV_NOT_EXPORTED);
-    expect(options.retryAfterMs).toBe(3000);
-    expect(options.action.label).toBe('Try again');
+  it('imports no transport: a click-time chunk reaching lib/apiTransport splits the initial closure', () => {
+    const source = readFileSync(join(process.cwd(), 'src', 'components', 'admin', 'AdminAuditExplorer.export.ts'), 'utf8') as string;
+    const runtimeImports = [...source.matchAll(/^import (?!type )[^;]*from '([^']+)'/gm)].map((match) => match[1]);
+    expect(runtimeImports).toEqual(['../../lib/apiClients/leadExport', '../../lib/csv', './AdminAuditExplorer.csv']);
   });
 });
