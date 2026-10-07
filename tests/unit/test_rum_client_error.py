@@ -326,20 +326,6 @@ def test_route_templates_match_every_route_meta_pattern() -> None:
 
 # --- item 10: the data-rum-target placements (d2 step 4) ---------------------
 
-# Shrink-only: the values sibling W5c lanes place. C3 (integrator): a listed
-# value that is now placed is NOT an error here; the integrator deletes the
-# map (and lands the strict version) after the last W5c merge.
-PENDING_SIBLING_PLACEMENTS: dict[str, str] = {
-    "lead-row": "w5-lead-queue-paging",
-    "lead-expand": "w5-lead-queue-paging",
-    "lead-approve": "w5-lead-queue-paging",
-    "sort": "w5-lead-queue-paging",
-    "map": "w5-zcta-watchlist",
-    "genie-composer": "w5-genie-stop-context",
-    "genie-panel": "w5-genie-stop-context",
-    "nav": "w5-shell-nav-followups",
-    "drawer": "w5-evidence-drawer",
-}
 _RUM_TARGET_LITERAL = re.compile(r"""data-rum-target=(?:"([^"]*)"|'([^']*)'|\{\s*['"]([^'"]*)['"]\s*\})""")
 
 
@@ -376,17 +362,12 @@ def test_every_placed_data_rum_target_literal_is_in_the_vocabulary() -> None:
     assert dynamic == [], "data-rum-target is a static literal only"
 
 
-def test_every_interaction_target_is_placed_or_pending_a_sibling_lane() -> None:
-    """(ii) Coverage, tolerant until the last W5c merge: every value except
-    'other' is placed in a production source, or listed in
-    PENDING_SIBLING_PLACEMENTS with the lane that places it."""
+def test_every_interaction_target_is_placed() -> None:
+    """(ii) Strict coverage since the last W5c merge (integrator C3): every
+    value except 'other' is placed as a static literal in a production
+    source. The sibling lanes' pending map is gone: a value nobody places is
+    a vocabulary entry the panel can never show."""
     placed = set(_placed_targets())
-    for owned in ("segment-card", "filter", "palette", "pager"):
-        assert owned in placed, f"this lane places {owned!r}"
-    missing = sorted(
-        value
-        for value in RUM_INTERACTION_TARGETS - {"other"}
-        if value not in placed and value not in PENDING_SIBLING_PLACEMENTS
-    )
+    missing = sorted(value for value in RUM_INTERACTION_TARGETS - {"other"} if value not in placed)
     assert missing == []
-    assert set(PENDING_SIBLING_PLACEMENTS) <= RUM_INTERACTION_TARGETS
+    assert "other" not in placed, "'other' is the client's fallback, never a placed literal"
