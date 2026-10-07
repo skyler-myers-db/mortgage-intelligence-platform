@@ -10,10 +10,11 @@ import logging
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from backend.config.settings import settings
 from backend.main import app
-from backend.services.actor_identity import actor_cache_key
+from backend.services.actor_identity import actor_cache_key, actor_cache_key_aliases
 
 _ACTOR = "approver.one@summit.example"
 
@@ -66,6 +67,7 @@ def test_session_identity_matches_the_actor_the_approver_gate_admits(
         "rum_enabled": settings.mip_rum_enabled,
         "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": actor_cache_key(_ACTOR),
+        "actor_cache_key_aliases": [],
     }
 
 
@@ -114,6 +116,7 @@ def test_session_ignores_forwarded_identity_when_the_edge_is_untrusted(
         "rum_enabled": settings.mip_rum_enabled,
         "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
+        "actor_cache_key_aliases": [],
     }
 
 
@@ -335,3 +338,29 @@ def test_session_presenter_mode_follows_the_strictly_parsed_setting(
     assert body["presenter_mode"] is expected
     assert body["can_access_admin"] is False
     assert body["can_approve"] is False
+
+
+# --- D-identity-review-a4: rotation aliases and the session/health key ---
+
+
+def test_session_carries_the_rotation_aliases_beside_the_key(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same list the health body carries; [] whenever actor_email is null."""
+    monkeypatch.setattr(settings, "mip_genie_action_secret_current", SecretStr("test-secret-0123456789abcdef"))
+    monkeypatch.setattr(settings, "mip_genie_action_secret_previous", SecretStr("previous-action-secret"))
+    headers = {"X-Forwarded-Email": _ACTOR, "X-Forwarded-Groups": ""}
+
+    session = client.get("/api/v1/session", headers=headers).json()
+    health = client.get("/api/v1/health", headers=headers).json()
+    nobody = client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""}).json()
+
+    assert session["actor_cache_key_aliases"] == actor_cache_key_aliases(_ACTOR)
+    assert len(session["actor_cache_key_aliases"]) == 1
+    assert session["actor_cache_key"] == health["actor_cache_key"]
+    assert session["actor_cache_key_aliases"] == health["actor_cache_key_aliases"]
+    assert nobody["actor_email"] is None
+    assert nobody["actor_cache_key"] is None
+    assert nobody["actor_cache_key_aliases"] == []
+

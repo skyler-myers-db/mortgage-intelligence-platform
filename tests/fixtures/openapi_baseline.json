@@ -476,6 +476,14 @@
             ],
             "title": "Actor Cache Key"
           },
+          "actor_cache_key_aliases": {
+            "description": "The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4): an open tab holding it re-stamps instead of resetting, and requests bound to it are still accepted. Empty outside a rotation. Authenticated body only.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actor Cache Key Aliases",
+            "type": "array"
+          },
           "agent_gateway_binding_sha256": {
             "anyOf": [
               {
@@ -10655,6 +10663,14 @@
             ],
             "title": "Actor Cache Key"
           },
+          "actor_cache_key_aliases": {
+            "description": "The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4): an open tab holding it re-stamps instead of resetting, and requests bound to it are still accepted. Empty outside a rotation. Authenticated body only.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actor Cache Key Aliases",
+            "type": "array"
+          },
           "agent_gateway_binding_sha256": {
             "anyOf": [
               {
@@ -17448,6 +17464,14 @@
             "description": "Opaque per-actor browser-cache discriminator: the same keyed hash of the forwarded identity that the authenticated health body carries, so the browser can seed its actor-scoped storage gate before the first health probe. Not reversible to the identity and never sent to telemetry. Null exactly when actor_email is.",
             "title": "Actor Cache Key"
           },
+          "actor_cache_key_aliases": {
+            "description": "The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4); the health body carries the same list, and the browser reads it from there only. Empty whenever actor_email is null.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actor Cache Key Aliases",
+            "type": "array"
+          },
           "actor_display_name": {
             "anyOf": [
               {
@@ -17527,7 +17551,7 @@
                 "type": "null"
               }
             ],
-            "description": "Whether the browser may install the opt-in RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07).",
+            "description": "Whether the browser may install the RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). On by default; the deploy setting MIP_RUM_ENABLED=0 turns it off (D-platform-process-d1).",
             "title": "Rum Enabled"
           }
         },

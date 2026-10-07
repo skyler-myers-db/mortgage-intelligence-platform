@@ -16,9 +16,14 @@ the secret order, so a deploy of this module is an actor change to no open
 tab. There is exactly one per-process fallback secret, so health and session
 can never derive different keys when no secret is configured.
 
-Imports stay minimal on purpose (settings, the stdlib and Starlette's
-connection type): the module never imports ``backend.api`` or
-``backend.main``.
+:func:`actor_cache_key_aliases` names the same actor's key under the
+previous rotation secret (D-identity-review-a4): ``/api/health`` carries it so
+an open tab re-stamps instead of resetting, and the request binding accepts
+it, for the length of a rotation's grace window.
+
+Imports stay minimal on purpose (settings, the runtime-secret text rule, the
+stdlib and Starlette's connection type): the module never imports
+``backend.api`` or ``backend.main``.
 """
 
 from __future__ import annotations
@@ -29,9 +34,16 @@ import secrets
 
 from starlette.requests import HTTPConnection
 
+from backend.config.runtime_secret_policy import runtime_secret_text
 from backend.config.settings import settings
 
 _PROCESS_ACTOR_CACHE_SECRET = secrets.token_urlsafe(32)
+
+# A retired previous secret (tools/databricks/provision_runtime_secrets.py
+# DISABLED_PREVIOUS_PREFIX, line 67) is a random value under this prefix: it
+# names no real rotation, so it derives no alias. The two literals are pinned
+# equal by tests/unit/test_actor_binding.py.
+_DISABLED_PREVIOUS_PREFIX = "disabled."
 
 
 def forwarded_identity(conn: HTTPConnection) -> str | None:
@@ -48,16 +60,43 @@ def forwarded_identity(conn: HTTPConnection) -> str | None:
     return conn.headers.get("X-Forwarded-Email") or conn.headers.get("X-Forwarded-User") or None
 
 
-def actor_cache_key(identity: str) -> str:
-    """Return a non-reversible actor/session discriminator for browser caches."""
+def _actor_cache_secret() -> str:
+    """The secret actor_cache_key derives with: current, then legacy, then the process one."""
 
     configured_secret = settings.mip_genie_action_secret_current or settings.mip_genie_action_secret
     secret = configured_secret.get_secret_value().strip() if configured_secret else ""
-    if not secret:
-        secret = _PROCESS_ACTOR_CACHE_SECRET
+    return secret or _PROCESS_ACTOR_CACHE_SECRET
+
+
+def _derive(secret: str, identity: str) -> str:
     digest = hmac.new(
         secret.encode("utf-8"),
         identity.strip().lower().encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()[:16]
     return f"actor_{digest}"
+
+
+def actor_cache_key(identity: str) -> str:
+    """Return a non-reversible actor/session discriminator for browser caches."""
+
+    return _derive(_actor_cache_secret(), identity)
+
+
+def actor_cache_key_aliases(identity: str) -> list[str]:
+    """The same actor's key under the previous rotation secret, if one is live.
+
+    During a ``MIP_GENIE_ACTION_SECRET_PREVIOUS`` grace window an open tab
+    still holds the key derived from the previous secret; the browser's gate
+    re-stamps an alias instead of reading it as another actor, and the
+    request binding (backend/services/actor_binding.py) accepts it. Empty when
+    no previous secret is configured, when it is a placeholder, a retired
+    ``disabled.`` value, or the current secret itself.
+    """
+
+    previous = runtime_secret_text(settings.mip_genie_action_secret_previous)
+    if previous is None or previous.startswith(_DISABLED_PREVIOUS_PREFIX):
+        return []
+    if previous == _actor_cache_secret():
+        return []
+    return [_derive(previous, identity)]
