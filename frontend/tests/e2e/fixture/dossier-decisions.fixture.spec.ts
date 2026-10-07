@@ -102,8 +102,10 @@ test.describe('borrower decision history', () => {
       json<DecisionReceipt>(ledgerReceipt(params.id, PRIMARY_BORROWER, 'approved')),
     );
     await app.gotoRoute(OFFER);
-    await expect(page.getByTestId('offer-prior-decisions').getByRole('button', { name: /Prior decisions/ })).toBeVisible();
-    expect(reads(mockApi, DECISIONS)).toBe(1);
+    // The counted name proves the first read answered: the bare "Prior
+    // decisions" toggle renders when the lazy chunk mounts, before the GET.
+    await expect(page.getByTestId('offer-prior-decisions').getByRole('button', { name: 'Prior decisions (4)' })).toBeVisible();
+    expect(reads(mockApi, DECISIONS), 'one history read before the approve').toBe(1);
     const dossierReads = reads(mockApi, DOSSIER);
 
     await page.getByTestId('offer-action-bar').getByRole('button', { name: 'Approve outreach' }).click();
