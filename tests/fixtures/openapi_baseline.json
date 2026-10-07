@@ -5772,19 +5772,6 @@
             "title": "Lo Email",
             "type": "string"
           },
-          "notes": {
-            "anyOf": [
-              {
-                "maxLength": 500,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Retired 2026-10: must be absent, null or blank; free-text disposition notes are no longer accepted",
-            "title": "Notes"
-          },
           "occurred_at": {
             "anyOf": [
               {

@@ -2744,8 +2744,6 @@ export interface RequestSchemas {
   DispositionRequest: {
     callback_at?: string | null;
     lo_email: string;
-    /** Retired 2026-10: must be absent, null or blank; free-text disposition notes are no longer accepted */
-    notes?: string | null;
     occurred_at?: string | null;
     outcome: "called_no_answer" | "called_left_voicemail" | "connected" | "callback_scheduled" | "application_started" | "not_interested" | "not_now" | "dead";
     request_id?: string | null;

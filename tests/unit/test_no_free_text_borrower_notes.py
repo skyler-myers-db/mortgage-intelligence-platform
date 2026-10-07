@@ -43,7 +43,6 @@ CREATE_TABLE_RE = re.compile(
 # (owning schema, property). Exactly these three on 0a30fca2.
 ALLOWLIST = frozenset(
     {
-        ("DispositionRequest", "notes"),
         ("GenieFeedbackRequest", "comment"),
         ("PostedComposedPlan", "risk_notes"),
     }

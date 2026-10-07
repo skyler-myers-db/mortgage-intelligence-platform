@@ -62,14 +62,6 @@ LeadOutcomeSourceSystem = Literal[
     "manual_import",
 ]
 
-# D-shell-deviations-g2 (flow-08 adjacent, critic-05): the write-only free-text
-# disposition note is retired. The field survives one tolerant release so a tab
-# loaded before the deploy still logs a call with an empty Notes box; any
-# non-blank value is refused (422) and nothing is persisted.
-DISPOSITION_NOTES_RETIRED = (
-    "Free-text disposition notes are retired. Clear the Notes field (or reload the page) "
-    "and log the call again."
-)
 _PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^Competitor ([A-Z]|Other)$")
 _MAX_CLIENT_CLOCK_SKEW = timedelta(minutes=5)
 
@@ -301,33 +293,22 @@ class DistributionReleaseResponse(BaseModel):
 
 
 class DispositionRequest(BaseModel):
+    # D-shell-deviations-g2 (flow-08 adjacent, critic-05): the write-only
+    # free-text disposition note is gone. After its one tolerant release, any
+    # `notes` key (blank included) is an unknown field: extra='forbid' answers
+    # the app-wide 422, whose input echo main.py strips, and nothing is written.
     model_config = ConfigDict(extra="forbid")
 
     lo_email: str
     outcome: CallDispositionOutcome
     occurred_at: datetime | None = None
     callback_at: datetime | None = None
-    notes: str | None = Field(
-        default=None,
-        max_length=500,
-        description=(
-            "Retired 2026-10: must be absent, null or blank; free-text disposition notes "
-            "are no longer accepted"
-        ),
-    )
     request_id: str | None = None
 
     @field_validator("lo_email")
     @classmethod
     def _lo_email(cls, value: str) -> str:
         return validate_internal_staff_email(value)
-
-    @field_validator("notes", mode="before")
-    @classmethod
-    def _notes_retired(cls, value: object) -> None:
-        if value is None or (isinstance(value, str) and not value.strip()):
-            return None
-        raise ValueError(DISPOSITION_NOTES_RETIRED)
 
     @field_validator("request_id")
     @classmethod
