@@ -26,7 +26,6 @@ import { lazyWithPreload, preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
 import { actorResetHeld, observeActor, subscribeActorScope } from '../../lib/actorScope';
 import { clearActorScopedMemoryCaches } from '../../lib/actorScopedMemoryCaches';
-import { clearBorrowerMorph, installBorrowerMorph } from '../../lib/borrowerMorph';
 import { RouteFallback } from './RouteFallback';
 import { useExitRetained } from '../../hooks/useExitRetained';
 import { useMainScroll } from '../../hooks/useMainScroll';
@@ -39,6 +38,11 @@ const LazyConsole = lazyWithPreload(() =>
 const LazyGenieChat = lazyWithPreload(() =>
   import('../mortgage/GenieChat').then((module) => ({ default: module.GenieChat })),
 );
+
+// The borrower-id morph (deviation:borrower-id-morph) lives in its own small
+// chunk, kept out of the initial closure; a click before it lands just does
+// not morph.
+const loadBorrowerMorph = () => import('../../lib/borrowerMorph');
 
 const preloadConsole = createIdlePreloader(() => LazyConsole.preload(), 5000);
 const preloadGenieChat = createIdlePreloader(() => LazyGenieChat.preload(), 5000);
@@ -112,13 +116,23 @@ function AppShellInner({ children }: PropsWithChildren) {
   });
   const consoleMounted = useExitRetained(consoleOpen ? true : null, consoleElementRef) === true;
 
-  // The borrower-id morph (deviation:borrower-id-morph): one capture-phase
-  // click listener names a Lead Queue row id before its link navigates; any
-  // committed location change drops a pending mark.
-  useEffect(() => installBorrowerMorph(), []);
+  // The borrower-id morph: one capture-phase click listener names a Lead
+  // Queue row id before its link navigates; any committed location change
+  // drops a pending mark.
+  useEffect(() => {
+    let live = true;
+    let uninstall: (() => void) | null = null;
+    loadBorrowerMorph().then((morph) => {
+      if (live) uninstall = morph.installBorrowerMorph();
+    }, () => undefined);
+    return () => {
+      live = false;
+      uninstall?.();
+    };
+  }, []);
   const { pathname } = useLocation();
   useEffect(() => {
-    clearBorrowerMorph();
+    loadBorrowerMorph().then((morph) => morph.clearBorrowerMorph(), () => undefined);
   }, [pathname]);
 
   useEffect(() => {

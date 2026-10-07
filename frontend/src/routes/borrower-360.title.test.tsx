@@ -17,7 +17,6 @@ const morph = vi.hoisted(() => ({
 
 vi.mock('../lib/borrowerMorph', () => ({
   borrowerMorphNameFor: morph.nameFor,
-  borrowerMorphReleaseMs: () => 300,
   clearBorrowerMorph: morph.clear,
 }));
 
@@ -32,6 +31,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   morph.nameFor.mockReset();
   morph.clear.mockReset();
+  // The release reads --dur-base at runtime: 200ms + a 100 ms margin.
+  document.documentElement.style.setProperty('--dur-base', '200ms');
   document.body.innerHTML = '<h1 id="title"></h1>';
   root = createRoot(document.getElementById('title') as HTMLElement);
 });
@@ -39,6 +40,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   vi.useRealTimers();
+  document.documentElement.style.removeProperty('--dur-base');
   document.body.innerHTML = '';
 });
 
@@ -63,7 +65,7 @@ describe('BorrowerTitle', () => {
     act(() => root.render(<BorrowerTitle id={ID} />));
     expect(morph.nameFor).toHaveBeenCalledTimes(1);
 
-    act(() => vi.advanceTimersByTime(299));
+    act(() => vi.advanceTimersByTime(299)); // --dur-base 200ms + 100
     expect(nameOf()).toBe('mip-borrower-id');
     act(() => vi.advanceTimersByTime(1));
     expect(nameOf()).toBe('');

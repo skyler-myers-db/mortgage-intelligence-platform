@@ -16,7 +16,9 @@
  * at mount. Back / Forward and the pagers navigate programmatically, so they
  * never pass this listener and never morph. The mark clears after a second,
  * on the next location commit (AppShell) and when the title lets go, so a
- * stale or duplicate name can never abort a later transition.
+ * stale or duplicate name can never abort a later transition. AppShell loads
+ * this module as its own small chunk, outside the initial closure; the
+ * title's release timing lives with the title.
  */
 import { MASKED_BORROWER_ID_RE } from './routeMeta';
 
@@ -26,60 +28,46 @@ const BORROWER_PATH_RE = /^\/borrower-360\/([^/]+)\/?$/;
 
 let marked: HTMLElement | null = null;
 let pending: { id: string; at: number } | null = null;
-let expiry: number | null = null;
+let expiry = 0;
 
 /** Drop the source name and the pending pair. */
 export function clearBorrowerMorph(): void {
   marked?.style.removeProperty('view-transition-name');
-  marked = null;
-  pending = null;
-  if (expiry !== null) window.clearTimeout(expiry);
-  expiry = null;
+  marked = pending = null;
+  window.clearTimeout(expiry);
 }
 
 /** The target's name: only for the id a click just marked, within the hold. */
 export function borrowerMorphNameFor(id: string | undefined): string | undefined {
-  if (!pending || pending.id !== id || performance.now() - pending.at >= HOLD_MS) return undefined;
-  return BORROWER_MORPH_NAME;
+  return pending && pending.id === id && performance.now() - pending.at < HOLD_MS ? BORROWER_MORPH_NAME : undefined;
 }
 
-/** How long the target keeps its name: --dur-base plus a frame margin (the token, read at runtime). */
-export function borrowerMorphReleaseMs(): number {
-  const raw = window.getComputedStyle(document.documentElement).getPropertyValue('--dur-base').trim();
-  const amount = Number.parseFloat(raw);
-  const base = Number.isFinite(amount) ? (raw.endsWith('ms') ? amount : amount * 1000) : 0;
-  return base + 100;
-}
-
+/** The masked id a same-origin, same-tab link to a dossier names, else null. */
 function linkedBorrowerId(anchor: HTMLAnchorElement): string | null {
-  if (anchor.target === '_blank') return null;
-  const url = new URL(anchor.href, window.location.href);
-  if (url.origin !== window.location.origin) return null;
-  const match = BORROWER_PATH_RE.exec(url.pathname);
-  if (!match) return null;
+  const match = anchor.target !== '_blank' && anchor.origin === window.location.origin
+    ? BORROWER_PATH_RE.exec(anchor.pathname)
+    : null;
   try {
-    const id = decodeURIComponent(match[1]);
+    const id = match ? decodeURIComponent(match[1]) : '';
     return MASKED_BORROWER_ID_RE.test(id) ? id : null;
   } catch {
     return null;
   }
 }
 
+/** A non-empty box that intersects .main's visible rect. */
 function onScreen(element: Element): boolean {
   const rect = element.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return false;
   const main = document.querySelector('.main')?.getBoundingClientRect();
-  if (!main) return false;
-  return rect.bottom > main.top && rect.top < main.bottom && rect.right > main.left && rect.left < main.right;
+  return Boolean(main && rect.width && rect.height && rect.bottom > main.top && rect.top < main.bottom
+    && rect.right > main.left && rect.left < main.right);
 }
 
 function onClick(event: MouseEvent): void {
-  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
-  if (!(anchor instanceof HTMLAnchorElement)) return;
-  const id = linkedBorrowerId(anchor);
-  if (!id || typeof document.startViewTransition !== 'function') return;
-  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  const id = anchor instanceof HTMLAnchorElement ? linkedBorrowerId(anchor) : null;
+  if (!id || !document.startViewTransition || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
   const source = document.querySelector(`tr[data-borrower-row="${CSS.escape(id)}"] .lead-table__borrower`);
   if (!(source instanceof HTMLElement) || !onScreen(source)) return;
   clearBorrowerMorph();

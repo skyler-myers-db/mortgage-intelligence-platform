@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BORROWER_MORPH_NAME,
   borrowerMorphNameFor,
-  borrowerMorphReleaseMs,
   clearBorrowerMorph,
   installBorrowerMorph,
 } from './borrowerMorph';
@@ -170,13 +169,5 @@ describe('borrower-id morph source', () => {
     uninstall = () => undefined;
     click('#open');
     expect(borrowerMorphNameFor(ID)).toBeUndefined();
-  });
-
-  it('releases the target after --dur-base plus a frame margin', () => {
-    document.documentElement.style.setProperty('--dur-base', '200ms');
-    expect(borrowerMorphReleaseMs()).toBe(300);
-    document.documentElement.style.setProperty('--dur-base', '0.25s');
-    expect(borrowerMorphReleaseMs()).toBe(350);
-    document.documentElement.style.removeProperty('--dur-base');
   });
 });

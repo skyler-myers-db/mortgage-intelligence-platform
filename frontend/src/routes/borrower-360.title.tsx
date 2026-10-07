@@ -11,7 +11,14 @@
  * transition. The name is set inline only; app.transitions.css carries none.
  */
 import { useEffect, useState } from 'react';
-import { borrowerMorphNameFor, borrowerMorphReleaseMs, clearBorrowerMorph } from '../lib/borrowerMorph';
+import { borrowerMorphNameFor, clearBorrowerMorph } from '../lib/borrowerMorph';
+
+/** --dur-base (the token, read at runtime) plus a frame margin. */
+function releaseMs(): number {
+  const raw = window.getComputedStyle(document.documentElement).getPropertyValue('--dur-base').trim();
+  const amount = Number.parseFloat(raw);
+  return (Number.isFinite(amount) ? (raw.endsWith('ms') ? amount : amount * 1000) : 0) + 100;
+}
 
 export function BorrowerTitle({ id }: { id: string }) {
   const [name, setName] = useState(() => borrowerMorphNameFor(id));
@@ -20,7 +27,7 @@ export function BorrowerTitle({ id }: { id: string }) {
     const release = window.setTimeout(() => {
       setName(undefined);
       clearBorrowerMorph();
-    }, borrowerMorphReleaseMs());
+    }, releaseMs());
     return () => window.clearTimeout(release);
   }, [name]);
   return (
