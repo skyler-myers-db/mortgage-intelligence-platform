@@ -10,7 +10,8 @@
  * The Offer reject has no default reason (D-approval-flow-d item 13, the
  * Offer half; tables-07 / states-08): the Reason opens on "Choose a reason",
  * Confirm reject stays aria-disabled (never natively disabled) until one is
- * chosen, and a submit without one focuses Reason and sends nothing.
+ * chosen, and a submit without one (the panel's Confirm reject or the bar's
+ * own Reject) focuses Reason and sends nothing.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -323,6 +324,22 @@ describe('Offer prior decisions', () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
       });
       expect(apiMocks.reject).not.toHaveBeenCalled();
+    });
+
+    it("the bar's own Reject without a reason lands on Reason and sends nothing", async () => {
+      await openReject();
+      // Reason took focus on open; move it away so the bar's Reject has to bring it back.
+      act(() => (document.activeElement as HTMLElement | null)?.blur());
+      expect(document.activeElement).not.toBe(reason());
+      const barReject = findButton('Reject')!;
+      expect(barReject.closest('form')).toBeNull();
+      await act(async () => {
+        barReject.click();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(apiMocks.reject).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(reason());
+      expect(findButton('Confirm reject')?.getAttribute('aria-disabled')).toBe('true');
     });
 
     it('sends the chosen reason with the unchanged body', async () => {

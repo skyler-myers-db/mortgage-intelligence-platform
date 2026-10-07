@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation, useParams } from 'react-router';
 import type { ApproveResult, RejectResult } from '../lib/apiTypes';
@@ -97,6 +97,7 @@ export default function OfferOrchestrator() {
   // No default reason (D-approval-flow-d item 13): every rationale_code in the
   // ledger is one a reviewer chose.
   const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode | ''>('');
+  const rejectReasonRef = useRef<HTMLSelectElement>(null);
   const salesTeam = useOfferSalesTeam();
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
@@ -331,8 +332,12 @@ export default function OfferOrchestrator() {
       setRejectReviewOpen(true);
       return;
     }
-    // Belt: the panel moves focus to Reason and sends nothing without one.
-    if (rejectReasonCode === '') return;
+    // No reason yet: send nothing and land on Reason. The panel's submit
+    // focuses it itself; this covers the bar's own Reject.
+    if (rejectReasonCode === '') {
+      rejectReasonRef.current?.focus();
+      return;
+    }
     if (rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0) {
       setApproveError('Rejection reason "Other" requires a rationale note.');
       return;
@@ -547,6 +552,7 @@ export default function OfferOrchestrator() {
               }}
               onSubmit={() => void onReject()}
               submitDisabled={snapshot.reading}
+              reasonRef={rejectReasonRef}
             />
           )}
         />

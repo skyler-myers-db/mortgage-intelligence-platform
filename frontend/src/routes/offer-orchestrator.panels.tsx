@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
@@ -67,6 +67,8 @@ interface RejectRationalePanelProps {
   onSubmit: () => void;
   /** Confirm reject waits while this open's snapshot read is in flight. */
   submitDisabled?: boolean;
+  /** The route's handle on Reason, so the bar's own Reject can focus it too. */
+  reasonRef?: RefObject<HTMLSelectElement | null>;
 }
 
 /**
@@ -83,8 +85,10 @@ export function RejectRationalePanel({
   onCancel,
   onSubmit,
   submitDisabled = false,
+  reasonRef: routeReasonRef,
 }: RejectRationalePanelProps) {
-  const reasonRef = useRef<HTMLSelectElement>(null);
+  const ownReasonRef = useRef<HTMLSelectElement>(null);
+  const reasonRef = routeReasonRef ?? ownReasonRef;
   const titleId = useId();
   useEffect(() => {
     reasonRef.current?.focus();
