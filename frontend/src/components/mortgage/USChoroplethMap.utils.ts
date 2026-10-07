@@ -285,27 +285,29 @@ export function buildCountiesPayload(
 /**
  * Walk a GeoJSON Polygon / MultiPolygon and produce an SVG compound path `d`
  * string. Handles MultiPolygon by concatenating with a space between sub-
- * polygons.
+ * polygons. `digits` is the coordinate precision: 1 (about 490 m in the
+ * Albers-1300 viewBox) for the state paths, 3 (about 5 m) for the ZCTA rung,
+ * whose areas are a few units wide.
  */
-export function geometryToPath(geom: Geometry): string {
+export function geometryToPath(geom: Geometry, digits = 1): string {
+  // Explicit arrows: a bare `.map(ringToPath)` would pass the array index as `digits`.
+  const polygon = (rings: number[][][]) => rings.map((ring) => ringToPath(ring, digits)).join(' ');
   if (geom.type === 'Polygon') {
-    return geom.coordinates.map(ringToPath).join(' ');
+    return polygon(geom.coordinates);
   }
   if (geom.type === 'MultiPolygon') {
-    return geom.coordinates
-      .map((poly) => poly.map(ringToPath).join(' '))
-      .join(' ');
+    return geom.coordinates.map((poly) => polygon(poly)).join(' ');
   }
   return '';
 }
 
-function ringToPath(ring: number[][]): string {
+function ringToPath(ring: number[][], digits: number): string {
   if (ring.length === 0) return '';
   const [x0, y0] = ring[0];
-  let d = `M${fixedAttr(x0, 1)},${fixedAttr(y0, 1)}`;
+  let d = `M${fixedAttr(x0, digits)},${fixedAttr(y0, digits)}`;
   for (let i = 1; i < ring.length; i += 1) {
     const [x, y] = ring[i];
-    d += `L${fixedAttr(x, 1)},${fixedAttr(y, 1)}`;
+    d += `L${fixedAttr(x, digits)},${fixedAttr(y, digits)}`;
   }
   return `${d}Z`;
 }
