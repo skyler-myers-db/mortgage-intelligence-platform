@@ -4288,7 +4288,7 @@ COMMENT ON TABLE mip_app.rum_daily IS
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_0X_rum_daily',
+    '2026_10_07_rum_daily',
     'Browser RUM day aggregates: mip_app.rum_daily, a 90-slot day ring keyed (slot, metric, route, facet, rating) over closed vocabularies; zero-in-place retention, SELECT/INSERT/UPDATE only'
 )
 ON CONFLICT (version) DO NOTHING;

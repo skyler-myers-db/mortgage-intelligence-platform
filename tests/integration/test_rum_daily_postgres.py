@@ -33,8 +33,8 @@ from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
-#: The placeholder version; the integrator dates it at merge.
-RUM_DAILY_VERSION = "2026_10_0X_rum_daily"
+#: Dated at the W5c merge: the fifth and last of the five W5c blocks.
+RUM_DAILY_VERSION = "2026_10_07_rum_daily"
 _MARKER = "-- Browser RUM day aggregates ---"
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
