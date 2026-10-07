@@ -116,18 +116,23 @@ test.describe('identity menu (shell-06)', () => {
     expect(edge.width).toBeGreaterThanOrEqual(1);
   });
 
-  test('an application-id session shows the account glyph, never initials or the borrower glyph', async ({ app, mockApi, page }) => {
-    mockApi.register('GET', '/api/session', () =>
-      sessionReply({ ...SIGNED_IN_APPROVER, actor_email: '4f3a9c1e-7b2d-4c1a-9e1f-0a1b2c3d4e5f', actor_display_name: null }),
-    );
-    await app.gotoRoute('/');
-    const trigger = page.getByRole('banner').getByTestId('identity-menu-trigger');
-    await expect(trigger.locator('svg')).toHaveCount(1);
-    await expect(trigger.locator('.identity-menu__avatar')).toHaveCount(0);
-    // The account glyph's outer ring (Icon.tsx `account`); the borrower's
-    // `user` glyph has no r=10 circle.
-    await expect(trigger.locator('svg circle[r="10"]')).toHaveCount(1);
-  });
+  for (const theme of THEMES) {
+    test(`${theme}: an application-id session shows the account glyph, never initials or the borrower glyph, and passes axe`, async ({ app, mockApi, page }) => {
+      mockApi.register('GET', '/api/session', () =>
+        sessionReply({ ...SIGNED_IN_APPROVER, actor_email: '4f3a9c1e-7b2d-4c1a-9e1f-0a1b2c3d4e5f', actor_display_name: null }),
+      );
+      await app.setTheme(theme);
+      await app.gotoRoute('/');
+      const trigger = page.getByRole('banner').getByTestId('identity-menu-trigger');
+      await expect(trigger.locator('svg')).toHaveCount(1);
+      await expect(trigger.locator('.identity-menu__avatar')).toHaveCount(0);
+      // The account glyph's outer ring (Icon.tsx `account`); the borrower's
+      // `user` glyph has no r=10 circle.
+      await expect(trigger.locator('svg circle[r="10"]')).toHaveCount(1);
+      // W5a w5-design-contract reviewNonBlocking[4]: the glyph state is scanned too.
+      await expectAxeClean(page, { key: { route: 'home', state: 'account-glyph' }, theme, known: {} });
+    });
+  }
 
   test('a theme picked in the menu repaints the app and the menu marks it', async ({ app, page }) => {
     await app.setTheme('dark');
