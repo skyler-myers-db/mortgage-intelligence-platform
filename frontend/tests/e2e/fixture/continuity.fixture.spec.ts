@@ -172,12 +172,13 @@ test.describe('recovery refetch', () => {
     await app.gotoRoute('/segment-intelligence');
     const banner = page.locator('.degraded-banner').first();
     await expect(banner).toContainText(/Reconnecting/);
-    await expect(page.locator('table.tbl:not([aria-hidden="true"])')).toHaveCount(0);
+    const rankedRows = page.getByRole('region', { name: 'Ranked borrowers table scroll region' }).locator('tbody tr');
+    await expect(rankedRows).toHaveCount(0);
     expect(leadReads(mockApi, 503)).toBeGreaterThan(0);
 
     // The warehouse comes back. Nothing is clicked from here on.
     outage.recover();
-    await expect(page.locator('table.tbl:not([aria-hidden="true"]) tbody tr').first(), 'the table refetched on the down → up edge').toBeVisible({
+    await expect(rankedRows.first(), 'the table refetched on the down → up edge').toBeVisible({
       timeout: 30_000,
     });
     await expect(page.locator('.degraded-banner:not(.degraded-banner--info)')).toHaveCount(0);

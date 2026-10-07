@@ -336,7 +336,8 @@ test.describe('queue-to-dossier wayfinding (shell-04)', () => {
     await page.getByRole('banner').getByRole('button', { name: 'Toggle console' }).focus();
     await page.keyboard.press('j');
     expect(page.url(), 'J on a topbar control stays put').toMatch(new RegExp(`/borrower-360/${ids[0]}$`));
-    await page.locator('main#main-content h1').focus();
+    // The painted heading: the Lead Queue kept hidden behind the dossier (W5c) has its own.
+    await page.locator('main#main-content h1').filter({ visible: true }).focus();
     await page.keyboard.press('j');
     await expect(page).toHaveURL(new RegExp(`/borrower-360/${ids[1]}$`));
     await app.settle();
