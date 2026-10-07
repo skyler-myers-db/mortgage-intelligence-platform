@@ -31,9 +31,14 @@ vi.mock('../lib/api', async (importOriginal) => ({
 vi.mock('../lib/configOptionsQuery', () => ({ useConfigOptionsQuery: () => ({ data: { lender_name: 'Summit Mortgage', rum_enabled: false } }) }));
 
 // RouteNav calls its dock hook once per render: a render counter that sees
-// every re-render. A Profiler's onRender missed the ones a context change
-// propagates into a child (measured: the facade re-rendered RouteNav on a
-// drawer open and the Profiler count stayed put).
+// every re-render. A Profiler placed directly under the provider misses a
+// re-render that a context change propagates into its child: react-dom 19.3
+// sets the Profiler's update flag from its childLanes in
+// attemptEarlyBailoutIfNoUpdate, before bailoutOnAlreadyFinishedWork's lazy
+// propagateParentContextChanges marks the consumer. Measured 2026-10-07: on
+// a drawer open a direct Profiler stayed at 1 commit while its useApp()
+// reader rendered twice; under a memo wrapper (as the row pins below sit) the
+// propagation starts above the Profiler and it counted both.
 const navRenders = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../hooks/useRouteNavDock', () => ({
   useRouteNavDock: () => {
