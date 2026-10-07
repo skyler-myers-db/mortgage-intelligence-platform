@@ -15,7 +15,6 @@
     "frontend/src/components/layout/AppShell.tsx": {"jsx-a11y/no-redundant-roles":2},
     "frontend/src/components/layout/Console.tsx": {"jsx-a11y/label-has-associated-control":11,"jsx-a11y/no-redundant-roles":1},
     "frontend/src/components/layout/IdentityMenuPanel.tsx": {"jsx-a11y/control-has-associated-label":1,"jsx-a11y/interactive-supports-focus":1},
-    "frontend/src/components/layout/Rail.tsx": {"jsx-a11y/role-supports-aria-props":1},
     "frontend/src/components/layout/ShellPanelBoundaries.tsx": {"jsx-a11y/no-redundant-roles":1},
     "frontend/src/components/layout/Topbar.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/interactive-supports-focus":2},
     "frontend/src/components/mortgage/AssignmentLifecycleAdvance.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-static-element-interactions":1},
