@@ -1,7 +1,8 @@
 // Shell-initial and its frames render only on failure: React Compiler memo
 // caches would roughly double these small renderers in the initial chunk for
 // no measurable render saving (same call as DegradedBanner.tsx and
-// RouteFallback.tsx).
+// RouteFallback.tsx). Re-measured 2026-10-07 (stack-09 item 6): compiled, the
+// module costs +0.47 KiB br / +2.17 KiB raw of initial JS, so it stays.
 'use no memo';
 
 import { useCallback, useRef, useState, type ReactNode, type RefObject } from 'react';
