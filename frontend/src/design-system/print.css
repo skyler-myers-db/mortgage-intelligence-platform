@@ -117,23 +117,28 @@
   }
 
   /* Workspace chrome, overlays and anything that is not the page itself.
-     #refusal-reports: consented, expiring refusal text never reaches paper. */
-  .rail,
-  .topbar,
-  .route-nav,
-  .tweaks,
-  .genie,
-  .genie__fab,
-  .drawer,
-  .cmdk,
-  .evidence-hovercard,
-  .toast-region,
-  #refusal-reports,
-  .degraded-banner,
-  .sr-skip-link,
-  .btn,
-  .surface__icon,
-  .tbl__expand {
+     #refusal-reports: consented, expiring refusal text never reaches paper.
+     :is() takes its most specific argument (the id), so an open panel's own
+     display rule (.tweaks.is-open, .genie.is-open) can never put it back on
+     paper: the open Console used to print. */
+  :root :is(
+    .rail,
+    .topbar,
+    .route-nav,
+    .tweaks,
+    .genie,
+    .genie__fab,
+    .drawer,
+    .cmdk,
+    .evidence-hovercard,
+    .toast-region,
+    #refusal-reports,
+    .degraded-banner,
+    .sr-skip-link,
+    .btn,
+    .surface__icon,
+    .tbl__expand
+  ) {
     display: none;
   }
 

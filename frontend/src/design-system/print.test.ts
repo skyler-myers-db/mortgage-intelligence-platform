@@ -42,11 +42,16 @@ describe('print.css reveal contract', () => {
  */
 const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '');
 
-/** The selector lists of every rule whose declarations include `display: none`. */
+/**
+ * The selectors of every rule whose declarations include `display: none`,
+ * with a `:root :is(...)` list flattened to its arguments.
+ */
 function hiddenSelectors(css: string): string[] {
   const hidden: string[] = [];
   for (const match of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (/display:\s*none/.test(match[2])) hidden.push(...match[1].split(',').map((part) => part.trim()));
+    if (!/display:\s*none/.test(match[2])) continue;
+    const list = /:root :is\(([^)]*)\)/.exec(match[1])?.[1] ?? match[1];
+    hidden.push(...list.split(',').map((part) => part.trim()));
   }
   return hidden;
 }
@@ -67,11 +72,13 @@ describe('print.css paper contract (responsive-08)', () => {
     expect([...declared].filter((name) => !remapped.has(name))).toEqual([]);
   });
 
-  it('hides the overlays, the toasts and the refusal reports on paper', () => {
+  it('hides the chrome, the overlays, the toasts and the refusal reports on paper', () => {
     const hidden = hiddenSelectors(printCss());
-    for (const selector of ['.genie__fab', '.cmdk', '.evidence-hovercard', '.toast-region', '#refusal-reports']) {
+    for (const selector of ['.rail', '.topbar', '.tweaks', '.genie', '.genie__fab', '.cmdk', '.evidence-hovercard', '.toast-region', '#refusal-reports']) {
       expect(hidden, selector).toContain(selector);
     }
+    // At id specificity, so an open panel's own display rule never wins.
+    expect(stripComments(printCss())).toMatch(/:root :is\([^)]*#refusal-reports[^)]*\)\s*\{\s*display:\s*none;/s);
   });
 
   it('shows the provenance block that the screen keeps hidden, and unclips the tables', () => {
