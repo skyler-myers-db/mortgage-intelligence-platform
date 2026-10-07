@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -97,26 +98,35 @@ class PermissionDenied(Exception):  # the SDK error class name the probe recogni
     status_code = 403
 
 
-def _message(message_id: str, age_days: float, *, status: str = "COMPLETED", query: bool = True) -> Any:
+def _message(message_id: str, age_days: float, *, status: str = "COMPLETED", query: bool = True,
+             now_s: float = NOW_S) -> Any:
     attachments = [SimpleNamespace(attachment_id=f"att-{message_id}", query=SimpleNamespace(query=SECRET_SQL), text=None)]
     return SimpleNamespace(
         message_id=message_id,
         id=message_id,
         status=SimpleNamespace(value=status),
-        created_timestamp=int(NOW_S * 1000 - age_days * DAY_MS),
+        created_timestamp=int(now_s * 1000 - age_days * DAY_MS),
         attachments=attachments if query else [SimpleNamespace(attachment_id="txt", query=None, text=SECRET_QUESTION)],
         content=SECRET_QUESTION,
         user_id=SECRET_EMAIL,
     )
 
 
+class Boom(Exception):  # an unrecognized mid-run failure; its message must never be recorded
+    pass
+
+
 class _Genie:
     def __init__(self, messages: list[Any], *, refuse: bool = False, fail_after_days: float | None = None,
-                 status_now: dict[str, str] | None = None) -> None:
+                 status_now: dict[str, str] | None = None, execute_raises: BaseException | None = None,
+                 get_message_ok: int | None = None) -> None:
         self.messages = {m.message_id: m for m in messages}
         self.refuse = refuse
         self.fail_after_days = fail_after_days
         self.status_now = status_now or {}
+        self.execute_raises = execute_raises
+        self.get_message_ok = get_message_ok  # None: never raises; n: raises after n good reads
+        self.reads = 0
         self.executed: list[str] = []
 
     def get_space(self, space_id: str) -> Any:
@@ -133,6 +143,9 @@ class _Genie:
         return SimpleNamespace(messages=list(self.messages.values()), next_page_token=None)
 
     def get_message(self, space_id: str, conversation_id: str, message_id: str) -> Any:
+        self.reads += 1
+        if self.get_message_ok is not None and self.reads > self.get_message_ok:
+            raise Boom(f"{SECRET_EMAIL} {SECRET_QUESTION}")
         message = self.messages[message_id]
         status = self.status_now.get(message_id)
         return SimpleNamespace(**{**vars(message), "status": SimpleNamespace(value=status)}) if status else message
@@ -140,6 +153,8 @@ class _Genie:
     def execute_message_attachment_query(self, space_id: str, conversation_id: str, message_id: str,
                                          attachment_id: str) -> Any:
         self.executed.append(message_id)
+        if self.execute_raises is not None:
+            raise self.execute_raises
         if self.refuse:
             raise PermissionDenied(SECRET_EMAIL)
         age_days = (NOW_S * 1000 - self.messages[message_id].created_timestamp) / DAY_MS
@@ -153,15 +168,22 @@ class _Genie:
 
 
 class _Client:
-    def __init__(self, genie: _Genie, *, state: str = "RUNNING") -> None:
+    def __init__(self, genie: _Genie, *, state: str = "RUNNING", warehouse_ok: int | None = None) -> None:
         self.genie = genie
-        self.warehouses = SimpleNamespace(
-            get=lambda _id: SimpleNamespace(state=SimpleNamespace(value=state), cluster_size="Small")
-        )
+        self.warehouse_reads = 0
+
+        def get(_id: str) -> Any:
+            self.warehouse_reads += 1
+            if warehouse_ok is not None and self.warehouse_reads > warehouse_ok:
+                raise Boom(f"{SECRET_EMAIL} {SECRET_SQL}")
+            return SimpleNamespace(state=SimpleNamespace(value=state), cluster_size="Small")
+
+        self.warehouses = SimpleNamespace(get=get)
 
 
-def _ladder() -> list[Any]:
-    return [_message("m-day", 0.5), _message("m-week", 3), _message("m-month", 10), _message("m-old", 40)]
+def _ladder(now_s: float = NOW_S) -> list[Any]:
+    ages = (("m-day", 0.5), ("m-week", 3), ("m-month", 10), ("m-old", 40))
+    return [_message(message_id, age, now_s=now_s) for message_id, age in ages]
 
 
 def _probe(clients: dict[str, _Client], **kwargs: Any) -> tuple[dict[str, Any], int]:
@@ -261,3 +283,115 @@ def test_the_live_json_never_carries_question_sql_rows_or_emails(tmp_path: Path)
     assert json.loads(text)["mode"] == "live"
     for sentinel in (SECRET_QUESTION, SECRET_SQL, SECRET_ROW, SECRET_EMAIL, "zyrplax", "Zyrplax"):
         assert sentinel not in text, sentinel
+
+
+# ------------------------------- mid-run auth or network: INCONCLUSIVE, never FAIL
+
+SENTINELS = (SECRET_QUESTION, SECRET_SQL, SECRET_ROW, SECRET_EMAIL, "zyrplax", "Zyrplax")
+
+
+def _main_json(tmp_path: Path, clients: dict[str, _Client], *extra: str) -> tuple[int, dict[str, Any], str]:
+    out = tmp_path / "live.json"
+    code = spike.main(
+        ["--live", "--profile", "me", "--space-id", "space-1", "--json", str(out), *extra],
+        client_factory=lambda profile: clients[profile],
+    )
+    text = out.read_text(encoding="utf-8")
+    return code, json.loads(text), text
+
+
+@pytest.mark.parametrize("read", ["genie.get_message", "warehouses.get"])
+def test_a_pre_execute_read_that_fails_mid_run_is_unavailable_and_exits_inconclusive(
+    tmp_path: Path, read: str
+) -> None:
+    # The first candidate (<= 1 day) reads and executes; every later read
+    # raises. The 7-30 day bucket therefore measured nothing: criterion 2 is
+    # INCONCLUSIVE and the run exits 2, never an uncaught 1 and never FAIL.
+    # main() reads the wall clock, so the ladder is aged from it.
+    genie = _Genie(_ladder(time.time()), get_message_ok=1 if read == "genie.get_message" else None)
+    me = _Client(genie, warehouse_ok=1 if read == "warehouses.get" else None)
+    other = _Client(_Genie(_ladder(), refuse=True))
+
+    code, result, text = _main_json(tmp_path, {"me": me, "other": other}, "--other-profile", "other", "--app-identity")
+
+    assert code == 2, result["criteria"]
+    by_bucket = {e["bucket"]: e for e in result["executions"]}
+    assert by_bucket["le_1d"]["outcome"] == "ok"
+    for bucket in ("1_7d", "7_30d", "gt_30d"):
+        failed = by_bucket[bucket]
+        assert failed["outcome"] == "unavailable", failed
+        assert failed["error_class"] == "Boom" and failed["failed_read"] == read
+    assert genie.executed == ["m-day"]
+    assert result["criteria"]["criterion_2"] == {"verdict": "INCONCLUSIVE", "executed_7_30d": 0}
+    assert result["criteria"]["criterion_3"]["verdict"] == "PASS"
+    for sentinel in SENTINELS:
+        assert sentinel not in text, sentinel
+
+
+def _transport_errors() -> list[BaseException]:
+    import requests
+    from databricks.sdk import errors
+
+    return [
+        errors.Unauthenticated(SECRET_EMAIL),
+        errors.TooManyRequests(SECRET_EMAIL),
+        errors.InternalError(SECRET_EMAIL),
+        errors.TemporarilyUnavailable(SECRET_EMAIL),
+        errors.DeadlineExceeded(SECRET_EMAIL),
+        TimeoutError(SECRET_EMAIL),
+        ConnectionError(SECRET_EMAIL),
+        requests.exceptions.ConnectionError(SECRET_EMAIL),
+        requests.exceptions.ReadTimeout(SECRET_EMAIL),
+    ]
+
+
+@pytest.mark.parametrize("exc", _transport_errors(), ids=lambda exc: f"{type(exc).__module__}.{type(exc).__name__}")
+def test_an_auth_or_transport_failure_on_execute_is_unavailable_never_a_fail(
+    tmp_path: Path, exc: BaseException
+) -> None:
+    code, result, text = _main_json(tmp_path, {"me": _Client(_Genie(_ladder(), execute_raises=exc))})
+
+    assert {e["outcome"] for e in result["executions"]} == {"unavailable"}
+    assert {e["error_class"] for e in result["executions"]} == {type(exc).__name__}
+    assert {c["verdict"] for c in result["criteria"].values()} == {"INCONCLUSIVE"}
+    assert code == 2
+    assert SECRET_EMAIL not in text
+
+
+def test_a_measured_answer_still_scores_refused_or_fail() -> None:
+    from databricks.sdk import errors
+
+    missing, code = _probe({"me": _Client(_Genie(_ladder(), execute_raises=errors.ResourceDoesNotExist("x")))})
+    assert {(e["outcome"], e["http_status"]) for e in missing["executions"]} == {("refused", 404)}
+    assert missing["criteria"]["criterion_2"]["verdict"] == "FAIL" and code == 1
+
+    bad, code = _probe({"me": _Client(_Genie(_ladder(), execute_raises=errors.InvalidState("x")))})
+    assert {(e["outcome"], e["http_status"]) for e in bad["executions"]} == {("error", 400)}
+    assert bad["criteria"]["criterion_2"]["verdict"] == "FAIL" and code == 1
+
+
+def test_an_unauthenticated_other_identity_is_not_an_isolation_pass() -> None:
+    from databricks.sdk import errors
+
+    clients = {
+        "me": _Client(_Genie(_ladder())),
+        "other": _Client(_Genie(_ladder(), execute_raises=errors.Unauthenticated(SECRET_EMAIL))),
+    }
+    result, code = _probe(clients, other_profile="other", app_identity=True)
+
+    assert result["isolation"]["outcome"] == "unavailable" and result["isolation"]["http_status"] == 401
+    assert result["criteria"]["criterion_3"]["other_identity_refused"] == "INCONCLUSIVE"
+    assert code == 2
+
+
+def test_an_unexpected_failure_after_startup_is_inconclusive(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(SECRET_SQL)
+
+    monkeypatch.setattr(live, "_criteria", broken)
+    result, code = _probe({"me": _Client(_Genie(_ladder()))})
+
+    assert code == 2
+    assert result["phase"] == "measure" and result["error_class"] == "RuntimeError"
+    assert {c["verdict"] for c in result["criteria"].values()} == {"INCONCLUSIVE"}
+    assert SECRET_SQL not in json.dumps(result)

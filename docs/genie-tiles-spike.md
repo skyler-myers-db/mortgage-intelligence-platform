@@ -96,11 +96,20 @@ ONE execute of the first identity's attachment under the other identity.
 
 It records ids, states, the HTTP status or exception class, durations, row
 counts and the warehouse state and size only: never question text,
-conversation titles, SQL text, row values, emails or headers. Verdicts:
+conversation titles, SQL text, row values, emails or headers (an exception's
+message is never recorded). Each execute ends `ok`, `refused` (403/404: the
+identity may not run it), `error` (any other answer: a measured failure) or
+`unavailable` (401, 429, 5xx, a timeout or a transport error: nothing was
+measured). A `warehouses.get` or `genie.get_message` read that fails mid-run
+is `unavailable` with its `failed_read`, and an unexpected exception after
+start-up returns INCONCLUSIVE (`phase: measure`). Only `ok`, `refused` and
+`error` executes count towards a verdict, so an auth or network failure
+mid-run is never a FAIL. Verdicts:
 
 - criterion 2 PASS when a 7-30 day attachment executed with 200, FAIL when
-  every 7-30 day execute failed, otherwise INCONCLUSIVE;
-- criterion 3 needs the same identity's 200, the other identity refused, and
+  every measured 7-30 day execute failed, otherwise INCONCLUSIVE;
+- criterion 3 needs the same identity's 200, the other identity refused (a
+  401 under the other identity is `unavailable`, not a refusal), and
   the App service principal's half: INCONCLUSIVE without `--other-profile`,
   and INCONCLUSIVE for the App half unless run with `--app-identity` under
   the App's own identity (the reason is recorded in the JSON);

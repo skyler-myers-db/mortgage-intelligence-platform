@@ -18,6 +18,14 @@ and the warehouse state and size. NEVER question text, conversation titles,
 SQL text, row values, emails or headers. Verdicts for pass criteria 2-4 of
 docs/genie-tiles-spike.md; exit 0 PASS, 1 FAIL, 2 INCONCLUSIVE (auth or
 network, or nothing to measure). Nothing in backend/ or frontend/ imports it.
+
+An execute ends ``ok``, ``refused`` (403/404: the identity may not run it),
+``error`` (any other answer: a measured failure) or ``unavailable`` (auth,
+429, 5xx, timeout or transport: nothing was measured). A failed pre-execute
+read (``warehouses.get``, ``genie.get_message``) is ``unavailable`` too, and
+an unexpected exception anywhere after start-up returns INCONCLUSIVE (exit
+2). Only ``ok``, ``refused`` and ``error`` count towards a verdict, so an
+auth or network failure mid-run never reads as FAIL.
 """
 
 from __future__ import annotations
@@ -31,7 +39,40 @@ EXECUTABLE = frozenset({"COMPLETED", "EXECUTING_QUERY"})
 WARM_P95_MS = 15_000  # docs/load-baseline.md: Genie p95
 MAX_CONVERSATIONS = 200
 PAGE_SIZE = 50
-REFUSED_CLASSES = frozenset({"PermissionDenied", "NotFound", "ResourceDoesNotExist", "Unauthenticated"})
+# Matched against every class in the exception's MRO (ResourceDoesNotExist is
+# a NotFound, Unknown an InternalError). Unauthenticated is NOT a refusal: a
+# 401 proves only that the credentials failed, never that access was denied.
+REFUSED_CLASSES = frozenset({"PermissionDenied", "NotFound"})
+UNAVAILABLE_CLASSES = frozenset(
+    {
+        "Unauthenticated",
+        "TooManyRequests",
+        "Cancelled",
+        "InternalError",
+        "TemporarilyUnavailable",
+        "DeadlineExceeded",
+        "OperationTimeout",
+        "TimeoutError",
+        "ConnectionError",
+        "Timeout",
+    }
+)
+# databricks-sdk errors carry no status attribute; the class names the status
+# (databricks.sdk.errors.platform.STATUS_CODE_MAPPING).
+SDK_STATUS = {
+    "BadRequest": 400,
+    "Unauthenticated": 401,
+    "PermissionDenied": 403,
+    "NotFound": 404,
+    "ResourceConflict": 409,
+    "TooManyRequests": 429,
+    "Cancelled": 499,
+    "InternalError": 500,
+    "NotImplemented": 501,
+    "TemporarilyUnavailable": 503,
+    "DeadlineExceeded": 504,
+}
+MEASURED = frozenset({"ok", "refused", "error"})
 PASS, FAIL, INCONCLUSIVE = "PASS", "FAIL", "INCONCLUSIVE"
 
 ClientFactory = Callable[[str], Any]
@@ -57,7 +98,29 @@ def _attachment_id(message: Any) -> str | None:
 
 def _http_status(exc: BaseException) -> int | None:
     status = getattr(exc, "status_code", None)
-    return int(status) if isinstance(status, int) else None
+    if isinstance(status, int):
+        return status
+    return next((SDK_STATUS[c.__name__] for c in type(exc).__mro__ if c.__name__ in SDK_STATUS), None)
+
+
+def _outcome(exc: BaseException) -> str:
+    """refused, unavailable (auth, throttling, 5xx, transport) or error."""
+
+    names = {c.__name__ for c in type(exc).__mro__}
+    status = _http_status(exc)
+    if names & REFUSED_CLASSES or status in {403, 404}:
+        return "refused"
+    if names & UNAVAILABLE_CLASSES or (status is not None and (status in {401, 429, 499} or status >= 500)):
+        return "unavailable"
+    if isinstance(exc, OSError) and "DatabricksError" not in names:
+        return "unavailable"  # a socket, TLS or requests transport error (SDK errors are OSErrors too)
+    return "error"
+
+
+def _failure(outcome: str, exc: BaseException, **extra: Any) -> dict[str, Any]:
+    """The class and status of a failed call only: never its message."""
+
+    return {"outcome": outcome, "error_class": type(exc).__name__, "http_status": _http_status(exc), **extra}
 
 
 def _row_count(response: Any) -> int | None:
@@ -126,12 +189,7 @@ def _execute(client: Any, space_id: str, ids: dict[str, str], monotonic: Callabl
             space_id, ids["conversation_id"], ids["message_id"], ids["attachment_id"]
         )
     except Exception as exc:  # noqa: BLE001 - recorded as a class and an HTTP status only
-        return {
-            "outcome": "refused" if type(exc).__name__ in REFUSED_CLASSES else "error",
-            "error_class": type(exc).__name__,
-            "http_status": _http_status(exc),
-            "duration_ms": round((monotonic() - started) * 1000, 1),
-        }
+        return _failure(_outcome(exc), exc, duration_ms=round((monotonic() - started) * 1000, 1))
     return {
         "outcome": "ok",
         "http_status": 200,
@@ -144,15 +202,18 @@ def _attempt(
     client: Any, space_id: str, warehouse_id: str, ids: dict[str, str], *, allow_wake: bool,
     monotonic: Callable[[], float],
 ) -> dict[str, Any]:
-    warehouse = client.warehouses.get(warehouse_id)
-    record: dict[str, Any] = {
-        **ids,
-        "warehouse_state": _value(getattr(warehouse, "state", None)),
-        "warehouse_size": str(getattr(warehouse, "cluster_size", None) or ""),
-    }
-    if record["warehouse_state"] != "RUNNING" and not allow_wake:
-        return {**record, "outcome": "skipped_cold"}
-    status = _value(getattr(client.genie.get_message(space_id, ids["conversation_id"], ids["message_id"]), "status", None))
+    record: dict[str, Any] = dict(ids)
+    read = "warehouses.get"
+    try:
+        warehouse = client.warehouses.get(warehouse_id)
+        record["warehouse_state"] = _value(getattr(warehouse, "state", None))
+        record["warehouse_size"] = str(getattr(warehouse, "cluster_size", None) or "")
+        if record["warehouse_state"] != "RUNNING" and not allow_wake:
+            return {**record, "outcome": "skipped_cold"}
+        read = "genie.get_message"
+        status = _value(getattr(client.genie.get_message(space_id, ids["conversation_id"], ids["message_id"]), "status", None))
+    except Exception as exc:  # noqa: BLE001 - auth or network mid-run: this candidate measured nothing
+        return {**record, **_failure("unavailable", exc, failed_read=read)}
     record["message_status"] = status
     if status not in EXECUTABLE:
         return {**record, "outcome": "skipped_state"}
@@ -166,9 +227,12 @@ def _verdict(*parts: str) -> str:
 
 
 def _criteria(executions: list[dict[str, Any]], isolation: dict[str, Any] | None, *, app_identity: bool) -> dict[str, Any]:
-    tried = [e for e in executions if e["bucket"] == "7_30d" and e["outcome"] in {"ok", "refused", "error"}]
+    # MEASURED excludes 'unavailable' (and the skips): an auth or network
+    # failure is never a FAIL, so a run whose executes were all unavailable
+    # stays INCONCLUSIVE.
+    tried = [e for e in executions if e["bucket"] == "7_30d" and e["outcome"] in MEASURED]
     c2 = PASS if any(e["outcome"] == "ok" for e in tried) else (FAIL if tried else INCONCLUSIVE)
-    ran = [e for e in executions if e["outcome"] in {"ok", "refused", "error"}]
+    ran = [e for e in executions if e["outcome"] in MEASURED]
     same = PASS if any(e["outcome"] == "ok" for e in ran) else (FAIL if ran else INCONCLUSIVE)
     if isolation is None:
         other = INCONCLUSIVE
@@ -215,8 +279,42 @@ def measure_live(
         warehouse_id = str(client.genie.get_space(space_id).warehouse_id)
         buckets = _candidates(client, space_id, clock() * 1000)
     except Exception as exc:  # noqa: BLE001 - auth or network: nothing was measured
-        verdicts = {f"criterion_{n}": {"verdict": INCONCLUSIVE} for n in (2, 3, 4)}
-        return {"mode": "live", "space_id": space_id, "error_class": type(exc).__name__, "criteria": verdicts}, 2
+        return _inconclusive(space_id, "startup", exc), 2
+    try:
+        return _measure(
+            client_factory,
+            client,
+            space_id=space_id,
+            warehouse_id=warehouse_id,
+            buckets=buckets,
+            other_profile=other_profile,
+            max_executions=max_executions,
+            allow_wake=allow_wake,
+            app_identity=app_identity,
+            monotonic=monotonic,
+        )
+    except Exception as exc:  # noqa: BLE001 - the backstop: an unexpected failure is never a FAIL
+        return _inconclusive(space_id, "measure", exc), 2
+
+
+def _inconclusive(space_id: str, phase: str, exc: BaseException) -> dict[str, Any]:
+    verdicts = {f"criterion_{n}": {"verdict": INCONCLUSIVE} for n in (2, 3, 4)}
+    return {"mode": "live", "space_id": space_id, "phase": phase, "error_class": type(exc).__name__, "criteria": verdicts}
+
+
+def _measure(
+    client_factory: ClientFactory,
+    client: Any,
+    *,
+    space_id: str,
+    warehouse_id: str,
+    buckets: dict[str, list[dict[str, str]]],
+    other_profile: str | None,
+    max_executions: int,
+    allow_wake: bool,
+    app_identity: bool,
+    monotonic: Callable[[], float],
+) -> tuple[dict[str, Any], int]:
     executions: list[dict[str, Any]] = []
     for bucket, candidates in buckets.items():
         for ids in candidates[: max(0, max_executions)]:
@@ -231,7 +329,7 @@ def measure_live(
             other = client_factory(other_profile)
             isolation = {**ids, **_execute(other, space_id, ids, monotonic)}
         except Exception as exc:  # noqa: BLE001 - the other identity could not even sign in
-            isolation = {**ids, "outcome": "error", "error_class": type(exc).__name__, "http_status": _http_status(exc)}
+            isolation = {**ids, **_failure("unavailable", exc)}
     criteria = _criteria(executions, isolation, app_identity=app_identity)
     result = {
         "mode": "live",
