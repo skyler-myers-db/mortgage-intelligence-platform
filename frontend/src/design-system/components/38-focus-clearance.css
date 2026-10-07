@@ -52,6 +52,13 @@
      into view ({block:'nearest'}) as the pointer moves over it. The nav's
      margin there rolled a scrolled menu back under a still pointer, so a
      click picked the option above the one aimed at.
+   - `.zip-tiles` contents: the map's ZIP drill is an overflow-y scroller of
+     tile buttons with roving arrow-key focus. The nav is not over it, so
+     the margin only over-scrolled the list when a tile already in its view
+     took focus. The other nested scrollers in `.main` need nothing:
+     `.lead-queue-scope` holds no focusable element and
+     `.filter-row--lead-queue` does not scroll (lead-queue.css); the census
+     is shell-nav-followups.fixture.spec.ts.
    - /ask-genie while its Ask tab shows (a `.genie-composer` outside any
      hidden tabpanel): routes/ask-genie.css already clears the nav there
      with `.main` scroll-padding, and a margin as well put the nav in twice
@@ -71,6 +78,6 @@
 .main:has(> .route-nav[data-docked]):not(:has(.genie-composer:not([hidden] *))) {
   --nav-clear: calc(var(--route-nav-block) + var(--focus-ring-width) + var(--focus-ring-offset));
 }
-:where(.main :not(.route-nav *, .tbl-wrap *, .filter-menu *, .lead-approve-dialog *)) {
+:where(.main :not(.route-nav *, .tbl-wrap *, .filter-menu *, .lead-approve-dialog *, .zip-tiles *)) {
   scroll-margin-block-start: var(--nav-clear);
 }

@@ -231,6 +231,12 @@ describe('focus clearance (a11y-v2)', () => {
     expect(focusClearancePartial()).toMatch(/:where\(\.main :not\([^)]*\.filter-menu \*[^)]*\)\)/);
   });
 
+  it('leaves the map\'s ZIP tile list, a roving-focus scroller of its own, out of the nav\'s margin', () => {
+    // Measured, not assumed (shell-nav-followups.fixture.spec.ts): the margin
+    // over-scrolled the list when a tile already in its view took focus.
+    expect(focusClearancePartial()).toMatch(/:where\(\.main :not\([^)]*\.zip-tiles \*[^)]*\)\)/);
+  });
+
   // The rendered proofs that the two conditions agree (the Ask tab clears the
   // nav once; the Workflows tab keeps this rule) are in lead-queue.fixture.spec.ts.
   it('leaves /ask-genie to its own .main scroll-padding while its Ask tab shows', () => {
