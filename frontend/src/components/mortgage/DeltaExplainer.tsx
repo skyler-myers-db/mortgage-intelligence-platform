@@ -104,7 +104,8 @@ function Breakdown({
         Addressable borrowers (the whole book); the Lead Queue shows the contactable subset.
       </p>
       <Waterfall steps={steps} />
-      <table className="tbl delta-explainer__table">
+      {/* Read-only rows (only the state links act): .tbl--static drops the row pointer and hover fill. */}
+      <table className="tbl tbl--static delta-explainer__table">
         <caption className="sr-only">Change in {response.label} by state</caption>
         <thead>
           <tr>

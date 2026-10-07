@@ -202,6 +202,14 @@ describe('DeltaExplainer', () => {
     expect(document.querySelector('[data-testid="delta-explainer"]')?.innerHTML).not.toContain('signal-danger');
   });
 
+  it('is a static table: a row click does nothing, so no row pointer or hover fill (only the state links act)', async () => {
+    respond(body());
+    await render();
+    const table = document.querySelector('.delta-explainer__table');
+    expect(table?.classList.contains('tbl')).toBe(true);
+    expect(table?.classList.contains('tbl--static')).toBe(true);
+  });
+
   it("gives the row headers and the total the .tbl td cell box, not the user agent's centred bold", async () => {
     respond(body());
     await render();
