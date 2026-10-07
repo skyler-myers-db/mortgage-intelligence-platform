@@ -4,8 +4,7 @@ import { ROUTE_NAV_BLOCK_PROPERTY, ROUTE_NAV_DOCKED_ATTRIBUTE, routeNavDocks } f
 /** `.main`'s content-box block size: the client height less its block padding (the Console sheet's gutter). */
 function contentBlockSize(main: HTMLElement): number {
   const style = getComputedStyle(main);
-  const padding = (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
-  return main.clientHeight - padding;
+  return main.clientHeight - (Number.parseFloat(style.paddingTop) || 0) - (Number.parseFloat(style.paddingBottom) || 0);
 }
 
 /**
@@ -23,8 +22,8 @@ export function useRouteNavDock(navRef: RefObject<HTMLElement | null>): void {
     const nav = navRef.current;
     const main = nav?.closest<HTMLElement>('.main');
     if (!nav || !main) return undefined;
-    let navBlock = nav.offsetHeight;
-    let scrollport = contentBlockSize(main);
+    let navBlock = 0;
+    let scrollport = 0;
     let docked = false;
     let written = '';
     const apply = () => {
@@ -39,16 +38,20 @@ export function useRouteNavDock(navRef: RefObject<HTMLElement | null>): void {
         main.style.setProperty(ROUTE_NAV_BLOCK_PROPERTY, value);
       }
     };
-    apply();
     const remeasure = () => {
       navBlock = nav.offsetHeight;
       scrollport = contentBlockSize(main);
       apply();
     };
+    remeasure();
+    // `.main`'s entry is observed with box 'content-box', so its contentRect
+    // is the content box (the contentBoxSize block size, in this horizontal
+    // writing mode); the nav's is its border box, offsetHeight where the
+    // entry lacks borderBoxSize.
     const observer = typeof ResizeObserver === 'function'
       ? new ResizeObserver((entries) => {
           for (const entry of entries) {
-            if (entry.target === main) scrollport = entry.contentBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+            if (entry.target === main) scrollport = entry.contentRect.height;
             else navBlock = entry.borderBoxSize?.[0]?.blockSize ?? nav.offsetHeight;
           }
           apply();

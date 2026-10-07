@@ -88,37 +88,39 @@ export function RouteNav() {
   // lists), which keeps the list and its name in WebKit / VoiceOver and is
   // no redundant <ul role="list">. A cluster with no visible link renders
   // nothing.
-  const groups = NAVIGATION_GROUPS.map((group) => ({
-    ...group,
-    items: group.routes.filter(shown).map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] })),
-  })).filter((group) => group.items.length > 0);
   return (
     // data-rum-target: field telemetry attributes an interaction to "nav"
     // (D-platform-process-d2); a static word, never an identifier.
     <nav ref={navRef} aria-label="Main navigation" className="route-nav" data-rum-target="nav">
-      {groups.map((group) => (
-        <div
-          key={group.id}
-          className={`route-nav__group${group.id === 'tools' ? ' route-nav__group--end' : ''}`}
-          role="list"
-          aria-label={group.label}
-        >
-          {group.items.map((i) => (
-            <div key={i.id} className="route-nav__item" role="listitem">
-              <NavLink
-                to={i.to}
-                end={i.to === '/'}
-                onMouseEnter={() => onIntent(i.to)}
-                onFocus={() => onIntent(i.to)}
-                className="route-nav__link"
-              >
-                <Icon name={i.route.icon} size={12} />
-                <span className="route-nav__label">{i.route.navLabel}</span>
-              </NavLink>
-            </div>
-          ))}
-        </div>
-      ))}
+      {NAVIGATION_GROUPS.map((group) => {
+        const ids = group.routes.filter(shown);
+        return ids.length > 0 && (
+          <div
+            key={group.id}
+            className={group.id === 'tools' ? 'route-nav__group route-nav__group--end' : 'route-nav__group'}
+            role="list"
+            aria-label={group.label}
+          >
+            {ids.map((id) => {
+              const to = navTargetFor(id, lastBorrowerId);
+              return (
+                <div key={id} className="route-nav__item" role="listitem">
+                  <NavLink
+                    to={to}
+                    end={to === '/'}
+                    onMouseEnter={() => onIntent(to)}
+                    onFocus={() => onIntent(to)}
+                    className="route-nav__link"
+                  >
+                    <Icon name={ROUTES[id].icon} size={12} />
+                    <span className="route-nav__label">{ROUTES[id].navLabel}</span>
+                  </NavLink>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </nav>
   );
 }
