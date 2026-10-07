@@ -212,6 +212,9 @@ export function useSvgViewBox({ svgRef, fit, bounds, from = null }: SvgViewBoxIn
     };
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0 || !event.isPrimary) return;
+      // A drag that ended with no click (pointercancel, a release outside the
+      // window) must not swallow this new press's click.
+      swallowClick = false;
       press = { id: event.pointerId, x: event.clientX, y: event.clientY, view: live.current, dragging: false };
     };
     const onPointerMove = (event: PointerEvent) => {

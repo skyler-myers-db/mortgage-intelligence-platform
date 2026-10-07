@@ -164,6 +164,23 @@ describe('useSvgViewBox', () => {
     expect(clicks).toHaveBeenCalledTimes(1);
   });
 
+  it('a drag that ends with no click (pointercancel) never swallows the next press\'s click', async () => {
+    await mount();
+    act(() => api?.zoomIn());
+    const clicks = vi.fn();
+    svg().addEventListener('click', clicks);
+    svg().dispatchEvent(pointer('pointerdown', 200, 150));
+    for (let step = 1; step <= 3; step += 1) svg().dispatchEvent(pointer('pointermove', 200 + step * 10, 150));
+    // The browser took the gesture over: no pointerup, no click.
+    svg().dispatchEvent(pointer('pointercancel', 230, 150));
+    await frames();
+    // The next press is a plain click on a ZIP area: it reaches the stage.
+    svg().dispatchEvent(pointer('pointerdown', 120, 150));
+    svg().dispatchEvent(pointer('pointerup', 120, 150));
+    svg().dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(clicks).toHaveBeenCalledTimes(1);
+  });
+
   it('zooms a ctrl-wheel burst with no render per event and commits once when the wheel goes idle', async () => {
     await mount();
     const before = commits;
