@@ -1,0 +1,30 @@
+/* A figure in Genie's answer prose that matches one returned cell (audit
+   genie-10 phase 2). deviation:genie-figure-highlight. Loaded with the Genie
+   answer (GenieAnswerFigures.tsx), never in the initial bundle.
+
+   The UA <mark> paints a highlighter fill (Mark / MarkText); this one keeps
+   the surrounding ink and adds a dotted accent underline, so the prose still
+   reads as prose and the figure reads as "checked". */
+.genie-md-figure {
+  background-color: transparent;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--accent-ink);
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.22em;
+  cursor: help;
+}
+
+/* Forced colours: the author colours above are reverted to the UA's, which
+   for <mark> is the system Mark / MarkText highlighter; author system colours
+   are kept, so the figure states the surrounding canvas and ink outright and
+   its underline takes the text colour (no accent hue). */
+@media (forced-colors: active) {
+  .genie-md-figure {
+    background-color: Canvas;
+    color: CanvasText;
+    text-decoration-color: CanvasText;
+  }
+}

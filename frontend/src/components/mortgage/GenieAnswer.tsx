@@ -13,6 +13,7 @@ import { GenieAnswerSections, GenieRowsVisual } from './GenieAnswer.sections';
 import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown';
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { GenieProofPanel } from './GenieAnswerProof';
+import { GenieFigureScopes, genieFigureScopes } from './GenieAnswerFigures';
 import { GenieAnswerFeedback } from './GenieAnswerFeedback';
 import { GenieActionReceipt } from './GenieActionReceipt';
 import { GenieRefusalCard } from './GenieRefusalCard';
@@ -173,6 +174,12 @@ export function GenieAnswer({
   // family's guard-validated rewordings as its own "Ask" row, so a second row
   // of backend samples would only duplicate it (audit 2026-09-21 `genie-05`).
   const withheld = isWithheldGenieSource(payload.source);
+  // genie-10 phase 2: figures that match one returned cell are marked in the
+  // prose of a final, trusted answer that lists its verified figures; never
+  // withheld prose, a governed-action receipt or an answer without claims.
+  const figureScopes = isTrustedGenieSource(payload.source) && !withheld && !isGovernedActionResult
+    ? genieFigureScopes(payload, cleanedAnswer)
+    : null;
   const effectiveFollowUps = withheld
     ? []
     : follow_up_questions && follow_up_questions.length > 0
@@ -280,21 +287,27 @@ export function GenieAnswer({
       {/* Sections ARE the body when the sweep shipped them; the stitched
           top-level `answer` would repeat every one of them. */}
       {hasSections ? (
-        <GenieAnswerSections
-          summary={payload.summary}
-          sections={sections}
-          workspaceHost={workspaceHost}
-          cellCohort={cellCohort}
-          dense={dense}
-          exportBase={exportBase}
-          onAnnounce={onAnnounce}
-        />
+        <GenieFigureScopes value={figureScopes}>
+          <GenieAnswerSections
+            summary={payload.summary}
+            sections={sections}
+            workspaceHost={workspaceHost}
+            cellCohort={cellCohort}
+            dense={dense}
+            exportBase={exportBase}
+            onAnnounce={onAnnounce}
+          />
+        </GenieFigureScopes>
       ) : receiptId ? (
         <p className="genie-md-p genie-md-p--first">
           <GenieActionReceipt message={answer} auditEventId={receiptId} />
         </p>
       ) : (
-        cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} workspaceHost={workspaceHost} />
+        cleanedAnswer && (
+          <GenieFigureScopes value={figureScopes}>
+            <MarkdownAnswer text={cleanedAnswer} workspaceHost={workspaceHost} />
+          </GenieFigureScopes>
+        )
       )}
       {/* A withheld turn is not a dead end: the card names the family in
           lender language, offers guard-validated rewordings, restores the
