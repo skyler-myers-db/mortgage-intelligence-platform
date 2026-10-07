@@ -19,6 +19,10 @@
  *    holds at 1150px and at every one of its eight anchors;
  *  - a narrow WHO column (a 1366 laptop, the Console open) shows every id and
  *    city whole, and whatever still truncates keeps its text in a tooltip;
+ *  - the hero's actions keep the two-row stack beside the title at full
+ *    width, and where the main column wraps them under the title (the
+ *    Console open, the 1150px canary) they are one start-aligned row, so the
+ *    hero is no taller than its title and one control row (home.css);
  *  - KPI values are at least the size of the page title;
  *  - no two cards touch: every measured gap is at least --gap-grid;
  *  - exactly one primary button above the fold, into the ranked queue;
@@ -35,7 +39,8 @@
  * legend row fails "the tallest answer band"; putting "Monitor for later"
  * back in the bar fails "WHAT TO OFFER reconciles"; dropping the WHO
  * column's narrow layout fails "a narrow WHO column keeps every id and city
- * whole".
+ * whole"; dropping home.css's wrapped-hero query, or its 42vw-cap lift, fails
+ * "the hero actions" (Console open, and the 1150px canary).
  */
 import type { Locator, Page } from '@playwright/test';
 import { expectAxeClean } from './axe';
@@ -154,6 +159,55 @@ async function gapGridPx(page: Page): Promise<number> {
   );
   expect(raw, '--gap-grid resolves to a pixel length').toMatch(/^\d+(\.\d+)?px$/);
   return Number.parseFloat(raw);
+}
+
+/**
+ * Let the shell's finite transitions end, so a sample taken while the Console
+ * slides in (and .main's gutter snaps) proves nothing about the settled layout.
+ */
+async function finishTransitions(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+        .map((animation) => animation.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+type HeroBox = Box & { height: number };
+
+interface HeroGeometry {
+  hero: HeroBox;
+  title: HeroBox;
+  actions: HeroBox;
+  /** The hero's row gap: the space between the title line and a wrapped actions line. */
+  rowGap: number;
+  /** The gold "Refreshed" chip, FetchedAt and the primary action, in DOM order. */
+  items: HeroBox[];
+}
+
+/** The Home hero: its title block, its actions slot and the three actions in it. */
+async function heroGeometry(page: Page): Promise<HeroGeometry> {
+  await expect(page.locator('.proto-hero__actions [data-testid="fetched-at"] .fetched-at__label')).toBeVisible();
+  return page.locator('#main-content .proto-hero').evaluate((hero) => {
+    const box = (element: Element, name: string) => {
+      const rect = element.getBoundingClientRect();
+      return { name, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, height: rect.height };
+    };
+    const actions = hero.querySelector('.proto-hero__actions')!;
+    const items = Array.from(actions.querySelectorAll('.chip, [data-testid="fetched-at"], .btn--primary'), (element) =>
+      box(element, element.className.split(' ')[0]),
+    );
+    return {
+      hero: box(hero, 'proto-hero'),
+      title: box(hero.firstElementChild!, 'title'),
+      actions: box(actions, 'proto-hero__actions'),
+      rowGap: Number.parseFloat(getComputedStyle(hero).rowGap),
+      items,
+    };
+  });
 }
 
 for (const theme of FIXTURE_THEMES) {
@@ -333,16 +387,8 @@ for (const theme of FIXTURE_THEMES) {
       ]) {
         await page.setViewportSize({ width: narrow.width, height: FOLD });
         if (narrow.console) await app.openConsole();
-        // Let the shell's finite transitions end, then check the column really
-        // is narrow: a sample taken while the Console slides in proves nothing.
-        await page.evaluate(() =>
-          Promise.all(
-            document
-              .getAnimations()
-              .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
-              .map((animation) => animation.finished.catch(() => undefined)),
-          ),
-        );
+        // Then check the column really is narrow.
+        await finishTransitions(page);
         await expect
           .poll(() => who.evaluate((el) => el.getBoundingClientRect().width), { message: `${narrow.label}: WHO list width` })
           .toBeLessThan(WHO_ONE_LINE_MIN);
@@ -363,6 +409,52 @@ for (const theme of FIXTURE_THEMES) {
         await expect(place).toHaveAttribute('title', (await place.textContent()) ?? '');
         const chip = row.locator('.chip');
         await expect(chip).toHaveAttribute('title', (await chip.locator('.chip__label').textContent()) ?? '');
+      }
+    });
+
+    test('the hero actions: the stack beside the title at full width, one start-aligned row under it with the Console open', async ({ app, page }) => {
+      // Full width (the Console closed): the gold chip over FetchedAt and the
+      // action, beside the title, and the hero is its title block's height.
+      const wide = await heroGeometry(page);
+      expect(wide.items.map((item) => item.name)).toEqual(['chip', 'fetched-at', 'btn']);
+      expect(wide.actions.left, 'full width: the actions sit beside the title block').toBeGreaterThan(wide.title.right);
+      expect(wide.items[0].bottom, 'full width: the gold chip sits over the controls').toBeLessThanOrEqual(
+        Math.min(wide.items[1].top, wide.items[2].top),
+      );
+      expect(wide.hero.height, 'full width: the hero is as tall as its title block').toBeLessThanOrEqual(wide.title.height + 0.5);
+
+      // A main column too narrow for the stack beside the title wraps the
+      // actions under it. There the stack's second row grew the hero 32px and
+      // pushed the answer band down (W5b home-hero-wrap): the actions must be
+      // one start-aligned row, the hero the title plus one control row, as
+      // before FetchedAt joined the hero (the pre-W5b console capture).
+      for (const narrow of [
+        { label: '1440x900 with the Console open', width: 1440, console: true },
+        // responsive.spec.ts's narrow canary: the 42vw cap (483px) is narrower
+        // than the 528px row, so the row only holds if the wrapped slot lifts it.
+        { label: '1150x900, the Console closed', width: 1150, console: false },
+      ]) {
+        await page.setViewportSize({ width: narrow.width, height: FOLD });
+        if (narrow.console) await app.openConsole();
+        await finishTransitions(page);
+        const geometry = await heroGeometry(page);
+        const { title, actions, items } = geometry;
+        expect(actions.top, `${narrow.label}: the actions wrap under the title`).toBeGreaterThanOrEqual(title.bottom);
+        expect(Math.abs(items[0].left - title.left), `${narrow.label}: the row starts at the title's edge`).toBeLessThanOrEqual(0.5);
+        const centres = items.map((item) => item.top + item.height / 2);
+        const minHeight = Math.min(...items.map((item) => item.height));
+        expect(Math.max(...centres) - Math.min(...centres), `${narrow.label}: chip, FetchedAt and action centre on one row`).toBeLessThan(
+          minHeight / 2,
+        );
+        for (let index = 1; index < items.length; index += 1) {
+          expect(items[index].left, `${narrow.label}: ${items[index].name} follows ${items[index - 1].name}`).toBeGreaterThanOrEqual(
+            items[index - 1].right,
+          );
+        }
+        const controlRow = Math.max(...items.map((item) => item.height));
+        expect(geometry.hero.height, `${narrow.label}: the hero is its title and one control row`).toBeLessThanOrEqual(
+          title.height + geometry.rowGap + controlRow + 0.5,
+        );
       }
     });
 

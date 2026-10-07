@@ -151,7 +151,8 @@ export default function Home() {
         // deviation:home-fetched-at: a two-row stack (home.css .home-hero),
         // the gold refresh chip over the briefing's age and the one primary
         // action, so the hero keeps its title row at 1440x900 and the answer
-        // band clears the fold.
+        // band clears the fold. Wrapped under the title by a narrow main
+        // column (the Console open), the three lay out as one row instead.
         <div className="home-hero">
           {/* Freshness reads as relative age ("Refreshed 3 hours ago"); the
               <time> carries the instant and an absolute-UTC title, so two

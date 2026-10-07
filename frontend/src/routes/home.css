@@ -42,7 +42,8 @@
    tallest answer band ended below the fold
    (home-answer.fixture.spec.ts). The stack is about 345px
    wide and 70px tall, under the 76px title block, so the hero keeps
-   its one-row height.
+   its one-row height. A main column too narrow for it beside the title
+   lays it out as one row under the title instead (WRAPPED HERO below).
    ============================================================ */
 .home-hero {
   display: flex;
@@ -61,8 +62,48 @@
 }
 /* The row's gap spaces FetchedAt; its own start margin is for a table title. */
 .home-hero__controls .fetched-at { margin-inline-start: 0; }
-/* A stacked hero (10-native-analytics.css, <= 640px) starts its actions. */
-@container main (max-width: 640px) {
-  .home-hero { align-items: flex-start; }
+
+/* WRAPPED HERO: one start-aligned row under the title, the prototype's
+   right slot (Module 0 Prototype.html:2148, one centred flex row). When
+   the main column is too narrow for the stack beside the title (the
+   Console open at 1440x900 leaves a 1044px container, 1033px in CI) the
+   slot wraps under the title, where the stack's second row grew the hero
+   from 138 to 170px and pushed the answer band 32px down. Here the chip,
+   FetchedAt and the action share one 528px row: the wrapped hero is the
+   title, the 24px gap and one 37.5px control row, as before FetchedAt
+   joined it, and the row wraps only when its line cannot hold it.
+
+   The breakpoint is the real wrap width: the container that just holds
+   the title block, the gap and the widest settled stack beside each
+   other. A container condition cannot read var(), so the tokens are
+   spelled out:
+       48px     .main__inner's inline padding, 2 x --sp-6
+     + 25.13 x --fs-hero
+                the title block, the h1's max-content: 25.124em at every
+                size measured (755.7px at 1440, 707.5px at 1280); the
+                lede's 559px is narrower. The clamp() is --fs-hero
+                (tokens.css; home.css.test.ts pins the copy), so the
+                breakpoint follows the fluid title as the viewport moves
+                it; a px breakpoint would fit one viewport only
+     + 24px     .proto-hero's gap
+     + 371px    the widest settled stack, "Fetched yesterday · Refresh"
+                (FetchedAt 161px + --sp-2 + the action's 202px; 343px as
+                "Fetched now · Refresh", the chip 177px). A read in flight
+                ("Refreshing…") adds 24px for its moment
+     + 16px     --sp-4 of slack: Linux Chromium sets the h1 up to 8px wider
+     = 459px + 25.13 x --fs-hero: 1214.9px at 1440 (Console open 1044px:
+       one row; closed 1368px: the stack), 1166.7px at 1280 (closed
+       1208px, 1197px in CI: the stack), 1127.5px at 1150 (1078px: one row).
+   Below it the slot cannot sit beside the title (the row needs 528px, not
+   the stack's 371px), so it always has a line of its own and drops
+   .proto-hero__actions' 42vw cap (483px at the 1150px canary) to use it.
+   It also covers the <= 640px column hero (10-native-analytics.css). */
+@container main (max-width: calc(459px + 25.13 * clamp(1.5rem, 1.2vw + 0.8rem, 2.5rem))) {
+  .proto-hero__actions:has(> .home-hero) { max-inline-size: 100%; }
+  .home-hero {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
   .home-hero__controls { justify-content: flex-start; }
 }
