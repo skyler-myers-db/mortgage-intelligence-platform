@@ -83,12 +83,15 @@ describe('DeltaExplainer', () => {
     vi.useRealTimers();
   });
 
-  async function render(baselineDate = '2026-09-01'): Promise<void> {
+  async function render(
+    baselineDate = '2026-09-01',
+    measure: HomeSummaryAttributionResponse['measure'] = 'refi_economics_screen',
+  ): Promise<void> {
     await act(async () => {
       root.render(
         <QueryClientProvider client={createMipQueryClient()}>
           <MemoryRouter>
-            <DeltaExplainer explainer={{ measure: 'refi_economics_screen', baselineDate, liveDisplay: '+2,250' }} />
+            <DeltaExplainer explainer={{ measure, baselineDate, liveDisplay: '+2,250' }} />
           </MemoryRouter>
         </QueryClientProvider>,
       );
@@ -176,6 +179,27 @@ describe('DeltaExplainer', () => {
       'Per-state attribution is not snapshotted for this measure yet.',
     );
     expect(text()).not.toContain('No daily funnel snapshot covers this period yet');
+    expect(document.querySelector('[data-testid="delta-explainer-waterfall"]')).toBeNull();
+  });
+
+  it('gives competitor_lien the generic empty state until a snapshot records it, never the not-snapshotted note', async () => {
+    // W5c INT-9 (w5-evidence-drawer x w5-gold-slot-cache): the measure is
+    // snapshotted now, so before the first post-deploy snapshot the route
+    // answers the no-snapshot shape with snapshotted: true.
+    respond(body({
+      measure: 'competitor_lien', label: 'competitor liens',
+      baseline_total: null, current_total: null, total_change: null, states: [], unattributed_change: null,
+      baseline_snapshot_date: null, current_snapshot_date: null, snapshotted: true,
+    }));
+    await render('2026-09-01', 'competitor_lien');
+    for (let i = 0; i < 40 && !text().includes('No daily funnel snapshot'); i += 1) {
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+    }
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      '/api/v1/home/summary/attribution?measure=competitor_lien&baseline=2026-09-01',
+    );
+    expect(text()).toContain('No daily funnel snapshot covers this period yet');
+    expect(document.querySelector('[data-testid="delta-explainer-not-snapshotted"]')).toBeNull();
     expect(document.querySelector('[data-testid="delta-explainer-waterfall"]')).toBeNull();
   });
 

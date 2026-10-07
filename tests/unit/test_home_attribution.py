@@ -413,13 +413,44 @@ def test_per_state_rows_and_the_remainder_reconcile_to_the_total(monkeypatch: py
     assert attributed + (response.unattributed_change or 0) == response.total_change
 
 
-@pytest.mark.skipif(
-    "competitor_lien" not in get_args(HomeAttributionMeasure),
-    reason="the HomeAttributionMeasure member lands with w5-evidence-drawer (integrator merge)",
-)
 def test_the_competitor_lien_measure_answers_no_snapshot_until_one_records_it() -> None:
+    # Was skip-guarded until the W5c merge brought w5-evidence-drawer's
+    # HomeAttributionMeasure member; it can no longer skip.
+    assert "competitor_lien" in get_args(HomeAttributionMeasure)
     sql = _FakeSql(dates={"at_or_before": None, "after": None, "latest": None}, values=[])
-    response = _service(sql).attribution("competitor_lien", BASELINE)  # type: ignore[arg-type]
+    response = _service(sql).attribution("competitor_lien", BASELINE)
     assert response.measure == "competitor_lien"
     assert response.label == "competitor liens"
     assert response.states == [] and response.current_total is None
+
+
+def test_the_competitor_lien_route_answers_the_no_snapshot_shape_until_a_snapshot_records_it(
+    audit: InMemoryAuditStore,
+) -> None:
+    """W5c INT-9 (w5-evidence-drawer x w5-gold-slot-cache), through the real route.
+
+    competitor_lien is a snapshotted measure now (MEASURE_COLUMNS carries it,
+    unpatched), so the route reaches the service instead of answering
+    ``snapshotted: false``. Until the first post-deploy snapshot records the
+    nullable column, the answer is the honest no-snapshot shape: no dates, no
+    totals, no states, no per-state read and no audit row. The drawer renders
+    its generic empty state for it (DeltaExplainer.test.tsx), never the
+    not-snapshotted note.
+    """
+
+    sql = _FakeSql(dates={"at_or_before": None, "after": None, "latest": None}, values=[])
+    _install(_service(sql))
+    response = TestClient(app).get(
+        f"/api/v1/home/summary/attribution?measure=competitor_lien&baseline={_recent_baseline()}",
+        headers=IDENTITY,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["measure"], body["label"], body["snapshotted"]) == ("competitor_lien", "competitor liens", True)
+    assert (body["baseline_snapshot_date"], body["current_snapshot_date"]) == (None, None)
+    assert (body["baseline_total"], body["current_total"], body["total_change"]) == (None, None, None)
+    assert body["states"] == [] and body["unattributed_change"] is None
+    assert any("at_or_before" in statement for statement, _ in sql.statements)
+    assert not any(" AS value " in statement for statement, _ in sql.statements)
+    assert audit.list(limit=100) == []
