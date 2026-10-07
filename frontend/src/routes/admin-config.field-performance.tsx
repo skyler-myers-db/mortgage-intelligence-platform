@@ -1,7 +1,7 @@
 import { useState, type ReactElement, type ReactNode } from 'react';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { Chip, SurfaceTitle } from '../components/Primitives';
-import { AsyncStatus, type AsyncQuery } from '../components/ui/AsyncState';
+import { AsyncState, type AsyncQuery } from '../components/ui/AsyncState';
 import { EmptyState } from '../components/ui/EmptyState';
 import { FetchedAt } from '../components/ui/FetchedAt';
 import {
@@ -187,27 +187,38 @@ function Loading(): ReactElement {
   return <div className="skeleton field-perf__skeleton" data-testid="field-performance-loading" aria-hidden="true" />;
 }
 
+const isEmptyReading = (data: FieldPerformanceResponse): boolean =>
+  data.vitals.length + data.interactions.length + data.client_errors.length === 0;
+
+/**
+ * The shared AsyncState owns the states: a failed read (a first load or a
+ * later Refresh) shows the describeApiError callout with Retry, above the
+ * last good tables when there are some, and the day-zero EmptyState appears
+ * only for a settled, error-free zero, never while the latest read failed.
+ */
 function Readings({ query }: { query: UseQueryResult<FieldPerformanceResponse> }): ReactElement {
-  const { data } = query;
-  if (!data) {
-    if (query.error) return <AsyncStatus query={asyncQuery(query)} subject="Field performance" />;
-    return <Loading />;
-  }
-  if (data.vitals.length + data.interactions.length + data.client_errors.length === 0) {
-    return (
-      <EmptyState
-        cause="day-zero"
-        title="No field measurements in this window yet."
-        secondary="Rows appear about a minute after people use the app with browser telemetry on."
-      />
-    );
-  }
   return (
-    <>
-      <Section title="p75 by route"><VitalsTable data={data} /></Section>
-      <Section title="INP by interaction"><InteractionsTable data={data} /></Section>
-      <Section title="Client errors"><ClientErrorsTable data={data} /></Section>
-    </>
+    <AsyncState
+      query={asyncQuery(query)}
+      subject="Field performance"
+      loading={<Loading />}
+      isEmpty={isEmptyReading}
+      empty={
+        <EmptyState
+          cause="day-zero"
+          title="No field measurements in this window yet."
+          secondary="Rows appear about a minute after people use the app with browser telemetry on."
+        />
+      }
+    >
+      {(data) => (
+        <>
+          <Section title="p75 by route"><VitalsTable data={data} /></Section>
+          <Section title="INP by interaction"><InteractionsTable data={data} /></Section>
+          <Section title="Client errors"><ClientErrorsTable data={data} /></Section>
+        </>
+      )}
+    </AsyncState>
   );
 }
 

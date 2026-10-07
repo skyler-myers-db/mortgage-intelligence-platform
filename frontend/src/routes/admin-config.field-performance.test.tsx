@@ -4,7 +4,9 @@
  * Administration -> Field performance (D-platform-process-d2 step 12): the
  * '<20 samples' floor, the rating chips, the RUM-off empty state that reads
  * nothing, a 503 in the describeApiError vocabulary with Retry, the 7/28
- * toggle, an explicit Refresh as the only re-read, and no refetch on focus.
+ * toggle, an explicit Refresh as the only re-read, no refetch on focus, and
+ * a failed Refresh that stays on screen (never swallowed under stale tables,
+ * never read as an empty window).
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -62,6 +64,12 @@ const RESPONSE: FieldPerformanceResponse = {
     { route: '/borrower-360/:id', error_name: 'TypeError', error_kind: 'render', boundary: 'drawer', count: 3 },
   ],
 };
+
+const LAKEBASE_503 = new ApiError('lakebase is temporarily unavailable', {
+  path: '/api/admin/field-performance',
+  status: 503,
+  dependency: 'lakebase',
+});
 
 function client(): QueryClient {
   return new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
@@ -143,9 +151,7 @@ describe('FieldPerformancePanel', () => {
   });
 
   it('answers a 503 with the describeApiError copy and a Retry that reads once more', async () => {
-    mocks.fetchFieldPerformance.mockRejectedValue(
-      new ApiError('lakebase is temporarily unavailable', { path: '/api/admin/field-performance', status: 503, dependency: 'lakebase' }),
-    );
+    mocks.fetchFieldPerformance.mockRejectedValue(LAKEBASE_503);
     const { container } = await render();
     await settle();
 
@@ -194,5 +200,43 @@ describe('FieldPerformancePanel', () => {
     const { container } = await render();
     await settle();
     expect(container.querySelector('[data-empty-cause]')?.textContent).toContain('No field measurements in this window yet.');
+  });
+
+  it('keeps a failed Refresh on screen with Retry above the last good tables', async () => {
+    const { container } = await render();
+    await settle();
+    expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(0);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+
+    mocks.fetchFieldPerformance.mockRejectedValue(LAKEBASE_503);
+    await act(async () => buttonNamed(container, /^Refresh field performance$/).click());
+    await settle();
+
+    expect(mocks.fetchFieldPerformance).toHaveBeenCalledTimes(2);
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Couldn't load field performance");
+    expect(alert?.textContent).not.toContain('lakebase is temporarily unavailable');
+    expect(buttonNamed(container, /^Retry loading field performance$/)).toBeTruthy();
+    // The stale tables stay, under the callout.
+    const leadQueue = [...container.querySelectorAll('tbody tr')].find((row) => row.textContent?.startsWith('/lead-queue'));
+    expect(leadQueue).toBeTruthy();
+    expect(alert?.compareDocumentPosition(leadQueue as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('never claims an empty window while the latest read failed', async () => {
+    mocks.fetchFieldPerformance.mockResolvedValue({ ...RESPONSE, vitals: [], interactions: [], client_errors: [] });
+    const { container } = await render();
+    await settle();
+    expect(container.textContent).toContain('No field measurements in this window yet.');
+
+    mocks.fetchFieldPerformance.mockRejectedValue(LAKEBASE_503);
+    await act(async () => buttonNamed(container, /^Refresh field performance$/).click());
+    await settle();
+
+    expect(mocks.fetchFieldPerformance).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Couldn't load field performance");
+    expect(buttonNamed(container, /^Retry loading field performance$/)).toBeTruthy();
+    expect(container.textContent).not.toContain('No field measurements in this window yet.');
+    expect(container.querySelector('[data-empty-cause]')).toBeNull();
   });
 });
