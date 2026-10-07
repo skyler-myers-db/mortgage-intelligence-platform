@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.schemas.sales import DISPOSITION_NOTES_RETIRED, CallDisposition, DispositionRequest
 from tests.fixtures import mock_population as mock_data
+from tests.fixtures.reviewed_approval import reviewed_approval
 
 ROOT = Path(__file__).resolve().parents[2]
 client = TestClient(app)
@@ -71,20 +72,13 @@ def test_the_schema_accepts_only_an_absent_null_or_blank_note() -> None:
 
 def _approved_and_assigned() -> str:
     borrower_id = mock_data.BORROWERS[0].borrower_id
-    draft = client.post("/api/outreach/draft", json={"borrower_id": borrower_id, "channel": "email"})
-    assert draft.status_code == 200
+    # review_mode is required since w5-lead-queue-paging (W5c): the approve
+    # certifies the generated draft (tests/fixtures/reviewed_approval.py).
     approved = client.post(
         "/api/outreach/approve",
-        json={
-            "borrower_id": borrower_id,
-            "offer_code": "refi_plus_heloc",
-            "channel": "email",
-            "draft_subject": draft.json()["subject"],
-            "draft_body": draft.json()["body"],
-            "request_id": str(uuid4()),
-        },
+        json=reviewed_approval(client, borrower_id, request_id=str(uuid4())),
     )
-    assert approved.status_code == 200
+    assert approved.status_code == 200, approved.text
     assigned = client.post(
         f"/api/leads/{borrower_id}/assign",
         json={"assigned_to_email": LO, "strategy": "manual"},
