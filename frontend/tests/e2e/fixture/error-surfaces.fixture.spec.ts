@@ -79,7 +79,8 @@ test.describe('a bannered warehouse outage (states-03 a)', () => {
           await expect(page.locator(`${MAIN} [data-async-status="bannered"]`)).toHaveCount(route.statuses);
           await expect(page.locator(`${MAIN} [data-async-status="bannered"]`).first()).toContainText(CALM);
         } else {
-          await expect(page.locator(MAIN)).toContainText('This dossier reloads when the analytics warehouse reconnects.');
+          await expect(page.locator(`${MAIN} h1`)).toHaveText(`Borrower ${PRIMARY_BORROWER.borrower_id}`);
+          await expect(page.locator(MAIN)).toContainText('Loading this dossier. It reloads when the analytics warehouse reconnects.');
         }
         await expect(page.locator(`${MAIN} [role="alert"]`)).toHaveCount(0);
         await expectBuyerSafe(page);
