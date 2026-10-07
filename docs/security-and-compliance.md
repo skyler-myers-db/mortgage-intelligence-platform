@@ -189,7 +189,9 @@ the pull request that ships the behaviour, never earlier.
 | Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
 | Borrower decision history (`borrower_decisions.list_borrower_decisions`) | none | on a Borrower 360 or Offer mount; never polled or prefetched | audit-free |
-| Audit ledger (`audit.list_events`, `list_event_page`, `audit_rollups`, `audit_facets`, `count_events`) | `VIEW_AUDIT_LEDGER` (`ledger_surface` events / events_page / rollups / facets / count) | once per served read by an admin or auditor | background, fail-open (`audit.dropped`) |
+| Audit ledger (`audit.list_events`, `list_event_page`, `audit_rollups`, `audit_facets`, `count_events`) | `VIEW_AUDIT_LEDGER` (`ledger_surface` events / events_page / rollups / facets / count) | once per served read by an admin or auditor; the explorer reads its facets only on an explicit Action / Event type menu open (W5d), never on load, hover or focus; with 'Exclude my ledger reads' the read still writes its own row | background, fail-open (`audit.dropped`) |
+| Audit explorer page CSV (`audit.create_audit_export_receipt`) | `AUDIT_EXPORT` | once per download, before it starts (W5d): the CSV and its event-id list are hashed in the browser, the server recomputes the id digest, and only the recorded row releases the file; administrators only (the control is not rendered for an auditor) | synchronous, fail-closed (no download without the row; no key: 503 and no row) |
+| Export PDF, Borrower 360 and the audit explorer (`print_receipt.create_print_receipt`) | `PRINT_EXPORT` (`print_surface`, `printed_row_count`, and the masked `borrower_id` or the keyed `filter_fingerprint`) | once per Export PDF, before the print dialog opens (W5d); the page prints the DOM already rendered, nothing is re-read, and a Ctrl/Cmd-P print writes nothing and says it is unaudited | synchronous, fail-closed (no print without the row; a ledger print with no key: 503 and no row) |
 | Another actor's decision receipt (`audit_receipt.read_decision_receipt`) | `VIEW_AUDIT_LEDGER` (`receipt`, `read_audit_event_id`) | once per served cross-actor read | background, fail-open |
 | Refusal reports list (`refusal_reports_admin.list_refusal_reports`) | `VIEW_AUDIT_LEDGER` (`refusal_reports`) | once per served page by an admin or auditor, only on an explicit "Show refusal reports", a family filter, Load more or Retry; report metadata only, never question text | background, fail-open (`audit.dropped`) |
 | Refusal question read (`refusal_reports_admin.read_refusal_report_question`) | `VIEW_REFUSAL_REPORT_TEXT` (the report's 16-hex `question_hash` label and, when governed, its `refusal_reason` code) | once per served "Show question" click; never on hover, focus, prefetch or poll | synchronous, fail-closed: written before the text is returned, and a failed write answers 503 with no text |
@@ -235,12 +237,41 @@ fingerprint; a plain value is never stored. Two digests stay unkeyed on
 purpose: `audit_pagination.audit_filter_fingerprint` inside the
 HMAC-authenticated ledger cursor (only ledger readers receive it), and
 `LEAD_EXPORT`'s fingerprint, which an auditor recomputes from the CSV's
-`# filters=` line. Residual (recorded 2026-10-01, owner in the 2026-09-21
-UI/UX audit report, 12.3): the explorer's
-'Page CSV' downloads the loaded page without `POST /audit/export-receipt`, so
-no `AUDIT_EXPORT` row precedes it (the read that loaded that page wrote its
-own `VIEW_AUDIT_LEDGER` row); W5d `w5-print-glossary-sales-manager` wires the receipt and
-settles whether auditors may export.
+`# filters=` line. The 2026-10-01 residual (the explorer's 'Page CSV'
+downloading without `POST /audit/export-receipt`) is closed by W5d
+`w5-print-glossary-sales-manager`: the download waits for its `AUDIT_EXPORT`
+row, as in the table above.
+
+### Printing and the explorer's exclusion (W5d)
+
+- **`PRINT_EXPORT`** (`backend/services/print_receipt.py`) is a server-owned
+  event type: `POST /api/audit/event` refuses it with 400. The row stores only
+  `print_surface` (`borrower_360` or `audit_ledger`), `printed_row_count`, and
+  the masked `borrower_id` (a dossier) or the KEYED `filter_fingerprint` of
+  the explorer query (a ledger page). Never the filters, an id list or row
+  contents. A metadata policy refusal answers a fixed 422; Lakebase down or a
+  missing fingerprint key answers 503, and no row is written.
+- **Who may print and export (ruling, W5d, delegated owner).** Every
+  authenticated Borrower 360 reader may print the dossier, and every ledger
+  reader (administrator or read-only auditor) may print the explorer page
+  already rendered to them: one borrower, or one page, per `PRINT_EXPORT`
+  receipt, never a re-read. The explorer CSV, the machine-readable bulk
+  path, stays administrator-only: the control is hidden for an auditor and
+  `POST /audit/export-receipt` stays `AdminDep`.
+- **What never reaches paper.** `print.css` hides the workspace chrome, the
+  overlays, the toasts and `#refusal-reports`: consented, expiring,
+  access-logged refusal question text never prints. Print surfaces never
+  carry the lender mark (report 12.4 #9): the provenance block names the
+  lender as text only, beside the actor, the local time and the receipt id.
+- **'Exclude my ledger reads'** (`exclude_own_ledger_reads=true` on
+  `/audit/events`, `/audit/events/page` and `/audit/count`) drops the
+  `VIEW_AUDIT_LEDGER` rows written by the server-resolved reader, through one
+  NULL-safe clause the page and the count share
+  (`backend/services/audit_filter_sql.py`); a query value can never name
+  whose reads are hidden. It is a per-viewer control, default off and never
+  in the URL, so a shared link never silently means 'hide the recipient's
+  reads'. The flag joins the cursor fingerprint only when on, so a cursor
+  never crosses it and default cursors are unchanged.
 
 **Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
 keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`
