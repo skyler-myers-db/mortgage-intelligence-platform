@@ -10,7 +10,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -183,10 +183,9 @@ describe('Analytics Sales ops tab', () => {
     );
     expect(card?.textContent).toContain('Summit LO 02');
     expect(card?.textContent).not.toContain('lo02@summit.example');
-    // The raw key stays reachable as the title so the row is still traceable.
-    expect(
-      [...(card?.querySelectorAll('[title]') ?? [])].map((node) => node.getAttribute('title')),
-    ).toContain('lo02@summit.example');
+    // critic-08: the LO email is never put in the DOM as a title= attribute.
+    expect(card?.querySelectorAll('[title]').length).toBe(0);
+    expect(card?.innerHTML).not.toContain('lo02@summit.example');
     // No roster entry -> render the key, never an invented name.
     expect(card?.textContent).toContain('manager@summit.example');
   });
@@ -326,6 +325,115 @@ describe('Analytics Sales ops tab', () => {
     expect(alerts).toContain('Sales operations metrics unavailable: The server hit an unexpected error.');
     expect(document.body.textContent).not.toContain('SENTINEL');
     expect(document.body.textContent).not.toContain('Internal Server Error');
+  });
+
+  describe('the sales manager view (critic-10)', () => {
+    const TEAM = Array.from({ length: 5 }, (_, index) => ({
+      email: `lo0${index + 1}@summit.example`,
+      display_label: `Summit LO 0${index + 1}`,
+      role: 'loan_officer',
+      capacity_per_day: 20,
+      active: true,
+    }));
+    let location = '';
+
+    function LocationProbe() {
+      const current = useLocation();
+      location = `${current.pathname}${current.search}`;
+      return null;
+    }
+
+    async function renderView(path: string): Promise<void> {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter initialEntries={[path]}>
+              <AnalyticsRoute />
+              <LocationProbe />
+            </MemoryRouter>
+          </QueryClientProvider>,
+        );
+      });
+      await settle();
+    }
+
+    function periodButton(label: string): HTMLButtonElement | undefined {
+      return [...document.querySelectorAll<HTMLButtonElement>('.sales-ops-period button')].find(
+        (button) => button.textContent === label,
+      );
+    }
+
+    function conversionWindows(): string[] {
+      return apiMocks.salesConversion.mock.calls.map((call) => `${String(call[0])}..${String(call[1])}`);
+    }
+
+    it('reads week to date by default and puts a chosen preset in the URL', async () => {
+      await renderView('/analytics?view=sales-ops');
+      expect(periodButton('Week to date')?.getAttribute('aria-pressed')).toBe('true');
+      expect(document.querySelector('.sales-ops-period [role="group"]')).toBeTruthy();
+
+      await act(async () => {
+        periodButton('7 days')?.click();
+      });
+      await settle();
+
+      expect(location).toBe('/analytics?view=sales-ops&sales_period=7d');
+      expect(periodButton('7 days')?.getAttribute('aria-pressed')).toBe('true');
+      const [, last] = conversionWindows();
+      expect(last).toMatch(/^\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$/);
+      expect(document.body.textContent).toContain('Last 7 days conversion');
+      // Aging and the standup are not period reads: one call each.
+      expect(apiMocks.salesAging).toHaveBeenCalledTimes(1);
+      expect(apiMocks.salesStandup).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads a custom range and normalises an invalid one to week to date with replace', async () => {
+      await renderView('/analytics?view=sales-ops&sales_period=custom&sales_from=2026-01-05&sales_to=2026-01-20');
+      expect(conversionWindows()).toEqual(['2026-01-05..2026-01-20']);
+      expect(document.querySelectorAll('.sales-ops-period input[type="date"]').length).toBe(2);
+
+      act(() => root.unmount());
+      root = createRoot(document.getElementById('root') as HTMLElement);
+      apiMocks.salesConversion.mockClear();
+      await renderView('/analytics?view=sales-ops&sales_period=custom&sales_from=2026-01-05&sales_to=2025-01-20');
+      expect(location).toBe('/analytics?view=sales-ops');
+      expect(periodButton('Week to date')?.getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('lists every loan officer, with no title attribute', async () => {
+      apiMocks.salesTeam.mockResolvedValue(TEAM);
+      apiMocks.salesConversion.mockResolvedValue({
+        rows: TEAM.map((member, index) => ({ group_key: member.email, application_start_rate: index / 10 })),
+      });
+      await renderView('/analytics?view=sales-ops');
+      const card = [...document.querySelectorAll('.sales-ops-card')].find((node) =>
+        node.textContent?.includes('Week-to-date conversion'),
+      );
+      expect(card?.querySelectorAll('.split-row').length).toBe(5);
+      expect(card?.textContent).toContain('Summit LO 05');
+      expect(card?.querySelectorAll('[title]').length).toBe(0);
+    });
+
+    it('offers the Distribution Board only after the manager read succeeded with an officer in scope', async () => {
+      apiMocks.salesTeam.mockResolvedValue(TEAM);
+      await renderView('/analytics?view=sales-ops');
+      expect(document.body.textContent).toContain('Distribute approved leads…');
+
+      act(() => root.unmount());
+      queryClient.clear();
+      root = createRoot(document.getElementById('root') as HTMLElement);
+      apiMocks.salesAging.mockRejectedValue(new ApiError('forbidden', { path: '/api/v1/sales/aging', status: 403 }));
+      await renderView('/analytics?view=sales-ops');
+      expect(document.body.textContent).not.toContain('Distribute approved leads…');
+
+      act(() => root.unmount());
+      queryClient.clear();
+      root = createRoot(document.getElementById('root') as HTMLElement);
+      apiMocks.salesAging.mockResolvedValue([]);
+      apiMocks.salesTeam.mockResolvedValue([]);
+      await renderView('/analytics?view=sales-ops');
+      expect(document.body.textContent).not.toContain('Distribute approved leads…');
+    });
   });
 
   it('says why the outcome summary failed, apart from the other cards', async () => {

@@ -2,14 +2,15 @@
 // budget; the analytics route family opts out. Keep this section explicit.
 'use no memo';
 
-import type { ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router';
+import { lazy, Suspense, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { Link, useSearchParams } from 'react-router';
 import { api } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
 import { loanOfficersOnly, useSalesRoster } from '../lib/salesRoster';
 import { Chip, SurfaceTitle } from '../components/Primitives';
 import { DescribedErrorBody as ErrorBody } from '../components/ui/DescribedError';
+import { Field } from '../components/ui/Field';
 import type {
   SalesAgingLead,
   SalesConversionResponse,
@@ -17,6 +18,17 @@ import type {
   SalesStandupResponse,
 } from '../types';
 import { formatCount } from '../lib/formatters';
+import {
+  SALES_PERIOD_PRESETS,
+  isoDay,
+  normalizedParams,
+  paramsForPeriod,
+  periodEyebrow,
+  resolveSalesPeriod,
+  type SalesPeriod,
+  type SalesPeriodPreset,
+} from './analytics.sales-ops.period';
+import './analytics.sales-ops.css';
 
 /**
  * Sales ops snapshot — relocated from the Lead Queue (2026-07-10) into its own
@@ -24,24 +36,24 @@ import { formatCount } from '../lib/formatters';
  * interrupted by shift-capacity / stale-approval / outcome chrome. Queries live
  * inside the component so they fire only when the tab mounts, matching the lazy
  * per-tab analytics pattern. Reuses the global `sales-ops-*` classes unchanged.
+ *
+ * The sales manager view (2026-09-21 audit critic-10): the conversion and
+ * outcome cards follow a period held in the URL (analytics.sales-ops.period),
+ * the conversion card lists EVERY loan officer, and the Distribution Board
+ * (components/mortgage/DistributionBoard, lazy) is an explicit action. Every
+ * read here is audit-free; nothing polls or refetches on focus.
+ *
+ * deviation:sales-manager-period. The period control is the prototype's
+ * `.segmented` (design_files/index.html:926-935) as a role=group of
+ * aria-pressed buttons, beside two native date fields for a custom range.
  */
 
-function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
+const DistributionBoard = lazy(() => import('../components/mortgage/DistributionBoard'));
 
 function relativeIsoDate(days: number): string {
   const date = new Date();
   date.setDate(date.getDate() + days);
-  return isoDate(date);
-}
-
-function weekStartIsoDate(): string {
-  const date = new Date();
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  date.setDate(date.getDate() + diff);
-  return isoDate(date);
+  return isoDay(date);
 }
 
 /**
@@ -64,47 +76,123 @@ function CardValue({
   return <div className="kpi__value">{state === 'error' ? '—' : children}</div>;
 }
 
+/** A native date field applied on its `change` event (or Enter), never per keystroke. */
+function PeriodDate({ label, value, max, onApply }: { label: string; value: string; max: string; onApply: (value: string) => void }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return undefined;
+    const apply = () => {
+      if (input.value) onApply(input.value);
+    };
+    input.addEventListener('change', apply);
+    return () => input.removeEventListener('change', apply);
+  });
+  return (
+    <Field label={label} className="sales-ops-period__date">
+      {(control) => (
+        <input
+          {...control}
+          ref={inputRef}
+          type="date"
+          className="form-input"
+          defaultValue={value}
+          key={value}
+          max={max}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && event.currentTarget.value) onApply(event.currentTarget.value);
+          }}
+        />
+      )}
+    </Field>
+  );
+}
+
+function SalesPeriodControl({ period, onChange }: {
+  period: SalesPeriod;
+  onChange: (preset: SalesPeriodPreset, range?: { from: string; to: string }) => void;
+}) {
+  const labelId = useId();
+  const today = isoDay(new Date());
+  return (
+    <div className="sales-ops-period">
+      <span className="eyebrow" id={labelId}>Period</span>
+      <div className="segmented" role="group" aria-labelledby={labelId}>
+        {SALES_PERIOD_PRESETS.map((preset) => (
+          <button
+            key={preset.value}
+            type="button"
+            className={preset.value === period.preset ? 'is-active' : undefined}
+            aria-pressed={preset.value === period.preset}
+            onClick={() => onChange(preset.value, preset.value === 'custom' ? { from: period.from, to: period.to } : undefined)}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      {period.preset === 'custom' && (
+        <div className="sales-ops-period__range">
+          <PeriodDate label="From" value={period.from} max={today} onApply={(from) => onChange('custom', { from, to: period.to })} />
+          <PeriodDate label="To" value={period.to} max={today} onApply={(to) => onChange('custom', { from: period.from, to })} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SalesOpsSection() {
   const yesterday = relativeIsoDate(-1);
-  const weekStart = weekStartIsoDate();
-  const today = isoDate(new Date());
+  const [searchParams, setSearchParams] = useSearchParams();
+  const period = resolveSalesPeriod(searchParams);
+  const [boardOpen, setBoardOpen] = useState(false);
+
+  // An invalid, future or over-long period reads as week to date; the URL is
+  // cleaned with replace so Back never returns to the bad link.
+  const cleaned = normalizedParams(searchParams);
+  useEffect(() => {
+    if (cleaned) setSearchParams(cleaned, { replace: true });
+  });
+
+  const choosePeriod = (preset: SalesPeriodPreset, range?: { from: string; to: string }) => {
+    setSearchParams((current) => paramsForPeriod(current, preset, range), { replace: true });
+  };
 
   const salesTeamQuery = useSalesRoster(loanOfficersOnly);
-  const salesOpsQuery = useQuery<{
-    staleLeads: SalesAgingLead[];
-    standup: SalesStandupResponse;
+  const snapshotQuery = useQuery<{ staleLeads: SalesAgingLead[]; standup: SalesStandupResponse }>({
+    queryKey: queryKeys.salesOps(),
+    queryFn: async ({ signal }) => {
+      const [agingRows, standupRows] = await Promise.all([
+        api.salesAging(7, 100, signal),
+        api.salesStandup(yesterday, signal),
+      ]);
+      return { staleLeads: agingRows, standup: standupRows };
+    },
+    staleTime: 30_000,
+  });
+  const periodQuery = useQuery<{
     conversion: SalesConversionResponse;
     outcomes: SalesOutcomeSummaryResponse | null;
     /** The outcome read's own failure, kept apart: it degrades one card only. */
     outcomesError: unknown;
   }>({
-    queryKey: queryKeys.salesOps(),
+    queryKey: [...queryKeys.salesOps(), 'period', period.from, period.to],
     queryFn: async ({ signal }) => {
-      const [agingRows, standupRows, conversionRows] = await Promise.all([
-        api.salesAging(7, 100, signal),
-        api.salesStandup(yesterday, signal),
-        api.salesConversion(weekStart, today, 'lo', signal),
-      ]);
-      const outcomeResult = await api.salesOutcomeSummary(weekStart, today, signal)
+      const conversion = await api.salesConversion(period.from, period.to, 'lo', signal);
+      const outcomeResult = await api.salesOutcomeSummary(period.from, period.to, signal)
         .then((data) => ({ data, error: null as unknown }))
         .catch((error: unknown) => ({ data: null, error }));
-      return {
-        staleLeads: agingRows,
-        standup: standupRows,
-        conversion: conversionRows,
-        outcomes: outcomeResult.data,
-        outcomesError: outcomeResult.error,
-      };
+      return { conversion, outcomes: outcomeResult.data, outcomesError: outcomeResult.error };
     },
+    placeholderData: keepPreviousData,
     staleTime: 30_000,
   });
 
   const salesTeam = salesTeamQuery.data ?? [];
-  const staleLeads = salesOpsQuery.data?.staleLeads ?? [];
-  const standup = salesOpsQuery.data?.standup ?? null;
-  const conversion = salesOpsQuery.data?.conversion ?? null;
-  const outcomes = salesOpsQuery.data?.outcomes ?? null;
-  const outcomesError = salesOpsQuery.data?.outcomesError ?? null;
+  const staleLeads = snapshotQuery.data?.staleLeads ?? [];
+  const standup = snapshotQuery.data?.standup ?? null;
+  const conversion = periodQuery.data?.conversion ?? null;
+  const outcomes = periodQuery.data?.outcomes ?? null;
+  const outcomesError = periodQuery.data?.outcomesError ?? null;
   const connectedOutcomeSources = outcomes?.source_statuses
     .filter((source) => source.source_system !== 'manual_import' && source.status === 'connected')
     ?? [];
@@ -119,18 +207,21 @@ export function SalesOpsSection() {
   // Failures render in the shared, buyer-safe vocabulary (audit states-04),
   // never the transport message.
   const salesTeamError = salesTeamQuery.error;
-  const salesOpsError = salesOpsQuery.error;
-  // Every card on this page reads one combined query. Until it resolves the
-  // `?? []` / `?? 0` fallbacks are indistinguishable from real counts, and a
-  // manager who reads "STALE APPROVED 0" while 100+ approvals are aging has
-  // been told the opposite of the truth. Render the KpiCard skeletons instead,
-  // and an em-dash (never a zero) when the query failed outright.
-  const cardState: 'loading' | 'error' | 'ready' = salesOpsQuery.isPending
-    ? 'loading'
-    : salesOpsError
-      ? 'error'
-      : 'ready';
-  const loading = cardState === 'loading';
+  const salesOpsError = snapshotQuery.error ?? periodQuery.error;
+  // Until a read resolves the `?? []` / `?? 0` fallbacks are indistinguishable
+  // from real counts, and a manager who reads "STALE APPROVED 0" while 100+
+  // approvals are aging has been told the opposite of the truth. Render the
+  // KpiCard skeletons instead, and an em-dash (never a zero) on a failure.
+  const stateOf = (query: { isPending: boolean; error: unknown }): 'loading' | 'error' | 'ready' => (
+    query.isPending ? 'loading' : query.error ? 'error' : 'ready'
+  );
+  const snapshotState = stateOf(snapshotQuery);
+  const periodState = stateOf(periodQuery);
+  const snapshotLoading = snapshotState === 'loading';
+  const periodLoading = periodState === 'loading';
+  // The Board is a manager action: offered once the manager-only snapshot
+  // read succeeded and someone is in scope (the server enforces RBAC anyway).
+  const canDistribute = snapshotQuery.isSuccess && salesTeam.length > 0;
   // Conversion rows are grouped by LO EMAIL (`group_by: 'lo'`), which is an
   // internal identifier -- the queue shows every other LO reference as
   // "Summit LO 01". Resolve through the roster the same page already loads,
@@ -164,9 +255,15 @@ export function SalesOpsSection() {
             </>
           )}
           {salesTeamError && <Chip variant="warning">Team unavailable</Chip>}
+          {canDistribute && (
+            <button type="button" className="btn btn--primary btn--sm" onClick={() => setBoardOpen(true)}>
+              Distribute approved leads…
+            </button>
+          )}
         </div>
       </div>
       <div className="surface__body">
+        <SalesPeriodControl period={period} onChange={choosePeriod} />
         {salesTeamError && (
           <div role="alert" className="status-callout status-callout--warning mb-3">
             Sales team unavailable: <ErrorBody error={salesTeamError} subject="the sales team" />
@@ -178,9 +275,9 @@ export function SalesOpsSection() {
           </div>
         )}
         <div className="sales-ops-grid">
-          <div className="sales-ops-card" aria-busy={loading}>
+          <div className="sales-ops-card" aria-busy={snapshotLoading}>
             <div className="eyebrow">Stale approved</div>
-            <CardValue state={cardState}>
+            <CardValue state={snapshotState}>
               {staleLeads.length >= 100 ? '100+' : formatCount(staleLeads.length)}
             </CardValue>
             <div className="muted fs-12">
@@ -197,10 +294,10 @@ export function SalesOpsSection() {
               ))}
             </div>
           </div>
-          <div className="sales-ops-card" aria-busy={loading}>
+          <div className="sales-ops-card" aria-busy={snapshotLoading}>
             <div className="eyebrow">Yesterday standup</div>
-            <CardValue state={cardState}>{formatCount(standup?.calls_logged ?? 0)}</CardValue>
-            {loading ? (
+            <CardValue state={snapshotState}>{formatCount(standup?.calls_logged ?? 0)}</CardValue>
+            {snapshotLoading ? (
               <span className="skeleton kpi__delta-skeleton" aria-hidden="true" />
             ) : (
               <div className="muted fs-12">
@@ -208,29 +305,29 @@ export function SalesOpsSection() {
               </div>
             )}
           </div>
-          <div className="sales-ops-card" aria-busy={loading}>
-            <div className="eyebrow">Week-to-date conversion</div>
+          <div className="sales-ops-card" aria-busy={periodLoading}>
+            <div className="eyebrow">{periodEyebrow(period)}</div>
+            {/* Every loan officer, by roster label; the internal email is never
+                put in the DOM (critic-08: no title= carrying an LO address). */}
             <div className="sales-ops-list">
-              {loading
+              {periodLoading
                 ? [0, 1, 2].map((row) => (
                   <span key={row} className="skeleton kpi__delta-skeleton" aria-hidden="true" />
                 ))
-                : (conversion?.rows ?? []).slice(0, 3).map((row) => (
+                : (conversion?.rows ?? []).map((row) => (
                   <div key={row.group_key} className="split-row">
-                    <span className="fs-12" title={row.group_key}>
-                      {loanOfficerLabel(row.group_key)}
-                    </span>
+                    <span className="fs-12">{loanOfficerLabel(row.group_key)}</span>
                     <span className="mono num">{Math.round(row.application_start_rate * 100)}%</span>
                   </div>
                 ))}
-              {/* "No dispositions" is a CLAIM about the week, so it may only
+              {/* "No dispositions" is a CLAIM about the window, so it may only
                   render once the window has actually been read. */}
-              {!loading && (conversion?.rows ?? []).length === 0 && (
-                <div className="muted fs-12">No LO dispositions logged this week.</div>
+              {!periodLoading && (conversion?.rows ?? []).length === 0 && (
+                <div className="muted fs-12">No LO dispositions logged in this period.</div>
               )}
             </div>
           </div>
-          <div className="sales-ops-card" aria-busy={loading}>
+          <div className="sales-ops-card" aria-busy={periodLoading}>
             <div className="eyebrow">
               {hasDryRunOutcomeRows ? 'Outcome ledger · includes dry run' : 'Closed-loop outcomes'}
             </div>
@@ -240,16 +337,16 @@ export function SalesOpsSection() {
                 itself. Funded now leads the breakdown, where it can't be
                 mistaken for the total. `total_outcomes` is SUM over every
                 outcome type in the window (sales_state.outcome_summary). */}
-            <CardValue state={cardState}>
+            <CardValue state={periodState}>
               {outcomesError ? '--' : formatCount(outcomes?.total_outcomes ?? 0)}
             </CardValue>
-            {loading ? (
+            {periodLoading ? (
               <span className="skeleton kpi__delta-skeleton" aria-hidden="true" />
             ) : (
               <div className="muted fs-12">
                 {outcomesError
                   ? 'Customer-system outcome counts are unavailable.'
-                  : `Outcomes recorded this week: ${formatCount(outcomes?.closed_funded ?? 0)} funded · ${formatCount(outcomes?.applications_submitted ?? 0)} submitted · ${formatCount(outcomes?.lost_to_competitor ?? 0)} lost elsewhere · ${formatCount(outcomes?.withdrawn ?? 0)} withdrawn · ${formatCount(outcomes?.not_qualified ?? 0)} not qualified.`}
+                  : `Outcomes recorded in this period: ${formatCount(outcomes?.closed_funded ?? 0)} funded · ${formatCount(outcomes?.applications_submitted ?? 0)} submitted · ${formatCount(outcomes?.lost_to_competitor ?? 0)} lost elsewhere · ${formatCount(outcomes?.withdrawn ?? 0)} withdrawn · ${formatCount(outcomes?.not_qualified ?? 0)} not qualified.`}
               </div>
             )}
             <div className="muted fs-12 mt-1">
@@ -266,7 +363,7 @@ export function SalesOpsSection() {
             {/* The per-type distribution moved into the caption above (funded
                 first), so this list carries only what the caption does not:
                 which competitors took the lost loans. */}
-            {loading ? null : !outcomesError && (outcomes?.total_outcomes ?? 0) > 0 ? (
+            {periodLoading ? null : !outcomesError && (outcomes?.total_outcomes ?? 0) > 0 ? (
               <div className="sales-ops-list mt-2">
                 {(outcomes?.top_competitors ?? []).slice(0, 2).map((row) => (
                   <div key={row.competitor_lender_label} className="split-row">
@@ -278,7 +375,7 @@ export function SalesOpsSection() {
             ) : !outcomesError ? (
               <div className="muted fs-12 mt-2">
                 {connectedOutcomeSources.length > 0
-                  ? 'Connected outcome feeds are live; no funded or lost loans have been reported this week.'
+                  ? 'Connected outcome feeds are live; no funded or lost loans have been reported in this period.'
                   : dryRunOutcomeSources.length > 0
                     ? 'Outcome feeds are configured in dry run; no customer-system outcomes are being counted as live yet.'
                   : 'Customer CRM/LOS/POS outcome feeds are not configured yet; manual imports remain available for governed backfill.'}
@@ -287,6 +384,11 @@ export function SalesOpsSection() {
           </div>
         </div>
       </div>
+      {boardOpen && (
+        <Suspense fallback={null}>
+          <DistributionBoard onClose={() => setBoardOpen(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }
