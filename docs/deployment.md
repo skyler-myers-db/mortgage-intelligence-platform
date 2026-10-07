@@ -885,6 +885,31 @@ product defaults and no mark, and the app also hides a mark that was built
 for a different lender than the one the session reports. The mark's hash
 (`MIP_LENDER_MARK_SHA256`) is derived by preflight, never set by an operator.
 
+## Browser telemetry (RUM) default
+
+Browser RUM is ON for every `./scripts/deploy.sh` deploy: the deploy payload
+sets `MIP_RUM_ENABLED=1` when `.env.local` does not set it
+(`tools/databricks/app_deploy_payload.py` `SAFE_RUNTIME_DEFAULTS`). The App
+stores only day-grain, identifier-free aggregates in Lakebase
+`mip_app.rum_daily` (created by `mip_lakebase_migrate` at deploy step 4b),
+and administrators read them in Administration -> Field performance. The
+envelope is in
+[security-and-compliance.md](security-and-compliance.md#browser-telemetry-rum).
+
+- Opt out with `MIP_RUM_ENABLED=0` in `.env.local` and redeploy; the value is
+  forwarded as-is.
+- Upgrade note: an existing `.env.local` that already carries
+  `MIP_RUM_ENABLED=0` (copied from the old `.env.example`) keeps RUM off, and
+  `deploy.sh` never rewrites it. Delete the line, or set it to `1`, to take
+  the new default.
+- A redeploy through the Databricks Apps UI Deploy button drops the operator
+  environment, so RUM is off (the code default) until the next `deploy.sh`
+  run. `GET /api/v1/admin/health` reports the effective state as
+  `browser_telemetry`.
+- A piecewise deploy that runs `mip_lakebase_migrate` by hand must stop
+  `mip-app` first: the migrate job fails closed while an App-role session is
+  live.
+
 ## Resources
 
 Databricks App resources expected by `app.yaml`:

@@ -159,6 +159,7 @@ the pull request that ships the behaviour, never earlier.
 | Genie completion-job status poll (`genie.genie_message_status`) | none | every ~1.5 s poll of the caller's own job; while a deep job runs it may carry verified sections as Partial research | audit-free; `genie.run_query` RUN_GENIE stays at the job's single `recorded_at` commit point and no action token is issued for a revealed section |
 | Genie verified section revealed (the job's sections writer, `genie_completion_sections`) | `GENIE_SECTION_REVEALED` | once per section, before it can be served (ruling R1): job and turn ids, plan index, row count, SQL hash, verification verdict; never question text or a row value | same Lakebase transaction as the `sections_json` write, fail-closed: a failed audit write withholds the section until the final answer; a turn that later fails, stops or expires keeps the rows |
 | Admin SSE ingress probe (`admin_sse_probe.sse_probe`, `admin_sse_probe.sse_probe_outcome`) | none | admin-only transport diagnostic (delivery-04) | audit-free; reads no UC or Lakebase data |
+| Admin Field performance (`admin_field_performance.field_performance`) | none | when Administration opens, and on an explicit Refresh or 7/28-day change; never polled or refetched on focus | audit-free (admin-only; day-grain browser RUM aggregates, no borrower data) |
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the
@@ -194,3 +195,75 @@ user action two ledger shapes. Pins: `tests/unit/test_audit_event_label_parity.p
 `tests/unit/test_offers_router.py` (a single `RECOMMEND_OFFER` emitter) and
 `frontend/src/routes/offer-orchestrator.recommendCaller.test.ts` (a single
 `recommendOffer` caller).
+
+## Browser telemetry (RUM)
+
+Decisions D-platform-process-d1 (the envelope and the default) and d2 (the
+sink). Browser RUM measures how fast the product is for the people using it:
+Core Web Vitals and a few timings per route, plus client-error class counts.
+It is operational telemetry, never an audit record: it is never written to
+`mip_app.action_audit`, never counted as a `VIEW_*` read, and a telemetry
+POST creates no audit row.
+
+**Default and opt-out.** RUM is on for every deployment made through
+`./scripts/deploy.sh`: the deploy payload sets `MIP_RUM_ENABLED=1`
+(`tools/databricks/app_deploy_payload.py` `SAFE_RUNTIME_DEFAULTS`). To turn
+it off, put `MIP_RUM_ENABLED=0` in `.env.local` and redeploy; that value is
+forwarded as-is, the browser then installs nothing and the server stores
+nothing. The code default (`backend/config/settings.py`) stays off, so a
+deploy that drops the operator environment (the Databricks Apps UI Deploy
+button, a bare `app.yaml` deploy) turns RUM off rather than overriding an
+opt-out. `app.yaml` never sets it. The effective state of a running App is
+`browser_telemetry` (`on` / `off`) in `GET /api/v1/admin/health` and the
+header of Administration's Field performance panel.
+
+**What is collected (the closed envelope).** Only these fields, each checked
+against a closed set by `backend/schemas/telemetry.py` (`extra="forbid"`):
+
+1. the metric: `navigation_load`, `route_change`, `lcp`, `cls`, `inp`,
+   `api_call` or `client_error` (`long_task` is still accepted from an old
+   bundle and ignored);
+2. a numeric value and a coarse rating;
+3. the route TEMPLATE, a member of `RUM_ROUTE_TEMPLATES` (the
+   `frontend/src/lib/routeMeta.ts` patterns plus `/*`), never a concrete
+   path: `/borrower-360/:id`, never a borrower id;
+4. the navigation type (`navigate`, `reload`, `back_forward`, `prerender`,
+   `soft_navigation`);
+5. closed-vocabulary details, at most eight per event: the timings
+   `dom_content_loaded_ms`, `ttfb_ms`, `transfer_size`, `duration_ms`,
+   `warehouse_ms`, `lakebase_ms`, `total_ms`; `from_route` (a template);
+   `attempt`, `retryable`, `dependency`; a templated `api_route` and its
+   `cache` state; the client-error `error_name`, `error_kind`,
+   `error_source` and `boundary`; the INP phases `input_delay_ms`,
+   `processing_ms`, `presentation_ms`; the `interaction_target` (the nearest
+   `data-rum-target` value from a closed list, never a CSS selector); and the
+   `lcp_element` (a tag bucket from a closed list).
+
+**What is never collected.** No user, actor, email, IP address, user agent,
+session or device identifier; no borrower, CLIP or conversation id; no free
+text, error message, stack, query string, DOM text, CSS selector, cookie or
+storage value. The schema's rejection regexes refuse id-, email-, phone-,
+SSN-, address- and name-shaped values before anything else runs.
+
+**Destination.** The App's own origin only (`POST /api/v1/telemetry/rum`;
+CSP `connect-src 'self'`). Nothing is sent to Entrada, to Databricks product
+telemetry or to any third party; the data stays in the customer's workspace.
+
+**At rest.** Day-grain aggregates only, in Lakebase `mip_app.rum_daily`:
+sample counts, sums, min / max and 24 histogram buckets per day x metric x
+route template x closed facet x rating, with up to eight contributing build
+ids. There are no event rows, no per-event log lines and no sub-day
+timestamp column.
+
+**Retention.** Stored measurements older than 90 days are zeroed in place
+(an `UPDATE`); the App role holds `SELECT`, `INSERT` and `UPDATE` on the
+table and no `DELETE`.
+
+**Access.** Administrators only: `GET /api/v1/admin/field-performance`
+(`AdminDep`; an auditor or an approver gets 403) behind the Field performance
+panel, which shows a p75 only for a cell with at least 20 samples.
+
+**Facts for the lender.** First-party only, no cookies, no identifiers
+stored, day-grain aggregates, admin-only access and a one-line opt-out. The
+lender decides its own employee-notice obligations. The per-actor record of
+product use is `mip_app.action_audit`, which RUM never joins or references.

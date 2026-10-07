@@ -47,6 +47,10 @@ SAFE_RUNTIME_DEFAULTS = {
     # the default must be explicit), otherwise the runtime falls back to code.
     "MIP_LEADS_WARM_INTERVAL_S": "0",
     "MIP_WAREHOUSE_KEEP_WARM": "off",
+    # Browser RUM is on by default for every deploy.sh deploy (D-platform-
+    # process-d1); the code default stays off, and an explicit '0' in
+    # .env.local is forwarded verbatim (the opt-out).
+    "MIP_RUM_ENABLED": "1",
 }
 
 NON_SECRET_OPERATOR_VARS = (
