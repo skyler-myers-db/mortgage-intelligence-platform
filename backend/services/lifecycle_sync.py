@@ -22,11 +22,13 @@ from backend.services.databricks_sql import (
 from backend.services.observability import emit
 from backend.services.resilience_breaker import DependencyDownError
 from jobs.sync_lifecycle_state import (
+    _build_funnel_snapshot_schema_probe,
     _build_legacy_default_prune,
     _build_lifecycle_merge,
     _ensure_funnel_snapshot_schema,
     _ensure_lifecycle_schema,
     _fetch_lakebase_rows,
+    _missing_funnel_snapshot_columns,
     _qualified_uc_table,
     _resolve_connection,
 )
@@ -99,23 +101,26 @@ def _funnel_snapshot_schema_ready(
     """Ensure the funnel snapshot's newer columns before its MERGE (wow-ai-3).
 
     The deploy identity (deploy step 9, the bundle job) adds a missing column,
-    and a refusal there propagates (``tolerate_denied=False``). The App's own
-    paths (Admin 'Sync workflow state') hold only MODIFY on the table, so
-    their ALTER is refused when the deploy has not run yet: that skips ONLY
-    the funnel snapshot write, with one warning. The lifecycle mirror above
-    has already landed and the sync never answers 503 for it.
+    and any failure there propagates (``tolerate_denied=False``). The App's own
+    paths (Admin 'Sync workflow state') hold only MODIFY on the table and never
+    attempt DDL on gold (NB-f): they only PROBE information_schema. A missing
+    column skips ONLY the funnel snapshot write, with one warning, until the
+    deploy identity adds it; a refused probe does the same. The lifecycle
+    mirror above has already landed and the sync never answers 503 for it.
     """
-    try:
+    if not tolerate_denied:
         _ensure_funnel_snapshot_schema(client.execute, catalog=catalog)
+        return True
+    try:
+        rows = client.execute(_build_funnel_snapshot_schema_probe(catalog=catalog))
     except Exception as exc:
-        if not (tolerate_denied and _is_permission_refusal(exc)):
+        if not _is_permission_refusal(exc):
             raise
-        emit(
-            log,
-            "funnel_snapshot_schema_denied",
-            level=logging.WARNING,
-            exc_type=type(exc).__name__,
-        )
+        emit(log, "funnel_snapshot_schema_denied", level=logging.WARNING, exc_type=type(exc).__name__)
+        return False
+    missing = _missing_funnel_snapshot_columns(rows)
+    if missing:
+        emit(log, "funnel_snapshot_schema_deferred", level=logging.WARNING, missing_columns=len(missing))
         return False
     return True
 

@@ -433,14 +433,22 @@ _FUNNEL_SQL = REPO / "sql" / "transformations" / "gold_funnel_snapshot_daily.sql
 class _FunnelClient:
     """Fake warehouse: both schema probes, the ALTERs, the MERGEs and a count."""
 
-    def __init__(self, *, alter_error: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        alter_error: BaseException | None = None,
+        probe_error: BaseException | None = None,
+    ) -> None:
         self.statements: list[str] = []
         self.funnel_columns: set[str] = set()
         self.alter_error = alter_error
+        self.probe_error = probe_error
 
     def execute(self, statement: str) -> list[dict[str, Any]]:
         self.statements.append(statement)
         if "information_schema" in statement and "'funnel_snapshot_daily'" in statement:
+            if self.probe_error is not None:
+                raise self.probe_error
             return [{"column_name": column} for column in sorted(self.funnel_columns)]
         if "information_schema" in statement:
             return _schema_rows()
@@ -470,9 +478,11 @@ def test_the_funnel_ensure_adds_the_column_once_before_the_funnel_merge(monkeypa
     monkeypatch.setattr(lifecycle_sync, "_fetch_lakebase_rows", lambda _: _one_event())
     client = _FunnelClient()
 
+    # The deploy identity (deploy step 9, the bundle job) keeps the self-heal.
     first = lifecycle_sync.sync_lifecycle_state_via_warehouse(
         sql_client=client,  # type: ignore[arg-type]
         funnel_sql_path=_FUNNEL_SQL,
+        tolerate_funnel_schema_denied=False,
     )
     alters = [s for s in client.statements if "ALTER TABLE" in s]
     assert len(alters) == 1 and "competitor_lien_borrowers INT COMMENT" in alters[0]
@@ -485,6 +495,7 @@ def test_the_funnel_ensure_adds_the_column_once_before_the_funnel_merge(monkeypa
     second = lifecycle_sync.sync_lifecycle_state_via_warehouse(
         sql_client=client,  # type: ignore[arg-type]
         funnel_sql_path=_FUNNEL_SQL,
+        tolerate_funnel_schema_denied=False,
     )
     assert not [s for s in client.statements if "ALTER TABLE" in s], "twice-applied: no ALTER"
     assert len(_funnel_merges(client.statements)) == 1
@@ -492,6 +503,7 @@ def test_the_funnel_ensure_adds_the_column_once_before_the_funnel_merge(monkeypa
 
 
 def test_an_app_path_permission_refusal_skips_only_the_funnel_write(monkeypatch, caplog) -> None:
+    """NB-f: a refused information_schema probe on the App path skips only the funnel write."""
     import logging
 
     from backend.services import lifecycle_sync
@@ -506,7 +518,7 @@ def test_an_app_path_permission_refusal_skips_only_the_funnel_write(monkeypatch,
         last_error=DatabricksSqlPermissionError("[INSUFFICIENT_PERMISSIONS] SQLSTATE: 42501"),
         kind=DependencyDownError.KIND_PERMISSION_DENIED,
     )
-    client = _FunnelClient(alter_error=refusal)
+    client = _FunnelClient(probe_error=refusal)
 
     with caplog.at_level(logging.WARNING):
         result = lifecycle_sync.sync_lifecycle_state_via_warehouse(
@@ -518,12 +530,57 @@ def test_an_app_path_permission_refusal_skips_only_the_funnel_write(monkeypatch,
     assert result.funnel_snapshot_rows is None
     assert len(_lifecycle_merges(client.statements)) == 1, "the mirror still lands"
     assert _funnel_merges(client.statements) == [], "the funnel MERGE would hit a missing column"
+    assert not [s for s in client.statements if "ALTER TABLE" in s and "funnel_snapshot_daily" in s]
     denied = [
         record
         for record in caplog.records
         if getattr(record, "mip_event", None) == "funnel_snapshot_schema_denied"
     ]
     assert len(denied) == 1
+
+
+def test_the_app_path_never_attempts_ddl_on_gold(monkeypatch, caplog) -> None:
+    """NB-f: with the column missing, the App path PROBES, issues zero ALTER
+    statements (its ALTER would be refused: alter_error is armed) and skips only
+    the funnel write with one warning; the deploy identity adds the column."""
+    import logging
+
+    from backend.services import lifecycle_sync
+    from backend.services.databricks_sql import DatabricksSqlPermissionError
+
+    monkeypatch.setattr(lifecycle_sync, "_resolve_connection", lambda: {"fake": True})
+    monkeypatch.setattr(lifecycle_sync, "_fetch_lakebase_rows", lambda _: _one_event())
+    client = _FunnelClient(
+        alter_error=DatabricksSqlPermissionError("[INSUFFICIENT_PERMISSIONS] SQLSTATE: 42501")
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = lifecycle_sync.sync_lifecycle_state_via_warehouse(
+            sql_client=client,  # type: ignore[arg-type]
+            funnel_sql_path=_FUNNEL_SQL,
+        )
+
+    assert [s for s in client.statements if "ALTER TABLE" in s] == [], "the App never issues DDL"
+    assert any("'funnel_snapshot_daily'" in s for s in client.statements), "non-vacuity: it probed"
+    assert len(_lifecycle_merges(client.statements)) == 1, "the mirror still lands"
+    assert _funnel_merges(client.statements) == []
+    assert result.funnel_snapshot_rows is None
+    deferred = [
+        record
+        for record in caplog.records
+        if getattr(record, "mip_event", None) == "funnel_snapshot_schema_deferred"
+    ]
+    assert len(deferred) == 1
+
+    # Once the deploy identity has added the column, the App path writes the snapshot.
+    client.funnel_columns.add("competitor_lien_borrowers")
+    client.statements.clear()
+    again = lifecycle_sync.sync_lifecycle_state_via_warehouse(
+        sql_client=client,  # type: ignore[arg-type]
+        funnel_sql_path=_FUNNEL_SQL,
+    )
+    assert len(_funnel_merges(client.statements)) == 1
+    assert again.funnel_snapshot_rows == 3
 
 
 def test_a_bare_client_permission_refusal_is_tolerated_the_same_way(monkeypatch) -> None:
@@ -533,7 +590,7 @@ def test_a_bare_client_permission_refusal_is_tolerated_the_same_way(monkeypatch)
     monkeypatch.setattr(lifecycle_sync, "_resolve_connection", lambda: {"fake": True})
     monkeypatch.setattr(lifecycle_sync, "_fetch_lakebase_rows", lambda _: _one_event())
     client = _FunnelClient(
-        alter_error=DatabricksSqlPermissionError("[INSUFFICIENT_PERMISSIONS] SQLSTATE: 42501")
+        probe_error=DatabricksSqlPermissionError("[INSUFFICIENT_PERMISSIONS] SQLSTATE: 42501")
     )
 
     result = lifecycle_sync.sync_lifecycle_state_via_warehouse(
@@ -556,12 +613,18 @@ def test_any_other_funnel_ensure_failure_still_propagates(monkeypatch) -> None:
     outage = DependencyDownError(
         "warehouse", reason="down", kind=DependencyDownError.KIND_RETRIES_EXHAUSTED
     )
-    client = _FunnelClient(alter_error=outage)
-
+    # App path: the probe is the only funnel statement it issues.
     with pytest.raises(DependencyDownError):
         lifecycle_sync.sync_lifecycle_state_via_warehouse(
-            sql_client=client,  # type: ignore[arg-type]
+            sql_client=_FunnelClient(probe_error=outage),  # type: ignore[arg-type]
             funnel_sql_path=_FUNNEL_SQL,
+        )
+    # Deploy identity: its ALTER failing for any reason propagates too.
+    with pytest.raises(DependencyDownError):
+        lifecycle_sync.sync_lifecycle_state_via_warehouse(
+            sql_client=_FunnelClient(alter_error=outage),  # type: ignore[arg-type]
+            funnel_sql_path=_FUNNEL_SQL,
+            tolerate_funnel_schema_denied=False,
         )
 
 
