@@ -182,5 +182,5 @@ not asserted in CI.
 row above is still 'pending integrator run' (W5b was not yet deployed when
 W5c started), so the job-events stream is deferred to W5d
 w5-genie-provenance-tiles, not cut; the 1.5 s status poll stays. When it is
-built, '/api/genie/message/events' joins rumApiRoute.ts EXCLUDED_TEMPLATES
-beside '/api/genie/message/status'.
+built, the job-events route (`POST /api/v1/genie/message/events`) joins
+rumApiRoute.ts EXCLUDED_TEMPLATES beside the status poll's template.

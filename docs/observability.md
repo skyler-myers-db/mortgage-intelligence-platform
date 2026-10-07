@@ -748,7 +748,7 @@ failure:
 
 | Event | Level | Fields | Meaning |
 | --- | --- | --- | --- |
-| `dependency_call_end`, outcome `cancelled` (logger `mip.dependency`) | INFO | `dependency`, `operation`, `duration_ms` | A Genie (or other) call ended because its owner stopped the turn. Not counted in the `/api/health` error counter; the circuit breaker records neither a failure nor a success (a half-open probe slot is returned). |
+| `dependency_call_end`, outcome `cancelled` (logger `mip.dependency`) | INFO | `dependency`, `operation`, `duration_ms` | A Genie (or other) call ended because its owner stopped the turn. Not counted in the `/api/v1/health` error counter; the circuit breaker records neither a failure nor a success (a half-open probe slot is returned). |
 | `genie_query_end`, outcome `cancelled` (logger `backend.services.genie_client`) | INFO | `operation` ask / resume, `duration_ms`, `statement_hash` (or the resume id), never question text | A Genie ask or resume stopped by its owner; replaces `genie_query_error` for a stop. |
 | `genie_sweep_cancelled` (logger `mip-genie-sweep`) | INFO | `outcome` cancelled, `duration_ms`, `planned`, `unfinished` | A Stop ended a deep sweep: counts and duration only. |
 
