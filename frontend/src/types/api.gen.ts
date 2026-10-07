@@ -1760,6 +1760,14 @@ export interface ResponseSchemas {
     intent_trigger: number;
     relationship: number;
   };
+  LeadSnoozeResponse: {
+    audit_event_id: string;
+    borrower_id: string;
+    /** When the item returns to the tray at the latest. */
+    wake_at: string;
+    /** True when the wake time was moved to the contact frequency cap's end. */
+    wake_clamped: boolean;
+  };
   LeadSummary: {
     aging_days: number | null;
     approval_status: "pending" | "approved" | "rejected" | "hold";
@@ -2955,6 +2963,11 @@ export interface RequestSchemas {
     request_id?: string | null;
     source_record_ref?: string | null;
     source_system: "salesforce" | "crm_cdp" | "los_pos" | "servicing" | "webhook" | "manual_import";
+  };
+  LeadSnoozeRequest: {
+    /** One UUID per snooze intent; a retry resends it. */
+    request_id: string;
+    snooze_days: 1 | 3 | 7;
   };
   OfferRecommendRequest: {
     borrower_id: string;
@@ -4565,6 +4578,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['LeadOutcomeRequest'];
     ok: ResponseSchemas['LeadOutcomeResponse'];
+  };
+  "POST /api/v1/leads/{borrower_id}/snooze": {
+    pathParams: {
+      borrower_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['LeadSnoozeRequest'];
+    ok: ResponseSchemas['LeadSnoozeResponse'];
   };
   "POST /api/v1/loan-officers/assignments": {
     pathParams: Record<string, never>;

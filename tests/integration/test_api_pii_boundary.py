@@ -344,3 +344,78 @@ def test_analytics_signals_has_only_schema_keys_and_no_raw_pii() -> None:
         route="/api/v1/analytics/signals",
         schema=SignalAnalyticsResponse,
     )
+
+
+# ---------------------------------------------------------------------------
+# W5d w5-followups-snooze: the Follow-ups tray list and the snooze
+# ---------------------------------------------------------------------------
+
+_FOLLOWUP_FORBIDDEN_KEYS: frozenset[str] = _ANALYTICS_FORBIDDEN_KEYS | {
+    "consent_status",
+    "suppression_reason",
+    "dnc",
+    "marketing_eligible",
+    "eligibility_source",
+    "last_touch_at",
+    "lo_email",
+    "assigned_to_email",
+    "notes",
+    "offer_code",
+}
+
+
+def _followup_services() -> Any:
+    from backend.services.lead_snooze import LeadSnoozeService, get_lead_snooze_service
+    from backend.services.repositories import get_borrower_repository
+    from backend.services.sales_followups import FollowupService, get_followup_service
+    from tests.unit.test_lead_snooze import _Lakebase as _SnoozeLakebase
+    from tests.unit.test_sales_followups import _Lakebase as _FollowupsLakebase
+    from tests.unit.test_sales_followups import _row
+
+    repo = app.dependency_overrides[get_borrower_repository]()
+    repo.contactability_overrides = {"B-48294": {"suppression_reason": "bankruptcy"}}
+    rows = [_row("B-48291"), _row("B-48294", "requested_follow_up"), _row("B-0000000000001")]
+    listing = _FollowupsLakebase(rows=rows)
+    snoozing = _SnoozeLakebase()
+    app.dependency_overrides[get_followup_service] = lambda: FollowupService(lambda: listing)
+    app.dependency_overrides[get_lead_snooze_service] = lambda: LeadSnoozeService(lambda: snoozing)
+    return repo
+
+
+def test_followups_list_has_only_schema_keys_and_no_contact_or_consent_fields() -> None:
+    from backend.schemas.sales_followups import FollowupItem, FollowupList
+
+    repo = _followup_services()
+    try:
+        resp = client.get("/api/v1/sales/followups", headers={"X-Forwarded-Email": "lo01@summit.example"})
+    finally:
+        repo.contactability_overrides = {}
+    assert resp.status_code == 200
+    payload = resp.json()
+    _assert_schema_subset(payload, route="/api/sales/followups", schema=FollowupList)
+    assert len(payload["items"]) == 3, "non-vacuity: contactable, withheld and out-of-coverage rows"
+    for item in payload["items"]:
+        _assert_schema_subset(item, route="/api/sales/followups items", schema=FollowupItem)
+    leaks = _FOLLOWUP_FORBIDDEN_KEYS.intersection(_walk_keys(payload))
+    assert not leaks, leaks
+    assert "@" not in resp.text and "bankruptcy" not in resp.text
+
+
+def test_snooze_response_has_only_schema_keys() -> None:
+    from backend.schemas.lead_snooze import LeadSnoozeResponse
+
+    repo = _followup_services()
+    try:
+        resp = client.post(
+            "/api/v1/leads/B-48291/snooze",
+            headers={"X-Forwarded-Email": "lo01@summit.example", "Content-Type": "application/json"},
+            content=json.dumps({"snooze_days": 1, "request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}),
+        )
+    finally:
+        repo.contactability_overrides = {}
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    _assert_schema_subset(payload, route="/api/leads/{borrower_id}/snooze", schema=LeadSnoozeResponse)
+    assert set(payload) == {"borrower_id", "wake_at", "wake_clamped", "audit_event_id"}
+    assert not _FOLLOWUP_FORBIDDEN_KEYS.intersection(_walk_keys(payload))
+    assert "@" not in resp.text

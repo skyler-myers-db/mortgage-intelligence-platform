@@ -42,6 +42,8 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   LEAD_UNASSIGN: 'Lead assignment released',
   VIEW_REFUSAL_REPORT_TEXT: 'Refusal question read',
   GENIE_SECTION_REVEALED: 'Genie verified section made available',
+  LEAD_SNOOZE: 'Follow-up snoozed',
+  LEAD_SNOOZE_REFUSED: 'Follow-up snooze refused',
 };
 
 export type DecisionTone = 'green' | 'amber' | 'red';

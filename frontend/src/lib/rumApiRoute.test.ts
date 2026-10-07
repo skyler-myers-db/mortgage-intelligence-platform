@@ -87,10 +87,11 @@ describe('apiCallRoute', () => {
     expect(apiCallRoute(`${ORIGIN}/api/v1/admin/settings`, ORIGIN)).toBe('/api/admin/settings');
   });
 
-  it('never reports the Follow-ups poll, but keeps the tray list (D-shell-deviations-a)', () => {
+  it('never reports the Follow-ups poll, but keeps the tray list and the snooze (D-shell-deviations-a)', () => {
     expect(apiCallRoute(`${ORIGIN}/api/v1/sales/followups/summary`, ORIGIN)).toBeNull();
     expect(apiCallRoute(`${ORIGIN}/api/sales/followups/summary`, ORIGIN)).toBeNull();
     expect(apiCallRoute(`${ORIGIN}/api/v1/sales/followups?window_days=7`, ORIGIN)).toBe('/api/sales/followups');
+    expect(apiCallRoute(`${ORIGIN}/api/v1/leads/B-0123456789ABC/snooze`, ORIGIN)).toBe('/api/leads/:id/snooze');
     // A sibling 'summary' read still reports.
     expect(apiCallRoute(`${ORIGIN}/api/v1/sales/outcomes/summary`, ORIGIN)).toBe('/api/sales/outcomes/summary');
   });

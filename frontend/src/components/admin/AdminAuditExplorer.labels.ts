@@ -70,6 +70,9 @@ export const AUDIT_EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   VIEW_LEADS: 'Lead queue reviewed',
   // D-audit-reads-d: an administrator or auditor read one consented question.
   VIEW_REFUSAL_REPORT_TEXT: 'Refusal question read',
+  // wow-power-3 phase 2: a Follow-ups tray snooze and its refusal.
+  LEAD_SNOOZE: 'Follow-up snoozed',
+  LEAD_SNOOZE_REFUSED: 'Follow-up snooze refused',
 };
 
 /** The no-op option of the event-type filter. */

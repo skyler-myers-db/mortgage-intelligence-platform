@@ -237,6 +237,9 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # OUTREACH_REVOKE is written with the revoke row in one transaction.
     "revoke_outreach": ("revoke_approval(",),
     "stage_activation": ("store.stage_borrower(", "_assert_activation_eligible("),
+    # wow-power-3 phase 2: LEAD_SNOOZE in the snooze's own Lakebase transaction,
+    # or exactly one LEAD_SNOOZE_REFUSED (tests/unit/test_lead_snooze.py).
+    "snooze_lead_followup": ("service.snooze(",),
 }
 
 

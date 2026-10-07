@@ -12362,6 +12362,63 @@
         "title": "LeadScorePoints",
         "type": "object"
       },
+      "LeadSnoozeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "One UUID per snooze intent; a retry resends it.",
+            "maxLength": 64,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "snooze_days": {
+            "enum": [
+              1,
+              3,
+              7
+            ],
+            "title": "Snooze Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "snooze_days",
+          "request_id"
+        ],
+        "title": "LeadSnoozeRequest",
+        "type": "object"
+      },
+      "LeadSnoozeResponse": {
+        "properties": {
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "wake_at": {
+            "description": "When the item returns to the tray at the latest.",
+            "format": "date-time",
+            "title": "Wake At",
+            "type": "string"
+          },
+          "wake_clamped": {
+            "description": "True when the wake time was moved to the contact frequency cap's end.",
+            "title": "Wake Clamped",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "wake_at",
+          "wake_clamped",
+          "audit_event_id"
+        ],
+        "title": "LeadSnoozeResponse",
+        "type": "object"
+      },
       "LeadSummary": {
         "properties": {
           "aging_days": {
@@ -27336,6 +27393,70 @@
         ]
       }
     },
+    "/api/leads/{borrower_id}/snooze": {
+      "post": {
+        "deprecated": true,
+        "description": "Hide one of the caller's own open follow-ups for 1, 3 or 7 days.\n\nThe service writes the LEAD_SNOOZE audit row in the same Lakebase\ntransaction as the snooze row, or exactly one LEAD_SNOOZE_REFUSED row\nwhen the item may not be contacted (409 not_contactable). 401 without a\nforwarded identity, 403 for a caller with no tray, 409 no_open_follow_up\nwhen the caller has no open item for the borrower.",
+        "operationId": "post_api_leads_borrower_id_snooze_snooze_lead_followup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadSnoozeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadSnoozeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snooze Lead Followup",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
     "/api/lineage/manifest": {
       "get": {
         "deprecated": true,
@@ -38116,6 +38237,69 @@
           }
         },
         "summary": "Record Lead Outcome",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/leads/{borrower_id}/snooze": {
+      "post": {
+        "description": "Hide one of the caller's own open follow-ups for 1, 3 or 7 days.\n\nThe service writes the LEAD_SNOOZE audit row in the same Lakebase\ntransaction as the snooze row, or exactly one LEAD_SNOOZE_REFUSED row\nwhen the item may not be contacted (409 not_contactable). 401 without a\nforwarded identity, 403 for a caller with no tray, 409 no_open_follow_up\nwhen the caller has no open item for the borrower.",
+        "operationId": "post_api_v1_leads_borrower_id_snooze_snooze_lead_followup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadSnoozeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadSnoozeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snooze Lead Followup",
         "tags": [
           "sales"
         ]
