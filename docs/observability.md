@@ -1128,8 +1128,11 @@ Log lines (counts only, never a value, route or identifier):
 | `rum_rollup_flush_failed` | WARNING | `rows`, `events`, `dropped` | the upsert failed; that batch is dropped, never retried |
 | `field_performance_read_capped` | WARNING | `rows`, `limit`, `days` | a panel read reached the 100,000-row read cap, so that window's summary is partial; day-grain keys stay far below it, so this points at a vocabulary or ring defect |
 
-An open Lakebase breaker skips the flush silently and keeps the aggregates
-(bounded at 1000 keys) for the next minute.
+Unless the shared Lakebase breaker is CLOSED the flush is skipped silently
+(it never takes a half-open probe) and keeps the aggregates (bounded at 1000
+keys) for the next minute. The write goes through the bare Lakebase client,
+so a RUM-only failure never records on, or opens, that breaker (W5d item
+3b).
 
 **Panel.** Administration -> Field performance
 (`GET /api/v1/admin/field-performance?days=7|28`, admin-only, audit-free)
@@ -1148,3 +1151,54 @@ WHERE day >= current_date - 6 AND sample_count > 0
 GROUP BY day, metric
 ORDER BY day DESC, metric;
 ```
+
+## 13. Follow-ups due and snooze wake
+
+D-shell-deviations-a / wow-power-3 (W5d w5-followups-snooze).
+
+**The rail poll.** `GET /api/v1/sales/followups/summary` runs once a minute
+while the tab is visible (no background or focus refetch, no retry) for a
+session that names an actor and is not expired. It reads Lakebase only (the
+shared open-item CTE in `backend/services/sales_followups_sql.py`; never a
+warehouse statement), is cached per actor for 30 s under the opaque actor
+cache key (never the email), writes no audit row and takes the
+`lakebase-read` backpressure class (the default read bucket and a Lakebase
+slot, like `/api/genie/message/status`). RUM never reports it
+(`EXCLUDED_TEMPLATES`). `GET /api/v1/admin/field-performance` takes the same
+class (it reads `mip_app.rum_daily` only).
+
+**The tray.** `GET /api/v1/sales/followups?window_days=7` is read when the
+tray opens. It stays a `warehouse-read`: after the Lakebase read it makes ONE
+batched gold contactability read. A warehouse failure answers 503 (never
+unverified rows); a Lakebase failure answers 503 too. It writes no audit row.
+
+**Snooze.** `POST /api/v1/leads/{id}/snooze` is a mutation on a Lakebase slot
+and writes `LEAD_SNOOZE` (or one `LEAD_SNOOZE_REFUSED` when the item may not
+be contacted). A snooze ends at its wake time on its own: reads compare
+`wake_at` to `now()`, so a timer wake needs no job.
+
+**Wake on signal.** A new event-dated listing, refinance, payoff or sale
+(dated after the snooze's UTC day) wakes a snooze early, but only when a
+lifecycle sync runs: an approval's background sync, Administration's 'Sync
+workflow state', deploy step 9 and a run of the bundle job, whose schedule
+ships PAUSED. The tray hint says "at the next workflow sync" for that reason.
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `followups_list_read` | INFO | `items`, `withheld`, `hidden`, `truncated` | one tray read; `hidden` rows were snoozed and callable (or only capped) |
+| `followups_list_failed` / `followups_summary_failed` | WARNING | `dependency`, `exc_type` | the read answered 503 |
+| `lead_snooze_written` | INFO | `snooze_days`, `wake_clamped` | one snooze landed |
+| `lead_snooze_refused` | INFO | `reason` (`no_open_follow_up`, `not_contactable`, `snooze_in_progress`), `contact_block_reason` | a snooze was refused (409) |
+| `lead_snooze_wake` | INFO | `open`, `signal`, `timer` | the App path's wake step after the lifecycle MERGE |
+| `lead_snooze_wake_failed` | WARNING | `exc_type` | the wake step failed; the sync's result and status are unchanged |
+
+The bundle job prints `[sync-lifecycle] snooze wake: open=N signal=N timer=N`
+or `[sync-lifecycle] snooze wake skipped: <ExcType>` (stderr) and keeps its
+exit code. No line carries a borrower id, an email or a message.
+
+**The App never attempts DDL on gold (NB-f).** The App's own lifecycle sync
+paths only probe `information_schema` for the funnel snapshot's newer
+columns: a missing column skips the funnel snapshot write with one
+`funnel_snapshot_schema_deferred` warning (a refused probe:
+`funnel_snapshot_schema_denied`), and the deploy identity (deploy step 9,
+the bundle job) adds the column.
