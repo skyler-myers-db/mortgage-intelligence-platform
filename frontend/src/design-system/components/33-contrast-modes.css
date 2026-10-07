@@ -44,8 +44,12 @@
   /* A nested control keeps forcing, so its hover / focus fill stays the
      forced ButtonFace its ButtonText glyph is set for (routes/lead-queue.css). */
   .filter.is-active .filter__remove { forced-color-adjust: auto; }
-  /* The cursor's inset ring. */
-  .filter-menu__item.is-focused { --focus-ring-color: HighlightText; }
+  /* The cursor's inset ring: the filter menu's, the palette's and the
+     topbar search's active row all sit on the Highlight fill, where a
+     Highlight ring drew 1.46:1 (light) / 1.58:1 (dark) (css-06 / a11y-10). */
+  .filter-menu__item.is-focused,
+  .cmdk__row.is-active,
+  .topbar__search-result.is-active { --focus-ring-color: HighlightText; }
   /* Route nav links (visual-05) carry their state in an underline, not a
      fill. A forced transparent border would surface as a line under every
      link, so the idle one is named Canvas and the current one Highlight. */
