@@ -564,14 +564,16 @@ test.describe('route nav docks by its measured share of the scrollport (report 1
     await start.focus();
     await settleFrames(page);
     const gaps: number[] = [];
-    for (let press = 0; press < 8; press += 1) {
+    for (let press = 0; press < 40; press += 1) {
       await page.keyboard.press('Shift+Tab');
       await settleFrames(page);
       const active = page.locator(':focus');
       if (!(await active.evaluate((el) => Boolean(el.closest('tr[data-borrower-row]'))))) continue;
-      gaps.push(await gapBelowRouteNav(active));
+      gaps.push(Math.round(await gapBelowRouteNav(active) * 10) / 10);
     }
-    expect(gaps.length, 'non-vacuity: Shift+Tab stopped on row controls').toBeGreaterThan(2);
+    expect(gaps.length, 'non-vacuity: Shift+Tab stopped on row controls').toBeGreaterThan(5);
+    // Non-vacuity: the walk climbed up to the nav, so a stop was placed by the clearance (at its edge, not far below it).
+    expect(Math.min(...gaps), `a stop reached the nav's edge (gaps ${gaps.join(', ')})`).toBeLessThanOrEqual(12);
     for (const gap of gaps) expect(gap, `every row stop sits below the ${nav}px nav (gaps ${gaps.join(', ')})`).toBeGreaterThanOrEqual(-0.5);
   });
 });
