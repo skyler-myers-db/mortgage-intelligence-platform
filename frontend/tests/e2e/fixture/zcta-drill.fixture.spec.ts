@@ -217,7 +217,9 @@ test.describe('ZIP areas (needs the committed geometry)', () => {
     await app.gotoRoute(SEGMENTS);
     await drill(page, 'il');
     await expect(zctaStage(page)).toBeVisible();
-    await expect(page.getByRole('note')).toContainText('1 ZIP (37 borrowers) has no Census ZIP-area boundary (PO box or unique ZIP)');
+    await expect(page.locator('#main-content .map-wrap [role="note"]')).toContainText(
+      '1 ZIP (37 borrowers) has no Census ZIP-area boundary (PO box or unique ZIP)',
+    );
   });
 
   test('forced colours keep the state outline, and the drilled map is axe clean', async ({ app, page }) => {
@@ -277,7 +279,10 @@ test.describe('the rung without geometry (always)', () => {
     expect(geometry).toEqual([]);
   });
 
-  test('a geometry read that fails falls back to the densest-ZIP tiles with their status line', async ({ app, page }) => {
+  test('a geometry read that fails falls back to the densest-ZIP tiles with their status line', async ({ app, hygiene, page }) => {
+    // The aborted geometry reads (the first try and its two retries) are the point of the test.
+    hygiene.allow('request-failed', /\/assets\/[A-Z]{2}\.topo-[^/]+\.json failed: net::ERR_FAILED/);
+    hygiene.allow('console.error', /Failed to load resource: net::ERR_FAILED \(http:\/\/[^)]+\/assets\/[A-Z]{2}\.topo-/);
     await page.route(GEOMETRY_URL, (route) => route.abort());
     await app.gotoRoute(SEGMENTS);
     await drill(page, 'il');
