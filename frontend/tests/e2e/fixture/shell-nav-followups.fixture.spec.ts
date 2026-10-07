@@ -112,22 +112,31 @@ test.describe('the measured dock\'s consumers (report 12.4 #5)', () => {
   });
 });
 
-/** A ZIP tile list made to scroll (a short max height) with a tile placed 4px under its top. */
-async function placeTileUnderListTop(page: Page): Promise<{ overflow: number; before: number }> {
-  await page.addStyleTag({ content: '.zip-tiles { flex: none !important; max-block-size: 96px !important; }' });
+/**
+ * A ZIP tile list made to scroll (two columns, 160px tall) with a
+ * tile placed 4px under its top, deep enough in the list (scrollTop > 61px,
+ * the nav's margin) that a restored margin has room to over-scroll it.
+ */
+async function placeTileUnderListTop(page: Page): Promise<{ overflow: number; before: number; offset: number }> {
+  await page.addStyleTag({
+    content: '.zip-tiles { flex: none !important; max-inline-size: 240px !important; max-block-size: 160px !important; }',
+  });
   return page.locator('ul.zip-tiles').evaluate(async (list) => {
     const frames = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     await frames();
     const tiles = [...list.querySelectorAll<HTMLElement>('button.zip-tile[data-populated]')];
-    const top = list.getBoundingClientRect().top;
-    // The first tile of the second row, and the tile before it (end of row one).
-    const second = tiles.find((tile) => tile.getBoundingClientRect().top > tiles[0].getBoundingClientRect().top + 1);
-    if (!second) throw new Error('precondition: the tiles wrap to a second row');
-    list.scrollTop += second.getBoundingClientRect().top - top - 4;
+    const contentTop = list.getBoundingClientRect().top - list.scrollTop;
+    // The first tile of a row at least 80px into the list, and the tile before it.
+    const target = tiles.find((tile, index) => index > 0 && tile.getBoundingClientRect().top - contentTop >= 80);
+    if (!target) throw new Error(`precondition: ${tiles.length} tiles reach 80px into the list`);
+    list.scrollTop += target.getBoundingClientRect().top - list.getBoundingClientRect().top - 4;
     await frames();
-    const previous = tiles[tiles.indexOf(second) - 1];
-    previous.focus({ preventScroll: true });
-    return { overflow: list.scrollHeight - list.clientHeight, before: list.scrollTop };
+    tiles[tiles.indexOf(target) - 1].focus({ preventScroll: true });
+    return {
+      overflow: list.scrollHeight - list.clientHeight,
+      before: list.scrollTop,
+      offset: target.getBoundingClientRect().top - list.getBoundingClientRect().top,
+    };
   });
 }
 
@@ -159,6 +168,8 @@ test.describe('nested scrollers are left out of the route nav\'s margin (a11y-v2
       if (restored) await page.addStyleTag({ content: '.main .zip-tiles * { scroll-margin-block-start: var(--nav-clear) !important; }' });
       const placed = await placeTileUnderListTop(page);
       expect(placed.overflow, 'precondition: the tile list scrolls').toBeGreaterThan(40);
+      expect(Math.abs(placed.offset - 4), `precondition: the tile sits 4px under the list's top (${placed.offset}px)`).toBeLessThanOrEqual(1);
+      expect(placed.before, 'precondition: room above to over-scroll into').toBeGreaterThan(61);
       const { moved, onTile } = await arrowOntoPlacedTile(page, placed.before);
       expect(onTile, 'the arrow moved focus to a tile').toBe(true);
       if (restored) expect(moved, 'the nav margin over-scrolls the list').toBeGreaterThan(40);
@@ -170,9 +181,13 @@ test.describe('nested scrollers are left out of the route nav\'s margin (a11y-v2
   interface Scroller {
     selector: string;
     focusable: number;
+    /** Overflows in the block axis, the only one the nav's block-start margin can scroll. */
+    blockScrollable: boolean;
+    /** The computed scroll-margin-block-start of its first focusable element. */
+    margin: string;
   }
 
-  /** Every element in `.main` that scrolls (overflow auto/scroll) and holds a focusable element. */
+  /** Every element in `.main` declared a scroller (overflow auto/scroll) that holds a focusable element. */
   async function nestedScrollers(page: Page): Promise<Scroller[]> {
     return page.locator('.main').evaluate((main) => {
       const FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex], [contenteditable="true"], summary';
@@ -182,10 +197,15 @@ test.describe('nested scrollers are left out of the route nav\'s margin (a11y-v2
           const style = getComputedStyle(element);
           return scrolls(style.overflowY) || scrolls(style.overflowX);
         })
-        .map((element) => ({
-          selector: `${element.tagName.toLowerCase()}.${[...element.classList].join('.')}`,
-          focusable: element.querySelectorAll(FOCUSABLE).length,
-        }))
+        .map((element) => {
+          const first = element.querySelector(FOCUSABLE);
+          return {
+            selector: `${element.tagName.toLowerCase()}.${[...element.classList].join('.')}`,
+            focusable: element.querySelectorAll(FOCUSABLE).length,
+            blockScrollable: scrolls(getComputedStyle(element).overflowY) && element.scrollHeight - element.clientHeight > 1,
+            margin: first ? getComputedStyle(first).scrollMarginBlockStart : '',
+          };
+        })
         .filter((scroller) => scroller.focusable > 0);
     });
   }
@@ -197,10 +217,12 @@ test.describe('nested scrollers are left out of the route nav\'s margin (a11y-v2
       await page.setViewportSize({ width, height });
       await forceZipTiles(page);
       const found: Record<string, Scroller[]> = {};
+      const docked: Record<string, boolean> = {};
       for (const path of ['/?geo_state=IL', '/segment-intelligence?geo_state=IL', '/lead-queue?states=IL,TX&zips=60601,60602']) {
         await app.gotoRoute(path);
         const naturalLoad = markNaturalLoad(mockApi);
         found[path] = await nestedScrollers(page);
+        docked[path] = await page.locator('.route-nav').evaluate((nav) => nav.hasAttribute('data-docked'));
         if (path.startsWith('/lead-queue')) {
           // The measured facts that need no exclusion: the scope strip holds
           // pills only, and the filter row never scrolls.
@@ -218,8 +240,21 @@ test.describe('nested scrollers are left out of the route nav\'s margin (a11y-v2
         expectNoAuditedReadSince(mockApi, naturalLoad, `census ${path}`);
       }
       test.info().annotations.push({ type: 'nested-scrollers', description: JSON.stringify(found) });
-      const unexcluded = Object.entries(found).flatMap(([path, list]) => list.filter((scroller) => !excluded(scroller)).map((scroller) => `${path}: ${scroller.selector}`));
-      expect(unexcluded, 'a nested scroller with a focusable element the margin does not leave out').toEqual([]);
+      // A declared scroller with no block overflow (the ranked table's
+      // `.surface`, overflow-x: auto for its wide table, so overflow-y computes
+      // to auto) has nothing the margin could scroll: only block-scrollable
+      // ones must be left out.
+      const unexcluded = Object.entries(found).flatMap(([path, list]) => list
+        .filter((scroller) => scroller.blockScrollable && !excluded(scroller))
+        .map((scroller) => `${path}: ${scroller.selector}`));
+      expect(unexcluded, 'a block-scrollable nested scroller with a focusable element the margin does not leave out').toEqual([]);
+      // And the stylesheet really leaves them out: with the nav docked (a
+      // 61px clearance on everything else), their controls carry none. The
+      // table's rows carry their own clearance (LeadTable.css), so it is not read here.
+      const marginInside = Object.entries(found).flatMap(([path, list]) => (docked[path] ? list : [])
+        .filter((scroller) => excluded(scroller) && !scroller.selector.split('.').includes('tbl-wrap') && scroller.margin !== '0px')
+        .map((scroller) => `${path}: ${scroller.selector} ${scroller.margin}`));
+      expect(marginInside, 'an excluded scroller whose controls still carry the nav margin').toEqual([]);
       expect(Object.values(found).flat().some((scroller) => scroller.selector.includes('zip-tiles')), 'non-vacuity: the census saw the tile list').toBe(true);
     });
   }
@@ -350,7 +385,8 @@ test.describe('the roadmap rail slots show only in presenter mode (critic-05, D-
       const calls = mockApi.calls.length;
       await page.keyboard.press('Enter');
       await page.keyboard.press('Space');
-      await slots.first().click();
+      // aria-disabled is not actionable to Playwright; force the pointer click through.
+      await slots.first().click({ force: true });
       await page.waitForTimeout(300);
       expect(page.url()).toBe(url);
       expect(mockApi.calls.slice(calls), 'no request from a roadmap slot').toEqual([]);
