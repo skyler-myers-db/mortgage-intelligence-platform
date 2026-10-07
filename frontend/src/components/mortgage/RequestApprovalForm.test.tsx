@@ -9,7 +9,7 @@
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { approvalRequestsApi } from '../../lib/apiClients/approvalRequests';
 import { ApiError } from '../../lib/apiTransport';
 import { clearToasts, getToasts } from '../../lib/toast';
@@ -59,6 +59,11 @@ async function submit() {
   await act(async () => send().click());
   await flush();
 }
+
+beforeAll(async () => {
+  // describeApiError's sentence rides AsyncFailure's lazy chunk: transformed once up front.
+  await import('../ui/AsyncFailure');
+}, 60_000);
 
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -186,14 +191,14 @@ describe('RequestApprovalForm', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['session', 'access'] });
   });
 
-  it('never says the refusal was recorded on a 503 (the refusal row may not exist: C4)', async () => {
+  it('never says the refusal was recorded on a 503 (the refusal row may not exist: C4)', { timeout: 30_000 }, async () => {
     vi.spyOn(approvalRequestsApi, 'create').mockRejectedValue(
       new ApiError('Lakebase is temporarily unavailable.', { path: '/x', status: 503, dependency: 'lakebase' }),
     );
     await render();
     await type('Reason.');
     await submit();
-    await vi.waitFor(() => expect(failure()).not.toBeNull(), { timeout: 5000 });
+    await vi.waitFor(() => expect(failure()).not.toBeNull(), { timeout: 20_000 });
     expect(failure()).not.toMatch(/recorded/i);
   });
 
