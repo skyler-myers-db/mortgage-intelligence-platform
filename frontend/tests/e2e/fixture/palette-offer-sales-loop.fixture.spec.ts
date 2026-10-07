@@ -161,6 +161,12 @@ test.describe('the palette (shell-07, runtime-06, tables-09)', () => {
     await app.settle();
     expect(callsTo(mockApi, '/api/borrowers/search').map((call) => call.search)).toEqual(['q=Chicago']);
 
+    // Every option is a button out of the Tab order (a11y-05).
+    const options = list.getByRole('option');
+    for (const option of await options.all()) {
+      await expect(option).toHaveAttribute('tabindex', '-1');
+      expect(await option.evaluate((el) => el.tagName)).toBe('BUTTON');
+    }
     await page.keyboard.press('ArrowDown');
     const active = list.locator('.topbar__search-result.is-active');
     await expect(active).toHaveCount(1);
