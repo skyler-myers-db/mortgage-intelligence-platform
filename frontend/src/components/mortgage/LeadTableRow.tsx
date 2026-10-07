@@ -301,23 +301,25 @@ export function LeadTableRow({
             >
               {pendingDecision === 'approve' ? 'Approving…' : 'Approve'}
             </Button>
-            <button
-              type="button"
-              className="btn btn--sm lead-table__reject"
-              aria-label={pendingDecision === 'reject' ? `Rejecting ${lead.borrower_id}` : `Reject ${lead.borrower_id}`}
-              aria-busy={pendingDecision === 'reject' || undefined}
+            {/* motion-08 slice 2: a reject on the wire shows Button loading (spinner over
+                the same box, same name, aria-busy + aria-disabled); native disabled only for
+                the gate, a blocked binding or an approve on the wire, so focus stays put. */}
+            <Button
+              size="sm"
+              icon="cross"
+              className="lead-table__reject"
+              loading={pendingDecision === 'reject'}
+              aria-label={`Reject ${lead.borrower_id}`}
               aria-keyshortcuts={rowKeys && !gated ? 'R' : undefined}
               title={approverGate ?? 'Reject'}
-              disabled={gated || approvalActionsDisabled || decisionPending}
+              disabled={gated || approvalActionsDisabled || pendingDecision === 'approve'}
               aria-describedby={decisionDescribedBy}
               onClick={(e) => {
                 e.stopPropagation();
                 onReject(lead.borrower_id);
               }}
               data-testid={`lead-reject-${lead.borrower_id}`}
-            >
-              <Icon name="cross" size={12} />
-            </button>
+            />
           </div>
         )}
       </td>

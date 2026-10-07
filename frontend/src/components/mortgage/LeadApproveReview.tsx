@@ -229,6 +229,8 @@ export function LeadApproveReview({
           variant="primary"
           size="sm"
           icon={phase === 'submitting' ? undefined : 'check'}
+          // motion-08 slice 2: the spinner over the kept label while the approve is on the wire.
+          loading={phase === 'submitting'}
           // aria-disabled, never native `disabled`: a focused Confirm that
           // turned disabled would drop keyboard focus to <body> mid-approval.
           aria-disabled={phase !== 'ready' || undefined}

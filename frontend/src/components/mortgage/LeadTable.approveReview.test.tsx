@@ -261,6 +261,10 @@ describe('LeadTable approve review', () => {
     // In flight: the review says so, nothing claims "approved" yet: no toast.
     expect(confirm().textContent).toBe('Approving…');
     expect(confirm().getAttribute('aria-disabled')).toBe('true');
+    // motion-08 slice 2: the spinner over the kept label, focus kept (aria-busy, no native disabled).
+    expect(confirm().classList.contains('btn--loading')).toBe(true);
+    expect(confirm().getAttribute('aria-busy')).toBe('true');
+    expect(confirm().disabled).toBe(false);
     expect(getToasts()).toEqual([]);
     expect(setApproval).not.toHaveBeenCalled();
     // A second Confirm while in flight is not a second POST.

@@ -258,10 +258,13 @@ export function LeadTableBulkActions({
           onClick={() => {
             if (!bulkBlocked) onOpenBulkReject?.();
           }}
+          // motion-08 slice 2: its own run shows Button loading (never native
+          // disabled, which would drop focus); the other kind's run disables it.
           disabled={
-            approverGate !== null || campaignBindingBlocked || bulkApproving
+            approverGate !== null || campaignBindingBlocked || (bulkApproving && runKind !== 'reject')
             || selectedApprovalEligibleCount === 0
           }
+          loading={bulkApproving && runKind === 'reject'}
           aria-disabled={bulkBlocked || undefined}
           aria-describedby={describedBy(
             approverGate !== null && APPROVER_ROLE_STATUS_ID,
@@ -282,9 +285,10 @@ export function LeadTableBulkActions({
           icon={bulkApproving ? undefined : 'check'}
           onClick={approve}
           disabled={
-            approverGate !== null || campaignBindingBlocked || bulkApproving
+            approverGate !== null || campaignBindingBlocked || (bulkApproving && runKind !== 'approve')
             || selectedApprovalEligibleCount === 0
           }
+          loading={bulkApproving && runKind === 'approve'}
           aria-disabled={armingCopy !== null || bulkBlocked || undefined}
           aria-describedby={describedBy(
             approverGate !== null && APPROVER_ROLE_STATUS_ID,

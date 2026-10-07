@@ -421,9 +421,11 @@ describe('LeadTableRow pending decision', () => {
 
     expect(approveButton().textContent).toBe('Approve');
     expect(approveButton().disabled).toBe(true);
-    expect(rejectButton().disabled).toBe(true);
-    expect(rejectButton().getAttribute('aria-busy')).toBe('true');
-    expect(rejectButton().getAttribute('aria-label')).toBe(`Rejecting ${lead.borrower_id}`);
+    // motion-08 slice 2: never native disabled (Button loading carries the
+    // busy state; pinned with the real Button in LeadTable.approveReviewRemount),
+    // and the name is the same.
+    expect(rejectButton().disabled).toBe(false);
+    expect(rejectButton().getAttribute('aria-label')).toBe(`Reject ${lead.borrower_id}`);
   });
 
   it('enables both controls when nothing is on the wire', () => {
