@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, type ComponentType } from 'react';
 import { Link, useLocation } from 'react-router';
 import { Icon } from '../Icon';
 import { EntradaMark } from '../brand/Entrada';
@@ -26,7 +26,7 @@ import { useAdminNavigationAccess } from './RouteNav';
 
 const M0 = { id: 0, name: 'Top-of-Funnel', desc: 'Lead generation + borrower segmentation (ships today).' } as const;
 
-const RailRoadmap = lazy(() => import('./RailRoadmap').catch(() => ({ default: () => null })));
+const RailRoadmap = lazy<ComponentType>(() => import('./RailRoadmap').catch(() => ({ default: () => null })));
 
 export function Rail() {
   const { pathname } = useLocation();
