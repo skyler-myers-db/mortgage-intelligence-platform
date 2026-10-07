@@ -187,6 +187,20 @@ describe('Offer prior decisions', () => {
     const body = container.querySelector<HTMLElement>('[data-testid="outreach-draft"]');
     return body !== null && body.getAttribute('aria-disabled') !== 'true' && body.textContent === 'email governed body';
   };
+  const reason = () => container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select');
+  function choose(value: string) {
+    act(() => {
+      const select = reason()!;
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+  async function openReject() {
+    mount();
+    await waitUntil(() => loaded());
+    act(() => findButton('Reject')?.click());
+    await waitUntil(() => findButton('Confirm reject') !== undefined);
+  }
 
   it('reads the history once on mount, collapsed, with the count in its toggle', async () => {
     mount();
@@ -242,22 +256,50 @@ describe('Offer prior decisions', () => {
     expect(decisions.list).toHaveBeenCalledTimes(1);
   });
 
-  describe('the reject reason has no default', () => {
-    const reason = () => container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select');
-    function choose(value: string) {
-      act(() => {
-        const select = reason()!;
-        select.value = value;
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-      });
-    }
-    async function openReject() {
-      mount();
-      await waitUntil(() => loaded());
-      act(() => findButton('Reject')?.click());
-      await waitUntil(() => findButton('Confirm reject') !== undefined);
-    }
+  it('re-reads only the history, once, after the reject resolves', async () => {
+    let resolveReject: (value: unknown) => void = () => undefined;
+    apiMocks.reject.mockReturnValue(new Promise((resolve) => { resolveReject = resolve; }));
+    await openReject();
+    await waitUntil(() => toggle()?.textContent === 'Prior decisions (1)');
+    const borrowerReads = apiMocks.borrower.mock.calls.length;
 
+    choose('data_quality');
+    act(() => findButton('Confirm reject')?.click());
+    await waitUntil(() => apiMocks.reject.mock.calls.length === 1);
+    // Pessimistic: nothing re-reads while the write is on the wire.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(decisions.list).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveReject({ rejected: true, audit_event_id: 'audit-reject-1' });
+    });
+    await waitUntil(() => decisions.list.mock.calls.length === 2);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(decisions.list).toHaveBeenCalledTimes(2);
+    // The audited reads are never repeated for it.
+    expect(apiMocks.borrower.mock.calls.length).toBe(borrowerReads);
+    expect(queryClient.getQueryState(['mip', 'borrower', ID])).toBeUndefined();
+  });
+
+  it('re-reads nothing after a failed reject', async () => {
+    apiMocks.reject.mockRejectedValue(new Error('Lakebase unavailable'));
+    await openReject();
+    await waitUntil(() => toggle()?.textContent === 'Prior decisions (1)');
+
+    choose('data_quality');
+    act(() => findButton('Confirm reject')?.click());
+    await waitUntil(() => container.textContent?.includes("Couldn't record rejection") === true);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(decisions.list).toHaveBeenCalledTimes(1);
+  });
+
+  describe('the reject reason has no default', () => {
     it('opens on "Choose a reason" and a submit without one focuses Reason and sends nothing', async () => {
       await openReject();
       expect(reason()?.value).toBe('');
