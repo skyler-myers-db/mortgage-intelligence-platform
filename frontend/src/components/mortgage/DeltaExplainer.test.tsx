@@ -201,4 +201,30 @@ describe('DeltaExplainer', () => {
     expect(css).not.toContain('signal-danger');
     expect(document.querySelector('[data-testid="delta-explainer"]')?.innerHTML).not.toContain('signal-danger');
   });
+
+  it('is a static table: a row click does nothing, so no row pointer or hover fill (only the state links act)', async () => {
+    respond(body());
+    await render();
+    const table = document.querySelector('.delta-explainer__table');
+    expect(table?.classList.contains('tbl')).toBe(true);
+    expect(table?.classList.contains('tbl--static')).toBe(true);
+  });
+
+  it("gives the row headers and the total the .tbl td cell box, not the user agent's centred bold", async () => {
+    respond(body());
+    await render();
+    // Every body row and the total are headed by a <th scope="row">, which .tbl leaves unstyled.
+    const rows = [...document.querySelectorAll('.delta-explainer__table tbody tr, .delta-explainer__table tfoot tr')];
+    expect(rows.map((row) => row.firstElementChild?.tagName)).toEqual(rows.map(() => 'TH'));
+    const declarations = (block: string) => block.split(';').map((part) => part.trim()).filter(Boolean);
+    const tblCss = readFileSync(`${process.cwd()}/src/design-system/components/03-score-and-table.css`, 'utf8') as string;
+    const tdBox = declarations(tblCss.match(/\n\.tbl td \{([^}]*)\}/)?.[1] ?? '')
+      .filter((declaration) => /^(padding|height|border-bottom|vertical-align):/.test(declaration));
+    expect(tdBox).toHaveLength(4);
+    const css = readFileSync(`${process.cwd()}/src/components/mortgage/DeltaExplainer.css`, 'utf8') as string;
+    const th = declarations(css.match(/\.delta-explainer__table tbody th,\s*\.delta-explainer__table tfoot th \{([^}]*)\}/)?.[1] ?? '');
+    expect(th).toEqual(expect.arrayContaining([...tdBox, 'text-align: start', 'font-weight: 500', 'color: var(--text-1)']));
+    const total = declarations(css.match(/\.delta-explainer__table tfoot th,\s*\.delta-explainer__table tfoot td \{([^}]*)\}/)?.[1] ?? '');
+    expect(total).toContain('font-weight: 600');
+  });
 });
