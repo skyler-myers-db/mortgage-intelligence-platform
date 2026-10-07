@@ -210,6 +210,24 @@ describe('DistributionBoard', () => {
     expect(document.activeElement?.id).toBe('opener');
   });
 
+  it('reads a 409 that reached it without a reason (the base transport parses none) as the moved plan', async () => {
+    loopMocks.previewDistribution
+      .mockResolvedValueOnce(previewResponse(plan('f'.repeat(64), [2, 2])))
+      .mockResolvedValueOnce(previewResponse(plan('0'.repeat(64), [1, 2])));
+    loopMocks.commitDistribution.mockRejectedValueOnce(
+      new ApiError('The distribution plan changed since the preview.', { path: '/api/sales/distribute', status: 409 }),
+    );
+    await openBoard();
+    await eventually(() => expect(commitButton().disabled).toBe(false));
+
+    await act(async () => {
+      commitButton().click();
+    });
+    await eventually(() => expect(loopMocks.previewDistribution).toHaveBeenCalledTimes(2));
+    await eventually(() => expect(document.body.textContent).toContain('The plan changed since your preview'));
+    expect(document.querySelector('dialog [role="alert"]')).toBeNull();
+  });
+
   it('cannot be dismissed while committing, and keeps any other failure inside the dialog', async () => {
     loopMocks.previewDistribution.mockResolvedValue(previewResponse(plan('e'.repeat(64), [1, 1])));
     let fail: (reason: unknown) => void = () => undefined;
