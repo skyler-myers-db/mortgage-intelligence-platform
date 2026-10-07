@@ -40,6 +40,7 @@ import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
 import { useLeadBulkRun, type BulkRunCanary, type BulkRunResult } from './useLeadBulkRun';
 import {
   approveWithReport as writeApprove,
+  DECIDED_SINCE,
   requestScopeParts,
   type ApproveExtras,
   type DecisionWriteDeps,
@@ -162,6 +163,12 @@ export function useLeadApprovalActions({
   // `decidedRef` holds rows whose approve / reject write returned ok in this
   // mount, `bulkRunIdsRef` the rows of the bulk run on the wire.
   const decidedRef = useRef<Set<string>>(new Set());
+  // Read by a 429 Retry long after its render (states-08 item 3): the rows
+  // still eligible and the latest rejectLead, synced after every commit.
+  const eligibleRef = useRef<ReadonlySet<string>>(new Set());
+  const rejectLatestRef = useRef<(borrowerId: string, reasonCode: RejectReasonCode, rationale: string | null) => Promise<boolean>>(
+    () => Promise.resolve(false),
+  );
   const bulkRunIdsRef = useRef<ReadonlySet<string>>(new Set());
   // R5-21: a run the last unmount cut short is flashed once on this mount
   // (read in the initializer, so StrictMode's double render is safe; the
@@ -264,6 +271,7 @@ export function useLeadApprovalActions({
       setApproval(borrowerId, decision);
       recordDecision(borrowerId, { auditEventId, decision });
     },
+    stillDecidable: (borrowerId) => !isDecisionLocked(borrowerId) && eligibleRef.current.has(borrowerId),
   };
   const approveWithReport = (
     borrowerId: string,
@@ -360,7 +368,16 @@ export function useLeadApprovalActions({
       },
       (err: unknown) => {
         if (decisionFailure(err) === 'aborted') return false;
-        toastWriteFailure(`Couldn't reject ${borrowerId}`, err, 'the rejection');
+        // states-08 item 3: a 429's Retry re-runs this same rejection once
+        // (same request_id: the intent is unsettled), if the row is still open.
+        const retry = () => {
+          if (decisionInFlight(borrowerId) || !writeDeps.stillDecidable?.(borrowerId)) {
+            toastWriteRefusal(`Couldn't reject ${borrowerId}`, DECIDED_SINCE);
+            return;
+          }
+          void rejectLatestRef.current(borrowerId, reasonCode, rationale);
+        };
+        toastWriteFailure(`Couldn't reject ${borrowerId}`, err, 'the rejection', retry);
         return false;
       },
     );
@@ -447,6 +464,10 @@ export function useLeadApprovalActions({
       return isLeadApprovalEligible(l.approval_status, localStatus, l) && !pendingDecisions.has(l.borrower_id);
     })
     .map((l) => l.borrower_id);
+  useEffect(() => {
+    eligibleRef.current = new Set(approvalEligibleIds);
+    rejectLatestRef.current = rejectLead;
+  });
   // Audit tables-07: the selection a render may act on is the stored set
   // intersected with the rows on screen, derived here (never pruned in an
   // effect). Counts, the header checkbox, the Cmd-K verbs, the CSV scope,

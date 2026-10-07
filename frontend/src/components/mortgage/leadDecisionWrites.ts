@@ -84,7 +84,15 @@ export interface DecisionWriteDeps {
   latch: (borrowerId: string, inFlight: boolean) => void;
   /** The write returned ok: record the decision and its receipt. */
   onDecided: (borrowerId: string, decision: 'approved' | 'rejected', auditEventId: string | null) => void;
+  /**
+   * The row may still be decided from here, read at call time (not decided in
+   * this mount, not in a bulk run, still eligible): a 429's Retry re-checks it.
+   */
+  stillDecidable?: (borrowerId: string) => boolean;
 }
+
+/** A 429 Retry that found the row decided meanwhile: nothing is sent. */
+export const DECIDED_SINCE = 'It was decided since; nothing was sent.';
 
 /** An intent's request scope: the batch id joins a fingerprint only when set (unscoped ids unchanged). */
 export function requestScopeParts(deps: DecisionWriteDeps): string[] {
@@ -170,7 +178,17 @@ export function approveWithReport(
       if (err instanceof OfferNotPreviewedError) return { outcome: 'backend', message: OFFER_NOT_PREVIEWED };
       const message = err instanceof Error ? err.message : null;
       // A single row's failure is a toast; a bulk row reports in the run.
-      if (!inBulk) toastWriteFailure(`Couldn't approve ${borrowerId}`, err, 'the approval');
+      // states-08 item 3: a 429's Retry (live after its Retry-After) re-runs
+      // the SAME write once: the intent is unsettled, so the request_id and
+      // the reviewed draft are the same; pessimistic as ever.
+      const retry = () => {
+        if (deps.isInFlight(borrowerId) || deps.stillDecidable?.(borrowerId) === false) {
+          toastWriteRefusal(`Couldn't approve ${borrowerId}`, DECIDED_SINCE);
+          return;
+        }
+        void approveWithReport(deps, borrowerId, undefined, extras, reviewedDraft);
+      };
+      if (!inBulk) toastWriteFailure(`Couldn't approve ${borrowerId}`, err, 'the approval', retry);
       // The session ended mid-click (on the draft step or the approve POST):
       // the session dialog must say this approval was NOT recorded.
       if (clientFailureReason(err) === 'session_expired') {

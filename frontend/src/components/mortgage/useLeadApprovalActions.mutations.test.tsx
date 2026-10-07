@@ -607,6 +607,80 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     }
   });
 
+  describe('a 429 Retry (states-08 item 3)', () => {
+    const tooMany = (path: string) => new ApiError('Too many requests', { path, status: 429, retryAfterMs: 30_000 });
+    const retryToast = async () => {
+      await vi.waitFor(() => expect(getToasts().find((toast) => toast.action?.label === 'Retry')).toBeDefined());
+      return getToasts().find((toast) => toast.action?.label === 'Retry')!;
+    };
+
+    it('holds the single approve Retry behind the countdown, then sends exactly one POST with the same request_id', async () => {
+      apiMocks.approve.mockRejectedValueOnce(tooMany('/api/outreach/approve'));
+      mount();
+      const reviewed = draft('gen-429');
+      await act(async () => {
+        await actions!.approveLead(BORROWER, undefined, {}, reviewed);
+      });
+      const toast = await retryToast();
+      expect(toast.actionReadyAt).toBeGreaterThan(Date.now() + 25_000);
+      expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        toast.action!.onAction();
+      });
+      await flush();
+      expect(apiMocks.approve).toHaveBeenCalledTimes(2);
+      const [first, again] = apiMocks.approve.mock.calls.map(requestIdOf);
+      expect(again).toBe(first);
+      expect(apiMocks.approve.mock.calls[1][1]).toEqual(expect.objectContaining({ draft_generation_id: 'gen-429' }));
+      expect(apiMocks.draftOutreach).not.toHaveBeenCalled();
+      expect(setApproval).toHaveBeenCalledWith(BORROWER, 'approved');
+    });
+
+    it('a row decided meanwhile sends nothing on Retry, and says so', async () => {
+      apiMocks.approve.mockRejectedValueOnce(tooMany('/api/outreach/approve'));
+      mount();
+      await act(async () => {
+        await actions!.approveLead(BORROWER, undefined, {}, draft('gen-429'));
+      });
+      const toast = await retryToast();
+      await act(async () => {
+        await actions!.rejectLead(BORROWER, 'low_intent', 'Decided another way');
+      });
+      await act(async () => {
+        toast.action!.onAction();
+      });
+      await flush();
+      expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+      expect(getToasts().some((item) => item.detail === 'It was decided since; nothing was sent.')).toBe(true);
+    });
+
+    it('re-runs a single reject once with its request_id', async () => {
+      apiMocks.reject.mockRejectedValueOnce(tooMany('/api/outreach/reject'));
+      mount();
+      await act(async () => {
+        await actions!.rejectLead(BORROWER, 'low_intent', 'No intent');
+      });
+      const toast = await retryToast();
+      await act(async () => {
+        toast.action!.onAction();
+      });
+      await flush();
+      expect(apiMocks.reject).toHaveBeenCalledTimes(2);
+      const [first, again] = apiMocks.reject.mock.calls.map(requestIdOf);
+      expect(again).toBe(first);
+    });
+
+    it('a 429 without a Retry-After offers no Retry', async () => {
+      apiMocks.approve.mockRejectedValueOnce(new ApiError('Too many requests', { path: '/api/outreach/approve', status: 429 }));
+      mount();
+      await act(async () => {
+        await actions!.approveLead(BORROWER, undefined, {}, draft('gen-429'));
+      });
+      await vi.waitFor(() => expect(getToasts()).toHaveLength(1));
+      expect(getToasts()[0].action).toBeNull();
+    });
+  });
+
   it('sends one reject POST for a double submit and replays its request_id after a failure', async () => {
     let releaseReject: (value: unknown) => void = () => undefined;
     apiMocks.reject
