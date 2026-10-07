@@ -4,6 +4,7 @@ import { isWarmingUpError } from './api';
 import { clientFailureReason } from './apiTransport';
 import { installOnlineManager } from './connectivity';
 import { planForReason } from './retryPlan';
+import { queryKeys } from './queryKeys';
 
 export const DEFAULT_QUERY_STALE_MS = 30_000;
 export const DEFAULT_QUERY_GC_MS = 5 * 60_000;
@@ -13,7 +14,7 @@ export function createMipQueryClient(): QueryClient {
   // default) instead of burning the retry budget against a dead network;
   // see lib/connectivity.
   installOnlineManager();
-  return new QueryClient({
+  const client = new QueryClient({
     defaultOptions: {
       queries: {
         staleTime: DEFAULT_QUERY_STALE_MS,
@@ -51,6 +52,16 @@ export function createMipQueryClient(): QueryClient {
       },
     },
   });
+  // The Lead Queue's paged view (routes/lead-queue.pages.ts; the scope is
+  // lib/leadsQuery LEADS_PAGED_SCOPE): every served page writes a VIEW_LEADS
+  // row, so nothing but the reader's action re-reads it (D-audit-reads-a).
+  client.setQueryDefaults(queryKeys.leads(['lead-queue-paged']), {
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: Infinity,
+  });
+  return client;
 }
 
 type QueryPersistModule = Pick<typeof import('./queryPersist'), 'startQueryPersistence'>;

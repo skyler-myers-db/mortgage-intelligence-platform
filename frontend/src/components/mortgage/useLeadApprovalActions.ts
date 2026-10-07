@@ -96,6 +96,8 @@ export interface UseLeadApprovalActionsInput {
    * nothing is drafted or sent).
    */
   bulkRuns?: () => BulkRunsChunk | null;
+  /** The paged Lead Queue view every decision declares (D-audit-reads-a); null elsewhere. */
+  leadViewId?: string | null;
 }
 
 export function useLeadApprovalActions({
@@ -110,6 +112,7 @@ export function useLeadApprovalActions({
   canApprove,
   tableWrapRef,
   bulkRuns,
+  leadViewId = null,
 }: UseLeadApprovalActionsInput) {
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -239,6 +242,7 @@ export function useLeadApprovalActions({
   const writeDeps: DecisionWriteDeps = {
     leadsById,
     campaignBinding,
+    leadViewId,
     approve: (variables) => approveMutation.mutateAsync(variables),
     reject: (variables) => rejectMutation.mutateAsync(variables),
     requestIds,
@@ -332,6 +336,7 @@ export function useLeadApprovalActions({
       evidenceIds: lead?.evidence_ids ?? [],
       offerCode: lead?.recommended_offer_code ?? null,
       bulkId: null,
+      leadViewId,
     }).then(
       (res) => {
         if (!res.rejected) {

@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { ApiError } from '../lib/apiTransport';
 import type { HealthPayload } from '../lib/apiTypes';
-import type { ConnectionStatus } from './connectionState';
+import { hasAuditedPages, type ConnectionStatus } from './connectionState';
 
 /**
  * Health recovery — what the shared health poll does on the
@@ -140,6 +140,6 @@ export function refetchRecoveredQueries(queryClient: QueryClient, recovered: rea
   const names = new Set(recovered.map((name) => name.toLowerCase()));
   void queryClient.refetchQueries({
     type: 'active',
-    predicate: (query) => isRecoverableQueryError(query.state.error, names),
+    predicate: (query) => isRecoverableQueryError(query.state.error, names) && !hasAuditedPages(query),
   });
 }

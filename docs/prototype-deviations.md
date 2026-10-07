@@ -102,3 +102,4 @@ enforces it.
 
 | id | deviation | prototype cite | class | code | pinning test | finding ids | ruling date | lane |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| lead-queue-load-next | The Lead Queue table footer (`.surface__ft`) adds an explicit `.btn .btn--ghost .btn--sm` "Load next N" control, an always-mounted polite status line and a "Narrow the filters to see more" note, for a server view read 500 rows per explicit action up to 5,000 (D-audit-reads-a); the prototype table is a fixed 480px scroller (Module 0 Prototype.html:2009) over a static count line with no paging. | design_files/Module 0 Prototype.html:2074 | product | frontend/src/components/mortgage/LeadTableFooter.tsx | frontend/src/components/mortgage/LeadTableFooter.test.tsx | tables-02; delivery-02 | 2026-09-30 | w5-lead-queue-paging |

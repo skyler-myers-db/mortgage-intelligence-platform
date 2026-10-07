@@ -201,8 +201,8 @@ describe('HealthProvider refetches failed panels when their dependency recovers'
     vi.useRealTimers();
   });
 
-  function Panel({ name, queryFn }: { name: string; queryFn: () => Promise<string> }) {
-    const query = useQuery({ queryKey: ['panel', name], queryFn });
+  function Panel({ name, queryFn, audited = false }: { name: string; queryFn: () => Promise<string>; audited?: boolean }) {
+    const query = useQuery({ queryKey: ['panel', name], queryFn, ...(audited && { meta: { auditedPages: true } }) });
     return <div data-panel={name}>{query.isError ? 'error' : (query.data ?? 'loading')}</div>;
   }
 
@@ -242,6 +242,11 @@ describe('HealthProvider refetches failed panels when their dependency recovers'
       throw dependencyDown('warehouse');
     });
     await queryClient.fetchQuery({ queryKey: ['panel', 'left-behind'], queryFn: leftBehind }).catch(() => undefined);
+    // The Lead Queue's paged view (W5c, D-audit-reads-a): every served page
+    // writes a VIEW_LEADS row, so only the reader's Retry re-reads it.
+    const pagedView = vi.fn(async (): Promise<string> => {
+      throw dependencyDown('warehouse');
+    });
 
     await act(async () => {
       root.render(
@@ -250,6 +255,7 @@ describe('HealthProvider refetches failed panels when their dependency recovers'
             <Panel name="leads" queryFn={leads} />
             <Panel name="forbidden" queryFn={forbidden} />
             <Panel name="genie" queryFn={genie} />
+            <Panel name="paged" queryFn={pagedView} audited />
           </HealthProvider>
         </QueryClientProvider>,
       );
@@ -273,6 +279,8 @@ describe('HealthProvider refetches failed panels when their dependency recovers'
     expect(forbidden).toHaveBeenCalledTimes(1);
     expect(genie).toHaveBeenCalledTimes(1);
     expect(leftBehind).toHaveBeenCalledTimes(1);
+    expect(pagedView, 'an audited paged view is never re-read by a recovery').toHaveBeenCalledTimes(1);
+    expect(panelText('paged')).toBe('error');
 
     // The edge fires once: a later healthy poll does not refetch again.
     await advance(8000);

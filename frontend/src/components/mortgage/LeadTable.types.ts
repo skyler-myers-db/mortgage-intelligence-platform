@@ -55,6 +55,30 @@ export interface LeadTableTriage {
   onModeChange: (mode: 'triage' | null, row?: string | null) => void;
 }
 
+/**
+ * A server-paged view (the Lead Queue, D-audit-reads-a): the footer's Load
+ * next, its scope copy, and the view id the decisions and the export declare.
+ * Segment Intelligence passes none and keeps today's footer byte for byte.
+ */
+export interface LeadTablePaging {
+  viewId: string | null;
+  pagesLoaded: number;
+  hasMore: boolean;
+  /** The server could not page this view (no cursor key): page 0 only. */
+  unavailable: boolean;
+  /** Ten pages (5,000 rows) are loaded: no further page is ever served. */
+  capped: boolean;
+  fetchingNext: boolean;
+  nextError: boolean;
+  /** The view restarted at page 0 because the queue changed under it. */
+  queueUpdated: boolean;
+  loadNext: () => void;
+  retryNext: () => void;
+}
+
+/** Where a column sort applies: the server's whole view, or only the loaded rows. */
+export type LeadTableSortScope = 'server' | 'loaded';
+
 export interface LeadTableProps {
   leads: LeadSummary[];
   totalMatching?: number | null;
@@ -98,6 +122,10 @@ export interface LeadTableProps {
   campaignHandoff?: LeadTableCampaignHandoff | null;
   /** The Triage deck's URL contract (the Lead Queue only). */
   triage?: LeadTableTriage | null;
+  /** The server-paged view (the Lead Queue only). */
+  paging?: LeadTablePaging | null;
+  /** 'server': rows arrive in the server's sort order and a server key is not re-sorted here. */
+  sortScope?: LeadTableSortScope;
 }
 
 export type RejectReasonCode =
