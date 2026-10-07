@@ -60,6 +60,8 @@ _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     "genie_refusal_report_texts": ("SELECT", "INSERT", "UPDATE"),
     # Browser RUM day aggregates: retention zeroes rows in place, so no DELETE.
     "rum_daily": ("SELECT", "INSERT", "UPDATE"),
+    # Composed-plan execute progress (genie-09 part 4): upserted, never deleted.
+    "growth_agent_plan_progress": ("SELECT", "INSERT", "UPDATE"),
 }
 
 _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {

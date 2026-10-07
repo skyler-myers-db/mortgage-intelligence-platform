@@ -12,8 +12,9 @@ every composed plan (``plan_digest``) and never runs it; ``POST
 /growth-agent/agent/plan/execute`` runs exactly that reviewed plan; ``GET
 /growth-agent/runs`` lists the caller's own reviewed-workflow runs; ``POST
 /growth-agent/runs/{run_id}/monitors`` saves exactly one of those runs as a
-watchlist; and ``GET /growth-agent/monitors/summary`` briefs the caller's
-saved watchlists. They
+watchlist; ``GET /growth-agent/monitors/summary`` briefs the caller's
+saved watchlists; and ``GET /growth-agent/agent/plan/progress`` reads the
+caller's own running execute's per-step progress (genie-09 part 4). They
 mount here because ``backend/api`` modules may not import each other and this
 router is already registered.
 """
@@ -25,13 +26,16 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import AfterValidator
 
 from backend.schemas.agent_plan import (
     ComposePlanRequest,
     ComposePlanResponse,
     ExecutePlanRequest,
 )
+from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.growth_agent import GrowthAgentMonitor
+from backend.schemas.growth_agent_plan_progress import GrowthAgentPlanProgressResponse
 from backend.schemas.growth_agent_run_history import GrowthAgentRunSummary
 from backend.schemas.growth_agent_watchlist import (
     DEFAULT_WATCHLIST_SUMMARY_LIMIT,
@@ -49,6 +53,7 @@ from backend.services.growth_agent_plan_digest import (
     PlanDigestUnavailable,
     issue_plan_digest,
 )
+from backend.services.growth_agent_plan_progress import read_plan_progress
 from backend.services.growth_agent_reviewed_plan import execute_reviewed_plan
 from backend.services.growth_agent_run_history import (
     DEFAULT_RUN_LIST_LIMIT,
@@ -193,6 +198,23 @@ def execute_reviewed_growth_agent_plan(
             status_code=503,
             detail=safe_dependency_detail("plan signing"),
         ) from exc
+
+
+@router.get("/agent/plan/progress", response_model=GrowthAgentPlanProgressResponse)
+def growth_agent_plan_progress(
+    request: Request,
+    lakebase: LakebaseDep,
+    request_id: Annotated[str, Query(min_length=1, max_length=128), AfterValidator(validate_public_opaque_id)],
+) -> GrowthAgentPlanProgressResponse:
+    """Per-step progress of the caller's own composed-plan execute (genie-09 part 4).
+
+    The browser polls it about once a second only while its OWN execute
+    request is pending. Read-only operational Lakebase state for this actor;
+    another actor's request id reads ``not_started``.
+    """
+
+    # AUDIT EXEMPT: operational progress of the caller's own execute
+    return read_plan_progress(lakebase, actor=resolve_actor(request), request_id=request_id)
 
 
 @router.get("/runs", response_model=list[GrowthAgentRunSummary])

@@ -232,6 +232,13 @@ class BackpressureController:
             # one source-readiness SELECT on the warehouse per drawer open.
             # The admin metadata read stays under the "/api/admin" prefix.
             return RouteBudget("warehouse-read", settings.mip_rate_limit_expensive_per_minute, "warehouse")
+        if method.upper() == "GET" and path == "/api/growth-agent/agent/plan/progress":
+            # A composed plan's per-step progress (audit genie-09 part 4): a
+            # ~1 s poll of the caller's own progress row while its execute is
+            # pending. Lakebase only, never the warehouse, so it takes its own
+            # scope of the default read bucket and a Lakebase slot (the
+            # genie-job status-poll precedent).
+            return RouteBudget("growth-plan-progress", settings.mip_rate_limit_default_per_minute, "lakebase")
         # NOTE: lead assign/disposition calls are POSTs, so they are already
         # classified by the mutation branch above -- a dedicated pattern here
         # would be unreachable dead code (removed 2026-06-10 audit).
