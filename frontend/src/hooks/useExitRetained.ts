@@ -104,3 +104,30 @@ export function useExitRetained<TValue, TElement extends HTMLElement>(
 
   return value ?? retained;
 }
+
+/**
+ * useExitPresence — the boolean form of useExitRetained for an overlay that
+ * unmounts when it closes (motion-01 item 2e: the filter menus, the account
+ * menu, the drawer's recovery frame, the ? sheet). deviation:menu-exit-motion
+ *
+ * `present` keeps the element rendered until its own exit transition ends
+ * (instant under reduced motion and where nothing transitions, such as the
+ * test DOM); `closing` is the exit itself. The caller contract:
+ *
+ *   - render while `present`;
+ *   - while `closing`, add `is-closing`, `aria-hidden="true"` and `inert`
+ *     (lib/keymap hasOpenOverlay skips aria-hidden subtrees, so a closing
+ *     menu never holds the Lead Queue's A / R keys off);
+ *   - derive everything else from `open`: listeners, the Escape layer,
+ *     aria-expanded / aria-controls / aria-activedescendant and focus
+ *     return, so focus returns when the exit STARTS.
+ *
+ * A reopen during the exit keeps the same element (no duplicate ids).
+ */
+export function useExitPresence<T extends HTMLElement>(
+  open: boolean,
+  elementRef: RefObject<T | null>,
+): { present: boolean; closing: boolean } {
+  const present = useExitRetained(open ? true : null, elementRef) === true;
+  return { present, closing: present && !open };
+}

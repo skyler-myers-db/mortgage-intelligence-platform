@@ -119,3 +119,4 @@ enforces it.
 
 | id | deviation | prototype cite | class | code | pinning test | finding ids | ruling date | lane |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| menu-exit-motion | Unmounting overlays (the filter menus, the Status sort menu, the account menu, the drawer recovery frame and the ? sheet) play a 216 ms `--dur-exit` / `--ease-exit` fade-and-lift before they unmount, aria-hidden and inert while closing; the prototype hard-cuts every overlay on close. Instant under reduced motion. | design_files/index.html:665-676 | product | frontend/src/hooks/useExitRetained.ts::useExitPresence; frontend/src/design-system/components/11-skeleton-menu-and-genie-answer.css::.filter-menu.is-closing | frontend/src/hooks/useExitRetained.test.tsx | motion-01 | 2026-10-07 | w5-print-glossary-sales-manager |
