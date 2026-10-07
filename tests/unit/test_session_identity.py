@@ -14,7 +14,9 @@ from pydantic import SecretStr
 
 from backend.config.settings import settings
 from backend.main import app
+from backend.services import rbac
 from backend.services.actor_identity import actor_cache_key, actor_cache_key_aliases
+from backend.services.audit_store import get_fallback_identity_count
 
 _ACTOR = "approver.one@summit.example"
 
@@ -364,3 +366,50 @@ def test_session_carries_the_rotation_aliases_beside_the_key(
     assert nobody["actor_cache_key"] is None
     assert nobody["actor_cache_key_aliases"] == []
 
+
+# --- request-scoped actor resolution (rbac memo; W5c dossier-decisions deferred) ---
+
+
+def test_one_session_read_without_an_identity_falls_back_once(
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``get_session`` asks four rbac questions; they share ONE resolve_actor,
+    so a local/test read without a forwarded identity warns and counts once."""
+    before = get_fallback_identity_count()
+
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""})
+
+    assert response.status_code == 200
+    fallbacks = [record for record in caplog.records if record.getMessage() == "identity_fallback"]
+    assert len(fallbacks) == 1
+    assert get_fallback_identity_count() == before + 1
+
+
+def test_one_session_read_resolves_the_actor_once(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    real = rbac.resolve_actor
+
+    def spy(request: object) -> str:
+        actor = real(request)  # type: ignore[arg-type]
+        calls.append(actor)
+        return actor
+
+    monkeypatch.setattr(rbac, "resolve_actor", spy)
+
+    client.get("/api/v1/session", headers={"X-Forwarded-Email": _ACTOR, "X-Forwarded-Groups": ""})
+
+    assert calls == [_ACTOR]
+
+
+def test_the_memo_falls_back_to_a_plain_call_without_a_scope() -> None:
+    """An object with no scope dict (a test double) still resolves."""
+
+    class _Bare:
+        headers: dict[str, str] = {}
+
+    assert rbac._request_actor(_Bare()) == rbac.resolve_actor(_Bare())  # type: ignore[arg-type]

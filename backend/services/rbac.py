@@ -43,9 +43,30 @@ def _parse_admin_emails(raw: str | None) -> set[str]:
     return {tok.strip().lower() for tok in raw.split(",") if tok.strip()}
 
 
+_ACTOR_SCOPE_KEY = "mip.rbac_actor"
+
+
+def _request_actor(request: Request) -> str:
+    """``resolve_actor`` once per request, memoised in the ASGI scope.
+
+    ``/api/session`` asks four capability questions of one request; each used
+    to resolve the actor again, so a request without a forwarded identity
+    logged four ``identity_fallback`` WARNINGs and bumped the fallback counter
+    four times. The scope is per request, so the memo never outlives it; an
+    object without a scope dict (a test double) gets a plain call.
+    """
+    scope = getattr(request, "scope", None)
+    if not isinstance(scope, dict):
+        return resolve_actor(request)
+    if _ACTOR_SCOPE_KEY not in scope:
+        scope[_ACTOR_SCOPE_KEY] = resolve_actor(request)
+    actor: str = scope[_ACTOR_SCOPE_KEY]
+    return actor
+
+
 def _admin_access(request: Request) -> tuple[bool, str, set[str]]:
     """Resolve the single admin-access decision used by UI and enforcement."""
-    actor = resolve_actor(request)
+    actor = _request_actor(request)
     compatibility_groups_enabled = (
         settings.trust_forwarded_headers and settings.app_env in {"local", "test"}
     )
@@ -178,7 +199,7 @@ def _audit_reader_access(request: Request) -> tuple[bool, str, set[str]]:
 
 def is_configured_auditor(request: Request) -> bool:
     """Auditor by membership (never by being an administrator): the role label."""
-    return _auditor_membership(request, resolve_actor(request))
+    return _auditor_membership(request, _request_actor(request))
 
 
 def can_read_audit(request: Request) -> bool:
