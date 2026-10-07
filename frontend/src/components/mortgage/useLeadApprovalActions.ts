@@ -423,6 +423,12 @@ export function useLeadApprovalActions({
     setBulkRunCanary(null);
   }
 
+  /** An approval request was sent for these rows (flow-02): they leave the selection. */
+  function dropFromSelection(ids: readonly string[]) {
+    const dropped = new Set(ids);
+    setSelectedIds((cur) => new Set([...cur].filter((id) => !dropped.has(id))));
+  }
+
   // Sales Manager selection is broader than approval eligibility: already
   // approved rows must still be selectable for assignment/distribution.
   // Rejected and hold rows remain locked out so operations do not
@@ -614,6 +620,7 @@ export function useLeadApprovalActions({
     toggleSelect,
     selectRange,
     clearSelection,
+    dropFromSelection,
     toggleSelectAll,
     selectableIds,
     approvalEligibleIds,

@@ -23,6 +23,7 @@ import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
 import { LEAD_TABLE_KEYS } from './LeadTable.keymap';
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
+import { requestDecisionBatchId, useLeadTableRequests } from './LeadTable.requests';
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
@@ -122,6 +123,7 @@ export function LeadTable({
   triage = null,
   paging = null,
   sortScope = 'loaded',
+  approvalRequests = null,
 }: LeadTableProps) {
   // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
   // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
@@ -265,6 +267,15 @@ export function LeadTable({
     bulkRuns: BULK_REVIEW_CHUNK.current,
     // The view every decision declares (D-audit-reads-a); null outside the paged queue.
     leadViewId: paging?.viewId ?? null,
+    // A request-scoped queue (flow-02): every decision answers that request.
+    approvalRequestBatchId: requestDecisionBatchId(approvalRequests),
+  });
+  const requests = useLeadTableRequests({
+    approvalRequests,
+    approverGate,
+    campaignBound: hasCampaignBindingRequest,
+    dropFromSelection: approval.dropFromSelection,
+    tableWrapRef,
   });
   // The Triage deck (D-approval-flow-a2): `?mode=triage`, approvers only. A
   // definitive non-approver's check strips the mode; a loading one waits; a
@@ -441,6 +452,7 @@ export function LeadTable({
     onOpenDisposition: sales.openDisposition,
     onAssignmentUpdate: sales.applyLeadUpdate,
     onFocusRow: flow.focusRow,
+    onRequestApproval: requests.openRow,
   });
   // An Approve waiting on the review chunk (nothing drafted yet), or a
   // review whose chunk is still rendering in.
@@ -529,6 +541,7 @@ export function LeadTable({
         onExport={exportCsv}
         triageEntry={triageEntryNow}
         onEnterTriage={() => enterTriage(triageCtl, triageEntryNow, flow.cancelReview)}
+        requestChips={requests.chips}
       />
       <LeadTableStatusChips
         growthAgentVerification={growthAgentVerification}
@@ -538,6 +551,9 @@ export function LeadTable({
         expandedBorrowerId={expanded}
         approverGate={approverGate}
         actorEmail={actorEmail}
+        requestPathOpen={requests.path !== null}
+        requestScope={approvalRequests}
+        onClearRequestScope={requests.clearScope}
       />
       {/* Keyed by the row: each form owns its fields, and a new row starts clean. */}
       {!triageOn && approval.pendingReject && (
@@ -549,6 +565,7 @@ export function LeadTable({
           onSubmit={(reasonCode, rationale) => void flow.submitReject(reasonCode, rationale)}
         />
       )}
+      {!triageOn && requests.rowForm}
       {!triageOn && sales.pendingDisposition && (
         <LeadDispositionPanel
           key={sales.pendingDisposition}
@@ -665,6 +682,9 @@ export function LeadTable({
             // From the flow state, not from whether the review chunk rendered.
             reviewBorrowerId={openReview?.borrowerId ?? flow.reviewLoading}
             rowCallbacks={rowCallbacks}
+            requestMarks={approvalRequests?.marks ?? null}
+            canRequestApproval={requests.path !== null}
+            requestBlockedReason={requests.path?.blockedReason ?? null}
           />
         </table>
       </div>
@@ -714,6 +734,11 @@ export function LeadTable({
           loadedCount={leads.length}
           totalMatching={totalMatching}
           campaignHandoff={campaignHandoff && BulkCampaignHandoff ? <BulkCampaignHandoff handoff={campaignHandoff} /> : null}
+          requestApproval={requests.path && {
+            blockedReason: requests.path.blockedReason,
+            onOpen: () => requests.openBulk(flow.eligibleSelectedIds()),
+          }}
+          requestGate={requests.bulkForm}
           bulkRejectOpen={approval.bulkRejectOpen}
           onOpenBulkReject={flow.bulkRejectFromToolbar}
           bulkRejectBtnRef={approval.bulkRejectBtnRef}

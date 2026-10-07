@@ -196,7 +196,7 @@ the pull request that ships the behaviour, never earlier.
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` or `approval_request_batch` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
-| Approval request list (`approval_requests.list_outreach_approval_requests`) | none | when a request panel opens | audit-free (Lakebase workflow state, no borrower attribute) |
+| Approval request list (`approval_requests.list_outreach_approval_requests`) | none | once per Lead Queue mount once the session is ready (approvers `open`, everyone else `mine`; the keep-alive slot keeps the mount), and an active refetch after a decision, a create or a withdraw (W5d); never polled, never on focus or reconnect | audit-free (Lakebase workflow state, no borrower attribute) |
 | Approval request create / withdraw (`/outreach/approval-requests`) | `APPROVAL_REQUESTED` / `APPROVAL_REQUEST_REFUSED` / `APPROVAL_REQUEST_WITHDRAWN` | every create attempt that reaches classification (a zero-eligible one writes `APPROVAL_REQUEST_REFUSED` with each id's reason and answers counts only); a withdraw that closed at least one borrower | same Lakebase transaction as the batch (or its own, for a refusal), fail-closed |
 | Governed-text refusal (approve, reject, approval-request create, revoke; `governed_text_refusal.refuse_ungoverned_text_audited`) | `GOVERNED_TEXT_REFUSED` | once per attempt whose rationale the governed text screen refuses (owner ruling O1, W5d), before any read; metadata `surface`, `screen` (`pii` / `fair_lending` / `other`) and `item_count` only: no text, no borrower or request id, no pattern | its own Lakebase transaction, fail-closed: the route answers the unchanged 422, or 503 when the row cannot be written (a refusal that was not recorded never answers as recorded) |
 | Triage deck (`/lead-queue?mode=triage`) | none on entry, card show, J / K / Skip, Back or Esc (the cards are the loaded rows); `DRAFT_OUTREACH` only on A; `APPROVE` with `review_mode` `triage` per Confirm; `OUTREACH_REJECT` per card rejected | per explicit action | as the draft / approve / reject rows above |
@@ -222,6 +222,20 @@ name-shape check, which runs before the route), the size cap, the
 write-time value-policy branches and the NB-1 fixed 422 for an audit payload
 the ledger's PII scan refuses. A refused bulk rationale writes one row per
 bulk attempt: the Lead Queue's bulk run stops after its first refused row.
+
+Approval-request justification: a decision rationale (governed), owner
+ruling O3 (built in W5d `w5-lq-requests-binding`). The "Reason for the
+request" a requester writes is sent as `rationale` and stored in
+`approval_request_batches.note` (the column keeps its name). It is
+batch-scoped: one justification for the whole request, never a note on a
+borrower and never shown as one. It takes the same governed text screen and
+the same 500-character cap as the approve and reject rationales, is
+recorded on the `APPROVAL_REQUESTED` row, and is shown only as "Reason for
+the request" (the approver's panel and scope row, the requester's My
+requests). It is outside the 2026-09-30 borrower-notes ruling. The Lead
+Queue reads the request list once per mount and after a decision, a create
+or a withdraw (audit-free Lakebase workflow state; never polled), and the
+request path never calls `/outreach/draft`.
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the

@@ -20,6 +20,7 @@ import {
 } from './LeadTableWorkflowCells';
 import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 import { ScoreBadge } from './ScoreBadge';
+import type { ApprovalRequestMark } from './LeadTable.types';
 
 interface LeadTableRowProps {
   lead: LeadSummary;
@@ -57,6 +58,16 @@ interface LeadTableRowProps {
    * preview's approval banner stands down, so two gates never stack.
    */
   reviewActive?: boolean;
+  /**
+   * An OPEN approval request holds this row (flow-02; deviation:request-approval):
+   * the requester's chip replaces the disabled Approve / Reject, the approver's
+   * sits before them. Hidden whenever `approval` is set.
+   */
+  requestMark?: ApprovalRequestMark | null;
+  /** The request path is open (a ready non-approver, unscoped queue); its blocked reason, if any. */
+  canRequestApproval?: boolean;
+  requestBlockedReason?: string | null;
+  onRequestApproval?: (borrowerId: string) => void;
   onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
   /** `range`: Shift was held (audit tables-07): select from the anchor to this row. */
   onToggleSelect: (borrowerId: string, range: boolean) => void;
@@ -108,6 +119,10 @@ export function LeadTableRow({
   shortcutsLive = true,
   reviewSlot = null,
   reviewActive = false,
+  requestMark = null,
+  canRequestApproval = false,
+  requestBlockedReason = null,
+  onRequestApproval,
   onToggleRow,
   onToggleSelect,
   onApprove,
@@ -262,8 +277,12 @@ export function LeadTableRow({
         {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
         {approval === 'hold' && <Chip variant="warning" icon="shield">Hold</Chip>}
         {!approval && !isApprovalEligible && <Chip variant="warning" icon="shield">Not actionable</Chip>}
-        {!approval && isApprovalEligible && (
+        {!approval && isApprovalEligible && requestMark?.tone === 'warning' && (
+          <Chip variant="warning" className="lead-table__request-chip">{requestMark.label}</Chip>
+        )}
+        {!approval && isApprovalEligible && requestMark?.tone !== 'warning' && (
           <div className="lead-table__approval-actions" onClick={stop}>
+            {requestMark && <Chip variant="neutral" className="lead-table__request-chip">{requestMark.label}</Chip>}
             <Button
               variant="primary"
               size="sm"
@@ -338,6 +357,8 @@ export function LeadTableRow({
                     submitting: decisionPending,
                     onApprove,
                     onReject,
+                    onRequestApproval: canRequestApproval && !requestMark ? onRequestApproval : undefined,
+                    requestBlockedReason,
                   }
                 : null}
             />

@@ -42,21 +42,38 @@ async function failureSentence(error: ApiError, subject: string): Promise<string
   return module ? module.failureSentence(error, subject) : null;
 }
 
-/** A write that failed on the wire: describeApiError's body for an ApiError. */
-export function toastWriteFailure(title: string, error: unknown, subject: string): void {
+/**
+ * describeApiError's body for a failed write (the same lazy path as the
+ * toast), else the error's own message; never rejects. The request form
+ * (RequestApprovalForm) shows it inline.
+ */
+export function describeWriteFailure(error: unknown, subject: string): Promise<string | null> {
   const fallback = error instanceof Error && error.message ? error.message : null;
+  if (!(error instanceof ApiError) || clientFailureReason(error) !== null) return Promise.resolve(fallback);
+  return failureSentence(error, subject).then((sentence) => sentence || fallback, () => fallback);
+}
+
+/**
+ * A write that failed on the wire: describeApiError's body for an ApiError.
+ *
+ * A 429 with a Retry-After and a `retry` (states-08 item 3): the toast's one
+ * action is Retry, held aria-disabled behind the shared countdown until the
+ * wait has run, then live once. The caller's retry re-runs the SAME write
+ * (same request id) after re-checking that it may still run. Without a
+ * Retry-After the toast is today's, with no action.
+ */
+export function toastWriteFailure(title: string, error: unknown, subject: string, retry?: () => void): void {
+  const waitMs = error instanceof ApiError && error.status === 429 ? error.retryAfterMs ?? 0 : 0;
+  const retryAction = retry && waitMs > 0
+    ? { action: { label: 'Retry', onAction: retry }, retryAfterMs: waitMs }
+    : {};
   if (!(error instanceof ApiError) || clientFailureReason(error) !== null) {
-    toast.error(title, { detail: fallback });
+    toast.error(title, { detail: error instanceof Error && error.message ? error.message : null });
     return;
   }
-  failureSentence(error, subject).then(
-    (sentence) => {
-      toast.error(title, { detail: sentence || fallback });
-    },
-    () => {
-      toast.error(title, { detail: fallback });
-    },
-  );
+  void describeWriteFailure(error, subject).then((detail) => {
+    toast.error(title, { detail, ...retryAction });
+  });
 }
 
 /** A refusal before any request (the approver or campaign-binding gate, a decision on the wire). */

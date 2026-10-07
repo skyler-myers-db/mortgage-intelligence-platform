@@ -90,6 +90,14 @@ interface LeadTableBulkActionsProps {
   totalMatching?: number | null;
   /** The campaign handoff link (LeadBulkCampaignHandoff, lazy), on the scope line. */
   campaignHandoff?: ReactNode;
+  /**
+   * "Request approval for N" (flow-02 / shell-06; deviation:request-approval):
+   * a ready non-approver on an unscoped queue only. `blockedReason` keeps it
+   * aria-disabled with its reason (a campaign binding).
+   */
+  requestApproval?: { blockedReason: string | null; onOpen: () => void } | null;
+  /** The request form (RequestApprovalForm, lazy), while it is open from here. */
+  requestGate?: ReactNode;
 }
 
 const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
@@ -127,12 +135,18 @@ export function LeadTableBulkActions({
   loadedCount = 0,
   totalMatching = null,
   campaignHandoff = null,
+  requestApproval = null,
+  requestGate = null,
 }: LeadTableBulkActionsProps) {
   const armingId = useId();
+  const requestNoteId = useId();
   const [bulkRationale, setBulkRationale] = useState('');
   const gateOpen = selectionCount > 1 && bulkRationaleOpen;
   const rejectGateOpen = selectionCount > 1 && bulkRejectOpen;
   const running = runKind !== null;
+  const requestOff = requestApproval !== null && (
+    requestApproval.blockedReason !== null || running || selectedApprovalEligibleCount === 0
+  );
   const rationaleMissing = bulkRationale.trim().length === 0;
   const armingCopy = !gateOpen
     ? null
@@ -286,7 +300,25 @@ export function LeadTableBulkActions({
             ? `${bulkRunVerb('approve')}…`
             : `Approve ${selectedApprovalEligibleCount} eligible`}
         </Button>
+        {requestApproval && (
+          <Button
+            size="sm"
+            onClick={() => {
+              if (!requestOff) requestApproval.onOpen();
+            }}
+            aria-disabled={requestOff || undefined}
+            aria-describedby={requestApproval.blockedReason !== null ? requestNoteId : undefined}
+            data-testid="lead-bulk-request-approval"
+          >
+            Request approval for {selectedApprovalEligibleCount}
+          </Button>
+        )}
       </div>
+      {requestApproval?.blockedReason && (
+        <span id={requestNoteId} className="muted fs-12" data-testid="lead-bulk-request-blocked">
+          {requestApproval.blockedReason}
+        </span>
+      )}
       {armingCopy !== null && (
         <span id={armingId} className="muted fs-12" data-testid="lead-bulk-arming">{armingCopy}</span>
       )}
@@ -309,6 +341,7 @@ export function LeadTableBulkActions({
       )}
       {gateOpen && gateReview}
       {rejectGateOpen && rejectGate}
+      {requestGate}
       {running && runStatus}
     </div>
   );

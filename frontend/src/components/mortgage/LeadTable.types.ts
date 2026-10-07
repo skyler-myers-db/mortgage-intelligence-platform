@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { LeadSummary, SalesTeamMember } from '../../types';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
 import type { LeadTableView } from './LeadTable.columns';
+import type { ApprovalRequestBatchView } from '../../types/approvalRequests';
 
 export interface LeadExportContext {
   generatedAt?: string;
@@ -126,6 +127,11 @@ export interface LeadTableProps {
   paging?: LeadTablePaging | null;
   /** 'server': rows arrive in the server's sort order and a server key is not re-sorted here. */
   sortScope?: LeadTableSortScope;
+  /**
+   * The maker-checker approval requests (flow-02 / shell-06): the Lead Queue
+   * only (Segment Intelligence passes none). Null until the session is ready.
+   */
+  approvalRequests?: LeadTableApprovalRequests | null;
 }
 
 export type RejectReasonCode =
@@ -155,4 +161,28 @@ export type LeadTableSortKey = Exclude<SortKey, 'rank'>;
 export interface LeadTableSort {
   key: LeadTableSortKey;
   dir: SortDir;
+}
+
+/** One row's approval-request chip (flow-02): an OPEN request only. */
+export interface ApprovalRequestMark {
+  label: string;
+  tone: 'warning' | 'neutral';
+}
+
+/**
+ * The Lead Queue's audit-free approval requests (routes/lead-queue.approvalRequests.ts):
+ * an approver reads every open request, anyone else their own.
+ */
+export interface LeadTableApprovalRequests {
+  role: 'approver' | 'requester';
+  status: 'pending' | 'ready' | 'error';
+  /** borrowerId to chip, for the rows an OPEN request holds. */
+  marks: ReadonlyMap<string, ApprovalRequestMark>;
+  /** Approver: open borrowers across requests; requester: own requests listed. */
+  count: number;
+  batches: readonly ApprovalRequestBatchView[];
+  /** The request a scoped queue shows; its batch is null once it has no open borrower. */
+  scope: { batchId: string; batch: ApprovalRequestBatchView | null } | null;
+  /** Read the list again (the explicit Retry of a failed read). */
+  retry: () => void;
 }

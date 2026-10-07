@@ -87,8 +87,11 @@ let bulkChunk: BulkRunsChunk | null = { runBulkApprove, runBulkReject };
 const setApproval = vi.fn();
 /** The paged Lead Queue view the table shows (null outside it). */
 let harnessViewId: string | null = null;
+/** The approval request a scoped queue answers (flow-02; null when unscoped). */
+let harnessRequestBatch: string | null = null;
 
-function Harness({ client }: { client: QueryClient }) {
+// A prop, not only the module variable: a compiled Harness memoizes module values.
+function Harness({ client, requestBatch = harnessRequestBatch }: { client: QueryClient; requestBatch?: string | null }) {
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   const current = useLeadApprovalActions({
     displayLeads: harnessLeads,
@@ -103,6 +106,7 @@ function Harness({ client }: { client: QueryClient }) {
     tableWrapRef,
     bulkRuns: () => bulkChunk,
     leadViewId: harnessViewId,
+    approvalRequestBatchId: requestBatch,
   });
   useEffect(() => {
     actions = current;
@@ -162,6 +166,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     actions = null;
     harnessLeads = LEADS;
     harnessViewId = null;
+    harnessRequestBatch = null;
     bulkChunk = { runBulkApprove, runBulkReject };
   });
 
@@ -288,6 +293,65 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(apiMocks.approve.mock.calls.length).toBeGreaterThan(1);
     expect(views(apiMocks.approve.mock.calls)).toEqual(new Set([harnessViewId]));
     expect(views(apiMocks.reject.mock.calls)).toEqual(new Set([harnessViewId]));
+  });
+
+  it('a request-scoped queue sends approval_request_batch_id on single, bulk approve, bulk reject and row reject (flow-02)', async () => {
+    const BATCH = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const batchesOf = (calls: unknown[][]) => calls.map((call) => (call[1] as { approval_request_batch_id: unknown }).approval_request_batch_id);
+    // Unscoped first: the field is null and the intents mint their own ids.
+    mount();
+    await act(async () => {
+      await actions!.approveLead(BORROWER, undefined, {}, draft('gen-unscoped'));
+    });
+    const unscopedId = requestIdOf(apiMocks.approve.mock.calls[0]);
+    expect(batchesOf(apiMocks.approve.mock.calls)).toEqual([null]);
+    act(() => root.unmount());
+    root = createRoot(container);
+    vi.clearAllMocks();
+    apiMocks.draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draft(`gen-${borrowerId}`)));
+    apiMocks.approve.mockResolvedValue({ approved: true, audit_event_id: 'audit-1' });
+    apiMocks.reject.mockResolvedValue({ rejected: true, audit_event_id: 'audit-2' });
+    harnessRequestBatch = BATCH;
+    mount();
+    await act(async () => {
+      await actions!.approveLead(IDS[1], undefined, {}, draft('gen-unscoped'));
+      await actions!.rejectLead(IDS[2], 'low_intent', 'No intent');
+    });
+    act(() => actions!.toggleSelectAll());
+    await act(async () => {
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+    harnessLeads = LEADS.slice(3);
+    remount();
+    act(() => actions!.toggleSelectAll());
+    await act(async () => {
+      await actions!.bulkReject('low_intent', 'Q3 sweep');
+    });
+    expect(apiMocks.approve.mock.calls.length).toBeGreaterThan(2);
+    expect(new Set(batchesOf(apiMocks.approve.mock.calls))).toEqual(new Set([BATCH]));
+    expect(apiMocks.reject.mock.calls.length).toBeGreaterThan(1);
+    expect(new Set(batchesOf(apiMocks.reject.mock.calls))).toEqual(new Set([BATCH]));
+    expect(unscopedId).toBeTruthy();
+  });
+
+  it('the request scope joins an intent only when set: unscoped request ids are unchanged', async () => {
+    const BATCH = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    apiMocks.approve.mockRejectedValue(new ApiError('Internal Server Error', { path: '/api/outreach/approve', status: 500 }));
+    mount();
+    const reviewed = draft('gen-review-scope');
+    const approveOnce = async () => {
+      await act(async () => {
+        await actions!.approveLead(BORROWER, undefined, {}, reviewed);
+      });
+    };
+    await approveOnce();
+    act(() => root.render(<Harness client={client} requestBatch={BATCH} />));
+    await approveOnce();
+    act(() => root.render(<Harness client={client} requestBatch={null} />));
+    await approveOnce();
+    const [unscoped, scoped, unscopedAgain] = apiMocks.approve.mock.calls.map(requestIdOf);
+    expect(scoped).not.toBe(unscoped);
+    expect(unscopedAgain).toBe(unscoped);
   });
 
   it('Stop after this batch: the canary and one batch are sent, nothing is aborted, the rest stay selected and undrafted', async () => {

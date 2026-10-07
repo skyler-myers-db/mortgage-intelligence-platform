@@ -1111,6 +1111,24 @@ WHERE event_type = 'OUTREACH_REVOKE'
 ORDER BY event_at DESC;
 ```
 
+Client (W5d `w5-lq-requests-binding`). The Lead Queue reads
+`GET /api/v1/outreach/approval-requests` once per mount, only once the
+session is ready (approvers `scope=open`, anyone else `scope=mine`; the
+keep-alive slot keeps the mount across a dossier and Back), and refetches it
+only while mounted, after an approve or reject (single, Triage, a bulk run
+that recorded at least one row, or the Offer), a create or a withdraw
+(`invalidateApprovalRequests`, refetchType `active`). No polling, no focus or
+reconnect refetch, no retry: a failed read shows "Approval requests
+unavailable" with a Retry and no row marks. Expect at most a handful of these
+audit-free GETs per Lead Queue session; a steady stream means a regression.
+A create is one `POST` whose `request_key` is one UUID per intent (the sorted
+ids and the reason), replayed on a retry of the same content; the request
+path never calls `/outreach/draft`. Every approve and reject taken in a
+request-scoped queue (`?approval_request_batch=`) carries
+`approval_request_batch_id`; an unscoped body is unchanged. A session that
+ends during a create or a withdraw reads as a lost change in the session
+dialog.
+
 ## 12. Browser RUM day aggregates and the Field performance panel
 
 <!-- w5-field-vitals, W5c. Appended as section 12; the integrator renumbers. -->

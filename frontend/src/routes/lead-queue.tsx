@@ -20,6 +20,7 @@ import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
 import { serverOrderOf, useLeadQueuePages } from './lead-queue.pages';
 import { leadQueueFilterInputFromSearchParams, leadQueueLenderRefs, leadsRequestFromSearchParams } from './lead-queue.request';
+import { useLeadQueueApprovalRequests } from './lead-queue.approvalRequests';
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
@@ -114,7 +115,7 @@ export default function LeadQueue() {
   // are display state, not filters: they never enable Clear all.
   const filtersActive = hasLeadQueueFilters(searchParams);
   const footprint = useFootprint();
-  const { canAccessAdmin, actorEmail, sessionStatus } = useApp();
+  const { canAccessAdmin, canApprove, actorEmail, sessionStatus } = useApp();
   const queryClient = useQueryClient();
   const moreFiltersToggleRef = useRef<HTMLButtonElement | null>(null);
   const configOptionsQuery = useConfigOptionsQuery();
@@ -227,6 +228,13 @@ export default function LeadQueue() {
     [searchParams, targetLenderOptions, actorEmail],
   );
   const requestScopeBatch = leadsRequest.opts?.approvalRequestBatch ?? null;
+  // flow-02 / shell-06: ONE audit-free approval-request read per mount (and
+  // after a decision, create or withdraw); never polled.
+  const approvalRequests = useLeadQueueApprovalRequests({
+    sessionStatus,
+    canApprove: canApprove === true,
+    scopeBatchId: requestScopeBatch,
+  });
   const place = parseLeadTablePlace(searchParams);
   const order = serverOrderOf(place.sort);
   const pages = useLeadQueuePages({
@@ -681,6 +689,7 @@ export default function LeadQueue() {
                     : page.growthAgentVerification ?? null}
                   paging={pages.paging}
                   sortScope={order.sort === 'rank' && place.sort ? 'loaded' : 'server'}
+                  approvalRequests={approvalRequests}
                   exportContext={exportContext}
                   salesTeam={salesTeam}
                   view={tableView}

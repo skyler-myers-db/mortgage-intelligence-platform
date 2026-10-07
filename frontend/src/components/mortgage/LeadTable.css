@@ -350,3 +350,11 @@
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
 }
+
+/* Approval-request chips in the pinned Approval column (audit flow-02 /
+   shell-06; deviation:request-approval): the requester's "Approval requested"
+   replaces the disabled Approve / Reject, the approver's "Requested · name"
+   sits before them and shrinks to an ellipsis (the base .chip / .chip__label
+   carry it), so the row height and the column's declared width hold. */
+.tbl-cell--approval .lead-table__approval-actions { max-inline-size: 100%; }
+.lead-table__request-chip { flex: 0 1 auto; }
