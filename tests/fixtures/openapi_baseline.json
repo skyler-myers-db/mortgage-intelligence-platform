@@ -7740,6 +7740,223 @@
         "title": "GenieCompletionJobStatusRequest",
         "type": "object"
       },
+      "GenieContext": {
+        "additionalProperties": false,
+        "description": "A Lead Queue filter selection as closed codes, for a server-rendered Genie question.\n\nCodes only: segment codes, a USPS state code, a county FIPS code, a ZIP, a\ngoverned city key and a public Competitor lender ref. No field carries free\ntext, a borrower id or an email address.",
+        "properties": {
+          "assignee": {
+            "anyOf": [
+              {
+                "const": "me",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z.'-]*(?: [A-Za-z][A-Za-z.'-]*){0,3}~[A-Z]{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "county_fips": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{5}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County Fips"
+          },
+          "lender_ref": {
+            "anyOf": [
+              {
+                "pattern": "^Competitor ([A-Z]|Other)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lender Ref"
+          },
+          "route": {
+            "const": "lead-queue",
+            "title": "Route",
+            "type": "string"
+          },
+          "segment_codes": {
+            "items": {
+              "enum": [
+                "itm",
+                "listed",
+                "permit",
+                "investor",
+                "equity",
+                "retention",
+                "second_lien_itm",
+                "heloc_draw_to_payback",
+                "home_equity_history",
+                "refi_propensity",
+                "itm_on_related_property",
+                "payoff_loss_leads",
+                "permit_activity"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Segment Codes",
+            "type": "array"
+          },
+          "segment_mode": {
+            "default": "any",
+            "enum": [
+              "any",
+              "all"
+            ],
+            "title": "Segment Mode",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "AL",
+                  "AK",
+                  "AZ",
+                  "AR",
+                  "CA",
+                  "CO",
+                  "CT",
+                  "DE",
+                  "DC",
+                  "FL",
+                  "GA",
+                  "HI",
+                  "ID",
+                  "IL",
+                  "IN",
+                  "IA",
+                  "KS",
+                  "KY",
+                  "LA",
+                  "ME",
+                  "MD",
+                  "MA",
+                  "MI",
+                  "MN",
+                  "MS",
+                  "MO",
+                  "MT",
+                  "NE",
+                  "NV",
+                  "NH",
+                  "NJ",
+                  "NM",
+                  "NY",
+                  "NC",
+                  "ND",
+                  "OH",
+                  "OK",
+                  "OR",
+                  "PA",
+                  "RI",
+                  "SC",
+                  "SD",
+                  "TN",
+                  "TX",
+                  "UT",
+                  "VT",
+                  "VA",
+                  "WA",
+                  "WV",
+                  "WI",
+                  "WY"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "zip": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{5}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Zip"
+          }
+        },
+        "required": [
+          "route"
+        ],
+        "title": "GenieContext",
+        "type": "object"
+      },
+      "GenieContextScopeResponse": {
+        "description": "The reviewed question for a context, or the closed reason none is offered.\n\n``prompt`` is a server-rendered sentence that has already passed the\ndeterministic prompt guards; the browser only prefills the composer with\nit. ``withheld`` names why no prompt is offered, and ``omitted`` names the\nslots the question deliberately leaves out.",
+        "properties": {
+          "omitted": {
+            "items": {
+              "const": "assignee",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "title": "Omitted",
+            "type": "array"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "withheld": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unsupported_combination",
+                  "excluded_value",
+                  "place_unavailable",
+                  "refused"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withheld"
+          }
+        },
+        "title": "GenieContextScopeResponse",
+        "type": "object"
+      },
       "GenieDataFreshness": {
         "properties": {
           "asset": {
@@ -21956,6 +22173,59 @@
         ]
       }
     },
+    "/api/genie/context-scope": {
+      "post": {
+        "deprecated": true,
+        "description": "Render a Lead Queue filter selection into a reviewed Genie question.\n\nAUDIT EXEMPT: renders a reviewed prompt from closed codes; reads no\nborrower data and writes nothing. Answers 200 with a prompt or a withheld\nreason, 422 only for a body outside the closed model.",
+        "operationId": "post_api_genie_context_scope_genie_context_scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieContext"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieContextScopeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Context Scope",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
     "/api/genie/export-receipt": {
       "post": {
         "deprecated": true,
@@ -32709,6 +32979,58 @@
           }
         },
         "summary": "Genie Action",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/context-scope": {
+      "post": {
+        "description": "Render a Lead Queue filter selection into a reviewed Genie question.\n\nAUDIT EXEMPT: renders a reviewed prompt from closed codes; reads no\nborrower data and writes nothing. Answers 200 with a prompt or a withheld\nreason, 422 only for a body outside the closed model.",
+        "operationId": "post_api_v1_genie_context_scope_genie_context_scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieContext"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieContextScopeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Context Scope",
         "tags": [
           "genie"
         ]

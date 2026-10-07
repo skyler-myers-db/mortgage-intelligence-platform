@@ -196,6 +196,11 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "genie_message_cancel": ("request_cancel(",),
     "genie_action": ("handle_genie_action(",),
     "genie_feedback": ("record_genie_feedback(",),
+    # genie-04 phase 2: a render-only scope sentence from closed codes.
+    "genie_context_scope": (
+        "AUDIT EXEMPT: renders a reviewed prompt from closed codes",
+        "render_genie_context_scope(",
+    ),
     "genie_refusal_report": ("record_genie_refusal_report(",),
     "run_growth_agent_workflow": ("_run_workflow(",),
     "run_custom_growth_agent_workflow": ("_run_workflow(",),

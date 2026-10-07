@@ -209,6 +209,12 @@ class BackpressureController:
             # Genie call and writes no audit row, so it takes the default
             # read bucket and a Lakebase slot, never a Genie slot.
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "POST" and path == "/api/genie/context-scope":
+            # The Genie context-scope render (audit genie-04 phase 2) fills a
+            # closed template and runs the prompt guards in-process: no Genie
+            # call, no Lakebase, no warehouse query. The default bucket and no
+            # dependency slot, so a click never spends the Genie budget.
+            return RouteBudget("default", settings.mip_rate_limit_default_per_minute, None)
         if path.startswith("/api/genie"):
             return RouteBudget("genie", settings.mip_rate_limit_genie_per_minute, "genie")
         if method.upper() == "POST" and path in self._READ_ONLY_POSTS:
