@@ -54,6 +54,8 @@ _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     # row is ever deleted, so no DELETE.
     "approval_request_batches": ("SELECT", "INSERT", "UPDATE"),
     "approval_request_items": ("SELECT", "INSERT", "UPDATE"),
+    # Browser RUM day aggregates: retention zeroes rows in place, so no DELETE.
+    "rum_daily": ("SELECT", "INSERT", "UPDATE"),
 }
 
 _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {

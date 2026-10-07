@@ -5,12 +5,15 @@ A client error reaches the server as four closed values and nothing else: an
 error message, a stack line or a borrower-bearing path never validates, so it
 can never reach the log sink. An `api_call` carries a templated API path whose
 every segment is a literal route segment of this app or `:id`, plus the
-Server-Timing fields. The sink stays log-only and off by default.
+Server-Timing fields. An accepted event is folded into the Lakebase day
+aggregates (backend/services/rum_rollup.py); the code default is off and the
+deploy payload turns RUM on (D-platform-process-d1 / d2).
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +29,7 @@ from backend.schemas.telemetry import (
     CLIENT_ERROR_SOURCES,
     RUM_API_ROUTE_SEGMENTS,
 )
+from backend.services import rum_rollup
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUM_BRIDGE_TS = REPO_ROOT / "frontend" / "src" / "lib" / "rumBridge.ts"
@@ -51,7 +55,7 @@ API_CALL: dict[str, Any] = {
     "metric": "api_call",
     "value": 912,
     "rating": "info",
-    "route": "/borrower-360/:borrower_id",
+    "route": "/borrower-360/:id",
     "details": {
         "api_route": "/api/borrowers/:id/proof",
         "cache": "miss",
@@ -72,6 +76,16 @@ LEAKS = [MESSAGE, STACK_LINE, BORROWER_ID, BORROWER_PATH]
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture(autouse=True)
+def _rollup() -> Iterator[None]:
+    """A fresh accumulator with no flusher thread, for every test."""
+    rum_rollup._reset_for_tests()
+    try:
+        yield
+    finally:
+        rum_rollup._reset_for_tests()
 
 
 def _post(client: TestClient, event: dict[str, Any]) -> Any:

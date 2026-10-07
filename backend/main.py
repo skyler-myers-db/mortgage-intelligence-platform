@@ -28,6 +28,7 @@ from backend.config.settings import (
     looks_like_databricks_app_deploy,
     settings,
 )
+from backend.services import rum_rollup
 from backend.services.backpressure import BackpressureController, BackpressureMiddleware
 from backend.services.campaign_treatment_runtime import (
     CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
@@ -322,6 +323,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await asyncio.to_thread(rum_rollup.flush_on_shutdown)  # D-platform-process-d2
         if rewarm_task is not None:
             rewarm_task.cancel()
             with suppress(asyncio.CancelledError):
