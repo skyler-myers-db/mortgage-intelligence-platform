@@ -42,9 +42,10 @@ from backend.services.approval_requests import (
 )
 from backend.services.audit_store import AuditMetadataValueViolation, AuditPIIError
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.governed_text_refusal import refuse_ungoverned_text_audited
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
-from backend.services.outreach_text_policy import refuse_ungoverned_text, text_policy_refusal
+from backend.services.outreach_text_policy import text_policy_refusal
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.rbac import can_access_approver, require_authenticated_actor
 from backend.services.repositories import LeadRepository, get_lead_repository
@@ -97,7 +98,13 @@ def request_outreach_approval(
     # the Lakebase breaker), so the scrubbed length is checked here too.
     if len(note) > APPROVAL_REQUEST_NOTE_MAX_LENGTH:
         raise HTTPException(status_code=422, detail=RATIONALE_TOO_LONG_REDACTED)
-    refuse_ungoverned_text({"rationale": note})
+    refuse_ungoverned_text_audited(
+        lakebase,
+        actor=actor,
+        surface="request",
+        values={"rationale": note},
+        item_count=len(payload.borrower_ids),
+    )
     try:
         return create_approval_request(
             lakebase,

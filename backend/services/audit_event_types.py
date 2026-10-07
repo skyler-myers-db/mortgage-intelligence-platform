@@ -22,6 +22,9 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "GENIE_REFUSAL_REPORT",
         "GENIE_SECTION_REVEALED",
         "GENIE_TURN_CANCELLED",
+        # Owner ruling O1: a rationale the governed text screen refused on
+        # approve, reject, approval-request create or revoke.
+        "GOVERNED_TEXT_REFUSED",
         "GROWTH_AGENT_COMPOSE",
         "GROWTH_AGENT_MONITOR_SAVE",
         "GROWTH_AGENT_NOTIFICATION_DRAFT",

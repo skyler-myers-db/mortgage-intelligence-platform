@@ -18,6 +18,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from backend.schemas.outreach_revoke import OutreachRevokeRequest, OutreachRevokeResponse
 from backend.services.audit_store import AuditMetadataValueViolation, AuditPIIError
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.governed_text_refusal import refuse_ungoverned_text_audited
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.job_trigger import enqueue_lifecycle_trigger
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
@@ -28,7 +29,7 @@ from backend.services.outreach_revoke import (
     revoke_approval,
     revoke_intent_matches_payload,
 )
-from backend.services.outreach_text_policy import refuse_ungoverned_text, text_policy_refusal
+from backend.services.outreach_text_policy import text_policy_refusal
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.rbac import require_approver
 from backend.services.repositories import OutreachRepository, get_outreach_repository
@@ -55,7 +56,9 @@ def revoke_outreach(
 ) -> OutreachRevokeResponse:
     actor = require_approver(request)
     rationale = scrub_free_text(payload.rationale)
-    refuse_ungoverned_text({"rationale": rationale})
+    refuse_ungoverned_text_audited(
+        lakebase, actor=actor, surface="revoke", values={"rationale": rationale}, item_count=1
+    )
     try:
         replay = _lookup_persisted_decision_replay(
             lakebase,

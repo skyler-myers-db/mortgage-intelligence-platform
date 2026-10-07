@@ -70,6 +70,8 @@ export const AUDIT_EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   VIEW_LEADS: 'Lead queue reviewed',
   // D-audit-reads-d: an administrator or auditor read one consented question.
   VIEW_REFUSAL_REPORT_TEXT: 'Refusal question read',
+  // Owner ruling O1: a decision rationale the governed text screen refused.
+  GOVERNED_TEXT_REFUSED: 'Decision reason refused',
 };
 
 /** The no-op option of the event-type filter. */

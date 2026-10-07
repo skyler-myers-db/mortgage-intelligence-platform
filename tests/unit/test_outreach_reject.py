@@ -37,7 +37,7 @@ from fastapi.testclient import TestClient
 from backend.api import outreach as outreach_mod
 from backend.config.settings import settings
 from backend.main import app
-from backend.services import job_trigger, lakebase_bootstrap
+from backend.services import governed_text_refusal, job_trigger, lakebase_bootstrap
 from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError, get_lakebase_client
@@ -1725,6 +1725,11 @@ def test_a_refused_reject_note_answers_422_before_any_read_or_write(
     override_deps, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     audit, fake_lakebase = _bulk_reject_setup(override_deps, monkeypatch)
+    # Owner ruling O1: the refusal itself is the one write (its own row).
+    refusals: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        governed_text_refusal, "write_audit_event_in_transaction", lambda _conn, **row: refusals.append(row)
+    )
 
     response = TestClient(app).post(
         "/api/outreach/reject",
@@ -1743,6 +1748,7 @@ def test_a_refused_reject_note_answers_422_before_any_read_or_write(
     fake_lakebase.fetchone.assert_not_called()
     assert _approval_inserts(fake_lakebase) == []
     assert _reject_rows(audit) == []
+    assert [row["event_type"] for row in refusals] == ["GOVERNED_TEXT_REFUSED"]
 
 
 def test_single_reject_intents_are_byte_identical_to_0a30fca2() -> None:

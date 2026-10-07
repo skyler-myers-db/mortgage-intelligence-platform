@@ -9,6 +9,7 @@ repository. The real SQL is pinned by the Postgres integration suite.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import timedelta
 from types import SimpleNamespace
@@ -222,20 +223,47 @@ def test_when_every_candidate_is_taken_the_attempt_rolls_back_and_is_still_audit
 
 
 @pytest.mark.parametrize(
-    ("note", "status"),
+    ("note", "screen"),
     [
-        ("Please ask Jane Smith to call them", 422),
-        ("Prioritize borrowers who are not Hispanic", 422),
+        # The schema's name-shape check refuses this before the route runs:
+        # a schema 422, unaudited under owner ruling O1.
+        ("Please ask Jane Smith to call them", None),
+        ("Prioritize borrowers who are not Hispanic", "fair_lending"),
+        ("Call them even if they opted out.", "pii"),
     ],
-    ids=["name-shaped", "protected-class"],
+    ids=["name-shaped", "protected-class", "contact-directive"],
 )
-def test_a_refused_note_answers_422_before_any_read_or_write(
-    client: TestClient, ledger: FakeApprovalLedger, leads: _Leads, note: str, status: int
+def test_a_refused_note_answers_422_before_any_read(
+    client: TestClient, ledger: FakeApprovalLedger, leads: _Leads, note: str, screen: str | None
 ) -> None:
     response = _create(client, [OK_1], note=note)
-    assert response.status_code == status
+    assert response.status_code == 422
     assert note not in response.text
-    assert ledger.statements == [] and leads.calls == [] and ledger.writes() == 0
+    assert leads.calls == [] and ledger.batches == {} and ledger.items == {}
+    if screen is None:
+        assert ledger.statements == [] and ledger.writes() == 0
+        return
+    # O1: the governed screen's refusal is recorded, without the text.
+    assert response.json()["detail"] == "rationale failed the governed text policy"
+    assert ledger.statements == ["INSERT_AUDIT"]
+    [row] = ledger.audits
+    assert row["event_type"] == "GOVERNED_TEXT_REFUSED"
+    assert {key: row["metadata"][key] for key in ("surface", "screen", "item_count")} == {
+        "surface": "request", "screen": screen, "item_count": 1,
+    }
+    assert note not in json.dumps(row, default=str)
+
+
+def test_a_refused_note_counts_every_named_borrower(
+    client: TestClient, ledger: FakeApprovalLedger, leads: _Leads
+) -> None:
+    response = _create(client, [OK_1, OK_2, MISSING], note="Focus on borrowers without disabilities.")
+    assert response.status_code == 422
+    [row] = ledger.audits
+    assert row["metadata"]["item_count"] == 3
+    stored = json.dumps(row, default=str)
+    assert not [bid for bid in (OK_1, OK_2, MISSING) if bid in stored]
+    assert leads.calls == []
 
 
 def test_a_note_that_redaction_pushes_past_the_cap_is_422_not_a_503(

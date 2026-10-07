@@ -425,6 +425,13 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "total_matching",
         "declared_lead_view_id",
         "pages_loaded",
+        # GOVERNED_TEXT_REFUSED (owner ruling O1,
+        # backend/services/governed_text_refusal.py): which decision surface
+        # refused, the screen's closed category and how many borrowers the
+        # attempt named. Never the text, a borrower id or the matched pattern.
+        "surface",
+        "screen",
+        "item_count",
     }
 )
 
@@ -756,3 +763,9 @@ class AuditMetadataValueViolation(RuntimeError):
 LEDGER_SURFACES: frozenset[str] = frozenset(
     {"events", "events_page", "rollups", "receipt", "refusal_reports", "facets", "count"}
 )
+
+# The closed GOVERNED_TEXT_REFUSED vocabularies (owner ruling O1): the decision
+# surface whose rationale the governed text screen refused, and the screen's
+# category. Pinned equal to governed_text_refusal's Literal tuples.
+GOVERNED_TEXT_SURFACE_VALUES: frozenset[str] = frozenset({"approve", "reject", "request", "revoke"})
+GOVERNED_TEXT_SCREEN_VALUES: frozenset[str] = frozenset({"pii", "fair_lending", "other"})
