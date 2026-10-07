@@ -564,13 +564,23 @@ and logs INFO `lifecycle_sync_completed` with `mode` job, `job_id`, `run_id`,
 expires without a bump (WARNING `lifecycle_job_watch_expired`); a failed
 `get_run` keeps the run pending (WARNING `lifecycle_job_watch_error`,
 exception type only); a submit that returned no run id logs WARNING
-`lifecycle_job_unobservable`. Only the App process that submitted a run
-observes it: other App processes trail the mirror by at most one soft TTL
-(default 120 s preview, 300 s analytics) plus one stale serve, as they do for
-the approval-write bump, which is process-local too. Runs the App did not
-submit are NOT observed and trail the same way: the job's 04:00 schedule ships
-PAUSED, so a scheduled run happens only if an operator unpauses it, and a run
-started from the Jobs UI is not the App's either.
+`lifecycle_job_unobservable`. The process that submitted a run observes it
+through `get_run`. Runs this process did NOT submit (another App process's
+submit, the job's 04:00 schedule, which ships PAUSED, if an operator
+unpauses it, or a run started from the Jobs UI) are observed by the foreign
+arm (W5c): at startup the App enables it when `MIP_LIFECYCLE_SYNC_JOB_ID` is
+bound (INFO `lifecycle_foreign_watch_unbound` and no observer otherwise; no
+name lookup on this path). While workflow counts are read, at most once a
+minute per process and never two at once, it reads ONE
+`jobs.list_runs(job_id=..., completed_only=True, limit=5)` page on the same
+executor; a run that ended after its baseline (the wall clock at startup, then
+the newest end time it counted) and is not one this process submitted bumps
+the generation once and logs `lifecycle_sync_completed` with
+`mode="job_foreign"`, `job_id`, `run_id` and `result_state`. A failed list
+logs WARNING `lifecycle_job_watch_error` (exception type only) and keeps the
+baseline. With nobody reading workflow counts it makes zero Jobs calls; the
+App's CAN_MANAGE_RUN covers the read. The approval-write bump stays
+process-local, so another process still trails that one by one soft TTL.
 
 ### Client half: the retained-value marker on screen (W5b)
 
@@ -1075,4 +1085,66 @@ FROM mip_app.action_audit
 WHERE event_type = 'OUTREACH_REVOKE'
   AND event_at >= now() - interval '30 days'
 ORDER BY event_at DESC;
+```
+
+## 12. Browser RUM day aggregates and the Field performance panel
+
+<!-- w5-field-vitals, W5c. Appended as section 12; the integrator renumbers. -->
+
+Decisions D-platform-process-d1 / d2 (audit runtime-09, stack-08,
+quality-07, quality-01). The privacy envelope, the default and the opt-out
+are in
+[security-and-compliance.md](security-and-compliance.md#browser-telemetry-rum).
+
+**Client.** `frontend/src/lib/rum.ts` loads lazily once the session says RUM
+is on, then registers the web-vitals 6.2.2 attribution build: one LCP, one
+CLS and one INP report per page lifecycle (plus one per soft navigation
+where Chromium supports it), each attributed to the route TEMPLATE in effect
+at the interaction or render time, read from the router's committed
+location (`lib/rumBridge.ts`), never from `window.location` at report time.
+INP carries its three phases and the nearest closed `data-rum-target`
+value; LCP carries a tag bucket. `navigation_load`, `route_change` and the
+sampled `api_call` stay; the old `long_task` observer is gone. Client
+errors report the same registry template. Every event is re-validated
+against the closed sets before it is queued; an invalid one is dropped
+alone, never the batch.
+
+**Sink.** `POST /api/v1/telemetry/rum` folds each accepted event into an
+in-process accumulator (`backend/services/rum_rollup.py`); nothing is
+logged per event, and the per-event `rum_metric` log line no longer exists.
+Once a minute, and at shutdown, the accumulator writes ONE multi-row upsert
+into Lakebase `mip_app.rum_daily`, a 90-slot day ring keyed `(slot, metric,
+route, facet, rating)`: a same-day row is incremented, a new day in the
+same slot resets the row, a straggler for an older day is refused. The
+first writing flush of each UTC day zeroes rows older than 90 days in
+place. No warehouse statement and no UC write: the serverless warehouse is
+never woken by telemetry.
+
+Log lines (counts only, never a value, route or identifier):
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `rum_rollup_flushed` | INFO | `rows`, `events`, `dropped`, `duration_ms` | one flush wrote `rows` aggregate rows from `events` browser events; `dropped` events found the 1000-key cap full |
+| `rum_rollup_flush_failed` | WARNING | `rows`, `events`, `dropped` | the upsert failed; that batch is dropped, never retried |
+| `field_performance_read_capped` | WARNING | `rows`, `limit`, `days` | a panel read reached the 100,000-row read cap, so that window's summary is partial; day-grain keys stay far below it, so this points at a vocabulary or ring defect |
+
+An open Lakebase breaker skips the flush silently and keeps the aggregates
+(bounded at 1000 keys) for the next minute.
+
+**Panel.** Administration -> Field performance
+(`GET /api/v1/admin/field-performance?days=7|28`, admin-only, audit-free)
+shows p75 LCP / INP / CLS per route with the CWV rating chip, INP by
+interaction target with its phases, and client-error counts by route,
+name, kind and boundary. A cell with fewer than 20 samples shows
+`<20 samples` instead of a p75. Reads happen on open and on an explicit
+Refresh or window change only.
+
+Daily volume by metric for the last week (run as the Lakebase admin):
+
+```sql
+SELECT day, metric, sum(sample_count) AS samples
+FROM mip_app.rum_daily
+WHERE day >= current_date - 6 AND sample_count > 0
+GROUP BY day, metric
+ORDER BY day DESC, metric;
 ```

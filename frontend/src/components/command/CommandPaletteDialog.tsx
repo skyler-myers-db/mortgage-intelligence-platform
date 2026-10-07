@@ -297,6 +297,7 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     <dialog
       ref={dialogRef}
       className="cmdk"
+      data-rum-target="palette"
       aria-label="Command palette"
       aria-hidden={!open || undefined}
       inert={!open}

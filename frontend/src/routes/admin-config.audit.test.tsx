@@ -218,7 +218,7 @@ describe('AdminConfig audit ledger card', () => {
     expect(status?.textContent).toContain('Presenter mode: Off');
     const nav = document.querySelector('nav[aria-label="Administration sections"]');
     const targets = [...(nav?.querySelectorAll('a') ?? [])].map((link) => link.getAttribute('href')?.split('#')[1]);
-    expect(targets).toHaveLength(10);
+    expect(targets).toHaveLength(11);
     // data-estate is the mocked DataEstatePanel here; every other root is on the page.
     for (const id of targets.filter((target) => target !== 'data-estate')) {
       const section = document.getElementById(id as string);

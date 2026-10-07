@@ -252,6 +252,10 @@ def _diagnostic_body(
         # Demo-only flag (D-shell-deviations-e1) and the auditor
         # segregation-of-duties count (D-audit-reads-c3): admin body only.
         "presenter_mode": settings.mip_presenter_mode,
+        # The EFFECTIVE browser RUM setting (D-platform-process-d1): on by
+        # default through the deploy payload, off when an operator opted out
+        # or a UI Deploy dropped the operator env.
+        "browser_telemetry": "on" if settings.mip_rum_enabled else "off",
         "auditor_role_overlap": auditor_role_overlap_count(),
         "boundary_warning": boundary_warning,
     }

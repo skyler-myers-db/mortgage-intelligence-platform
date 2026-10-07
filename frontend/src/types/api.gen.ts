@@ -75,6 +75,8 @@ export interface ResponseSchemas {
     auditor_role_overlap: number;
     boundary_warning: ResponseSchemas['BoundaryWarning'] | null;
     breaker_state_changes_last_hour: number;
+    /** The effective browser RUM setting of this App process (D-platform-process-d1). */
+    browser_telemetry: "on" | "off";
     campaign_treatment_runtime: string | null;
     circuit_breakers: { [key: string]: string };
     counters_persistence: string;
@@ -916,6 +918,53 @@ export interface ResponseSchemas {
     population_source: string;
     snapshot_date: string | null;
     workflow_source: string;
+  };
+  FieldPerformanceCell: {
+    /** True when the cell has too few samples to show a p75. */
+    floor_applied: boolean;
+    /** 75th percentile; null below the sample floor. */
+    p75: number | null;
+    /** Core Web Vitals band of the p75; null below the sample floor. */
+    rating: "good" | "needs_improvement" | "poor" | null;
+    samples: number;
+  };
+  FieldPerformanceClientErrorRow: {
+    boundary: string | null;
+    count: number;
+    error_kind: string;
+    error_name: string;
+    /** Route registry template. */
+    route: string;
+  };
+  FieldPerformanceInteractionRow: {
+    inp: ResponseSchemas['FieldPerformanceCell'];
+    input_delay: ResponseSchemas['FieldPerformanceCell'];
+    /** Closed data-rum-target value. */
+    interaction_target: string;
+    presentation: ResponseSchemas['FieldPerformanceCell'];
+    processing: ResponseSchemas['FieldPerformanceCell'];
+    /** Route registry template. */
+    route: string;
+    samples: number;
+  };
+  FieldPerformanceResponse: {
+    /** The effective RUM setting of this App process. */
+    browser_telemetry: "on" | "off";
+    /** Contributing build ids, sorted. */
+    builds: string[];
+    client_errors: ResponseSchemas['FieldPerformanceClientErrorRow'][];
+    days: 7 | 28;
+    interactions: ResponseSchemas['FieldPerformanceInteractionRow'][];
+    /** First UTC day included. */
+    since: string;
+    vitals: ResponseSchemas['FieldPerformanceVitalsRow'][];
+  };
+  FieldPerformanceVitalsRow: {
+    cls: ResponseSchemas['FieldPerformanceCell'];
+    inp: ResponseSchemas['FieldPerformanceCell'];
+    lcp: ResponseSchemas['FieldPerformanceCell'];
+    /** Route registry template. */
+    route: string;
   };
   FootprintState: {
     display_order: number;
@@ -3013,9 +3062,9 @@ export interface RequestSchemas {
     events: RequestSchemas['RumEvent'][];
   };
   RumEvent: {
-    details?: { [K in "dom_content_loaded_ms" | "ttfb_ms" | "transfer_size" | "from_route" | "duration_ms" | "attempt" | "retryable" | "dependency" | "error_name" | "error_kind" | "error_source" | "boundary" | "api_route" | "cache" | "warehouse_ms" | "lakebase_ms" | "total_ms"]?: string | number | boolean | null };
+    details?: { [K in "dom_content_loaded_ms" | "ttfb_ms" | "transfer_size" | "from_route" | "duration_ms" | "attempt" | "retryable" | "dependency" | "error_name" | "error_kind" | "error_source" | "boundary" | "api_route" | "cache" | "warehouse_ms" | "lakebase_ms" | "total_ms" | "interaction_target" | "lcp_element" | "input_delay_ms" | "processing_ms" | "presentation_ms"]?: string | number | boolean | null };
     metric: "navigation_load" | "route_change" | "lcp" | "cls" | "inp" | "long_task" | "api_call" | "client_error";
-    navigation_type?: "navigate" | "reload" | "back_forward" | "prerender" | null;
+    navigation_type?: "navigate" | "reload" | "back_forward" | "prerender" | "soft_navigation" | null;
     rating?: "good" | "needs_improvement" | "poor" | "info";
     route: string;
     value: number;
@@ -3123,6 +3172,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['AdminCapabilitiesResponse'];
+  };
+  "GET /api/v1/admin/field-performance": {
+    pathParams: Record<string, never>;
+    query: {
+      days?: 7 | 28;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['FieldPerformanceResponse'];
   };
   "GET /api/v1/admin/health": {
     pathParams: Record<string, never>;

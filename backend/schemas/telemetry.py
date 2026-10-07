@@ -1,4 +1,10 @@
-"""Sanitized browser RUM telemetry request contracts."""
+"""Sanitized browser RUM telemetry request contracts.
+
+The sink is a Lakebase day aggregate (backend/services/rum_rollup.py,
+D-platform-process-d2): every accepted event is folded into closed-vocabulary
+keys and nothing per event is stored or logged. RUM is on by default through
+the deploy payload; the code default stays off (D-platform-process-d1).
+"""
 
 from __future__ import annotations
 
@@ -36,6 +42,11 @@ RumDetailKey = Literal[
     "warehouse_ms",
     "lakebase_ms",
     "total_ms",
+    "interaction_target",
+    "lcp_element",
+    "input_delay_ms",
+    "processing_ms",
+    "presentation_ms",
 ]
 RumDetailValue = str | int | float | bool | None
 
@@ -61,7 +72,7 @@ _HEX32_RE = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{32}(?![0-9A-Fa-f])")
 # The Ask Genie conversation deep link: its id segment is only ever sent
 # templated (a `:name`), whatever it holds; a malformed id can be typed text.
 _ASK_GENIE_CONVERSATION_PREFIX = "/ask-genie/"
-RumNavigationType = Literal["navigate", "reload", "back_forward", "prerender"]
+RumNavigationType = Literal["navigate", "reload", "back_forward", "prerender", "soft_navigation"]
 
 _NUMERIC_DETAIL_KEYS = frozenset({
     "dom_content_loaded_ms",
@@ -71,6 +82,9 @@ _NUMERIC_DETAIL_KEYS = frozenset({
     "warehouse_ms",
     "lakebase_ms",
     "total_ms",
+    "input_delay_ms",
+    "processing_ms",
+    "presentation_ms",
 })
 _DEPENDENCIES = frozenset({"warehouse", "lakebase", "genie"})
 
@@ -133,6 +147,7 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "export-receipt", "facets", "feedback", "footprint", "force-degraded", "funnel", "genie",
     "freshness",
     "kpi-proof",
+    "field-performance",
     "geo", "geography", "growth-agent", "health", "home", "leads", "lifecycle",
     "lineage", "loan-officers", "lookup", "manifest", "message", "metadata",
     "monitors", "my-events", "notification-drafts", "offers", "operations", "options",
@@ -152,6 +167,46 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "zip-rollups",
 })
 RUM_API_ROUTE_ID_SEGMENT = ":id"
+
+# ---------------------------------------------------------------------------
+# Closed vocabularies for the Core Web Vitals attribution and the route
+# template (D-platform-process-d1 / d2; audit 2026-09-21 runtime-09, stack-08,
+# quality-01). An interaction target is the nearest `[data-rum-target]` value
+# (never a selector); an LCP element is a tag bucket. A route is a pattern of
+# the route registry (frontend/src/lib/routeMeta.ts) or the fallback '/*',
+# never a concrete path.
+#
+# Parity pin: frontend/src/lib/rumVocabulary.ts declares the two attribution
+# sets and routeMeta.ts every `pattern:`; tests/unit/test_rum_client_error.py
+# asserts set equality. Change both sides together.
+# ---------------------------------------------------------------------------
+RUM_INTERACTION_TARGETS = frozenset({
+    "lead-row", "lead-expand", "lead-approve", "filter", "sort", "segment-card", "map",
+    "genie-composer", "genie-panel", "nav", "palette", "drawer", "pager", "other",
+})
+RUM_LCP_ELEMENTS = frozenset({"img", "svg", "h1", "h2", "h3", "p", "div", "table", "canvas", "other"})
+RUM_ROUTE_TEMPLATES = frozenset({
+    "/",
+    "/analytics",
+    "/data-estate/assets/:assetKey",
+    "/portfolio-builder",
+    "/segment-intelligence",
+    "/lead-queue",
+    "/borrower-360",
+    "/borrower-360/:id",
+    "/glossary",
+    "/offer-orchestrator",
+    "/offer-orchestrator/:id",
+    "/ask-genie",
+    "/ask-genie/:conversationId",
+    "/audit-ledger",
+    "/admin-config",
+    "/outreach-composer",
+    "/outreach-composer/:id",
+    "/*",
+})
+_INP_DETAIL_KEYS = frozenset({"interaction_target", "input_delay_ms", "processing_ms", "presentation_ms"})
+_LCP_DETAIL_KEYS = frozenset({"lcp_element"})
 
 _CLIENT_ERROR_DETAIL_KEYS = frozenset({"error_name", "error_kind", "error_source", "boundary"})
 _CLIENT_ERROR_REQUIRED_KEYS = frozenset({"error_name", "error_kind", "error_source"})
@@ -224,6 +279,7 @@ class RumEvent(BaseModel):
             raise ValueError("route must be a sanitized absolute path")
         _assert_public_value(value)
         _assert_conversation_route_templated(value)
+        _assert_route_template(value)
         return value
 
     @field_validator("navigation_type")
@@ -269,6 +325,15 @@ class RumEvent(BaseModel):
                 if any(ch.isspace() for ch in value):
                     raise ValueError("from_route must not contain whitespace")
                 _assert_conversation_route_templated(value)
+                _assert_route_template(value)
+                continue
+            if key == "interaction_target":
+                if value not in RUM_INTERACTION_TARGETS:
+                    raise ValueError("interaction_target must be a known data-rum-target value")
+                continue
+            if key == "lcp_element":
+                if value not in RUM_LCP_ELEMENTS:
+                    raise ValueError("lcp_element must be a known element bucket")
                 continue
             if key == "cache":
                 if value not in RUM_CACHE_STATES:
@@ -279,6 +344,12 @@ class RumEvent(BaseModel):
                 continue
         _assert_metric_detail_scope(self)
         return self
+
+
+def _assert_route_template(value: str) -> None:
+    """A route and a from_route are route-registry templates, checked after the public scan."""
+    if value not in RUM_ROUTE_TEMPLATES:
+        raise ValueError("route must be a route registry template")
 
 
 def _assert_api_route(value: RumDetailValue) -> None:
@@ -315,7 +386,8 @@ def _assert_client_error(event: RumEvent) -> None:
 
 
 def _assert_metric_detail_scope(event: RumEvent) -> None:
-    """Error keys belong to client_error only; the delivery keys to api_call only."""
+    """Error keys belong to client_error only; the delivery keys to api_call only;
+    the INP attribution keys to inp only and the LCP element to lcp only."""
     keys = set(event.details)
     if event.metric == "client_error":
         _assert_client_error(event)
@@ -323,6 +395,10 @@ def _assert_metric_detail_scope(event: RumEvent) -> None:
         raise ValueError("error keys are only allowed on client_error")
     if event.metric != "api_call" and keys & _API_CALL_DETAIL_KEYS:
         raise ValueError("api_route, cache and timing keys are only allowed on api_call")
+    if event.metric != "inp" and keys & _INP_DETAIL_KEYS:
+        raise ValueError("interaction_target and the INP phase keys are only allowed on inp")
+    if event.metric != "lcp" and keys & _LCP_DETAIL_KEYS:
+        raise ValueError("lcp_element is only allowed on lcp")
 
 
 class RumBatch(BaseModel):

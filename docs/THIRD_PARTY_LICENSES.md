@@ -15,7 +15,7 @@ about.
 | `pg8000` / `scramp` / `asn1crypto` | Structured PostgreSQL authentication and replication-denial proof for Lakebase | `BSD-3-Clause` / `MIT-0` / `MIT` | Permissive. Preserve the upstream copyright and license notices in distributions. |
 | `us-atlas` | U.S. state TopoJSON for browser maps | `ISC` | Permissive. Replaced the prior no-commercial-use map package. |
 | `topojson-client` | Runtime TopoJSON-to-GeoJSON decoding | `ISC` | Permissive. |
-| `web-vitals` | Core Web Vitals measurement (LCP, INP, CLS), to be consumed lazily by field vitals (W5c) | `Apache-2.0` | Permissive. Installed but not yet imported, so the browser build ships none of it today; once field vitals lands it will ship unmodified in a lazy browser chunk, and distributions must then preserve the upstream copyright, license and NOTICE materials. |
+| `web-vitals` | Core Web Vitals measurement (LCP, INP, CLS) with attribution, imported by the lazy browser RUM chunk (`frontend/src/lib/rum.ts`, W5c field vitals) | `Apache-2.0` | Permissive. Ships unmodified in a lazy browser chunk (`web-vitals/attribution`), loaded only when browser telemetry is on; distributions must preserve the upstream copyright, license and NOTICE materials. |
 | `@fontsource-variable/geist` / `@fontsource-variable/geist-mono` | Geist and Geist Mono variable webfonts (latin wght woff2), bundled into the browser build | `OFL-1.1` | Permitted for commercial use, embedding and bundling. The fonts are not sold on their own, and the Reserved Font Name is not used for a modified version (the files ship unmodified). Keep the copyright and OFL notice with distributions. |
 
 LGPL-3.0-only license text for `psycopg` is available from the GNU project:

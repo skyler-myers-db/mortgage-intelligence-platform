@@ -183,7 +183,7 @@ for (const theme of FIXTURE_THEMES) {
       await expect(status).toContainText('Offer rules: active');
       await expect(status).toContainText('Presenter mode: Off');
       const sections = page.getByRole('navigation', { name: 'Administration sections' });
-      await expect(sections.getByRole('link')).toHaveCount(10);
+      await expect(sections.getByRole('link')).toHaveCount(11);
 
       // Scroll-spy (critic-09 fix round): Offer rules and Data estate scrolled
       // to the landing line, then Audit ledger, Data sources, Data estate,

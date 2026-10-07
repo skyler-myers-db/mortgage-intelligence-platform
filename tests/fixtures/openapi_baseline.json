@@ -519,6 +519,16 @@
             "title": "Breaker State Changes Last Hour",
             "type": "integer"
           },
+          "browser_telemetry": {
+            "default": "off",
+            "description": "The effective browser RUM setting of this App process (D-platform-process-d1).",
+            "enum": [
+              "on",
+              "off"
+            ],
+            "title": "Browser Telemetry",
+            "type": "string"
+          },
           "campaign_treatment_runtime": {
             "anyOf": [
               {
@@ -6507,6 +6517,231 @@
           "note"
         ],
         "title": "ExecutiveProvenance",
+        "type": "object"
+      },
+      "FieldPerformanceCell": {
+        "properties": {
+          "floor_applied": {
+            "description": "True when the cell has too few samples to show a p75.",
+            "title": "Floor Applied",
+            "type": "boolean"
+          },
+          "p75": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "75th percentile; null below the sample floor.",
+            "title": "P75"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "enum": [
+                  "good",
+                  "needs_improvement",
+                  "poor"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Core Web Vitals band of the p75; null below the sample floor.",
+            "title": "Rating"
+          },
+          "samples": {
+            "title": "Samples",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "p75",
+          "rating",
+          "samples",
+          "floor_applied"
+        ],
+        "title": "FieldPerformanceCell",
+        "type": "object"
+      },
+      "FieldPerformanceClientErrorRow": {
+        "properties": {
+          "boundary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "error_kind": {
+            "title": "Error Kind",
+            "type": "string"
+          },
+          "error_name": {
+            "title": "Error Name",
+            "type": "string"
+          },
+          "route": {
+            "description": "Route registry template.",
+            "title": "Route",
+            "type": "string"
+          }
+        },
+        "required": [
+          "route",
+          "error_name",
+          "error_kind",
+          "boundary",
+          "count"
+        ],
+        "title": "FieldPerformanceClientErrorRow",
+        "type": "object"
+      },
+      "FieldPerformanceInteractionRow": {
+        "properties": {
+          "inp": {
+            "$ref": "#/components/schemas/FieldPerformanceCell"
+          },
+          "input_delay": {
+            "$ref": "#/components/schemas/FieldPerformanceCell"
+          },
+          "interaction_target": {
+            "description": "Closed data-rum-target value.",
+            "title": "Interaction Target",
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/FieldPerformanceCell"
+          },
+          "processing": {
+            "$ref": "#/components/schemas/FieldPerformanceCell"
+          },
+          "route": {
+            "description": "Route registry template.",
+            "title": "Route",
+            "type": "string"
+          },
+          "samples": {
+            "title": "Samples",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "route",
+          "interaction_target",
+          "samples",
+          "inp",
+          "input_delay",
+          "processing",
+          "presentation"
+        ],
+        "title": "FieldPerformanceInteractionRow",
+        "type": "object"
+      },
+      "FieldPerformanceResponse": {
+        "properties": {
+          "browser_telemetry": {
+            "description": "The effective RUM setting of this App process.",
+            "enum": [
+              "on",
+              "off"
+            ],
+            "title": "Browser Telemetry",
+            "type": "string"
+          },
+          "builds": {
+            "description": "Contributing build ids, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Builds",
+            "type": "array"
+          },
+          "client_errors": {
+            "items": {
+              "$ref": "#/components/schemas/FieldPerformanceClientErrorRow"
+            },
+            "title": "Client Errors",
+            "type": "array"
+          },
+          "days": {
+            "enum": [
+              7,
+              28
+            ],
+            "title": "Days",
+            "type": "integer"
+          },
+          "interactions": {
+            "items": {
+              "$ref": "#/components/schemas/FieldPerformanceInteractionRow"
+            },
+            "title": "Interactions",
+            "type": "array"
+          },
+          "since": {
+            "description": "First UTC day included.",
+            "format": "date",
+            "title": "Since",
+            "type": "string"
+          },
+          "vitals": {
+            "items": {
+              "$ref": "#/components/schemas/FieldPerformanceVitalsRow"
+            },
+            "title": "Vitals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "days",
+          "since",
+          "browser_telemetry",
+          "builds",
+          "vitals",
+          "interactions",
+          "client_errors"
+        ],
+        "title": "FieldPerformanceResponse",
+        "type": "object"
+      },
+      "FieldPerformanceVitalsRow": {
+        "properties": {
+          "cls": {
+            "$ref": "#/components/schemas/FieldPerformanceCell"
+          },
+          "inp": {
+            "$ref": "#/components/schemas/FieldPerformanceCell"
+          },
+          "lcp": {
+            "$ref": "#/components/schemas/FieldPerformanceCell"
+          },
+          "route": {
+            "description": "Route registry template.",
+            "title": "Route",
+            "type": "string"
+          }
+        },
+        "required": [
+          "route",
+          "lcp",
+          "inp",
+          "cls"
+        ],
+        "title": "FieldPerformanceVitalsRow",
         "type": "object"
       },
       "FootprintState": {
@@ -15819,7 +16054,12 @@
                 "cache",
                 "warehouse_ms",
                 "lakebase_ms",
-                "total_ms"
+                "total_ms",
+                "interaction_target",
+                "lcp_element",
+                "input_delay_ms",
+                "processing_ms",
+                "presentation_ms"
               ]
             },
             "title": "Details",
@@ -15846,7 +16086,8 @@
                   "navigate",
                   "reload",
                   "back_forward",
-                  "prerender"
+                  "prerender",
+                  "soft_navigation"
                 ],
                 "type": "string"
               },
@@ -18318,6 +18559,55 @@
           }
         },
         "summary": "Get Capabilities",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/field-performance": {
+      "get": {
+        "deprecated": true,
+        "description": "p75 LCP / INP / CLS by route template, INP by interaction target, and\nclient-error counts, over the last 7 or 28 UTC days.\n\nAUDIT EXEMPT: read-only aggregate operational telemetry; no borrower data.\nThe rows are day-grain aggregates over closed vocabularies, never a\nVIEW_* read of product data. Cache-Control private, no-store.",
+        "operationId": "get_api_admin_field_performance_field_performance",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "enum": [
+                7,
+                28
+              ],
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldPerformanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Field Performance",
         "tags": [
           "admin"
         ]
@@ -28756,7 +29046,7 @@
     "/api/telemetry/rum": {
       "post": {
         "deprecated": true,
-        "description": "Accept sanitized browser performance telemetry.\n\nRUM events are operational telemetry, not audit rows. They are kept\ndeliberately narrow: sanitized route patterns, metric name, numeric\nvalue, coarse rating, and non-identifying details. The schema rejects\nquery strings, borrower ids, UUIDs, and email-looking values before\nanything reaches logs or downstream collectors.",
+        "description": "Accept sanitized browser performance telemetry.\n\nRUM events are operational telemetry, not audit rows. They are kept\ndeliberately narrow: route-registry templates, metric name, numeric\nvalue, coarse rating, and closed-vocabulary details. The schema rejects\nquery strings, borrower ids, UUIDs, and email-looking values first.\n\nEach accepted event is folded into the in-process day aggregates\n(backend/services/rum_rollup.py), which flush once a minute to\nmip_app.rum_daily. Nothing is logged per event and no actor is resolved:\nthe stored rows carry no identifier of any kind (D-platform-process-d1).",
         "operationId": "post_api_telemetry_rum_record_rum",
         "requestBody": {
           "content": {
@@ -29070,6 +29360,54 @@
           }
         },
         "summary": "Get Capabilities",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/field-performance": {
+      "get": {
+        "description": "p75 LCP / INP / CLS by route template, INP by interaction target, and\nclient-error counts, over the last 7 or 28 UTC days.\n\nAUDIT EXEMPT: read-only aggregate operational telemetry; no borrower data.\nThe rows are day-grain aggregates over closed vocabularies, never a\nVIEW_* read of product data. Cache-Control private, no-store.",
+        "operationId": "get_api_v1_admin_field_performance_field_performance",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "enum": [
+                7,
+                28
+              ],
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldPerformanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Field Performance",
         "tags": [
           "admin"
         ]
@@ -39391,7 +39729,7 @@
     },
     "/api/v1/telemetry/rum": {
       "post": {
-        "description": "Accept sanitized browser performance telemetry.\n\nRUM events are operational telemetry, not audit rows. They are kept\ndeliberately narrow: sanitized route patterns, metric name, numeric\nvalue, coarse rating, and non-identifying details. The schema rejects\nquery strings, borrower ids, UUIDs, and email-looking values before\nanything reaches logs or downstream collectors.",
+        "description": "Accept sanitized browser performance telemetry.\n\nRUM events are operational telemetry, not audit rows. They are kept\ndeliberately narrow: route-registry templates, metric name, numeric\nvalue, coarse rating, and closed-vocabulary details. The schema rejects\nquery strings, borrower ids, UUIDs, and email-looking values first.\n\nEach accepted event is folded into the in-process day aggregates\n(backend/services/rum_rollup.py), which flush once a minute to\nmip_app.rum_daily. Nothing is logged per event and no actor is resolved:\nthe stored rows carry no identifier of any kind (D-platform-process-d1).",
         "operationId": "post_api_v1_telemetry_rum_record_rum",
         "requestBody": {
           "content": {

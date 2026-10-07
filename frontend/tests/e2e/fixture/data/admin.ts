@@ -12,8 +12,10 @@ import type { ActivationDestination, ActivationOutboxItem, ActivationSummary, Da
 import type { GrowthAgentCapabilityRow } from '../../../../src/types/growthAgent';
 import type { AuditEventPage, AuditEventRow } from '../../../../src/lib/apiTypes';
 import type { RefusalReportListResponse } from '../../../../src/lib/apiClients/refusalReports';
+import type { FieldPerformanceResponse } from '../../../../src/lib/apiClients/fieldPerformance';
 import { fixture, json, type FixtureEntry } from '../mockApi';
 import { LEADS } from './borrowers';
+import { fieldPerformanceFixture } from './fieldPerformance';
 import { SNAPSHOT_AT, TOTALS } from './reference';
 
 /** Mirror of `RulesResponse` in src/routes/admin-config.tsx. */
@@ -272,6 +274,10 @@ export const adminFixtures: FixtureEntry[] = [
     }),
   ),
   fixture('GET', '/api/admin/capabilities', () => json<{ capabilities: GrowthAgentCapabilityRow[] }>({ capabilities: CAPABILITIES })),
+  // Field performance (D-platform-process-d2): data/fieldPerformance.ts holds the bodies and variants.
+  fixture('GET', '/api/admin/field-performance', ({ query }) =>
+    json<FieldPerformanceResponse>(fieldPerformanceFixture(query.get('days') === '28' ? 28 : 7)),
+  ),
   fixture('GET', '/api/activation/summary', () => json<ActivationSummary>({ destinations: DESTINATIONS, recent_outbox: [] })),
   fixture('GET', '/api/activation/destinations', () => json<ActivationDestination[]>(DESTINATIONS)),
   fixture('GET', '/api/activation/outbox', () => json<ActivationOutboxItem[]>([])),

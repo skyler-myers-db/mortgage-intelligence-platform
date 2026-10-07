@@ -4255,3 +4255,40 @@ VALUES (
     'Genie completion-job pre-cancel: nullable precancelled_at with a named shape CHECK (cancelled, cancel requested, nothing recorded); a Stop before the job exists inserts the turn''s row already cancelled'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Browser RUM day aggregates ---------------------------------------------
+-- D-platform-process-d1 / d2 (audit 2026-09-21 runtime-09, stack-08,
+-- quality-07). The in-process accumulator (backend/services/rum_rollup.py)
+-- flushes once a minute into a 90-slot day ring keyed by closed
+-- vocabularies: the route is a route-registry template, the facet is built
+-- only from closed values, and the rating is server-derived. No event rows,
+-- no identifiers and no sub-day timestamp. Retention is zero-in-place (an
+-- UPDATE of rows older than 90 days), so the App role holds SELECT, INSERT
+-- and UPDATE only. The 24-bucket length is enforced in code; the CHECKs use
+-- only length(), IN and same-type comparisons so the executable-hook
+-- preflight accepts every re-run.
+CREATE TABLE IF NOT EXISTS mip_app.rum_daily (
+    slot         INTEGER NOT NULL CHECK (slot >= 0 AND slot <= 89),
+    day          DATE NOT NULL,
+    metric       TEXT NOT NULL CHECK (metric IN ('navigation_load','route_change','lcp','cls','inp','inp_input_delay','inp_processing','inp_presentation','api_call','client_error')),
+    route        TEXT NOT NULL CHECK (length(route) <= 160),
+    facet        TEXT NOT NULL DEFAULT '' CHECK (length(facet) <= 200),
+    rating       TEXT NOT NULL CHECK (rating IN ('good','needs_improvement','poor','info')),
+    builds       TEXT[] NOT NULL DEFAULT '{}'::text[],
+    sample_count BIGINT NOT NULL,
+    value_sum    DOUBLE PRECISION NOT NULL,
+    value_min    DOUBLE PRECISION,
+    value_max    DOUBLE PRECISION,
+    buckets      INTEGER[] NOT NULL,
+    PRIMARY KEY (slot, metric, route, facet, rating)
+);
+
+COMMENT ON TABLE mip_app.rum_daily IS
+    'Browser RUM day aggregates (operational telemetry, never an audit record): sample counts, sums, min/max and 24 histogram buckets per day x metric x route template x closed facet x server-derived rating, with up to 8 contributing builds. First-party, identifier-free, day grain; rows older than 90 days are zeroed in place; no DELETE grant. Read only by the admin Field performance panel.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_0X_rum_daily',
+    'Browser RUM day aggregates: mip_app.rum_daily, a 90-slot day ring keyed (slot, metric, route, facet, rating) over closed vocabularies; zero-in-place retention, SELECT/INSERT/UPDATE only'
+)
+ON CONFLICT (version) DO NOTHING;

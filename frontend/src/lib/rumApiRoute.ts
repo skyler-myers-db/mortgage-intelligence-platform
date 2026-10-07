@@ -29,6 +29,7 @@ export const API_ROUTE_SEGMENTS = [
   'export-receipt', 'facets', 'feedback', 'footprint', 'force-degraded', 'funnel', 'genie',
   'freshness',
   'kpi-proof',
+  'field-performance',
   'geo', 'geography', 'growth-agent', 'health', 'home', 'leads', 'lifecycle',
   'lineage', 'loan-officers', 'lookup', 'manifest', 'message', 'metadata',
   'monitors', 'my-events', 'notification-drafts', 'offers', 'operations', 'options',

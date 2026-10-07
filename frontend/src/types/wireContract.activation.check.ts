@@ -35,10 +35,7 @@ export type WireContractActivation = [
   Expect<WireFits<ApiResponse<'PropertyLoanLookupResponse'>, PropertyLoanLookupResponse>>,
   Expect<NoPhantomKeys<PropertyLoanLookupResponse, ApiResponse<'PropertyLoanLookupResponse'>>>,
   // (ii) bound call sites whose type argument is not schema-named
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-field-vitals: navigation_type is string but the wire takes only navigate | reload | back_forward | prerender
   Expect<WireFits<RumEvent, ApiRequest<'RumEvent'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-field-vitals: details is an open Record<string, ...> but the wire RumEvent.details is a closed set of reviewed keys
   Expect<DeepNoPhantomKeys<RumEvent, ApiRequest<'RumEvent'>>>,
-  // The drift above masks the whole deep element; a new phantom at this level still fails here.
   Expect<NoPhantomKeys<RumEvent, ApiRequest<'RumEvent'>>>,
 ];

@@ -528,6 +528,10 @@ class Settings(BaseSettings):
     # Browser Real User Monitoring. The client sends only sanitized route
     # patterns and aggregate performance metrics; no query strings,
     # borrower IDs, UUIDs, email addresses, or free-form text are accepted.
+    # Fail-closed split (docs/security-and-compliance.md#browser-telemetry-rum):
+    # deploy.sh turns RUM on through the payload's SAFE_RUNTIME_DEFAULTS, so a
+    # deploy that drops the operator env (UI Deploy) turns it OFF and never
+    # overrides an opt-out. Keep this default False.
     mip_rum_enabled: bool = False
     # Slice-13 performance follow-up: portfolio preview is an expensive
     # aggregate over 5.16M rows; its cache-miss cost shows up as a

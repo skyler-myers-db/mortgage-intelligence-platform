@@ -58,6 +58,8 @@ _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     # only purged (question_text -> NULL) by a trigger-enforced UPDATE; never
     # deleted, so no DELETE.
     "genie_refusal_report_texts": ("SELECT", "INSERT", "UPDATE"),
+    # Browser RUM day aggregates: retention zeroes rows in place, so no DELETE.
+    "rum_daily": ("SELECT", "INSERT", "UPDATE"),
 }
 
 _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {

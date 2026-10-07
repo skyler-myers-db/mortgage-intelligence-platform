@@ -69,6 +69,8 @@ export const queryKeys = {
   adminSources: () => ['mip', 'admin', 'sources'] as const,
   adminOperations: () => ['mip', 'admin', 'operations'] as const,
   adminCapabilities: () => ['mip', 'admin', 'capabilities'] as const,
+  /** Administration's Field performance (D-platform-process-d2): audit-free, never persisted, never polled. */
+  adminFieldPerformance: (days: number) => ['mip', 'admin', 'field-performance', days] as const,
   activationDestinations: () => ['mip', 'activation', 'destinations'] as const,
   activationSummary: () => ['mip', 'activation', 'summary'] as const,
   activationOutbox: (criteria: readonly unknown[]) => ['mip', 'activation', 'outbox', ...criteria] as const,

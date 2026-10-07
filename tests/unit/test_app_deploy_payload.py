@@ -613,3 +613,20 @@ def test_payload_keep_warm_policies_are_the_runtime_literal() -> None:
 
     annotation = Settings.model_fields["mip_warehouse_keep_warm"].annotation
     assert get_args(annotation) == KEEP_WARM_POLICIES
+
+
+def test_rum_is_on_by_default_and_an_explicit_opt_out_is_forwarded(monkeypatch) -> None:
+    """D-platform-process-d1: the payload turns browser RUM on when .env.local
+    omits it, an explicit '0' rides through verbatim, and the code default
+    stays off so a deploy that drops the operator env fails closed."""
+    from backend.config.settings import Settings
+
+    for target in ("dev", "prod"):
+        env = _env_map(build_payload(source_code_path="/Workspace/app/files", target=target))
+        assert env["MIP_RUM_ENABLED"] == {"name": "MIP_RUM_ENABLED", "value": "1"}
+
+    monkeypatch.setenv("MIP_RUM_ENABLED", "0")
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+    assert env["MIP_RUM_ENABLED"] == {"name": "MIP_RUM_ENABLED", "value": "0"}
+
+    assert Settings.model_fields["mip_rum_enabled"].default is False

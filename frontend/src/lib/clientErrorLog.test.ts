@@ -7,6 +7,7 @@
  * capped. Each test imports fresh modules (vi.resetModules) so the per-document
  * queue starts empty; the sink is the real `attachClientErrorSink`.
  */
+import { createBrowserRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { QueuedClientError } from './rumBridge';
 
@@ -79,6 +80,29 @@ describe('reportClientError', () => {
     expect(log.reportClientError('uncaught', new Error('x')).route).toBe('/borrower-360/:id');
     window.history.replaceState(null, '', '/nope/B-0123456789ABC');
     expect(log.reportClientError('uncaught', new Error('x')).route).toBe('/*');
+  });
+
+  it('reports the router\'s COMMITTED template while a held navigation has moved the URL (quality-01)', async () => {
+    const { log, bridge } = await freshModules();
+    // main.tsx registers the router while the URL is its location.
+    window.history.replaceState(null, '', '/portfolio-builder');
+    const router = createBrowserRouter([{ path: '*', element: null }]);
+    bridge.setRumRouteSource((listener) => router.subscribe((state) => listener(state.location.pathname)));
+    try {
+      // The unsaved-changes guard holds a Back: the browser has moved the URL,
+      // the router has not committed it (it never sees a pushState).
+      window.history.pushState(null, '', `/borrower-360/${BORROWER_ID}`);
+      expect(router.state.location.pathname).toBe('/portfolio-builder');
+
+      const report = log.reportClientError('uncaught', new TypeError('x'));
+
+      expect(report.route).toBe('/portfolio-builder');
+      // A committed navigation moves the template with it.
+      await router.navigate('/glossary');
+      expect(log.reportClientError('uncaught', new RangeError('y')).route).toBe('/glossary');
+    } finally {
+      router.dispose();
+    }
   });
 
   it('maps an unknown or missing error name to Other and keeps the closed names', async () => {
