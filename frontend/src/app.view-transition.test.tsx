@@ -69,8 +69,10 @@ vi.mock('./lib/routePreloaders', async () => {
   return {
     HomeRoute: Ok('home'),
     AnalyticsRoute: Ok('analytics'),
-    // The keep-alive slot's loader preloads the route chunk beside it.
-    LeadQueueRoute: Object.assign(Ok('lead-queue'), { preload: () => Promise.resolve() }),
+    // The keep-alive slot rides the route chunk: its preload answers the module with the slot.
+    LeadQueueRoute: Object.assign(Ok('lead-queue'), {
+      preload: () => import('./components/layout/LeadQueueKeepAlive').then((mod) => ({ LeadQueueKeepAlive: mod.default })),
+    }),
     GlossaryRoute: Ok('glossary'),
     AssetRoute: Ok('asset'),
     PortfolioBuilderRoute: Ok('portfolio'),
@@ -297,7 +299,7 @@ describe('App route View Transition boundary', () => {
       .find((node) => node.textContent === 'lead-queue') ?? null;
     const paths = () => markers().map((node) => node.getAttribute('data-route-path'));
     const hidden = (node: Element | null) =>
-      (node?.closest('.route-transition') as HTMLElement | null)?.style.display === 'none';
+      node?.closest('[style*="display: none"]') != null;
 
     it('hides the queue on a dossier and reveals the same node on Back, with one marker throughout', async () => {
       stubReducedMotion(false);
@@ -309,7 +311,10 @@ describe('App route View Transition boundary', () => {
       await go(DOSSIER);
       expect(queueNode(), 'hidden under Activity, not unmounted').toBe(queue);
       expect(hidden(queue)).toBe(true);
-      expect(queue?.closest('.route-transition')?.hasAttribute('data-route-path'), 'the hidden slot names no route').toBe(false);
+      // The hidden wrapper is neither a marker nor a `.route-transition` (one per screen).
+      expect(queue?.parentElement?.hasAttribute('data-route-path'), 'the hidden slot names no route').toBe(false);
+      expect(queue?.parentElement?.classList.contains('route-transition')).toBe(false);
+      expect(container.querySelectorAll('#main-content .route-transition')).toHaveLength(1);
       expect(paths()).toEqual([DOSSIER]);
 
       await go(-1);
@@ -349,6 +354,13 @@ describe('App route View Transition boundary', () => {
       await go('/glossary');
       expect(queueNode(), 'any other destination unmounts the slot').toBeNull();
       expect(paths()).toEqual(['/glossary']);
+
+      await go(DOSSIER);
+      expect(queueNode(), 'a dossier reached from elsewhere keeps no queue').toBeNull();
+      expect(paths()).toEqual([DOSSIER]);
+      await go('/lead-queue?state=TX');
+      expect(queueNode(), 'the next visit is a fresh queue').not.toBe(fresh);
+      expect(paths()).toEqual(['/lead-queue']);
     });
 
     it('starts one View Transition per navigation into, out of and back to the slot', async () => {

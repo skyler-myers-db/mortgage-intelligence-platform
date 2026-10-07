@@ -102,6 +102,9 @@ const EMPTY_STATE = lazyModule(() => import('../components/mortgage/LeadQueueEmp
 const PROPERTY_LOOKUP = lazyModule(() => import('../components/mortgage/PropertyLookupPanel'));
 const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters';
 
+// The keep-alive slot app.tsx renders the queue in rides this chunk (W5c runtime-08).
+export { default as LeadQueueKeepAlive } from '../components/layout/LeadQueueKeepAlive';
+
 export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { search: queueSearch, pathname } = useLocation();

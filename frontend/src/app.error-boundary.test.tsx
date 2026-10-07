@@ -61,12 +61,14 @@ vi.mock('./lib/routePreloaders', async () => {
   const Ok = (label: string) => () => <div data-testid="route-ok">{label}</div>;
   const held = (chunk: { promise: Promise<void> }, label: string) =>
     lazy(() => chunk.promise.then(() => ({ default: Ok(label) })));
-  // The keep-alive slot's loader preloads the route chunk beside it.
+  // The keep-alive slot rides the route chunk: its preload answers the module with the slot.
   const Throwing = Object.assign(() => {
     if (queueRoute.pending) use(queueRoute.pending);
     if (!queueRoute.throws) return <div data-testid="route-ok">lead-queue</div>;
     throw new Error('Cannot read score of borrower B-0TESTBORROWER');
-  }, { preload: () => Promise.resolve() });
+  }, {
+    preload: () => import('./components/layout/LeadQueueKeepAlive').then((mod) => ({ LeadQueueKeepAlive: mod.default })),
+  });
   const StaleChunk = lazy(() =>
     Promise.reject(
       new TypeError('Failed to fetch dynamically imported module: /assets/analytics-0ld5ta1e.js'),
@@ -258,7 +260,8 @@ describe('App route error boundary', () => {
       const queue = Array.from(container.querySelectorAll('[data-testid="route-ok"]'))
         .find((node) => node.textContent === 'lead-queue');
       expect(queue).toBeDefined();
-      expect(queue?.closest('.route-transition')?.hasAttribute('data-route-path')).toBe(false);
+      expect(queue?.parentElement?.hasAttribute('data-route-path')).toBe(false);
+      expect(container.querySelectorAll('.route-transition')).toHaveLength(1);
       expect(paintedRoutePaths()).toEqual(['/borrower-360/B-0TESTBORROWER0']);
 
       // A held navigation from the dossier: the marker still names the painted dossier.

@@ -22,11 +22,12 @@ import {
   SegmentIntelligenceRoute,
   preloadLikelyNextRoutes,
 } from './lib/routePreloaders';
-import { lazyWithPreload, preloadBestEffort } from './lib/lazyPreload';
+import { lazyWithPreload } from './lib/lazyPreload';
 import { legacyLedgerRedirect } from './lib/legacyLedgerRedirect';
-import { indexPathOf, ROUTE_IDS, ROUTES, routeSurfacePath, type RouteId } from './lib/routeMeta';
+import { ROUTE_IDS, ROUTES, routeSurfacePath, type RouteId } from './lib/routeMeta';
 import { prefersReducedMotionAtMount, ROUTE_ENTER_CLASS, ROUTE_EXIT_CLASS } from './lib/routeMotion';
 import { canReadAuditLedger, sessionQueryOptions } from './lib/sessionQuery';
+import type * as LeadQueueModule from './routes/lead-queue';
 import './app.transitions.css';
 // The evidence hover card's sheet ships with the initial CSS (it was in
 // partial 02 before): every route renders evidence chips, and as a lazy sheet
@@ -118,8 +119,14 @@ const ROUTE_ELEMENTS = {
   legacyOutreachDetail: <Navigate to={ROUTES.legacyOutreachDetail.redirectTo} replace />,
 } satisfies Record<RouteId, ReactElement>;
 
-const QUEUE_PATH = ROUTES.leads.pattern;
-const DOSSIER_PATH = indexPathOf(ROUTES.borrower.pattern);
+// The Lead Queue keep-alive slot (components/layout/LeadQueueKeepAlive) rides
+// the route's own chunk: no chunk of its own, no second request.
+let queueSlotLoaded = false;
+const LeadQueueSlot = lazyWithPreload(() => (LeadQueueRoute.preload() as Promise<typeof LeadQueueModule>)
+  .then((mod) => {
+    queueSlotLoaded = true;
+    return { default: mod.LeadQueueKeepAlive };
+  }));
 
 /**
  * RouteTransition — the painted route inside a `<ViewTransition>` keyed by
@@ -196,6 +203,16 @@ const DOSSIER_PATH = indexPathOf(ROUTES.borrower.pattern);
  * draws a 2px --accent-ink line under the route nav once the hold outlasts
  * --dur-base, so a preloaded route never flashes it.
  *
+ * The Lead Queue keep-alive slot (W5c, audit runtime-08;
+ * components/layout/LeadQueueKeepAlive): the queue renders in a lazy slot
+ * BESIDE the keyed boundary, inside this always-mounted Suspense, mounted on
+ * /lead-queue and on Borrower 360 (where it keeps, hidden under <Activity>,
+ * the queue the reader came from) and unmounted for any other destination. On /lead-queue the keyed boundary
+ * renders nothing and the slot paints the one marker; hidden, it names no
+ * route. Sharing this Suspense keeps the hold for a navigation INTO the queue
+ * and the page-shaped cold-load fallback. A slot chunk that failed never
+ * follows the reader to a dossier.
+ *
  * The route ErrorBoundary wraps the Suspense (a boundary inside PageShell
  * could not catch a failed lazy chunk or a route-level throw) and resets on
  * pathname, so a broken route leaves the shell usable and navigating away
@@ -208,6 +225,10 @@ function RouteTransition() {
   const surfacePath = routeSurfacePath(pathname);
   const [reducedMotion] = useState(prefersReducedMotionAtMount);
   const pending = useRoutePending();
+  const onQueue = pathname === ROUTES.leads.pattern;
+  // Mounted on the queue, and on a dossier once the slot has loaded: the slot
+  // keeps a queue only when the reader came from it (it renders nothing else).
+  const keepQueue = onQueue || (queueSlotLoaded && pathname.startsWith(ROUTES.borrowerIndex.pattern));
   const painted = (
     <div className="route-transition" data-route-path={pathname} aria-busy={pending ? 'true' : undefined}>
       <Routes>
@@ -227,8 +248,8 @@ function RouteTransition() {
           </div>
         )}
       >
-        {/* The Lead Queue paints in its keep-alive slot (LeadQueueSlot) instead. */}
-        {pathname === QUEUE_PATH ? null : reducedMotion ? (
+        {/* The Lead Queue paints in its keep-alive slot instead (below). */}
+        {onQueue ? null : reducedMotion ? (
           <Fragment key={surfacePath}>{painted}</Fragment>
         ) : (
           <ViewTransition
@@ -241,41 +262,7 @@ function RouteTransition() {
             {painted}
           </ViewTransition>
         )}
-      </Suspense>
-    </RouteErrorBoundary>
-  );
-}
-
-// The Lead Queue's keep-alive slot (routes/lead-queue.keepAlive.tsx), a lazy
-// module beside the route chunk; its loader starts the route chunk too.
-let queueSlotLoaded = false;
-const LeadQueueSlot = lazyWithPreload(() => {
-  preloadBestEffort(LeadQueueRoute.preload);
-  return import('./routes/lead-queue.keepAlive').then((mod) => {
-    queueSlotLoaded = true;
-    return mod;
-  });
-});
-
-/**
- * Hosts the Lead Queue keep-alive slot (W5c, audit runtime-08): mounted on
- * /lead-queue, kept through a Borrower 360 visit (index or detail), unmounted
- * for any other destination. Its Suspense is ALWAYS mounted, so it is an
- * already-revealed boundary: a navigation into the queue holds the painted
- * page until the slot and route chunks arrive (shell-05), and a cold load
- * paints the page-shaped fallback (no route marker). A slot chunk that failed
- * never follows the reader to a dossier.
- */
-function LeadQueueSlotHost() {
-  const { pathname } = useLocation();
-  const onQueue = pathname === QUEUE_PATH;
-  const [active, setActive] = useState(onQueue);
-  const next = onQueue || (active && queueSlotLoaded && (pathname === DOSSIER_PATH || pathname.startsWith(`${DOSSIER_PATH}/`)));
-  if (next !== active) setActive(next);
-  return (
-    <RouteErrorBoundary pathname={pathname}>
-      <Suspense fallback={onQueue ? <div className="route-transition route-transition--fallback"><RouteFallback /></div> : null}>
-        {next && <LeadQueueSlot />}
+        {keepQueue && <LeadQueueSlot />}
       </Suspense>
     </RouteErrorBoundary>
   );
@@ -287,7 +274,6 @@ export default function App() {
     <AppShell>
       <RouteNav />
       <RouteTransition />
-      <LeadQueueSlotHost />
     </AppShell>
   );
 }
