@@ -11124,6 +11124,19 @@
             "title": "Filters",
             "type": "object"
           },
+          "lead_view_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Lead Queue view the file was built from, as the client declares it.",
+            "title": "Lead View Id"
+          },
           "matching_row_count": {
             "anyOf": [
               {
@@ -11136,6 +11149,20 @@
             ],
             "description": "How many borrowers matched the filters when the file was built (the CSV's `# matching_rows=` line). Absent when unknown; never below row_count.",
             "title": "Matching Row Count"
+          },
+          "pages_loaded": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many pages of that view were loaded when the file was built.",
+            "title": "Pages Loaded"
           },
           "row_count": {
             "maximum": 5000.0,
@@ -12748,6 +12775,19 @@
             ],
             "title": "Follow Up In Days"
           },
+          "lead_view_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Lead Queue view the decision was taken from, as the client declares it.",
+            "title": "Lead View Id"
+          },
           "offer_code": {
             "anyOf": [
               {
@@ -12809,6 +12849,7 @@
                 "type": "null"
               }
             ],
+            "description": "Required: how the approver saw the copy. A request without it is refused with 422.",
             "title": "Review Mode"
           },
           "variant_name": {
@@ -13174,6 +13215,19 @@
             },
             "title": "Evidence Ids",
             "type": "array"
+          },
+          "lead_view_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Lead Queue view the decision was taken from, as the client declares it.",
+            "title": "Lead View Id"
           },
           "offer_code": {
             "anyOf": [
@@ -24037,6 +24091,60 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "description": "Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "rank",
+              "description": "Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence.",
+              "enum": [
+                "rank",
+                "score",
+                "equity",
+                "rate",
+                "confidence"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Direction of a server sort. Ignored for rank.",
+            "in": "query",
+            "name": "sort_dir",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "Direction of a server sort. Ignored for rank.",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Dir",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -34465,6 +34573,60 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "rank",
+              "description": "Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence.",
+              "enum": [
+                "rank",
+                "score",
+                "equity",
+                "rate",
+                "confidence"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Direction of a server sort. Ignored for rank.",
+            "in": "query",
+            "name": "sort_dir",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "Direction of a server sort. Ignored for rank.",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Dir",
+              "type": "string"
             }
           }
         ],

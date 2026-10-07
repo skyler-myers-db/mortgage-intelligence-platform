@@ -66,7 +66,9 @@ function receiptCalls(mockApi: MockApi): number {
 }
 
 function spineGate(scope: Page | Locator): Locator {
-  return scope.locator('[data-testid="score-anatomy-spine"]');
+  // Visible only: a Lead Queue kept alive under <Activity> behind a dossier
+  // (W5c, runtime-08) is hidden, not unmounted, and has its own spine.
+  return scope.locator('[data-testid="score-anatomy-spine"]').filter({ visible: true });
 }
 
 async function openSpine(scope: Page | Locator): Promise<Locator> {

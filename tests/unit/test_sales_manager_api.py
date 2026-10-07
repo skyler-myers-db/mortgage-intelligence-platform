@@ -19,6 +19,7 @@ from backend.services.sales_state import (
 )
 from tests.fixtures import mock_population as mock_data
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.reviewed_approval import draft_proof
 
 client = TestClient(app)
 client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
@@ -38,10 +39,8 @@ def _approve_for_sales(borrower_id: str) -> None:
         "/api/outreach/approve",
         json={
             "borrower_id": borrower_id,
-            "offer_code": "refi_plus_heloc",
             "channel": "email",
-            "draft_subject": draft.json()["subject"],
-            "draft_body": draft.json()["body"],
+            **draft_proof(draft.json()),
             "request_id": str(uuid4()),
         },
     )
@@ -1372,10 +1371,8 @@ def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None
             "/api/outreach/approve",
             json={
                 "borrower_id": borrower_id,
-                "offer_code": "refi_plus_heloc",
                 "channel": "email",
-                "draft_subject": draft.json()["subject"],
-                "draft_body": draft.json()["body"],
+                **draft_proof(draft.json()),
                 "request_id": str(uuid4()),
             },
         )

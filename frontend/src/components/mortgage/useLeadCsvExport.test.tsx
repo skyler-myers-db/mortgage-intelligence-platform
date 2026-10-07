@@ -133,5 +133,22 @@ describe('useLeadCsvExport placeholder gate', () => {
     expect(leadExportReceipt).toHaveBeenCalledTimes(1);
     expect(downloads).toBe(1);
     expect(hook!.state.status).toBe('done');
+    expect(leadExportReceipt.mock.calls[0][0], 'outside the paged queue: no view declared').not.toHaveProperty('lead_view_id');
+  });
+
+  it('declares the paged view and its loaded pages on the receipt (W5c, F8)', async () => {
+    await act(async () => {
+      await hook!.exportCsv({
+        plan: planLeadCsvExport(ROWS, new Set()),
+        approvals: {},
+        exportContext: { filters: 'state=IL', resolveRulesVersion: async () => 'rules.itm_2026_09', exportBlockedReason: null },
+        rowOrder: 'rank',
+        view: { viewId: '0123456789abcdef0123456789abcdef', pagesLoaded: 2 },
+      });
+    });
+    expect(leadExportReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      lead_view_id: '0123456789abcdef0123456789abcdef',
+      pages_loaded: 2,
+    }));
   });
 });

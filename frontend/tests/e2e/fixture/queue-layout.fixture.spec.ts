@@ -450,3 +450,70 @@ test.describe('axe stays clean on the new queue states', () => {
     });
   }
 });
+
+/** Ranked rows whose box ends above the fold (integrator C2's measure). */
+async function rowsAboveFold(page: Page): Promise<number> {
+  return page.locator('tr[data-borrower-row]').evaluateAll(
+    (rows) => rows.filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight).length,
+  );
+}
+
+/** The pre-W5c hero and header rules (lead-queue.css / LeadTable.css), for the non-vacuity twin. */
+const PRE_W5C_LAYOUT = `
+  .proto-hero > :first-child { flex: initial !important; }
+  .surface__hdr--split { display: flex !important; }
+  .surface__hdr--split > .surface__hdr-main { display: flex !important; }
+  .surface__hdr--split > .surface__hdr-main > div:not(.surface__icon) { display: block !important; }
+`;
+
+test.describe('the ranked table fits 1440x900 with the Console open (W5c, integrator C2/C3)', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`at least 8 ranked rows end above the fold (${theme})`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      await app.openConsole();
+      await expect(page.locator(ROWS).nth(7)).toBeVisible();
+      await expect.poll(() => rowsAboveFold(page), 'ranked rows above the fold, Console open').toBeGreaterThanOrEqual(8);
+    });
+  }
+
+  test('non-vacuity: the pre-W5c hero and header rules leave fewer than 8 rows above the fold', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    await app.openConsole();
+    await expect(page.locator(ROWS).nth(7)).toBeVisible();
+    await page.addStyleTag({ content: PRE_W5C_LAYOUT });
+    await expect.poll(() => rowsAboveFold(page)).toBeLessThan(8);
+  });
+
+  test('the ranked-table header: one hint line on the Lead Queue; the Segment Intelligence remainder', async ({ app, page }) => {
+    const header = page.locator('.surface:has(> .tbl-wrap) > .surface__hdr').first();
+    const height = () => header.evaluate((element) => Math.round(element.getBoundingClientRect().height));
+    const heights: Record<string, number> = {};
+    for (const route of ['/lead-queue', '/segment-intelligence'] as const) {
+      await app.gotoRoute(route);
+      await expect(header).toBeVisible();
+      if (await page.getByRole('complementary', { name: 'Workspace console' }).locator('.tweaks__body').isVisible()) {
+        await page.getByRole('banner').getByRole('button', { name: 'Toggle console' }).click();
+      }
+      heights[`${route} closed`] = await height();
+      await app.openConsole();
+      // The Console narrows the header once its width settles.
+      await expect.poll(() => page.locator('#main-content .main__inner').first().evaluate((element) => Math.round(element.getBoundingClientRect().width)))
+        .toBeLessThan(1100);
+      await app.settle();
+      heights[`${route} open`] = await height();
+    }
+    const measured = JSON.stringify(heights);
+    // Measured at 1440x900 (W5c): the Lead Queue header is 83px, Console open
+    // or closed (was 83 / 101: the hint wrapped beside the actions).
+    expect(heights['/lead-queue closed'], measured).toBeLessThanOrEqual(84);
+    expect(heights['/lead-queue open'], measured).toBe(heights['/lead-queue closed']);
+    // Segment Intelligence keeps its pre-existing remainder (83 -> 101px, one
+    // more hint line, Console open): a shared rule could not fix it without
+    // either a :has() restyle cost or a markup change, so it is recorded for
+    // W5e w5-lead-queue-columns (integrator C3). Only the regression bound is
+    // pinned (no more than that one line), so the W5e fix stays green here.
+    expect(heights['/segment-intelligence closed'], measured).toBe(heights['/lead-queue closed']);
+    expect(heights['/segment-intelligence open'] - heights['/segment-intelligence closed'], measured).toBeLessThanOrEqual(24);
+  });
+});

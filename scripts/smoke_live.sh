@@ -638,7 +638,8 @@ SMOKE_APPROVE_PAYLOAD="$(jq -n \
   '{borrower_id:$borrower_id, offer_code:$offer_code, evidence_ids:$evidence_ids,
     channel:"email", draft_body:$draft_body, draft_subject:$draft_subject,
     draft_generation_id:$draft_generation_id, draft_response_hash:$draft_response_hash,
-    draft_source_refreshed_at:$draft_source_refreshed_at, request_id:$request_id}')"
+    draft_source_refreshed_at:$draft_source_refreshed_at, request_id:$request_id,
+    review_mode:"individual"}')"
 probe "outreach approval audit write" "$API_PREFIX/outreach/approve" POST \
   "$SMOKE_APPROVE_PAYLOAD" idempotent_mutation "$SMOKE_REQUEST_ID"
 if ! jq -e --arg generation_id "$SMOKE_DRAFT_GENERATION_ID" \

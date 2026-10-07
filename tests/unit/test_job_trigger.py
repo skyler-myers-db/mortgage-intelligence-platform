@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.services import job_trigger
+from tests.fixtures.reviewed_approval import reviewed_approval
 
 
 def _install_fake_sdk(monkeypatch: pytest.MonkeyPatch, ws: Any) -> None:
@@ -280,16 +281,7 @@ def test_approval_endpoint_schedules_trigger(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(outreach_mod, "enqueue_lifecycle_trigger", _spy)
 
     client = TestClient(app)
-    resp = client.post(
-        "/api/outreach/approve",
-        json={
-            "borrower_id": "B-48291",
-            "offer_code": "heloc",
-            "actor": "anonymous",
-            "draft_subject": "Your mortgage review",
-            "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
-        },
-    )
+    resp = client.post("/api/outreach/approve", json=reviewed_approval(client, "B-48291"))
     assert resp.status_code == 200, resp.text
     assert len(calls) == 1
     assert calls[0]["reason"] == "approval"

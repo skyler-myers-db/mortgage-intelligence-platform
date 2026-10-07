@@ -39,6 +39,7 @@ from backend.schemas.common import (
 from backend.services.audit_event_types import is_server_owned_audit_event_type
 from backend.services.audit_export_receipt import (
     AuditExportDeclarationMismatch,
+    AuditExportFingerprintUnavailable,
     AuditExportInvalidEventIds,
     write_audit_export_receipt,
 )
@@ -496,6 +497,9 @@ def create_audit_export_receipt(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    except AuditExportFingerprintUnavailable as exc:
+        # No key to store a keyed fingerprint under: no row, fail closed (W5c).
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("audit")) from exc
 
 
 @router.get("/rollups", response_model=list[AuditRollupResponse])

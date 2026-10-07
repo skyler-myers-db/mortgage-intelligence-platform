@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.services.scoring import is_high_opportunity
 from tests.fixtures import mock_population as mock_data
+from tests.fixtures.reviewed_approval import reviewed_approval
 
 client = TestClient(app)
 client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
@@ -47,14 +48,7 @@ def _stage(body: dict, stage: str) -> dict:
 def _approve(borrower_id: str) -> dict:
     response = client.post(
         "/api/outreach/approve",
-        json={
-            "borrower_id": borrower_id,
-            "offer_code": "refi_plus_heloc",
-            "channel": "email",
-            "draft_subject": "Your mortgage review",
-            "draft_body": _DRAFT_BODY,
-            "request_id": str(uuid4()),
-        },
+        json=reviewed_approval(client, borrower_id, request_id=str(uuid4())),
     )
     assert response.status_code == 200, response.text
     return response.json()

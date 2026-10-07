@@ -222,6 +222,12 @@ class MipUser(HttpUser):
             "variant_name": "load_test",
             "rationale": "Concurrent load-test approval path.",
             "draft_body": body,
+            "draft_subject": draft.get("subject"),
+            # The draft's proof and review_mode, required since W5c.
+            "draft_generation_id": draft.get("generation_id"),
+            "draft_response_hash": draft.get("response_hash"),
+            "draft_source_refreshed_at": draft.get("source_refreshed_at"),
+            "review_mode": "individual",
             "request_id": request_id,
         }
         with self.client.post(

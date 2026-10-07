@@ -26,6 +26,10 @@ What the row proves:
   client cannot declare one list and hash another.
 * ``borrower_ids``       -- the masked ids themselves, so "who was in the file"
   is answerable without the file.
+* ``declared_lead_view_id`` / ``pages_loaded`` -- the Lead Queue view and the
+  pages of it the file was built from, AS THE CLIENT DECLARES THEM
+  (D-audit-reads-a): the join to that view's VIEW_LEADS rows. Absent when the
+  client sent none (outside the paged Lead Queue).
 """
 
 from __future__ import annotations
@@ -95,6 +99,10 @@ def write_lead_export_receipt(
     }
     if payload.matching_row_count is not None:
         payload_json["matching_row_count"] = payload.matching_row_count
+    if payload.lead_view_id is not None:
+        payload_json["declared_lead_view_id"] = payload.lead_view_id
+    if payload.pages_loaded is not None:
+        payload_json["pages_loaded"] = payload.pages_loaded
     event: AuditEvent = store.write(
         actor=actor,
         action=LEAD_EXPORT_ACTION,

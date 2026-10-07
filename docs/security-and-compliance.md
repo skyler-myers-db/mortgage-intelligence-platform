@@ -135,13 +135,13 @@ the pull request that ships the behaviour, never earlier.
 
 | Surface | Event | When | Write mode |
 | --- | --- | --- | --- |
-| Lead Queue list (`leads.list_leads`) | `VIEW_LEADS` | once per served `GET /leads`; carries `approval_request_batch_id` when the list is scoped to an approval request (a request with no open borrower answers an empty list and writes none) | background, fail-open (`audit.dropped`) |
+| Lead Queue list (`leads.list_leads`) | `VIEW_LEADS` | once per served page of a view (D-audit-reads-a, W5c): page 0 mints a server `view_id` and each explicit Load next serves the next 500 behind a signed cursor; every row carries `view_id`, `page_index`, `sort` (and `sort_dir`), `total_matching`, the keyed `filter_fingerprint`, `source_refreshed_at` and that page's `rendered_borrower_ids` (returned in this response); a later page echoes page 0's Growth Agent provenance. An empty answer is a served page too: the assignee and approval-request early returns write one row each (no ids, a new view, page 0, total 0; the request one carries `approval_request_batch_id`; before W5c they wrote none). A refused cursor (422), a refreshed view (409, also when a later page's assignee or approval-request population emptied since page 0, so the client restarts at page 0) and a missing cursor key (503) write nothing. Never on prefetch, scroll, poll, focus, reconnect or remount | background, fail-open (`audit.dropped`) |
 | Borrower 360 open (`borrowers.get_borrower`) | `VIEW_BORROWER` | once per served `GET /borrowers/{id}` | background, fail-open |
 | Proof drawer (`borrowers.get_borrower_proof`) | `VIEW_BORROWER_PROOF` | once per served `GET /borrowers/{id}/proof` | background, fail-open |
 | Offer open (the approval surface) | `VIEW_BORROWER` | its own `GET /borrowers/{id}` (the Offer never reuses the Borrower 360 cache entry) | background, fail-open |
 | Offer open (the approval surface) | `RECOMMEND_OFFER` | once per `POST /offers/recommend` (`offers.recommend_offer`): the approval-surface open record, carrying offer code, confidence, thresholds, `decision_inputs`, source freshness, evidence ids and subject CLIP | synchronous, fail-closed (503) |
 | Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`) | committed in the same transaction as the draft row, fail-closed |
-| Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, and `approval_request_batch_id` when the decision answers an approval request |
+| Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision; an approve without `review_mode` is refused with 422 `Reload the app to approve` before any read or write (required since W5c) | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, `approval_request_batch_id` when the decision answers an approval request, and the client-declared `declared_lead_view_id` when taken from the paged Lead Queue |
 | Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
 | Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
@@ -154,7 +154,7 @@ the pull request that ships the behaviour, never earlier.
 | Approval request list (`approval_requests.list_outreach_approval_requests`) | none | when a request panel opens | audit-free (Lakebase workflow state, no borrower attribute) |
 | Approval request create / withdraw (`/outreach/approval-requests`) | `APPROVAL_REQUESTED` / `APPROVAL_REQUEST_REFUSED` / `APPROVAL_REQUEST_WITHDRAWN` | every create attempt that reaches classification (a zero-eligible one writes `APPROVAL_REQUEST_REFUSED` with each id's reason and answers counts only); a withdraw that closed at least one borrower | same Lakebase transaction as the batch (or its own, for a refusal), fail-closed |
 | Triage deck (`/lead-queue?mode=triage`) | none on entry, card show, J / K / Skip, Back or Esc (the cards are the loaded rows); `DRAFT_OUTREACH` only on A; `APPROVE` with `review_mode` `triage` per Confirm; `OUTREACH_REJECT` per card rejected | per explicit action | as the draft / approve / reject rows above |
-| Lead Queue CSV export (`leads_export.create_lead_export_receipt`) | `LEAD_EXPORT` | once per download, before it starts; carries `exported_row_count` and, when the client knew it, `matching_row_count` (how many borrowers matched: a loaded-rows export states it is partial; a count below the file's row count is refused with 422 and nothing written) | synchronous, fail-closed (no download without the row) |
+| Lead Queue CSV export (`leads_export.create_lead_export_receipt`) | `LEAD_EXPORT` | once per download, before it starts; carries `exported_row_count` and, when the client knew it, `matching_row_count` (how many borrowers matched: a loaded-rows export states it is partial; a count below the file's row count is refused with 422 and nothing written), and from the paged Lead Queue the client-declared `declared_lead_view_id` and `pages_loaded` (1-10) | synchronous, fail-closed (no download without the row) |
 | Home Delta Explainer (`home.home_summary_attribution`) | none | only while an evidence drawer for a supported "since your last login" measure is open on Overview; never on hover, prefetch or poll | audit-free (gold and ref aggregates) |
 | Home watchlist briefings (`growth_agent_compose_routes.growth_agent_watchlist_summary`) | none | once per Home load (the card never POSTs, so it starts no run) | audit-free |
 | Home WHY NOW rate move (`analytics_rate_window.rate_window`) | none | on Home only when the summary is a delta with a previous visit (and on Analytics as before) | audit-free |
@@ -166,7 +166,7 @@ the pull request that ships the behaviour, never earlier.
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the
-SHA-256 `filter_fingerprint` and, for a receipt, `read_audit_event_id`: never
+keyed `filter_fingerprint` (below) and, for a receipt, `read_audit_event_id`: never
 ledger row contents, an actor filter in clear, or an email. Opening
 Administration reads nothing from the ledger (its old "last event" probe
 went with the explorer, which now lives on `/audit-ledger`), and no ledger
@@ -174,14 +174,23 @@ read is polled, prefetched or refetched on window focus. `tools/verify_live.py`'
 ledger probes now write attributable `VIEW_AUDIT_LEDGER` rows; that is
 expected.
 
-Residuals (recorded 2026-10-01, owners in the 2026-09-21 UI/UX audit report,
-12.3). The `filter_fingerprint` is an unkeyed SHA-256 of the filter set
-(`audit_pagination.audit_filter_fingerprint`, also the cursor binding), so an
-actor-only filter can be recovered by hashing candidate emails. Only ledger
-readers can see these rows, and they already see actor emails, so the added
-exposure is small. Keying the stored copy with an HMAC (the cursor already
-derives one from the action secret) goes to W5c `w5-lead-queue-paging`
-before `VIEW_LEADS` adds a fingerprint of the same shape. The explorer's
+Keyed fingerprints (W5c `w5-lead-queue-paging`, closing the 2026-10-01
+residual in 12.3). Every STORED `filter_fingerprint` -- the
+`VIEW_AUDIT_LEDGER` row (written centrally by
+`audit_ledger_reads.record_ledger_read`), the `AUDIT_EXPORT` row and its
+response, and the `VIEW_LEADS` row -- is an HMAC-SHA256 of the plain filter
+digest under a key derived from `MIP_GENIE_ACTION_SECRET_CURRENT` (then the
+legacy secret), one domain per surface (`backend/services/audit_fingerprint.py`).
+A dictionary of candidate emails hashed without the key never reproduces a
+stored value (`tests/unit/test_audit_fingerprint.py`). With no key outside
+local/test the ledger row omits the value, the export receipt is refused
+with 503 and writes no row, and the Lead Queue serves page 0 unpaged with no
+fingerprint; a plain value is never stored. Two digests stay unkeyed on
+purpose: `audit_pagination.audit_filter_fingerprint` inside the
+HMAC-authenticated ledger cursor (only ledger readers receive it), and
+`LEAD_EXPORT`'s fingerprint, which an auditor recomputes from the CSV's
+`# filters=` line. Residual (recorded 2026-10-01, owner in the 2026-09-21
+UI/UX audit report, 12.3): the explorer's
 'Page CSV' downloads the loaded page without `POST /audit/export-receipt`, so
 no `AUDIT_EXPORT` row precedes it (the read that loaded that page wrote its
 own `VIEW_AUDIT_LEDGER` row); W5d `w5-print-glossary-sales-manager` wires the receipt and

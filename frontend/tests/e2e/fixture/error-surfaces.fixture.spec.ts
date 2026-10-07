@@ -97,6 +97,16 @@ test.describe('a bannered warehouse outage (states-03 a)', () => {
         await expect(page.locator(`${MAIN} [data-async-status="bannered"]`)).toHaveCount(0, { timeout: 30_000 });
         await expect(page.locator(MAIN)).not.toContainText(CALM, { timeout: 30_000 });
         await app.settle();
+        if (route.url === '/lead-queue') {
+          // W5c (D-audit-reads-a): every served page of the paged queue writes
+          // a VIEW_LEADS row, so a recovery reads nothing; the reader's Retry
+          // reads page 0 once.
+          expect(callsTo(mockApi, '/api/leads') - recovered[0], '/api/leads: no passive recovery read').toBe(0);
+          await page.getByRole('button', { name: 'Retry loading ranked borrowers' }).click();
+          await expect(page.locator(TABLE).first()).toBeVisible();
+          expect(callsTo(mockApi, '/api/leads') - recovered[0], '/api/leads: one read for one Retry').toBe(1);
+          continue;
+        }
         route.endpoints.forEach((endpoint, index) => {
           expect(callsTo(mockApi, endpoint) - recovered[index], `${endpoint}: exactly one recovery refetch`).toBe(1);
         });

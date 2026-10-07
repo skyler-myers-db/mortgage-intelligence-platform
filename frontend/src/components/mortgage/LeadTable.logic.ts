@@ -1,6 +1,6 @@
 import type { CampaignSummary, LeadSummary } from '../../types';
 import { isEditableElement } from '../../lib/keymap';
-import type { SortKey } from './LeadTable.types';
+import type { LeadTableSortScope, SortKey } from './LeadTable.types';
 
 export interface CampaignBinding {
   campaign_id: string;
@@ -93,6 +93,19 @@ export function sortValue(lead: LeadSummary, key: SortKey): string | number {
   if (key === 'score') return lead.opportunity_score;
   if (key === 'confidence') return lead.confidence;
   return 0;
+}
+
+/** The keys the server sorts a whole view by (lead-queue.pages.ts serverOrderOf). */
+const SERVER_SORT_KEYS: ReadonlySet<SortKey> = new Set<SortKey>(['score', 'equity', 'rate', 'confidence']);
+
+/**
+ * The rows already arrive in this key's order, so the table must not re-sort
+ * them: rank is the server's order, and under a server sort (the paged Lead
+ * Queue) so is a warehouse key. A Lakebase-hydrated key (relationship,
+ * assignment, outreach) still sorts the loaded rows client-side.
+ */
+export function keepsServerOrder(key: SortKey, scope: LeadTableSortScope): boolean {
+  return key === 'rank' || (scope === 'server' && SERVER_SORT_KEYS.has(key));
 }
 
 /** S2 assignment lifecycle chip copy. Stages render as short labels in the

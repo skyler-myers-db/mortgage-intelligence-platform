@@ -179,6 +179,12 @@ function runWritePath(borrowerId) {
         variant_name: 'load_test',
         rationale: 'Concurrent load-test approval path.',
         draft_body: draft.body,
+        draft_subject: draft.subject,
+        // The draft's proof and review_mode, required since W5c.
+        draft_generation_id: draft.generation_id,
+        draft_response_hash: draft.response_hash,
+        draft_source_refreshed_at: draft.source_refreshed_at,
+        review_mode: 'individual',
         request_id: uuidv4(),
       }),
       jsonParams({ endpoint: 'outreach_approve' }),

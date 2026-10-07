@@ -69,17 +69,17 @@ from backend.services.audit_metadata_validation import (
     _growth_agent_reviewed_text_contains_pii,
 )
 from backend.services.audit_metadata_value_policy import (
+    validate_lead_view_values,
     validate_row_count,
     validate_source_assets,
     validate_sql_hash,
 )
 from backend.services.pii_redaction import normalize_public_lender_ref
 
-# The APPROVE row's review_mode: the four a client may declare plus the
-# server-only 'undeclared' for a client older than the review ledger.
-_REVIEW_MODES: frozenset[str] = frozenset(
-    {"individual", "triage", "bulk_sample", "bulk_cohort", "undeclared"}
-)
+# The APPROVE row's review_mode: the four a client declares. W5c made it
+# required and dropped the server-only 'undeclared' from the WRITE side;
+# historic rows stay readable through audit_store_receipt's own set.
+_REVIEW_MODES: frozenset[str] = frozenset({"individual", "triage", "bulk_sample", "bulk_cohort"})
 _MAX_DRAFT_AGE_SECONDS = 315_360_000
 
 # (ceiling key, the reviewed floor whose range it shares). GET /leads records
@@ -708,3 +708,6 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             validate_row_count(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
+    # VIEW_LEADS paging and the decisions / export that declare a view.
+    for field, reason in validate_lead_view_values(metadata):
+        raise AuditMetadataValueViolation(field, reason)

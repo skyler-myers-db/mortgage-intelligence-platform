@@ -42,6 +42,7 @@ export function rejectWithReport(
     bulkId: run.bulkId,
     signal,
     suppressInvalidation: true,
+    leadViewId: deps.leadViewId,
   }).then(
     (res): BulkRowReport => {
       if (!res.rejected) return { outcome: 'backend', message: 'The endpoint returned rejected=false.' };

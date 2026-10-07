@@ -169,6 +169,7 @@ export function LeadTableRow({
           type="button"
           id={`lead-row-toggle-${lead.borrower_id}`}
           className="lead-table__borrower-btn"
+          data-rum-target="lead-expand"
           aria-expanded={isOpen}
           aria-label={`Toggle preview for lead ${lead.borrower_id}`}
           onClick={(e) => {
@@ -277,6 +278,7 @@ export function LeadTableRow({
               aria-label={`Approve ${lead.borrower_id}`}
               aria-keyshortcuts={rowKeys && !gated ? 'A' : undefined}
               data-testid={`lead-approve-${lead.borrower_id}`}
+              data-rum-target="lead-approve"
             >
               {pendingDecision === 'approve' ? 'Approving…' : 'Approve'}
             </Button>
@@ -315,6 +317,7 @@ export function LeadTableRow({
         aria-rowindex={resolvedAriaRowIndex}
         aria-current={isCursor ? 'true' : undefined}
         data-borrower-row={lead.borrower_id}
+        data-rum-target="lead-row"
         onClick={toggleRow}
         onFocus={onFocusRow ? () => onFocusRow(lead.borrower_id) : undefined}
       >

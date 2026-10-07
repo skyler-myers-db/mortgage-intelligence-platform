@@ -40,7 +40,7 @@ describe('campaign-bound outreach API client', () => {
     });
 
     await api.draftOutreach('B-48291', 'email', undefined, campaign);
-    await api.approve('B-48291', { ...campaign, draft_body: 'draft', rationale: 'reviewed' });
+    await api.approve('B-48291', { ...campaign, draft_body: 'draft', rationale: 'reviewed', review_mode: 'individual' });
     await api.reject('B-48291', { ...campaign, rationale_code: 'low_intent' });
 
     expect(calls.map((call) => JSON.parse(String(call.init?.body)))).toEqual([
