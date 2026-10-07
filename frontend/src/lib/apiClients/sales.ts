@@ -33,11 +33,12 @@ import {
 } from '../apiTransport';
 
 /**
- * The strategies the queue SENDS (audit wow-power-5 step 1). The store
- * allocates round-robin in request order for every strategy, so 'manual'
- * (one loan officer) and 'round_robin' (two or more) are the honest labels;
- * 'score_balanced' stays only in the read-side union (types/loanOfficer) so
- * historical assignment rows still type-check.
+ * The strategies the Lead Queue SENDS (audit wow-power-5 step 1): 'manual'
+ * for one loan officer and 'round_robin' for two or more, both allocated
+ * round-robin in request order. 'score_balanced' is the Distribution Board's
+ * greedy capacity/region fill (step 2): only POST /sales/distribute runs it,
+ * only the Board sends it (DistributeLeadsRequest below), and a single assign
+ * refuses it.
  */
 export type SalesSendStrategy = 'manual' | 'round_robin';
 
@@ -74,22 +75,55 @@ export interface AssignLeadRequest {
   request_id: string;
 }
 
-/** The `/api/sales/distribute` response. */
+/** One officer's share of a planned score-balanced fill (aggregates only). */
+export interface DistributionOfficerLoad {
+  email: string;
+  display_label: string;
+  region: string | null;
+  capacity_per_day: number;
+  open_count: number;
+  added_count: number;
+  added_score_sum: number;
+  in_region_count: number;
+}
+
+/** What the Board's greedy fill placed: counts and sums, never a borrower id. */
+export interface DistributionPreview {
+  strategy: 'score_balanced';
+  plan_fingerprint: string;
+  pool_count: number;
+  placed_count: number;
+  placed_score_sum: number;
+  unplaced_no_capacity: number;
+  skipped_not_assignable: number;
+  skipped_already_assigned: number;
+  officers: DistributionOfficerLoad[];
+}
+
+/** The `/api/sales/distribute` response; `preview` on a Board dry run or commit. */
 export interface DistributeLeadsResponse {
   assigned_count: number;
   strategy: string;
   assignments: LeadAssignment[];
   per_lo_counts: Record<string, number>;
   audit_event_id?: string | null;
+  preview?: DistributionPreview | null;
 }
 
-/** The `/api/sales/distribute` body. */
+/**
+ * The `/api/sales/distribute` body. The Lead Queue sends a SalesSendStrategy
+ * with a request id; the Distribution Board sends 'score_balanced' with
+ * `dry_run` (and no request id) or with the previewed
+ * `expected_plan_fingerprint`.
+ */
 export interface DistributeLeadsRequest {
   borrower_ids: string[];
   lo_emails: string[];
-  strategy: SalesSendStrategy;
+  strategy: SalesSendStrategy | 'score_balanced';
   expires_in_hours: number;
-  request_id: string;
+  request_id?: string;
+  dry_run?: boolean;
+  expected_plan_fingerprint?: string;
 }
 
 /** The `/api/leads/{id}/disposition` body. */

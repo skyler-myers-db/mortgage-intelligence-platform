@@ -11,7 +11,8 @@
  */
 import type { ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
-import type { AssignLeadRequest, AssignLoanOfficerRequest, AssignmentOutcomeRequest, AssignmentStatusUpdateRequest, DispositionRequest, DistributeLeadsRequest, DistributeLeadsResponse, LoanOfficerAssignmentResponse } from '../lib/apiClients/sales';
+import type { AssignLeadRequest, AssignLoanOfficerRequest, AssignmentOutcomeRequest, AssignmentStatusUpdateRequest, DispositionRequest, DistributeLeadsRequest, DistributeLeadsResponse, DistributionOfficerLoad, DistributionPreview, LoanOfficerAssignmentResponse } from '../lib/apiClients/sales';
+import type { AssignmentReleaseRequest, AssignmentReleaseResponse, DistributionReleaseRequest, DistributionReleaseResponse } from '../lib/apiClients/salesLoop';
 import type { AssignmentResponse, DispositionResponse } from '../lib/apiTypes';
 import type { QueueVersionBody } from '../lib/queueVersion';
 import type { CallDisposition, SalesAgingLead, SalesConversionResponse, SalesOutcomeSummaryResponse, SalesStandupResponse } from '../types';
@@ -34,6 +35,18 @@ export type WireContractSales = [
   Expect<DeepNoPhantomKeys<DistributeLeadsRequest, ApiRequest<'DistributeLeadsRequest'>>>,
   Expect<WireFits<ApiResponse<'DistributeLeadsResponse'>, DistributeLeadsResponse>>,
   Expect<NoPhantomKeys<DistributeLeadsResponse, ApiResponse<'DistributeLeadsResponse'>>>,
+  Expect<WireFits<ApiResponse<'DistributionPreview'>, DistributionPreview>>,
+  Expect<NoPhantomKeys<DistributionPreview, ApiResponse<'DistributionPreview'>>>,
+  Expect<WireFits<ApiResponse<'DistributionOfficerLoad'>, DistributionOfficerLoad>>,
+  Expect<NoPhantomKeys<DistributionOfficerLoad, ApiResponse<'DistributionOfficerLoad'>>>,
+  Expect<WireFits<AssignmentReleaseRequest, ApiRequest<'AssignmentReleaseRequest'>>>,
+  Expect<DeepNoPhantomKeys<AssignmentReleaseRequest, ApiRequest<'AssignmentReleaseRequest'>>>,
+  Expect<WireFits<ApiResponse<'AssignmentReleaseResponse'>, AssignmentReleaseResponse>>,
+  Expect<NoPhantomKeys<AssignmentReleaseResponse, ApiResponse<'AssignmentReleaseResponse'>>>,
+  Expect<WireFits<DistributionReleaseRequest, ApiRequest<'DistributionReleaseRequest'>>>,
+  Expect<DeepNoPhantomKeys<DistributionReleaseRequest, ApiRequest<'DistributionReleaseRequest'>>>,
+  Expect<WireFits<ApiResponse<'DistributionReleaseResponse'>, DistributionReleaseResponse>>,
+  Expect<NoPhantomKeys<DistributionReleaseResponse, ApiResponse<'DistributionReleaseResponse'>>>,
   Expect<WireFits<ApiResponse<'LoanOfficerAssignmentResponse'>, LoanOfficerAssignmentResponse>>,
   Expect<NoPhantomKeys<LoanOfficerAssignmentResponse, ApiResponse<'LoanOfficerAssignmentResponse'>>>,
   Expect<WireFits<ApiResponse<'AssignmentResponse'>, AssignmentResponse>>,

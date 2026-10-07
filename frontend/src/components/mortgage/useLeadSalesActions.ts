@@ -11,8 +11,10 @@
  * The writes run on the sales mutations (lib/mutations/sales, audit stack-09
  * / wow-power-5 step 1): networkMode 'always', one request_id per intent,
  * and an honest strategy ('manual' for one loan officer, 'round_robin' for
- * two or more; 'score_balanced' is never sent). Results and write failures
- * go to the shell toast region with the audit event id.
+ * two or more; 'score_balanced' is sent only by the Distribution Board).
+ * Results and write failures go to the shell toast region with the audit
+ * event id; an assign or distribution toast carries Undo (salesUndoToasts,
+ * states-07 item 1) and a 429 keeps a Retry behind its countdown (states-08).
  */
 
 import { useRef, useState } from 'react';
@@ -20,6 +22,7 @@ import { useIsMutating, type QueryClient } from '@tanstack/react-query';
 import type { LeadSummary, SalesTeamMember } from '../../types';
 import { intentFingerprint, useIntentRequestIds } from '../../lib/mutations/requestIds';
 import {
+  isSingleAssignment,
   salesMutationKeys,
   useAssignLeads,
   useLogDisposition,
@@ -28,6 +31,13 @@ import {
 import { toast } from '../../lib/toast';
 import { dispositionLabel } from './LeadTable.logic';
 import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
+import {
+  toastAssigned,
+  toastDistributed,
+  toastSalesWriteFailure,
+  withRetry,
+  type SalesUndoContext,
+} from './salesUndoToasts';
 
 /** One assignment row as returned by `assignLead` / `distributeLeads`. */
 export interface LeadAssignmentResult {
@@ -128,6 +138,63 @@ export function useLeadSalesActions({
   }
 
   /**
+   * After an Undo's 200 (never before): a handed-back row shows its officer
+   * again; a released row with no restore reads as unassigned. A no-op once
+   * the queue has unmounted (the server state is refetched on return).
+   */
+  function revertAssignments(released: LeadAssignmentResult[], restored: LeadAssignmentResult[]) {
+    const handedBack = new Set(restored.map((row) => row.borrower_id));
+    setSalesOverrides((current) => {
+      const next = { ...current };
+      released.filter((row) => !handedBack.has(row.borrower_id)).forEach((row) => {
+        next[row.borrower_id] = {
+          ...(next[row.borrower_id] ?? {}),
+          assigned_to_email: null,
+          assigned_to_label: null,
+          assigned_at: null,
+          assignment_expires_at: null,
+          assignment_status: null,
+          assignment_id: null,
+        };
+      });
+      return next;
+    });
+    applyAssignmentOverrides(restored);
+  }
+
+  const undoContext: SalesUndoContext = {
+    queryClient,
+    requestIdFor: (fingerprint) => requestIds.idFor(fingerprint),
+    settle: (fingerprint) => requestIds.settle(fingerprint),
+    onReverted: revertAssignments,
+  };
+
+  /** One assign / distribute intent; a 429 `retry` re-runs it with the same request id. */
+  function runAssign(
+    borrowerIds: string[],
+    loEmails: string[],
+    onAssigned: () => void,
+    retry: () => void,
+  ): Promise<void> {
+    if (salesWriteInFlight()) return Promise.resolve();
+    salesInFlightRef.current = true;
+    const intent = intentFingerprint('assign', borrowerIds.join(','), loEmails.join(','));
+    const variables = { borrowerIds, loEmails, requestId: requestIds.idFor(intent) };
+    return latched(assignLeads.run(variables).then(
+      (result) => {
+        requestIds.settle(intent);
+        applyAssignmentOverrides(result.assignments);
+        if (isSingleAssignment(variables)) toastAssigned(undoContext, result);
+        else toastDistributed(undoContext, result, variables.requestId);
+        onAssigned();
+      },
+      (err: unknown) => {
+        toastSalesWriteFailure(ASSIGN_FAILED, err, 'the assignment', retry);
+      },
+    ));
+  }
+
+  /**
    * Assign or round-robin-distribute the caller's selection.
    *
    * `borrowerIds` and `onAssigned` are parameters, not hook inputs, because
@@ -149,20 +216,7 @@ export function useLeadSalesActions({
       toastWriteRefusal(ASSIGN_FAILED, 'No active loan officers are available for assignment.');
       return Promise.resolve();
     }
-    salesInFlightRef.current = true;
-    const intent = intentFingerprint('assign', borrowerIds.join(','), loEmails.join(','));
-    return latched(assignLeads.run({ borrowerIds, loEmails, requestId: requestIds.idFor(intent) }).then(
-      (result) => {
-        requestIds.settle(intent);
-        applyAssignmentOverrides(result.assignments);
-        const noun = result.assigned_count === 1 ? 'lead' : 'leads';
-        toast.success(`${result.assigned_count} ${noun} assigned`, { auditEventId: result.audit_event_id });
-        onAssigned();
-      },
-      (err: unknown) => {
-        toastWriteFailure(ASSIGN_FAILED, err, 'the assignment');
-      },
-    ));
+    return withRetry((retry) => runAssign(borrowerIds, loEmails, onAssigned, retry));
   }
 
   /** The open panel's Submit, with the payload the panel validated. */
@@ -193,7 +247,7 @@ export function useLeadSalesActions({
         setPendingDisposition(null);
       },
       (err: unknown) => {
-        toast.error("Couldn't log the disposition", { detail: err instanceof Error ? err.message : null });
+        toastWriteFailure("Couldn't log the disposition", err, 'the disposition');
       },
     ));
   }

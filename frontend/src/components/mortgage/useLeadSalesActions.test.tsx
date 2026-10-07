@@ -35,6 +35,18 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   api: apiMocks,
 }));
 
+// The Undo's release client is loaded lazily by salesUndoToasts; a
+// SYNCHRONOUS factory so that lazy import gets the mock, never the original.
+const loopMocks = vi.hoisted(() => ({
+  releaseAssignment: vi.fn(),
+  releaseDistribution: vi.fn(),
+  previewDistribution: vi.fn(),
+  commitDistribution: vi.fn(),
+}));
+vi.mock('../../lib/apiClients/salesLoop', () => ({ salesLoopApi: loopMocks }));
+
+import { ApiError } from '../../lib/apiTransport';
+import { UNDO_CONFLICT_COPY } from './salesUndoToasts';
 import { useLeadSalesActions } from './useLeadSalesActions';
 
 const LO_A = 'lo.alpha@summit.example';
@@ -240,5 +252,191 @@ describe('useLeadSalesActions on the sales mutations', () => {
     expect(sales!.selectedAssignee).toBe(LO_A);
     act(() => sales!.setSelectedAssignee(LO_B));
     expect(sales!.selectedAssignee).toBe(LO_B);
+  });
+});
+
+// A loaded CI host can take more than vi.waitFor's default second to load
+// the lazy failure vocabulary; the assertions themselves never change.
+const eventually = (assertion: () => void) => vi.waitFor(assertion, { timeout: 10_000 });
+
+describe('Undo and Retry on the assign / distribute toasts (states-07 item 1, states-08 item 3)', () => {
+  let root: Root;
+  let client: QueryClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearToasts();
+    client = new QueryClient();
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    apiMocks.assignLead.mockImplementation((id: string, email: string) =>
+      Promise.resolve({ assignment: assignment(id, email), audit_event_id: 'audit-assign-1' }));
+    apiMocks.distributeLeads.mockImplementation((ids: string[], los: string[], strategy: string) =>
+      Promise.resolve({
+        assigned_count: ids.length,
+        strategy,
+        assignments: ids.map((id, index) => assignment(id, los[index % los.length])),
+        per_lo_counts: {},
+        audit_event_id: 'audit-distribute-1',
+      }));
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    client.clear();
+    clearToasts();
+    sales = null;
+    document.body.innerHTML = '';
+  });
+
+  function mount() {
+    act(() => root.render(<Harness client={client} team={TEAM} />));
+    if (!sales) throw new Error('hook did not mount');
+  }
+
+  async function assignOne() {
+    mount();
+    act(() => sales!.setSelectedAssignee(LO_B));
+    await act(async () => {
+      await sales!.assignSelected('selected-lo', [IDS[0]], vi.fn());
+    });
+  }
+
+  function pressAction(label: string) {
+    const target = getToasts().find((toast) => toast.action?.label === label);
+    if (!target?.action) throw new Error(`no ${label} action`);
+    target.action.onAction();
+  }
+
+  const released = { ...assignment(IDS[0], LO_B), released_at: '2026-07-14T15:01:00Z' };
+
+  it('sends one release per Undo, changes nothing before the 200, then re-applies the row', async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    loopMocks.releaseAssignment.mockReturnValue(new Promise((resolve) => {
+      answer = resolve;
+    }));
+    await assignOne();
+    expect(getToasts()).toEqual([
+      expect.objectContaining({ title: '1 lead assigned', auditEventId: 'audit-assign-1', action: expect.objectContaining({ label: 'Undo' }) }),
+    ]);
+
+    await act(async () => {
+      pressAction('Undo');
+    });
+    await eventually(() => expect(loopMocks.releaseAssignment).toHaveBeenCalledTimes(1));
+    expect(loopMocks.releaseAssignment).toHaveBeenCalledWith(IDS[0], { assignment_id: `asg-${IDS[0]}`, request_id: expect.any(String) });
+    // Pessimistic: the row still reads assigned while the release is in flight.
+    expect(sales!.displayLeads[0].assigned_to_email).toBe(LO_B);
+    expect(client.isMutating({ mutationKey: ['mip', 'sales', 'release'] })).toBe(1);
+
+    await act(async () => {
+      answer({ released, restored: null, restore_skipped_reason: null, audit_event_id: 'audit-unassign-1' });
+    });
+    await eventually(() => expect(sales!.displayLeads[0].assigned_to_email).toBeNull());
+    expect(sales!.displayLeads[0].assignment_id).toBeNull();
+    const undone = getToasts().find((toast) => toast.title === 'Assignment undone');
+    expect(undone).toEqual(expect.objectContaining({ tone: 'success', auditEventId: 'audit-unassign-1', action: null }));
+  });
+
+  it('hands a restored row back to its officer', async () => {
+    const restored = { ...assignment(IDS[0], LO_A), assignment_id: 'asg-restored', assigned_to_label: 'Loan Officer A' };
+    loopMocks.releaseAssignment.mockResolvedValue({ released, restored, restore_skipped_reason: null, audit_event_id: 'audit-unassign-2' });
+    await assignOne();
+    await act(async () => {
+      pressAction('Undo');
+    });
+    await eventually(() => expect(sales!.displayLeads[0].assignment_id).toBe('asg-restored'));
+    expect(sales!.displayLeads[0].assigned_to_email).toBe(LO_A);
+    expect(getToasts().find((toast) => toast.title === 'Assignment undone')?.detail).toBe('Back with Loan Officer A.');
+  });
+
+  it('undoes a distribution with the run request id it captured before the intent settled', async () => {
+    loopMocks.releaseDistribution.mockResolvedValue({
+      released_count: 1, restored_count: 0, skipped_started_count: 1, skipped_not_active_count: 0,
+      restore_skipped_count: 0, released: [released], restored: [], audit_event_ids: ['audit-unassign-3'],
+    });
+    mount();
+    await act(async () => {
+      await sales!.assignSelected('round-robin', IDS, vi.fn());
+    });
+    const runRequestId = apiMocks.distributeLeads.mock.calls[0][4] as string;
+    await act(async () => {
+      pressAction('Undo');
+    });
+    await eventually(() => expect(loopMocks.releaseDistribution).toHaveBeenCalledTimes(1));
+    const [body] = loopMocks.releaseDistribution.mock.calls[0] as [{ distribution_request_id: string; request_id: string }];
+    expect(body.distribution_request_id).toBe(runRequestId);
+    expect(body.request_id).not.toBe(runRequestId);
+    await eventually(() => expect(getToasts().some((toast) => toast.title === '1 of 2 assignments undone')).toBe(true));
+    const undone = getToasts().find((toast) => toast.title === '1 of 2 assignments undone');
+    expect(undone).toEqual(expect.objectContaining({ auditEventId: 'audit-unassign-3', detail: '1 already started', action: null }));
+  });
+
+  it('shows client copy keyed by the 409 reason, never the server message', async () => {
+    loopMocks.releaseAssignment.mockRejectedValue(
+      new ApiError('server-side wording', { path: '/api/leads/x/assignment/release', status: 409, reason: 'assignment_started' }),
+    );
+    await assignOne();
+    await act(async () => {
+      pressAction('Undo');
+    });
+    await eventually(() => expect(getToasts().some((toast) => toast.tone === 'error')).toBe(true));
+    const failure = getToasts().find((toast) => toast.tone === 'error');
+    expect(failure?.detail).toBe(UNDO_CONFLICT_COPY.assignment_started);
+    expect(failure?.detail).not.toContain('server-side wording');
+    expect(sales!.displayLeads[0].assigned_to_email).toBe(LO_B);
+  });
+
+  it('holds a 429 Retry behind its countdown and retries the same intent with the same request id', async () => {
+    const limited = new ApiError('slow down', { path: '/api/leads/x/assignment/release', status: 429, retryAfterMs: 5_000 });
+    loopMocks.releaseAssignment
+      .mockRejectedValueOnce(limited)
+      .mockResolvedValueOnce({ released, restored: null, restore_skipped_reason: null, audit_event_id: 'audit-unassign-4' });
+    await assignOne();
+    const before = Date.now();
+    await act(async () => {
+      pressAction('Undo');
+    });
+    await eventually(() => expect(getToasts().some((toast) => toast.action?.label === 'Retry')).toBe(true));
+    const retry = getToasts().find((toast) => toast.action?.label === 'Retry');
+    expect(retry?.tone).toBe('error');
+    expect(retry?.actionReadyAt).toBeGreaterThanOrEqual(before + 5_000);
+
+    await act(async () => {
+      pressAction('Retry');
+    });
+    await eventually(() => expect(loopMocks.releaseAssignment).toHaveBeenCalledTimes(2));
+    const [first, second] = loopMocks.releaseAssignment.mock.calls as Array<[string, { request_id: string }]>;
+    expect(second[1].request_id).toBe(first[1].request_id);
+  });
+
+  it('retries a rate-limited assign with the same request id', async () => {
+    apiMocks.assignLead.mockRejectedValueOnce(
+      new ApiError('slow down', { path: '/api/leads/x/assign', status: 429, retryAfterMs: 3_000 }),
+    );
+    await assignOne();
+    await eventually(() => expect(getToasts().some((toast) => toast.action?.label === 'Retry')).toBe(true));
+    expect(getToasts().find((toast) => toast.action?.label === 'Retry')?.actionReadyAt).not.toBeNull();
+    await act(async () => {
+      pressAction('Retry');
+    });
+    await eventually(() => expect(apiMocks.assignLead).toHaveBeenCalledTimes(2));
+    const [first, second] = apiMocks.assignLead.mock.calls;
+    expect(second[4]).toBe(first[4]);
+  });
+
+  it('lands an Undo pressed after the queue unmounted under the release key', async () => {
+    loopMocks.releaseAssignment.mockResolvedValue({ released, restored: null, restore_skipped_reason: null, audit_event_id: 'audit-unassign-5' });
+    await assignOne();
+    act(() => root.unmount());
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    await act(async () => {
+      pressAction('Undo');
+    });
+    await eventually(() => expect(loopMocks.releaseAssignment).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(
+      client.getMutationCache().findAll({ mutationKey: ['mip', 'sales', 'release'], exact: true }),
+    ).toHaveLength(1));
+    await eventually(() => expect(getToasts().some((toast) => toast.title === 'Assignment undone')).toBe(true));
   });
 });
