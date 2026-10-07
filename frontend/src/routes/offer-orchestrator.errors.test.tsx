@@ -26,10 +26,13 @@ beforeAll(async () => {
   await preloadDescribedError();
 }, 60_000);
 
+/** The described sentence's chunk, then its vocabulary, load on the first failure. */
 async function settle(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  for (let round = 0; round < 3; round += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  }
 }
 
 describe('Offer write failures (states-04)', () => {

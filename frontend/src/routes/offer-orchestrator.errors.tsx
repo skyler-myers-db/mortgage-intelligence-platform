@@ -1,5 +1,5 @@
 import { Button } from '../components/Primitives';
-import { DescribedErrorBody } from '../components/ui/DescribedError';
+import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { ApiError } from '../lib/api';
 import { FixedCopyError } from './offer-orchestrator.queries';
 
@@ -16,6 +16,11 @@ import { FixedCopyError } from './offer-orchestrator.queries';
  * (a refresh landed between the reads; the campaign proof went stale): that
  * sentence is shown as written, being app copy, not server detail
  * (FixedCopyError).
+ *
+ * The described sentence loads with the first failure on screen
+ * (DESCRIBED_ERROR_CHUNK): neither DescribedError's wrapper chunk nor its
+ * vocabulary rides the Offer's natural-load closure, and until it arrives (or
+ * if it cannot) the lead phrase stands alone, still buyer-safe.
  *
  * A 409 on approve or reject means the decision cites a draft that is no
  * longer current (its proof or its campaign variant changed). The alert
@@ -36,10 +41,15 @@ export function isConflictError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 409;
 }
 
+const DESCRIBED_ERROR_CHUNK = lazyModule(() => import('../components/ui/DescribedError'));
+
 /** The cause sentence: fixed app copy as written, otherwise the shared vocabulary. */
 export function OfferFailureBody({ cause, subject }: { cause: unknown; subject: string }) {
+  const fixed = cause instanceof FixedCopyError;
+  const described = useLazyModule(DESCRIBED_ERROR_CHUNK, !fixed);
   if (cause instanceof FixedCopyError) return cause.message;
-  return <DescribedErrorBody error={cause} subject={subject} />;
+  const Body = described.module?.DescribedErrorBody;
+  return Body ? <Body error={cause} subject={subject} /> : null;
 }
 
 /**
