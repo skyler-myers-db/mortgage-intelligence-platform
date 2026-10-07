@@ -202,7 +202,8 @@ class Resilient(Generic[T]):
         return self._breaker
 
     def call(self, fn: Callable[[], T]) -> T:
-        if not self._breaker.allow():
+        probe = self._breaker.admit()
+        if probe is None:
             # R6-05: the breaker is already OPEN (or HALF_OPEN with no
             # probe slot). Tag ``kind=breaker_open`` so the frontend can
             # back off longer than the warming-up default; hammering a
@@ -230,8 +231,9 @@ class Resilient(Generic[T]):
         except CooperativeCancel:
             # The owner's stop (genie-03), not a dependency answer: no
             # breaker success or failure, no wrap. A half-open probe slot
-            # this call held goes back, or the breaker would refuse forever.
-            self._breaker.release_probe()
+            # this call held goes back, or the breaker would refuse forever;
+            # a call admitted without one gives none back.
+            self._breaker.release_probe(probe)
             raise
         except BaseException as exc:
             if isinstance(exc, self._permission_denied_on):

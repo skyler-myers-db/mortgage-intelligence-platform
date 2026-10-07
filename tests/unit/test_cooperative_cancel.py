@@ -110,6 +110,53 @@ def test_a_cancelled_half_open_probe_returns_its_slot_without_a_transition() -> 
     assert breaker.allow() is True, "the probe slot went back; a stranded slot would refuse forever"
 
 
+def _opens_and_half_opens(name: str) -> tuple[CircuitBreaker, list[float]]:
+    clock = [0.0]
+    return CircuitBreaker(name, failure_threshold=1, cooldown_s=5.0, now=lambda: clock[0]), clock
+
+
+def test_a_cancelled_call_admitted_closed_gives_back_no_probe_slot() -> None:
+    breaker, clock = _opens_and_half_opens("genie-test-closed-cancel")
+    resilient = Resilient[Any](breaker=breaker, dependency_name="genie", attempts=1)
+
+    def admitted_closed_then_stopped() -> Any:
+        # While this call runs (admitted CLOSED: no probe slot), the
+        # dependency fails elsewhere, the cool-down elapses and another
+        # caller takes the one half-open probe slot.
+        breaker.record_failure()
+        clock[0] = 10.0
+        assert breaker.allow() is True
+        raise GenieTurnCancelled()
+
+    with pytest.raises(GenieTurnCancelled):
+        resilient.call(admitted_closed_then_stopped)
+
+    assert breaker.state == CircuitBreaker.HALF_OPEN
+    assert breaker.allow() is False, "the other caller still holds the only probe slot"
+
+
+def test_a_probe_from_an_earlier_half_open_period_never_returns_a_newer_slot() -> None:
+    breaker, clock = _opens_and_half_opens("genie-test-stale-probe")
+    breaker.record_failure()
+    clock[0] = 10.0
+    resilient = Resilient[Any](breaker=breaker, dependency_name="genie", attempts=1)
+
+    def stale_probe_then_stopped() -> Any:
+        # This call holds the first half-open period's probe. A late failure
+        # re-opens the breaker, the cool-down elapses again and another
+        # caller takes the second period's only slot.
+        breaker.record_failure()
+        clock[0] = 20.0
+        assert breaker.allow() is True
+        raise GenieTurnCancelled()
+
+    with pytest.raises(GenieTurnCancelled):
+        resilient.call(stale_probe_then_stopped)
+
+    assert breaker.state == CircuitBreaker.HALF_OPEN
+    assert breaker.allow() is False, "the second period's probe is still in flight"
+
+
 def test_with_retry_passes_a_cancel_through_on_the_first_attempt() -> None:
     calls: list[int] = []
 
