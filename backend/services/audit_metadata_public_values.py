@@ -59,6 +59,7 @@ from backend.services.audit_metadata_policy import (
     _SALES_DISPOSITION_OUTCOMES,
     _SALES_STRATEGIES,
     LEDGER_SURFACES,
+    PRINT_SURFACES,
     AuditMetadataValueViolation,
     _metadata_values_for,
 )
@@ -710,6 +711,18 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         if value is not None and str(value) not in _REFUSAL_TEXT_DECLINE_REASONS:
             raise AuditMetadataValueViolation(field, "must be a governed decline reason")
     for field, value in _metadata_values_for(metadata, {"returned_row_count"}):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
+    # PRINT_EXPORT (W5d, responsive-08): a closed surface token and a bounded
+    # count; borrower_id and filter_fingerprint take their existing rules.
+    for field, value in _metadata_values_for(metadata, {"print_surface"}):
+        if value is not None and str(value) not in PRINT_SURFACES:
+            raise AuditMetadataValueViolation(field, "must be a governed print surface")
+    for field, value in _metadata_values_for(metadata, {"printed_row_count"}):
         if value is None:
             continue
         try:

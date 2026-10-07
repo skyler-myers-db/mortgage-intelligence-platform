@@ -425,6 +425,12 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "total_matching",
         "declared_lead_view_id",
         "pages_loaded",
+        # PRINT_EXPORT (print receipt; backend/services/print_receipt.py):
+        # which surface printed and how many rows the page held. The
+        # borrower_id and filter_fingerprint keys above are reused; the
+        # filters and row contents never land.
+        "print_surface",
+        "printed_row_count",
     }
 )
 
@@ -756,3 +762,7 @@ class AuditMetadataValueViolation(RuntimeError):
 LEDGER_SURFACES: frozenset[str] = frozenset(
     {"events", "events_page", "rollups", "receipt", "refusal_reports", "facets", "count"}
 )
+
+# The closed ``print_surface`` vocabulary of a PRINT_EXPORT row (W5d,
+# responsive-08): the two pages Export PDF prints.
+PRINT_SURFACES: frozenset[str] = frozenset({"borrower_360", "audit_ledger"})

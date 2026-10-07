@@ -37,6 +37,8 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "OUTREACH_REJECT",
         "OUTREACH_REVOKE",
         "PORTFOLIO_CREATE",
+        # responsive-08 (W5d): an Export PDF's receipt (services/print_receipt).
+        "PRINT_EXPORT",
         "PROPERTY_LOOKUP",
         "RECOMMEND_OFFER",
         "RUN_GENIE",
