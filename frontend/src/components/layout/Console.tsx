@@ -11,6 +11,7 @@ import { api } from '../../lib/api';
 import { recentActivityPresentation } from '../../lib/auditEventPresentation';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
+import { preloadIntentProps } from '../../lib/preloadIntent';
 import { lenderMarkUrl } from '../../lib/themePreference';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
 
@@ -268,12 +269,15 @@ export function Console() {
             {workspaceStatus !== 'loading' && savedLeadItems.length === 0 && savedDraftItems.length === 0 && (
               <div className="muted fs-12">No saved leads or drafts yet.</div>
             )}
+            {/* Intent warms the route CHUNK only (bundle-09 item 1): the
+                dossier and offer reads are audited, so they stay click-only. */}
             {savedLeadItems.map((lead) => (
               <Link
                 key={`lead-${lead.borrower_id}`}
                 className="saved-workspace__item"
                 to={`/borrower-360/${lead.borrower_id}`}
                 onClick={() => setConsoleOpen(false)}
+                {...preloadIntentProps(`/borrower-360/${lead.borrower_id}`)}
               >
                 <Icon name="tag" size={12} />
                 <span className="saved-workspace__body">
@@ -288,6 +292,7 @@ export function Console() {
                 className="saved-workspace__item"
                 to={`/offer-orchestrator/${draft.borrower_id}`}
                 onClick={() => setConsoleOpen(false)}
+                {...preloadIntentProps(`/offer-orchestrator/${draft.borrower_id}`)}
               >
                 <Icon name="doc" size={12} />
                 <span className="saved-workspace__body">
