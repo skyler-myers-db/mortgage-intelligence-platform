@@ -172,6 +172,10 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # one Lakebase transaction inside record_outcome.
     "record_assignment_outcome": ("store.record_outcome(",),
     "distribute_leads": ("store.distribute(",),
+    # W5d w5-sales-loop: one LEAD_UNASSIGN per released borrower, written in
+    # the release transaction (tests/unit/test_assignment_release.py).
+    "release_lead_assignment": ("store.release_assignment(",),
+    "release_distribution": ("store.release_distribution(",),
     "log_disposition": ("store.log_disposition(",),
     "record_lead_outcome": ("store.record_outcome(",),
     "property_loan_lookup": ("lookup_property_loan(",),
