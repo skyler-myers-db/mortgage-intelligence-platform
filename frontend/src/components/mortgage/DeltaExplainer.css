@@ -29,6 +29,30 @@
 .delta-explainer__bar--up { fill: var(--accent-data); }
 .delta-explainer__bar--down { fill: var(--text-3); }
 .delta-explainer__bar--total { fill: var(--bg-4); stroke: var(--text-3); stroke-width: 0.5; }
+/* The row headers (each state, Other states, Not attributed to a state) and
+   the Whole book total are <th scope="row">, which `.tbl` leaves to the user
+   agent (centred, bold, 1px padding, no row rule) because it styles only
+   `thead th` and `td`. They take the `.tbl td` cell box
+   (design_files/index.html:610-616) and the primary-cell ink of
+   `.tbl td.is-primary` (index.html:620), as the map's table
+   (USChoroplethMap.css) and the signal stack (SignalStack.css) do. */
+.delta-explainer__table tbody th,
+.delta-explainer__table tfoot th {
+  padding: 0 var(--sp-4);
+  height: var(--row-h);
+  border-bottom: 1px solid var(--line-1);
+  text-align: start;
+  vertical-align: middle;
+  font-weight: 500;
+  color: var(--text-1);
+}
+/* The total row reads as one, as the map table's total row does: the
+   prototype's `.tbl` has no tfoot (deviation:delta-explainer). */
+.delta-explainer__table tfoot th,
+.delta-explainer__table tfoot td {
+  font-weight: 600;
+  color: var(--text-1);
+}
 .delta-explainer__table th a {
   color: var(--accent-ink);
 }
