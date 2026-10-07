@@ -609,6 +609,12 @@ describe('USChoroplethMap ZIP areas (the ZCTA rung, W5c dataviz-01)', () => {
     expect(document.querySelector('.map-legend__scale')?.textContent).toContain('over the 24 densest of 30 ZIPs');
   });
 
+  it('marks the root as the map interaction target (D-platform-process-d2)', async () => {
+    act(() => root.render(<Providers><USChoroplethMap /></Providers>));
+    await settle();
+    expect(document.querySelector('.map-wrap')?.getAttribute('data-rum-target')).toBe('map');
+  });
+
   it('without zipAreas (Home) never loads or warms the rung and keeps the plain tiles', async () => {
     await drillWith(<USChoroplethMap />);
     await until(() => document.querySelectorAll('.zip-tile').length > 0);

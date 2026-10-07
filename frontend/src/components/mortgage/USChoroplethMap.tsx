@@ -112,7 +112,8 @@ export type { MapSelection } from './USChoroplethMap.selection';
  * (USChoroplethMapZctaLevel); the legend's scale covers every populated ZIP
  * and its caption says what a ZCTA is. The densest-ZIP tiles are the degraded
  * fallback (a status line says so). Home never sets it, so it never loads the
- * rung or fetches geometry.
+ * rung or fetches geometry. The root carries data-rum-target="map"
+ * (D-platform-process-d2, runtime-09).
  */
 
 interface USChoroplethMapProps {
@@ -524,6 +525,7 @@ export function USChoroplethMap({
   return (
     <div
       className="map-wrap"
+      data-rum-target="map"
       // Rate mode grows the map by the lever instead of squeezing the stage
       // (USChoroplethMap.css keeps the stage's floor); `height` stays the floor.
       style={rateOn ? { minHeight: height } : { height }}
