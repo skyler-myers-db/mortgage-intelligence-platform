@@ -48,8 +48,15 @@ def sync_lifecycle_state_via_warehouse(
     record_funnel_snapshot: bool = True,
     prune_legacy_defaults: bool = False,
     funnel_sql_path: Path | None = None,
+    tolerate_funnel_schema_denied: bool = True,
 ) -> LifecycleSyncResult:
-    """Mirror Lakebase approvals into gold using only Lakebase + SQL Warehouse."""
+    """Mirror Lakebase approvals into gold using only Lakebase + SQL Warehouse.
+
+    ``tolerate_funnel_schema_denied`` is for the App's own paths, which hold
+    only MODIFY on the funnel table. The deploy identity (deploy step 9,
+    ``tools/sync_lifecycle_warehouse.py``) passes False: a refused ALTER there
+    is a misconfigured deploy and must fail it, not skip the snapshot.
+    """
 
     resolved_catalog = catalog or settings.mip_default_catalog
     client = sql_client or get_sql_client()
@@ -59,7 +66,9 @@ def sync_lifecycle_state_via_warehouse(
         client.execute(_build_legacy_default_prune(catalog=resolved_catalog))
     client.execute(_build_lifecycle_merge(rows, catalog=resolved_catalog))
     funnel_rows: int | None = None
-    if record_funnel_snapshot and _funnel_snapshot_schema_ready(client, catalog=resolved_catalog):
+    if record_funnel_snapshot and _funnel_snapshot_schema_ready(
+        client, catalog=resolved_catalog, tolerate_denied=tolerate_funnel_schema_denied
+    ):
         sql_path = funnel_sql_path or Path(
             "sql/_rendered/transformations/gold_funnel_snapshot_daily.sql"
         )
@@ -84,19 +93,22 @@ def sync_lifecycle_state_via_warehouse(
     )
 
 
-def _funnel_snapshot_schema_ready(client: DatabricksSqlClient, *, catalog: str) -> bool:
+def _funnel_snapshot_schema_ready(
+    client: DatabricksSqlClient, *, catalog: str, tolerate_denied: bool
+) -> bool:
     """Ensure the funnel snapshot's newer columns before its MERGE (wow-ai-3).
 
-    The deploy identity (deploy step 9, the bundle job) adds a missing column.
-    The App's own paths (Admin 'Sync workflow state') hold only MODIFY on the
-    table, so their ALTER is refused when the deploy has not run yet: that
-    skips ONLY the funnel snapshot write, with one warning. The lifecycle
-    mirror above has already landed and the sync never answers 503 for it.
+    The deploy identity (deploy step 9, the bundle job) adds a missing column,
+    and a refusal there propagates (``tolerate_denied=False``). The App's own
+    paths (Admin 'Sync workflow state') hold only MODIFY on the table, so
+    their ALTER is refused when the deploy has not run yet: that skips ONLY
+    the funnel snapshot write, with one warning. The lifecycle mirror above
+    has already landed and the sync never answers 503 for it.
     """
     try:
         _ensure_funnel_snapshot_schema(client.execute, catalog=catalog)
     except Exception as exc:
-        if not _is_permission_refusal(exc):
+        if not (tolerate_denied and _is_permission_refusal(exc)):
             raise
         emit(
             log,

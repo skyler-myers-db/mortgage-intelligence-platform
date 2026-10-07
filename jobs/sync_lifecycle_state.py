@@ -639,6 +639,18 @@ def _get_spark() -> Any:
     return spark
 
 
+def _spark_executor(spark: Any) -> Callable[[str], list[dict[str, Any]]]:
+    """``spark.sql`` as the ensure helpers' executor: rows as dicts, a None result as no rows."""
+
+    def execute(statement: str) -> list[dict[str, Any]]:
+        result = spark.sql(statement)
+        if result is None:
+            return []
+        return [row.asDict(recursive=True) for row in result.collect()]
+
+    return execute
+
+
 def _write_gold(
     rows: list[dict[str, Any]],
     *,
@@ -647,14 +659,7 @@ def _write_gold(
 ) -> None:
     """Migrate and merge; prune defaults only on explicit operator request."""
     spark = _get_spark()
-
-    def execute(statement: str) -> list[dict[str, Any]]:
-        result = spark.sql(statement)
-        if result is None:
-            return []
-        return [row.asDict(recursive=True) for row in result.collect()]
-
-    _ensure_lifecycle_schema(execute, catalog=catalog)
+    _ensure_lifecycle_schema(_spark_executor(spark), catalog=catalog)
     if prune_legacy_defaults:
         spark.sql(_build_legacy_default_prune(catalog=catalog))
     spark.sql(_build_lifecycle_merge(rows, catalog=catalog))
@@ -713,11 +718,7 @@ def main(argv: list[str] | None = None) -> None:
     print("[sync-lifecycle] gold mirror refreshed")
     # The bundle job's record_funnel_snapshot SQL task runs next and MERGEs
     # every funnel column, so an existing table gains them here first.
-    spark = _get_spark()
-    if _ensure_funnel_snapshot_schema(
-        lambda statement: [row.asDict(recursive=True) for row in spark.sql(statement).collect()],
-        catalog=args.catalog,
-    ):
+    if _ensure_funnel_snapshot_schema(_spark_executor(_get_spark()), catalog=args.catalog):
         print("[sync-lifecycle] funnel snapshot columns added")
 
 
