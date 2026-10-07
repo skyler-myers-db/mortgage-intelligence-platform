@@ -14,7 +14,6 @@ import { isDecisionPending } from '../lib/mutations/outreach';
 import { intentFingerprint, useIntentRequestIds } from '../lib/mutations/requestIds';
 import { queueHref, useQueueContext } from '../lib/queueContext';
 import { queuePosition } from '../lib/queuePosition';
-import { offerPath } from '../lib/routeMeta';
 import { queryKeys } from '../lib/queryKeys';
 import { usePresenterMode } from '../lib/presenterMode';
 import { PageShell } from '../components/layout/PageShell';
@@ -36,6 +35,7 @@ import { draftProofMatchesSnapshot, resolveOfferApprovalStatus } from './offer-o
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
 import { OfferDecisionOutcome } from './offer-orchestrator.decision';
 import { OfferPriorDecisions } from './offer-orchestrator.priorDecisions';
+import { bindingShowsPager, useVerifiedOfferBinding } from './offer-orchestrator.binding';
 import { announceApprovalRouting, offerUnsavedMessage } from './offer-orchestrator.feedback';
 import {
   OfferLoadErrorRoute,
@@ -71,6 +71,10 @@ export default function OfferOrchestrator() {
   // the pager, the Next-in-queue step and the queue-aware back links.
   const queue = useQueueContext(location.state, id ?? null);
   const { campaignBinding, campaignBindingError } = useOfferCampaignBinding();
+  // The pager and Next in queue carry a VERIFIED binding only; an unverified
+  // one hides them (shell-04 / flow-09, offer-orchestrator.binding).
+  const binding = useVerifiedOfferBinding(campaignBinding, campaignBindingError, queue);
+  const steppingQueue = bindingShowsPager(binding.state) ? queue : null;
   const queryClient = useQueryClient();
   const [approveError, setApproveError] = useState<string | null>(null);
   // Counts this view's explicit re-reads (Regenerate / Retry draft, a saved
@@ -185,14 +189,15 @@ export default function OfferOrchestrator() {
 
   // shell-04 / flow-09: step offer to offer through the queue. The keys are
   // off while the reject rationale is open (the only typed work here) and,
-  // with the buttons, while a decision is on the wire.
+  // with the buttons, while a decision is on the wire or the campaign
+  // binding is still being verified.
   const pager = (
     <QueuePager
       borrowerId={id}
-      queue={queue}
-      pathFor={offerPath}
+      queue={steppingQueue}
+      pathFor={binding.pathFor}
       hotkeys={!rejectReviewOpen && !approving}
-      disabled={approving}
+      disabled={approving || binding.state === 'validating'}
     />
   );
 
@@ -518,8 +523,9 @@ export default function OfferOrchestrator() {
         approveError={decisionPending ? null : approveError}
         score={b ? { opportunityScore: b.opportunity_score, confidence: b.confidence } : null}
         routing={approvalRouting?.id === id ? approvalRouting : null}
-        queue={queue}
+        queue={binding.state === 'validating' ? null : steppingQueue}
         nextId={queue ? queuePosition(queue, id)?.next ?? null : null}
+        pathFor={binding.pathFor}
       />
       <OfferPriorDecisions borrowerId={b?.borrower_id ?? id} />
       {decisionPending && (

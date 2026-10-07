@@ -57,6 +57,8 @@ export interface OfferDecisionOutcomeProps {
   queue?: QueueContext | null;
   /** The next ranked borrower in that queue; null at its end. */
   nextId?: string | null;
+  /** Where Next in queue opens: offerPath, or offerPath plus a verified campaign binding. */
+  pathFor?: (borrowerId: string) => string;
 }
 
 /**
@@ -67,11 +69,19 @@ export interface OfferDecisionOutcomeProps {
  * (the receipt keeps focus). A plain Link: no prefetch and no hover read of
  * the neighbour, whose open writes audit rows only when the reviewer goes.
  */
-function NextInQueue({ queue, nextId }: { queue: QueueContext; nextId: string | null }) {
+function NextInQueue({
+  queue,
+  nextId,
+  pathFor = offerPath,
+}: {
+  queue: QueueContext;
+  nextId: string | null;
+  pathFor?: (borrowerId: string) => string;
+}) {
   return (
     <div className="section-actions" data-testid="offer-next-in-queue">
       {nextId ? (
-        <Link className="btn btn--sm" to={offerPath(nextId)} state={{ queue }}>
+        <Link className="btn btn--sm" to={pathFor(nextId)} state={{ queue }}>
           Next in queue: <span className="mono">{nextId}</span>
         </Link>
       ) : (
@@ -96,6 +106,7 @@ export function OfferDecisionOutcome({
   routing = null,
   queue = null,
   nextId = null,
+  pathFor = offerPath,
 }: OfferDecisionOutcomeProps) {
   const scoreAtDecision = justDecided ? score : null;
   const decided = effectiveApproval === 'approved' || effectiveApproval === 'rejected';
@@ -104,7 +115,7 @@ export function OfferDecisionOutcome({
   const receiptChunk = useLazyModule(RECEIPT_CHUNK, decided && hasAuditId);
   const DecisionReceipt = receiptChunk.module?.DecisionReceipt;
   const receiptSlot = hasAuditId && !receiptChunk.failed;
-  const nextStep = justDecided && queue ? <NextInQueue queue={queue} nextId={nextId} /> : null;
+  const nextStep = justDecided && queue ? <NextInQueue queue={queue} nextId={nextId} pathFor={pathFor} /> : null;
   return (
     <>
       {effectiveApproval === 'approved' && (
