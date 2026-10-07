@@ -59,6 +59,50 @@ describe('USChoroplethMap geography helpers', () => {
     expect(featureBBox(feature)).toEqual([1, 2, 3, 4]);
   });
 
+  it('writes 3 decimals for a ZCTA, so a 0.05-unit square keeps its 4 distinct vertices', () => {
+    const square = {
+      type: 'Polygon' as const,
+      coordinates: [[[100, 200], [100.05, 200], [100.05, 200.05], [100, 200.05], [100, 200]]],
+    };
+    const vertices = (d: string) => new Set(d.replace(/[MZ]/g, '').split('L'));
+    expect(vertices(geometryToPath(square, 3)).size).toBe(4);
+    expect(geometryToPath(square, 3)).toBe('M100.000,200.000L100.050,200.000L100.050,200.050L100.000,200.050L100.000,200.000Z');
+    // Control: at the state paths' 1 decimal the square collapses (why ZCTAs need 3).
+    expect(vertices(geometryToPath(square)).size).toBeLessThan(4);
+  });
+
+  it('applies the digits to every ring, never the ring index (a bare .map(ringToPath))', () => {
+    const holed = {
+      type: 'Polygon' as const,
+      coordinates: [
+        [[1.25, 2.25], [9.25, 2.25], [9.25, 8.25], [1.25, 2.25]],
+        [[3.25, 3.25], [4.25, 3.25], [4.25, 4.25], [3.25, 3.25]],
+      ],
+    };
+    expect(geometryToPath(holed)).toBe('M1.3,2.3L9.3,2.3L9.3,8.3L1.3,2.3Z M3.3,3.3L4.3,3.3L4.3,4.3L3.3,3.3Z');
+    expect(geometryToPath({ type: 'MultiPolygon', coordinates: [holed.coordinates, holed.coordinates] }, 3))
+      .toBe(Array(2).fill('M1.250,2.250L9.250,2.250L9.250,8.250L1.250,2.250Z M3.250,3.250L4.250,3.250L4.250,4.250L3.250,3.250Z').join(' '));
+  });
+
+  it('keeps every state path byte-identical at the default 1 decimal', () => {
+    const topology = statesTopology as { objects: { states: unknown } };
+    const fc = topoFeature(topology as never, topology.objects.states as never) as unknown as FeatureCollection;
+    // An independent 1-decimal writer: the pre-W5c output, byte for byte.
+    const ring = (points: number[][]) => `M${points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join('L')}Z`;
+    const oracle = (feature: Feature) => {
+      const { geometry } = feature;
+      if (geometry.type === 'Polygon') return geometry.coordinates.map(ring).join(' ');
+      if (geometry.type === 'MultiPolygon') return geometry.coordinates.map((poly) => poly.map(ring).join(' ')).join(' ');
+      return '';
+    };
+    const locations = buildUsaStateMapPayload(fc).locations;
+    expect(locations).toHaveLength(51);
+    for (const location of locations) {
+      const source = fc.features.find((f) => FIPS_TO_USCODE[String(f.id).padStart(2, '0')] === location.id);
+      expect(location.path, location.id).toBe(oracle(source as Feature));
+    }
+  });
+
   it('builds lead queue links with geography, segment, and portfolio filters', () => {
     expect(
       buildLeadQueuePath({

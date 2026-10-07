@@ -19,6 +19,10 @@ def test_bundle_uploads_prebuilt_frontend_without_root_npm_wrapper() -> None:
     # the rest of the Playwright tree never ride the App upload.
     assert "frontend/tests/**" in sync["exclude"]
     assert not any(pattern.startswith("frontend/tests") for pattern in sync["include"])
+    # The ZCTA geometry sources and the operator-only tool that builds them
+    # (W5c dataviz-01): the geometry ships only as hashed dist assets.
+    assert {"frontend/src/geo/**", "tools/geo/**"} <= set(sync["exclude"])
+    assert not any(pattern.startswith(("frontend/src/geo", "tools/geo")) for pattern in sync["include"])
     assert "build" not in app
     assert app["command"] == ["python", "-m", "backend.runtime"]
     assert deploy.index("run npm --prefix frontend run build") < deploy.index(

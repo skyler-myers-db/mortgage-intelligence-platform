@@ -20,8 +20,10 @@
  *     its Under the hood tab                                           4
  *  K. W5c: Home with the presenter-mode roadmap rail (M1-M4)           2
  *  L. W5c w5-lead-queue-paging: the Lead Queue paged footer            2
+ *  M. W5c w5-zcta-watchlist: the Segments map drilled to Illinois'
+ *     ZIP areas                                                        2
  *                                                                     --
- *                                                                    120
+ *                                                                    122
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -184,6 +186,23 @@ for (const theme of FIXTURE_THEMES) {
       await expect(page.locator('.rail button.rail__item--disabled')).toHaveCount(4);
       await check(page, 'home', theme, 'presenter-rail');
       expectNoAuditedReadSince(mockApi, naturalLoad, 'home · presenter rail');
+    });
+
+    // M (W5c w5-zcta-watchlist, dataviz-01): the Segments map drilled to
+    // Illinois, its ZIP areas as committed ZCTA polygons (the tile fallback
+    // with its status line until the operator build is committed).
+    test('segment-intelligence · zcta drill', async ({ app, mockApi, page }) => {
+      const { naturalLoad } = await load(app, mockApi, route('segment-intelligence'), theme);
+      await page.locator('path[data-map-unit="il"]').click();
+      await expect(page).toHaveURL(/geo_state=IL/);
+      const map = page.locator('#main-content .map-wrap');
+      await expect(map.locator('svg.map-zcta, .zip-tiles').first()).toBeVisible();
+      await expect(map.locator('.map-levels')).toHaveAttribute('aria-busy', 'false');
+      await map.scrollIntoViewIfNeeded();
+      await app.settle();
+      await expectNoSurfaceOverflow(page, { route: 'segment-intelligence', state: 'zcta-drill', theme });
+      await capture(page, `segment-intelligence--${theme}--zcta-drill.png`, { element: map });
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'segment-intelligence · zcta drill');
     });
 
     // E: compact density.

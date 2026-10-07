@@ -1,0 +1,26 @@
+/* ============================================================
+   Segment Intelligence's ZIP stage (audit dataviz-01 / motion-10;
+   deviation:zcta-level). Imported by USChoroplethMapZipAreas.tsx, so it
+   ships with the Segment Intelligence route only: never the initial
+   stylesheet, never Home.
+
+   App-added (the prototype has neither): .map-stage--zcta (the ZIP areas'
+   loading stage) and .zip-tiles__status (the tiles' fallback line).
+   ============================================================ */
+
+/* motion-10: the ZCTA rung tweens its viewBox from the national view, so the
+   keyed level settle (map-level-in, 08-map.css) must not run under it, from
+   the loading stage on. */
+.map-levels:has(> .map-zcta, > .map-stage--zcta) { animation: none; }
+
+/* The tiles' status line when they stand in for the ZCTA polygons. */
+.zip-tiles__status {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) 0;
+}
+
+/* A keyboard drill parks focus on the loading stage (a11y-04). It fills the
+   map's clipping box, so its ring is drawn inside, as on .map-stage--status. */
+.map-stage--zcta:focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}

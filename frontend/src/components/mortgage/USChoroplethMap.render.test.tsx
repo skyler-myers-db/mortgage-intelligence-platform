@@ -9,6 +9,8 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { createMipQueryClient } from '../../lib/queryClient';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMap } from './USChoroplethMap';
+import { buildChoroplethScale } from './USChoroplethMap.scale';
+import { ZIP_AREAS } from './USChoroplethMapZipAreas';
 import type { StateRollupResponse, ZipRollupResponse } from '../../types';
 import { genieStatePrompt } from '../../lib/genieContext';
 import { consumeGeniePrefill, subscribeGenieOpenRequests } from '../../lib/genieOpen';
@@ -40,6 +42,23 @@ vi.mock('../../lib/api', async (importOriginal) => ({
     zipRollupsWithFreshness: (...args: unknown[]) =>
       Promise.resolve(apiMocks.zipRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: apiMocks.fresh.zips })),
   },
+}));
+
+// The ZCTA rung (W5c, dataviz-01): its chunk and its geometry, controllable.
+const zcta = vi.hoisted(() => ({ fail: false, loads: 0, has: vi.fn(() => true), load: vi.fn() }));
+vi.mock('./zctaLevel.lazy', async () => {
+  const { lazyModule } = await import('./useLazyModule');
+  return {
+    ZCTA_LEVEL: lazyModule(() => {
+      zcta.loads += 1;
+      return zcta.fail ? Promise.reject(new Error('Chunk unavailable')) : import('./USChoroplethMapZctaLevel');
+    }),
+  };
+});
+vi.mock('./zctaGeometry', () => ({
+  hasZctaGeometry: zcta.has,
+  loadZctaGeometry: zcta.load,
+  zctaGeometryKey: (usps: string) => ['mip', 'geo', 'zcta-geometry', usps],
 }));
 
 vi.mock('./USStateMapData', () => ({
@@ -522,4 +541,112 @@ describe('USChoroplethMap ZIP drill reconciles against the state total', () => {
 
     expect(document.querySelector('.zip-tiles__reconcile')).toBeNull();
   });
+});
+
+describe('USChoroplethMap ZIP areas (the ZCTA rung, W5c dataviz-01)', () => {
+  let root: Root;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    apiMocks.stateRollups.mockResolvedValue(stateRollupPayload(0));
+    zcta.loads = 0;
+    zcta.fail = false;
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    vi.clearAllMocks();
+  });
+
+  /** 30 populated ZIPs (60000-60029, 100 down to 71 borrowers), each with a ZCTA square. */
+  const ZIPS = Array.from({ length: 30 }, (_, index) => ({
+    zip: String(60000 + index),
+    state: 'IL',
+    county_fips_5: null,
+    addressable_borrowers: 100 - index,
+    avg_opportunity_score: 50,
+    top_segment_code: 'itm',
+    sample_borrower_id: null,
+  }));
+  const geometry = () => {
+    const areas = ZIPS.map(({ zip }, index) => ({
+      zip,
+      d: `M${index},0L${index + 1},0L${index + 1},1L${index},1Z`,
+      box: [index, 0, index + 1, 1] as const,
+      labelAt: [index + 0.5, 0.5] as const,
+    }));
+    return { usps: 'IL', areas, byZip: new Map(areas.map((area) => [area.zip, area])), outline: 'M0,0L30,0L30,30L0,30Z', stateBox: [0, 0, 30, 30] as const };
+  };
+
+  async function drillWith(element: ReactNode): Promise<void> {
+    apiMocks.zipRollups.mockResolvedValue({ state: 'IL', fips_5: null, snapshot_date: '2026-10-01', rollups: ZIPS });
+    act(() => root.render(<Providers>{element}</Providers>));
+    await settle();
+    await drillIntoIllinois();
+  }
+
+  async function until(check: () => boolean): Promise<void> {
+    for (let i = 0; i < 200 && !check(); i += 1) {
+      await settle();
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+    }
+    expect(check()).toBe(true);
+  }
+
+  // The rung's module, transformed once up front so a loaded machine cannot
+  // push its first import past a test's wait.
+  beforeAll(async () => {
+    await import('./USChoroplethMapZctaLevel');
+  }, 60_000);
+
+  // First: a rejected chunk is not cached, so the later cases still load it.
+  it('falls back to the tiles with a status line when the rung chunk fails', async () => {
+    zcta.fail = true;
+    await drillWith(<USChoroplethMap zipStage={ZIP_AREAS} />);
+    await until(() => document.querySelector('.zip-tiles__status') !== null);
+    expect(document.querySelector('.zip-tiles__status[role="status"]')?.textContent).toBe(
+      'ZIP boundaries could not load; showing the densest ZIPs as tiles.',
+    );
+    expect(document.querySelectorAll('.zip-tile')).toHaveLength(24);
+    expect(document.querySelector('.map-legend__scale')?.textContent).toContain('over the 24 densest of 30 ZIPs');
+  });
+
+  it('marks the root as the map interaction target (D-platform-process-d2)', async () => {
+    act(() => root.render(<Providers><USChoroplethMap /></Providers>));
+    await settle();
+    expect(document.querySelector('.map-wrap')?.getAttribute('data-rum-target')).toBe('map');
+  });
+
+  it('without a zipStage (Home) never loads or warms the rung and keeps the plain tiles', async () => {
+    await drillWith(<USChoroplethMap />);
+    await until(() => document.querySelectorAll('.zip-tile').length > 0);
+    expect(document.querySelector('.zip-tiles__status')).toBeNull();
+    expect(document.querySelector('.map-stage--zcta, svg.map-zcta')).toBeNull();
+    act(() => root.render(<Providers><USChoroplethMap selection={{ state: null, county: null, zip: null }} /></Providers>));
+    await settle();
+    document.querySelector('.map-levels')?.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+    await settle();
+    expect(zcta.loads).toBe(0);
+    expect(zcta.load).not.toHaveBeenCalled();
+  });
+
+  it('draws ZIP areas with the scale over EVERY populated ZIP, no densest scope, and the ZCTA caption', async () => {
+    zcta.load.mockResolvedValue(geometry());
+    await drillWith(<USChoroplethMap zipStage={ZIP_AREAS} />);
+    await until(() => document.querySelector('svg.map-zcta') !== null);
+    expect(document.querySelectorAll('svg.map-zcta path[data-populated]')).toHaveLength(30);
+    expect(document.querySelector('.zip-tiles')).toBeNull();
+    const breaks = [...document.querySelectorAll('.map-legend__break')].map((node) => Number(node.getAttribute('data-break')));
+    expect(breaks).toEqual(buildChoroplethScale(ZIPS.map((row) => row.addressable_borrowers))?.breaks);
+    expect(breaks).not.toEqual(buildChoroplethScale(ZIPS.slice(0, 24).map((row) => row.addressable_borrowers))?.breaks);
+    const caption = document.querySelector('.map-legend__caption')?.textContent ?? '';
+    expect(caption).toContain('ZIP areas are Census 2020 ZCTAs, an approximation of USPS delivery areas');
+    expect(caption).not.toContain('densest');
+    expect(document.querySelector('.map-levels > svg.map-zcta')).not.toBeNull();
+    expect(document.querySelector('.map-zoom')?.querySelectorAll('button')).toHaveLength(3);
+    expect(zcta.load).toHaveBeenCalledTimes(1);
+  }, 30_000);
 });

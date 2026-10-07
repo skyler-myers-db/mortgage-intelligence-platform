@@ -51,6 +51,19 @@ Enforcement is two-layer, pinned by
    governed way to clean a stale tree by hand — it validates the exact
    bundle-files path shape and touches nothing but the two manifest files.
 
+`sync.exclude` also keeps two geometry trees out of the App source (W5c,
+audit `dataviz-01`), pinned by the same test:
+
+- **`frontend/src/geo/**`**: the committed per-state ZCTA TopoJSON sources.
+  The geometry reaches the App only as hashed `frontend/dist/assets/*.topo-*.json`
+  files with `.br`/`.gz` siblings, emitted by the `npm --prefix frontend run
+  build` step `scripts/deploy.sh` already runs (precompression included) and
+  served same-origin by `backend/services/static_assets.py`. Nothing is
+  fetched from the Census Bureau at deploy time or at runtime.
+- **`tools/geo/**`**: the operator-only geometry tool, with its own
+  `package.json` and lock. It never runs in CI or deploy, and a nested npm
+  manifest has no place in the App source tree.
+
 Two operational facts to know before assembling any ad-hoc App source tree
 (emergency recovery only — the command of record is `./scripts/deploy.sh`):
 

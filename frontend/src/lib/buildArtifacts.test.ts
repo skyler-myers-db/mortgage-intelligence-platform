@@ -42,6 +42,17 @@ const tools = {
   staleManifestProblems: budgetTool.staleManifestProblems as (manifest: Manifest, dist: string[]) => string[],
   fontCountProblem: budgetTool.fontCountProblem as (actual: number, expected: number) => string | null,
   routeBudgetProblems: budgetTool.routeBudgetProblems as (keys: string[], budgets: Record<string, number>) => string[],
+  lazyEntryClosures: budgetTool.lazyEntryClosures as (
+    manifest: Manifest,
+    initial: Closure,
+    keys: string[],
+  ) => Record<string, RouteClosure>,
+  lazyModuleGates: budgetTool.lazyModuleGates as (
+    manifest: Manifest,
+    initial: Closure,
+    lazyBudgets: Record<string, number>,
+    sizeOf: (file: string) => { bytes: number; gzipBytes: number; brBytes: number },
+  ) => { measured: Array<{ key: string; brBytes: number; files: string[] }>; problems: string[] },
   vendorChunkProblems: budgetTool.vendorChunkProblems as (
     manifest: Manifest,
     initial: Closure,
@@ -171,6 +182,85 @@ describe('route closures', () => {
     ]);
     expect(tools.routeBudgetProblems(keys, { 'src/routes/home.tsx': 1, 'src/routes/lead.tsx': 1, 'src/routes/gone.tsx': 1 }))
       .toEqual(['budgets.routes names src/routes/gone.tsx, which is not a route module in the build manifest']);
+  });
+});
+
+/**
+ * W5c budgets.lazyModules: a lazy rung (the ZCTA level) that the shared map
+ * chunk imports dynamically, and that itself imports the map chunk (already
+ * loaded by its importer) plus one chunk and one stylesheet of its own.
+ */
+const ZCTA_KEY = 'src/components/mortgage/USChoroplethMapZctaLevel.tsx';
+function lazyRungManifest(): Manifest {
+  const manifest = syntheticManifest();
+  manifest['src/routes/home.tsx'].imports = ['index.html', '_shared-B.js', '_map-M.js'];
+  manifest['src/routes/lead.tsx'].imports?.push('_map-M.js');
+  manifest['_map-M.js'] = {
+    file: 'assets/map-M.js',
+    imports: ['_shared-B.js'],
+    dynamicImports: [ZCTA_KEY],
+    css: ['assets/map-M.css'],
+  };
+  manifest[ZCTA_KEY] = {
+    file: 'assets/zcta-Z.js',
+    src: ZCTA_KEY,
+    isDynamicEntry: true,
+    imports: ['_map-M.js', '_viewbox-V.js', 'index.html'],
+    css: ['assets/zcta-Z.css', 'assets/map-M.css'],
+  };
+  manifest['_viewbox-V.js'] = { file: 'assets/viewbox-V.js' };
+  return manifest;
+}
+
+const KIB = 1024;
+/** Every file's br size is its sizes[file], in bytes (raw and gzip mirror it). */
+const sizedBy = (sizes: Record<string, number>) => (file: string) => {
+  const brBytes = sizes[file] ?? 0;
+  return { bytes: brBytes, gzipBytes: brBytes, brBytes };
+};
+
+describe('lazy module gates (budgets.lazyModules, W5c)', () => {
+  it('measure a lazy module beyond the initial closure and beyond what its importer already loaded', () => {
+    const manifest = lazyRungManifest();
+    const closures = tools.lazyEntryClosures(manifest, tools.initialClosure(manifest), [ZCTA_KEY]);
+    expect(closures[ZCTA_KEY].js.sort()).toEqual(['assets/viewbox-V.js', 'assets/zcta-Z.js']);
+    expect(closures[ZCTA_KEY].css).toEqual(['assets/zcta-Z.css']);
+  });
+
+  it('pass a present module under its gate and report its closure', () => {
+    const manifest = lazyRungManifest();
+    const sizes = { 'assets/zcta-Z.js': 5 * KIB, 'assets/viewbox-V.js': 1 * KIB, 'assets/zcta-Z.css': 0.5 * KIB, 'assets/map-M.js': 40 * KIB };
+    const result = tools.lazyModuleGates(manifest, tools.initialClosure(manifest), { [ZCTA_KEY]: 8 * KIB }, sizedBy(sizes));
+    expect(result.problems).toEqual([]);
+    expect(result.measured).toHaveLength(1);
+    expect(result.measured[0].key).toBe(ZCTA_KEY);
+    expect(result.measured[0].brBytes).toBe(6.5 * KIB);
+  });
+
+  it('fail a present module over its gate', () => {
+    const manifest = lazyRungManifest();
+    const sizes = { 'assets/zcta-Z.js': 8 * KIB, 'assets/viewbox-V.js': 1 * KIB };
+    const result = tools.lazyModuleGates(manifest, tools.initialClosure(manifest), { [ZCTA_KEY]: 8 * KIB }, sizedBy(sizes));
+    expect(result.problems).toEqual([`lazy module ${ZCTA_KEY} closure br is 9.00 KiB > 8.00 KiB`]);
+  });
+
+  it('fail a key that is not a dynamic entry in the build, never a silent pass', () => {
+    const absent = syntheticManifest();
+    const result = tools.lazyModuleGates(absent, tools.initialClosure(absent), { [ZCTA_KEY]: 8 * KIB }, sizedBy({}));
+    expect(result.problems).toEqual([
+      `budgets.lazyModules names ${ZCTA_KEY}, which is not a dynamic entry in the build manifest`,
+    ]);
+    expect(result.measured).toEqual([]);
+    // Inlined into its importer (a static chunk, no longer a dynamic entry): the same problem.
+    const inlined = lazyRungManifest();
+    inlined[ZCTA_KEY].isDynamicEntry = false;
+    expect(tools.lazyModuleGates(inlined, tools.initialClosure(inlined), { [ZCTA_KEY]: 8 * KIB }, sizedBy({})).problems)
+      .toHaveLength(1);
+  });
+
+  it('gate nothing while the map is empty (the integrator adds the number)', () => {
+    const manifest = lazyRungManifest();
+    expect(tools.lazyModuleGates(manifest, tools.initialClosure(manifest), {}, sizedBy({}))).toEqual({ measured: [], problems: [] });
   });
 });
 
