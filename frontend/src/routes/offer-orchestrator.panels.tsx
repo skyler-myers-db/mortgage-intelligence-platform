@@ -90,9 +90,10 @@ export function RejectRationalePanel({
   const ownReasonRef = useRef<HTMLSelectElement>(null);
   const reasonRef = routeReasonRef ?? ownReasonRef;
   const titleId = useId();
+  // Both candidates are stable ref objects, so this still runs once, on open.
   useEffect(() => {
     reasonRef.current?.focus();
-  }, []);
+  }, [reasonRef]);
   return (
     <form
       className="surface"
