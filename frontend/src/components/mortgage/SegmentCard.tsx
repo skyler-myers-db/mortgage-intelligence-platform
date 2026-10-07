@@ -142,6 +142,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   return (
     <div
       className={`seg-card ${selected ? 'is-selected' : ''} ${updating ? 'is-updating' : ''} ${gated ? 'seg-card--gated' : ''}`}
+      data-rum-target="segment-card"
       style={{ '--seg-color': displayColor } as CSSProperties}
       aria-busy={updating || undefined}
     >

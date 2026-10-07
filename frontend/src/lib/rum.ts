@@ -1,26 +1,52 @@
+import type { CLSMetricWithAttribution, INPMetricWithAttribution, LCPMetricWithAttribution, Metric } from 'web-vitals/attribution';
 import { apiPath } from './apiPaths';
+import { resolveRouteMeta } from './routeMeta';
 import { apiCallRoute, isApiCallSampled, serverTimingDetails } from './rumApiRoute';
-import { attachClientErrorSink, getRumRouteSource, type QueuedClientError } from './rumBridge';
+import {
+  attachClientErrorSink,
+  getCommittedRouteTemplate,
+  getRumRouteSource,
+  routeTemplateAt,
+  type QueuedClientError,
+} from './rumBridge';
+import {
+  closedInteractionTarget,
+  closedLcpElement,
+  isValidRumEvent,
+  lcpElementBucket,
+  nearestRumTarget,
+  type RumDetails,
+  type RumMetric,
+  type RumNavigationType,
+  type RumRating,
+} from './rumVocabulary';
 
-export type RumMetric =
-  | 'navigation_load'
-  | 'route_change'
-  | 'lcp'
-  | 'cls'
-  | 'inp'
-  | 'long_task'
-  | 'api_call'
-  | 'client_error';
+/**
+ * Browser RUM (D-platform-process-d1 / d2; audit 2026-09-21 stack-08,
+ * runtime-09, quality-07, quality-01). Lazy: AppContext imports it only when
+ * the session says RUM is on (on by default through the deploy payload).
+ *
+ * Core Web Vitals come from the web-vitals 6.2.2 attribution build, imported
+ * inside this chunk: one LCP, CLS and INP report per page lifecycle (and per
+ * soft navigation where Chromium supports it), each attributed to the route
+ * TEMPLATE in effect at the interaction or render time (lib/rumBridge's
+ * timeline of the router's committed location), never window.location at
+ * report time. INP carries its phases and the closed data-rum-target; LCP a
+ * closed tag bucket. navigation_load, route_change and the sampled api_call
+ * stay. Every event is re-validated against the closed sets before it is
+ * queued (lib/rumVocabulary); an invalid one is dropped alone.
+ */
 
-export type RumRating = 'good' | 'needs_improvement' | 'poor' | 'info';
+export type { RumDetailKey, RumDetails, RumMetric, RumNavigationType, RumRating } from './rumVocabulary';
 
+/** One event on the wire (POST /api/v1/telemetry/rum): closed keys and values only. */
 export interface RumEvent {
   metric: RumMetric;
   value: number;
   rating: RumRating;
   route: string;
-  navigation_type?: string | null;
-  details?: Record<string, string | number | boolean | null>;
+  navigation_type?: RumNavigationType | null;
+  details?: RumDetails;
 }
 
 declare global {
@@ -29,70 +55,27 @@ declare global {
   }
 }
 
-const BORROWER_ID_RE = /\/B-[A-Za-z0-9][A-Za-z0-9_-]{0,126}(?=\/|$)/g;
-const CLIP_ID_RE = /\/CL-[A-Za-z0-9][A-Za-z0-9_-]{1,126}(?=\/|$)/g;
-const NUMERIC_ID_RE = /\/\d{5,}(?=\/|$)/g;
-const UUID_RE = /\/[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}(?=\/|$)/g;
-/** A bare 32-hex segment elsewhere (the backend refuses a raw one anywhere). */
-const HEX32_RE = /\/[0-9a-fA-F]{32}(?=\/|$)/g;
-/** The Ask Genie conversation deep link (audit 2026-09-21 shell-03): ANY
- *  segment is templated, a malformed id included, since it can hold typed
- *  text. The backend refuses an untemplated `/ask-genie/<x>`. */
-const ASK_GENIE_CONVERSATION_RE = /^\/ask-genie\/.+$/;
 const MAX_BATCH = 20;
 const FLUSH_DELAY_MS = 2000;
+const IDLE_TIMEOUT_MS = 3000;
 
 let queue: RumEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function sanitizeRumRoute(pathname: string): string {
-  const pathOnly = pathname.split(/[?#]/, 1)[0] || '/';
-  if (ASK_GENIE_CONVERSATION_RE.test(pathOnly)) return '/ask-genie/:conversation_id';
-  return pathOnly
-    .replace(BORROWER_ID_RE, '/:borrower_id')
-    .replace(CLIP_ID_RE, '/:clip_id')
-    .replace(NUMERIC_ID_RE, '/:numeric_id')
-    .replace(UUID_RE, '/:uuid')
-    .replace(HEX32_RE, '/:hex_id')
-    .slice(0, 160);
+/** The template at `t` (performance.now()); the committed one before the timeline, the URL only before the router. */
+function templateAt(t: number): string {
+  return routeTemplateAt(t) ?? getCommittedRouteTemplate() ?? resolveRouteMeta(window.location.pathname).pattern;
 }
 
-function currentRoute(): string {
-  if (typeof window === 'undefined') return '/';
-  return sanitizeRumRoute(window.location.pathname);
-}
-
-function rate(metric: RumMetric, value: number): RumRating {
-  if (metric === 'lcp') {
-    if (value <= 2500) return 'good';
-    if (value <= 4000) return 'needs_improvement';
-    return 'poor';
-  }
-  if (metric === 'cls') {
-    if (value <= 0.1) return 'good';
-    if (value <= 0.25) return 'needs_improvement';
-    return 'poor';
-  }
-  if (metric === 'inp') {
-    if (value <= 200) return 'good';
-    if (value <= 500) return 'needs_improvement';
-    return 'poor';
-  }
-  if (metric === 'navigation_load' || metric === 'route_change') {
-    if (value <= 1000) return 'good';
-    if (value <= 2500) return 'needs_improvement';
-    return 'poor';
-  }
-  if (metric === 'long_task') {
-    if (value <= 100) return 'good';
-    if (value <= 250) return 'needs_improvement';
-    return 'poor';
-  }
-  return 'info';
+/** navigation_load and route_change bands (the server derives the stored rating itself). */
+function rate(value: number): RumRating {
+  if (value <= 1000) return 'good';
+  if (value <= 2500) return 'needs_improvement';
+  return 'poor';
 }
 
 export function enqueueRumEvent(event: RumEvent): void {
-  if (!Number.isFinite(event.value) || event.value < 0) return;
+  if (!isValidRumEvent(event)) return;
   queue.push(event);
   if (queue.length >= MAX_BATCH) {
     flushRum();
@@ -130,124 +113,119 @@ export function flushRum(): void {
   if (queue.length > 0) flushRum();
 }
 
+function reportNavigation(): void {
+  const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+  if (!nav) return;
+  const value = nav.loadEventEnd || nav.duration;
+  enqueueRumEvent({
+    metric: 'navigation_load',
+    value,
+    rating: rate(value),
+    route: templateAt(0),
+    navigation_type: nav.type,
+    details: {
+      dom_content_loaded_ms: Math.round(nav.domContentLoadedEventEnd),
+      ttfb_ms: Math.round(nav.responseStart),
+      transfer_size: nav.transferSize || 0,
+    },
+  });
+}
+
+/** RUM installs at idle, usually after `load`: report at once then, else after `load` settles. */
 function observeNavigation(): void {
-  window.addEventListener('load', () => {
-    const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
-    if (!nav) return;
-    enqueueRumEvent({
-      metric: 'navigation_load',
-      value: nav.loadEventEnd || nav.duration,
-      rating: rate('navigation_load', nav.loadEventEnd || nav.duration),
-      route: currentRoute(),
-      navigation_type: nav.type,
-      details: {
-        dom_content_loaded_ms: Math.round(nav.domContentLoadedEventEnd),
-        ttfb_ms: Math.round(nav.responseStart),
-        transfer_size: nav.transferSize || 0,
-      },
-    });
-  }, { once: true });
-}
-
-function observeLcp(): void {
-  if (!('PerformanceObserver' in window)) return;
-  try {
-    const observer = new PerformanceObserver((list) => {
-      const entries = list.getEntries();
-      const last = entries[entries.length - 1];
-      if (!last) return;
-      enqueueRumEvent({
-        metric: 'lcp',
-        value: last.startTime,
-        rating: rate('lcp', last.startTime),
-        route: currentRoute(),
-      });
-    });
-    observer.observe({ type: 'largest-contentful-paint', buffered: true });
-  } catch {
-    // Unsupported browser, no-op.
+  if (document.readyState === 'complete') {
+    reportNavigation();
+    return;
   }
+  window.addEventListener('load', () => setTimeout(reportNavigation, 0), { once: true });
 }
 
-function observeCls(): void {
-  if (!('PerformanceObserver' in window)) return;
-  let cls = 0;
-  try {
-    const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        const shift = entry as PerformanceEntry & { hadRecentInput?: boolean; value?: number };
-        if (!shift.hadRecentInput) cls += shift.value ?? 0;
-      }
-    });
-    observer.observe({ type: 'layout-shift', buffered: true });
-    const report = () => {
-      enqueueRumEvent({
-        metric: 'cls',
-        value: cls,
-        rating: rate('cls', cls),
-        route: currentRoute(),
-      });
-    };
-    window.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') report();
-    });
-    window.addEventListener('pagehide', report);
-  } catch {
-    // Unsupported browser, no-op.
+const NAVIGATION_TYPES: Readonly<Record<Metric['navigationType'], RumNavigationType>> = {
+  navigate: 'navigate',
+  reload: 'reload',
+  restore: 'reload',
+  'back-forward': 'back_forward',
+  'back-forward-cache': 'back_forward',
+  prerender: 'prerender',
+  'soft-navigation': 'soft_navigation',
+};
+
+/** The route of a vital: the template at its attribution time, else its navigation URL's template. */
+function vitalRoute(attributionTime: number | undefined, navigationURL: string | undefined): string | null {
+  const atTime = attributionTime === undefined ? null : routeTemplateAt(attributionTime);
+  if (atTime !== null) return atTime;
+  if (navigationURL) {
+    try {
+      return resolveRouteMeta(new URL(navigationURL).pathname).pattern;
+    } catch {
+      // A malformed URL: fall through to the committed template.
+    }
   }
+  return getCommittedRouteTemplate();
 }
 
-function observeInp(): void {
-  if (!('PerformanceObserver' in window)) return;
-  let maxDuration = 0;
-  try {
-    const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        const event = entry as PerformanceEntry & { duration?: number; interactionId?: number };
-        if ((event.interactionId ?? 0) > 0 && (event.duration ?? 0) > maxDuration) {
-          maxDuration = event.duration ?? 0;
-        }
-      }
-    });
-    observer.observe({
-      type: 'event',
-      buffered: true,
-      durationThreshold: 40,
-    } as PerformanceObserverInit & { durationThreshold: number });
-    const report = () => {
-      if (maxDuration <= 0) return;
-      enqueueRumEvent({
-        metric: 'inp',
-        value: maxDuration,
-        rating: rate('inp', maxDuration),
-        route: currentRoute(),
-      });
-    };
-    window.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') report();
-    });
-    window.addEventListener('pagehide', report);
-  } catch {
-    // Unsupported browser, no-op.
-  }
+/** Metric ids already reported: one report per metric instance (page lifecycle or soft navigation). */
+const reportedVitals = new Set<string>();
+
+function reportVital(
+  metric: Metric,
+  name: 'lcp' | 'cls' | 'inp',
+  attributionTime: number | undefined,
+  details: RumDetails,
+): void {
+  if (reportedVitals.has(metric.id)) return;
+  reportedVitals.add(metric.id);
+  const route = vitalRoute(attributionTime, metric.navigationURL);
+  if (route === null) return;
+  enqueueRumEvent({
+    metric: name,
+    value: metric.value,
+    rating: metric.rating === 'needs-improvement' ? 'needs_improvement' : metric.rating,
+    route,
+    navigation_type: NAVIGATION_TYPES[metric.navigationType] ?? null,
+    details,
+  });
 }
 
-function observeLongTasks(): void {
-  if (!('PerformanceObserver' in window)) return;
+function reportInp(metric: INPMetricWithAttribution): void {
+  const { attribution } = metric;
+  reportVital(metric, 'inp', attribution.interactionTime, {
+    interaction_target: closedInteractionTarget(attribution.interactionTarget),
+    input_delay_ms: Math.round(attribution.inputDelay),
+    processing_ms: Math.round(attribution.processingDuration),
+    presentation_ms: Math.round(attribution.presentationDelay),
+  });
+}
+
+function reportLcp(metric: LCPMetricWithAttribution): void {
+  const entry = metric.attribution.lcpEntry;
+  const renderedAt = entry ? entry.renderTime || entry.startTime : undefined;
+  reportVital(metric, 'lcp', renderedAt, { lcp_element: closedLcpElement(metric.attribution.target) });
+}
+
+function reportCls(metric: CLSMetricWithAttribution): void {
+  reportVital(metric, 'cls', metric.attribution.largestShiftTime, {});
+}
+
+function flushWhenHidden(): void {
+  if (document.visibilityState === 'hidden') flushRum();
+}
+
+/**
+ * The web-vitals attribution build, loaded inside this lazy chunk. Its
+ * hidden-page reports run in its own capture listeners, so the flush on
+ * `visibilitychange` is added after them and carries what they queued.
+ */
+async function observeVitals(): Promise<void> {
   try {
-    const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        enqueueRumEvent({
-          metric: 'long_task',
-          value: entry.duration,
-          rating: rate('long_task', entry.duration),
-          route: currentRoute(),
-        });
-      }
-    });
-    observer.observe({ type: 'longtask', buffered: true });
+    const vitals = await import('web-vitals/attribution');
+    vitals.onINP(reportInp, { reportSoftNavs: true, generateTarget: (el) => nearestRumTarget(el) });
+    vitals.onLCP(reportLcp, { reportSoftNavs: true, generateTarget: (el) => lcpElementBucket(el) });
+    vitals.onCLS(reportCls, { reportSoftNavs: true, generateTarget: () => 'other' });
   } catch {
-    // Unsupported browser, no-op.
+    // A chunk that cannot load costs only the vitals; the other events still flow.
+  } finally {
+    document.addEventListener('visibilitychange', flushWhenHidden);
   }
 }
 
@@ -267,12 +245,12 @@ function sessionStorageOrNull(): Storage | null {
 /**
  * api_call (audit delivery-v3): same-origin fetch / XHR resource timings under
  * /api, as a templated `api_route` (lib/rumApiRoute) plus the Server-Timing
- * fields, on the page route. Sampled per tab session and capped per document;
- * the server rejects a whole batch over one out-of-range number, so a call
- * longer than the schema's 600 s is skipped and an oversized transfer is left
- * out rather than clamped. `transferSize` is the encoded (compressed) size on
- * the wire, so the cap binds rarely: the default 500-row GET /api/leads page
- * is about 45 KB gzipped (628 KB decoded).
+ * fields, on the route template in effect when the call started. Sampled per
+ * tab session and capped per document; a call longer than the schema's 600 s
+ * is skipped and an oversized transfer is left out rather than clamped.
+ * `transferSize` is the encoded (compressed) size on the wire, so the cap
+ * binds rarely: the default 500-row GET /api/leads page is about 45 KB
+ * gzipped (628 KB decoded).
  */
 function observeApiCalls(): void {
   if (!('PerformanceObserver' in window)) return;
@@ -289,12 +267,12 @@ function observeApiCalls(): void {
         const apiRoute = apiCallRoute(entry.name, window.location.origin);
         const value = Math.round(entry.duration);
         if (apiRoute === null || !(value >= 0 && value <= MAX_RUM_NUMBER)) continue;
-        const details: Record<string, string | number> = { api_route: apiRoute };
+        const details: RumDetails = { api_route: apiRoute };
         const transferSize = entry.transferSize || 0;
         if (transferSize <= MAX_RUM_NUMBER) details.transfer_size = transferSize;
         Object.assign(details, serverTimingDetails(entry.serverTiming ?? []));
         reported += 1;
-        enqueueRumEvent({ metric: 'api_call', value, rating: 'info', route: currentRoute(), details });
+        enqueueRumEvent({ metric: 'api_call', value, rating: 'info', route: templateAt(entry.startTime), details });
       }
     });
     observer.observe({ type: 'resource', buffered: true });
@@ -307,16 +285,17 @@ function observeApiCalls(): void {
  * route_change from the router's COMMITTED location (lib/rumBridge's route
  * source, registered by main.tsx), never from window.history: a Back the
  * unsaved-changes guard blocks moves the URL there and back again (two
- * popstates) while the router's location never changes, which the old
- * pushState / replaceState patch and popstate listener recorded as two
- * phantom route changes. Without a registered source nothing is recorded.
+ * popstates) while the router's location never changes. Route and from_route
+ * are registry templates, so a change inside one template (one borrower to
+ * the next) is not a route change. Without a registered source nothing is
+ * recorded.
  */
 function observeRouteChanges(): void {
   const source = getRumRouteSource();
   if (!source) return;
-  let route = currentRoute();
+  let route = templateAt(performance.now());
   source((pathname) => {
-    const next = sanitizeRumRoute(pathname);
+    const next = resolveRouteMeta(pathname).pattern;
     if (next === route) return;
     const previous = route;
     const start = performance.now();
@@ -327,7 +306,7 @@ function observeRouteChanges(): void {
         enqueueRumEvent({
           metric: 'route_change',
           value: duration,
-          rating: rate('route_change', duration),
+          rating: rate(duration),
           route: next,
           details: { from_route: previous },
         });
@@ -342,7 +321,7 @@ function observeRouteChanges(): void {
  * message, a stack or a pathname.
  */
 function clientErrorEvent(report: QueuedClientError): RumEvent {
-  const details: Record<string, string> = {
+  const details: RumDetails = {
     error_name: report.errorName,
     error_kind: report.kind,
     error_source: report.source,
@@ -351,17 +330,29 @@ function clientErrorEvent(report: QueuedClientError): RumEvent {
   return { metric: 'client_error', value: 1, rating: 'info', route: report.route, details };
 }
 
-export function installRum(): void {
-  if (typeof window === 'undefined') return;
-  if (window.__mipRumInstalled) return;
-  window.__mipRumInstalled = true;
+function startRum(): void {
   attachClientErrorSink((report) => enqueueRumEvent(clientErrorEvent(report)));
   observeNavigation();
-  observeLcp();
-  observeCls();
-  observeInp();
-  observeLongTasks();
+  void observeVitals();
   observeApiCalls();
   observeRouteChanges();
   window.addEventListener('pagehide', flushRum);
+}
+
+export type RumScheduler = (task: () => void) => void;
+
+/** After first paint, when the main thread is idle (setTimeout where requestIdleCallback is missing: Safari). */
+export function scheduleIdle(task: () => void): void {
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(() => task(), { timeout: IDLE_TIMEOUT_MS });
+    return;
+  }
+  setTimeout(task, 0);
+}
+
+export function installRum(schedule: RumScheduler = scheduleIdle): void {
+  if (typeof window === 'undefined') return;
+  if (window.__mipRumInstalled) return;
+  window.__mipRumInstalled = true;
+  schedule(startRum);
 }
