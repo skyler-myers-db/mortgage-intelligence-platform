@@ -140,7 +140,7 @@ test.describe('Module 0 — accessibility (nightly)', () => {
         await seedTheme(page, theme);
         await page.goto(`/borrower-360/${id}`);
         await setTheme(page, theme);
-        await expect(page.getByText(/Borrower dossier|Refi economics check/i).first()).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByText(/Borrower dossier|In the Money check/i).first()).toBeVisible({ timeout: 20_000 });
         await runAxeAndAssertClean(page, '/borrower-360/:id', theme);
       });
 

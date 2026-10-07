@@ -36,6 +36,8 @@ import { LtvEquityValue } from './borrower-360.ltv-field';
 import { BorrowerQueuePager } from './borrower-360.pager';
 import { BorrowerTitle } from './borrower-360.title';
 import { useQueueContext } from '../lib/queueContext';
+import { saveDataRequested } from '../lib/prefetch';
+import { preloadRouteForPath } from '../lib/routePreloaders';
 
 // The proof drawer ships in the lazy Score anatomy chunk (wow-stage-2): the
 // dossier's natural load does not carry it. It is mounted (closed) on the
@@ -322,6 +324,12 @@ export default function Borrower360() {
 
   const offerLabel = offerDisplayLabel(b.recommended_offer_code, b.recommended_offer);
   const printRequest = { surface: 'borrower_360', borrower_id: b.borrower_id, row_count: 1 } as const;
+  // bundle-09 item 1: intent on 'Build outreach draft' warms the Offer route's
+  // CHUNK only. Never its data: the Offer read writes VIEW_BORROWER and
+  // RECOMMEND_OFFER audit rows, so it waits for the navigation.
+  const warmOfferChunk = () => {
+    if (!saveDataRequested()) preloadRouteForPath(`/offer-orchestrator/${b.borrower_id}`);
+  };
   const offerDescription = offerShortDescription(b.recommended_offer_code);
 
   return (
@@ -439,7 +447,7 @@ export default function Borrower360() {
                     {/* `current_rate` is already percent form in gold
                         (`first_pos_rate * 100`, unrounded) — render it through
                         the shared 2-dp rate convention so it can't disagree
-                        with the par rate in the refi-economics panel, and so
+                        with the par rate in the In the Money panel, and so
                         an IEEE754 tail (7.000000000000001) never ships. */}
                     <div className="field__value mono num">{`${currency(b.current_lien_balance)} · ${ratePct(b.current_rate)}`}</div>
                     <div className="field__sub">
@@ -495,7 +503,10 @@ export default function Borrower360() {
                 }
               />
               <Field k="Assigned to" v={b.assigned_to_label ?? b.assigned_to_email ?? 'Unassigned'} />
-              <Field k="Approval status" v={titleCaseStatus(b.approval_status, 'Pending')} />
+              <Field
+                k={<GlossaryTerm term="humanApproval">Approval status</GlossaryTerm>}
+                v={titleCaseStatus(b.approval_status, 'Pending')}
+              />
               <Field
                 k="Outreach status"
                 v={`${titleCaseStatus(b.outreach_status)} · ${formatDateTimeShort(b.outreach_at)}`}
@@ -559,12 +570,14 @@ export default function Borrower360() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="shield" size={14} className="icon-accent" />
-              <SurfaceTitle>Refi economics check</SurfaceTitle>
+              {/* D-platform-process-g step 3: the prototype's own vocabulary
+                  ('In the Money'), literals here until W5e's lexicon. */}
+              <SurfaceTitle>In the Money check</SurfaceTitle>
             </div>
             <div className="surface__body">
               <div className="chip-row mb-3">
                 <Chip variant={b.why_panel.in_the_money ? 'success' : 'warning'}>
-                  {b.why_panel.in_the_money ? <GlossaryTerm term="inTheMoney">Passes refi screen</GlossaryTerm> : 'Below refi screen'}
+                  <GlossaryTerm term="inTheMoney">{b.why_panel.in_the_money ? 'In the Money' : 'Not in the money'}</GlossaryTerm>
                 </Chip>
                 <span className="mono num text-1">
                   {signedBpsLabel(b.why_panel.rate_spread_bps)}
@@ -577,7 +590,7 @@ export default function Borrower360() {
                 </span>
               </div>
               <div className="rationale-box">
-                <span className="text-1 fw-500">Refinance economics.</span>{' '}
+                <span className="text-1 fw-500">In the Money rule.</span>{' '}
                 {b.why_panel.in_the_money_reason}
               </div>
               <div className="chip-row mt-3">
@@ -634,6 +647,8 @@ export default function Borrower360() {
                   to={`/offer-orchestrator/${b.borrower_id}`}
                   state={queue ? { queue } : undefined}
                   onClick={() => setLastBorrowerId(b.borrower_id)}
+                  onPointerEnter={warmOfferChunk}
+                  onFocus={warmOfferChunk}
                 >
                   Build outreach draft
                   <Icon name="chevright" size={14} />

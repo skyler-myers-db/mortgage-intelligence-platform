@@ -38,7 +38,18 @@ vi.mock('../components/AppContext', () => ({
   useApp: () => ({ lastBorrowerId: null, setLastBorrowerId: vi.fn(), saveLead: vi.fn(), isLeadSaved: () => false }),
 }));
 
+const preload = vi.hoisted(() => ({ route: vi.fn(), saveData: false }));
+vi.mock('../lib/routePreloaders', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/routePreloaders')>()),
+  preloadRouteForPath: preload.route,
+}));
+vi.mock('../lib/prefetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/prefetch')>()),
+  saveDataRequested: () => preload.saveData,
+}));
+
 import Borrower360 from './borrower-360';
+import type { Borrower360 as Borrower360Type } from '../types';
 
 const ID = 'B-0123456789ABC';
 const SENTINEL = 'SENTINEL SQL warehouse unavailable 500 Internal Server Error';
@@ -160,5 +171,132 @@ describe('Borrower 360 failure states', () => {
     expect(document.querySelector('h1')?.textContent).toBe(`Borrower ${ID} not found`);
     expect(text()).toContain('Check the ID, use search, or return to the lead queue.');
     expect(retry()).toBeNull();
+  });
+});
+
+/**
+ * The loaded dossier (W5d). D-platform-process-g step 3: the panel speaks the
+ * prototype's vocabulary, 'In the Money', never the scrubbed 'refi screen' /
+ * 'refi economics' variants. bundle-09 item 1: intent on 'Build outreach
+ * draft' warms the Offer route's chunk only (no read: the Offer read writes
+ * VIEW_BORROWER and RECOMMEND_OFFER rows). responsive-08: Export PDF appears
+ * only once the dossier has loaded.
+ *
+ * Mutation check (lane report): restoring 'Refi economics check' fails
+ * "names the panel and its chip in the prototype vocabulary".
+ */
+function dossier(inTheMoney: boolean): Borrower360Type {
+  return {
+    borrower_id: ID,
+    city: 'Chicago', state: 'IL', zip: '60611',
+    segment_codes: ['itm'],
+    equity_estimate: 285_000,
+    rate_spread_bps: 88,
+    opportunity_score: 82,
+    confidence: 80,
+    recommended_offer: 'Refinance',
+    recommended_offer_code: 'refi',
+    why_now: 'Rate spread clears the bar.',
+    is_investor: false,
+    related_property_count: 1,
+    clip_id: 'clip_demo_48291',
+    owner_link_id: 'ol_demo_48291',
+    subject_property: 'Chicago, IL 60611',
+    avm_value: 625_000,
+    current_lien_balance: 340_000,
+    current_rate: 5.75,
+    ltv: 54,
+    ltv_basis_is_unreliable: false,
+    approval_status: 'pending',
+    outreach_status: 'none',
+    trigger_timeline: [],
+    evidence_events: [],
+    why_panel: {
+      in_the_money: inTheMoney,
+      in_the_money_reason: 'Spread and equity both clear the screen.',
+      rate_spread_bps: 88,
+      market_rate: 0.0487,
+      sources: [],
+    },
+  } as unknown as Borrower360Type;
+}
+
+const BANNED_VARIANTS = /\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i;
+
+describe('Borrower 360 loaded dossier (W5d)', () => {
+  beforeEach(() => {
+    preload.route.mockReset();
+    preload.saveData = false;
+    // The dossier's sibling cards read through the transport; they are not
+    // under test here and must never reach a network.
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('names the panel and its chip in the prototype vocabulary', async () => {
+    state.borrower.data = dossier(true);
+    await mount();
+
+    expect(text()).toContain('In the Money check');
+    expect(text()).toContain('In the Money rule.');
+    const chip = [...document.querySelectorAll('.chip')].find((node) => node.textContent?.startsWith('In the Money'));
+    expect(chip?.querySelector('a.glossary-term')?.getAttribute('href')).toBe('/glossary#in-the-money');
+    expect(text()).not.toMatch(BANNED_VARIANTS);
+  });
+
+  it('says "Not in the money" below the rule, with the same glossary link', async () => {
+    state.borrower.data = dossier(false);
+    await mount();
+
+    const chip = [...document.querySelectorAll('.chip')].find((node) => node.textContent?.startsWith('Not in the money'));
+    expect(chip?.querySelector('a.glossary-term')?.getAttribute('href')).toBe('/glossary#in-the-money');
+    expect(text()).not.toMatch(BANNED_VARIANTS);
+  });
+
+  it('links the Approval status label to the human-approval definition', async () => {
+    state.borrower.data = dossier(true);
+    await mount();
+    const term = [...document.querySelectorAll('a.glossary-term')].find((node) => node.textContent?.startsWith('Approval status'));
+    expect(term?.getAttribute('href')).toBe('/glossary#human-approval');
+  });
+
+  it('warms only the Offer route chunk on intent, and nothing under Save-Data', async () => {
+    state.borrower.data = dossier(true);
+    await mount();
+    const link = [...document.querySelectorAll<HTMLAnchorElement>('a.btn--primary')]
+      .find((node) => node.textContent?.includes('Build outreach draft'));
+    expect(link).toBeTruthy();
+    const fetches = (globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+    const lifecycleReads = apiMocks.borrowerLifecycle.mock.calls.length;
+
+    act(() => {
+      link!.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+      link!.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }));
+    });
+    act(() => link!.focus());
+    expect(preload.route).toHaveBeenCalledWith(`/offer-orchestrator/${ID}`);
+    // The chunk only: no request of any kind leaves on intent.
+    expect((globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(fetches);
+    expect(apiMocks.borrowerLifecycle.mock.calls.length).toBe(lifecycleReads);
+
+    preload.route.mockReset();
+    preload.saveData = true;
+    act(() => link!.blur());
+    act(() => link!.focus());
+    expect(preload.route).not.toHaveBeenCalled();
+  });
+
+  it('offers Export PDF only once the dossier has loaded', async () => {
+    state.borrower.warmingUp = { dependency: 'warehouse', label: 'Warehouse warming up', attempt: 1, maxAttempts: 6, correlationId: null };
+    await mount();
+    expect(document.querySelector('[data-testid="export-pdf"]')).toBeNull();
+
+    act(() => root.unmount());
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    state.borrower = { data: dossier(true), warmingUp: null, error: null, manualRetry: vi.fn() };
+    await mount();
+    expect(document.querySelector('[data-testid="export-pdf"]')?.textContent).toContain('Export PDF');
   });
 });
