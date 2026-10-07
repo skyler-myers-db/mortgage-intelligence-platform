@@ -23,6 +23,11 @@
 .distribution-board::backdrop { background: var(--surface-scrim); }
 
 .distribution-board__wrap { overflow-x: auto; }
+.distribution-board__loading {
+  display: grid;
+  gap: var(--sp-2);
+  padding-block: var(--sp-2);
+}
 .distribution-board__table td { vertical-align: middle; }
 .distribution-board__name { font-size: var(--fs-13); }
 

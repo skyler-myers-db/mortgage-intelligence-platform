@@ -239,11 +239,7 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
           </thead>
           <tbody>
             {loading
-              ? [0, 1, 2].map((row) => (
-                <tr key={row}>
-                  <td colSpan={6}><span className="skeleton kpi__delta-skeleton" aria-hidden="true" /></td>
-                </tr>
-              ))
+              ? null
               : (preview?.officers ?? []).map((officer) => (
                 <tr key={officer.email}>
                   <td>
@@ -259,6 +255,14 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
               ))}
           </tbody>
         </table>
+        {loading && (
+          <div className="distribution-board__loading">
+            <span className="sr-only">Planning the distribution…</span>
+            {[0, 1, 2].map((row) => (
+              <span key={row} className="skeleton kpi__delta-skeleton" aria-hidden="true" />
+            ))}
+          </div>
+        )}
       </div>
       {failure ? (
         <div className="status-callout status-callout--danger" role="alert">

@@ -138,7 +138,7 @@ test.describe('(c) a moved plan', () => {
     hygiene.allow('console.error', /status of 409/);
     let previews = 0;
     const commits: string[] = [];
-    mockApi.register('POST', '/api/sales/distribute', ({ body }) => {
+    mockApi.register<unknown>('POST', '/api/sales/distribute', ({ body }) => {
       const request = body as { dry_run?: boolean; expected_plan_fingerprint?: string };
       if (request.dry_run) {
         previews += 1;
