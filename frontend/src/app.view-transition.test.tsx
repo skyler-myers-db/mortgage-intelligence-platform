@@ -69,7 +69,8 @@ vi.mock('./lib/routePreloaders', async () => {
   return {
     HomeRoute: Ok('home'),
     AnalyticsRoute: Ok('analytics'),
-    LeadQueueRoute: Ok('lead-queue'),
+    // The keep-alive slot's loader preloads the route chunk beside it.
+    LeadQueueRoute: Object.assign(Ok('lead-queue'), { preload: () => Promise.resolve() }),
     GlossaryRoute: Ok('glossary'),
     AssetRoute: Ok('asset'),
     PortfolioBuilderRoute: Ok('portfolio'),
@@ -146,6 +147,10 @@ describe('App route View Transition boundary', () => {
   async function flush(): Promise<void> {
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    // The Lead Queue keep-alive slot is a lazy module (routes/lead-queue.keepAlive).
+    await act(async () => {
+      await vi.dynamicImportSettled();
     });
   }
 
