@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator, Mapping
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -161,6 +161,9 @@ def test_audit_rollups_group_the_ten_workflow_types(monkeypatch: pytest.MonkeyPa
 
 
 Captured = tuple[str, str, str, dict[str, Any], str]  # event_type, entity_type, entity_id, metadata, borrower
+# borrower -> the approval / activation / request-batch ids its own writer created for it:
+# what ENTITY_RESOLUTION_SQL selects by borrower_id in production.
+Resolved = Mapping[str, Collection[str]]
 
 ACTOR = "skyler@entrada.ai"
 HEADERS = {"X-Forwarded-Email": ACTOR}
@@ -213,15 +216,16 @@ def _approved(borrower_id: str, *, review_mode: str = "individual") -> dict[str,
     return response.json()
 
 
-def _outreach_writers(store: InMemoryAuditStore, borrower_id: str) -> list[Captured]:
-    _approved(borrower_id)
+def _outreach_writers(store: InMemoryAuditStore, borrower_id: str) -> tuple[list[Captured], Resolved]:
+    approved = _approved(borrower_id)
     rejected = client.post(
         "/api/outreach/reject",
         json={"borrower_id": borrower_id, "channel": "email", "rationale_code": "fair_lending_review", "request_id": str(uuid4())},
         headers=HEADERS,
     )
     assert rejected.status_code == 200, rejected.text
-    return [row for row in _store_rows(store, borrower_id) if row[0] in {"APPROVE", "OUTREACH_REJECT"}]
+    rows = [row for row in _store_rows(store, borrower_id) if row[0] in {"APPROVE", "OUTREACH_REJECT"}]
+    return rows, {borrower_id: {approved["approval_id"], rejected.json()["approval_id"]}}
 
 
 def _sales_writers(fake: Any, borrower_id: str) -> list[Captured]:
@@ -263,7 +267,7 @@ def _loan_officer_writers(fake: Any, borrower_id: str) -> list[Captured]:
     return _fake_rows(fake, borrower_id)
 
 
-def _activation_writer(borrower_id: str) -> list[Captured]:
+def _activation_writer(borrower_id: str) -> tuple[list[Captured], Resolved]:
     from backend.schemas.activation import ActivationStageRequest
     from backend.services.activation_state import ActivationStateStore
     from tests.fixtures import mock_population
@@ -272,7 +276,7 @@ def _activation_writer(borrower_id: str) -> list[Captured]:
     borrower = next(b for b in mock_population.BORROWERS if b.borrower_id == borrower_id)
     fake = _Client()
     approval_id = str(uuid4())
-    ActivationStateStore(client=fake).stage_borrower(  # type: ignore[arg-type]
+    staged = ActivationStateStore(client=fake).stage_borrower(  # type: ignore[arg-type]
         borrower=borrower,
         destination=_destination(),
         payload=ActivationStageRequest(
@@ -284,10 +288,12 @@ def _activation_writer(borrower_id: str) -> list[Captured]:
     )
     params = fake.conn.audit_params
     assert params is not None
-    return [(params["event_type"], params["entity_type"], params["entity_id"], json.loads(params["metadata"]), borrower_id)]
+    assert staged.activation.borrower_id == borrower_id
+    row = (params["event_type"], params["entity_type"], params["entity_id"], json.loads(params["metadata"]), borrower_id)
+    return [row], {borrower_id: {staged.activation.activation_id}}
 
 
-def _ledger_writers(monkeypatch: pytest.MonkeyPatch) -> list[Captured]:
+def _ledger_writers(monkeypatch: pytest.MonkeyPatch) -> tuple[list[Captured], Resolved]:
     from backend.api import outreach_revoke as revoke_mod
     from tests.fixtures.approval_ledger_fake import FakeApprovalLedger
 
@@ -324,11 +330,13 @@ def _ledger_writers(monkeypatch: pytest.MonkeyPatch) -> list[Captured]:
         headers={"X-Forwarded-Email": "alice.analyst@summit.example", "X-Forwarded-Groups": ""},
     )
     assert requested.status_code == 200, requested.text
+    assert requested.json()["requested"] == [requested_id]
     owner = {"OUTREACH_REVOKE": borrower_id, "APPROVAL_REQUESTED": requested_id}
-    return [
+    rows = [
         (row["event_type"], row["entity_type"], row["entity_id"], dict(row["metadata"]), owner[row["event_type"]])
         for row in ledger.audits
     ]
+    return rows, {borrower_id: {revoked.json()["approval_id"]}, requested_id: {requested.json()["batch_id"]}}
 
 
 def _suppression_writers(borrower_id: str) -> tuple[list[Captured], list[Captured]]:
@@ -344,28 +352,47 @@ def _suppression_writers(borrower_id: str) -> tuple[list[Captured], list[Capture
     )
 
 
-def _assert_found_for_its_borrower_only(rows: list[Captured], expected_types: set[str]) -> None:
+def _assert_found_for_its_borrower_only(
+    rows: list[Captured], expected_types: set[str], resolved: Resolved | None = None
+) -> None:
     assert {row[0] for row in rows} >= expected_types, rows
     for event_type, entity_type, entity_id, metadata, borrower_id in rows:
         if event_type not in expected_types:
             continue
-        assert row_found(event_type, entity_type, entity_id, metadata, borrower_id), (event_type, entity_type)
+        reachable = (resolved or {}).get(borrower_id, ())
+        assert row_found(event_type, entity_type, entity_id, metadata, borrower_id, reachable), (event_type, entity_type)
         assert not history.row_names_borrower(event_type, entity_id, metadata, STRANGER), event_type
 
 
-def row_found(event_type: str, entity_type: str, entity_id: str, metadata: dict[str, Any], borrower_id: str) -> bool:
-    """Accepted by the belt, on an entity shape the resolution step reaches."""
-    resolvable = {"borrower", "approval", "activation", "approval_request_batch", "lead_queue"}
-    if entity_type not in resolvable or (entity_type == "borrower" and entity_id != borrower_id):
-        return False
-    return history.row_names_borrower(event_type, entity_id, metadata, borrower_id)
+def row_found(
+    event_type: str,
+    entity_type: str,
+    entity_id: str,
+    metadata: dict[str, Any],
+    borrower_id: str,
+    resolved: Collection[str] = (),
+) -> bool:
+    """Accepted by the belt, on an entity the resolution step reaches for THIS borrower.
+
+    A borrower entity is the borrower itself; an approval, activation or
+    request-batch entity is one its writer created for the borrower (``resolved``);
+    a lead_queue row is read by the distribute statement, never resolved.
+    """
+    if entity_type == "borrower":
+        reached = entity_id == borrower_id
+    elif entity_type in {"approval", "activation", "approval_request_batch"}:
+        reached = entity_id in resolved
+    else:
+        reached = entity_type == "lead_queue"
+    return reached and history.row_names_borrower(event_type, entity_id, metadata, borrower_id)
 
 
 def test_the_outreach_approve_and_reject_writers_are_found(writer_audit: InMemoryAuditStore) -> None:
     from tests.fixtures import mock_population
 
     borrower_id = mock_population.BORROWERS[0].borrower_id
-    _assert_found_for_its_borrower_only(_outreach_writers(writer_audit, borrower_id), {"APPROVE", "OUTREACH_REJECT"})
+    rows, resolved = _outreach_writers(writer_audit, borrower_id)
+    _assert_found_for_its_borrower_only(rows, {"APPROVE", "OUTREACH_REJECT"}, resolved)
 
 
 def test_the_sales_state_writers_are_found(writer_audit: InMemoryAuditStore, fake_lakebase_client: Any) -> None:
@@ -387,14 +414,15 @@ def test_the_loan_officer_writers_are_found(writer_audit: InMemoryAuditStore, fa
 def test_the_activation_writer_is_found() -> None:
     from tests.fixtures import mock_population
 
-    rows = _activation_writer(mock_population.BORROWERS[0].borrower_id)
-    _assert_found_for_its_borrower_only(rows, {"ACTIVATION_STAGE"})
+    rows, resolved = _activation_writer(mock_population.BORROWERS[0].borrower_id)
+    _assert_found_for_its_borrower_only(rows, {"ACTIVATION_STAGE"}, resolved)
 
 
 def test_the_revoke_and_approval_request_writers_are_found(
     writer_audit: InMemoryAuditStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _assert_found_for_its_borrower_only(_ledger_writers(monkeypatch), {"OUTREACH_REVOKE", "APPROVAL_REQUESTED"})
+    rows, resolved = _ledger_writers(monkeypatch)
+    _assert_found_for_its_borrower_only(rows, {"OUTREACH_REVOKE", "APPROVAL_REQUESTED"}, resolved)
 
 
 def test_a_blocked_approve_or_activation_is_found_and_a_blocked_draft_is_not() -> None:
