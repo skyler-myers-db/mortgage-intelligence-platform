@@ -5,7 +5,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { GenieAnswer as GenieAnswerShape, GenieClaimsSummary } from '../../types';
+import type { GenieAnswer as GenieAnswerShape, GenieClaimsSummary, GenieVerifiedClaim } from '../../types';
 import { GenieProofPanel } from './GenieAnswerProof';
 
 function payload(elapsedMs: number | null): GenieAnswerShape {
@@ -140,7 +140,7 @@ describe('GenieProofPanel: figures verified against the rows (genie-10 phase 1)'
     );
 
     expect(metrics()).toContain('Figures');
-    expect(container.textContent).toContain('3 of 3 verified against the returned rows');
+    expect(container.textContent).toContain('3 of 3 answer figures verified');
     const groups = Array.from(container.querySelectorAll('.genie-claims__group'));
     expect(groups.map((g) => g.querySelector('.genie-claims__group-title')?.textContent)).toEqual(['Summary', 'Market size']);
     const items = Array.from(container.querySelectorAll('.genie-claims__item')).map((item) => item.textContent);
@@ -160,10 +160,10 @@ describe('GenieProofPanel: figures verified against the rows (genie-10 phase 1)'
     }));
     render(withClaims({ verified: 45, total: 45, items }));
 
-    expect(container.textContent).toContain('45 of 45 verified against the returned rows');
+    expect(container.textContent).toContain('45 of 45 answer figures verified');
     expect(container.querySelectorAll('.genie-claims__item')).toHaveLength(40);
     expect(container.querySelector('.genie-claims__more')?.textContent).toBe(
-      'The first 40 of 45 verified figures are listed.',
+      'The first 40 of 45 verified answer figures are listed.',
     );
   });
 
@@ -173,6 +173,51 @@ describe('GenieProofPanel: figures verified against the rows (genie-10 phase 1)'
     expect(container.querySelector('.genie-claims__group-title')).toBeNull();
     expect(container.querySelectorAll('.genie-claims__item')).toHaveLength(1);
   });
+
+  it('counts the answer figures in the singular for one figure (owner ruling O2)', () => {
+    render(withClaims({ verified: 1, total: 1, items: [{ token: '123', kind: 'number', derivation: 'returned_value' }] }));
+
+    expect(Array.from(container.querySelectorAll('.genie-proof__value')).map((v) => v.textContent)).toContain(
+      '1 of 1 answer figure verified',
+    );
+  });
+
+  it('counts only the answer figures: 8 of 9 when one is not verified (owner ruling O2)', () => {
+    render(withClaims({ verified: 8, total: 9, items: [{ token: '123', kind: 'number', derivation: 'returned_value' }] }));
+
+    expect(container.textContent).toContain('8 of 9 answer figures verified');
+  });
+
+  it.each<[Partial<GenieVerifiedClaim>, string]>([
+    [{ support: 'cell', column: 'in_the_money_borrowers' }, 'Matches a returned value in In The Money Borrowers'],
+    [{ support: 'cell', column: null }, 'Matches a returned value'],
+    [{ support: 'row_count' }, 'The number of returned rows'],
+    [{ support: 'sum', column: 'borrowers' }, 'The total of the returned Borrowers values'],
+    [{ support: 'sum', column: null }, 'A total of a returned column'],
+    [{ support: 'share', column: 'borrowers' }, 'A share of the returned Borrowers total'],
+    [{ support: 'share' }, 'A share of a returned column total'],
+    [{ support: 'derived', derivation: 'derived_from_rows' }, 'Derived from the returned rows (an average, range, change or running total)'],
+    [{ support: 'bound', derivation: 'bound' }, 'A threshold the returned values satisfy'],
+  ])('labels the provenance %j as "%s"', (fields, label) => {
+    const item: GenieVerifiedClaim = { token: '250', kind: 'number', derivation: 'returned_value', ...fields };
+    render(withClaims({ verified: 1, total: 1, items: [item] }));
+
+    expect(container.querySelector('.genie-claims__derivation')?.textContent).toBe(label);
+  });
+
+  it.each<GenieVerifiedClaim['derivation']>(['returned_value', 'derived_from_rows', 'bound'])(
+    'falls back to the %s derivation label when the item carries no provenance (older answers)',
+    (derivation) => {
+      const labels = {
+        returned_value: 'Matches a returned value',
+        derived_from_rows: 'Derived from the returned rows (a total, average, share or change)',
+        bound: 'A threshold the returned values satisfy',
+      };
+      render(withClaims({ verified: 1, total: 1, items: [{ token: '250', kind: 'number', derivation, support: null }] }));
+
+      expect(container.querySelector('.genie-claims__derivation')?.textContent).toBe(labels[derivation]);
+    },
+  );
 
   it.each([null, { verified: 0, total: 0, items: [] }])('renders nothing for claims %j (older answers included)', (claims) => {
     render(withClaims(claims));
