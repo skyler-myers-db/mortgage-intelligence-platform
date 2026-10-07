@@ -81,6 +81,9 @@ from backend.services.genie_answers import (
     GenieVisualizationSpec,
     default_follow_up_questions,
 )
+from backend.services.repositories.databricks_borrower_contactability import (
+    BorrowerContactabilityRow,
+)
 from backend.services.repositories.databricks_borrowers import _build_borrower_proof
 from backend.services.scoring import is_high_opportunity, score_band
 from tests.fixtures import mock_population as mock_data
@@ -820,6 +823,24 @@ class InProcessMockLeadRepository:
 class InProcessMockBorrowerRepository:
     """Test fixture implementing ``BorrowerRepository`` from the synthetic population."""
 
+    #: The contactability columns ``contactability`` reads off a fixture borrower.
+    _CONTACTABILITY_FIELDS = (
+        "marketing_eligible",
+        "consent_status",
+        "suppression_reason",
+        "dnc",
+        "eligibility_source",
+        "last_touch_at",
+        "eligible_recontact_at",
+    )
+
+    def __init__(self) -> None:
+        # Per-test gold overrides by borrower id (the Follow-ups tray suites):
+        # any of the seven transport columns, and ``contactable_sql`` to force
+        # the warehouse predicate to disagree with ``evaluate`` either way.
+        # Absent ``contactable_sql`` agrees with ``evaluate``. Tests reset it.
+        self.contactability_overrides: dict[str, dict[str, object]] = {}
+
     def get(self, borrower_id: str) -> Borrower360 | None:
         for b in mock_data.BORROWERS:
             if b.borrower_id == borrower_id:
@@ -834,6 +855,27 @@ class InProcessMockBorrowerRepository:
     def existing_borrower_ids(self, borrower_ids: Sequence[str]) -> set[str]:
         known = {b.borrower_id for b in mock_data.BORROWERS}
         return {borrower_id for borrower_id in borrower_ids if borrower_id in known}
+
+    def contactability(
+        self, borrower_ids: Sequence[str]
+    ) -> dict[str, BorrowerContactabilityRow]:
+        by_id = {b.borrower_id: b for b in mock_data.BORROWERS}
+        out: dict[str, BorrowerContactabilityRow] = {}
+        for borrower_id in borrower_ids:
+            borrower = by_id.get(borrower_id)
+            if borrower is None:
+                continue
+            fields: dict[str, object] = {
+                name: getattr(borrower, name) for name in self._CONTACTABILITY_FIELDS
+            }
+            overrides = dict(self.contactability_overrides.get(borrower_id, {}))
+            fields.update({k: v for k, v in overrides.items() if k != "contactable_sql"})
+            row = BorrowerContactabilityRow.from_gold({**fields, "contactable_sql": None})
+            verdict = overrides.get(
+                "contactable_sql", GoldEligibilityService().evaluate(row).eligible
+            )
+            out[borrower_id] = row.model_copy(update={"contactable_sql": verdict})
+        return out
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
         borrower = self.get(borrower_id)

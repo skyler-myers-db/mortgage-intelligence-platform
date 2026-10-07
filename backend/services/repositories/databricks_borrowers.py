@@ -12,6 +12,7 @@ import re
 from collections.abc import Sequence
 from threading import Lock
 
+import backend.services.repositories.databricks_borrower_contactability as _contactability
 from backend.config.settings import settings
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.lead import Borrower360, LeadSummary
@@ -56,7 +57,7 @@ log = logging.getLogger(__name__)
 
 
 
-class DatabricksBorrowerRepository:
+class DatabricksBorrowerRepository(_contactability.BorrowerContactabilityMixin):
     """Borrower-360 + evidence reads from ``gold.borrower_dossier``.
 
     Slice13-accuracy perf: the dossier table pre-joins ``borrower_360`` +

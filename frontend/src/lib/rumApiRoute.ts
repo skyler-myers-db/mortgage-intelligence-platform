@@ -47,6 +47,8 @@ export const API_ROUTE_SEGMENTS = [
   'status', 'submit', 'summary', 'team', 'telemetry', 'workflows', 'workspace',
   'withdraw',
   'zip-rollups',
+  // Follow-ups tray (D-shell-deviations-a).
+  'followups',
 ] as const;
 
 const KNOWN_SEGMENTS: ReadonlySet<string> = new Set(API_ROUTE_SEGMENTS);
@@ -69,6 +71,9 @@ const EXCLUDED_TEMPLATES: ReadonlySet<string> = new Set([
   // The Lead Queue's change-signal poll (audit states-09): once a minute
   // while the queue is open; a poll, not a read a person made.
   '/api/workspace/queue-version',
+  // The rail's Follow-ups poll (D-shell-deviations-a): once a minute on every
+  // route for an eligible actor; a poll, not a read a person made.
+  '/api/sales/followups/summary',
 ]);
 const EXCLUDED_PREFIX = '/api/telemetry/';
 

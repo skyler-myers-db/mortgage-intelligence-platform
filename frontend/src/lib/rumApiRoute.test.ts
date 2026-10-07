@@ -87,6 +87,14 @@ describe('apiCallRoute', () => {
     expect(apiCallRoute(`${ORIGIN}/api/v1/admin/settings`, ORIGIN)).toBe('/api/admin/settings');
   });
 
+  it('never reports the Follow-ups poll, but keeps the tray list (D-shell-deviations-a)', () => {
+    expect(apiCallRoute(`${ORIGIN}/api/v1/sales/followups/summary`, ORIGIN)).toBeNull();
+    expect(apiCallRoute(`${ORIGIN}/api/sales/followups/summary`, ORIGIN)).toBeNull();
+    expect(apiCallRoute(`${ORIGIN}/api/v1/sales/followups?window_days=7`, ORIGIN)).toBe('/api/sales/followups');
+    // A sibling 'summary' read still reports.
+    expect(apiCallRoute(`${ORIGIN}/api/v1/sales/outcomes/summary`, ORIGIN)).toBe('/api/sales/outcomes/summary');
+  });
+
   it('skips a template over the server\'s 160-character api_route limit instead of costing the batch a 422', () => {
     // '/api' + six '/campaign-recommendation' (24 each) = 148 characters.
     const long = Array.from({ length: 6 }, () => 'campaign-recommendation').join('/');

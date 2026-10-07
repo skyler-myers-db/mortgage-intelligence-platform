@@ -165,6 +165,8 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "status", "submit", "summary", "team", "telemetry", "workflows", "workspace",
     "withdraw",
     "zip-rollups",
+    # Follow-ups tray (D-shell-deviations-a).
+    "followups",
 })
 RUM_API_ROUTE_ID_SEGMENT = ":id"
 
