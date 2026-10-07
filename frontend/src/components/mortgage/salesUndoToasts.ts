@@ -73,6 +73,15 @@ async function failureSentence(error: ApiError, subject: string): Promise<string
   return module ? module.failureSentence(error, subject) : null;
 }
 
+/** A 429 that names a wait: its Retry is held behind the toast's countdown. */
+export function isCountdown429(error: unknown): error is ApiError & { retryAfterMs: number } {
+  return error instanceof ApiError
+    && error.status === 429
+    && error.retryAfterMs !== null
+    && error.retryAfterMs > 0
+    && clientFailureReason(error) === null;
+}
+
 /**
  * Run `attempt`, handing it the way to run itself again (a 429's Retry).
  * Module-level on purpose: a hook-local function that names itself inside its
@@ -92,13 +101,7 @@ export function withRetry<T>(attempt: (retry: () => void) => T): T {
  * queue's ordinary write-failure toast.
  */
 export function toastSalesWriteFailure(title: string, error: unknown, subject: string, retry: () => void): void {
-  if (
-    !(error instanceof ApiError)
-    || error.status !== 429
-    || error.retryAfterMs === null
-    || error.retryAfterMs <= 0
-    || clientFailureReason(error) !== null
-  ) {
+  if (!isCountdown429(error)) {
     toastWriteFailure(title, error, subject);
     return;
   }
