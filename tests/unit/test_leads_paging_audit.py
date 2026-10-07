@@ -416,6 +416,37 @@ def test_a_cached_later_page_of_the_old_refresh_is_not_served_behind_a_fresh_pag
     assert _ids(second) == _ids(old_second), "the same rows, read again from the new refresh"
 
 
+def test_an_identity_page_zero_of_a_newer_refresh_retires_the_cached_later_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A handoff / identity view reads page 0 uncached; its page 1 must not come from the old refresh."""
+
+    clock = _Clock()
+    warehouse = SqliteLeadWarehouse([gold_lead_row(index) for index in range(1_050)])
+    repo = DatabricksLeadRepository(warehouse, cache=TTLCache(now=clock), cache_ttl_s=300.0)  # type: ignore[arg-type]
+    first = repo.list_page(None, None, limit=500)
+    old_second = repo.list_page(None, None, limit=500, after=first.last_keyset)
+    warehouse.set_refreshed_at(NEW_REFRESH)
+
+    def identity_rows(*_args: object, **_kwargs: object) -> tuple[list[dict[str, Any]], dict[str, str | int]]:
+        # The identity statement is Databricks SQL; its ranked raw rows are these.
+        raw = warehouse.execute(
+            "SELECT -rank_overall AS __rank_order, * FROM lead_population "
+            "ORDER BY __rank_order DESC, borrower_id ASC LIMIT 500"
+        )
+        return raw, {"total": 1_050, "cohort_digest": "b" * 64, "snapshot_id": "snapshot-1"}
+
+    monkeypatch.setattr(repo._cohort_queries, "list_with_identity_rows", identity_rows)
+    page_zero, _ = repo.list_with_identity_page(None, None, limit=500)
+    second = repo.list_page(None, None, limit=500, after=page_zero.last_keyset)
+
+    assert page_zero.last_keyset == first.last_keyset
+    assert [lead.borrower_id for lead in second.leads] == [lead.borrower_id for lead in old_second.leads]
+    assert {lead.row_refreshed_at.isoformat() for lead in second.leads if lead.row_refreshed_at} == {
+        "2026-09-30T06:00:00+00:00"
+    }, "page 1 came from the cached old refresh behind a fresh identity page 0"
+
+
 def test_a_page_with_no_refresh_stamp_stays_cached() -> None:
     clock = _Clock()
     warehouse = SqliteLeadWarehouse([gold_lead_row(index, refreshed_at=None) for index in range(10)])
