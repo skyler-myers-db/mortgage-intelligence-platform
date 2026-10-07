@@ -13,7 +13,6 @@
  *
  * W5d (tables-10; deviation:audit-explorer-controls): the Action menu and the
  * menus' counts come from the facets, read only on an explicit menu open;
- * Today / 7 / 30-day presets; an on-demand total ('Count matching rows');
  * 'Exclude my ledger reads', a per-viewer, server-side filter kept out of the
  * URL (a shared link must not silently mean 'hide the recipient's reads');
  * the page CSV, for administrators only, downloads only after its
@@ -40,7 +39,6 @@ import {
 import { queryKeys } from '../../lib/queryKeys';
 import { toast } from '../../lib/toast';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
-import { AuditMatchingCount } from './AdminAuditExplorer.count';
 import { AuditFacetsProvider } from './AdminAuditExplorer.facets';
 import { useScrollDeepLinkedRow } from './AdminAuditExplorer.deepLink';
 import { AuditAppliedFilterChips, AuditExplorerFilterForm } from './AdminAuditExplorer.filters';
@@ -315,12 +313,6 @@ export function AdminAuditExplorer() {
           emptiedFocusRef={applyButtonRef}
           summary={`Showing rows ${firstShownRow}-${lastShownRow} that match the applied filters.`}
           onRemove={(key) => applyFilters({ ...applied, [key]: '' })}
-        />
-        <AuditMatchingCount
-          query={explorerQuery}
-          filtersKey={appliedKey}
-          firstRow={firstShownRow}
-          lastRow={lastShownRow}
         />
         {warmingUp && events === null && (
           <div className="mt-3">

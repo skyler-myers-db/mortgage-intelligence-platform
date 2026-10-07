@@ -6,14 +6,14 @@
  * Every read here is a RECORDED ledger read: the server writes one
  * VIEW_AUDIT_LEDGER row per served request (D-audit-reads-c3). So the
  * explorer calls them only on a deliberate act: the page on a filter set or
- * page change, the facets on an explicit menu open, the count on a click.
- * Never on hover, prefetch or a poll. The CSV declaration (the hashing) is
+ * page change, the facets on an explicit menu open. Never on hover, prefetch
+ * or a poll. (The on-demand total, GET /audit/count, is W5e's: cut 2.) The CSV declaration (the hashing) is
  * built in AdminAuditExplorer.export.ts, a click-time chunk.
  */
 import type { AuditEventPage } from '../apiTypes';
 import { getJson, postJson } from '../apiTransport';
 
-/** The /events/page and /count filters (the URL's applied set plus the exclusion). */
+/** The /events/page filters (the URL's applied set plus the exclusion). */
 export interface AuditExplorerQuery {
   actor?: string | null;
   action?: string | null;
@@ -41,12 +41,6 @@ export interface AuditFacetsResponse {
   truncated: { event_types: boolean; actions: boolean; actors: boolean };
   since: string;
   until: string | null;
-}
-
-export interface AuditCountResponse {
-  count: number;
-  capped: boolean;
-  cap: number;
 }
 
 export interface AuditExportReceiptRequest {
@@ -103,11 +97,6 @@ export function auditFacets(
 ): Promise<AuditFacetsResponse> {
   const params = queryString({ since: window.since, until: window.until });
   return getJson<AuditFacetsResponse>(`/api/audit/facets?${params}`, signal);
-}
-
-export function auditCount(query: AuditExplorerQuery, signal?: AbortSignal): Promise<AuditCountResponse> {
-  const params = queryString({ ...query, event_id: null });
-  return getJson<AuditCountResponse>(`/api/audit/count?${params}`, signal);
 }
 
 /** The AUDIT_EXPORT ledger row the explorer's page CSV waits for (admin only). */

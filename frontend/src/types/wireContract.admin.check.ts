@@ -18,7 +18,7 @@ import type { AuditRollupResponse } from '../lib/apiClients/audit';
 import type { RefusalReportFamilyCount, RefusalReportItem, RefusalReportListResponse, RefusalReportQuestionResponse } from '../lib/apiClients/refusalReports';
 import type { FieldPerformanceCell, FieldPerformanceResponse } from '../lib/apiClients/fieldPerformance';
 import type { PrintReceipt, PrintReceiptRequest } from '../lib/apiClients/printReceipt';
-import type { AuditCountResponse, AuditExportReceipt, AuditExportReceiptRequest, AuditFacetsResponse, AuditFacetValue } from '../lib/apiClients/auditExplorer';
+import type { AuditExportReceipt, AuditExportReceiptRequest, AuditFacetsResponse, AuditFacetValue } from '../lib/apiClients/auditExplorer';
 import type { ActorAuditEventPage, ActorAuditEventSummary, AuditEventPage, AuditEventRow, DecisionReceipt, HealthPayload as LibHealthPayload } from '../lib/apiTypes';
 import type { AssetFreshnessResponse, KpiProofParam, KpiProofResponse } from '../lib/apiTypes';
 import type { AssetColumn, AssetLineageNode, AssetMetadataResponse, AssetProperty, AssetTag, DataEstateAsset, DataEstateLane, DataEstateResponse } from '../types';
@@ -82,8 +82,6 @@ export type WireContractAdmin = [
   Expect<NoPhantomKeys<AuditFacetsResponse, ApiResponse<'AuditFacetsResponse'>>>,
   Expect<WireFits<ApiResponse<'AuditFacetValue'>, AuditFacetValue>>,
   Expect<NoPhantomKeys<AuditFacetValue, ApiResponse<'AuditFacetValue'>>>,
-  Expect<WireFits<ApiResponse<'AuditCountResponse'>, AuditCountResponse>>,
-  Expect<NoPhantomKeys<AuditCountResponse, ApiResponse<'AuditCountResponse'>>>,
   Expect<WireFits<ApiResponse<'AuditExportReceipt'>, AuditExportReceipt>>,
   Expect<NoPhantomKeys<AuditExportReceipt, ApiResponse<'AuditExportReceipt'>>>,
   Expect<WireFits<AuditExportReceiptRequest, ApiRequest<'AuditExportReceiptRequest'>>>,

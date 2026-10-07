@@ -5,9 +5,8 @@
  * (audit flow-04 phase 1 / tables-10), pinned on the rendered explorer with
  * the real query hook: what reaches the explorer's page read, what the URL
  * holds, and what the table shows. W5d adds the recorded-read discipline of
- * the facets and the count (an explicit menu open, a click; never on
- * mount), the per-viewer exclusion, the presets and the audited, admin-only
- * page CSV.
+ * the facets (an explicit menu open; never on mount), the per-viewer
+ * exclusion and the audited, admin-only page CSV.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect } from 'react';
@@ -26,7 +25,6 @@ const mocks = vi.hoisted(() => ({
   pageError: null as Error | null,
   rollupsError: null as Error | null,
   facetCalls: [] as Array<{ since: string | null; until: string | null }>,
-  countCalls: [] as PageFilters[],
   receiptCalls: [] as Array<{ row_count: number; filters: Record<string, string> }>,
   order: [] as string[],
 }));
@@ -72,10 +70,6 @@ vi.mock('../../lib/apiClients/auditExplorer', async (importOriginal) => {
         since: window.since ?? '2026-07-01T00:00:00Z',
         until: window.until,
       });
-    },
-    auditCount: (query: PageFilters) => {
-      mocks.countCalls.push(query);
-      return Promise.resolve({ count: 60_000, capped: true, cap: 50_000 });
     },
     createAuditExportReceipt: (body: { row_count: number; filters: Record<string, string> }) => {
       mocks.receiptCalls.push(body);
@@ -172,7 +166,6 @@ describe('AdminAuditExplorer', () => {
   beforeEach(() => {
     mocks.pageCalls.length = 0;
     mocks.facetCalls.length = 0;
-    mocks.countCalls.length = 0;
     mocks.receiptCalls.length = 0;
     mocks.order.length = 0;
     appContext.canAccessAdmin = true;
@@ -422,7 +415,7 @@ describe('AdminAuditExplorer', () => {
 
   // --- W5d (tables-10): recorded reads only on a deliberate act -------------
 
-  it('reads no facets and no count on mount', async () => {
+  it('reads no facets on mount, hover or focus', async () => {
     await render('/audit-ledger?audit_since=2026-07-01');
     // Hovering or focusing a counted menu reads nothing either.
     const action = button(/^Action: /);
@@ -432,7 +425,6 @@ describe('AdminAuditExplorer', () => {
     });
     await settle();
     expect(mocks.facetCalls).toEqual([]);
-    expect(mocks.countCalls).toEqual([]);
     expect(mocks.pageCalls).toHaveLength(1);
   });
 
@@ -458,25 +450,6 @@ describe('AdminAuditExplorer', () => {
     expect(mocks.facetCalls).toHaveLength(1);
   });
 
-  it('counts matching rows only on a click, and a filter change hides the count', async () => {
-    await render('/audit-ledger?audit_event_type=LEAD_EXPORT');
-    expect(mocks.countCalls).toEqual([]);
-
-    act(() => button(/^Count matching rows$/).click());
-    await vi.waitFor(() => expect(container.querySelector('[data-testid="audit-count"]')).not.toBeNull());
-
-    expect(mocks.countCalls).toHaveLength(1);
-    expect(mocks.countCalls[0]).toMatchObject({ event_type: 'LEAD_EXPORT', exclude_own_ledger_reads: false });
-    expect(container.querySelector('[data-testid="audit-count"]')?.textContent)
-      .toBe('Showing rows 1–2 of more than 60,000 matching');
-
-    type(input('ACTOR'), 'approver@summit-mortgage.example');
-    act(() => button(/^Apply filters$/).click());
-    await settle();
-    expect(container.querySelector('[data-testid="audit-count"]')).toBeNull();
-    expect(mocks.countCalls).toHaveLength(1);
-  });
-
   it('sends Exclude my ledger reads on the page read, keeps it out of the URL and restarts on page 1', async () => {
     await render('/audit-ledger?audit_event_type=LEAD_EXPORT#audit');
     const toggle = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
@@ -489,22 +462,6 @@ describe('AdminAuditExplorer', () => {
 
     expect(lastCall()).toMatchObject({ event_type: 'LEAD_EXPORT', exclude_own_ledger_reads: true, cursor: null });
     expect(seen.location.search).toBe('?audit_event_type=LEAD_EXPORT');
-  });
-
-  it('applies a date preset at once, keeping the other filters and dropping the deep link', async () => {
-    await render('/audit-ledger?audit_event_type=LEAD_EXPORT&audit_event_id=evt-fixture-1');
-    const preset = button(/^Last 7 days$/);
-    expect(preset.getAttribute('aria-pressed')).toBe('false');
-
-    act(() => preset.click());
-    await settle();
-
-    const params = Object.fromEntries(new URLSearchParams(seen.location.search));
-    const today = new Date();
-    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
-    const day = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    expect(params).toEqual({ audit_event_type: 'LEAD_EXPORT', audit_since: day(start), audit_until: day(today) });
-    expect(button(/^Last 7 days$/).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('waits for the AUDIT_EXPORT receipt before the CSV download', async () => {

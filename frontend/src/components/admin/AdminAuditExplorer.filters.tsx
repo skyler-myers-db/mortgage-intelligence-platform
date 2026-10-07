@@ -17,8 +17,7 @@
  *
  * W5d (tables-10; deviation:audit-explorer-controls): the ACTION free-text
  * box is an 'Action' FilterSelect fed by the facets (AdminAuditExplorer.
- * facets.tsx: read only on an explicit menu open), and Today / Last 7 days /
- * Last 30 days presets apply a window at once beside SINCE / UNTIL.
+ * facets.tsx: read only on an explicit menu open).
  */
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { Chip } from '../Primitives';
@@ -36,7 +35,6 @@ import {
   actionFilterOptions,
   useAuditActionFacets,
 } from './AdminAuditExplorer.facets';
-import { AUDIT_DATE_PRESETS, isPresetApplied, withPreset } from './AdminAuditExplorer.presets';
 import {
   EMPTY_AUDIT_FILTERS,
   auditFilterDraftError,
@@ -180,19 +178,7 @@ export function AuditExplorerFilterForm({ applied, onApply, applyButtonRef }: Fi
           {...fieldErrorProps('until')}
         />
       </label>
-      <div className="filter-row__group audit-date-presets" role="group" aria-label="Date presets">
-        {AUDIT_DATE_PRESETS.map((preset) => (
-          <button
-            key={preset.label}
-            type="button"
-            className="btn btn--ghost btn--sm"
-            aria-pressed={isPresetApplied(applied, preset)}
-            onClick={() => onApply(withPreset(applied, preset))}
-          >
-            {preset.label}
-          </button>
-        ))}
-      </div>
+
       <label className="filter-row__group">
         <span className="field__label">CORRELATION ID</span>
         <input

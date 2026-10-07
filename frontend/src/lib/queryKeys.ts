@@ -80,12 +80,10 @@ export const queryKeys = {
   auditReceipt: (auditEventId: string | null | undefined) =>
     ['mip', 'audit', 'receipt', auditEventId ?? ''] as const,
   /**
-   * The explorer's facets and total count (W5d, tables-10): recorded
-   * VIEW_AUDIT_LEDGER reads, started only by an explicit menu open (facets,
-   * per since / until window) or a click (count, per applied filter set).
+   * The explorer's facets (W5d, tables-10): a recorded VIEW_AUDIT_LEDGER read,
+   * started only by an explicit menu open, per since / until window.
    */
   auditFacets: (windowKey: string) => ['mip', 'audit', 'facets', windowKey] as const,
-  auditCount: (filtersKey: string) => ['mip', 'audit', 'count', filtersKey] as const,
   /**
    * The refusal-reports page (D-audit-reads-d): every served page writes one
    * VIEW_AUDIT_LEDGER row, so it is read only on an explicit open, a filter

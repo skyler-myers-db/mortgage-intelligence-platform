@@ -7,15 +7,6 @@
    .filter-row / .chip-row primitives.
    ============================================================ */
 
-/* Today / Last 7 days / Last 30 days, beside SINCE / UNTIL: a row of
-   ghost buttons aligned on the inputs' bottom edge. */
-.filter-row__group.audit-date-presets {
-  flex-direction: row;
-  align-items: flex-end;
-  gap: var(--sp-1);
-  inline-size: auto;
-}
-
 /* 'Exclude my ledger reads' in the header chip row. */
 .audit-exclude-own {
   display: inline-flex;
@@ -25,12 +16,4 @@
   font-size: var(--fs-12);
   white-space: nowrap;
   cursor: pointer;
-}
-
-/* The on-demand total under the applied-filter chips. */
-.audit-count {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-block-size: calc(var(--sp-6) + var(--sp-1));
 }
