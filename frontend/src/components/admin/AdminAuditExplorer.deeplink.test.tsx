@@ -38,6 +38,8 @@ vi.mock('../../lib/useWarmingUpRetry', () => ({
   },
 }));
 
+vi.mock('../AppContext', () => ({ useApp: () => ({ canAccessAdmin: true, lender: 'Summit Mortgage' }) }));
+
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {},

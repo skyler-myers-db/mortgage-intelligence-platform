@@ -1,10 +1,27 @@
 /* Print-only evidence view.
    Keeps Borrower 360 and other audit surfaces readable in paper binders by
-   removing workspace chrome while preserving the same token vocabulary. */
+   removing workspace chrome while preserving the same token vocabulary.
+
+   responsive-08 (W5d; deviation:print-export): Export PDF on Borrower 360
+   and the audit explorer writes a PRINT_EXPORT receipt before the print
+   dialog opens, and `.print-provenance` (hidden on screen) carries the
+   surface, the actor, the time and the receipt id onto paper. Paper is
+   monochrome and token-only (no literals): Canvas / CanvasText and their
+   mixes, so a dark and a light session print identical ink. Every override
+   below is prefixed with :root so it outranks the screen compound it
+   undoes, including lazy route and component sheets that load after this
+   initial stylesheet (SegmentCard.css, route CSS). */
 
 @media print {
   @page {
     margin: 0.5in;
+
+    /* Progressive enhancement: engines with page margin boxes (Chromium
+       131+) number the pages; the others ignore the at-rule. */
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      color: CanvasText;
+    }
   }
 
   :root,
@@ -30,10 +47,43 @@
     --accent-hover: CanvasText;
     --accent-soft: Canvas;
     --accent-contrast: Canvas;
+    --accent-data: CanvasText;
     --kpi-glow: none;
     --shadow-sm: none;
     --shadow-md: none;
     --shadow-lg: none;
+    /* Signal and status ink: monochrome on paper, so a dark and a light
+       session print the same page (the chips already print monochrome). */
+    --signal-success: CanvasText;
+    --signal-danger: CanvasText;
+    --signal-warning: CanvasText;
+    --signal-warning-ink: CanvasText;
+    --status-success-ink: CanvasText;
+    --status-danger-ink: CanvasText;
+    --status-warning-ink: CanvasText;
+    --success-fill: CanvasText;
+    --success-fill-hover: CanvasText;
+    /* Score anatomy parts: five greys, still told apart in black and white. */
+    --score-part-economic: CanvasText;
+    --score-part-intent: color-mix(in srgb, CanvasText 82%, Canvas);
+    --score-part-fit: color-mix(in srgb, CanvasText 64%, Canvas);
+    --score-part-relationship: color-mix(in srgb, CanvasText 46%, Canvas);
+    --score-part-evidence: color-mix(in srgb, CanvasText 28%, Canvas);
+    /* Segment ink: every --seg-* tokens.css declares, so no segment prints
+       pastel on white (print.test.ts pins the name parity). */
+    --seg-itm: CanvasText;
+    --seg-listed: CanvasText;
+    --seg-permit: CanvasText;
+    --seg-investor: CanvasText;
+    --seg-equity: CanvasText;
+    --seg-retention: CanvasText;
+    --seg-second-lien: CanvasText;
+    --seg-heloc-draw: CanvasText;
+    --seg-equity-history: CanvasText;
+    --seg-refi-propensity: CanvasText;
+    --seg-related-itm: CanvasText;
+    --seg-payoff-loss: CanvasText;
+    --seg-permit-activity: CanvasText;
   }
 
   html,
@@ -66,19 +116,39 @@
     animation: none;
   }
 
+  /* Workspace chrome, overlays and anything that is not the page itself.
+     #refusal-reports: consented, expiring refusal text never reaches paper. */
   .rail,
   .topbar,
   .route-nav,
   .tweaks,
   .genie,
+  .genie__fab,
   .drawer,
-  .fab,
+  .cmdk,
+  .evidence-hovercard,
+  .toast-region,
+  #refusal-reports,
   .degraded-banner,
   .sr-skip-link,
   .btn,
   .surface__icon,
   .tbl__expand {
     display: none;
+  }
+
+  /* The provenance block: hidden on screen, the page's first lines on paper. */
+  :root .print-provenance[hidden] {
+    display: block;
+    margin-block-end: var(--sp-4);
+    padding-block-end: var(--sp-2);
+    border-block-end: 1pt solid var(--line-2);
+    color: CanvasText;
+    font-size: var(--fs-12);
+  }
+
+  :root .print-provenance p {
+    margin: 0;
   }
 
   .surface {
@@ -102,14 +172,32 @@
     border-color: var(--line-2);
   }
 
-  .grid,
-  .grid-2,
-  .grid-3,
-  .layout-2,
-  .layout-3,
-  .cols-2,
-  .cols-3 {
-    display: block;
+  /* One column on paper: the real grids and their screen compounds (the
+     container bands and the four-KPI quantity query). */
+  :root .layoutA-grid,
+  :root .layoutA-grid.analytics-grid--wide-left,
+  :root .layoutA-grid.layoutA-grid--segment-workbench,
+  :root .main__inner > .layoutA-grid,
+  :root .kpi-row,
+  :root .kpi-row:has(> :nth-child(4):last-child),
+  :root .main__inner > .kpi-row,
+  :root .seg-grid,
+  :root .main__inner > .seg-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :root .stack-grid {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Tables print whole: no scroll window clips them. */
+  :root .tbl-wrap,
+  :root .tbl-wrap.tbl-wrap--fill,
+  :root .admin-audit-list {
+    max-height: none;
+    max-block-size: none;
+    overflow: visible;
   }
 
   .tbl {
@@ -124,12 +212,27 @@
 
   .chip,
   .evidence-chip,
-  .score,
-  .confidence {
+  .score {
     color: CanvasText;
     background: Canvas;
     border-color: var(--line-2);
     box-shadow: none;
+  }
+
+  /* Confidence bars on paper: every bar outlined, the lit ones filled. */
+  :root .conf__bar {
+    background: Canvas;
+    outline: 1pt solid CanvasText;
+    outline-offset: -1pt;
+    print-color-adjust: exact;
+  }
+
+  :root .conf .conf__bar.on,
+  :root .conf--high .conf__bar.on,
+  :root .conf--med .conf__bar.on,
+  :root .conf--low .conf__bar.on {
+    background: CanvasText;
+    print-color-adjust: exact;
   }
 
   /* Scroll-revealed blocks (trigger timeline, offer details) sit at

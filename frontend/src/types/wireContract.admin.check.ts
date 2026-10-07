@@ -9,7 +9,7 @@
  * proves the coverage and the binding. A failing pair carries a dated
  * wire-drift entry tagged to the lane that fixes it at the cause.
  */
-import type { ApiBody, ApiOk, ApiResponse } from './api.gen';
+import type { ApiBody, ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
 import type { FootprintPayload } from '../components/FootprintProvider';
 import type { HealthPayload as BannerHealthPayload } from '../components/mortgage/DegradedBanner';
@@ -17,6 +17,7 @@ import type { adminApi } from '../lib/apiClients/admin';
 import type { AuditRollupResponse } from '../lib/apiClients/audit';
 import type { RefusalReportFamilyCount, RefusalReportItem, RefusalReportListResponse, RefusalReportQuestionResponse } from '../lib/apiClients/refusalReports';
 import type { FieldPerformanceCell, FieldPerformanceResponse } from '../lib/apiClients/fieldPerformance';
+import type { PrintReceipt, PrintReceiptRequest } from '../lib/apiClients/printReceipt';
 import type { ActorAuditEventPage, ActorAuditEventSummary, AuditEventPage, AuditEventRow, DecisionReceipt, HealthPayload as LibHealthPayload } from '../lib/apiTypes';
 import type { AssetFreshnessResponse, KpiProofParam, KpiProofResponse } from '../lib/apiTypes';
 import type { AssetColumn, AssetLineageNode, AssetMetadataResponse, AssetProperty, AssetTag, DataEstateAsset, DataEstateLane, DataEstateResponse } from '../types';
@@ -72,6 +73,10 @@ export type WireContractAdmin = [
   Expect<NoPhantomKeys<FieldPerformanceResponse, ApiResponse<'FieldPerformanceResponse'>>>,
   Expect<WireFits<ApiResponse<'FieldPerformanceCell'>, FieldPerformanceCell>>,
   Expect<NoPhantomKeys<FieldPerformanceCell, ApiResponse<'FieldPerformanceCell'>>>,
+  Expect<WireFits<ApiResponse<'PrintReceipt'>, PrintReceipt>>,
+  Expect<NoPhantomKeys<PrintReceipt, ApiResponse<'PrintReceipt'>>>,
+  Expect<WireFits<PrintReceiptRequest, ApiRequest<'PrintReceiptRequest'>>>,
+  Expect<DeepNoPhantomKeys<PrintReceiptRequest, ApiRequest<'PrintReceiptRequest'>>>,
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'GET /api/v1/config/options'>, ConfigOptions>>,
   Expect<NoPhantomKeys<ConfigOptions, ApiOk<'GET /api/v1/config/options'>>>,

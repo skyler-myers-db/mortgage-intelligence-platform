@@ -16,6 +16,9 @@ import { useLocation, useNavigate } from 'react-router';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
+import { PrintProvenance } from '../print/PrintProvenance';
+import { usePrintReceipt } from '../print/usePrintReceipt';
+import type { PrintReceiptRequest } from '../../lib/apiClients/printReceipt';
 import { api, type AuditEventPage } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
@@ -91,6 +94,9 @@ export function AdminAuditExplorer() {
   );
   const [expandedState, setExpandedState] = useState<{ key: string; id: string | null } | null>(null);
   const [copyState, setCopyState] = useState<AuditCopyState | null>(null);
+  // Export PDF (responsive-08; deviation:print-export): any ledger reader
+  // prints the page already rendered, behind a PRINT_EXPORT receipt.
+  const print = usePrintReceipt();
 
   const pageCursors = cursorState.key === appliedKey ? cursorState.cursors : [null];
   const page = pageCursors.length - 1;
@@ -149,6 +155,18 @@ export function AdminAuditExplorer() {
   );
   const rollupsError = rollupsErrorObj;
 
+  // The applied query of the page on screen, as the receipt's fingerprinted
+  // filters (only the set parameters, as the page request sends them).
+  const printFilters: Record<string, string> = {};
+  for (const [key, value] of Object.entries(auditEventPageQuery(applied))) {
+    if (value !== null) printFilters[key] = value;
+  }
+  const printRequest: PrintReceiptRequest = {
+    surface: 'audit_ledger',
+    filters: printFilters,
+    row_count: events?.length ?? 0,
+  };
+
   const goToPage = (cursors: Array<string | null>) => {
     setExpandedState({ key: appliedKey, id: null });
     setCursorState({ key: appliedKey, cursors });
@@ -204,6 +222,17 @@ export function AdminAuditExplorer() {
           >
             <Icon name="export" size={12} />
             Page CSV
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => print.run(printRequest)}
+            disabled={!events?.length || updating || print.pending}
+            aria-busy={print.pending || undefined}
+            data-testid="audit-export-pdf"
+          >
+            <Icon name="export" size={12} />
+            Export PDF
           </button>
           <Chip variant={error ? 'warning' : filtersActive ? 'success' : 'neutral'}>
             {error
@@ -275,6 +304,12 @@ export function AdminAuditExplorer() {
             </div>
           )}
         </div>
+        {events !== null && !error && (
+          <PrintProvenance
+            subject={`Audit ledger page ${page + 1} · ${formatCount(events.length)} rows`}
+            receipt={print.receiptFor(printRequest)}
+          />
+        )}
         {events !== null && !error && (
           <div
             className={`admin-audit-list stable-refresh-region stable-refresh-region--table mt-3 ${updating ? 'is-updating' : ''}`}

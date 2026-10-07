@@ -24,6 +24,11 @@ const mocks = vi.hoisted(() => ({
   rollupsError: null as Error | null,
 }));
 
+// The explorer reads the session's role and lender name (Export PDF's
+// provenance; the admin-only page CSV).
+const appContext = vi.hoisted(() => ({ canAccessAdmin: true, lender: 'Summit Mortgage' }));
+vi.mock('../AppContext', () => ({ useApp: () => appContext }));
+
 vi.mock('../../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api')>();
   return {

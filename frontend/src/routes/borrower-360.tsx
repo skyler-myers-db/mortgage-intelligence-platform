@@ -23,6 +23,8 @@ import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WAREHOUSE_WARMING_BODY, WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
+import { PrintProvenance } from '../components/print/PrintProvenance';
+import { usePrintReceipt } from '../components/print/usePrintReceipt';
 import { metroLoanTypeLabel } from '../lib/dossierCodes';
 import { descriptorFor, descriptorForEvidence } from '../lib/drawerSources';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../lib/offerLanguage';
@@ -129,6 +131,9 @@ export default function Borrower360() {
   const [openDecisionAuditId, setOpenDecisionAuditId] = useState<string | null>(null);
   const latestDecisionOpen = latestDecisionAuditId !== null && openDecisionAuditId === latestDecisionAuditId;
   const latestDecisionRegionId = useId();
+  // Export PDF (responsive-08; deviation:print-export): a PRINT_EXPORT receipt
+  // first, then the print dialog on the page already rendered; no re-read.
+  const print = usePrintReceipt();
 
   // Borrower 360 is a per-borrower detail page; without an id in the URL
   // there is no borrower to show. Render a proper empty-state landing
@@ -316,6 +321,7 @@ export default function Borrower360() {
   };
 
   const offerLabel = offerDisplayLabel(b.recommended_offer_code, b.recommended_offer);
+  const printRequest = { surface: 'borrower_360', borrower_id: b.borrower_id, row_count: 1 } as const;
   const offerDescription = offerShortDescription(b.recommended_offer_code);
 
   return (
@@ -346,9 +352,20 @@ export default function Borrower360() {
               Latest decision
             </Button>
           )}
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="export"
+            loading={print.pending}
+            onClick={() => print.run(printRequest)}
+            data-testid="export-pdf"
+          >
+            Export PDF
+          </Button>
         </>
       }
     >
+      <PrintProvenance subject={`Borrower 360 · ${b.borrower_id}`} receipt={print.receiptFor(printRequest)} />
       {pager}
       {latestDecisionAuditId && (
         <div id={latestDecisionRegionId} hidden={!latestDecisionOpen}>
