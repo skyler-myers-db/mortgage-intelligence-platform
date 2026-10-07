@@ -13,22 +13,12 @@
  *  - a non-null `revealed_sections` replaces the sections, otherwise (the
  *    same revision, not re-sent) the current ones stay.
  */
-import type { GenieAnswerSection } from '../types';
-import type { GenieCompletionJobStatus } from '../types/genieJobs';
+import type { GenieCompletionJobStatus, GenieVerifiedRevealState } from '../types/genieJobs';
+
+export type { GenieVerifiedRevealState };
 
 /** The sweep's shipping floor (backend REVEAL_SECTION_FLOOR). */
 export const GENIE_REVEAL_FLOOR = 3;
-
-export interface GenieVerifiedRevealState {
-  jobId: string;
-  /** Sub-analyses verified so far (0 before the server says otherwise). */
-  verified: number;
-  partsPlanned: number | null;
-  /** The revision of `sections`. */
-  rev: number | null;
-  /** Null below the floor; plan-ordered verified sections from it. */
-  sections: readonly GenieAnswerSection[] | null;
-}
 
 function fresh(jobId: string): GenieVerifiedRevealState {
   return { jobId, verified: 0, partsPlanned: null, rev: null, sections: null };
