@@ -158,9 +158,10 @@ export function createZctaGeometryLoader(urlOf: (usps: string) => string | null,
     const url = urlOf(key);
     if (!url) return Promise.reject(new Error('No ZIP-area geometry for this state'));
     const pending = fetchImpl(url, { signal, credentials: 'same-origin' })
-      .then((response) => {
+      // A hashed static asset, not an /api read: no wire contract site.
+      .then((response): Promise<ZctaTopology> => {
         if (!response.ok) throw new Error(`ZIP-area geometry answered ${response.status}`);
-        return response.json() as Promise<ZctaTopology>;
+        return response.json();
       })
       .then((topology) => buildZctaGeometry(key, topology))
       .catch((error: unknown) => {
