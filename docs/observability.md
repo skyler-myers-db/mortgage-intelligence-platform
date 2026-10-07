@@ -560,13 +560,23 @@ and logs INFO `lifecycle_sync_completed` with `mode` job, `job_id`, `run_id`,
 expires without a bump (WARNING `lifecycle_job_watch_expired`); a failed
 `get_run` keeps the run pending (WARNING `lifecycle_job_watch_error`,
 exception type only); a submit that returned no run id logs WARNING
-`lifecycle_job_unobservable`. Only the App process that submitted a run
-observes it: other App processes trail the mirror by at most one soft TTL
-(default 120 s preview, 300 s analytics) plus one stale serve, as they do for
-the approval-write bump, which is process-local too. Runs the App did not
-submit are NOT observed and trail the same way: the job's 04:00 schedule ships
-PAUSED, so a scheduled run happens only if an operator unpauses it, and a run
-started from the Jobs UI is not the App's either.
+`lifecycle_job_unobservable`. The process that submitted a run observes it
+through `get_run`. Runs this process did NOT submit (another App process's
+submit, the job's 04:00 schedule, which ships PAUSED, if an operator
+unpauses it, or a run started from the Jobs UI) are observed by the foreign
+arm (W5c): at startup the App enables it when `MIP_LIFECYCLE_SYNC_JOB_ID` is
+bound (INFO `lifecycle_foreign_watch_unbound` and no observer otherwise; no
+name lookup on this path). While workflow counts are read, at most once a
+minute per process and never two at once, it reads ONE
+`jobs.list_runs(job_id=..., completed_only=True, limit=5)` page on the same
+executor; a run that ended after its baseline (the wall clock at startup, then
+the newest end time it counted) and is not one this process submitted bumps
+the generation once and logs `lifecycle_sync_completed` with
+`mode="job_foreign"`, `job_id`, `run_id` and `result_state`. A failed list
+logs WARNING `lifecycle_job_watch_error` (exception type only) and keeps the
+baseline. With nobody reading workflow counts it makes zero Jobs calls; the
+App's CAN_MANAGE_RUN covers the read. The approval-write bump stays
+process-local, so another process still trails that one by one soft TTL.
 
 ### Client half: the retained-value marker on screen (W5b)
 

@@ -28,7 +28,7 @@ from backend.config.settings import (
     looks_like_databricks_app_deploy,
     settings,
 )
-from backend.services import rum_rollup
+from backend.services import lifecycle_run_watch, rum_rollup
 from backend.services.backpressure import BackpressureController, BackpressureMiddleware
 from backend.services.campaign_treatment_runtime import (
     CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
@@ -316,6 +316,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         _warm_lakebase()
         _warm_hot_lead_cache()
         warm_governed_place_dimension()
+        lifecycle_run_watch.enable_foreign_run_watch()  # delivery-06: runs this process did not submit
         if _keep_warm_policy() == "scheduled":
             rewarm_task = asyncio.create_task(
                 _lead_cache_rewarm_loop(settings.mip_leads_warm_interval_s)
