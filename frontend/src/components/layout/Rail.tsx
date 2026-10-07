@@ -26,7 +26,20 @@ import { useAdminNavigationAccess } from './RouteNav';
 
 const M0 = { id: 0, name: 'Top-of-Funnel', desc: 'Lead generation + borrower segmentation (ships today).' } as const;
 
-const RailRoadmap = lazy<ComponentType>(() => import('./RailRoadmap').catch(() => ({ default: () => null })));
+const NoRoadmap: ComponentType = () => null;
+// Two steps, as in lenderMarkLoader: when the stale-chunk listener cancels
+// vite:preloadError, Vite's preload helper resolves the import to undefined,
+// skipping the first .then (which it takes in with the import), so the
+// undefined guard sits in the second one. Either way the rail renders M0
+// alone, never a shell error.
+const RailRoadmap = lazy<ComponentType>(() =>
+  import('./RailRoadmap')
+    .then((module) => module.default)
+    .then(
+      (roadmap: ComponentType | undefined) => ({ default: roadmap ?? NoRoadmap }),
+      () => ({ default: NoRoadmap }),
+    ),
+);
 
 export function Rail() {
   const { pathname } = useLocation();
