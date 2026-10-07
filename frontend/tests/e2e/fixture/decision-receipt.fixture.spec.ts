@@ -450,9 +450,10 @@ test.describe('decision receipt', () => {
     await expect(own).toHaveCount(1);
     expect(receiptCalls(mockApi), 'the history reads no receipt on its own').toBe(0);
     // Only the rows the server offers a receipt carry the button.
-    await expect(history.getByRole('button', { name: 'Receipt' })).toHaveCount(1);
+    await expect(history.getByRole('button', { name: 'Receipt', exact: true })).toHaveCount(1);
 
-    const open = own.getByRole('button', { name: 'Receipt' });
+    // Exact: the opened receipt carries its own 'Print receipt'.
+    const open = own.getByRole('button', { name: 'Receipt', exact: true });
     await open.click();
     await expect(open).toHaveAttribute('aria-expanded', 'true');
     const receipt = own.getByTestId('decision-receipt');
