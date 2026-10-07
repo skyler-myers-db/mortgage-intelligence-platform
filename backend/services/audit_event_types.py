@@ -33,6 +33,8 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "LEAD_EXPORT",
         "LEAD_OUTCOME",
         "LEAD_OUTCOME_RECORDED",
+        # states-07 item 1: the assignment / distribution release behind Undo.
+        "LEAD_UNASSIGN",
         "OUTREACH_APPROVE",
         "OUTREACH_REJECT",
         "OUTREACH_REVOKE",

@@ -222,6 +222,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # revoke superseded and the not-yet-worked assignment it released.
         "revoked_approval_id",
         "released_assignment_id",
+        # LEAD_UNASSIGN (states-07 item 1): the row a release handed the lead
+        # back on, its officer, or the closed reason it did not.
+        "restored_assignment_id",
+        "restored_to_email",
+        "restore_skipped_reason",
         # SAVE_QUEUE_VIEW / DELETE_QUEUE_VIEW (backend/api/workspace.py): the
         # server-issued view id only. The view's name and params never reach
         # the ledger; filter_fingerprint (above) is their SHA-256.
@@ -517,6 +522,7 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "approval_request_batch_id",
         "revoked_approval_id",
         "released_assignment_id",
+        "restored_assignment_id",
         "read_audit_event_id",
     }
 )
@@ -524,10 +530,19 @@ _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(
     {"variant_name", "recommended_offer", "workspace_offer_code"}
 )
 _INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset(
-    {"assigned_to_email", "assigned_by", "lo_email"}
+    {"assigned_to_email", "assigned_by", "lo_email", "restored_to_email"}
 )
 _INTERNAL_STAFF_EMAIL_LIST_METADATA_KEYS: frozenset[str] = frozenset({"lo_emails"})
 _SALES_STRATEGIES: frozenset[str] = frozenset({"manual", "round_robin", "score_balanced"})
+# Mirrors RestoreSkippedReason in backend/schemas/sales.py.
+_RESTORE_SKIPPED_REASONS: frozenset[str] = frozenset(
+    {
+        "previous_assignee_inactive",
+        "previous_assignee_out_of_scope",
+        "lead_not_approved",
+        "lead_not_contactable",
+    }
+)
 _ASSIGNMENT_LIFECYCLE_STATUSES: frozenset[str] = frozenset(
     {"assigned", "contact_drafted", "approved", "actioned", "outcome_recorded"}
 )
