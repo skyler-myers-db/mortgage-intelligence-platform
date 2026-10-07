@@ -403,6 +403,13 @@
   margin-bottom: var(--gap-grid);
 }
 .admin-panel-body { display: flex; flex-direction: column; gap: var(--sp-3); }
+/* A button in a panel body keeps the prototype's own-width inline-flex box
+   (design_files/index.html:378-385). The column's default stretch made the
+   Audit ledger link span the whole card with its label flush left, so it
+   read as an input; the Offer rules thresholds toggle painted its hover fill
+   and focus ring across the card. The prose and rows beside them still fill
+   the column. */
+.admin-panel-body > .btn { align-self: flex-start; }
 .admin-rules-version {
   cursor: pointer;
 }

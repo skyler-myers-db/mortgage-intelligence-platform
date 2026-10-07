@@ -14,7 +14,9 @@
  *  (d) Data operations Run is a confirm that posts only on Start, with the
  *      chosen reason;
  *  (e) the PROTOTYPE borrower view is presenter-only and never downloaded
- *      otherwise; Deployment readiness reports the mode.
+ *      otherwise; Deployment readiness reports the mode;
+ *  (f) Admin's Audit ledger link card keeps the prototype's own-width link
+ *      (W5b VRT review), Console closed and open.
  */
 import type { Page, Request } from '@playwright/test';
 import type { SessionResponse } from '../../../src/types';
@@ -61,6 +63,28 @@ async function expectOneLineNav(page: Page, app: { openConsole(): Promise<unknow
   expect(await navHeight(page), 'the route nav stays one 57px line, Console closed').toBe(57);
   await app.openConsole();
   expect(await navHeight(page), 'the route nav stays one 57px line, Console open').toBe(57);
+}
+
+/**
+ * The Audit ledger link card (W5b VRT review): its link is the prototype's
+ * own-width `.btn` at the start of the body, not a full-width bar.
+ */
+async function expectOwnWidthLedgerLink(page: Page, state: string): Promise<void> {
+  const link = page.locator('#audit').getByRole('link', { name: 'Open audit ledger' });
+  const { linkLeft, linkWidth, bodyLeft, bodyWidth, padStart } = await link.evaluate((el) => {
+    const body = el.parentElement as HTMLElement;
+    const linkBox = el.getBoundingClientRect();
+    const bodyBox = body.getBoundingClientRect();
+    return {
+      linkLeft: linkBox.left,
+      linkWidth: linkBox.width,
+      bodyLeft: bodyBox.left,
+      bodyWidth: bodyBox.width,
+      padStart: parseFloat(getComputedStyle(body).paddingInlineStart),
+    };
+  });
+  expect(linkLeft, `${state}: the link starts at the body's content edge`).toBeCloseTo(bodyLeft + padStart, 1);
+  expect(linkWidth, `${state}: the link keeps its own width (body ${bodyWidth}px)`).toBeLessThan(bodyWidth / 2);
 }
 
 for (const theme of FIXTURE_THEMES) {
@@ -169,6 +193,15 @@ for (const theme of FIXTURE_THEMES) {
 
       await expectAxeClean(page, { key: { route: 'admin-config', state: 'section-nav' }, theme, known: {} });
       await expectOneLineNav(page, app);
+    });
+
+    test('(f) the Audit ledger link card keeps an own-width link, Console closed and open', async ({ app, page }) => {
+      await app.gotoRoute('/admin-config');
+      await expect(page.locator('#audit').getByRole('heading', { name: 'Audit ledger' })).toBeVisible();
+      await expectOwnWidthLedgerLink(page, 'Console closed');
+      await app.openConsole();
+      await app.settle();
+      await expectOwnWidthLedgerLink(page, 'Console open');
     });
 
     test('(d) Run opens a confirm; only Start posts, with the chosen reason', async ({ app, mockApi, page }) => {
