@@ -32,6 +32,7 @@ const MAP_UNITS = [
   'SignalStack.tsx',
   // W5c (dataviz-01): the ZCTA rung and its pan / zoom hook.
   'USChoroplethMapZctaLevel.tsx',
+  'USChoroplethMapZipAreas.tsx',
   'useSvgViewBox.ts',
 ];
 

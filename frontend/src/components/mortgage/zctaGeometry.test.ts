@@ -22,13 +22,14 @@ import { join } from 'node:path';
 import { feature as topoFeature } from 'topojson-client';
 import statesTopology from 'us-atlas/states-albers-10m.json';
 import type { Feature, FeatureCollection } from 'geojson';
-import { geoQueryKeys } from '../../lib/geoQueryKeys';
 import { isPersistableQueryKey } from '../../lib/queryPersist';
+import { queryKeys } from '../../lib/queryKeys';
 import { FIPS_TO_USCODE, featureBBox } from './USChoroplethMap.utils';
 import {
   buildZctaGeometry,
   createZctaGeometryLoader,
   zctaGeometryStates,
+  zctaGeometryKey,
   zctaGeometryUrl,
   type ZctaTopology,
 } from './zctaGeometry';
@@ -90,8 +91,8 @@ describe.skipIf(!committed)('the committed ZCTA manifest (geometry not committed
 
 describe('ZCTA geometry in the browser', () => {
   it('never persists the geometry query key', () => {
-    expect(isPersistableQueryKey(geoQueryKeys.zctaGeometry('IL'))).toBe(false);
-    expect(geoQueryKeys.zctaGeometry('IL')).toEqual(['mip', 'geo', 'zcta-geometry', 'IL']);
+    expect(isPersistableQueryKey(zctaGeometryKey('il'))).toBe(false);
+    expect(zctaGeometryKey('il')).toEqual([...queryKeys.all, 'geo', 'zcta-geometry', 'IL']);
   });
 
   it('never inlines a geometry file, committed or not', () => {

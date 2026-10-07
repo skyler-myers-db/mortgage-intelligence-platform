@@ -10,6 +10,7 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMap } from './USChoroplethMap';
 import { buildChoroplethScale } from './USChoroplethMap.scale';
+import { ZIP_AREAS } from './USChoroplethMapZipAreas';
 import type { StateRollupResponse, ZipRollupResponse } from '../../types';
 import { genieStatePrompt } from '../../lib/genieContext';
 import { consumeGeniePrefill, subscribeGenieOpenRequests } from '../../lib/genieOpen';
@@ -54,7 +55,11 @@ vi.mock('./zctaLevel.lazy', async () => {
     }),
   };
 });
-vi.mock('./zctaGeometry', () => ({ hasZctaGeometry: zcta.has, loadZctaGeometry: zcta.load }));
+vi.mock('./zctaGeometry', () => ({
+  hasZctaGeometry: zcta.has,
+  loadZctaGeometry: zcta.load,
+  zctaGeometryKey: (usps: string) => ['mip', 'geo', 'zcta-geometry', usps],
+}));
 
 vi.mock('./USStateMapData', () => ({
   loadUsaStateMap: () => Promise.resolve({
@@ -600,7 +605,7 @@ describe('USChoroplethMap ZIP areas (the ZCTA rung, W5c dataviz-01)', () => {
   // First: a rejected chunk is not cached, so the later cases still load it.
   it('falls back to the tiles with a status line when the rung chunk fails', async () => {
     zcta.fail = true;
-    await drillWith(<USChoroplethMap zipAreas />);
+    await drillWith(<USChoroplethMap zipStage={ZIP_AREAS} />);
     await until(() => document.querySelector('.zip-tiles__status') !== null);
     expect(document.querySelector('.zip-tiles__status[role="status"]')?.textContent).toBe(
       'ZIP boundaries could not load; showing the densest ZIPs as tiles.',
@@ -615,11 +620,11 @@ describe('USChoroplethMap ZIP areas (the ZCTA rung, W5c dataviz-01)', () => {
     expect(document.querySelector('.map-wrap')?.getAttribute('data-rum-target')).toBe('map');
   });
 
-  it('without zipAreas (Home) never loads or warms the rung and keeps the plain tiles', async () => {
+  it('without a zipStage (Home) never loads or warms the rung and keeps the plain tiles', async () => {
     await drillWith(<USChoroplethMap />);
     await until(() => document.querySelectorAll('.zip-tile').length > 0);
     expect(document.querySelector('.zip-tiles__status')).toBeNull();
-    expect(document.querySelector('.map-levels')?.classList.contains('map-levels--tween')).toBe(false);
+    expect(document.querySelector('.map-stage--zcta, svg.map-zcta')).toBeNull();
     act(() => root.render(<Providers><USChoroplethMap selection={{ state: null, county: null, zip: null }} /></Providers>));
     await settle();
     document.querySelector('.map-levels')?.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
@@ -630,7 +635,7 @@ describe('USChoroplethMap ZIP areas (the ZCTA rung, W5c dataviz-01)', () => {
 
   it('draws ZIP areas with the scale over EVERY populated ZIP, no densest scope, and the ZCTA caption', async () => {
     zcta.load.mockResolvedValue(geometry());
-    await drillWith(<USChoroplethMap zipAreas />);
+    await drillWith(<USChoroplethMap zipStage={ZIP_AREAS} />);
     await until(() => document.querySelector('svg.map-zcta') !== null);
     expect(document.querySelectorAll('svg.map-zcta path[data-populated]')).toHaveLength(30);
     expect(document.querySelector('.zip-tiles')).toBeNull();
@@ -640,7 +645,7 @@ describe('USChoroplethMap ZIP areas (the ZCTA rung, W5c dataviz-01)', () => {
     const caption = document.querySelector('.map-legend__caption')?.textContent ?? '';
     expect(caption).toContain('ZIP areas are Census 2020 ZCTAs, an approximation of USPS delivery areas');
     expect(caption).not.toContain('densest');
-    expect(document.querySelector('.map-levels')?.classList.contains('map-levels--tween')).toBe(true);
+    expect(document.querySelector('.map-levels > svg.map-zcta')).not.toBeNull();
     expect(document.querySelector('.map-zoom')?.querySelectorAll('button')).toHaveLength(3);
     expect(zcta.load).toHaveBeenCalledTimes(1);
   }, 30_000);

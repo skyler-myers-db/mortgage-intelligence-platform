@@ -8,28 +8,39 @@
  * per click / Enter, the tile fallback with its status line (a missing file
  * and a failed load; the chunk failure is USChoroplethMap.render.test), the
  * reconcile note, the outline painted above the fills, the zoom controls
- * registered once, and zero React commits across a pointermove sweep.
+ * registered once, and zero React commits across a pointermove sweep. The
+ * fallback cases run through Segment Intelligence's stage (ZIP_AREAS), which
+ * draws the tiles when the rung reports them, and its reported view.
  */
 import { Profiler, act, type ProfilerOnRenderCallback, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads one stylesheet's source under Vitest only.
+import { readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import { createMipQueryClient } from '../../lib/queryClient';
 import type { StateRollup, ZipRollup } from '../../types';
+import { claimDrillFocus, moveRovingFocus, zipAriaLabel } from './USChoroplethMap.a11y';
 import { buildChoroplethScale } from './USChoroplethMap.scale';
-import { ZCTA_TILES_STATUS } from './USChoroplethMapZipLevel';
+import type { ZipStageView } from './USChoroplethMap.zipStage';
 import { useMapHover } from './useMapHover';
 import type { ZctaArea, ZctaGeometry } from './zctaGeometry';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+declare const process: { cwd(): string };
 
 const geo = vi.hoisted(() => ({ has: vi.fn(), load: vi.fn() }));
 vi.mock('./zctaGeometry', () => ({
   hasZctaGeometry: geo.has,
   loadZctaGeometry: geo.load,
+  zctaGeometryKey: (usps: string) => ['mip', 'geo', 'zcta-geometry', usps],
 }));
 
 const { USChoroplethMapZctaLevel } = await import('./USChoroplethMapZctaLevel');
+const { ZIP_AREAS, ZCTA_CAPTION, ZCTA_TILES_STATUS } = await import('./USChoroplethMapZipAreas');
 
 const square = (zip: string, x: number, y: number, size: number): ZctaArea => ({
   zip,
@@ -71,29 +82,40 @@ let commits = 0;
 const onRender: ProfilerOnRenderCallback = () => {
   commits += 1;
 };
-const handlers = { onRung: vi.fn(), onZoomControls: vi.fn(), onSelectZip: vi.fn(), onOpenStateQueue: vi.fn() };
+const handlers = {
+  onRung: vi.fn(),
+  onZoomControls: vi.fn(),
+  onSelectZip: vi.fn(),
+  onOpenStateQueue: vi.fn(),
+  onView: vi.fn<(view: ZipStageView) => void>(),
+};
+const KIT = { claimDrillFocus, moveRovingFocus, zipAriaLabel };
 
-function Harness({ children }: { children?: ReactNode }) {
-  const { stage } = useMapHover();
+/** The rung alone, or (`stage`) through Segment Intelligence's ZIP_AREAS stage. */
+function Harness({ stage = false, children }: { stage?: boolean; children?: ReactNode }) {
+  const { stage: hover } = useMapHover();
+  const tiles = {
+    usps: 'IL',
+    nationalViewBox: '0 0 975 610',
+    drillStateName: 'Illinois',
+    byZip: BY_ZIP,
+    stateFacts: STATE,
+    scale: buildChoroplethScale([50, 5, 7]),
+    overlayActive: false,
+    overlayByUnit: {},
+    selectedZip: null,
+    hover,
+    onSelectZip: handlers.onSelectZip,
+    onOpenStateQueue: handlers.onOpenStateQueue,
+  };
   return (
     <>
       <Profiler id="rung" onRender={onRender}>
-        <USChoroplethMapZctaLevel
-          usps="IL"
-          nationalViewBox="0 0 975 610"
-          drillStateName="Illinois"
-          byZip={BY_ZIP}
-          stateFacts={STATE}
-          scale={buildChoroplethScale([50, 5, 7])}
-          overlayActive={false}
-          overlayByUnit={{}}
-          selectedZip={null}
-          hover={stage}
-          onRung={handlers.onRung}
-          onZoomControls={handlers.onZoomControls}
-          onSelectZip={handlers.onSelectZip}
-          onOpenStateQueue={handlers.onOpenStateQueue}
-        />
+        {stage ? (
+          <ZIP_AREAS.Stage {...tiles} onView={handlers.onView} />
+        ) : (
+          <USChoroplethMapZctaLevel {...tiles} kit={KIT} onRung={handlers.onRung} onZoomControls={handlers.onZoomControls} />
+        )}
       </Profiler>
       {children}
     </>
@@ -111,12 +133,12 @@ async function until(check: () => boolean): Promise<void> {
   expect(check()).toBe(true);
 }
 
-async function render(): Promise<void> {
+async function render(stage = false): Promise<void> {
   const client = createMipQueryClient();
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
-        <Harness />
+        <Harness stage={stage} />
       </QueryClientProvider>,
     );
   });
@@ -263,22 +285,48 @@ describe('USChoroplethMapZctaLevel', () => {
     expect(commits).toBe(before);
   });
 
-  it('falls back to the densest-ZIP tiles with a status line when the state has no committed file', async () => {
+  it('reports tiles and draws nothing itself when the state has no committed file', async () => {
     geo.has.mockReturnValue(false);
     await render();
+    await until(() => handlers.onRung.mock.calls.length > 0);
+    expect(handlers.onRung).toHaveBeenCalledWith('tiles');
+    expect(svg()).toBeNull();
+    expect(geo.load).not.toHaveBeenCalled();
+  });
+
+  it('through ZIP_AREAS: the densest-ZIP tiles with their status line when the state has no committed file', async () => {
+    geo.has.mockReturnValue(false);
+    await render(true);
     await until(() => document.querySelector('.zip-tiles') !== null);
     expect(document.querySelector('.zip-tiles__status[role="status"]')?.textContent).toBe(ZCTA_TILES_STATUS);
     expect(svg()).toBeNull();
     expect(geo.load).not.toHaveBeenCalled();
-    expect(handlers.onRung).toHaveBeenCalledWith('tiles');
+    expect(handlers.onView).toHaveBeenLastCalledWith({ polygons: false, busy: false, controls: null, caption: null, cardNote: null });
   });
 
-  it('falls back to the tiles after the geometry read fails its retries', async () => {
+  it('through ZIP_AREAS: the tiles after the geometry read fails its retries', async () => {
     geo.load.mockRejectedValue(new Error('ZIP-area geometry answered 404'));
-    await render();
+    await render(true);
     await until(() => document.querySelector('.zip-tiles') !== null);
     expect(document.querySelector('.zip-tiles__status')?.textContent).toBe(ZCTA_TILES_STATUS);
     expect(geo.load).toHaveBeenCalledTimes(3);
-    expect(handlers.onRung).toHaveBeenLastCalledWith('tiles');
+    expect(handlers.onView).toHaveBeenLastCalledWith({ polygons: false, busy: false, controls: null, caption: null, cardNote: null });
+  });
+
+  it('through ZIP_AREAS: busy while loading, then polygons with the caption and the zoom buttons', async () => {
+    await render(true);
+    expect(handlers.onView.mock.calls[0]?.[0]).toMatchObject({ polygons: false, busy: true, controls: null, caption: null });
+    await until(() => svg() !== null);
+    await settle();
+    const last = handlers.onView.mock.calls[handlers.onView.mock.calls.length - 1]?.[0];
+    expect(last).toMatchObject({ polygons: true, busy: false, caption: ZCTA_CAPTION });
+    expect(last?.controls).not.toBeNull();
+    expect(last?.cardNote).toBe('Counts are Illinois borrowers in this ZIP area.');
+  });
+
+  it('opts the drill out of the level settle from the loading stage on, so only the viewBox tween moves (motion-10)', () => {
+    const css = (readFileSync(join(process.cwd(), 'src/components/mortgage/USChoroplethMapZipAreas.css'), 'utf8') as string)
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(css).toMatch(/\.map-levels:has\(> \.map-zcta, > \.map-stage--zcta\) \{ animation: none; \}/);
   });
 });

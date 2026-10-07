@@ -47,6 +47,16 @@ export interface ZctaGeometry {
   stateBox: ZctaBox;
 }
 
+/**
+ * A drilled state's geometry query key, under the app's 'mip' root
+ * (queryKeys.all; zctaGeometry.test.ts pins the two together). It lives here,
+ * in the lazy rung's chunk: in lib/geoQueryKeys it would ride in the initial
+ * bundle, and importing lib/queryKeys from this chunk split that shared
+ * initial chunk in two (+0.17 KiB br initial, measured). It is on no
+ * persisted-key list: the geometry is a static asset the browser caches.
+ */
+export const zctaGeometryKey = (usps: string) => ['mip', 'geo', 'zcta-geometry', usps.toUpperCase()] as const;
+
 /** Path precision for ZCTAs and the outline: 3 decimals of a viewBox unit (about 5 m). */
 export const ZCTA_PATH_DIGITS = 3;
 

@@ -29,8 +29,14 @@
  *
  * The densest-ZIP tiles are the degraded fallback, never a mock: a state
  * with no committed file, or a geometry read that fails after its retries,
- * renders USChoroplethMapZipLevel with a status line. The rung tells the
- * parent which one is on screen so the legend's scale and caption follow it.
+ * reports 'tiles' and its host (USChoroplethMapZipAreas) draws them with a
+ * status line, so the legend's scale and caption follow what is on screen.
+ *
+ * Bundling: this chunk imports nothing from the map's own modules (the
+ * shared a11y helpers arrive as `kit`, the unit lookup is inline). A chunk
+ * reaching USChoroplethMap.a11y made the bundler split that module out of
+ * the map chunk, adding a chunk to Home's closure and a preload entry to the
+ * initial bundle.
  */
 import {
   useEffect,
@@ -39,19 +45,16 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type ComponentProps,
   type ReactNode,
 } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { geoQueryKeys } from '../../lib/geoQueryKeys';
 import { formatCount } from '../../lib/formatters';
 import { safeSegmentName } from '../../lib/segmentMetadata';
-import { MAP_POPULATED_ATTR, MAP_UNIT_ATTR, claimDrillFocus, moveRovingFocus, zipAriaLabel } from './USChoroplethMap.a11y';
+import type * as MapA11y from './USChoroplethMap.a11y';
+import type { ZipStageProps } from './USChoroplethMap.zipStage';
 import { classify } from './USChoroplethMap.scale';
-import { USChoroplethMapZipLevel, ZCTA_TILES_STATUS } from './USChoroplethMapZipLevel';
-import { unitWithin } from './useMapHover';
 import { MAX_ZOOM, useSvgViewBox, viewBoxAttr, type ViewBox } from './useSvgViewBox';
-import { hasZctaGeometry, loadZctaGeometry, type ZctaGeometry } from './zctaGeometry';
+import { hasZctaGeometry, loadZctaGeometry, zctaGeometryKey, type ZctaGeometry } from './zctaGeometry';
 import {
   boxView,
   fitZctaView,
@@ -65,23 +68,24 @@ import './USChoroplethMapZctaLevel.css';
 
 export type ZipRung = 'polygons' | 'tiles';
 
-type TileProps = ComponentProps<typeof USChoroplethMapZipLevel>;
+/** The map's keyboard and naming helpers, handed down by the host (see Bundling above). */
+export type ZctaKit = Pick<typeof MapA11y, 'claimDrillFocus' | 'moveRovingFocus' | 'zipAriaLabel'>;
 
-export interface USChoroplethMapZctaLevelProps extends Omit<TileProps, 'status'> {
-  /** Uppercase USPS code of the drilled state. */
-  usps: string;
-  /** The national viewBox, the tween's first frame. */
-  nationalViewBox: string;
-  /** Which rung is on screen, once it is known. */
+const UNIT_ATTR = 'data-map-unit';
+const POPULATED_ATTR = 'data-populated';
+
+export interface USChoroplethMapZctaLevelProps extends Omit<ZipStageProps, 'onView'> {
+  kit: ZctaKit;
+  /** Which rung is on screen, once it is known ('tiles': the host draws the fallback). */
   onRung: (rung: ZipRung) => void;
   /** The header's zoom buttons while the polygons show; null when they go. */
   onZoomControls: (controls: ReactNode) => void;
 }
 
-export function USChoroplethMapZctaLevel({ usps, nationalViewBox, onRung, onZoomControls, ...tiles }: USChoroplethMapZctaLevelProps) {
+export function USChoroplethMapZctaLevel({ usps, onRung, ...stage }: USChoroplethMapZctaLevelProps) {
   const available = hasZctaGeometry(usps);
   const geometry = useQuery({
-    queryKey: geoQueryKeys.zctaGeometry(usps),
+    queryKey: zctaGeometryKey(usps),
     queryFn: ({ signal }) => loadZctaGeometry(usps, signal),
     enabled: available,
     staleTime: Infinity,
@@ -93,9 +97,9 @@ export function USChoroplethMapZctaLevel({ usps, nationalViewBox, onRung, onZoom
     if (fallback) onRung('tiles');
     else if (data) onRung('polygons');
   }, [data, fallback, onRung]);
-  if (fallback) return <USChoroplethMapZipLevel {...tiles} status={ZCTA_TILES_STATUS} />;
-  if (!data) return <div className="map-stage map-stage--empty">Loading ZIP areas…</div>;
-  return <ZctaStage {...tiles} geometry={data} nationalViewBox={nationalViewBox} onZoomControls={onZoomControls} />;
+  if (fallback) return null;
+  if (!data) return <div className="map-stage map-stage--empty map-stage--zcta">Loading ZIP areas…</div>;
+  return <ZctaStage {...stage} geometry={data} />;
 }
 
 interface ZoomState {
@@ -163,6 +167,7 @@ function MapZoomButtons({ store }: { store: ZoomStore }) {
 type StageProps = Omit<USChoroplethMapZctaLevelProps, 'usps' | 'onRung'> & { geometry: ZctaGeometry };
 
 function ZctaStage({
+  kit,
   geometry,
   nationalViewBox,
   onZoomControls,
@@ -219,8 +224,8 @@ function ZctaStage({
     const svg = svgRef.current;
     if (!svg) return undefined;
     const populatedUnit = (target: EventTarget | null) => {
-      const unit = unitWithin(target, svg);
-      return unit?.hasAttribute(MAP_POPULATED_ATTR) ? unit.getAttribute(MAP_UNIT_ATTR) : null;
+      const unit = target instanceof Element ? target.closest(`[${UNIT_ATTR}][${POPULATED_ATTR}]`) : null;
+      return unit && svg.contains(unit) ? unit.getAttribute(UNIT_ATTR) : null;
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (onKey(event.key)) {
@@ -233,7 +238,7 @@ function ZctaStage({
         onSelectZip(zip);
         return;
       }
-      moveRovingFocus(event);
+      kit.moveRovingFocus(event);
     };
     const onClick = (event: MouseEvent) => {
       const zip = populatedUnit(event.target);
@@ -245,16 +250,16 @@ function ZctaStage({
       svg.removeEventListener('keydown', onKeyDown);
       svg.removeEventListener('click', onClick);
     };
-  }, [onKey, onSelectZip]);
+  }, [kit, onKey, onSelectZip]);
 
   useEffect(() => {
     if (!autoFocus) return;
-    const stop = svgRef.current?.querySelector<SVGElement>(`[${MAP_UNIT_ATTR}][tabindex="0"]`) ?? null;
+    const stop = svgRef.current?.querySelector<SVGElement>(`[${UNIT_ATTR}][tabindex="0"]`) ?? null;
     const target = stop ?? noteActionRef.current;
     if (!target) return;
-    claimDrillFocus(target);
+    kit.claimDrillFocus(target);
     onAutoFocused?.();
-  }, [autoFocus, onAutoFocused]);
+  }, [autoFocus, kit, onAutoFocused]);
 
   const labels = labelledZips(geometry.areas, byZip, measure.scale);
   const missing = zipsWithoutBoundary(byZip, geometry);
@@ -295,7 +300,7 @@ function ZctaStage({
               data-map-class={cls ?? 0}
               data-target-size-exempt="geographic-shape"
               aria-keyshortcuts="Enter"
-              aria-label={zipAriaLabel(area.zip, {
+              aria-label={kit.zipAriaLabel(area.zip, {
                 count,
                 avgScore: rollup?.avg_opportunity_score ?? null,
                 topSegment: topSegCode ? (safeSegmentName(topSegCode) ?? undefined) : undefined,

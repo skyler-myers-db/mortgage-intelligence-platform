@@ -39,8 +39,8 @@ export interface MapCardInputs {
   selectedZip: string | null;
   /** The Rate Lever view at the shown step (rate mode); only STATE cards read it. */
   scenario: MapScenarioView | null;
-  /** The ZIP rung draws ZCTA polygons (not tiles): a ZIP card says whose counts it shows. */
-  zipAreas?: boolean;
+  /** A ZIP stage's line for the ZIP card (USChoroplethMap.zipStage), or null. */
+  zipNote?: string | null;
 }
 
 /** One state's scenario facts, or undefined off the grid (or without a step 0 to compare with). */
@@ -117,8 +117,7 @@ function zipCard(zip: string, inputs: MapCardInputs): MapCard | null {
     avgScore,
     topSegment,
     sourceHint: SOURCE_ZIP,
-    // A cross-line ZCTA is drawn in each state it touches; its counts are this state's.
-    note: inputs.zipAreas ? `Counts are ${drillStateName} borrowers in this ZIP area.` : undefined,
+    note: inputs.zipNote ?? undefined,
     overlay: overlayUnit
       ? {
           leadCount: overlayUnit.lead_count,

@@ -106,9 +106,8 @@ export function moveRovingFocus(event: RovingKeyEvent): void {
       ? -1
       : 0;
   if (direction === 0 && event.key !== 'Home' && event.key !== 'End') return;
-  const stage = event.currentTarget;
-  if (!(stage instanceof Element)) return;
-  const units = [...stage.querySelectorAll<HTMLElement | SVGElement>(`[${MAP_UNIT_ATTR}][${MAP_POPULATED_ATTR}]`)];
+  // The stage the handler is registered on (React or native: always an element).
+  const units = [...(event.currentTarget as Element).querySelectorAll<HTMLElement | SVGElement>(`[${MAP_UNIT_ATTR}][${MAP_POPULATED_ATTR}]`)];
   const current = units.findIndex((unit) => unit === event.target);
   if (current < 0 || units.length === 0) return;
   event.preventDefault();

@@ -8,6 +8,7 @@ import { SegmentCard, SegmentCardSkeleton } from '../components/mortgage/Segment
 import { SignalStack } from '../components/mortgage/SignalStack';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
+import { ZIP_AREAS } from '../components/mortgage/USChoroplethMapZipAreas';
 import { EMPTY_MAP_SELECTION, withMapSelection } from '../components/mortgage/USChoroplethMap.selection';
 import { useMapSelectionParams } from '../components/mortgage/useMapSelectionParams';
 import { useMapModeParams } from '../components/mortgage/useMapModeParams';
@@ -650,7 +651,7 @@ export default function SegmentIntelligence() {
           onModeChange={mapMode.setMode}
           onStepCommit={mapMode.setStep}
           onReadStale={setMapLastGoodAt}
-          zipAreas
+          zipStage={ZIP_AREAS}
         />
       </div>
     </PageShell>

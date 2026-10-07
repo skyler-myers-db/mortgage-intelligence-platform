@@ -14,9 +14,7 @@
    .map-legend__lever / __lever-note / __lever-slot (the Rate Lever's host
    in the legend, audit wow-stage-1; the control's block .rate-lever ships
    in its lazy chunk). The prototype legend (Module 0 Prototype.html
-   ~L1860-1871) has no scenario control. W5c (deviation:zcta-level):
-   .map-levels--tween and .zip-tiles__status (the tiles' fallback line);
-   the ZCTA rung's own blocks ship in USChoroplethMapZctaLevel.css.
+   ~L1860-1871) has no scenario control.
    ============================================================ */
 
 /* USPS labels on populated states. Sized in SVG user units (the Albers
@@ -143,15 +141,6 @@
    one line of hint widened it to ~530px at 1440x900 and covered half of
    Arizona, the states' first tab stop, and its focus ring. */
 .map-wrap:focus-within .map-legend__hint { contain: inline-size; }
-
-/* The ZCTA rung's drill tween (motion-10) starts from the national view: the
-   keyed level settle (map-level-in, 08-map.css) must not run under it. */
-.map-levels.map-levels--tween { animation: none; }
-/* The tiles' status line when they stand in for the ZCTA polygons. */
-.zip-tiles__status {
-  margin: 0;
-  padding: var(--sp-2) var(--sp-3) 0;
-}
 
 /* ZIP tiles are buttons inside list items (a11y-04). */
 .zip-tiles {
