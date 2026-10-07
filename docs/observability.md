@@ -800,16 +800,20 @@ of the decision intent; Offer-originated decisions omit it.
 
 `GET /api/v1/leads` serves a VIEW (D-audit-reads-a): page 0 mints a server
 `view_id` (`X-Lead-View-Id`, `X-Page-Index: 0`) and, when its rows continue,
-a signed `X-Next-Cursor` the client sends back on an explicit Load next. Two
+a signed `X-Next-Cursor` the client sends back on an explicit Load next. Three
 structured events, each carrying no cursor, filter or borrower value:
 
 | Event | When | Fields |
 | --- | --- | --- |
 | `lead_cursor_rejected` | a cursor failed verification; the answer is 422 `lead_view_cursor_invalid` and nothing is written | `reason`: `signature`, `filters`, `expired`, `page_cap` or `malformed` |
 | `lead_cursor_unavailable` | no cursor key (no `MIP_GENIE_ACTION_SECRET_CURRENT` outside local/test): page 0 is served with `X-Lead-Paging: unavailable`, a cursor gets 503 | `outcome` |
+| `lead_page_cache_superseded` | a cached ranked page carries an older gold refresh than a read in this process already saw: the entry is dropped and the page is read again | `outcome` (`miss`) |
 
 A refreshed gold snapshot between pages answers 409 (`The queue refreshed
-since this view loaded`) and the client restarts the view at page 0. An
+since this view loaded`) and the client restarts the view at page 0. The
+page cache (`MIP_CACHE_TTL_S`) records the newest refresh any uncached read
+saw and never serves a page of an older one after it, so the restart reads
+the new refresh: at most one 409 per view per refresh, never a loop. An
 access line never carries a cursor: the structured formatter redacts
 `?cursor=` and `&cursor=` values. A `page_index` gap within one `view_id`
 in `mip_app.action_audit` means a dropped background write (`audit.dropped`).

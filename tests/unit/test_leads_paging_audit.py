@@ -52,6 +52,7 @@ from backend.services.repositories.databricks_lead_cohorts import (
 )
 from backend.services.repositories.databricks_lead_order import LEAD_SORTS, LeadPage
 from backend.services.repositories.databricks_leads import DatabricksLeadRepository
+from backend.services.resilience import TTLCache
 from backend.services.sales_state import get_sales_state_store
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 from tests.fixtures.reviewed_approval import reviewed_approval
@@ -339,6 +340,92 @@ def test_a_row_of_a_later_refresh_is_409_and_writes_nothing(
     assert second.status_code == 409
     assert second.json()["detail"] == "The queue refreshed since this view loaded"
     assert len(_rows(audit)) == 1
+
+
+NEW_REFRESH = "2026-09-30T06:00:00Z"
+
+
+class _Clock:
+    """A TTLCache clock the test moves, so one page's entry can expire before another's."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _cached_gold(clock: _Clock) -> tuple[SqliteLeadWarehouse, Any]:
+    # The production page cache (MIP_CACHE_TTL_S defaults to 300 s), not the
+    # cache-off repository every other paging test reads through.
+    warehouse = SqliteLeadWarehouse([gold_lead_row(index) for index in range(1_050)])
+    repo = DatabricksLeadRepository(warehouse, cache=TTLCache(now=clock), cache_ttl_s=300.0)  # type: ignore[arg-type]
+    return warehouse, _override(get_lead_repository, repo)
+
+
+def test_the_restart_after_a_refresh_409_reads_the_new_refresh_under_the_page_cache(
+    audit: InMemoryAuditStore,
+) -> None:
+    """Page 0 cached before a gold refresh never answers the restart (the 409 loop)."""
+
+    clock = _Clock()
+    warehouse, prior = _cached_gold(clock)
+    try:
+        first = client.get("/api/leads", headers=HEADERS)
+        warehouse.set_refreshed_at(NEW_REFRESH)
+        clock.now = 10.0
+
+        refused = client.get("/api/leads", params={"cursor": first.headers["X-Next-Cursor"]}, headers=HEADERS)
+        restart = client.get("/api/leads", headers=HEADERS)
+        resumed = client.get("/api/leads", params={"cursor": restart.headers["X-Next-Cursor"]}, headers=HEADERS)
+    finally:
+        _restore(get_lead_repository, prior)
+
+    assert first.headers["X-Data-Refreshed-At"] == "2026-09-29T06:00:00Z"
+    assert refused.status_code == 409
+    assert restart.status_code == 200
+    assert restart.headers["X-Data-Refreshed-At"] == NEW_REFRESH, "the restart was served the cached old page 0"
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.headers["X-Data-Refreshed-At"] == NEW_REFRESH
+    assert [row["page_index"] for row in _rows(audit)] == [0, 0, 1]
+
+
+def test_a_cached_later_page_of_the_old_refresh_is_not_served_behind_a_fresh_page_zero(
+    audit: InMemoryAuditStore,
+) -> None:
+    """The mirror case: page 0 expired and was read fresh, page 1 is still cached from before."""
+
+    clock = _Clock()
+    warehouse, prior = _cached_gold(clock)
+    try:
+        first = client.get("/api/leads", headers=HEADERS)
+        clock.now = 200.0
+        old_second = client.get("/api/leads", params={"cursor": first.headers["X-Next-Cursor"]}, headers=HEADERS)
+        warehouse.set_refreshed_at(NEW_REFRESH)
+        clock.now = 350.0  # page 0's entry expired at 300 s, page 1's lives to 500 s
+
+        fresh = client.get("/api/leads", headers=HEADERS)
+        second = client.get("/api/leads", params={"cursor": fresh.headers["X-Next-Cursor"]}, headers=HEADERS)
+    finally:
+        _restore(get_lead_repository, prior)
+
+    assert old_second.status_code == 200
+    assert fresh.headers["X-Data-Refreshed-At"] == NEW_REFRESH
+    assert second.status_code == 200, second.text
+    assert second.headers["X-Data-Refreshed-At"] == NEW_REFRESH
+    assert _ids(second) == _ids(old_second), "the same rows, read again from the new refresh"
+
+
+def test_a_page_with_no_refresh_stamp_stays_cached() -> None:
+    clock = _Clock()
+    warehouse = SqliteLeadWarehouse([gold_lead_row(index, refreshed_at=None) for index in range(10)])
+    repo = DatabricksLeadRepository(warehouse, cache=TTLCache(now=clock), cache_ttl_s=300.0)  # type: ignore[arg-type]
+
+    repo.list_page(None, None, limit=5)
+    statements = len(warehouse.statements)
+    repo.list_page(None, None, limit=5)
+
+    assert len(warehouse.statements) == statements, "an unstamped page cannot be superseded"
 
 
 def test_no_secret_serves_page_zero_unpaged_and_refuses_a_cursor_503(

@@ -37,6 +37,7 @@ from backend.services.repositories.databricks_lead_order import (
     lead_page_filters,
     order_by_sql,
 )
+from backend.services.repositories.databricks_lead_page_cache import LeadPageCache
 from backend.services.repositories.databricks_portfolio import build_preview_predicates
 from backend.services.repositories.databricks_shared import (
     _LEAD_POPULATION_SELECT_FROM_B360,
@@ -68,6 +69,8 @@ class DatabricksLeadRepository:
         self._client = client
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = settings.mip_cache_ttl_s if cache_ttl_s is None else cache_ttl_s
+        # Ranked pages: never served once a newer gold refresh was read.
+        self._pages = LeadPageCache(self._cache, self._cache_ttl_s)
         self._cohort_queries = LeadCohortQueries(
             client,
             cache_ttl_s=self._cache_ttl_s,
@@ -666,6 +669,9 @@ class DatabricksLeadRepository:
             order=order,
         )
         page = self._page_of(rows, len(rows), order)
+        # An uncached read: a newer refresh here retires the cached pages of
+        # the old one, so the view's later pages are read fresh.
+        self._pages.observe(page.leads)
         return LeadPage(
             leads=page.leads,
             has_more=int(identity.get("total") or 0) > len(page.leads),
@@ -683,22 +689,11 @@ class DatabricksLeadRepository:
         stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return f"{prefix}:{stable}"
 
-    @staticmethod
-    def _copy_leads(rows: list[LeadSummary]) -> list[LeadSummary]:
-        return [row.model_copy(deep=True) for row in rows]
-
     def _get_cached_page(self, cache_key: str) -> LeadPage | None:
-        if self._cache_ttl_s <= 0:
-            return None
-        cached = self._cache.get(cache_key)
-        if isinstance(cached, LeadPage):
-            return cached.copy_with(self._copy_leads(cached.leads))
-        return None
+        return self._pages.get(cache_key)
 
     def _store_cached_page(self, cache_key: str, page: LeadPage) -> LeadPage:
-        if self._cache_ttl_s > 0:
-            self._cache.set(cache_key, page.copy_with(self._copy_leads(page.leads)), self._cache_ttl_s)
-        return page.copy_with(self._copy_leads(page.leads))
+        return self._pages.put(cache_key, page)
 
     def _store_cached_count(self, cache_key: str, value: int) -> int:
         if self._cache_ttl_s > 0:
