@@ -10,6 +10,8 @@ import { installLocalStorage } from '../test/installLocalStorage';
 import { NOBODY, _resetActorScopeForTests, observeActor } from './actorScope';
 import { ACTOR_A, ACTOR_B } from '../test/actorKeys';
 import {
+  KEYMAP_SCOPE_LABELS,
+  KEYMAP_SCOPE_ORDER,
   ariaKeyShortcuts,
   chordKeycaps,
   hasOpenModal,
@@ -417,5 +419,14 @@ describe('the Triage deck scope (D-approval-flow-a2)', () => {
     expect(table).not.toHaveBeenCalled();
     expect(global).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+describe('the `?` sheet scope order (wow-power-4)', () => {
+  it('lists every scope exactly once, page scopes before global, the queue pager labelled', () => {
+    expect([...KEYMAP_SCOPE_ORDER].sort()).toEqual(Object.keys(KEYMAP_SCOPE_LABELS).sort());
+    expect(new Set(KEYMAP_SCOPE_ORDER).size).toBe(KEYMAP_SCOPE_ORDER.length);
+    expect(KEYMAP_SCOPE_ORDER).toEqual(['triage', 'lead-queue', 'queue-pager', 'global']);
+    expect(KEYMAP_SCOPE_LABELS['queue-pager']).toBe('Queue pager');
   });
 });
