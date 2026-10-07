@@ -39,8 +39,19 @@ vi.mock('./zctaGeometry', () => ({
   zctaGeometryKey: (usps: string) => ['mip', 'geo', 'zcta-geometry', usps],
 }));
 
-const { USChoroplethMapZctaLevel } = await import('./USChoroplethMapZctaLevel');
+const RUNG_MODULE = await import('./USChoroplethMapZctaLevel');
+const { USChoroplethMapZctaLevel } = RUNG_MODULE;
 const { ZIP_AREAS, ZCTA_CAPTION, ZCTA_TILES_STATUS } = await import('./USChoroplethMapZipAreas');
+const { ZCTA_LEVEL } = await import('./zctaLevel.lazy');
+
+/** A promise the test settles by hand. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 const square = (zip: string, x: number, y: number, size: number): ZctaArea => ({
   zip,
@@ -123,7 +134,13 @@ function Harness({ stage = false, drill = {}, children }: { stage?: boolean; dri
         {stage ? (
           <ZIP_AREAS.Stage {...tiles} onView={handlers.onView} />
         ) : (
-          <USChoroplethMapZctaLevel {...tiles} kit={KIT} onRung={handlers.onRung} onZoomControls={handlers.onZoomControls} />
+          <USChoroplethMapZctaLevel
+            {...tiles}
+            kit={KIT}
+            loading={<p className="rung-loading">Loading</p>}
+            onRung={handlers.onRung}
+            onZoomControls={handlers.onZoomControls}
+          />
         )}
       </Profiler>
       {children}
@@ -361,6 +378,30 @@ describe('USChoroplethMapZctaLevel', () => {
     expect(geo.has).not.toHaveBeenCalled();
     expect(geo.load).not.toHaveBeenCalled();
     expect(handlers.onView).toHaveBeenLastCalledWith({ polygons: false, busy: false, controls: null, caption: null, cardNote: null });
+  });
+
+  it('through ZIP_AREAS: a keyboard drill parks focus on the loading stage while the chunk, then the geometry, loads, then hands it to the first ZIP area', async () => {
+    const chunk = deferred<typeof RUNG_MODULE>();
+    vi.spyOn(ZCTA_LEVEL, 'current').mockReturnValue(null);
+    vi.spyOn(ZCTA_LEVEL, 'load').mockReturnValue(chunk.promise);
+    const geometry = deferred<ZctaGeometry>();
+    geo.load.mockReturnValue(geometry.promise);
+    const loadingStage = () => document.querySelector('.map-stage--zcta');
+    await render(true, { autoFocus: true });
+    // The chunk is loading: focus waits on the stage, never on <body>.
+    await until(() => loadingStage() !== null && document.activeElement === loadingStage());
+    expect(document.activeElement?.getAttribute('role')).toBe('group');
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('ZIP areas in Illinois');
+    await act(async () => {
+      chunk.resolve(RUNG_MODULE);
+    });
+    // The chunk is in and the geometry is loading: the rung's loading stage holds focus.
+    await until(() => geo.load.mock.calls.length > 0);
+    await until(() => loadingStage() !== null && document.activeElement === loadingStage());
+    await act(async () => {
+      geometry.resolve(GEOMETRY);
+    });
+    await until(() => document.activeElement === unit('60611'));
   });
 
   it('through ZIP_AREAS: busy while loading, then polygons with the caption and the zoom buttons', async () => {

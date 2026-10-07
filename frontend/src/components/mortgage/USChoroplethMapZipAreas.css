@@ -18,3 +18,9 @@
   margin: 0;
   padding: var(--sp-2) var(--sp-3) 0;
 }
+
+/* A keyboard drill parks focus on the loading stage (a11y-04). It fills the
+   map's clipping box, so its ring is drawn inside, as on .map-stage--status. */
+.map-stage--zcta:focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}

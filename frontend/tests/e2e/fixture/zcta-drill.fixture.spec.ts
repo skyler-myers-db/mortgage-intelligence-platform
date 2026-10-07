@@ -16,7 +16,8 @@
  *  - Always (no geometry needed): Home never loads the rung or any geometry;
  *    the national hover on Segments warms JS only; a keyboard drill into a
  *    state with an empty ZIP rollup keeps the tiles' empty card (focus on
- *    its Lead Queue action, no status line, no rung load); a geometry read
+ *    its Lead Queue action, no status line, no rung load); a keyboard drill
+ *    holds focus on the loading stage while the rung loads; a geometry read
  *    that fails (or a state with no file) falls back to the densest-ZIP
  *    tiles with their status line.
  *
@@ -297,6 +298,28 @@ test.describe('the rung without geometry (always)', () => {
     await expect(page.locator('#main-content .zip-tiles__status')).toHaveCount(0);
     await app.settle();
     expect(rung).toEqual([]);
+  });
+
+  test('a keyboard drill holds focus on the loading stage while the rung loads, then hands it to the first ZIP', async ({ app, page }) => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(RUNG_CHUNK, async (route) => {
+      await held;
+      await route.continue();
+    });
+    await app.gotoRoute(SEGMENTS);
+    await expect(page.locator('#main-content path.map-region.has-data').first()).toBeVisible();
+    await statePath(page, 'il').focus();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/geo_state=IL/);
+    // a11y-04: never <body> while the rung's chunk is on its way.
+    await expect(page.getByRole('group', { name: 'ZIP areas in Illinois' })).toBeFocused();
+    release();
+    // A ZIP control takes it: a ZIP area, or a tile while no geometry is committed.
+    await expect(page.locator('#main-content .map-wrap [data-map-unit][data-populated]:focus')).toHaveCount(1);
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
   });
 
   test('a geometry read that fails falls back to the densest-ZIP tiles with their status line', async ({ app, hygiene, page }) => {

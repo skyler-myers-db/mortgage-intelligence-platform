@@ -16,7 +16,7 @@
  * reported to the map makes the legend's scale and caption, the header's zoom
  * buttons, the ZIP card's line and the busy flag follow what is on screen.
  */
-import { useLayoutEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { preloadBestEffort } from '../../lib/lazyPreload';
 import { claimDrillFocus, moveRovingFocus, zipAriaLabel } from './USChoroplethMap.a11y';
 import type { ZipStage, ZipStageProps } from './USChoroplethMap.zipStage';
@@ -60,10 +60,43 @@ function ZipAreasStage({ onView, usps, nationalViewBox, ...tiles }: ZipStageProp
       </>
     );
   }
+  const loading = <ZipAreasLoading stateName={tiles.drillStateName} autoFocus={tiles.autoFocus ?? false} />;
   const Rung = chunk.module?.USChoroplethMapZctaLevel ?? null;
-  if (!Rung) return <div className="map-stage map-stage--empty map-stage--zcta">Loading ZIP areas…</div>;
+  if (!Rung) return loading;
   return (
-    <Rung {...tiles} usps={usps} nationalViewBox={nationalViewBox} kit={KIT} onRung={setRung} onZoomControls={setControls} />
+    <Rung
+      {...tiles}
+      usps={usps}
+      nationalViewBox={nationalViewBox}
+      kit={KIT}
+      loading={loading}
+      onRung={setRung}
+      onZoomControls={setControls}
+    />
+  );
+}
+
+/**
+ * The stage while the rung's chunk, then its geometry, loads. A keyboard
+ * drill parks focus here (a11y-04: a drill never drops focus to <body>) and
+ * keeps its request open: each next stage replaces this one, so the first
+ * ZIP area, or the fallback tiles, take focus once they mount.
+ */
+function ZipAreasLoading({ stateName, autoFocus }: { stateName: string; autoFocus: boolean }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (autoFocus) claimDrillFocus(ref.current);
+  }, [autoFocus]);
+  return (
+    <div
+      ref={ref}
+      className="map-stage map-stage--empty map-stage--zcta"
+      role="group"
+      aria-label={`ZIP areas in ${stateName}`}
+      tabIndex={-1}
+    >
+      Loading ZIP areas…
+    </div>
   );
 }
 

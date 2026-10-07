@@ -76,13 +76,15 @@ const POPULATED_ATTR = 'data-populated';
 
 export interface USChoroplethMapZctaLevelProps extends Omit<ZipStageProps, 'onView'> {
   kit: ZctaKit;
+  /** The host's loading stage, shown while the geometry loads (it holds a keyboard drill's focus). */
+  loading: ReactNode;
   /** Which rung is on screen, once it is known ('tiles': the host draws the fallback). */
   onRung: (rung: ZipRung) => void;
   /** The header's zoom buttons while the polygons show; null when they go. */
   onZoomControls: (controls: ReactNode) => void;
 }
 
-export function USChoroplethMapZctaLevel({ usps, onRung, ...stage }: USChoroplethMapZctaLevelProps) {
+export function USChoroplethMapZctaLevel({ usps, onRung, loading, ...stage }: USChoroplethMapZctaLevelProps) {
   const available = hasZctaGeometry(usps);
   const geometry = useQuery({
     queryKey: zctaGeometryKey(usps),
@@ -98,7 +100,8 @@ export function USChoroplethMapZctaLevel({ usps, onRung, ...stage }: USChoroplet
     else if (data) onRung('polygons');
   }, [data, fallback, onRung]);
   if (fallback) return null;
-  if (!data) return <div className="map-stage map-stage--empty map-stage--zcta">Loading ZIP areas…</div>;
+  // Replaced by the stage at this position, so focus parked on it moves on.
+  if (!data) return loading;
   return <ZctaStage {...stage} geometry={data} />;
 }
 
@@ -164,7 +167,7 @@ function MapZoomButtons({ store }: { store: ZoomStore }) {
   );
 }
 
-type StageProps = Omit<USChoroplethMapZctaLevelProps, 'usps' | 'onRung'> & { geometry: ZctaGeometry };
+type StageProps = Omit<USChoroplethMapZctaLevelProps, 'usps' | 'onRung' | 'loading'> & { geometry: ZctaGeometry };
 
 function ZctaStage({
   kit,
