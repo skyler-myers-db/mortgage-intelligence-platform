@@ -52,7 +52,10 @@ describe('GenieRefusalReportConfirm', () => {
     expect(quote?.textContent).toBe(QUESTION);
     expect(step?.querySelector('input, textarea, [contenteditable]')).toBeNull();
     expect(step?.querySelector('.genie-answer__refusal-disclosure')?.textContent).toBe(REFUSAL_CAPTURE_DISCLOSURE);
-    expect(REFUSAL_CAPTURE_DISCLOSURE).toContain('questions that name a person or a borrower are not kept');
+    expect(REFUSAL_CAPTURE_DISCLOSURE).toContain('questions that appear to name a person or a borrower are not kept');
+    // Honest retention (owner re-ruling 2026-10-07): only the question ages out; the report and name stay.
+    expect(REFUSAL_CAPTURE_DISCLOSURE).toContain('the report itself stays in the audit record');
+    expect(REFUSAL_CAPTURE_DISCLOSURE).not.toMatch(/name (is|are) (kept|deleted|removed) for 90 days|and your name are kept/);
     const buttons = [...(step?.querySelectorAll('button') ?? [])].map((button) => [button.className, button.textContent]);
     expect(buttons).toEqual([
       ['btn btn--primary btn--sm', 'Report with my question'],

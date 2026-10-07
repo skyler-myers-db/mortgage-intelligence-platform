@@ -21,10 +21,16 @@ import { pushEscapeLayer } from '../../lib/escapeStack';
  * deviation:genie-refusal-confirm
  */
 
+// Owner re-ruling 2026-10-07 (report 12.4 #11): only the question text is
+// cleared at 90 days; the reporter identity stays on the report and in the
+// append-only GENIE_REFUSAL_REPORT audit row, so the copy must not read as
+// though the name is deleted. The masking claim covers what the screen
+// detects; a bare given name can pass it, hence 'appear to name'.
 export const REFUSAL_CAPTURE_DISCLOSURE =
-  'Your question and your name are kept for 90 days so the governance team can review this refusal. ' +
-  'Only administrators and auditors can read it, and every read is logged. Phone numbers, emails, SSNs ' +
-  'and street addresses are masked; questions that name a person or a borrower are not kept.';
+  'Your question is kept with your name for 90 days so the governance team can review this refusal; ' +
+  'the report itself stays in the audit record. Only administrators and auditors can read the question, ' +
+  'and every read is logged. Phone numbers, emails, SSNs and street addresses are masked; questions that ' +
+  'appear to name a person or a borrower are not kept.';
 
 export interface GenieRefusalReportConfirmProps {
   /** The panel id the card's "This was legitimate" names in aria-controls. */

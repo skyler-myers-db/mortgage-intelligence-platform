@@ -99,7 +99,8 @@ for (const theme of FIXTURE_THEMES) {
       await expect(legit).toHaveAttribute('aria-controls', (await step.getAttribute('id')) ?? 'missing');
       await expect(step.getByRole('button', { name: 'Report with my question' })).toBeFocused();
       await expect(step.getByTestId('genie-refusal-question')).toHaveText(question);
-      await expect(step).toContainText('questions that name a person or a borrower are not kept');
+      await expect(step).toContainText('questions that appear to name a person or a borrower are not kept');
+      await expect(step).toContainText('the report itself stays in the audit record');
       expect(reportCalls(mockApi), 'opening the step files nothing').toEqual([]);
       await expectAxeClean(page, { key: { route: 'genie-panel', state: 'refusal-confirm' }, theme, known: {} });
 
