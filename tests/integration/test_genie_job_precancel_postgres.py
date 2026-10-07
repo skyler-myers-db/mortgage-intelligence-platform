@@ -43,8 +43,8 @@ pytestmark = pytest.mark.integration
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
 _MARKER = "-- Genie completion-job pre-cancel ---"
-#: The integrator dates the placeholder at merge (it renumbers this constant).
-PRECANCEL_VERSION = "2026_10_0X_genie_job_precancel"
+#: Dated at the W5c merge: the fourth of the five W5c blocks, after the dossier index.
+PRECANCEL_VERSION = "2026_10_07_genie_job_precancel"
 _ACTOR = "lo@example.com"
 _HASH = "c" * 64
 

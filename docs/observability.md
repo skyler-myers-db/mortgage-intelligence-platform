@@ -823,7 +823,7 @@ The pre-cancel marker. A Stop before the complete's 202 named the job (Genie
 still answering, or the complete not yet answered) carries no `job_id`. The
 route locks the turn by its key (actor, conversation, message); with no row
 it INSERTs the turn's job row already `cancelled` (`precancelled_at`,
-migration `2026_10_0X_genie_job_precancel`, CHECK
+migration `2026_10_07_genie_job_precancel`, CHECK
 `genie_completion_jobs_precancel_shape_chk`) with `ON CONFLICT DO NOTHING`
 on the turn UNIQUE, and audits it (`status` `pre_job`). A complete that
 arrives later joins that terminal row and runs nothing: a 202 with the

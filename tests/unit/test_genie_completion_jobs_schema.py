@@ -284,8 +284,8 @@ def test_every_terminal_statement_nulls_the_sections() -> None:
 
 # ------------------------------------------- the pre-cancel block (W5c genie-03)
 
-#: The integrator dates the placeholder at merge (it renumbers this constant).
-PRECANCEL_VERSION = "2026_10_0X_genie_job_precancel"
+#: Dated at the W5c merge: the fourth of the five W5c blocks, after the dossier index.
+PRECANCEL_VERSION = "2026_10_07_genie_job_precancel"
 
 
 def _precancel_block() -> str:

@@ -4251,7 +4251,7 @@ COMMENT ON COLUMN mip_app.genie_completion_jobs.precancelled_at IS
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_0X_genie_job_precancel',
+    '2026_10_07_genie_job_precancel',
     'Genie completion-job pre-cancel: nullable precancelled_at with a named shape CHECK (cancelled, cancel requested, nothing recorded); a Stop before the job exists inserts the turn''s row already cancelled'
 )
 ON CONFLICT (version) DO NOTHING;
