@@ -25,6 +25,12 @@
  *
  * The Rate Lever read (audit wow-stage-1) is enabled only while the rate
  * colouring is the effective mode: never on load, never prefetched.
+ *
+ * Audit delivery-06 (client half): the state and ZIP rollups read their
+ * `*WithFreshness` twins, so each GeoRead carries `lastGoodAt`, the instant
+ * of the last successful read behind counts the server RETAINED after a
+ * failed refresh (null when current, and always null for the overlay and
+ * rate reads). `data` keeps its Record shape for every consumer.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -35,7 +41,9 @@ import {
   requestStateRollupsByCode,
   rollupCohort,
   type GeoCriteria,
+  type StateRollupsByCode,
 } from '../../lib/geoQueryKeys';
+import type { Fresh } from '../../lib/apiClients/headers';
 import {
   useWarmingUpRetry,
   type UseWarmingUpRetryResult,
@@ -67,6 +75,8 @@ export interface GeoRead<T> {
   loading: boolean;
   /** True while `data` is the previous key's payload shown as a placeholder (runtime-06). */
   updating: boolean;
+  /** The server retained `data` after a failed refresh: its last good read (delivery-06); else null. */
+  lastGoodAt: string | null;
   retry: () => void;
 }
 
@@ -99,9 +109,24 @@ function geoRead<T>(result: UseWarmingUpRetryResult<T>, enabled: boolean): GeoRe
     // react-query shows a placeholder only while the new key is pending: a
     // final error drops it (data null above), so the error is what renders.
     updating: data !== null && result.isPlaceholderData,
+    lastGoodAt: null,
     retry: result.manualRetry,
   };
 }
+
+/** A read whose payload carries its own age: `data` is the part the map renders. */
+function freshGeoRead<F, T>(
+  result: UseWarmingUpRetryResult<F>,
+  enabled: boolean,
+  unwrap: (payload: F) => { data: T; lastGoodAt: string | null },
+): GeoRead<T> {
+  const read = geoRead(result, enabled);
+  const payload = read.data === null ? null : unwrap(read.data);
+  return { ...read, data: payload?.data ?? null, lastGoodAt: payload?.lastGoodAt ?? null };
+}
+
+const unwrapStates = (payload: StateRollupsByCode) => ({ data: payload.byCode, lastGoodAt: payload.lastGoodAt });
+const unwrapFresh = <T,>(payload: Fresh<T>) => payload;
 
 export function useChoroplethLiveFacts({
   drillState,
@@ -136,18 +161,18 @@ export function useChoroplethLiveFacts({
     [segments, mode, portfolioCriteria],
   );
 
-  const stateResult = useWarmingUpRetry<Record<string, StateRollup>>(
+  const stateResult = useWarmingUpRetry<StateRollupsByCode>(
     (signal) => requestStateRollupsByCode(segments, mode, portfolioCriteria, signal),
     { queryKey: geoQueryKeys.stateRollups(cohort), keepPreviousData: true },
   );
 
   const zipEnabled = drillState !== null;
-  const zipResult = useWarmingUpRetry<Record<string, ZipRollup>>(
+  const zipResult = useWarmingUpRetry<Fresh<Record<string, ZipRollup>>>(
     (signal) =>
-      api.zipRollups({ state: drillState ?? '' }, signal, segments, mode, portfolioCriteria).then((payload) => {
+      api.zipRollupsWithFreshness({ state: drillState ?? '' }, signal, segments, mode, portfolioCriteria).then(({ data, lastGoodAt }) => {
         const byZip: Record<string, ZipRollup> = {};
-        for (const rollup of payload.rollups) byZip[rollup.zip] = rollup;
-        return byZip;
+        for (const rollup of data.rollups) byZip[rollup.zip] = rollup;
+        return { data: byZip, lastGoodAt };
       }),
     {
       queryKey: geoQueryKeys.zipRollups(drillState ?? '', cohort),
@@ -180,8 +205,8 @@ export function useChoroplethLiveFacts({
 
   return {
     usaMap,
-    states: geoRead(stateResult, true),
-    zips: geoRead(zipResult, zipEnabled),
+    states: freshGeoRead<StateRollupsByCode, Record<string, StateRollup>>(stateResult, true, unwrapStates),
+    zips: freshGeoRead<Fresh<Record<string, ZipRollup>>, Record<string, ZipRollup>>(zipResult, zipEnabled, unwrapFresh),
     overlayData: overlay.data,
     // A failed overlay is an honest degraded note in the legend; the base
     // borrower view stays up — never a silent fallback.

@@ -23,6 +23,7 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import type { StateRollupResponse } from '../../types';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import { USChoroplethMap } from './USChoroplethMap';
+import { RATE_COHORT_NOTE } from './rateScenario.logic';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -35,7 +36,16 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
-  api: { stateRollups: mocks.stateRollups, zipRollups: mocks.zipRollups, assignmentOverlay: mocks.assignmentOverlay },
+  api: {
+    stateRollups: mocks.stateRollups,
+    zipRollups: mocks.zipRollups,
+    assignmentOverlay: mocks.assignmentOverlay,
+    // delivery-06: the map reads the Fresh twins (no retained-value header here).
+    stateRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(mocks.stateRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: null })),
+    zipRollupsWithFreshness: (...args: unknown[]) =>
+      Promise.resolve(mocks.zipRollups(...args)).then((data: unknown) => ({ data, lastGoodAt: null })),
+  },
 }));
 vi.mock('../../lib/apiClients/rateScenario', () => ({ rateScenarioApi: { rateSensitivity: mocks.rateSensitivity } }));
 // The real control chunk, or (chunk.retired) an import that rejects the way
@@ -383,3 +393,145 @@ describe('USChoroplethMap mode and step from the URL', () => {
   });
 });
 
+
+/**
+ * Change versus today as labelled numbers (wow-stage-1 remainder,
+ * D-dataviz-geo-b): no diverging ramp; the table, the state names and the
+ * control say the change in words and numbers, every count a server count.
+ */
+describe('USChoroplethMap rate change as numbers', () => {
+  let root: Root;
+  // IL / TX report the contactable subset; PR (not drawn) does not.
+  const NUMBERS_GRID: RateSensitivityResponse = {
+    ...GRID,
+    states: [
+      { ...GRID.states[0], contactable_in_the_money: [160, 140, 120, 100, 80, 60, 40, 30, 20] },
+      { ...GRID.states[1], contactable_in_the_money: [40, 35, 30, 25, 20, 15, 10, 8, 5] },
+      { state: 'PR', addressable: 300, rate_movable: 200, in_the_money: [9, 9, 8, 8, 7, 6, 5, 4, 3] },
+    ],
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    client = createMipQueryClient();
+    mocks.stateRollups.mockResolvedValue({
+      ...rollups(9_000, 1_000),
+      rollups: [...rollups(9_000, 1_000).rollups, { state: 'PR', addressable: 300, in_the_money: 1, top_tier_opportunities: 1, avg_score: 60 }],
+    });
+    mocks.rateSensitivity.mockResolvedValue(NUMBERS_GRID);
+    mocks.zipRollups.mockResolvedValue({ rollups: [], state: 'TX' });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  type MapProps = Parameters<typeof USChoroplethMap>[0];
+  const renderMap = (props: MapProps) => act(async () => root.render(<Providers><USChoroplethMap {...props} /></Providers>));
+  const headers = () => [...document.querySelectorAll('[data-testid="map-table"] thead th')].map((th) => th.textContent ?? '');
+  const footer = (testId: string) => document.querySelector(`[data-testid="${testId}"]`)?.textContent;
+  const sentence = () => document.querySelector('.rate-lever__sentence')?.textContent ?? '';
+  const openTable = async () => {
+    const viewAsTable = [...document.querySelectorAll('button')].find((b) => b.textContent === 'View as table');
+    await act(async () => viewAsTable?.click());
+    await until(() => footer('map-table-extra-total') !== undefined);
+  };
+
+  it('hides the change column at step 0 and keeps the contactable-in-the-money column', async () => {
+    await renderMap({ mode: 'rate', step: 0 });
+    await until(() => document.querySelector('.map-legend__value')?.textContent === '1,007');
+    await openTable();
+    expect(headers()).not.toContain('In the money: change vs today↓');
+    expect(headers().some((text) => text.startsWith('In the money: change vs today'))).toBe(false);
+    expect(headers()).toContain('Contactable in the money at 6.30%');
+    // PR does not report the subset: its cell and the total say so, never 0.
+    expect(document.querySelector('tr[data-map-row="pr"]')?.textContent).toContain('—');
+    expect(footer('map-table-scenario-contactable-total')).toBe('—');
+  });
+
+  it('totals the change over every group, PR included: the footer is the headline delta', async () => {
+    await renderMap({ mode: 'rate', step: -50 });
+    await until(() => sentence().includes('more than today'));
+    await openTable();
+    await until(() => footer('map-table-change-total') !== undefined);
+    // IL +400, TX +100, PR +1: the not-drawn row counts.
+    expect(sentence()).toContain('501 more than today');
+    expect(footer('map-table-change-total')).toBe('+501');
+    expect(document.querySelector('tr[data-map-row="il"]')?.textContent).toContain('+400');
+    const caption = document.querySelector('[data-testid="map-table"] caption')?.textContent ?? '';
+    expect(caption).toBe('Marketable (addressable) borrowers by state, with in-the-money counts at 5.80% par, marketable population');
+    for (const text of [...headers(), caption]) expect(text.toLowerCase()).not.toContain('pipeline');
+  });
+
+  it('sorts by change: aria-sort moves to that header, and only the active header carries it', async () => {
+    await renderMap({ mode: 'rate', step: -50 });
+    await until(() => sentence().includes('more than today'));
+    await openTable();
+    const sortButton = (label: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>('[data-testid="map-table"] .tbl__sort')].find((b) =>
+        (b.textContent ?? '').startsWith(label));
+    expect(document.querySelectorAll('[data-testid="map-table"] th[aria-sort]')).toHaveLength(1);
+    expect(sortButton('Marketable borrowers')?.closest('th')?.getAttribute('aria-sort')).toBe('descending');
+    await act(async () => sortButton('In the money: change vs today')?.click());
+    const sorted = document.querySelectorAll('[data-testid="map-table"] th[aria-sort]');
+    expect(sorted).toHaveLength(1);
+    expect(sorted[0].textContent).toContain('In the money: change vs today');
+    expect(sorted[0].getAttribute('aria-sort')).toBe('descending');
+    const order = [...document.querySelectorAll('[data-testid="map-table"] tbody:first-of-type tr')].map((tr) => tr.getAttribute('data-map-row'));
+    expect(order).toEqual(['il', 'tx']);
+    await act(async () => sortButton('In the money: change vs today')?.click());
+    expect(document.querySelector('[data-testid="map-table"] th[aria-sort]')?.getAttribute('aria-sort')).toBe('ascending');
+  });
+
+  it('suffixes each state name with its scenario numbers and describes every path with ONE cohort note', async () => {
+    await renderMap({ mode: 'rate', step: -50 });
+    await until(() => sentence().includes('more than today'));
+    const il = document.querySelector('path[data-map-unit="il"]');
+    await until(() => (il?.getAttribute('aria-label') ?? '').includes('in the money at'));
+    expect(il?.getAttribute('aria-label')).toMatch(/; in the money at 5\.80%: 1,200 \(\+400 vs today\)$/);
+    const ids = new Set([...document.querySelectorAll('path[data-map-unit]')].map((path) => path.getAttribute('aria-describedby')));
+    expect(ids.size).toBe(1);
+    const [id] = [...ids];
+    expect(id).toMatch(/-rate-note$/);
+    const notes = [...document.querySelectorAll('.sr-only')].filter((el) => el.textContent === RATE_COHORT_NOTE);
+    expect(notes).toHaveLength(1);
+    expect(document.getElementById(id ?? '')?.textContent).toBe(RATE_COHORT_NOTE);
+    // The stage's own description (the skipped states) is untouched.
+    const svgDescribedBy = document.querySelector('svg.map-svg-stage')?.getAttribute('aria-describedby');
+    expect(svgDescribedBy).not.toBe(id);
+    expect(document.getElementById(svgDescribedBy ?? '')?.textContent).toContain('skipped');
+
+    await renderMap({ mode: 'rate', step: 0 });
+    await until(() => (il?.getAttribute('aria-label') ?? '').endsWith('; in the money today: 800'));
+  });
+
+  it('names no scenario and no note on a borrower-coloured map', async () => {
+    await renderMap({ mode: 'borrowers' });
+    await until(() => cls('il') === '4');
+    expect(document.querySelector('path[data-map-unit="il"]')?.getAttribute('aria-describedby')).toBeNull();
+    expect(document.querySelector('path[data-map-unit="il"]')?.getAttribute('aria-label')).not.toContain('in the money');
+  });
+
+  it('lists the largest gains for the whole book and links the cohort into the Lead Queue', async () => {
+    await renderMap({ mode: 'rate', step: -50 });
+    await until(() => document.querySelector('[data-testid="rate-lever-largest"]') !== null);
+    expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe(
+      'Largest in-the-money gains: Illinois +400 · Texas +100 · PR +1',
+    );
+    const link = [...document.querySelectorAll<HTMLAnchorElement>('.rate-lever a')].find((a) =>
+      a.textContent === 'Open borrowers within 50 bps of the refi screen in the Lead Queue');
+    expect(link?.getAttribute('href')).toBe('/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
+    expect(link?.className).toBe('btn btn--ghost btn--sm');
+
+    // Drilled into Texas: no whole-book clause; the link scopes to the state.
+    await renderMap({ mode: 'rate', step: 25, selection: { state: 'TX', county: null, zip: null } });
+    await until(() => (document.querySelector('.rate-lever a')?.getAttribute('href') ?? '').includes('state=TX'));
+    expect(document.querySelector('[data-testid="rate-lever-largest"]')).toBeNull();
+    expect(document.querySelector('.rate-lever a')?.getAttribute('href')).toBe(
+      '/lead-queue?segment=itm&min_rate_spread_bps=75&max_rate_spread_bps=99&state=TX',
+    );
+  });
+});

@@ -451,7 +451,7 @@ function leadQueueFilterParams(input: LeadQueueExportFiltersInput): URLSearchPar
     const value = bounds[key];
     if (value !== undefined) params.set(key, value);
   }
-  if (input.cohortId &&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.cohortId)) {
+  if (input.cohortId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.cohortId)) {
     params.set('cohort_id', input.cohortId);
   }
   return params;
@@ -487,7 +487,7 @@ const KNOWN_QUEUE_PARAMS: readonly string[] = [
   'segment', 'segment_codes', 'segment_mode', 'state', 'zip', 'states', 'zips', 'cities',
   'borrower_ids', 'county', 'counties', 'approval_status', 'outreach_status', 'assigned_to',
   'aged_days', 'funnel_stage', 'cohort_id', ...PORTFOLIO_FILTER_KEYS, ...LEAD_BOUND_FILTER_KEYS,
-  'sort', 'dir', 'row', 'view', 'campaign_id', 'variant_name', ...GROWTH_AGENT_PROOF_PARAMS,
+  'sort', 'dir', 'row', 'view', 'mode', 'campaign_id', 'variant_name', ...GROWTH_AGENT_PROOF_PARAMS,
 ];
 
 export interface LeadQueueShare {
@@ -501,7 +501,8 @@ export interface LeadQueueShare {
  * The query a "Copy link" carries (audit tables-09): the allowlisted,
  * sanitized filter grammar (the export's own), the segment mode, the sort
  * and direction, the column preset, the campaign binding, and `assigned_to`
- * only when it is `me`. Left out: the open row (a place, not a view), an
+ * only when it is `me`. Left out: the open row (a place, not a view), the
+ * Triage deck (`?mode=triage`, a mode of work, not a view), an
  * `assigned_to` that holds an email, the Growth Agent proof and unknown
  * params. `filters.assignedTo` is the RAW URL value, never the resolved one.
  */
@@ -529,6 +530,7 @@ export function leadQueueShareParams(
   for (const key of new Set(raw.keys())) {
     if (params.has(key)) continue;
     if (key === 'row') omitted.add('the open row');
+    else if (key === TRIAGE_MODE_PARAM) omitted.add('the triage deck');
     else if (key === 'assigned_to' && raw.get(key)?.trim()) omitted.add('the assignee email');
     else if ((GROWTH_AGENT_PROOF_PARAMS as readonly string[]).includes(key)) omitted.add('the Growth Agent proof');
     else if (!KNOWN_QUEUE_PARAMS.includes(key)) unknown += 1;
@@ -549,6 +551,46 @@ export const LEAD_TABLE_VIEW_PARAM = 'view';
 
 export function parseLeadTableView(raw: string | null): LeadTableView {
   return raw?.trim().toLowerCase() === 'sales-ops' ? 'sales-ops' : 'default';
+}
+
+/**
+ * The Triage deck (D-approval-flow-a2): `?mode=triage` opens the ranked
+ * table as a one-borrower deck for an approver. Display state, like
+ * `?view=`: never a filter, never in /api/leads, the leads query key, the
+ * Growth Agent proof key, a copied link or a saved view. This deep link is
+ * the contract a cohort's "Open as Triage deck" link uses.
+ */
+export const TRIAGE_MODE_PARAM = 'mode';
+export type TriageMode = 'triage';
+
+/** Only `triage` is a mode; anything else is none. */
+export function parseTriageMode(raw: string | null): TriageMode | null {
+  return raw?.trim().toLowerCase() === 'triage' ? 'triage' : null;
+}
+
+/** A location search without the deck's mode (what the queue publishes for dossier crumbs). */
+export function searchWithoutTriageMode(search: string): string {
+  const params = new URLSearchParams(search);
+  if (!params.has(TRIAGE_MODE_PARAM)) return search;
+  params.delete(TRIAGE_MODE_PARAM);
+  const rendered = params.toString();
+  return rendered ? `?${rendered}` : '';
+}
+
+/** Enter (`mode`) or leave (`null`) the deck; `row` (when given) is the row the table returns to. */
+export function searchParamsWithTriageMode(
+  searchParams: URLSearchParams,
+  mode: TriageMode | null,
+  row?: string | null,
+): URLSearchParams {
+  const next = new URLSearchParams(searchParams);
+  if (mode) next.set(TRIAGE_MODE_PARAM, mode);
+  else next.delete(TRIAGE_MODE_PARAM);
+  if (row !== undefined) {
+    if (row !== null && QUEUE_MASKED_ID_RE.test(row)) next.set('row', row);
+    else next.delete('row');
+  }
+  return next;
 }
 
 export function searchParamsWithLeadTableView(

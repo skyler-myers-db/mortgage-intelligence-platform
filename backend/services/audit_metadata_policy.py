@@ -199,6 +199,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # fingerprinted.
         "export_scope",
         "exported_row_count",
+        "matching_row_count",
         "csv_sha256",
         "borrower_ids_sha256",
         "filter_fingerprint",
@@ -206,6 +207,20 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # audit explorer's CSV. It reuses exported_row_count, csv_sha256 and
         # filter_fingerprint above; the event ids are only hashed, not stored.
         "event_ids_sha256",
+        # Maker-checker approval requests (backend/api/approval_requests.py):
+        # the server-issued request id, three bounded counts, and the skipped
+        # borrowers grouped under the four closed skip reasons. The note rides
+        # on ``rationale`` (free-text policy). APPROVE / OUTREACH_REJECT carry
+        # approval_request_batch_id when the decision names a request.
+        "approval_request_batch_id",
+        "requested_count",
+        "skipped_count",
+        "withdrawn_count",
+        "skipped_by_reason",
+        # OUTREACH_REVOKE (backend/api/outreach_revoke.py): the approval the
+        # revoke superseded and the not-yet-worked assignment it released.
+        "revoked_approval_id",
+        "released_assignment_id",
         # SAVE_QUEUE_VIEW / DELETE_QUEUE_VIEW (backend/api/workspace.py): the
         # server-issued view id only. The view's name and params never reach
         # the ledger; filter_fingerprint (above) is their SHA-256.
@@ -284,6 +299,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # job's server-issued UUID. Not ``job_id``, which carries Databricks
         # job ids.
         "genie_job_id",
+        # A verified deep-research section revealed before the final answer
+        # (genie-01 phase 1b, ruling R1): its plan index and closed verdict
+        # only, never the sub-question, prose or a row value.
+        "section_index",
+        "verification_verdict",
         # Genie answer feedback (thumbs up/down). ``helpful`` is a bool;
         # ``comment_present`` records only whether a sanitized free-text note
         # accompanied the feedback -- the note itself is scrubbed and posted as
@@ -378,6 +398,14 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "destination_key",
         "destination_type",
         "activation_status",
+        # VIEW_AUDIT_LEDGER (backend/services/audit_ledger_reads.py): which
+        # ledger surface was read, whether it was a later page, how many rows
+        # it returned and, for a receipt, which row. filter_fingerprint
+        # (above) is the SHA-256 of the filters; row contents never land.
+        "ledger_surface",
+        "has_cursor",
+        "returned_row_count",
+        "read_audit_event_id",
     }
 )
 
@@ -467,6 +495,10 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "draft_generation_id",
         "growth_agent_run_id",
         "genie_job_id",
+        "approval_request_batch_id",
+        "revoked_approval_id",
+        "released_assignment_id",
+        "read_audit_event_id",
     }
 )
 _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(
@@ -698,3 +730,10 @@ class AuditMetadataValueViolation(RuntimeError):
     def __init__(self, field: str, reason: str) -> None:
         self.field = field
         super().__init__(f"Audit metadata field {field!r} failed value policy: {reason}")
+
+
+# The closed ``ledger_surface`` vocabulary of a VIEW_AUDIT_LEDGER row
+# (D-audit-reads-c3): one token per served ledger read surface.
+LEDGER_SURFACES: frozenset[str] = frozenset(
+    {"events", "events_page", "rollups", "receipt", "refusal_reports", "facets", "count"}
+)

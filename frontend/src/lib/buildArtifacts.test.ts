@@ -51,6 +51,7 @@ const tools = {
   packageOfModule: budgetTool.packageOfModule as (id: string) => string | null,
   moduleKey: budgetTool.moduleKey as (id: string) => string,
   relocate: postbuildTool.relocateBuildArtifacts as (dirs: ScratchDirs) => { manifest: string; maps: string[] },
+  brandingProblems: postbuildTool.brandingProblems as (distDir: string, env: Record<string, string | undefined>) => string[],
   postbuildInitialClosure: postbuildTool.initialClosure as (manifest: Manifest) => Closure,
 };
 
@@ -520,5 +521,51 @@ describe('relocateBuildArtifacts', () => {
     mkdirSync(path.join(dirs.distDir, '.vite'));
     writeFileSync(path.join(dirs.distDir, '.vite', 'manifest.json'), '{}');
     expect(() => tools.relocate(dirs)).toThrow(/\.vite\/ metadata directory/);
+  });
+});
+
+/** responsive-10: a lender mark reaches dist only through a preflight-validated build. */
+describe('brandingProblems', () => {
+  let scratch: string | null = null;
+  afterEach(() => {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+    scratch = null;
+  });
+
+  function dist(files: string[]): string {
+    scratch = mkdtempSync(path.join(tmpdir(), 'mip-branding-'));
+    const distDir = path.join(scratch, 'dist');
+    mkdirSync(distDir, { recursive: true });
+    for (const file of files) {
+      mkdirSync(path.dirname(path.join(distDir, file)), { recursive: true });
+      writeFileSync(path.join(distDir, file), 'x');
+    }
+    return distDir;
+  }
+  const SHA = 'a'.repeat(64);
+
+  it('passes a default build (no dist/branding) with or without a hash', () => {
+    expect(tools.brandingProblems(dist(['index.html']), {})).toEqual([]);
+    expect(tools.brandingProblems(dist(['index.html']), { MIP_LENDER_MARK_SHA256: SHA })).toEqual([]);
+  });
+
+  it('passes one validated mark', () => {
+    expect(tools.brandingProblems(dist(['branding/lender-mark.png']), { MIP_LENDER_MARK_SHA256: SHA })).toEqual([]);
+    expect(tools.brandingProblems(dist(['branding/lender-mark.webp']), { MIP_LENDER_MARK_SHA256: SHA })).toEqual([]);
+  });
+
+  it('fails a dist/branding the preflight hash does not vouch for', () => {
+    for (const env of [{}, { MIP_LENDER_MARK_SHA256: '' }, { MIP_LENDER_MARK_SHA256: '  ' }]) {
+      expect(tools.brandingProblems(dist(['branding/lender-mark.png']), env)).toEqual([
+        'dist/branding exists but MIP_LENDER_MARK_SHA256 is unset: no lender mark ships without preflight validation',
+      ]);
+    }
+  });
+
+  it('fails anything in dist/branding but one lender-mark.png or .webp', () => {
+    const env = { MIP_LENDER_MARK_SHA256: SHA };
+    for (const files of [['branding/lender-mark.svg'], ['branding/lender-mark.png', 'branding/lender-mark.webp'], ['branding/x/lender-mark.png']]) {
+      expect(tools.brandingProblems(dist(files), env)[0]).toMatch(/must hold exactly one lender-mark\.png or lender-mark\.webp/);
+    }
   });
 });

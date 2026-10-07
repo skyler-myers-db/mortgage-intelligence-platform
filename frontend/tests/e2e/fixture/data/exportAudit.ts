@@ -27,6 +27,8 @@ export function leadExportReceiptFor(declaration: LeadExportReceiptRequest): Lea
     borrower_ids_sha256: declaration.borrower_ids_sha256,
     filter_fingerprint: 'f'.repeat(64),
     recorded_at: RECORDED_AT,
+    // D-approval-flow-b: echoed like the server, null when not declared.
+    matching_row_count: declaration.matching_row_count ?? null,
   };
 }
 

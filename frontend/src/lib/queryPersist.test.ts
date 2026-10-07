@@ -134,7 +134,6 @@ describe('what may persist: default deny', () => {
     ['growth agent', queryKeys.growthAgent()],
     ['growth agent capabilities', queryKeys.growthAgentCapabilities()],
     ['workspace', queryKeys.workspace()],
-    ['sales team', queryKeys.salesTeam()],
     ['sales roster', queryKeys.salesRoster()],
     ['sales ops', queryKeys.salesOps()],
     ['campaigns', queryKeys.campaigns()],
@@ -301,6 +300,9 @@ describe('the actor gate owns the snapshot', () => {
     await saveNow();
     expect(session.has(QUERY_CACHE_KEY)).toBe(true);
 
+    // The change, as a NEW document (a mid-session change resets the tab,
+    // D-identity-review-a3): pending over A's stamps, then B first.
+    _resetActorScopeForTests({ status: 'pending', owner: ACTOR_A });
     observeActor({ key: ACTOR_B });
     expect(session.has(QUERY_CACHE_KEY), 'rows 1/3/4 remove it').toBe(false);
 

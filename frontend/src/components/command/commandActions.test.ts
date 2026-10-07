@@ -24,6 +24,7 @@ describe('command palette action registry', () => {
       '/analytics',
       '/ask-genie',
       '/glossary',
+      '/audit-ledger',
       '/admin-config',
     ]) {
       expect(routes).toContain(to);
@@ -33,6 +34,25 @@ describe('command palette action registry', () => {
   it('removes the Admin destination unless access is affirmative', () => {
     expect(commandActionsForAccess(false).map((action) => action.id)).not.toContain('nav-admin');
     expect(commandActionsForAccess(true).map((action) => action.id)).toContain('nav-admin');
+  });
+
+  it('offers the audit ledger to admins and auditors only (D-audit-reads-c3)', () => {
+    const ids = (actions: CommandAction[]) => actions.map((action) => action.id);
+    const admin = ids(commandActionsForAccess(true));
+    expect(admin).toContain('nav-admin');
+    expect(admin).toContain('nav-audit-ledger');
+    const auditor = ids(commandActionsForAccess(false, COMMAND_ACTIONS, true));
+    expect(auditor).toContain('nav-audit-ledger');
+    expect(auditor).not.toContain('nav-admin');
+    const plain = ids(commandActionsForAccess(false));
+    expect(plain).not.toContain('nav-audit-ledger');
+    expect(plain).not.toContain('nav-admin');
+  });
+
+  it('finds the ledger by "audit log", not Admin', () => {
+    const ids = filterCommandActions('audit log').map((action) => action.id);
+    expect(ids[0]).toBe('nav-audit-ledger');
+    expect(ids).not.toContain('nav-admin');
   });
 
   it('returns the full registry (in order) for an empty query', () => {

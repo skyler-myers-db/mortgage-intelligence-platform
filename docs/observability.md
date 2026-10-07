@@ -568,6 +568,51 @@ submit are NOT observed and trail the same way: the job's 04:00 schedule ships
 PAUSED, so a scheduled run happens only if an operator unpauses it, and a run
 started from the Jobs UI is not the App's either.
 
+### Client half: the retained-value marker on screen (W5b)
+
+The browser shows `X-Data-Last-Good-At` instead of only logging it
+(D-platform-process-e1 items 7-9, client half, 2026-10-01):
+
+- Validation. `frontend/src/lib/apiClients/headers.ts` `lastGoodAtHeader`
+  accepts exactly `YYYY-MM-DDTHH:MM:SSZ` with a finite `Date.parse`; any other
+  value reads as "not stale". The header is read on 2xx responses only:
+  `apiTransport` rejects a non-2xx before any caller sees its headers, and the
+  middleware appends the header to 2xx responses only (§6), so a failure
+  never carries a "last good" age.
+- The Fresh shape. The geo client's `segmentsWithFreshness`,
+  `stateRollupsWithFreshness`, `countyRollupsWithFreshness` and
+  `zipRollupsWithFreshness` (same URLs as the plain reads) return
+  `{ data, lastGoodAt }`. The map's state rollups (Home's prefetch stores the
+  same `{ byCode, lastGoodAt }` shape under the same key) and ZIP rollups ride
+  them, and each map read exposes `lastGoodAt` (null for the overlay and the
+  Rate Lever).
+- Where it renders. One `StaleDataNote` ("Showing counts last read …") per
+  surface that shows retained data. Segment Intelligence shows one: the
+  OLDEST of the catalog and the map read on screen beside the ranked table's
+  FetchedAt, as the one-line compact form ("Refresh failed; counts from …",
+  the next-refresh sentence read to assistive technology) so the header
+  keeps its height (above the EmptyState when a measured zero replaces the
+  table, in the full form). Home can show two at once: the map's in the
+  legend, and the hero's at the top of the page when a hero refresh failed
+  over the briefing on screen (below). It clears on the first response
+  without the header, and never offers a Refresh of its own.
+- Persisted aggregates. A restored snapshot shows its true age (FetchedAt on
+  Home) while it bridges the load, and a restored value whose first refresh
+  fails is reset (lib/queryPersist), so the surface shows its warming or
+  error state instead. A Home hero read whose manual refresh fails over data
+  on screen shows the note with that data's age. A read that already failed
+  BEFORE the lazy snapshot restore lands (its final error, or a failed
+  attempt whose retry is in flight) is screened out of the snapshot right
+  before the newer-wins hydrate, so the restored value never replaces its
+  error with a success; a failure that lands while the restore is in
+  progress is settled like any first-refresh failure once it has finished
+  (`frontend/src/lib/queryPersist.restoreRace.test.ts`, and at the rendered
+  layer home-geo-lever.fixture.spec.ts "a refresh that fails before the
+  snapshot restore lands never brings the restored figures back").
+- A list built from retained readiness stays marked until its own next
+  refresh, up to the 300 s soft TTL: one successful readiness read does not
+  clear a list already built from a retained one.
+
 During a sustained warehouse outage, sites built with `stale_if_error` keep
 serving their last good value (up to the `MIP_GOLD_CACHE_MAX_STALE_S` hard
 cap), and every later stale read schedules one more background refresh per key
@@ -621,6 +666,9 @@ answer, SQL, or exception text; ids are the job UUID only:
 | `genie_job_cancel_end_failed` (logger `mip-genie`) | WARNING | `error_type`, `job_id` | The runner could not mark a stopped job `cancelled`. Nothing was recorded; the lease lapses and the next read expires the job. |
 | `genie_jobs_table_absent`, 2026_09_25 columns | WARNING, once per absence | — | Also logged when the table exists without `cancel_requested_at`, `recorded_at` and `deep` (the App promoted ahead of the 2026_09_25 migration): the App completes inline exactly as without the table. |
 | `genie_job_durations_failed` | WARNING, at most once a minute per process | `error_type` | The typical-duration aggregate (audit `genie-01`) could not be read. The status poll simply carries no `typical_seconds`; the miss is cached for 60 s. |
+| `genie_job_section_write_failed` | WARNING, at most once a minute per process | `error_type` | Audit `genie-01` phase 1b: a verified-sections write (its `GENIE_SECTION_REVEALED` audit rows and the `sections_json` UPDATE share one transaction) failed. Fail closed: the sections that write would have revealed stay withheld until the final answer; the answer itself is unaffected. |
+| `genie_job_sections_skipped` | WARNING, once per job | `reason` too_large, `sections`, `job_id` | The verified-sections payload of a running deep job exceeded 4 MiB, so nothing was written or audited for it; the recorded answer is unaffected. |
+| `genie_jobs_table_absent`, 2026_10_01_genie_job_sections column | WARNING, once per absence | — | Also logged when the table lacks `sections_json` (the App promoted ahead of the 2026_10_01_genie_job_sections migration): the App completes inline exactly as without the table, so no job statement can fail on the column. |
 
 Leases and expiry. Postgres `now()` is the only clock. A job is leased to its
 process for 45 s; one daemon thread per process renews its own queued and
@@ -642,6 +690,29 @@ The status poll is budgeted as `genie-job` (the default read rate and a
 Lakebase slot, never the 30/min Genie budget or a Genie slot). The complete
 call's Genie slot is adopted by the job and released when the job ends. The
 poll is also excluded from RUM `api_call` events, like the progress poll.
+
+Verified sections (audit `genie-01` phase 1b). While a deep sweep runs, each
+sub-analysis that passes its own output-policy scan is written to the job's
+`sections_json` by one background writer per process (latest snapshot wins
+per job, rows capped at 50 per section). Every newly revealed section first
+gets a `GENIE_SECTION_REVEALED` audit row in the same transaction (ruling R1);
+the status poll serves the sections from the three-section floor, only for a
+revision the poller does not hold, and never on a terminal or
+cancel-requested job. Every terminal statement NULLs the column.
+
+### Admin SSE ingress probe (delivery-04)
+
+`GET /api/v1/admin/sse-probe` (admin only, schema-hidden, audit exempt)
+streams a bounded tick sequence so `tools/databricks/sse_ingress_spike.py`
+can measure whether the Apps ingress passes Server-Sent Events unbuffered and
+reports a disconnect (docs/load-baseline.md). It holds no dependency slot
+(budget `admin-diagnostic`) and reads no product data. Logger
+`mip-sse-probe`; no event carries the actor:
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `sse_probe_started` | INFO | `outcome` started, `probe_id`, `events` | A probe stream opened. |
+| `sse_probe_finished` | INFO | `outcome` completed / disconnected, `events_sent`, `duration_ms`, `probe_id` | The stream ended at its bound, or the server saw `http.disconnect` (or a failed send) first. `GET /api/v1/admin/sse-probe/{probe_id}` returns the same record for 10 minutes (32 runs per process). |
 
 ## 10. Approval review ledger
 
@@ -717,3 +788,103 @@ release after this SPA ships, make `review_mode` required on
 `POST /api/v1/outreach/approve`. A request without it then gets a 422 whose
 detail tells the reader to reload the app to approve, and the server stops
 writing `undeclared`.
+
+## 11. Approval requests, revoke and the queue version
+
+<!-- w5-approval-ledger-api, 2026-10-01. Appended as section 11; the integrator renumbers. -->
+
+Audit flow-02 / shell-06 (report 12.4 #10), flow-v2 and states-09. A
+signed-in user without the approver role asks an approver to review named
+borrowers (a maker-checker request); an approver may revoke an approval
+while its outreach is still none or queued. Lakebase migration
+`2026_10_01_approval_requests` adds `mip_app.approval_request_batches`
+(finalize-only) and `mip_app.approval_request_items` (open, then withdrawn
+or expired; one open item per borrower), widens `approvals_action_check` to
+admit `revoke`, and indexes `approvals.decided_at`. Nothing is ever deleted
+from either table, and the approve row a revoke supersedes is never changed.
+
+Event vocabulary (all server-owned; free text only on `rationale`, through
+the governed text policy unchanged):
+
+| Event | Action / entity | Metadata | Written |
+| --- | --- | --- | --- |
+| `APPROVAL_REQUESTED` | `outreach.approval_request` / `approval_request_batch` (the batch id) | `approval_request_batch_id`, `borrower_ids` (requested), `requested_count`, `skipped_count`, `skipped_by_reason` (when any was skipped), `rationale` (the screened note) | in the same transaction as the batch and its items |
+| `APPROVAL_REQUEST_REFUSED` | `outreach.approval_request_refused` / `approval_request` (the client request key) | `borrower_ids` (every id asked for), `requested_count` 0, `skipped_count`, `skipped_by_reason`, `rationale` | its own transaction, after the attempt rolled back; the 409 answers counts per reason only |
+| `APPROVAL_REQUEST_WITHDRAWN` | `outreach.approval_request_withdraw` / `approval_request_batch` | `approval_request_batch_id`, `withdrawn_count`, `borrower_ids` (withdrawn) | only when the withdraw closed at least one borrower |
+| `OUTREACH_REVOKE` | `outreach.revoke` / `approval` (the revoke row) | `approval_id`, `revoked_approval_id`, `borrower_id`, `offer_code`, `channel`, `rationale`, `request_id`, `released_assignment_id` (when a not-yet-worked assignment was released) | in the same transaction as the revoke's approvals row |
+
+Value rules: `approval_request_batch_id`, `revoked_approval_id` and
+`released_assignment_id` are opaque ids; the three counts are bounded row
+counts; `skipped_by_reason` groups masked borrower ids under the four closed
+reasons `not_found`, `not_contactable`, `already_decided`,
+`already_requested`. APPROVE and OUTREACH_REJECT carry
+`approval_request_batch_id` when the decision answers a request; the decision
+intent carries it only then, so every unlinked intent (and its derived
+fallback request id) is unchanged. The decision receipt reads a revoke as
+`revoked`.
+
+Request state is Lakebase workflow app state, not audit-explorer visibility
+(12.4 #3 is unchanged): the list (`GET /api/v1/outreach/approval-requests`)
+writes no audit row. Each borrower's state is derived, never stored, in this
+order: the latest finalized approve or reject LINKED to the request
+(`approved` / `rejected`), the requester's withdraw (`withdrawn`), an
+expired item or a request older than 30 days (`expired`), a later finalized
+approve or reject without the link (`decided_outside`), else `open`. Hold
+and revoke rows never decide a request. A request older than 30 days frees
+its borrowers lazily: the next request for one of them expires the stale
+item first. A decided item keeps `status = 'open'` in the table (the
+decision is derived), so the approvers' list (`scope=open`, oldest first, at
+most 100) excludes requests with no derived-open borrower in its SQL read,
+and fully decided requests never crowd newer open ones out. Request and
+approval ids are compared in the ledger's lower-case spelling: the API
+canonicalizes an upper-case id on approve, reject, revoke and
+`GET /api/v1/leads?approval_request_batch=`.
+
+Revoke rules (`POST /api/v1/outreach/revoke`, approver-only): the named
+approval must still be the borrower's current, finalized, unbound decision;
+no call disposition or lead outcome may exist since it was decided, and no
+delivered activation for it; an active assignment a loan officer has worked
+(`actioned`, `outcome_recorded`) refuses, a not-yet-worked one is released.
+The borrower's open request items expire so it can be requested again. A new
+revoke clears the sales-state cache and enqueues the lifecycle sync with
+reason `revocation`; the sync, `lifecycle_for` and the activation delivery
+guard read the borrower as pending / none / superseded. The funnel's
+"approved" stage counts borrowers ever approved, so a revoked approval still
+counts there, exactly like approve-then-reject.
+
+Queue version: the change signal now reads six ledgers (approvals,
+assignments, call dispositions, loan-officer outcomes, activation delivery
+status and CRM-imported `lead_outcomes`) under the prefix
+`mip.queue-version.v2|`. The prefix change moves every version once, so each
+open Lead Queue shows one "Queue updated" pill after the deploy that ships
+it. The request tables are not folded in (a request sends no notification).
+
+Open requests by age (run as the audit reader):
+
+```sql
+SELECT batch.batch_id,
+       batch.created_at,
+       now() - batch.created_at AS age,
+       count(*) FILTER (WHERE item.status = 'open') AS open_items
+FROM mip_app.approval_request_batches AS batch
+JOIN mip_app.approval_request_items AS item USING (batch_id)
+WHERE batch.audit_event_id IS NOT NULL
+  AND batch.created_at >= now() - interval '30 days'
+GROUP BY batch.batch_id, batch.created_at
+HAVING count(*) FILTER (WHERE item.status = 'open') > 0
+ORDER BY batch.created_at;
+```
+
+Revokes in the last 30 days, with what each superseded:
+
+```sql
+SELECT event_at,
+       actor_email,
+       metadata->>'revoked_approval_id' AS revoked_approval_id,
+       metadata->>'borrower_id' AS borrower_id,
+       metadata->>'released_assignment_id' AS released_assignment_id
+FROM mip_app.action_audit
+WHERE event_type = 'OUTREACH_REVOKE'
+  AND event_at >= now() - interval '30 days'
+ORDER BY event_at DESC;
+```

@@ -1,4 +1,4 @@
-import { Fragment, useContext } from 'react';
+import { Fragment, lazy, Suspense, useContext } from 'react';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Icon } from '../Icon';
@@ -16,6 +16,15 @@ import type {
   LineageManifestNode,
 } from '../../types';
 import { EvidenceDrawerBodyContext, type EvidenceDrawerBodyProps } from './evidenceDrawerBodyLoader';
+import { deltaExplainerOf } from '../../lib/deltaExplainerSource';
+
+/**
+ * The Delta Explainer (audit wow-ai-3, deviation:delta-explainer): its own
+ * chunk, mounted only while the drawer is open on Overview for a source that
+ * carries one, so its audit-free read never runs on hover or for any other
+ * source. The evidence hover card never renders it.
+ */
+const DeltaExplainer = lazy(() => import('./DeltaExplainer'));
 
 /**
  * Data source / evidence drawer — fast context for a source chip.
@@ -266,6 +275,7 @@ export function EvidenceDrawerBody() {
       : null;
   const catalogExplorerUrl =
     destination.kind !== 'lakebase' ? metadata?.catalog_explorer_url ?? null : null;
+  const explainer = open ? deltaExplainerOf(d) : null;
 
   return (
     <div className="drawer__body">
@@ -410,6 +420,11 @@ export function EvidenceDrawerBody() {
           )}
           {tab === 'overview' ? (
             <div {...panelProps('overview')}>
+              {explainer && (
+                <Suspense fallback={<div className="source-card" role="status">Loading the change breakdown…</div>}>
+                  <DeltaExplainer explainer={explainer} />
+                </Suspense>
+              )}
               <div className="source-summary">
                 <div className="source-summary__top">
                   {/* Modifier keys off the VIEW state, not metadata.freshness:

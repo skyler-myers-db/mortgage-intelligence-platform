@@ -12,6 +12,9 @@ import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { api } from '../../lib/api';
 import { openGenie } from '../../lib/genieOpen';
+import { saveDataRequested } from '../../lib/prefetch';
+import { preloadRouteForPath } from '../../lib/routePreloaders';
+import { useAuditLedgerAccess } from '../../lib/sessionQuery';
 import type { LeadSummary } from '../../types';
 import { useModalDialog } from '../../hooks/useModalDialog';
 import {
@@ -61,6 +64,18 @@ type FlatItem =
   | { kind: 'genie'; prompt: string }
   | { kind: 'borrower'; lead: LeadSummary };
 
+/**
+ * The route chunk the row opens, for the active-row preload (audit bundle-09
+ * item 2): a route action's path, or the dossier route for a borrower row
+ * (preloadRouteForPath maps it to the borrower-360 chunk; no request carries
+ * the id). Verb, workspace-command and Ask Genie rows open no route.
+ */
+function routeChunkPath(item: FlatItem | undefined): string | null {
+  if (item?.kind === 'borrower') return `/borrower-360/${item.lead.borrower_id}`;
+  if (item?.kind === 'action' && item.action.target.kind === 'route') return item.action.target.to;
+  return null;
+}
+
 const DEBOUNCE_MS = 160;
 const MAX_BORROWERS = 6;
 /** Typed text this long or longer also offers "Ask Genie: <text>". */
@@ -76,6 +91,9 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     setGenieOpen,
     canAccessAdmin,
   } = useApp();
+  // The ledger entry for administrators AND read-only auditors: the same
+  // fail-closed session decision RouteNav and the Rail use (D-audit-reads-c3).
+  const canReadAudit = useAuditLedgerAccess();
   const [query, setQuery] = useState('');
   const [borrowers, setBorrowers] = useState<LeadSummary[]>([]);
   const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle');
@@ -144,8 +162,8 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   }, [open, query]);
 
   const actions = useMemo(
-    () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin)),
-    [canAccessAdmin, query],
+    () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin, undefined, canReadAudit)),
+    [canAccessAdmin, canReadAudit, query],
   );
   // Verbs on the page's published selection come first ("Approve 12
   // selected…"); they exist only while a page has a selection.
@@ -240,6 +258,15 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     [items, activeIndex, moveTo, runItem, searchStatus, borrowers.length],
   );
 
+  // Warm the active row's route chunk while the palette is open (bundle-09
+  // item 2), so Enter does not wait on a cold download. Chunks only: no
+  // query, no prefetchRouteData and no audited read; nothing under Save-Data.
+  useEffect(() => {
+    if (!open || saveDataRequested()) return;
+    const path = routeChunkPath(items[activeIndex]);
+    if (path) preloadRouteForPath(path);
+  }, [open, activeIndex, items]);
+
   // Keep the active row scrolled into view as arrows move it.
   useEffect(() => {
     if (!open) return;
@@ -254,6 +281,17 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   const actionItems = allActionItems.filter((it) => it.action.target.kind !== 'verb');
   const genieItems = items.filter((it) => it.kind === 'genie') as Extract<FlatItem, { kind: 'genie' }>[];
   const borrowerItems = items.filter((it) => it.kind === 'borrower') as Extract<FlatItem, { kind: 'borrower' }>[];
+  // At most one line speaks (shell-07 item 4): the empty state only once the
+  // borrower search has neither failed nor is still running.
+  const searching = query.trim().length >= 2 && searchStatus === 'loading' && borrowerItems.length === 0;
+  const searchFailed = query.trim().length >= 2 && searchStatus === 'error';
+  const noMatch = allActionItems.length === 0 && borrowerItems.length === 0
+    && searchStatus !== 'loading' && searchStatus !== 'error';
+  const statusText = searching
+    ? 'Searching borrowers…'
+    : searchFailed
+      ? 'Borrower search is temporarily unavailable.'
+      : noMatch ? `No pages, actions, or borrowers match “${query.trim()}”.` : '';
 
   return (
     <dialog
@@ -289,11 +327,13 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
 
         <div className="cmdk__list" id="cmdk-listbox" role="listbox" ref={listRef}>
           {/* The Genie row is a way out, not a match: the empty state still
-              says so when no page, action or borrower matched. */}
-          {allActionItems.length === 0 && borrowerItems.length === 0 && (
-            <div className="cmdk__empty" role="status">
-              No pages, actions, or borrowers match “{query.trim()}”.
-            </div>
+              says so when no page, action or borrower matched. While the
+              borrower search runs or after it failed, its status line shows
+              instead (shell-07 item 4): "no borrowers" is not known yet. The
+              visible lines are aria-hidden: a listbox may own only options and
+              groups, so the one live region below the list announces them. */}
+          {noMatch && (
+            <div className="cmdk__empty" aria-hidden="true">{statusText}</div>
           )}
 
           {verbItems.length > 0 && (
@@ -366,12 +406,8 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
             </div>
           )}
 
-          {query.trim().length >= 2 && searchStatus === 'loading' && borrowerItems.length === 0 && (
-            <div className="cmdk__status" role="status">Searching borrowers…</div>
-          )}
-          {query.trim().length >= 2 && searchStatus === 'error' && (
-            <div className="cmdk__status cmdk__status--error" role="status">Borrower search is temporarily unavailable.</div>
-          )}
+          {searching && <div className="cmdk__status" aria-hidden="true">{statusText}</div>}
+          {searchFailed && <div className="cmdk__status cmdk__status--error" aria-hidden="true">{statusText}</div>}
 
           {/* The fallback, after every match (and the same order as `items`,
               so the running index stays in step). */}
@@ -398,6 +434,8 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
             </div>
           )}
         </div>
+        {/* The palette's one live region, outside the listbox (see above). */}
+        <div className="sr-only" role="status">{open ? statusText : ''}</div>
 
         <div className="cmdk__footer">
           <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>

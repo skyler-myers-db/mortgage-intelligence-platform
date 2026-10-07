@@ -304,10 +304,17 @@ test('admin and non-admin identities enforce navigation and activity boundaries'
     await expect(
       adminPage.getByRole('heading', { name: 'Rules, data sources, and audit' }),
     ).toBeVisible();
-    const auditTrail = adminPage.locator('.surface', { hasText: 'Audit trail' }).first();
-    await expect(auditTrail).toBeVisible();
-    await expect(auditTrail.getByText('Probing Lakebase…')).toBeHidden({ timeout: 30_000 });
-    await expect(auditTrail).toContainText(/Last event|No events yet/);
+    // The Admin audit probe is gone (D-audit-reads-c3: every ledger read is
+    // now recorded, so opening Admin reads none); the card links to the
+    // ledger page, whose rows prove the Lakebase read path instead.
+    const ledgerCard = adminPage.locator('#audit');
+    await expect(ledgerCard.getByRole('heading', { name: 'Audit ledger' })).toBeVisible();
+    await expect(ledgerCard.getByRole('link', { name: 'Open audit ledger' })).toHaveAttribute('href', '/audit-ledger');
+    await gotoApp(adminPage, '/audit-ledger');
+    await expect(adminPage.getByRole('heading', { level: 1, name: 'Audit ledger' })).toBeVisible();
+    const ledgerRows = adminPage.locator('#audit table[aria-label="Audit events"] tbody tr');
+    const ledgerEmpty = adminPage.locator('#audit').getByText(/No audit (rows|event)/i);
+    await expect(ledgerRows.first().or(ledgerEmpty)).toBeVisible({ timeout: 30_000 });
   } finally {
     await adminContext.close();
   }

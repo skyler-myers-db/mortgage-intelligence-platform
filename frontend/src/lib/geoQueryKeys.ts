@@ -33,16 +33,28 @@ export function rollupCohort(segments: string[] | null, mode: 'any' | 'all', por
   return [segments?.join(',') ?? '', mode, JSON.stringify(portfolioCriteria ?? {})] as const;
 }
 
-/** The per-state rollups, keyed by lowercase USPS code to match the map's location ids. */
+/** The state rollups as the map reads them, with the age of a value the server retained (delivery-06). */
+export interface StateRollupsByCode {
+  /** Keyed by lowercase USPS code, the map's location ids. */
+  byCode: Record<string, StateRollup>;
+  /** `X-Data-Last-Good-At` of the 2xx response that carried them; null when current. */
+  lastGoodAt: string | null;
+}
+
+/**
+ * The per-state rollups, keyed by lowercase USPS code to match the map's
+ * location ids. The route-data prefetch stores this SAME shape under the
+ * same key (routeDataPrefetch.test.tsx pins the parity).
+ */
 export function requestStateRollupsByCode(
   segments: string[] | null,
   mode: 'any' | 'all',
   portfolioCriteria: GeoCriteria | undefined,
   signal?: AbortSignal,
-): Promise<Record<string, StateRollup>> {
-  return api.stateRollups(segments, signal, mode, portfolioCriteria).then((payload) => {
+): Promise<StateRollupsByCode> {
+  return api.stateRollupsWithFreshness(segments, signal, mode, portfolioCriteria).then(({ data, lastGoodAt }) => {
     const byCode: Record<string, StateRollup> = {};
-    for (const rollup of payload.rollups) byCode[rollup.state.toLowerCase()] = rollup;
-    return byCode;
+    for (const rollup of data.rollups) byCode[rollup.state.toLowerCase()] = rollup;
+    return { byCode, lastGoodAt };
   });
 }

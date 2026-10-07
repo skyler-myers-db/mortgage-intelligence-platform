@@ -1,0 +1,43 @@
+import { describe, expect, it } from 'vitest';
+import { AUDIT_FILTER_PARAMS } from '../components/admin/AdminAuditExplorer.params';
+import {
+  AUDIT_EXPLORER_HASH,
+  AUDIT_EXPLORER_PARAM_PREFIX,
+  AUDIT_EXPLORER_PATH,
+  auditCorrelationHref,
+  auditEventHref,
+  legacyLedgerRedirect,
+} from './auditLinks';
+import { LEDGER_EXPLORER_HASH, LEGACY_LEDGER_PARAM_PREFIX } from './legacyLedgerRedirect';
+import { ROUTES } from './routeMeta';
+
+/**
+ * The explorer moved from /admin-config to /audit-ledger (D-audit-reads-c3).
+ * Only the path changed: the parameters and the `#audit` hash are the same,
+ * and an old link that carries any explorer parameter is sent on unchanged.
+ */
+describe('audit explorer links', () => {
+  it('point at the ledger page with the same parameters and hash', () => {
+    expect(auditEventHref('evt-0001')).toBe('/audit-ledger?audit_event_id=evt-0001#audit');
+    expect(auditCorrelationHref('corr-1')).toBe('/audit-ledger?audit_correlation_id=corr-1#audit');
+  });
+
+  it('redirects an old link carrying any explorer parameter, search verbatim', () => {
+    expect(legacyLedgerRedirect('?audit_event_id=evt-0001')).toBe('/audit-ledger?audit_event_id=evt-0001#audit');
+    expect(legacyLedgerRedirect('?tab=x&audit_actor=a%40b.example')).toBe('/audit-ledger?tab=x&audit_actor=a%40b.example#audit');
+    for (const param of Object.values(AUDIT_FILTER_PARAMS)) {
+      expect(legacyLedgerRedirect(`?${param}=x`), param).toBe(`/audit-ledger?${param}=x#audit`);
+    }
+  });
+
+  it('the initial-bundle redirect and the explorer links share one path, hash and prefix', () => {
+    expect(AUDIT_EXPLORER_PATH).toBe(ROUTES.auditLedger.pattern);
+    expect(AUDIT_EXPLORER_HASH).toBe(LEDGER_EXPLORER_HASH);
+    expect(AUDIT_EXPLORER_PARAM_PREFIX).toBe(LEGACY_LEDGER_PARAM_PREFIX);
+  });
+
+  it('leaves a plain Admin link (no explorer parameter) on Admin', () => {
+    expect(legacyLedgerRedirect('')).toBeNull();
+    expect(legacyLedgerRedirect('?tab=rules')).toBeNull();
+  });
+});

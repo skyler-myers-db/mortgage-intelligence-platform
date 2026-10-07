@@ -12,6 +12,10 @@
  * other failure means NO download and a visible error. Nothing here retries
  * a write: the transport retries only the backend's retryable bodies, where
  * no row was written.
+ *
+ * The CSV builder (LeadTable.csv) loads on the click, before step 1: the
+ * shared LeadTable chunk carries only the plan and counts (LeadTable.csvPlan).
+ * A builder that cannot load writes nothing and says so.
  */
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, isAbortError } from '../../lib/api';
@@ -20,19 +24,24 @@ import {
   LEAD_EXPORT_DIGEST_MISMATCH_DETAIL,
   type LeadExportReceipt,
 } from '../../lib/apiClients/leadExport';
-import {
-  buildLeadCsv,
-  describeLeadCsvExport,
-  downloadLeadCsv,
-  type LeadCsvExportPlan,
-} from './LeadTable.csv';
+import { exportMatchingRows, loadedExportTruncatedOf, type LeadCsvExportPlan } from './LeadTable.csvPlan';
 import type { LeadExportContext } from './LeadTable.types';
 
 export type LeadCsvExportState =
   | { status: 'idle' }
   | { status: 'pending'; rowCount: number }
-  /** `notice` is the confirmation strip; null once it has retired. */
-  | { status: 'done'; rowCount: number; notice: string | null; receipt: LeadExportReceipt }
+  /**
+   * `notice` is the confirmation strip; null once it has retired.
+   * `truncatedOf`: how many borrowers matched when only the loaded ones were
+   * exported (no selection and more matching than loaded); else null.
+   * `campaignHref`: the campaign handoff of the filters that export ran
+   * under, so the strip's link and its count name the same cohort after a
+   * filter change.
+   */
+  | {
+    status: 'done'; rowCount: number; notice: string | null; receipt: LeadExportReceipt;
+    truncatedOf: number | null; campaignHref: string | null;
+  }
   | { status: 'error'; message: string };
 
 export interface LeadCsvExportRequest {
@@ -41,9 +50,22 @@ export interface LeadCsvExportRequest {
   exportContext: LeadExportContext | undefined;
   /** On-screen order, e.g. `rank` or `equity desc`. */
   rowOrder: string;
+  /** How many borrowers matched the filters (the route's total), when known. */
+  matchingRows?: number | null;
+  /** How many rows are loaded on screen. */
+  loadedCount?: number;
+  /** The current filters' campaign handoff (Lead Queue), held with the strip. */
+  campaignHref?: string | null;
 }
 
 const EXPORT_NOT_DOWNLOADED = 'Nothing was downloaded.';
+
+/** The click-time builder; a failed chunk load reads as a plain failure (no asset URL on screen). */
+function loadLeadCsvBuilder() {
+  return import('./LeadTable.csv').catch(() => {
+    throw new Error('the export could not load; reload the page, then export again');
+  });
+}
 
 /**
  * How long the confirmation strip stays up, as before the receipt existed
@@ -101,15 +123,20 @@ export function useLeadCsvExport() {
   const inflight = useRef(false);
 
   // The confirmation strip retires on its own; the receipt line does not.
+  // A partial export's strip (its campaign link, D-approval-flow-b) never
+  // retires: an action can never vanish from under a reader's pointer or
+  // focus (WCAG 2.2.1). It goes with the next export.
   useEffect(() => {
-    if (state.status !== 'done' || state.notice === null) return undefined;
+    if (state.status !== 'done' || state.notice === null || state.truncatedOf !== null) return undefined;
     const timer = window.setTimeout(() => {
       setState((current) => (current.status === 'done' ? { ...current, notice: null } : current));
     }, LEAD_EXPORT_NOTICE_MS);
     return () => window.clearTimeout(timer);
   }, [state]);
 
-  async function exportCsv({ plan, approvals, exportContext, rowOrder }: LeadCsvExportRequest): Promise<void> {
+  async function exportCsv({
+    plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount, campaignHref = null,
+  }: LeadCsvExportRequest): Promise<void> {
     if (inflight.current || plan.rows.length === 0) return;
     // Placeholder rows belong to the previous filters: never declare them
     // under the new ones.
@@ -117,16 +144,20 @@ export function useLeadCsvExport() {
     inflight.current = true;
     setState({ status: 'pending', rowCount: plan.rows.length });
     try {
+      const { buildLeadCsv, describeLeadCsvExport, downloadLeadCsv } = await loadLeadCsvBuilder();
       // Stamped before the bytes are built and hashed: the receipt's digest
       // covers the rules_version line the file carries.
       const rulesVersion = await resolveExportRulesVersion(exportContext);
+      // Decided once: the file's `# matching_rows=` line and the receipt agree.
+      const matching = exportMatchingRows(matchingRows, plan.rows.length);
       const csv = buildLeadCsv(plan.rows, approvals, {
         ...exportContext,
         rulesVersion,
         scope: plan.scope,
         rowOrder,
+        matchingRows: matching,
       });
-      const declaration = await buildLeadExportDeclaration(csv, plan, exportContext?.filters);
+      const declaration = await buildLeadExportDeclaration(csv, plan, exportContext?.filters, matching);
       const receipt = await api.leadExportReceipt(declaration);
       downloadLeadCsv(csv);
       setState({
@@ -134,6 +165,8 @@ export function useLeadCsvExport() {
         rowCount: plan.rows.length,
         notice: describeLeadCsvExport(plan, rowOrder),
         receipt,
+        truncatedOf: loadedExportTruncatedOf(plan.scope, matching, loadedCount ?? plan.rows.length),
+        campaignHref,
       });
     } catch (error) {
       if (isAbortError(error)) {

@@ -125,7 +125,10 @@
 .signal-stack__dot--equity.is-on { background: var(--seg-equity); }
 .signal-stack__dot--retention.is-on { background: var(--seg-retention); }
 
-/* The table alternative. */
+/* The table alternative. Its row headers take the .tbl td cell box
+   (design_files/index.html:610-616), as the Delta Explainer's table does: .tbl
+   styles only `thead th` and `td`, so a <th scope="row"> would otherwise keep the
+   user agent's 1px padding and no row rule. */
 .signal-stack__table-wrap { overflow-x: auto; }
 .signal-stack__caption {
   caption-side: top;
@@ -137,7 +140,12 @@
 .signal-stack__table .tbl-cell--right { text-align: end; }
 .signal-stack__table tbody th,
 .signal-stack__table tfoot th {
-  font-weight: 500;
+  padding: 0 var(--sp-4);
+  height: var(--row-h);
+  border-bottom: 1px solid var(--line-1);
   text-align: start;
+  vertical-align: middle;
+  font-weight: 500;
+  color: var(--text-1);
 }
 .signal-stack__note { color: var(--text-3); }

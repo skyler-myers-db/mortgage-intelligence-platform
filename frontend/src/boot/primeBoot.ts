@@ -51,9 +51,13 @@ export interface BootPrime {
 const BOOT_GLOBAL = '__MIP_BOOT__';
 
 const BOOT_READS = {
+  // wire: 'GET /api/v1/session'
   session: { url: '/api/v1/session', init: { redirect: 'manual' } },
+  // wire: 'GET /api/v1/config/options'
   options: { url: '/api/v1/config/options', init: { redirect: 'manual' } },
+  // wire: 'GET /api/v1/config/footprint'
   footprint: { url: '/api/v1/config/footprint', init: {} },
+  // wire: 'GET /api/v1/health'
   health: { url: '/api/v1/health?idle_s=0', init: { redirect: 'manual' } },
 } as const satisfies Record<BootReadName, { url: string; init: RequestInit }>;
 

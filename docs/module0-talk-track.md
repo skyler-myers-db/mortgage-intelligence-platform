@@ -40,7 +40,7 @@ Use these phrases in public or buyer-facing demos:
 
 - **CRM / Salesforce:** "MIP stages approved work and can deliver through
   configured destinations." Do not claim live Salesforce, CRM/CDP, LOS/POS, or servicing writeback
-  unless Admin → Buyer readiness shows the destination as connected and
+  unless Admin → Deployment readiness shows the destination as connected and
   delivered rows exist.
 - **Outreach:** "MIP drafts, approves, audits, and stages." Do not claim the app
   auto-sends email or SMS. External delivery requires a connected customer
@@ -293,8 +293,31 @@ Talk track:
 > success state is shown. That is the behavior reviewers should expect from an
 > enterprise Databricks App."
 
+Optional Triage beat (approver session, Lead Queue → "Triage (N)"):
+
+> "Triage is the same gate one borrower at a time: J and K move without writing
+> anything, A drafts the outreach for review, and only Confirm approves — each
+> approval is still its own audit row, and Esc returns to the table's row."
+
 Only click approval in a rehearsal/demo workspace where writing an audit row is
 expected.
+
+Maker-checker beat (optional, 30 seconds):
+
+> "Most lenders split the person who builds a list from the person who
+> releases it. An analyst without the approver role selects borrowers and
+> asks for approval with a short note; nothing is drafted or sent. An approver
+> opens that request in the Lead Queue, reviews each borrower's draft in the
+> same review sheet, and decides. The ledger shows both sides: who asked, why,
+> and who approved. The server refuses the person who raised a request when
+> they try to approve it themselves, and an approver can revoke an approval
+> while outreach is still queued, which writes its own audit row."
+
+Claim boundary: the request, decision link and revoke endpoints and their
+audit rows are live from the W5b backend; the Lead Queue request and revoke
+controls ship with the W5d UI. Until then, demo this beat from the audit
+explorer (`APPROVAL_REQUESTED`, `APPROVE` with its request id,
+`OUTREACH_REVOKE`), not from a button.
 
 ## Close
 

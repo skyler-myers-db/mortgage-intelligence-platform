@@ -281,6 +281,20 @@
   font-family: var(--font-mono);
   font-size: var(--fs-12);
 }
+/* The reviewed lender mark (responsive-10, 12.4 #9): in the topbar tenant
+   pill and the Console 'Configured tenant' chip, in place of the building
+   glyph, only on a co-branded build whose session lender matches. App-added
+   block, not a topbar__ element, because it renders in both places; a light
+   plate keeps any mark legible in either theme (deviation:lender-mark). */
+.lender-mark {
+  block-size: var(--sp-4);
+  inline-size: auto;
+  max-inline-size: var(--sp-8);
+  object-fit: contain;
+  border-radius: var(--r-sm);
+  padding: 1px;
+  background: var(--brand-mark-plate);
+}
 /* Below 89rem (1424px) the two side tracks can no longer both hold the
    actions cluster at max-content (it needs a 1412px viewport since the
    identity menu joined it), so the third track sizes to its content
@@ -606,7 +620,11 @@
 .btn--sm { padding: 5px 10px; min-block-size: var(--sp-6); font-size: var(--fs-12); border-radius: var(--r-sm); }
 .btn--danger { color: var(--signal-danger); border-color: var(--status-danger-line-strong); }
 .btn--danger:hover { background: var(--status-danger-soft-subtle); }
-.btn--success { background: var(--signal-success); border-color: transparent; color: var(--text-on-solid); }
+/* --success-fill, not the prototype's --signal-success: white on the dark
+   signal green read 2.54:1 (deviation:success-cta-fill). The hover keeps the
+   solid fill: .btn:hover's --bg-3 well under white read 1.1:1 in light. */
+.btn--success { background: var(--success-fill); border-color: transparent; color: var(--text-on-solid); }
+.btn--success:hover { background: var(--success-fill-hover); border-color: transparent; }
 .btn[disabled] {
   cursor: not-allowed;
   box-shadow: none;
@@ -625,6 +643,26 @@
 .btn--primary:active:not([disabled]) {
   background: var(--accent-fill-hover);
   box-shadow: 0 1px 0 var(--surface-inset-shadow) inset;
+}
+/* Pending (motion-08 slice 2; Button's `loading` prop): the label keeps
+   its box at opacity 0, so the inline size and the accessible name hold,
+   and a spinner shares its grid cell. The variant fill stays. App-added
+   state, not in design_files/index.html:378-398 (deviation:button-loading). */
+.btn--loading { display: inline-grid; place-items: center; cursor: progress; }
+.btn--loading > .btn__label,
+.btn--loading > .btn__spinner { grid-area: 1 / 1; }
+.btn__label { display: inline-flex; align-items: center; gap: var(--sp-2); opacity: 0; }
+.btn__spinner {
+  inline-size: var(--sp-3);
+  block-size: var(--sp-3);
+  border: 2px solid currentColor;
+  border-inline-end-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin var(--dur-spin) var(--ease-linear) infinite;
+}
+@keyframes btn-spin { to { rotate: 1turn; } }
+@media (prefers-reduced-motion: reduce) {
+  .btn__spinner { animation: none; }
 }
 
 /* ============================================================

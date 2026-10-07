@@ -12,22 +12,44 @@ the ledger contract at the HTTP layer through ``TestClient``:
 * the client cannot self-report the event through the admin-only
   ``POST /api/audit/event``;
 * the write shares the mutation rate budget with every other write.
+
+D-approval-flow-b (export honesty): a loaded-rows export states how many
+borrowers matched (``matching_row_count``): recorded and echoed when sent,
+absent from the row when not, refused (422, nothing written) below the
+file's own row count or below zero, and refused at the store above the
+governed row-count bound.
+
+Pins (tables-08 step 2 declined on the merits, wave-5 ruling 2026-09-30):
+there is no export stream. Every documented response is JSON, no ``/api``
+route answers with a ``StreamingResponse`` or ``FileResponse``, the only
+``/api`` paths naming an export are the three receipts, and the receipt's
+bounds equal the leads page cap. The one streaming ``Response`` subclass the
+API is allowed is the schema-hidden admin SSE ingress probe
+(``backend/api/admin_sse_probe.py``, w5-genie-verified-reveal, delivery-04):
+an admin diagnostic that carries no borrower rows and is not an export.
 """
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
 
+import annotated_types
 import pytest
+from fastapi.datastructures import DefaultPlaceholder
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from backend.api.leads_export import EXPORT_DIGEST_MISMATCH_DETAIL
 from backend.config.settings import settings
 from backend.main import app
+from backend.schemas.lead_export import LeadExportReceiptRequest
+from backend.schemas.lead_query import MAX_LEAD_LIMIT
 from backend.services.audit_event_types import is_server_owned_audit_event_type
 from backend.services.audit_store import get_audit_store
 from backend.services.backpressure import BackpressureController
@@ -42,6 +64,11 @@ client = TestClient(app)
 
 ROOT = Path(__file__).resolve().parents[2]
 LEAD_EXPORT_CLIENT = ROOT / "frontend" / "src" / "lib" / "apiClients" / "leadExport.ts"
+OPENAPI_BASELINE = ROOT / "tests" / "fixtures" / "openapi_baseline.json"
+API_DIR = ROOT / "backend" / "api"
+# The schema-hidden admin SSE ingress probe (w5-genie-verified-reveal,
+# delivery-04): the one module that may define a streaming Response subclass.
+SSE_PROBE_MODULE = "admin_sse_probe.py"
 
 ACTOR = "approver@summit-mortgage.example"
 ACTOR_HEADERS = {"X-Forwarded-Email": ACTOR, "X-Forwarded-Groups": ""}
@@ -247,3 +274,173 @@ def test_unversioned_alias_is_deprecated_and_writes_the_same_single_row(
     assert response.json()["audit_event_id"] == rows[0].event_id
     deprecated = app.openapi()["paths"]["/api/leads/export-receipt"]["post"].get("deprecated")
     assert deprecated is True
+
+
+# --- D-approval-flow-b: matching_row_count -------------------------------
+
+
+def test_receipt_records_and_echoes_the_matching_row_count(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    response = client.post(
+        "/api/v1/leads/export-receipt",
+        json=_declaration(scope="loaded", matching_row_count=2340),
+        headers=ACTOR_HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["matching_row_count"] == 2340
+    rows = audit_store.list(limit=10)
+    assert len(rows) == 1
+    assert rows[0].payload_json["matching_row_count"] == 2340
+    assert rows[0].payload_json["exported_row_count"] == 2
+
+
+def test_receipt_without_a_matching_count_writes_no_key(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    response = client.post(
+        "/api/v1/leads/export-receipt", json=_declaration(), headers=ACTOR_HEADERS
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["matching_row_count"] is None
+    assert "matching_row_count" not in audit_store.list(limit=10)[0].payload_json
+
+
+def test_matching_count_equal_to_the_file_is_accepted(audit_store: InMemoryAuditStore) -> None:
+    response = client.post(
+        "/api/v1/leads/export-receipt",
+        json=_declaration(matching_row_count=len(IDS)),
+        headers=ACTOR_HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    assert audit_store.list(limit=10)[0].payload_json["matching_row_count"] == len(IDS)
+
+
+@pytest.mark.parametrize("matching", [1, 0, -1])
+def test_matching_count_below_the_file_or_zero_is_refused_with_nothing_written(
+    audit_store: InMemoryAuditStore, matching: int
+) -> None:
+    response = client.post(
+        "/api/v1/leads/export-receipt",
+        json=_declaration(matching_row_count=matching),
+        headers=ACTOR_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert audit_store.list(limit=10) == []
+
+
+def test_matching_count_above_the_row_count_bound_is_refused_at_the_store(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    # The schema has no upper bound of its own: the governed audit value
+    # policy (validate_row_count, 10,000,000) refuses it with no row written.
+    response = client.post(
+        "/api/v1/leads/export-receipt",
+        json=_declaration(matching_row_count=10_000_001),
+        headers=ACTOR_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert "matching_row_count" in response.json()["detail"]
+    assert audit_store.list(limit=10) == []
+
+
+# --- tables-08 step 2 pins: there is no export stream ---------------------
+
+
+def _response_class(route: APIRoute) -> type:
+    value = route.response_class
+    return value.value if isinstance(value, DefaultPlaceholder) else value
+
+
+def test_every_documented_response_is_json() -> None:
+    spec = json.loads(OPENAPI_BASELINE.read_text(encoding="utf-8"))
+    content_types = {
+        content_type
+        for operations in spec["paths"].values()
+        for operation in operations.values()
+        if isinstance(operation, dict)
+        for response in operation.get("responses", {}).values()
+        for content_type in response.get("content", {})
+    }
+    assert content_types == {"application/json"}
+
+
+def test_no_api_route_answers_with_a_stream_or_a_file() -> None:
+    offenders = [
+        route.path
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        and route.path.startswith("/api/")
+        and issubclass(_response_class(route), StreamingResponse | FileResponse)
+    ]
+    assert offenders == []
+
+
+def test_the_only_export_paths_are_the_three_receipts() -> None:
+    exports = sorted(
+        (method, route.path)
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        and route.path.startswith("/api")
+        and "export" in route.path
+        for method in route.methods
+    )
+    expected = sorted(
+        ("POST", f"{prefix}/{surface}/export-receipt")
+        for prefix in ("/api", "/api/v1")
+        for surface in ("leads", "genie", "audit")
+    )
+    assert exports == expected
+
+
+def _names_used(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+    return names
+
+
+def test_no_api_module_imports_or_calls_a_stream_or_file_response() -> None:
+    offenders: list[str] = []
+    for path in sorted(API_DIR.glob("*.py")):
+        names = _names_used(ast.parse(path.read_text(encoding="utf-8")))
+        if names & {"StreamingResponse", "FileResponse"}:
+            offenders.append(path.name)
+    assert offenders == []
+
+
+def test_only_the_admin_sse_probe_may_define_a_response_subclass() -> None:
+    owners: list[str] = []
+    for path in sorted(API_DIR.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            bases = {
+                base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
+                for base in node.bases
+            }
+            if any(name.endswith("Response") for name in bases):
+                owners.append(path.name)
+    assert set(owners) <= {SSE_PROBE_MODULE}
+
+
+def test_receipt_bounds_equal_the_leads_page_cap() -> None:
+    fields = LeadExportReceiptRequest.model_fields
+    row_count_le = [item.le for item in fields["row_count"].metadata if isinstance(item, annotated_types.Le)]
+    ids_max = [
+        item.max_length
+        for item in fields["borrower_ids"].metadata
+        if isinstance(item, annotated_types.MaxLen)
+    ]
+    assert row_count_le == [MAX_LEAD_LIMIT]
+    assert ids_max == [MAX_LEAD_LIMIT]

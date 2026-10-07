@@ -25,6 +25,11 @@ Lifecycle::
                     then returns it. Any mismatch of job, actor, conversation
                     or message is None.
 
+Verified sections (audit ``genie-01`` phase 1b): ``sections_json`` holds the
+deep sweep's sections that passed their own checks while the job runs
+(written by ``genie_completion_sections``). Every terminal statement here
+and in genie_completion_record NULLs it, and only the status poll reads it.
+
 Expiry happens on read (the status poll, a joined complete) and in a bounded
 sweep every new job runs, never on process start: a live runner on another
 worker keeps renewing its lease and is never expired, and a dead process
@@ -85,19 +90,20 @@ _COLUMNS = """job_id::text AS job_id, status, stage, parts_done, parts_planned,
        cancel_requested_at IS NOT NULL AS cancel_requested,
        recorded_at IS NOT NULL AS recorded, deep, now() AS db_now"""
 
-# Present only with the 2026_09_25 columns too: an App promoted ahead of that
-# migration completes inline instead of 503ing every job statement.
+# Present only with the 2026_09_25 columns and the 2026_10_01_genie_job_sections sections_json
+# too: an App promoted ahead of either migration completes inline instead of
+# 503ing every job statement.
 _PROBE_SQL = """
 SELECT to_regclass('mip_app.genie_completion_jobs') IS NOT NULL
    AND (SELECT count(*) FROM pg_attribute
          WHERE attrelid = to_regclass('mip_app.genie_completion_jobs')
-           AND attname IN ('cancel_requested_at', 'recorded_at', 'deep')
-           AND NOT attisdropped) = 3 AS present
+           AND attname IN ('cancel_requested_at', 'recorded_at', 'deep', 'sections_json')
+           AND NOT attisdropped) = 4 AS present
 """
 
 _SWEEP_SQL = """
 UPDATE mip_app.genie_completion_jobs AS job
-   SET status = 'expired', stage = 'expired', result_json = NULL,
+   SET status = 'expired', stage = 'expired', result_json = NULL, sections_json = NULL,
        updated_at = now(), finished_at = COALESCE(job.finished_at, now())
   FROM (
         SELECT job_id, status AS prior_status
@@ -141,9 +147,24 @@ SELECT {_COLUMNS}
    AND message_id = %(message_id)s
 """
 
+# The status poll's read: _SELECT_JOB_SQL plus the verified sections, sent
+# only when their revision differs from the one the poller already holds.
+_SELECT_JOB_SECTIONS_SQL = f"""
+SELECT {_COLUMNS},
+       (sections_json->>'rev')::int AS sections_rev,
+       (sections_json->>'count')::int AS sections_count,
+       CASE WHEN (sections_json->>'rev')::int IS DISTINCT FROM %(known_rev)s::int
+            THEN sections_json->'sections' END AS revealed_json
+  FROM mip_app.genie_completion_jobs
+ WHERE job_id = %(job_id)s::uuid
+   AND actor_email = %(actor_email)s
+   AND conversation_id = %(conversation_id)s
+   AND message_id = %(message_id)s
+"""
+
 _EXPIRE_JOB_SQL = f"""
 UPDATE mip_app.genie_completion_jobs
-   SET status = 'expired', stage = 'expired', result_json = NULL,
+   SET status = 'expired', stage = 'expired', result_json = NULL, sections_json = NULL,
        updated_at = now(), finished_at = COALESCE(finished_at, now())
  WHERE job_id = %(job_id)s::uuid
    AND status = %(prior_status)s
@@ -178,6 +199,7 @@ UPDATE mip_app.genie_completion_jobs
 _SUCCEED_SQL = """
 UPDATE mip_app.genie_completion_jobs
    SET status = 'succeeded', stage = 'done', result_json = %(result_json)s::jsonb,
+       sections_json = NULL,
        parts_done = NULL, parts_planned = NULL, finished_at = now(), updated_at = now()
  WHERE job_id = %(job_id)s::uuid AND status = 'running' AND lease_owner = %(lease_owner)s
 RETURNING job_id::text AS job_id
@@ -185,7 +207,7 @@ RETURNING job_id::text AS job_id
 
 _FAIL_SQL = """
 UPDATE mip_app.genie_completion_jobs
-   SET status = 'failed', stage = 'failed', failure_kind = %(failure_kind)s,
+   SET status = 'failed', stage = 'failed', failure_kind = %(failure_kind)s, sections_json = NULL,
        parts_done = NULL, parts_planned = NULL, finished_at = now(), updated_at = now()
  WHERE job_id = %(job_id)s::uuid
    AND status IN ('queued', 'running')
@@ -214,6 +236,11 @@ class GenieCompletionJob:
     recorded: bool = False
     #: The submit-time deep flag; None on rows from before 2026_09_25.
     deep: bool | None = None
+    #: Verified sections (status poll only): their revision and count, and
+    #: the raw plan-ordered list when the revision differs from the poller's.
+    sections_rev: int | None = None
+    sections_count: int | None = None
+    revealed: list[Any] | None = None
 
     @property
     def terminal(self) -> bool:
@@ -253,7 +280,16 @@ def _job_from_row(row: dict[str, Any]) -> GenieCompletionJob:
         cancel_requested=row.get("cancel_requested") is True,
         recorded=row.get("recorded") is True,
         deep=row["deep"] if isinstance(row.get("deep"), bool) else None,
+        sections_rev=_optional_int(row.get("sections_rev")),
+        sections_count=_optional_int(row.get("sections_count")),
+        revealed=_revealed(row.get("revealed_json")),
     )
+
+
+def _revealed(value: Any) -> list[Any] | None:
+    if isinstance(value, str):
+        value = json.loads(value)
+    return value if isinstance(value, list) else None
 
 
 def _optional_int(value: Any) -> int | None:
@@ -678,19 +714,30 @@ def read_for_actor(
     actor: str,
     conversation_id: str,
     message_id: str,
+    with_sections: bool = False,
+    known_sections_rev: int | None = None,
 ) -> GenieCompletionJob | None:
-    """The caller's own job, expired first when its lease or window lapsed."""
+    """The caller's own job, expired first when its lease or window lapsed.
+
+    ``with_sections`` (the status poll only) also reads the verified
+    sections' revision and count, and the sections themselves unless their
+    revision is ``known_sections_rev``.
+    """
 
     if not JOB_ID_RE.fullmatch(job_id):
         return None
-    params = {
+    params: dict[str, Any] = {
         "job_id": job_id,
         "actor_email": actor,
         "conversation_id": conversation_id,
         "message_id": message_id,
     }
+    select_sql = _SELECT_JOB_SQL
+    if with_sections:
+        select_sql = _SELECT_JOB_SECTIONS_SQL
+        params["known_rev"] = known_sections_rev
     try:
-        row = lakebase.fetchone(_SELECT_JOB_SQL, params)
+        row = lakebase.fetchone(select_sql, params)
         if row is None:
             return None
         job = _job_from_row(row)
@@ -703,7 +750,7 @@ def read_for_actor(
         )
         if expired is None:
             # Changed under us (renewed, finished): report what is there now.
-            row = lakebase.fetchone(_SELECT_JOB_SQL, params)
+            row = lakebase.fetchone(select_sql, params)
             return _job_from_row(row) if row is not None else None
     except (LakebaseError, DependencyDownError) as exc:
         raise _unavailable(exc) from exc

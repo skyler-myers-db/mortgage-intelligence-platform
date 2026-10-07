@@ -6,7 +6,8 @@ import { api } from '../../lib/api';
 import { useIsOnline } from '../../lib/connectivity';
 import { queryKeys } from '../../lib/queryKeys';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
-import { planLeadCsvExport } from './LeadTable.csv';
+import { loadedExportTruncatedOf, planLeadCsvExport } from './LeadTable.csvPlan';
+import { leadExportNotice } from './LeadExportNotice';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.constants';
 import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
@@ -26,6 +27,11 @@ import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
 import { useTableScrollClearance } from './useTableScrollClearance';
+import type { CapturedCanary } from './LeadTable.canary';
+import {
+  TRIAGE_CHUNK, enterTriage, renderTriageDeck, triageEntry, triageFlowInput,
+  type LeadTableTriageState, type TriageApprovedSignal,
+} from './LeadTable.triage';
 import { useLeadTableScroll, type LeadTableVirtualScroll } from './useLeadTableScroll';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { approverGateReason } from './approverGate';
@@ -36,7 +42,6 @@ import type { LeadSummary } from '../../types';
 import type { LeadTableProps, LeadTableSort, SortDir, SortKey } from './LeadTable.types';
 import './LeadTable.css';
 
-export { buildLeadCsv } from './LeadTable.csv';
 export {
   bulkActionFocusTarget,
   isEditableTarget,
@@ -114,6 +119,7 @@ export function LeadTable({
   restoreScroll = false,
   headerStatus,
   campaignHandoff = null,
+  triage = null,
 }: LeadTableProps) {
   // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
   // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
@@ -255,6 +261,36 @@ export function LeadTable({
     tableWrapRef,
     bulkRuns: BULK_REVIEW_CHUNK.current,
   });
+  // The Triage deck (D-approval-flow-a2): `?mode=triage`, approvers only. A
+  // definitive non-approver's check strips the mode; a loading one waits; a
+  // failed one keeps the deep link and says why the deck is shut.
+  const triageMode = triage?.mode ?? null;
+  const triageRefused = approverGate !== null && sessionStatus === 'ready';
+  const triageOn = triageMode === 'triage' && !triageRefused;
+  // The deck first opens on settled rows, then stays open for its session: a
+  // filter change's placeholder rows never unmount it, so it never
+  // re-snapshots (brief 6.4); rows that leave drop out as gone cards.
+  const [triageOpened, setTriageOpened] = useState(false);
+  const triageActive = triageOn && approverGate === null && (triageOpened || !exportContext?.exportBlockedReason);
+  if (triageActive !== triageOpened) setTriageOpened(triageActive);
+  useEffect(() => {
+    if (triageMode === 'triage' && triageRefused) triage?.onModeChange(null);
+  }, [triageMode, triageRefused, triage]);
+  const triageChunk = useLazyModule(TRIAGE_CHUNK, triageActive);
+  const [triageSignal, setTriageSignal] = useState<TriageApprovedSignal>(null);
+  const [triageLastShown, setTriageLastShown] = useState<string | null>(null);
+  const triageCtl: LeadTableTriageState = {
+    triage,
+    hideTable: triageOn,
+    active: triageActive,
+    Deck: (triageChunk.module ?? TRIAGE_CHUNK.current())?.TriageDeck ?? null,
+    failed: triageChunk.failed,
+    blocked: sessionStatus === 'error' ? approverGate : null,
+    approvedSignal: triageSignal,
+    setApprovedSignal: setTriageSignal,
+    lastShown: triageLastShown,
+    setLastShown: setTriageLastShown,
+  };
 
   /**
    * Keyboard triage (wave 1c): a row cursor (J / K / arrows), Enter, X and
@@ -301,6 +337,7 @@ export function LeadTable({
       setSamplesShown(false);
       setSamplesCoverAllOffers(false);
     },
+    triage: triageFlowInput(triageCtl),
   });
   const { review } = flow;
   const openReview = review.review;
@@ -331,7 +368,7 @@ export function LeadTable({
   });
   // Load the review chunk once the reader engages with rows (the draft is
   // requested only on Approve); the bulk review chunk once rows are selected.
-  const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null);
+  const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null || triageActive);
   const bulkRun = approval.bulkRun;
   // The bulk chunk also carries a run's progress and report (tables-07).
   const bulkChunk = useLazyModule(
@@ -358,6 +395,12 @@ export function LeadTable({
   const BulkCampaignHandoff = bulkModule?.LeadBulkCampaignHandoff;
   const BulkRunProgress = bulkModule?.LeadBulkRunProgress;
   const BulkRunResult = bulkModule?.LeadBulkRunResult;
+  // The canary line belongs to its run's selection and gate (W5a ruling R2).
+  // A canary exists only after a bulk run, which loaded the bulk chunk.
+  const [canaryCapture, setCanaryCapture] = useState<CapturedCanary | null>(null);
+  const canary = bulkModule?.canaryNotice(canaryCapture, approval, bulkRun.result?.kind ?? null);
+  if (canary && canary.next !== canaryCapture) setCanaryCapture(canary.next);
+  const canaryShown = canary?.shown ?? null;
   const reviewProps = openReview && {
     review: openReview,
     actorEmail,
@@ -373,6 +416,10 @@ export function LeadTable({
     onInspectEvidence: openReview.mode === 'dialog' ? flow.inspectEvidenceFromDialog : undefined,
   };
   const skipTargetId = `${useId()}-end`;
+  const triageEntryNow = triageEntry(
+    triageCtl, approval, approverGate !== null && sessionStatus === 'ready', approverGate, campaignBindingState,
+    approval.bulkApproving || openReview?.phase === 'submitting',
+  );
   // Row callbacks are made here, once, never per row, with one identity for
   // the table's life: a compiled LeadTableRow then gets identical props
   // (LeadTableBody) and skips its cells on an expand elsewhere.
@@ -407,9 +454,13 @@ export function LeadTable({
 
   /**
    * Export as CSV. The bytes are built client-side from the real /api/leads
-   * payload the parent route already narrowed; there is no server-streamed
-   * export (an owner decision, audit tables-08 step 2) and no synthesized
-   * field — so PII stays suppressed by construction.
+   * payload the parent route already narrowed; a server-streamed export was
+   * declined on the merits (wave-5 ruling 2026-09-30):
+   * governance-real-data-review.md §2 per-borrower redistribution, Design
+   * System Principle 03, scale and egress of the approval bypass (audit
+   * tables-08 step 2). No field is synthesized, so PII stays suppressed by
+   * construction. A partial loaded-rows export says so in its label, its
+   * file (# matching_rows) and its receipt (D-approval-flow-b).
    *
    * Audit tables-08 (2026-09-21): the export used to serialise the raw
    * `leads` prop — ignoring the selection AND the sort — and its label
@@ -424,12 +475,16 @@ export function LeadTable({
   const csvExportNoun = csvExport.scope === 'selected_rows'
     ? 'selected'
     : csvExportCount === 1 ? 'lead' : 'leads';
+  const csvExportTruncatedOf = loadedExportTruncatedOf(csvExport.scope, totalMatching, leads.length);
   const { state: exportState, exportCsv: runExport } = useLeadCsvExport();
   const exportBlockedReason = exportContext?.exportBlockedReason ?? null;
   function exportCsv() {
     if (csvExportCount === 0 || exportBlockedReason) return;
     const rowOrder = sortKey === 'rank' ? 'rank' : `${sortKey} ${sortDir}`;
-    void runExport({ plan: csvExport, approvals, exportContext, rowOrder });
+    void runExport({
+      plan: csvExport, approvals, exportContext, rowOrder, matchingRows: totalMatching, loadedCount: leads.length,
+      campaignHref: campaignHandoff?.href,
+    });
   }
 
   function toggleSort(key: SortKey) {
@@ -463,8 +518,11 @@ export function LeadTable({
         csvExportCount={csvExportCount}
         csvExportNoun={csvExportNoun}
         csvExportExcluded={csvExport.excluded}
+        csvExportTruncatedOf={csvExportTruncatedOf}
         exportBlockedReason={exportBlockedReason}
         onExport={exportCsv}
+        triageEntry={triageEntryNow}
+        onEnterTriage={() => enterTriage(triageCtl, triageEntryNow, flow.cancelReview)}
       />
       <LeadTableStatusChips
         growthAgentVerification={growthAgentVerification}
@@ -476,7 +534,7 @@ export function LeadTable({
         actorEmail={actorEmail}
       />
       {/* Keyed by the row: each form owns its fields, and a new row starts clean. */}
-      {approval.pendingReject && (
+      {!triageOn && approval.pendingReject && (
         <LeadRejectPanel
           key={approval.pendingReject}
           borrowerId={approval.pendingReject}
@@ -485,7 +543,7 @@ export function LeadTable({
           onSubmit={(reasonCode, rationale) => void flow.submitReject(reasonCode, rationale)}
         />
       )}
-      {sales.pendingDisposition && (
+      {!triageOn && sales.pendingDisposition && (
         <LeadDispositionPanel
           key={sales.pendingDisposition}
           borrowerId={sales.pendingDisposition}
@@ -496,17 +554,17 @@ export function LeadTable({
           onSubmit={(payload) => void sales.submitDisposition(payload)}
         />
       )}
-      {exportState.status === 'done' && exportState.notice && (
-        <div role="status" aria-live="polite" className="table-success" data-testid="lead-export-notice">
-          {exportState.notice}
-        </div>
-      )}
+      {exportState.status === 'done' && exportState.notice && leadExportNotice({
+        notice: exportState.notice,
+        truncatedOf: exportState.truncatedOf,
+        campaignHref: exportState.campaignHref,
+      })}
       {exportState.status === 'error' && (
         <div role="alert" className="table-error" data-testid="lead-export-error">
           {exportState.message}
         </div>
       )}
-      {flow.toast && DecisionToast && (
+      {!triageOn && flow.toast && DecisionToast && (
         <DecisionToast
           toast={flow.toast}
           hasReceipt={Boolean(approval.decisionReceipts[flow.toast.borrowerId]?.auditEventId)}
@@ -549,6 +607,7 @@ export function LeadTable({
       </span>
       <div
         ref={tableWrapRef}
+        hidden={triageOn}
         className={fillHeight ? 'tbl-wrap tbl-wrap--fill' : 'tbl-wrap'}
         role="region"
         tabIndex={0}
@@ -575,7 +634,7 @@ export function LeadTable({
             rowIds={rowIds}
             view={view}
             columnCount={columnCount}
-            expanded={expanded}
+            expanded={triageOn ? null : expanded}
             expandedRowIndex={expandedRowIndex}
             virtualized={shouldVirtualize}
             rowEstimatePx={rowEstimatePx}
@@ -594,7 +653,7 @@ export function LeadTable({
             salesBusy={sales.salesBusy}
             salesTeamCount={salesTeam.length}
             shortcutsLive={singleKeysOn}
-            reviewSlot={reviewProps && ReviewInline && openReview?.mode === 'inline'
+            reviewSlot={!triageOn && reviewProps && ReviewInline && openReview?.mode === 'inline'
               ? { borrowerId: openReview.borrowerId, node: <ReviewInline {...reviewProps} /> }
               : null}
             // From the flow state, not from whether the review chunk rendered.
@@ -604,8 +663,12 @@ export function LeadTable({
         </table>
       </div>
       <span id={skipTargetId} className="sr-only lead-table__skip-target" tabIndex={-1}>End of ranked borrowers table</span>
+      {renderTriageDeck(triageCtl, {
+        sortedLeads, flow, approval, leadsById, approvals, ReviewInline: ReviewInline ?? null,
+        actorEmail: actorEmail ?? null, campaignBinding, canAccessAdmin,
+      })}
       {reviewProps && ReviewDialog && openReview?.mode === 'dialog' && <ReviewDialog {...reviewProps} />}
-      {flow.reviewLoadFailed ? (
+      {triageOn ? null : flow.reviewLoadFailed ? (
         <div role="alert" className="table-error" data-testid="lead-approve-review-loading">
           {online
             ? 'The approval review could not load, so no draft was generated and nothing was approved. Reload the page, then approve again.'
@@ -618,7 +681,7 @@ export function LeadTable({
       )}
       {/* The toolbar stays while a run is on the wire, even when a filter
           change took every selected row off screen. */}
-      {(approval.selectionCount > 0 || approval.bulkApproving) && (
+      {!triageOn && (approval.selectionCount > 0 || approval.bulkApproving) && (
         <LeadTableBulkActions
           selectionCount={approval.selectionCount}
           selectedApprovalEligibleCount={approval.selectedApprovalEligibleCount}
@@ -640,7 +703,7 @@ export function LeadTable({
           samplesShown={samplesShown}
           runKind={bulkRun.progress?.kind ?? null}
           samplesCoverAllOffers={samplesCoverAllOffers}
-          runNotice={approval.bulkRunCanary && bulkModule ? bulkModule.bulkCanaryNotice(approval.bulkRunCanary) : null}
+          runNotice={canaryShown && bulkModule ? bulkModule.bulkCanaryNotice(canaryShown) : null}
           allLoadedSelected={approval.headerCheckboxState.checked}
           loadedCount={leads.length}
           totalMatching={totalMatching}
@@ -691,14 +754,14 @@ export function LeadTable({
           }}
         />
       )}
-      <LeadTableFooter
+      {!triageOn && <LeadTableFooter
         loadedCount={leads.length}
         totalMatching={totalMatching}
         truncatedAt={truncatedAt}
         sortKey={sortKey}
         sortedCount={sortedLeads.length}
         onResetSort={() => toggleSort('rank')}
-      />
+      />}
     </div>
   );
 }

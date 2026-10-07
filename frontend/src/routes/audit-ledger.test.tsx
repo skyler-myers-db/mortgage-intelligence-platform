@@ -1,0 +1,317 @@
+/**
+ * @vitest-environment happy-dom
+ */
+
+/*
+ * The audit explorer on its own page (D-audit-reads-c3): these cases MOVED
+ * here from routes/admin-config.audit.test.tsx when the explorer left
+ * Administration for /audit-ledger. The explorer itself is unchanged.
+ */
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const fixtures = vi.hoisted(() => ({
+  auditEvent: {
+    event_id: 'evt-8ecf7294',
+    actor: 'vera@summit.example',
+    action: 'outreach.approve',
+    entity_type: 'approval',
+    entity_id: 'approval-42',
+    payload_json: {
+      channel: 'email',
+      offer_code: 'refi',
+      thresholds_applied: { minimum_score: 80 },
+    },
+    evidence_ids: ['ev-001', 'ev-002'],
+    created_at: '2026-07-13T14:30:00Z',
+    event_type: 'APPROVE',
+    subject_clip: 'clip_ref_abc123def456',
+    subject_segment: 'itm',
+    request_id: 'req-approval-42',
+    correlation_id: 'corr-admin-audit-42',
+  },
+}));
+
+const apiMocks = vi.hoisted(() => ({
+  dataEstate: vi.fn(),
+  hookKeys: [] as ReadonlyArray<unknown>[],
+  auditRows: [] as Array<typeof fixtures.auditEvent>,
+}));
+
+vi.mock('../lib/useWarmingUpRetry', () => ({
+  useWarmingUpRetry: (
+    _loader: unknown,
+    options: { queryKey: readonly unknown[] },
+  ) => {
+    const key = options.queryKey;
+    apiMocks.hookKeys.push(key);
+    const data = key.includes('explorer')
+      ? {
+          items: key.includes('cursor-page-2')
+            ? apiMocks.auditRows.slice(25)
+            : apiMocks.auditRows.slice(0, 25),
+          next_cursor: apiMocks.auditRows.length > 25 && !key.includes('cursor-page-2')
+            ? 'cursor-page-2'
+            : null,
+        }
+      : key.includes('rollups')
+        ? []
+        : null;
+    return {
+      data,
+      warmingUp: null,
+      error: null,
+      isFetching: false,
+      isPlaceholderData: false,
+      manualRetry: vi.fn(),
+    };
+  },
+}));
+
+vi.mock('../components/AppContext', () => ({
+  useApp: () => ({
+    theme: 'dark',
+    setTheme: vi.fn(),
+    accent: 'bright',
+    setAccent: vi.fn(),
+    density: 'comfortable',
+    setDensity: vi.fn(),
+    lender: 'Summit Mortgage',
+    showEvidence: true,
+    setShowEvidence: vi.fn(),
+    showConfidence: true,
+    setShowConfidence: vi.fn(),
+    setDrawer: vi.fn(),
+  }),
+}));
+
+// Spread the real module so every other export (ApiError, which lazily
+// preloaded route modules import) stays real; only `api` is mocked.
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
+  api: apiMocks,
+}));
+
+import AuditLedger from './audit-ledger';
+
+let root: Root;
+let queryClient: QueryClient;
+let writeText: ReturnType<typeof vi.fn>;
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+}
+
+async function renderLedger(entry = '/audit-ledger'): Promise<void> {
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[entry]}>
+          <AuditLedger />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  });
+  await settle();
+}
+
+function buttonByLabel(label: RegExp): HTMLButtonElement {
+  const button = [...document.querySelectorAll('button')].find((candidate) => (
+    label.test(candidate.getAttribute('aria-label') ?? candidate.textContent ?? '')
+  ));
+  if (!(button instanceof HTMLButtonElement)) throw new Error(`Button not found: ${label}`);
+  return button;
+}
+
+function setNativeValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+describe('Audit ledger page', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    apiMocks.dataEstate.mockResolvedValue({
+      generated_at: '2026-07-13T14:30:00Z',
+      lender_name: 'Summit Mortgage',
+      public_demo_masking: true,
+      lanes: [],
+      known_data_gaps: [],
+      proof_assets: [],
+    });
+    apiMocks.hookKeys.length = 0;
+    apiMocks.auditRows = [fixtures.auditEvent];
+    writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    queryClient.clear();
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+  });
+
+  it('renders the ledger page around the explorer, which keeps its #audit anchor', async () => {
+    await renderLedger();
+
+    expect(document.querySelector('h1')?.textContent).toBe('Audit ledger');
+    expect(document.querySelector('.eyebrow')?.textContent).toBe('Compliance');
+    expect(document.querySelector('.lede')?.textContent).toContain('Reading this ledger is itself recorded.');
+    const audit = document.getElementById('audit');
+    expect(audit?.tabIndex).toBe(-1);
+    expect(audit?.getAttribute('aria-labelledby')).toBe('audit-explorer-title');
+    expect(apiMocks.hookKeys.some((key) => key.includes('explorer'))).toBe(true);
+  });
+
+  it('expands a row into accessible forensic details from the audit event contract', async () => {
+    await renderLedger();
+
+    expect(document.getElementById('audit')).not.toBeNull();
+
+    const expand = buttonByLabel(/^Expand audit event evt-8ecf7294$/);
+    const detailId = expand.getAttribute('aria-controls');
+    expect(expand.getAttribute('aria-expanded')).toBe('false');
+    expect(detailId).toBeTruthy();
+    expect(document.getElementById(detailId as string)).toBeNull();
+
+    const table = document.querySelector('table[aria-label="Audit events"]');
+    expect(table?.textContent).toContain('Outreach approved');
+    expect(table?.querySelector('.chip.mono')?.textContent).toBe('APPROVE');
+    expect(table?.textContent).toContain('outreach.approve');
+    expect(table?.textContent).toContain('approval-42');
+    expect(table?.textContent).toContain('vera@summit.example');
+    expect(table?.querySelector('time')?.getAttribute('datetime')).toBe('2026-07-13T14:30:00Z');
+
+    act(() => expand.click());
+
+    const details = document.getElementById(detailId as string);
+    expect(expand.getAttribute('aria-expanded')).toBe('true');
+    expect(details?.textContent).toContain('evt-8ecf7294');
+    expect(details?.textContent).toContain('req-approval-42');
+    expect(details?.textContent).toContain('corr-admin-audit-42');
+    expect(details?.textContent).toContain('Masked subject reference');
+    expect(details?.textContent).toContain('ev-001');
+    expect(details?.textContent).toContain('ev-002');
+    expect(details?.textContent).toContain('offer_code');
+    expect(details?.textContent).toContain('minimum_score');
+    // flow-04: the only links are back into the explorer itself (this event
+    // on its own, and every row of its request); nothing links out.
+    expect([...(details?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))).toEqual([
+      '/audit-ledger?audit_event_id=evt-8ecf7294#audit',
+      '/audit-ledger?audit_correlation_id=corr-admin-audit-42#audit',
+    ]);
+
+    act(() => expand.click());
+    expect(expand.getAttribute('aria-expanded')).toBe('false');
+    expect(document.getElementById(detailId as string)).toBeNull();
+  });
+
+  it('applies borrower, action, and event filters to the audit query key', async () => {
+    await renderLedger();
+    const entity = document.querySelector<HTMLInputElement>('input[placeholder="B-... or approval UUID"]');
+    const action = document.querySelector<HTMLInputElement>('input[placeholder="outreach.approve"]');
+    expect(entity && action).toBeTruthy();
+
+    act(() => {
+      setNativeValue(entity!, 'B-ABC123');
+      setNativeValue(action!, 'outreach.approve');
+    });
+    // Event type is a FilterSelect fed by the labels registry (tables-10).
+    act(() => buttonByLabel(/^Event type: /).click());
+    const option = [...document.querySelectorAll('[role="option"]')]
+      .find((candidate) => candidate.textContent === 'Outreach approved');
+    act(() => (option as HTMLElement).click());
+    act(() => buttonByLabel(/^Apply filters$/).click());
+    await settle();
+
+    const explorerKeys = apiMocks.hookKeys.filter((key) => key.includes('explorer'));
+    const appliedKey = String(explorerKeys[explorerKeys.length - 1][4]);
+    expect(Object.fromEntries(new URLSearchParams(appliedKey))).toEqual({
+      audit_entity: 'B-ABC123',
+      audit_action: 'outreach.approve',
+      audit_event_type: 'APPROVE',
+    });
+    expect(document.body.textContent).toContain('entity = B-ABC123');
+    expect(document.body.textContent).toContain('action = outreach.approve');
+    expect(document.body.textContent).toContain('event = Outreach approved · APPROVE');
+  });
+
+  it('normalizes borrower references and rejects malformed B-prefixed filters', async () => {
+    await renderLedger();
+    const entity = document.querySelector<HTMLInputElement>('input[placeholder="B-... or approval UUID"]');
+    expect(entity).not.toBeNull();
+
+    act(() => setNativeValue(entity!, 'b-abc123'));
+    act(() => buttonByLabel(/^Apply filters$/).click());
+    expect(entity?.value).toBe('B-ABC123');
+    expect(document.body.textContent).toContain('entity = B-ABC123');
+
+    act(() => setNativeValue(entity!, 'B-ABC 123'));
+    act(() => buttonByLabel(/^Apply filters$/).click());
+    expect(entity?.getAttribute('aria-invalid')).toBe('true');
+    expect(document.body.textContent).toContain(
+      'Borrower reference must use B- followed by letters and numbers only.',
+    );
+    expect(document.body.textContent).toContain('entity = B-ABC123');
+  });
+
+  it('pages through older audit rows without calling a 25-row result a total', async () => {
+    apiMocks.auditRows = Array.from({ length: 26 }, (_, index) => ({
+      ...fixtures.auditEvent,
+      event_id: `evt-page-${index}`,
+      entity_id: `approval-${index}`,
+    }));
+    await renderLedger();
+
+    expect(document.body.textContent).toContain('page 1 · 25 rows');
+    expect(document.body.textContent).not.toContain('25 matching');
+    const next = buttonByLabel(/^Next$/);
+    expect(next.disabled).toBe(false);
+    act(() => next.click());
+
+    const explorerKeys = apiMocks.hookKeys.filter((key) => key.includes('explorer'));
+    expect(explorerKeys[explorerKeys.length - 1]).toContain('cursor-page-2');
+    expect(document.body.textContent).toContain('Page 2');
+    expect(document.body.textContent).toContain('page 2 · 1 rows');
+    expect(buttonByLabel(/^Previous$/).disabled).toBe(false);
+  });
+
+  it('copies the real table context and an exact record query without creating a row URL', async () => {
+    await renderLedger();
+
+    await act(async () => buttonByLabel(/^Copy Lakebase audit table context$/).click());
+    expect(writeText).toHaveBeenLastCalledWith('mip_app.action_audit');
+    expect(document.body.textContent).toContain('Table context copied');
+
+    act(() => buttonByLabel(/^Expand audit event evt-8ecf7294$/).click());
+    await act(async () => buttonByLabel(/^Copy event ID evt-8ecf7294$/).click());
+
+    expect(writeText).toHaveBeenLastCalledWith('evt-8ecf7294');
+    expect(document.body.textContent).toContain('Event ID copied');
+
+    await act(async () => buttonByLabel(/^Copy Lakebase query for audit event evt-8ecf7294$/).click());
+    expect(writeText).toHaveBeenLastCalledWith(
+      "SELECT * FROM mip_app.action_audit WHERE audit_id = 'evt-8ecf7294';",
+    );
+    expect(document.body.textContent).toContain('Lakebase record query copied');
+    expect(document.querySelector('a[href*="lakebase" i]')).toBeNull();
+  });
+});

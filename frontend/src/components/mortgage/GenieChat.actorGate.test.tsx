@@ -15,7 +15,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetActorScopeForTests, actorScopeStatus, observeActor } from '../../lib/actorScope';
-import { GENIE_CONVERSATION_STORAGE_KEY } from '../../lib/genieConversation';
+import {
+  GENIE_CONVERSATION_RESET_EVENT,
+  GENIE_CONVERSATION_STORAGE_KEY,
+  readGenieConversationId,
+} from '../../lib/genieConversation';
 import { __resetGenieTurnStoreForTests } from '../../lib/genieInFlightTurn';
 import { createMipQueryClient } from '../../lib/queryClient';
 import { ACTOR_A, ACTOR_B } from '../../test/actorKeys';
@@ -68,6 +72,7 @@ import { GenieChat } from './GenieChat';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const A_CONVERSATION = 'conv-of-a';
+const A_LATER_CONVERSATION = 'conv-of-a-later';
 /** No bootstrap conversation: the stored id is the only one there is. */
 const START: GenieStartResult = { conversation_id: null, trusted_assets: [], sample_questions: [] };
 
@@ -196,6 +201,36 @@ describe('the floating panel mounted while the actor gate is pending', () => {
 
     expect(mocks.genieSubmit.mock.calls[0]?.[0]).toBe('Break this down by state');
     expect(mocks.genieSubmit.mock.calls[0]?.[1], "A's question continues A's conversation").toBe(A_CONVERSATION);
+  });
+
+  it("a trusted nobody closes the gate and the panel drops A's id; A's return reopens it and A's next submit continues A's conversation (D-identity-review-a2)", async () => {
+    await mountWhilePending();
+    act(() => observeActor({ key: ACTOR_A }));
+    await flush();
+
+    const reset = vi.fn();
+    window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, reset);
+    try {
+      act(() => observeActor({ key: null }));
+    } finally {
+      window.removeEventListener(GENIE_CONVERSATION_RESET_EVENT, reset);
+    }
+    expect(actorScopeStatus()).toBe('closed');
+    expect(reset, 'the panel is reset through the event').toHaveBeenCalledOnce();
+    expect(readGenieConversationId(), 'nothing is readable while closed').toBeNull();
+    expect(local.get(GENIE_CONVERSATION_STORAGE_KEY), 'and nothing is removed').toBe(A_CONVERSATION);
+    await flush();
+
+    // Meanwhile A's other tab moved on to a newer conversation. Only a panel
+    // whose own id went null re-reads it when the gate reopens; one that kept
+    // the old id would send that instead.
+    local.set(GENIE_CONVERSATION_STORAGE_KEY, A_LATER_CONVERSATION);
+    act(() => observeActor({ key: ACTOR_A }));
+    expect(actorScopeStatus()).toBe('open');
+    await flush();
+    await ask('Break this down by state');
+
+    expect(mocks.genieSubmit.mock.calls[0]?.[1], "A's question continues A's (current) conversation").toBe(A_LATER_CONVERSATION);
   });
 
   it("starts a new thread when the gate opens for another actor: the re-read goes through the gate, which removed A's id", async () => {

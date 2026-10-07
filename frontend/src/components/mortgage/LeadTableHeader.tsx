@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { Button, SurfaceTitle } from '../Primitives';
@@ -8,6 +8,7 @@ import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyb
 import { LeadTableViewControl } from './LeadTableViewControl';
 import type { LeadTableView } from './LeadTable.columns';
 import type { LeadCsvExportState } from './useLeadCsvExport';
+import type { TriageEntry } from './LeadTable.triage';
 
 export interface LeadTableHeaderProps {
   headerStatus?: ReactNode;
@@ -23,8 +24,17 @@ export interface LeadTableHeaderProps {
   csvExportNoun: string;
   /** Rows in scope the marketing-eligibility gate excluded from the file. */
   csvExportExcluded: number;
+  /**
+   * D-approval-flow-b: how many borrowers match when the export would write
+   * only the loaded rows of a larger cohort (no selection); else null. The
+   * button then reads "Export k loaded" and describes the match count.
+   */
+  csvExportTruncatedOf?: number | null;
   exportBlockedReason: string | null;
   onExport: () => void;
+  /** The Triage deck's entry (approvers; null hides it). */
+  triageEntry?: TriageEntry | null;
+  onEnterTriage?: () => void;
 }
 
 /**
@@ -45,8 +55,11 @@ export function LeadTableHeader({
   csvExportCount,
   csvExportNoun,
   csvExportExcluded,
+  csvExportTruncatedOf = null,
   exportBlockedReason,
   onExport,
+  triageEntry = null,
+  onEnterTriage,
 }: LeadTableHeaderProps) {
   // The shell's compile posture (audit runtime-04, cut 5): compiled, this
   // module's memo caches would ride the LeadTable chunk and buy nothing
@@ -54,25 +67,52 @@ export function LeadTableHeader({
   'use no memo';
 
   const exporting = exportState.status === 'pending';
+  const scopeNoteId = useId();
+  const triageNoteId = useId();
+  const partial = csvExportTruncatedOf !== null;
+  const exportNoun = partial ? 'loaded' : csvExportNoun;
+  // A title row of controls (FetchedAt's Refresh, the Triage entry) is a
+  // `.btn--sm` tall; its modifier gives the keycap hint block clearance from
+  // it without growing the header (LeadTable.css,
+  // deviation:lead-table-title-row-clearance).
+  const titleRow = Boolean(headerStatus || triageEntry);
   return (
-    <div className="surface__hdr surface__hdr--split">
+    <div className={`surface__hdr surface__hdr--split${titleRow ? ' lead-table__header--title-row' : ''}`}>
       <div className="surface__hdr-main">
         <div className="surface__icon">
           <Icon name="user" size={14} />
         </div>
         <div>
-          {/* The view's freshness sits beside the title, not in the action
-              row: there it squeezed the keyboard hint onto a second line
-              and pushed the 480px scroller past the fold at 1440x900. */}
-          {headerStatus ? (
-            <div className="inline-flex">
+          {/* The view's freshness (and the Triage entry) sit beside the
+              title, not in the action row: there they squeezed the keyboard
+              hint onto a second line and pushed the 480px scroller past the
+              fold at 1440x900. */}
+          {titleRow ? (
+            <div className="inline-flex lead-table__title-row">
               <SurfaceTitle>Ranked borrowers</SurfaceTitle>
               {headerStatus}
+              {triageEntry && (
+                // deviation:triage-deck: the deck's entry (D-approval-flow-a2); aria-disabled with its reason.
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (triageEntry.disabledReason === null) onEnterTriage?.();
+                  }}
+                  aria-disabled={triageEntry.disabledReason !== null || undefined}
+                  aria-describedby={triageEntry.disabledReason !== null ? triageNoteId : undefined}
+                  data-testid="lead-triage-enter"
+                >
+                  {triageEntry.label}
+                </Button>
+              )}
+              {triageEntry?.disabledReason && (
+                <span id={triageNoteId} className="sr-only">{triageEntry.disabledReason}</span>
+              )}
             </div>
           ) : (
             <SurfaceTitle>Ranked borrowers</SurfaceTitle>
           )}
-          <div className="muted fs-12">
+          <div className="muted fs-12 lead-table__hint">
             {/* Keycaps are `<kbd>` (prototype-parity P2); the header's
                 "Keyboard shortcuts" button and `?` list every key. */}
             <LeadTableKeyboardHint singleKeysOn={singleKeysOn} approverActive={approverActive} />
@@ -111,15 +151,21 @@ export function LeadTableHeader({
           data-testid="lead-export"
           aria-label={exporting
             ? 'Recording the export in the audit ledger'
-            : `Export ${formatCount(csvExportCount)} ${csvExportNoun} as CSV`}
+            : `Export ${formatCount(csvExportCount)} ${exportNoun} as CSV`}
+          aria-describedby={partial ? scopeNoteId : undefined}
           title={exportBlockedReason ?? (csvExportCount === 0 && csvExportExcluded > 0
             ? 'Every row in scope is excluded by the marketing-eligibility gate'
             : undefined)}
         >
           {exporting
             ? 'Recording export…'
-            : `Export ${formatCount(csvExportCount)} ${csvExportNoun}`}
+            : `Export ${formatCount(csvExportCount)} ${exportNoun}`}
         </Button>
+        {partial && (
+          <span id={scopeNoteId} className="sr-only" data-testid="lead-export-scope-note">
+            {`${formatCount(csvExportTruncatedOf)} match these filters; only loaded leads are exported.`}
+          </span>
+        )}
       </div>
     </div>
   );

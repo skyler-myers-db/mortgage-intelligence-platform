@@ -143,6 +143,83 @@ def require_approver(request: Request) -> str:
 ApproverDep = Annotated[str, Depends(require_approver)]
 
 
+# Read-only Auditor role (D-audit-reads-c3). The group is a local/test
+# compatibility path only, like the admin group; deployed group headers grant
+# nothing. Admission never implies an administrator or approver capability.
+_AUDITOR_COMPAT_GROUP: str = "mip-auditor"
+
+
+def _auditor_identities() -> set[str]:
+    """Exact configured auditor emails and automation identities, lower-cased."""
+    return _parse_admin_emails(getattr(settings, "auditor_emails", None)) | (
+        _parse_admin_emails(getattr(settings, "auditor_identities", None))
+    )
+
+
+def _auditor_membership(request: Request, actor: str) -> bool:
+    """The local/test compat group, else an exact configured auditor identity."""
+    compatibility_groups_enabled = (
+        settings.trust_forwarded_headers and settings.app_env in {"local", "test"}
+    )
+    if compatibility_groups_enabled and _AUDITOR_COMPAT_GROUP in _parse_groups(
+        request.headers.get("X-Forwarded-Groups")
+    ):
+        return True
+    return bool(actor and actor.lower() in _auditor_identities())
+
+
+def _audit_reader_access(request: Request) -> tuple[bool, str, set[str]]:
+    """The one ledger-read decision shared by UI and enforcement: admin or auditor."""
+    is_admin, actor, groups = _admin_access(request)
+    if is_admin:
+        return True, actor, groups
+    return _auditor_membership(request, actor), actor, groups
+
+
+def is_configured_auditor(request: Request) -> bool:
+    """Auditor by membership (never by being an administrator): the role label."""
+    return _auditor_membership(request, resolve_actor(request))
+
+
+def can_read_audit(request: Request) -> bool:
+    """Return the same fail-closed decision enforced by ``require_audit_reader``."""
+    allowed, _actor, _groups = _audit_reader_access(request)
+    return allowed
+
+
+def require_audit_reader(request: Request) -> str:
+    """Admit an administrator or a configured auditor; otherwise the shared 403."""
+    allowed, actor, groups = _audit_reader_access(request)
+    if allowed:
+        return actor
+    emit(
+        log,
+        "audit_reader_access_denied",
+        outcome="denied",
+        actor_present=bool(actor),
+        groups_present=len(groups),
+    )
+    raise HTTPException(status_code=403, detail="forbidden")
+
+
+# ``AuditReaderDep`` evaluates to ``str`` (the admitted ledger reader).
+AuditReaderDep = Annotated[str, Depends(require_audit_reader)]
+
+
+def auditor_role_overlap_count() -> int:
+    """How many auditor identities also hold the administrator or approver role.
+
+    A segregation-of-duties signal: a count only, never an identity.
+    """
+    privileged = set().union(
+        *(
+            _parse_admin_emails(getattr(settings, name, None))
+            for name in ("admin_emails", "admin_identities", "approver_emails", "approver_identities")
+        )
+    )
+    return len(_auditor_identities() & privileged)
+
+
 def require_authenticated_actor(request: Request) -> str:
     """Fail-closed "any authenticated workspace user" gate for read surfaces.
 

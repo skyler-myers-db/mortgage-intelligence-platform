@@ -8,6 +8,7 @@
  * and the closed vocabularies in `genie_completion_stages.py`.
  */
 import type { GenieLiveProgress, GenieResult, GenieSubmitResult } from '../lib/apiTypes';
+import type { GenieAnswerSection } from './genie';
 
 /** Server-owned completion stages; `stage_label` is the words for each. */
 export type GenieJobStage =
@@ -48,6 +49,14 @@ export interface GenieCompletionJobStatus {
   /** Recent median completion seconds of this job's class, while it runs
    *  (audit genie-01); absent from older servers. */
   typical_seconds?: number | null;
+  /** Verified sections (audit genie-01 phase 1b), only while the job runs
+   *  and no cancel was requested: how many sub-analyses passed their own
+   *  checks, their revision, and (from the three-section floor, only for a
+   *  revision the poll did not send) the sections themselves, plan-ordered.
+   *  Absent from older servers. */
+  verified_sections?: number | null;
+  sections_rev?: number | null;
+  revealed_sections?: GenieAnswerSection[] | null;
 }
 
 /** What the progress rail shows of a running job (no id, no answer). */

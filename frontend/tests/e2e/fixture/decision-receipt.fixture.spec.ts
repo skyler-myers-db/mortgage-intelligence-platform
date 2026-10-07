@@ -57,7 +57,7 @@ import { json, type MockApi } from './mockApi';
 import { expect, test } from './test';
 
 const BORROWER_ID = PRIMARY_BORROWER.borrower_id;
-const EXPLORER_HREF = `/admin-config?audit_event_id=${APPROVE_AUDIT_ID}#audit`;
+const EXPLORER_HREF = `/audit-ledger?audit_event_id=${APPROVE_AUDIT_ID}#audit`;
 /** The Approved decision chip, not any chip that merely mentions approval. */
 const APPROVED_CHIP = /^\s*Approved\b/;
 /** Longest the receipt stagger may run (brief: "under 1.2 s"). */
@@ -453,7 +453,7 @@ test.describe('decision receipt', () => {
 
       await expect(pinned).toHaveCount(0);
       await expect(page, 'the deep-link param is gone from the URL').not.toHaveURL(/[?&]audit_event_id=/);
-      await expect(page, 'the page stays on the explorer').toHaveURL(/\/admin-config#audit$/);
+      await expect(page, 'the page stays on the explorer').toHaveURL(/\/audit-ledger#audit$/);
       await expect
         .poll(() => explorerPageCalls(mockApi).length, 'the explorer re-read the ledger unpinned')
         .toBeGreaterThan(pinnedReads);

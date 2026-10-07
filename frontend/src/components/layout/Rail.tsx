@@ -1,6 +1,8 @@
 import { Link, useLocation } from 'react-router';
 import { Icon, type IconName } from '../Icon';
 import { EntradaMark } from '../brand/Entrada';
+import { ROUTES } from '../../lib/routeMeta';
+import { useAuditLedgerAccess } from '../../lib/sessionQuery';
 import { useAdminNavigationAccess } from './RouteNav';
 
 /**
@@ -35,6 +37,8 @@ const MODULES: ModuleItem[] = [
 export function Rail() {
   const { pathname } = useLocation();
   const canAccessAdmin = useAdminNavigationAccess();
+  const canReadLedger = useAuditLedgerAccess();
+  const onLedger = pathname === ROUTES.auditLedger.pattern;
   // All current routes are Module 0.
   const activeModuleId = 0;
   const isM0 = activeModuleId === 0 && pathname !== '/__unused';
@@ -76,6 +80,21 @@ export function Rail() {
         );
       })}
       <div className="rail__spacer" />
+      {/* The audit ledger for administrators and auditors (D-audit-reads-c3):
+          the prototype rail ends with Settings only
+          (design_files/Module 0 Prototype.html:1201-1202;
+          deviation:rail-audit-ledger). */}
+      {canReadLedger && (
+        <Link
+          to={ROUTES.auditLedger.pattern}
+          className="rail__item"
+          aria-label={ROUTES.auditLedger.name}
+          title={ROUTES.auditLedger.name}
+          aria-current={onLedger ? 'page' : undefined}
+        >
+          <Icon name="audit" size={16} />
+        </Link>
+      )}
       {canAccessAdmin && (
         <Link to="/admin-config" className="rail__item" title="Admin / settings">
           <Icon name="settings" size={16} />

@@ -1,22 +1,40 @@
 import type { DrawerSource } from '../components/AppContext';
 import type { HomeSummaryHighlight } from '../types';
-import { formatCount } from './formatters';
+import { isDeltaExplainerMeasure, type DeltaExplainerDrawerSource } from './deltaExplainerSource';
+import { DRAWER_SOURCES } from './drawerSourceRegistry';
+import { formatCount, ratePct, signedBpsLabel } from './formatters';
+import type { RateMoveSinceVisit } from './homeAnswer';
+
+/** The UTC calendar date (YYYY-MM-DD) of an instant, or null. */
+function utcDate(instant: string | null | undefined): string | null {
+  const at = instant ? Date.parse(instant) : Number.NaN;
+  return Number.isFinite(at) ? new Date(at).toISOString().slice(0, 10) : null;
+}
 
 const HOME_SUMMARY_LINEAGE_FAMILY: Record<string, string> = {
   marketable_population: 'marketable_population',
   high_opportunity: 'opportunity_score',
   refi_economics_screen: 'in_the_money',
   offers_available: 'next_best_offer',
+  offers_recommended: 'next_best_offer',
+  listed_for_sale: 'listing_activity',
 };
 
-/** Evidence for one "since your last login" number, citing both snapshots. */
+/**
+ * Evidence for one "since your last login" number, citing both snapshots.
+ * A delta of a measure the funnel snapshots attribute per state (wow-ai-3)
+ * also carries the Delta Explainer (lib/deltaExplainerSource), anchored on
+ * the baseline KPI snapshot's date; competitor liens say why they have none.
+ */
 export function loginSummaryDrawerSource(
   highlight: Pick<
     HomeSummaryHighlight,
     'measure' | 'label' | 'display' | 'current' | 'baseline' | 'delta' | 'delta_pct'
   >,
-  opts: { previousVisitAt: string | null } = { previousVisitAt: null },
-): DrawerSource {
+  opts: { previousVisitAt: string | null; baselineSnapshotAt?: string | null; status?: string } = {
+    previousVisitAt: null,
+  },
+): DrawerSource | DeltaExplainerDrawerSource {
   const hasBaseline = highlight.baseline !== null && highlight.delta !== null;
   const lineageFamily = HOME_SUMMARY_LINEAGE_FAMILY[highlight.measure];
   const signals: NonNullable<DrawerSource['signals']> = [
@@ -43,7 +61,19 @@ export function loginSummaryDrawerSource(
       },
     );
   }
+  if (hasBaseline && highlight.measure === 'competitor_lien') {
+    signals.push({
+      label: 'Per-state attribution',
+      source: 'mip.gold.funnel_snapshot_daily',
+      value: 'not snapshotted for this measure',
+    });
+  }
+  const baselineDate = opts.status === 'delta' && hasBaseline ? utcDate(opts.baselineSnapshotAt) : null;
+  const explainer = baselineDate && isDeltaExplainerMeasure(highlight.measure)
+    ? { deltaExplainer: { measure: highlight.measure, baselineDate, liveDisplay: highlight.display } }
+    : {};
   return {
+    ...explainer,
     title: hasBaseline
       ? `Since your last login — ${highlight.label}`
       : `Today's briefing — ${highlight.label}`,
@@ -59,6 +89,32 @@ export function loginSummaryDrawerSource(
       : 'Live reading from the unfiltered portfolio headline metric view. ' +
         'Last-login deltas appear once a previous visit and a baseline snapshot exist.',
     signals,
+    ...(opts.previousVisitAt ? { eventDate: opts.previousVisitAt } : {}),
+  };
+}
+
+/**
+ * Evidence for WHY NOW's rate move (flow-05): the rate window's source with
+ * the two weekly prints the move subtracts (FRED MORTGAGE30US, read from
+ * mip.gold.rate_window_weekly) leading its signals.
+ */
+export function rateMoveDrawerSource(
+  move: RateMoveSinceVisit,
+  opts: { previousVisitAt: string | null } = { previousVisitAt: null },
+): DrawerSource {
+  const base = DRAWER_SOURCES.rateWindow;
+  return {
+    ...base,
+    title: '30-year par rate since your last visit',
+    description:
+      `The weekly FRED MORTGAGE30US print for the week of ${move.toWeek} against the print for the week of your ` +
+      `previous visit (${move.fromWeek}), both read as-is from mip.gold.rate_window_weekly. ${base.description ?? ''}`.trim(),
+    signals: [
+      { label: `Week of ${move.fromWeek}`, source: 'mip.gold.rate_window_weekly.market_rate_pct (MORTGAGE30US)', value: ratePct(move.fromPct) },
+      { label: `Week of ${move.toWeek} (latest)`, source: 'mip.gold.rate_window_weekly.market_rate_pct (MORTGAGE30US)', value: ratePct(move.toPct) },
+      { label: 'Since your last visit', source: 'latest - visit week', value: signedBpsLabel(move.deltaBps) },
+      ...(base.signals ?? []),
+    ],
     ...(opts.previousVisitAt ? { eventDate: opts.previousVisitAt } : {}),
   };
 }

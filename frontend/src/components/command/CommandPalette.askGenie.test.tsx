@@ -27,6 +27,12 @@ vi.mock('../AppContext', () => ({
 }));
 
 const borrowerSearch = vi.fn();
+// The ledger entry reads the shared session (useAuditLedgerAccess); this
+// harness has no QueryClient, so the decision is mocked like useApp's flags.
+vi.mock('../../lib/sessionQuery', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/sessionQuery')>()),
+  useAuditLedgerAccess: () => false,
+}));
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: { borrowerSearch: (...a: unknown[]) => borrowerSearch(...a) },
@@ -127,12 +133,13 @@ describe('CommandPalette Ask Genie row', () => {
   it('a word no page matches still offers the Genie row, so the palette never dead-ends', async () => {
     pressMetaK();
     setQuery('zyrplax');
-    // The empty state still says no page matched; the Genie row is the way out.
-    expect(container.querySelector('.cmdk__empty')?.textContent).toContain('No pages, actions, or borrowers');
     expect(genieRow()?.textContent).toContain('Ask Genie: zyrplax');
     // Enter reaches the fallback once the borrower search has settled (it is
     // held while a borrower row could still land above it).
     await settleSearch();
+    // The empty state still says no page matched, once the search settled
+    // (shell-07 item 4); the Genie row is the way out.
+    expect(container.querySelector('.cmdk__empty')?.textContent).toContain('No pages, actions, or borrowers');
     act(() => {
       input().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     });

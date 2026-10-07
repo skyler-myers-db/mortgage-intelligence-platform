@@ -1,0 +1,57 @@
+/* ============================================================
+   DATA OPERATIONS — the Run confirm dialog (audit critic-09)
+   ============================================================
+   Shipped with DataOperationsRunDialog.tsx, so it lives in the admin route
+   chunk. The prototype has no confirm dialog (deviation:admin-run-confirm):
+   the head is its `.approval` banner (design_files/index.html:634-651)
+   inside a `.surface--elev` dialog shell, the same composition as the
+   unsaved-changes dialog (32-feedback.css `.unsaved-dialog`). */
+
+.admin-run-dialog {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--text-1);
+  max-inline-size: min(var(--dialog-w), calc(100vw - 2 * var(--sp-6)));
+}
+.admin-run-dialog::backdrop { background: var(--surface-scrim); }
+
+.admin-run-dialog__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+  font-size: var(--fs-12);
+}
+.admin-run-dialog__facts dt { color: var(--text-3); }
+.admin-run-dialog__facts dd { margin: 0; color: var(--text-1); }
+
+.admin-run-dialog__reasons {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  font-size: var(--fs-13);
+}
+.admin-run-dialog__reasons legend {
+  padding-inline: var(--sp-1);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+.admin-run-dialog__reason {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-block-size: var(--sp-6);
+  cursor: pointer;
+}
+.admin-run-dialog__reasons:disabled .admin-run-dialog__reason { cursor: default; }
+
+.admin-run-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}

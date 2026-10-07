@@ -70,6 +70,7 @@ interface PlaceProps {
   onSortChange?: (next: { key: 'equity'; dir: 'desc' } | null) => void;
   expandedId?: string | null;
   onExpandedChange?: (id: string | null) => void;
+  triage?: { mode: 'triage' | null; onModeChange: (mode: 'triage' | null, row?: string | null) => void } | null;
 }
 
 /** The place props the route last handed the (stubbed) LeadTable. */
@@ -198,6 +199,31 @@ describe('LeadQueue cache identity', () => {
   }
 
   const tableText = () => document.querySelector('[data-testid="lead-table"]')?.textContent ?? '';
+
+  // D-approval-flow-a2: the Triage deck is display state. Entering pushes
+  // ?mode=triage and leaving replaces it with ?row=; neither re-reads
+  // /api/leads (a VIEW_LEADS audit row), and the mode is the table's only.
+  it('entering and leaving the Triage deck issues no second GET /leads', async () => {
+    await mountAt('/lead-queue?state=IL');
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+    expect(tablePlace.current?.triage?.mode).toBeNull();
+
+    await act(async () => {
+      tablePlace.current?.triage?.onModeChange('triage');
+    });
+    await settle();
+    expect(new URLSearchParams(currentSearch).get('mode')).toBe('triage');
+    expect(tablePlace.current?.triage?.mode).toBe('triage');
+
+    await act(async () => {
+      tablePlace.current?.triage?.onModeChange(null, 'B-NATIONAL0000');
+    });
+    await settle();
+    const after = new URLSearchParams(currentSearch);
+    expect(after.get('mode')).toBeNull();
+    expect(after.get('state')).toBe('IL');
+    expect(apiMocks.leadsPage, 'no refetch on entry or exit').toHaveBeenCalledTimes(1);
+  });
 
   it('refetches and swaps the rows when only `cities` changes inside the stale window', async () => {
     await mountAt('/lead-queue?cities=CHICAGO~IL');

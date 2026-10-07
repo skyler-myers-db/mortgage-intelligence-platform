@@ -28,6 +28,12 @@ rescue. The runner also installs a ``commit`` hook:
 called once before any audit write, token issuance or session recording;
 its errors are never swallowed.
 
+Verified sections (audit 2026-09-21 ``genie-01`` phase 1b): a runner may
+also install a ``sections`` callback. :func:`report_sections` hands it the
+current snapshot of the deep sweep's sections that passed their own checks,
+on the owning thread only, like :func:`report_stage`. Its failures are
+swallowed, it is never a cancel point and it never changes the answer.
+
 ``"Answer ready"`` is deliberately absent from every label: that sentence
 belongs to the client, at the moment it holds a renderable answer.
 """
@@ -40,6 +46,7 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 
 class GenieJobStage(StrEnum):
@@ -124,6 +131,8 @@ GENIE_JOB_CANCELLED_HINT = (
 )
 
 StageCallback = Callable[[GenieJobStage, int | None, int | None], None]
+#: Receives the plan-ordered snapshot of verified sections so far.
+SectionsCallback = Callable[[list[dict[str, Any]]], None]
 
 
 class GenieTurnCancelled(BaseException):
@@ -142,6 +151,7 @@ class _SinkBinding:
     owner_thread: int
     cancelled: Callable[[], bool] | None = None
     commit: Callable[[], None] | None = None
+    sections: SectionsCallback | None = None
 
 
 _STAGE_SINK: ContextVar[_SinkBinding | None] = ContextVar("mip_genie_stage_sink", default=None)
@@ -153,14 +163,18 @@ def stage_sink(
     *,
     cancelled: Callable[[], bool] | None = None,
     commit: Callable[[], None] | None = None,
+    sections: SectionsCallback | None = None,
 ) -> Iterator[None]:
     """Route :func:`report_stage` calls made on THIS thread to ``callback``.
 
     ``cancelled`` makes each report a cancel point; ``commit`` is the hook
-    :func:`commit_governed_record` calls.
+    :func:`commit_governed_record` calls; ``sections`` receives
+    :func:`report_sections` snapshots.
     """
 
-    token = _STAGE_SINK.set(_SinkBinding(callback, threading.get_ident(), cancelled, commit))
+    token = _STAGE_SINK.set(
+        _SinkBinding(callback, threading.get_ident(), cancelled, commit, sections)
+    )
     try:
         yield
     finally:
@@ -204,6 +218,21 @@ def report_stage(
         raise GenieTurnCancelled()
 
 
+def report_sections(snapshot: list[dict[str, Any]]) -> None:
+    """Hand the verified-sections snapshot to the runner; owner thread only.
+
+    A no-op without a sink, off the owning thread or without a ``sections``
+    callback. Callback errors are swallowed, there is no cancel check, and
+    nothing here changes the answer.
+    """
+
+    binding = _owned_binding()
+    if binding is None or binding.sections is None:
+        return
+    with suppress(Exception):
+        binding.sections(snapshot)
+
+
 def commit_governed_record() -> None:
     """The governed record's one commit point (see the module docstring).
 
@@ -227,8 +256,10 @@ __all__ = [
     "GenieJobStage",
     "GenieJobStatus",
     "GenieTurnCancelled",
+    "SectionsCallback",
     "StageCallback",
     "commit_governed_record",
+    "report_sections",
     "report_stage",
     "stage_sink",
 ]

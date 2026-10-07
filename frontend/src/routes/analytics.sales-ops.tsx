@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { api } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
+import { loanOfficersOnly, useSalesRoster } from '../lib/salesRoster';
 import { Chip, SurfaceTitle } from '../components/Primitives';
 import { DescribedErrorBody as ErrorBody } from '../components/ui/DescribedError';
 import type {
@@ -14,7 +15,6 @@ import type {
   SalesConversionResponse,
   SalesOutcomeSummaryResponse,
   SalesStandupResponse,
-  SalesTeamMember,
 } from '../types';
 import { formatCount } from '../lib/formatters';
 
@@ -69,11 +69,7 @@ export function SalesOpsSection() {
   const weekStart = weekStartIsoDate();
   const today = isoDate(new Date());
 
-  const salesTeamQuery = useQuery<SalesTeamMember[]>({
-    queryKey: queryKeys.salesTeam(),
-    queryFn: ({ signal }) => api.salesTeam(signal).then((team) => team.filter((member) => member.role === 'loan_officer')),
-    staleTime: 60_000,
-  });
+  const salesTeamQuery = useSalesRoster(loanOfficersOnly);
   const salesOpsQuery = useQuery<{
     staleLeads: SalesAgingLead[];
     standup: SalesStandupResponse;

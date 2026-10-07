@@ -39,7 +39,7 @@ SELECT cancel_requested_at IS NOT NULL AS cancel_requested
 _END_CANCELLED_SQL = """
 UPDATE mip_app.genie_completion_jobs
    SET status = 'cancelled', stage = 'cancelled', parts_done = NULL, parts_planned = NULL,
-       result_json = NULL, finished_at = now(), updated_at = now()
+       result_json = NULL, sections_json = NULL, finished_at = now(), updated_at = now()
  WHERE job_id = %(job_id)s::uuid AND status IN ('queued', 'running')
    AND lease_owner = %(lease_owner)s
    AND cancel_requested_at IS NOT NULL AND recorded_at IS NULL

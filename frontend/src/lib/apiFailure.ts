@@ -85,6 +85,7 @@ export function subscribeNetworkFailures(listener: () => void): () => void {
 export async function probeSession(signal?: AbortSignal): Promise<SessionProbeVerdict> {
   let res: Response;
   try {
+    // wire: 'GET /api/v1/health'
     res = await fetch(apiPath('/health'), {
       redirect: 'manual',
       cache: 'no-store',

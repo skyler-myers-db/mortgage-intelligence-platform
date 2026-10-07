@@ -48,7 +48,7 @@ export interface FootprintState {
 }
 
 /** Response shape from `GET /api/config/footprint`. */
-interface FootprintPayload {
+export interface FootprintPayload {
   states: FootprintState[];
   geography_scope?: GeographyScopePayload | null;
   using_fallback?: boolean;
@@ -125,6 +125,7 @@ interface FootprintProviderProps {
 }
 
 export async function defaultFetchFootprint(signal?: AbortSignal): Promise<FootprintPayload> {
+  // wire: 'GET /api/v1/config/footprint'
   const res = await fetch(apiPath('/config/footprint'), { signal });
   if (!res.ok) throw new Error(`footprint fetch ${res.status}`);
   return (await res.json()) as FootprintPayload;

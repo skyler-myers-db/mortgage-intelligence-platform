@@ -11,6 +11,9 @@
  *    Lead Queue; the warehouse-down degraded state on Home;
  *  - the non-bannered failed read (`read-failed`, quality-06) on Lead Queue
  *    and Segment Intelligence;
+ *  - W5b w5-home-geo-lever: the Delta Explainer drawer on Home
+ *    (`delta-explainer`) and the retained-value note on Segment
+ *    Intelligence (`stale-note`);
  *  - the teal, navy and red accents on Home, Lead Queue and Borrower 360,
  *    default and evidence drawer, both themes (bright is everything above).
  *
@@ -28,9 +31,10 @@ import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 
 const OVERLAY_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail', 'offer-orchestrator-detail', 'ask-genie']);
 const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
-  'lead-queue': ['filter-menu', 'expanded-row', 'read-failed'],
-  home: ['degraded'],
-  'segment-intelligence': ['read-failed'],
+  'lead-queue': ['filter-menu', 'expanded-row', 'read-failed', 'triage'],
+  home: ['degraded', 'delta-explainer'],
+  'segment-intelligence': ['read-failed', 'stale-note'],
+  'admin-config': ['run-dialog-open'],
 };
 const ACCENT_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail']);
 const SWEPT_ACCENTS: readonly AxeAccent[] = ['teal', 'navy', 'red'];

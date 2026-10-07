@@ -17,6 +17,12 @@ The cancel route's ONE transaction (audit ``genie-03``) is modelled too:
 when the block raises, so a failed audit insert rolls its flag back.
 ``audit_rows`` holds every ``action_audit`` insert made in a transaction;
 ``fail_audit_inserts`` makes the next N of them raise.
+
+Verified sections (audit ``genie-01`` phase 1b): ``sections_json`` is
+modelled, the sections writer's UPDATE runs inside that transaction (or
+alone) under its running/owner/unrecorded/uncancelled guard, the status
+poll's sections read gates on the poller's revision, and every terminal
+statement NULLs the column. ``sections_writes`` records each stored payload.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from backend.services import genie_completion_cancel as cancel
 from backend.services import genie_completion_durations as durations
 from backend.services import genie_completion_jobs as jobs
 from backend.services import genie_completion_record as record
+from backend.services import genie_completion_sections as sections
 from backend.services.lakebase import LakebaseError
 
 _LIVE = ("queued", "running")
@@ -43,10 +50,20 @@ _LIVE = ("queued", "running")
 class FakeJobLakebase:
     _supports_atomic_transactions = False
 
-    def __init__(self, *, jobs_table: bool = True, cancel_columns: bool = True, now: datetime | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        jobs_table: bool = True,
+        cancel_columns: bool = True,
+        sections_column: bool = True,
+        now: datetime | None = None,
+    ) -> None:
         self.jobs_table = jobs_table
         #: False: the table exists without its 2026_09_25 columns.
         self.cancel_columns = cancel_columns
+        #: False: the table exists without the 2026_10_01_genie_job_sections sections_json.
+        self.sections_column = sections_column
+        self.sections_writes: list[dict[str, Any]] = []
         # Starts at the wall clock: job expiry is minted from the progress
         # token's real ``exp``. Tests move it forward with ``advance``.
         self.now = now or datetime.now(UTC)
@@ -111,11 +128,21 @@ class FakeJobLakebase:
             "cancel_requested_at": None,
             "recorded_at": None,
             "deep": params.get("deep"),
+            "sections_json": None,
             "created_at": self.now,
         }
 
     _HIDDEN = frozenset(
-        {"actor_email", "conversation_id", "message_id", "finished_at", "cancel_requested_at", "recorded_at", "created_at"}
+        {
+            "actor_email",
+            "conversation_id",
+            "message_id",
+            "finished_at",
+            "cancel_requested_at",
+            "recorded_at",
+            "created_at",
+            "sections_json",
+        }
     )
 
     def _view(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -149,7 +176,7 @@ class FakeJobLakebase:
         )
 
     def _expire(self, row: dict[str, Any]) -> None:
-        row.update(status="expired", stage="expired", result_json=None)
+        row.update(status="expired", stage="expired", result_json=None, sections_json=None)
         row["finished_at"] = row["finished_at"] or self.now
 
     # -------------------------------------------------------- the surface
@@ -160,7 +187,11 @@ class FakeJobLakebase:
             self.before(_JOB_SQL[sql])
         with self._lock:
             if sql is jobs._PROBE_SQL:
-                return {"present": self.jobs_table and self.cancel_columns}
+                return {"present": self.jobs_table and self.cancel_columns and self.sections_column}
+            if sql is sections._WRITE_SECTIONS_SQL:
+                self._require_table()
+                self.job_statements.append("sections")
+                return self._write_sections(params)
             if sql is durations._DURATIONS_SQL:
                 self._require_table()
                 self.job_statements.append("durations")
@@ -231,7 +262,24 @@ class FakeJobLakebase:
                 self.rows, self.audit_rows = snapshot
                 raise
 
+    def _write_sections(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        row = self.rows.get(str(params["job_id"]))
+        if (
+            row is None
+            or row["status"] != "running"
+            or row["lease_owner"] != params["lease_owner"]
+            or row["recorded_at"] is not None
+            or row["cancel_requested_at"] is not None
+        ):
+            return None
+        row["sections_json"] = json.loads(params["sections_json"])
+        self.sections_writes.append(row["sections_json"])
+        return {"job_id": row["job_id"]}
+
     def _transaction_execute(self, sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if sql is sections._WRITE_SECTIONS_SQL:
+            self.job_statements.append("sections")
+            return self._write_sections(params)
         if sql is cancel._LOCK_SQL:
             self.job_statements.append("cancel_lock")
             row = self.rows.get(str(params["job_id"]))
@@ -306,6 +354,16 @@ class FakeJobLakebase:
             if row is None or self._by_turn(params) is not row:
                 return None
             return self._view(row)
+        if sql is jobs._SELECT_JOB_SECTIONS_SQL:
+            if row is None or self._by_turn(params) is not row:
+                return None
+            view = self._view(row)
+            stored = row["sections_json"]
+            view["sections_rev"] = stored["rev"] if stored else None
+            view["sections_count"] = stored["count"] if stored else None
+            changed = stored is not None and stored["rev"] != params["known_rev"]
+            view["revealed_json"] = stored["sections"] if changed else None
+            return view
         if row is None:
             return None
         if sql is jobs._EXPIRE_JOB_SQL:
@@ -336,7 +394,13 @@ class FakeJobLakebase:
             ):
                 return None
             row.update(
-                status="cancelled", stage="cancelled", parts_done=None, parts_planned=None, result_json=None, finished_at=self.now
+                status="cancelled",
+                stage="cancelled",
+                parts_done=None,
+                parts_planned=None,
+                result_json=None,
+                sections_json=None,
+                finished_at=self.now,
             )
             self._check(row)
             return {"job_id": row["job_id"]}
@@ -352,6 +416,7 @@ class FakeJobLakebase:
                 status="succeeded",
                 stage="done",
                 result_json=json.loads(params["result_json"]),
+                sections_json=None,
                 parts_done=None,
                 parts_planned=None,
                 finished_at=self.now,
@@ -364,6 +429,7 @@ class FakeJobLakebase:
                 status="failed",
                 stage="failed",
                 failure_kind=params["failure_kind"],
+                sections_json=None,
                 parts_done=None,
                 parts_planned=None,
                 finished_at=self.now,
@@ -392,6 +458,7 @@ _JOB_SQL: dict[str, str] = {
     jobs._INSERT_SQL: "insert",
     jobs._SELECT_TURN_SQL: "select_turn",
     jobs._SELECT_JOB_SQL: "select_job",
+    jobs._SELECT_JOB_SECTIONS_SQL: "select_job_sections",
     jobs._EXPIRE_JOB_SQL: "expire",
     jobs._CLAIM_SQL: "claim",
     jobs._SUCCEED_SQL: "succeed",

@@ -41,6 +41,66 @@ import {
  */
 export type SalesSendStrategy = 'manual' | 'round_robin';
 
+/** The `/api/loan-officers/assignments` body. */
+export interface AssignLoanOfficerRequest {
+  borrower_id: string;
+  loan_officer_id: string;
+  request_id: string;
+}
+
+/** The assignment create and status-change response. */
+export interface LoanOfficerAssignmentResponse {
+  assignment: LoanOfficerAssignment;
+  audit_event_id?: string | null;
+}
+
+/** The `/api/loan-officers/assignments/{id}/status` body. */
+export interface AssignmentStatusUpdateRequest {
+  status: AssignmentLifecycleStatus;
+  request_id: string;
+}
+
+/** The `/api/loan-officers/assignments/{id}/outcome` body. */
+export interface AssignmentOutcomeRequest {
+  outcome: AssignmentOutcome;
+  request_id: string;
+}
+
+/** The `/api/leads/{id}/assign` body. */
+export interface AssignLeadRequest {
+  assigned_to_email: string;
+  strategy: SalesSendStrategy;
+  expires_in_hours: number;
+  request_id: string;
+}
+
+/** The `/api/sales/distribute` response. */
+export interface DistributeLeadsResponse {
+  assigned_count: number;
+  strategy: string;
+  assignments: LeadAssignment[];
+  per_lo_counts: Record<string, number>;
+  audit_event_id?: string | null;
+}
+
+/** The `/api/sales/distribute` body. */
+export interface DistributeLeadsRequest {
+  borrower_ids: string[];
+  lo_emails: string[];
+  strategy: SalesSendStrategy;
+  expires_in_hours: number;
+  request_id: string;
+}
+
+/** The `/api/leads/{id}/disposition` body. */
+export interface DispositionRequest {
+  lo_email: string;
+  outcome: CallDisposition['outcome'];
+  callback_at?: string | null;
+  notes?: string | null;
+  request_id: string;
+}
+
 export const salesApi = {
   salesTeam: (signal?: AbortSignal) =>
     getJson<SalesTeamMember[]>('/api/sales/team', signal),
@@ -64,11 +124,7 @@ export const salesApi = {
   },
 
   assignLoanOfficer: (borrowerId: string, loanOfficerId: string, signal?: AbortSignal) =>
-    postJson<{ assignment: LoanOfficerAssignment; audit_event_id?: string | null }, {
-      borrower_id: string;
-      loan_officer_id: string;
-      request_id: string;
-    }>(
+    postJson<LoanOfficerAssignmentResponse, AssignLoanOfficerRequest>(
       '/api/loan-officers/assignments',
       { borrower_id: borrowerId, loan_officer_id: loanOfficerId, request_id: _newRequestId() },
       signal,
@@ -79,10 +135,7 @@ export const salesApi = {
     status: AssignmentLifecycleStatus,
     signal?: AbortSignal,
   ) =>
-    patchJson<{ assignment: LoanOfficerAssignment; audit_event_id?: string | null }, {
-      status: AssignmentLifecycleStatus;
-      request_id: string;
-    }>(
+    patchJson<LoanOfficerAssignmentResponse, AssignmentStatusUpdateRequest>(
       `/api/loan-officers/assignments/${encodeURIComponent(assignmentId)}/status`,
       { status, request_id: _newRequestId() },
       signal,
@@ -96,10 +149,7 @@ export const salesApi = {
     outcome: AssignmentOutcome,
     signal?: AbortSignal,
   ) =>
-    postJson<AssignmentOutcomeResponse, {
-      outcome: AssignmentOutcome;
-      request_id: string;
-    }>(
+    postJson<AssignmentOutcomeResponse, AssignmentOutcomeRequest>(
       `/api/loan-officers/assignments/${encodeURIComponent(assignmentId)}/outcome`,
       { outcome, request_id: _newRequestId() },
       signal,
@@ -124,12 +174,7 @@ export const salesApi = {
     signal?: AbortSignal,
     requestId: string = _newRequestId(),
   ) =>
-    postJson<AssignmentResponse, {
-      assigned_to_email: string;
-      strategy: SalesSendStrategy;
-      expires_in_hours: number;
-      request_id: string;
-    }>(
+    postJson<AssignmentResponse, AssignLeadRequest>(
       `/api/leads/${encodeURIComponent(borrowerId)}/assign`,
       {
         assigned_to_email: assignedToEmail,
@@ -147,19 +192,7 @@ export const salesApi = {
     signal?: AbortSignal,
     requestId: string = _newRequestId(),
   ) =>
-    postJson<{
-      assigned_count: number;
-      strategy: string;
-      assignments: LeadAssignment[];
-      per_lo_counts: Record<string, number>;
-      audit_event_id?: string | null;
-    }, {
-      borrower_ids: string[];
-      lo_emails: string[];
-      strategy: SalesSendStrategy;
-      expires_in_hours: number;
-      request_id: string;
-    }>(
+    postJson<DistributeLeadsResponse, DistributeLeadsRequest>(
       '/api/sales/distribute',
       {
         borrower_ids: borrowerIds,
@@ -182,13 +215,7 @@ export const salesApi = {
     signal?: AbortSignal,
     requestId: string = _newRequestId(),
   ) =>
-    postJson<DispositionResponse, {
-      lo_email: string;
-      outcome: CallDisposition['outcome'];
-      callback_at?: string | null;
-      notes?: string | null;
-      request_id: string;
-    }>(
+    postJson<DispositionResponse, DispositionRequest>(
       `/api/leads/${encodeURIComponent(borrowerId)}/disposition`,
       {
         ...payload,

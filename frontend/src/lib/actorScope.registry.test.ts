@@ -55,12 +55,12 @@ const STORAGE_FILES: readonly string[] = [
   'src/lib/staleChunkRecovery.ts',
   'public/theme-boot.js',
   ACTOR_SCOPE_FILE,
-  'src/components/mortgage/bulkApproveStash.ts', // TRANSITIONAL, see INDIRECTION
 ];
 
 /** Stores converted to lib/actorScope's guarded accessors: storage-free. */
 const GUARDED_STORES: readonly string[] = [
   'src/lib/pinnedInsights.ts',
+  'src/routes/portfolio-builder.draft.ts',
   'src/lib/genieConversation.ts',
   'src/lib/genieConversationStore.ts',
   'src/lib/genieInFlightRecord.ts',
@@ -68,6 +68,7 @@ const GUARDED_STORES: readonly string[] = [
   'src/lib/queueContextPublish.ts',
   'src/lib/keymapPreference.ts',
   'src/components/layout/GenieDock.tsx',
+  'src/components/mortgage/bulkApproveStash.ts',
 ];
 
 interface IndirectionRow {
@@ -119,12 +120,6 @@ const INDIRECTION: readonly IndirectionRow[] = [
     keys: [THEME, ACCENT, DENSITY, CONSOLE, THEME_CHOSEN, ACCENT_CHOSEN],
   },
   { file: ACTOR_SCOPE_FILE, functions: ['rawRead', 'rawWrite'], keys: 'ALL' },
-  {
-    file: 'src/components/mortgage/bulkApproveStash.ts',
-    functions: ['stashCancelledBulk', 'readCancelledBulk', 'clearCancelledBulk'],
-    keys: ['mip.bulkApprove.lastCancelled'],
-    removedBy: 'w5-identity-reset-portfolio',
-  },
 ];
 
 /** Non-key `mip` strings, each reviewed. */
@@ -134,6 +129,8 @@ const VIEW_TRANSITION_NAMES = new Set(['mip-route-enter', 'mip-route-exit']);
 const WEB_LOCK_HEADS = new Set(['mip-genie-turn:']);
 /** components/ui/tooltipController.ts: the shared tooltip popup's DOM id, not a storage key. */
 const DOM_IDS = new Set(['mip-tooltip']);
+/** The build-written `<meta name>`s (responsive-10; lib/themePreference.ts, tenantAppearancePlugin.ts, theme-boot.js), not storage keys. */
+const META_NAMES = new Set(['mip-default-theme', 'mip-default-accent', 'mip-lender-mark', 'mip-lender-mark-lender']);
 
 const PRIVILEGED_CLASSES: ReadonlySet<KeyClass> = new Set([
   'PRIVATE_LOCAL',
@@ -296,7 +293,7 @@ function mipLiteral(node: ts.Node): string | null {
 }
 
 function isReviewedNonKey(node: ts.Node, text: string): boolean {
-  if (UC_NAME.test(text) || VIEW_TRANSITION_NAMES.has(text) || DOM_IDS.has(text) || text.endsWith('.csv')) return true;
+  if (UC_NAME.test(text) || VIEW_TRANSITION_NAMES.has(text) || DOM_IDS.has(text) || META_NAMES.has(text) || text.endsWith('.csv')) return true;
   if (!ts.isTemplateHead(node)) return false;
   if (WEB_LOCK_HEADS.has(text)) return true;
   const template = node.parent as ts.TemplateExpression;
@@ -456,10 +453,10 @@ describe('the storage registry (lib/actorScope)', () => {
     }
   });
 
-  it('(v) non-vacuity: every registered key but the pre-registered ones is found as a literal (at least 23)', () => {
+  it('(v) non-vacuity: every registered key but the pre-registered ones is found as a literal (at least 26)', () => {
     const expected = [...CLASSES.keys()].filter((key) => !(key in PREREGISTERED));
     expect(expected.filter((key) => !REAL.foundKeys.has(key)), 'registered keys no source spells').toEqual([]);
-    expect(expected.filter((key) => REAL.foundKeys.has(key)).length).toBeGreaterThanOrEqual(23);
+    expect(expected.filter((key) => REAL.foundKeys.has(key)).length).toBeGreaterThanOrEqual(26);
   });
 
   describe('(v) non-vacuity: injected sources each fail', () => {

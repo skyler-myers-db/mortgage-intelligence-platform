@@ -85,17 +85,22 @@ export interface RowPreviewApprovalGate {
  *   The reveal plays once per decision: after it has played, a collapse +
  *   re-expand renders the receipt finished (motion-06).
  * @param approvalGate The row's approval banner, or null when it must not show.
+ * @param offerSearch The Triage deck's verified campaign binding as a query
+ *   (`?campaign_id=&variant_name=`): Build offer carries it, so the offer is
+ *   built for that campaign. The deck lays the preview out by its own CSS.
  */
 export function RowPreview({
   lead,
   approval,
   decisionReceipt = null,
   approvalGate = null,
+  offerSearch,
 }: {
   lead: LeadSummary;
   approval?: string;
   decisionReceipt?: LeadDecisionReceipt | null;
   approvalGate?: RowPreviewApprovalGate | null;
+  offerSearch?: string;
 }) {
   const { setLastBorrowerId, saveLead, isLeadSaved, actorEmail } = useApp();
   const gateRef = useRef<HTMLDivElement | null>(null);
@@ -249,9 +254,10 @@ export function RowPreview({
             </Link>
             <Link
               className="btn btn--default btn--sm"
-              to={`/offer-orchestrator/${lead.borrower_id}`}
+              to={`/offer-orchestrator/${lead.borrower_id}${offerSearch ?? ''}`}
               state={queueLinkState}
               onClick={() => setLastBorrowerId(lead.borrower_id)}
+              data-testid={`lead-build-offer-${lead.borrower_id}`}
             >
               Build offer
             </Link>

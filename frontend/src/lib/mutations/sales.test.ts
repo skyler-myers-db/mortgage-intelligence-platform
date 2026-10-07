@@ -15,18 +15,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const postJson = vi.hoisted(() => vi.fn());
+const patchJson = vi.hoisted(() => vi.fn());
 
 vi.mock('../apiTransport', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../apiTransport')>();
-  return { ...actual, postJson };
+  return { ...actual, postJson, patchJson };
 });
 
 import {
   distributionStrategy,
   isSingleAssignment,
   salesMutationKeys,
+  useAdvanceAssignment,
   useAssignLeads,
   useLogDisposition,
+  useRecordAssignmentOutcome,
 } from './sales';
 
 const LO_A = 'lo.alpha@summit.example';
@@ -72,7 +75,18 @@ beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
   root = createRoot(document.getElementById('root') as HTMLElement);
   client = new QueryClient();
+  patchJson.mockImplementation(() => Promise.resolve({
+    assignment: { ...assignment('B-AAAAAAAAAAAA1', LO_A), status: 'contact_drafted' },
+    audit_event_id: 'audit-lifecycle-1',
+  }));
   postJson.mockImplementation((path: string, body: Record<string, unknown>) => {
+    if (path.endsWith('/outcome')) {
+      return Promise.resolve({
+        assignment: { ...assignment('B-AAAAAAAAAAAA1', LO_A), status: 'outcome_recorded' },
+        outcome: body.outcome,
+        feedback_id: 'fb-1',
+      });
+    }
     if (path.endsWith('/assign')) {
       return Promise.resolve({ assignment: assignment('B-AAAAAAAAAAAA1', String(body.assigned_to_email)), audit_event_id: 'audit-assign-1' });
     }
@@ -116,13 +130,50 @@ describe('distributionStrategy', () => {
 });
 
 describe('sales mutation keys', () => {
-  it('keys assign, distribute and disposition under the sales prefix', () => {
+  it('keys assign, distribute, disposition, lifecycle and outcome under the sales prefix', () => {
     expect(salesMutationKeys).toEqual({
       all: ['mip', 'sales'],
       assign: ['mip', 'sales', 'assign'],
       distribute: ['mip', 'sales', 'distribute'],
       disposition: ['mip', 'sales', 'disposition'],
+      lifecycle: ['mip', 'sales', 'lifecycle'],
+      outcome: ['mip', 'sales', 'outcome'],
     });
+  });
+});
+
+describe('lifecycle writes (audit states-09)', () => {
+  it('advances through PATCH and records an outcome through one POST, both keyed and pessimistic', async () => {
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const latest = mountHook(() => ({
+      advance: useAdvanceAssignment(client),
+      outcome: useRecordAssignmentOutcome(client),
+    }));
+    await act(async () => {
+      await latest().advance.mutateAsync({ assignmentId: 'asg-1', status: 'contact_drafted' });
+      await latest().outcome.mutateAsync({ assignmentId: 'asg-1', outcome: 'declined' });
+    });
+    expect(patchJson).toHaveBeenCalledTimes(1);
+    expect(String(patchJson.mock.calls[0][0])).toContain('asg-1');
+    expect(patchJson.mock.calls[0][1]).toEqual(expect.objectContaining({ status: 'contact_drafted' }));
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].path).toContain('asg-1');
+    expect(posts()[0].body).toEqual(expect.objectContaining({ outcome: 'declined' }));
+    const mutations = client.getMutationCache().getAll();
+    expect(mutations.map((mutation) => mutation.options.mutationKey)).toEqual([
+      salesMutationKeys.lifecycle,
+      salesMutationKeys.outcome,
+    ]);
+    for (const mutation of mutations) {
+      expect(mutation.options.networkMode).toBe('always');
+      expect(mutation.options.retry).toBe(false);
+      expect(mutation.options.onMutate, 'no optimistic write').toBeUndefined();
+    }
+    // invalidateOperationalQueries marks stale without a refetch.
+    expect(invalidate).toHaveBeenCalled();
+    for (const [filters] of invalidate.mock.calls) {
+      expect((filters as { refetchType?: string } | undefined)?.refetchType).toBe('none');
+    }
   });
 });
 

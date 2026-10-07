@@ -26,11 +26,12 @@ export function clearGenieConversationState({ notify = false }: { notify?: boole
 
 /**
  * The identity boundary resets every mounted Genie surface and the turn
- * store: on 'cleared' (another actor's data was removed) and, as the W5a
- * nobody bridge, on 'closed' (a trusted nobody after a real owner: a 401,
- * 403 or anonymous body). While closed the removals the reset triggers are
- * dropped by the gate, so the stored conversation survives for a same-actor
- * reopen, which re-reads it.
+ * store: on 'cleared' (another actor's data was removed) and, per
+ * D-identity-review-a2, on 'closed' (a trusted nobody after a real owner: a
+ * 401, 403 or anonymous body; or a held proven-change reset). While closed
+ * the removals the reset triggers are dropped by the gate, so the stored
+ * conversation survives for a same-actor reopen, which re-reads it (and
+ * lib/genieInFlightTurn re-arms its resume for the kept record).
  */
 subscribeActorScope(({ reason }) => {
   if (reason !== 'cleared' && reason !== 'closed') return;

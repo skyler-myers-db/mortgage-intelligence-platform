@@ -2,8 +2,7 @@
    prototype has none. System colours only. Forcing keeps the cascade's
    winner: a doubled class (.switch.switch) or !important must win it. */
 @media (forced-colors: active) {
-  /* Fill-only states vanished once forced. Text keeps its forced ink on
-     Chromium's Canvas backplate; HighlightText vanished there. */
+  /* Fill-only states vanished once forced, so they fill Highlight. */
   .segmented.segmented button.is-active,
   .switch.switch.on,
   .filter.is-active,
@@ -20,9 +19,31 @@
     background-color: Highlight;
     border-color: Highlight;
   }
-  /* An svg has no backplate. */
-  :is(.segmented button, .filter, .rail__item, .topbar__icon-btn, .drawer__tab, .proof-tab, .cmdk__row, .topbar__search-result, .layout-tabs button).is-active svg,
-  .filter-menu__item:is(.is-focused, .is-selected) svg { color: HighlightText !important; }
+  /* Firefox paints no Canvas backplate behind forced text, so a forced ink
+     sat straight on the Highlight fill (1.18:1). These states opt out of
+     forcing and paint the system pair themselves, HighlightText on the state
+     and on everything in it (text, counts, an svg, whose shapes inherit it
+     so a nested control's own glyph rule still wins); with forcing off,
+     Chromium draws no backplate either (where HighlightText used to vanish). */
+  .segmented.segmented button.is-active,
+  .filter.is-active,
+  .rail__item.is-active,
+  .topbar__icon-btn.is-active,
+  .drawer__tab.is-active,
+  .proof-tab.is-active,
+  .cmdk__row.is-active,
+  .filter-menu__item:is(.is-focused, .is-selected),
+  .topbar__search-result.is-active,
+  .layout-tabs.layout-tabs button.is-active { forced-color-adjust: none; }
+  :is(.segmented button, .filter, .rail__item, .topbar__icon-btn, .drawer__tab, .proof-tab, .cmdk__row, .topbar__search-result, .layout-tabs button).is-active,
+  :is(.segmented button, .filter, .rail__item, .topbar__icon-btn, .drawer__tab, .proof-tab, .cmdk__row, .topbar__search-result, .layout-tabs button).is-active *:not(svg *),
+  .filter-menu__item:is(.is-focused, .is-selected),
+  .filter-menu__item:is(.is-focused, .is-selected) *:not(svg *) { color: HighlightText !important; }
+  /* The current rail item's edge bar, in the system colour. */
+  .rail__item.is-active::before { background-color: Highlight; }
+  /* A nested control keeps forcing, so its hover / focus fill stays the
+     forced ButtonFace its ButtonText glyph is set for (routes/lead-queue.css). */
+  .filter.is-active .filter__remove { forced-color-adjust: auto; }
   /* The cursor's inset ring. */
   .filter-menu__item.is-focused { --focus-ring-color: HighlightText; }
   /* Route nav links (visual-05) carry their state in an underline, not a
@@ -69,6 +90,11 @@
     border: 1px solid CanvasText;
   }
   .map-label { forced-color-adjust: none; }
+  /* The lender mark's light plate is forced away; an edge keeps its box. */
+  .lender-mark {
+    background: Canvas;
+    border: 1px solid CanvasText;
+  }
   .topbar__pill .dot.dot {
     forced-color-adjust: none;
     background-color: CanvasText;

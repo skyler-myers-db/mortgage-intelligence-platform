@@ -3,8 +3,8 @@
  */
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_UNSAVED_MESSAGE, unsavedWorkMessage, useUnsavedGuard } from './useUnsavedGuard';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_UNSAVED_MESSAGE, clearUnsavedWork, unsavedWorkMessage, useUnsavedGuard } from './useUnsavedGuard';
 
 function Guarded({ dirty, message }: { dirty: boolean; message?: string }) {
   useUnsavedGuard(dirty, message);
@@ -84,5 +84,28 @@ describe('useUnsavedGuard (audit states-05)', () => {
     render(<Guarded dirty message="Filters not run and setup not saved." />);
     expect(unsavedWorkMessage()).toBe('Filters not run and setup not saved.');
     expect(unloadIsBlocked()).toBe(true);
+  });
+
+  it('clearUnsavedWork forgets every dirty page and takes the beforeunload listener off (an actor reset)', () => {
+    render(
+      <>
+        <Guarded dirty message="A is not saved." />
+        <Guarded dirty message="B is not saved." />
+      </>,
+    );
+    expect(unloadIsBlocked()).toBe(true);
+    const removed = vi.spyOn(window, 'removeEventListener');
+    try {
+      clearUnsavedWork();
+      expect(unsavedWorkMessage()).toBeNull();
+      expect(removed).toHaveBeenCalledWith('beforeunload', expect.any(Function));
+      expect(unloadIsBlocked(), 'no prompt can hold the reset').toBe(false);
+      // Idempotent, and the still-mounted pages' own cleanup is a no-op.
+      clearUnsavedWork();
+      render(null);
+      expect(unsavedWorkMessage()).toBeNull();
+    } finally {
+      removed.mockRestore();
+    }
   });
 });

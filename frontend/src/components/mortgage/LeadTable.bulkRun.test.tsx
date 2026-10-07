@@ -24,6 +24,7 @@ import type { LeadSummary } from '../../types';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const approve = vi.fn();
+const reject = vi.fn();
 const draftOutreach = vi.fn();
 
 vi.mock('../AppContext', () => ({
@@ -46,6 +47,7 @@ vi.mock('../AppContext', () => ({
 vi.mock('../../lib/api', () => ({
   api: {
     approve: (...args: unknown[]) => approve(...args),
+    reject: (...args: unknown[]) => reject(...args),
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
   },
   ApiError: class extends Error {},
@@ -75,6 +77,7 @@ function lead(borrowerId: string): LeadSummary {
     rate_spread_bps: 120,
     opportunity_score: 88,
     confidence: 80,
+    recommended_offer_code: 'refi',
     recommended_offer: 'Refinance',
     evidence_ids: ['ev-1'],
     approval_status: 'pending',
@@ -208,6 +211,58 @@ describe('LeadTable bulk run', () => {
     expect(q<HTMLInputElement>('.bulk-actions__rationale input')!.value, 'with its rationale').toBe('Q3 retention sweep');
     expect(q('.bulk-actions__label')?.textContent).toBe('9 leads selected');
     expect(q('[data-testid="lead-bulk-result"]')?.textContent).toContain('0 of 9 approved, 1 failed, 8 not started. Nothing else was sent.');
+  });
+
+  it('the canary line retires for good on a selection change (W5a ruling R2)', async () => {
+    approve.mockImplementationOnce(() => Promise.reject(new Error('bulk_rationale failed the governed text policy')));
+    await startApproveRun();
+    await flush(5);
+    expect(q('[data-testid="lead-bulk-canary"]'), 'shown on its own gate and selection').not.toBeNull();
+
+    // Deselect the refused row: the line is about a run this selection never started.
+    act(() => q<HTMLInputElement>(`[data-testid="lead-select-${IDS[0]}"]`)!.click());
+    await flush();
+    expect(q('.bulk-actions__label')?.textContent).toBe('8 leads selected');
+    expect(q('[data-testid="lead-bulk-canary"]'), 'a selection change hides it').toBeNull();
+    // Selecting the row again does not bring it back.
+    act(() => q<HTMLInputElement>(`[data-testid="lead-select-${IDS[0]}"]`)!.click());
+    await flush();
+    expect(q('.bulk-actions__label')?.textContent).toBe('9 leads selected');
+    expect(q('[data-testid="lead-bulk-canary"]'), 'hidden for good').toBeNull();
+  });
+
+  it('a reject run\'s canary shows on the reject gate only, never on the approve gate', async () => {
+    reject.mockImplementationOnce(() => Promise.reject(new Error('reject refused by policy')));
+    reject.mockImplementation(() => Promise.resolve({ rejected: true, audit_event_id: 'audit-reject' }));
+    act(() => q<HTMLInputElement>('[data-testid="lead-select-all"]')!.click());
+    act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-reject"]')!.click());
+    await vi.waitFor(async () => {
+      await flush(1);
+      expect(q('[data-testid="lead-bulk-reject-gate"]')).not.toBeNull();
+    }, { timeout: 15_000 });
+    const reason = q<HTMLSelectElement>('[data-testid="lead-bulk-reject-reason"]')!;
+    act(() => {
+      reason.value = reason.options[1].value;
+      reason.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const note = q<HTMLTextAreaElement>('[data-testid="lead-bulk-reject-note"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(note, 'Out of footprint for this sweep');
+      note.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-reject-confirm"]')!.click());
+    await flush(5);
+
+    expect(reject, 'the canary goes alone and is refused').toHaveBeenCalledTimes(1);
+    expect(q('[data-testid="lead-bulk-reject-gate"]'), 'the reject gate reopened').not.toBeNull();
+    expect(q('[data-testid="lead-bulk-canary"]')?.textContent).toContain(`${IDS[0]} was refused`);
+
+    // The approve gate opens on the same selection: the reject run's line is not its.
+    act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-approve"]')!.click());
+    await flush();
+    expect(q('.bulk-actions__rationale input'), 'the approve gate is open').not.toBeNull();
+    expect(q('[data-testid="lead-bulk-canary"]'), 'never on the approve gate').toBeNull();
   });
 
   it('Stop leaves the rest unsent and selected; the report lists them and stays until dismissed', async () => {

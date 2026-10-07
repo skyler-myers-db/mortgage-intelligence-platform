@@ -67,10 +67,18 @@ def test_admin_rejects_non_admin_group(client: TestClient) -> None:
 
 @pytest.mark.parametrize(
     "path",
-    ["/api/audit/events", "/api/audit/events/page", "/api/audit/rollups"],
+    [
+        "/api/audit/events",
+        "/api/audit/events/page",
+        "/api/audit/rollups",
+        "/api/audit/count",
+        "/api/audit/facets",
+    ],
 )
 def test_audit_reads_reject_non_admin_group(client: TestClient, path: str) -> None:
-    """The relocated audit explorer is protected at its own API boundary."""
+    """The audit ledger is protected at its own API boundary: a caller that is
+    neither an administrator nor a configured auditor (D-audit-reads-c3) gets
+    the shared 403 on every one of the five ledger reads."""
 
     response = client.get(
         path,
@@ -99,14 +107,16 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
 
     assert admitted.status_code == 200
     assert admitted.json() == {
-        "can_access_admin": True, "can_approve": True, "actor_email": None,
+        "can_access_admin": True, "can_approve": True, "can_read_audit": True,
+        "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "actor_cache_key": None,
     }
     assert denied.status_code == 200
     assert denied.json() == {
-        "can_access_admin": False, "can_approve": False, "actor_email": None,
+        "can_access_admin": False, "can_approve": False, "can_read_audit": False,
+        "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": [],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "actor_cache_key": None,
@@ -131,6 +141,8 @@ def test_session_and_admin_gate_share_email_allowlist_rule(
     assert session.json() == {
         "can_access_admin": True,
         "can_approve": True,
+        "can_read_audit": True,
+        "presenter_mode": False,
         "actor_email": "operator@example.com",
         "actor_display_name": "operator",
         "role_labels": ["Administrator", "Approver"],
@@ -266,7 +278,8 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "/api/v1/session", headers={"X-Forwarded-Groups": "mip-admin"}
     )
     assert session_denied.json() == {
-        "can_access_admin": False, "can_approve": False, "actor_email": None,
+        "can_access_admin": False, "can_approve": False, "can_read_audit": False,
+        "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": [],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "actor_cache_key": None,
@@ -282,7 +295,8 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "/api/v1/session", headers={"X-Forwarded-Groups": "mip-admin"}
     )
     assert session_admitted.json() == {
-        "can_access_admin": True, "can_approve": True, "actor_email": None,
+        "can_access_admin": True, "can_approve": True, "can_read_audit": True,
+        "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "actor_cache_key": None,

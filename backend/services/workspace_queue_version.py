@@ -6,7 +6,7 @@ version moves; it never re-reads ``/api/leads`` by itself (that read writes a
 ``VIEW_LEADS`` audit row).
 
 What it reads: ONE Lakebase SELECT, one aggregate pass per table, over the
-human-decision ledgers only (``mip_app`` schema, never Unity Catalog):
+six ledgers behind a Lead Queue row (``mip_app`` schema, never Unity Catalog):
 
 * ``mip_app.approvals``        count, max(decided_at)
 * ``mip_app.lead_assignments`` count, max(greatest(assigned_at, released_at,
@@ -14,10 +14,17 @@ human-decision ledgers only (``mip_app`` schema, never Unity Catalog):
 * ``mip_app.call_dispositions`` count, max(created_at)
 * ``mip_app.feedback`` rows WITH an assignment_id (loan-officer outcomes)
   count, max(recorded_at)
+* ``mip_app.activation_outbox`` count, max(updated_at): outreach delivery
+  status (states-09), which reaches the queue through the lifecycle sync
+* ``mip_app.lead_outcomes``    count, max(created_at): CRM-imported outcomes
 
 Counts catch a delete that leaves the maximum unchanged. The version is
-``sha256("mip.queue-version.v1|" + the eight values)[:32]``: opaque, no row,
-no count, no borrower id and no actor leaves the service.
+``sha256("mip.queue-version.v2|" + the twelve values)[:32]``: opaque, no row,
+no count, no borrower id and no actor leaves the service. The v1 -> v2 prefix
+change (W5b) moves every version once, so each open Lead Queue shows one
+"Queue updated" pill after the deploy that ships it. Approval-request tables
+are deliberately not folded in: a request is not a queue change, and
+requests send no notifications.
 
 What it deliberately is not:
 
@@ -25,14 +32,10 @@ What it deliberately is not:
   borrower data.
 * It is global, not tenant-scoped: this is a single-tenant deploy and these
   tables carry no tenant column.
-* Documented gaps: outreach delivery status (activation outbox) and
-  CRM-imported ``lead_outcomes`` reach the queue through the lifecycle sync
-  job, not these ledgers, so they do not move the version.
 
-Cost: four aggregate scans per 30 s per worker (process-local TTL cache,
-never serving a stale value after an error). ``approvals`` has no
-``decided_at`` index today; acceptable at Module 0 volume, and an index is a
-later Lakebase-migration candidate.
+Cost: six aggregate scans per 30 s per worker (process-local TTL cache,
+never serving a stale value after an error); ``approvals.decided_at`` is
+indexed (idx_approvals_decided_at, migration 2026_10_01_approval_requests).
 """
 
 from __future__ import annotations
@@ -55,7 +58,7 @@ logger = logging.getLogger(__name__)
 # be answered from a fill that predates the write, on any worker.
 QUEUE_VERSION_TTL_S = 30.0
 _CACHE_KEY = "mip.queue-version"
-_VERSION_PREFIX = "mip.queue-version.v1|"
+_VERSION_PREFIX = "mip.queue-version.v2|"
 
 QUEUE_VERSION_SQL = """
 WITH approvals AS (
@@ -74,6 +77,14 @@ outcomes AS (
     SELECT COUNT(*) AS n, MAX(recorded_at) AS latest
     FROM mip_app.feedback
     WHERE assignment_id IS NOT NULL
+),
+deliveries AS (
+    SELECT COUNT(*) AS n, MAX(updated_at) AS latest
+    FROM mip_app.activation_outbox
+),
+crm_outcomes AS (
+    SELECT COUNT(*) AS n, MAX(created_at) AS latest
+    FROM mip_app.lead_outcomes
 )
 SELECT
     approvals.n AS approvals_count,
@@ -83,8 +94,12 @@ SELECT
     dispositions.n AS dispositions_count,
     dispositions.latest AS dispositions_latest,
     outcomes.n AS outcomes_count,
-    outcomes.latest AS outcomes_latest
-FROM approvals, assignments, dispositions, outcomes
+    outcomes.latest AS outcomes_latest,
+    deliveries.n AS deliveries_count,
+    deliveries.latest AS deliveries_latest,
+    crm_outcomes.n AS crm_outcomes_count,
+    crm_outcomes.latest AS crm_outcomes_latest
+FROM approvals, assignments, dispositions, outcomes, deliveries, crm_outcomes
 """
 
 VERSION_INPUTS = (
@@ -96,6 +111,10 @@ VERSION_INPUTS = (
     "dispositions_latest",
     "outcomes_count",
     "outcomes_latest",
+    "deliveries_count",
+    "deliveries_latest",
+    "crm_outcomes_count",
+    "crm_outcomes_latest",
 )
 
 

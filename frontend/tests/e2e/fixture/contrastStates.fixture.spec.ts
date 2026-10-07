@@ -235,7 +235,7 @@ const TEXT_INPUTS: readonly TextInputCase[] = [
     // flow-04 / tables-10 explorer rewrite (the old `.admin-filter-input`
     // class is gone), so this pins the ring on the admin surface itself.
     name: 'admin audit filter .form-input',
-    route: '/admin-config',
+    route: '/audit-ledger',
     locate: async (_app, page) => page.locator('#main-content form[aria-label="Audit filters"] .form-input').first(),
   },
 ];

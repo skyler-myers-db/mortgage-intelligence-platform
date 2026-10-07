@@ -8,6 +8,7 @@
  * token) fails here even when the source-level gates pass.
  */
 import { PRIMARY_BORROWER } from './data/borrowers';
+import { SESSION } from './data/shell';
 import { asComputedRgb, contrastRatio, parseRgb, renderedColors, tokenValue } from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
@@ -104,11 +105,13 @@ for (const theme of THEMES) {
 }
 
 for (const theme of THEMES) {
-  test(`${theme}: the offer prototype's "Not a live offer" banner paints the warning ink at AA (responsive-02)`, async ({ app, page }) => {
+  test(`${theme}: the offer prototype's "Not a live offer" banner paints the warning ink at AA (responsive-02)`, async ({ app, mockApi, page }) => {
     // The compliance disclaimer on the borrower-offer prototype was 1.29:1 in
     // the light theme (register responsive-02). It paints
     // --status-warning-ink on its own --status-warning-soft tint, so read it
     // rendered, composited over what is really behind the banner.
+    // The prototype is a demo affordance: presenter mode only (D-shell-deviations-e1).
+    mockApi.register('GET', '/api/session', () => ({ body: { ...SESSION, presenter_mode: true } }));
     await app.setTheme(theme);
     await app.gotoRoute(`/offer-orchestrator/${PRIMARY_BORROWER.borrower_id}`);
     await page.getByTestId('preview-borrower-offer').click();

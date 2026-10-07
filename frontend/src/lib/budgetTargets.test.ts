@@ -116,7 +116,7 @@ describe('frontend budget targets (quality-08)', () => {
 
   it('the committed targets file names exactly the gate\'s route keys, every target null', () => {
     const committed = JSON.parse(readFileSync(`${FRONTEND}../tools/frontend_budget_targets.json`, 'utf8') as string) as TargetsFile;
-    const source = readFileSync(`${FRONTEND}../tools/check_frontend_budgets.mjs`, 'utf8') as string;
+    const source = readFileSync(`${FRONTEND}../tools/frontend_budget_gates.mjs`, 'utf8') as string;
     const block = source.slice(source.indexOf('  routes: {'), source.indexOf('\n  },', source.indexOf('  routes: {')));
     const gateRoutes = [...block.matchAll(/^\s+'(src\/routes\/[^']+)':/gm)].map((match) => match[1]).sort();
     expect(gateRoutes.length, 'non-vacuity: the gate lists route budgets').toBeGreaterThan(10);

@@ -1,9 +1,9 @@
 {
   "_policy": [
-    "Absolute frontend budget TARGETS (audit quality-08), KiB brotli q11. The gates in tools/check_frontend_budgets.mjs are a change detector (measured + ~5%); a target here is the destination.",
+    "Absolute frontend budget TARGETS (audit quality-08), KiB brotli q11. The gates in tools/frontend_budget_gates.mjs (enforced by tools/check_frontend_budgets.mjs) are a change detector (measured + ~5%); a target here is the destination.",
     "targetKiB null means no target yet. Only the budget owner (the integrator) sets a number, from measured actuals; a lane never does.",
     "A dimension over its target fails unless it carries an unexpired waiver {until: YYYY-MM-DD, finding, owner, reason}. An expired waiver fails, and a waiver on a dimension back under its target fails as stale: waivers only shrink.",
-    "targets.routes lists exactly the budgets.routes keys of check_frontend_budgets.mjs; a missing or extra key fails."
+    "targets.routes lists exactly the budgets.routes keys of frontend_budget_gates.mjs; a missing or extra key fails."
   ],
   "targets": {
     "initialJsBr": {
@@ -43,6 +43,16 @@
         "waiver": null
       },
       "src/routes/asset.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
+      "src/routes/audit-ledger.access-denied.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
+      "src/routes/audit-ledger.tsx": {
         "targetKiB": null,
         "finding": "quality-08",
         "waiver": null

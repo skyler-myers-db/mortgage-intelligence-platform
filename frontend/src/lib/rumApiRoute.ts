@@ -17,7 +17,8 @@
 
 export const API_ROUTE_SEGMENTS = [
   'actions', 'activation', 'admin', 'agent', 'aging', 'analytics', 'approve',
-  'assets', 'assign', 'assignment', 'assignment-overlay', 'assignments', 'audit',
+  'approval-requests',
+  'assets', 'assign', 'assignment', 'assignment-overlay', 'assignments', 'attribution', 'audit',
   'borrowers', 'campaign-performance', 'campaign-recommendation', 'campaigns',
   'cancel',
   'capabilities', 'combinations', 'complete', 'compose', 'config', 'conversion', 'count', 'county-rollups',
@@ -34,11 +35,13 @@ export const API_ROUTE_SEGMENTS = [
   'queue-version',
   'receipt',
   'recommend', 'refusal-report', 'reject', 'rollups', 'rules', 'rum', 'run',
+  'revoke',
   'runs',
   'saved-views',
   'run-due', 'run-due-all', 'sales', 'search', 'segments', 'session', 'sessions',
-  'settings', 'signals', 'sources', 'stage', 'standup', 'start', 'state-rollups',
+  'settings', 'signals', 'sources', 'sse-probe', 'stage', 'standup', 'start', 'state-rollups',
   'status', 'submit', 'summary', 'team', 'telemetry', 'workflows', 'workspace',
+  'withdraw',
   'zip-rollups',
 ] as const;
 

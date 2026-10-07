@@ -128,6 +128,10 @@ function textPairs(): Pair[] {
   // Skip link: the same pair (it used --bg-1 text on --accent: light + bright
   // 1.91:1, light + teal 1.57:1, dark + navy 2.06:1).
   pairs.push({ finding: 'a11y-01 skip link', fg: '--accent-contrast', bg: '--accent-fill', min: AA_TEXT });
+  // Success CTA (.btn--success, the Growth Agent run card): white on the
+  // prototype's dark #10B981 read 2.54:1 (deviation:success-cta-fill).
+  pairs.push({ finding: 'a11y-01 success CTA', fg: '--text-on-solid', bg: '--success-fill', min: AA_TEXT });
+  pairs.push({ finding: 'a11y-01 success CTA', fg: '--text-on-solid', bg: '--success-fill-hover', min: AA_TEXT });
   return pairs;
 }
 

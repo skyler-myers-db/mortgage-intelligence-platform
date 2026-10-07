@@ -11,6 +11,7 @@ import type { ActivationSummary } from '../../types';
 
 const apiMocks = vi.hoisted(() => ({
   activationSummary: vi.fn(),
+  session: vi.fn(),
 }));
 
 vi.mock('../../lib/api', async () => {
@@ -20,6 +21,7 @@ vi.mock('../../lib/api', async () => {
     api: {
       ...actual.api,
       activationSummary: apiMocks.activationSummary,
+      session: apiMocks.session,
     },
   };
 });
@@ -38,6 +40,25 @@ async function settle(): Promise<void> {
 }
 
 describe('buyerReadinessItems', () => {
+  it('reports presenter mode: off is customer mode, on names the visible demo affordances', () => {
+    const off = itemByLabel(buyerReadinessItems(null, []), 'Presenter mode');
+    expect(off).toEqual({
+      label: 'Presenter mode',
+      value: 'Off',
+      status: 'customer mode',
+      tone: 'success',
+      detail: 'The PROTOTYPE borrower view is hidden.',
+    });
+
+    const on = itemByLabel(buyerReadinessItems(null, [], false, false, false, false, true), 'Presenter mode');
+    expect(on.value).toBe('On');
+    expect(on.status).toBe('demo affordances visible');
+    expect(on.tone).toBe('warning');
+    expect(on.detail).toBe(
+      'Roadmap rail slots and the PROTOTYPE borrower view are visible to every user. Demo workspaces only.',
+    );
+  });
+
   it('keeps CRM delivery claims gated when Salesforce is not configured', () => {
     const activation: ActivationSummary = {
       destinations: [
@@ -101,7 +122,7 @@ describe('buyerReadinessItems', () => {
 
     expect(crm.value).toBe('Connected destination');
     expect(crm.status).toBe('connected');
-    expect(crm.detail).toContain('claim delivery only when Activation / outreach shows delivered rows');
+    expect(crm.detail).toContain('delivery is confirmed only where Activation / outreach shows delivered rows');
     expect(activationItem.value).toBe('1 delivered row');
     expect(activationItem.status).toBe('delivery observed');
   });
@@ -166,7 +187,7 @@ describe('buyerReadinessItems', () => {
 
     expect(crm.value).toBe('Unknown');
     expect(crm.status).toBe('registry unavailable');
-    expect(crm.detail).toContain('Do not claim live CRM');
+    expect(crm.detail).toBe('Destination registry unavailable; CRM/Salesforce delivery is unverified until it responds.');
     expect(activationItem.value).toBe('Unknown');
     expect(activationItem.status).toBe('unverified');
   });
@@ -178,7 +199,7 @@ describe('buyerReadinessItems', () => {
 
     expect(crm.value).toBe('Checking');
     expect(crm.status).toBe('probing registry');
-    expect(crm.detail).toContain('Delivery claims stay unverified');
+    expect(crm.detail).toBe('Reading destinations; delivery is unverified until they load.');
     expect(activationItem.value).toBe('Checking');
     expect(activationItem.status).toBe('probing outbox');
   });
@@ -187,11 +208,21 @@ describe('buyerReadinessItems', () => {
     const items = buyerReadinessItems(null, []);
 
     expect(itemByLabel(items, 'Scoring / recommendations').status).toBe('not trained ML');
-    expect(itemByLabel(items, 'Scoring / recommendations').detail).toContain('Do not call them a trained MIP ML model');
+    expect(itemByLabel(items, 'Scoring / recommendations').detail).toBe(
+      'Governed SQL and Python rules plus Cotality propensity; not a trained machine-learning model.',
+    );
     expect(itemByLabel(items, 'Custom segments').status).toBe('configured only');
-    expect(itemByLabel(items, 'Custom segments').detail).toContain('Do not claim arbitrary named segment authoring');
-    expect(itemByLabel(items, 'Compliance posture').status).toBe('no certification claim');
-    expect(itemByLabel(items, 'Audit coverage').detail).toContain('Do not claim every click');
+    expect(itemByLabel(items, 'Custom segments').detail).toContain(
+      'arbitrary segment authoring is available only when a customer segment is configured',
+    );
+    expect(itemByLabel(items, 'Compliance posture').status).toBe('no certification');
+    expect(itemByLabel(items, 'Compliance posture').detail).toContain('No third-party certification such as HITRUST is claimed.');
+    // The coverage line names what is audited, borrower-level reads included,
+    // and what is not (D-shell-deviations-e1's corrected sentence).
+    const coverage = itemByLabel(items, 'Audit coverage');
+    expect(coverage.status).toBe('decisions and borrower reads audited');
+    expect(coverage.detail).toContain('borrower-level reads');
+    expect(coverage.detail).toMatch(/Not audited: navigation and aggregate dashboards\.$/);
   });
 });
 
@@ -229,12 +260,31 @@ describe('BuyerReadinessPanel', () => {
     });
   }
 
+  it.each([
+    [false, 'Off', 'customer mode'],
+    [true, 'On', 'demo affordances visible'],
+  ])('renders the Presenter mode row from the session (presenter_mode %s)', async (presenter, value, status) => {
+    apiMocks.activationSummary.mockImplementation(() => new Promise(() => undefined));
+    apiMocks.session.mockResolvedValue({ can_access_admin: true, can_approve: true, presenter_mode: presenter });
+
+    await renderPanel();
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+
+    const row = [...document.querySelectorAll('.admin-rollup--readiness')]
+      .find((candidate) => candidate.querySelector('.admin-rollup__label')?.textContent === 'Presenter mode');
+    expect(row?.querySelector('strong')?.textContent).toBe(value);
+    expect(row?.querySelector('.chip')?.textContent).toBe(status);
+  });
+
   it('renders loading claim boundaries before the activation registry resolves', async () => {
     apiMocks.activationSummary.mockImplementation(() => new Promise(() => undefined));
 
     await renderPanel();
 
-    expect(document.body.textContent).toContain('Buyer readiness');
+    expect(document.body.textContent).toContain('Deployment readiness');
+    expect(document.body.textContent).not.toContain('Buyer readiness');
     expect(document.body.textContent).toContain('Checking');
     expect(document.body.textContent).toContain('probing registry');
     expect(document.body.textContent).not.toContain('No destination registry');
@@ -247,7 +297,7 @@ describe('BuyerReadinessPanel', () => {
     await settle();
 
     expect(document.body.textContent).toContain('activation unknown');
-    expect(document.body.textContent).toContain('Activation status unavailable; connector claims are unverified.');
+    expect(document.body.textContent).toContain('Activation status unavailable; connector delivery is unverified.');
     expect(document.body.textContent).toContain('registry unavailable');
     expect(document.body.textContent).not.toContain('No destination registry');
   });

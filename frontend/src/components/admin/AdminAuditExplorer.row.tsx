@@ -41,8 +41,8 @@ const loadReceiptModule = (): Promise<ReceiptModule> => import('../mortgage/Deci
  * AdminAuditExplorer.receipt.test.tsx pins this mirror to
  * DecisionReceipt.copy's DECISION_RECEIPT_EVENT_TYPES / ACTIONS.
  */
-export const DECISION_RECEIPT_TYPES: readonly string[] = ['APPROVE', 'OUTREACH_APPROVE', 'OUTREACH_REJECT', 'REJECT', 'OUTREACH_HOLD', 'HOLD'];
-export const DECISION_RECEIPT_ACTION_NAMES: readonly string[] = ['outreach.approve', 'outreach.reject', 'outreach.hold'];
+export const DECISION_RECEIPT_TYPES: readonly string[] = ['APPROVE', 'OUTREACH_APPROVE', 'OUTREACH_REJECT', 'REJECT', 'OUTREACH_REVOKE', 'OUTREACH_HOLD', 'HOLD'];
+export const DECISION_RECEIPT_ACTION_NAMES: readonly string[] = ['outreach.approve', 'outreach.reject', 'outreach.revoke', 'outreach.hold'];
 
 function isDecisionRow(event: AuditEventRow): boolean {
   return DECISION_RECEIPT_TYPES.includes((event.event_type ?? '').trim().toUpperCase())

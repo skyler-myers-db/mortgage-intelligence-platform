@@ -81,7 +81,7 @@ describe('AdminAuditExplorer receipt deep link', () => {
   function render() {
     act(() => {
       root.render(
-        <MemoryRouter initialEntries={[`/admin-config?audit_event_id=${PINNED_ID}#audit`]}>
+        <MemoryRouter initialEntries={[`/audit-ledger?audit_event_id=${PINNED_ID}#audit`]}>
           <AdminAuditExplorer />
           <LocationProbe />
         </MemoryRouter>,
@@ -122,7 +122,7 @@ describe('AdminAuditExplorer receipt deep link', () => {
 
       act(() => dropPin[control]());
 
-      expect(location()).toBe('/admin-config#audit');
+      expect(location()).toBe('/audit-ledger#audit');
       expect(keyMentions(lastExplorerKey(), PINNED_ID)).toBe(false);
       // The same row comes back unpinned, collapsed like after Clear.
       const toggle = button(new RegExp(`^(Expand|Collapse) audit event ${PINNED_ID}$`));
@@ -140,7 +140,7 @@ describe('AdminAuditExplorer receipt deep link', () => {
 
       act(() => dropPin[control]());
 
-      expect(location()).toBe('/admin-config#audit');
+      expect(location()).toBe('/audit-ledger#audit');
       const key = lastExplorerKey()!;
       expect(key).not.toContain('cursor-page-2');
       expect(key[key.length - 1]).toBeNull();

@@ -11,6 +11,9 @@ import type { DecisionReceipt as DecisionReceiptPayload } from '../../lib/apiTyp
 
 const apiMocks = vi.hoisted(() => ({
   auditReceipt: vi.fn(),
+  // DecisionReceipt reads the shared session (useAuditLedgerAccess); an
+  // unmocked read rejected on every mount (reviewer note, fix round 2).
+  session: vi.fn(),
 }));
 
 vi.mock('../../lib/api', () => {
@@ -41,7 +44,8 @@ vi.mock('../AppContext', () => ({
 }));
 
 import { ApiError } from '../../lib/api';
-import { DecisionReceipt, auditExplorerHref } from './DecisionReceipt';
+import { auditEventHref } from '../../lib/auditLinks';
+import { DecisionReceipt } from './DecisionReceipt';
 import { PRINT_HOST_CLASS } from './DecisionReceipt.actions';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -91,6 +95,15 @@ describe('DecisionReceipt', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     appMocks.canAccessAdmin = true;
+    // The session agrees with AppContext's admin flag unless a case says otherwise.
+    apiMocks.session.mockImplementation(() =>
+      Promise.resolve({
+        can_access_admin: appMocks.canAccessAdmin,
+        can_approve: appMocks.canAccessAdmin,
+        can_read_audit: false,
+        presenter_mode: false,
+      }),
+    );
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -121,6 +134,11 @@ describe('DecisionReceipt', () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
+  }
+
+  /** settle() until `ready` holds (at most about a second): no fixed window under load. */
+  async function settleUntil(ready: () => boolean) {
+    for (let attempt = 0; attempt < 50 && !ready(); attempt += 1) await settle();
   }
 
   const receipt = () => container.querySelector<HTMLElement>('[data-testid="decision-receipt"]');
@@ -177,8 +195,8 @@ describe('DecisionReceipt', () => {
     expect(card.textContent).toContain('evidence ev-1 · ev-2');
     expect(card.querySelector('[data-testid="decision-receipt-score"]')?.textContent).toContain('91');
     const link = card.querySelector<HTMLAnchorElement>('[data-testid="decision-receipt-explorer-link"]')!;
-    expect(link.getAttribute('href')).toBe(auditExplorerHref(AUDIT_ID));
-    expect(link.getAttribute('href')).toContain(`audit_event_id=${AUDIT_ID}`);
+    expect(link.getAttribute('href')).toBe(auditEventHref(AUDIT_ID));
+    expect(link.getAttribute('href')).toBe(`/audit-ledger?audit_event_id=${AUDIT_ID}#audit`);
   });
 
   it('states how the copy was reviewed: one review line per mode, and none when nothing was recorded (flow-03)', async () => {
@@ -199,7 +217,7 @@ describe('DecisionReceipt', () => {
       act(() => root.unmount());
       root = createRoot(container);
       mount();
-      await settle();
+      await settleUntil(() => receipt() !== null);
       expect(receipt(), JSON.stringify(overrides)).not.toBeNull();
       expect(field('review'), JSON.stringify(overrides)).toBe(expected);
     }
@@ -232,6 +250,22 @@ describe('DecisionReceipt', () => {
     expect(receipt()!.classList.contains('decision-receipt--reveal')).toBe(false);
     expect(announcement()!.textContent).toBe(`Decision receipt: Approved, audit event ${AUDIT_ID}`);
     expect(onRevealed).toHaveBeenCalledTimes(1);
+  });
+
+  it('links a read-only auditor to the audit ledger, by the session decision the ledger gate makes (D-audit-reads-c3)', async () => {
+    appMocks.canAccessAdmin = false;
+    apiMocks.session.mockResolvedValue({
+      can_access_admin: false,
+      can_approve: false,
+      can_read_audit: true,
+      presenter_mode: false,
+    });
+    apiMocks.auditReceipt.mockResolvedValue(LEDGER);
+    mount();
+    await settle();
+
+    const link = receipt()!.querySelector<HTMLAnchorElement>('[data-testid="decision-receipt-explorer-link"]');
+    expect(link?.getAttribute('href')).toBe(`/audit-ledger?audit_event_id=${AUDIT_ID}#audit`);
   });
 
   it('renders the finished receipt without the reveal for a durable decision and hides the explorer link from non-admins', async () => {

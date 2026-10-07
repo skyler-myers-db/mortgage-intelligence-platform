@@ -14,7 +14,8 @@ interface ConfidenceMeterProps {
 }
 
 export function ConfidenceMeter({ value, compact }: ConfidenceMeterProps) {
-  const { showConfidence } = useApp();
+  // Keyed read (runtime-05): only the Console toggle re-renders the meter.
+  const { showConfidence } = useApp('showConfidence');
   if (!showConfidence) return null;
   const filled = Math.max(0, Math.min(5, Math.round(value / 20)));
   const tier = value >= 80 ? 'high' : value >= 60 ? 'med' : 'low';

@@ -102,9 +102,40 @@ describe('buildMapTableRows (d2 step 0 characterization)', () => {
   });
 
   it('carries the scenario count in the extra column in rate mode', () => {
-    const shownScenario: MapScenarioView = { step: -50, ratePct: 5.8, inTheMoneyById: { az: 12, ca: 40 }, total: 52 };
+    const shownScenario: MapScenarioView = {
+      step: -50, ratePct: 5.8, inTheMoneyById: { az: 12, ca: 40 }, total: 52, todayById: null, changeById: null, contactableById: null, totalChange: null,
+    };
     const { rows } = buildMapTableRows(inputs({ shownScenario, scale: buildChoroplethScale([12, 40]) }));
     expect(rows.map((row) => [row.id, row.extra])).toEqual([['az', 12], ['ca', 40]]);
+  });
+
+  // wow-stage-1: change versus today and the contactable subset at the step ride on every state row.
+  it('carries change versus today and the contactable subset on drawn, not-drawn and empty rows', () => {
+    const shownScenario: MapScenarioView = {
+      step: -50,
+      ratePct: 5.8,
+      inTheMoneyById: { az: 12, ca: 40, vi: 7, wy: 0 },
+      total: 59,
+      todayById: { az: 10, ca: 30, vi: 6, wy: 0 },
+      changeById: { az: 2, ca: 10, vi: 1, wy: 0 },
+      contactableById: { az: 3, ca: null, vi: null, wy: 0 },
+      totalChange: 13,
+    };
+    const { rows, offMap, empty } = buildMapTableRows(inputs({ shownScenario, scale: buildChoroplethScale([12, 40]) }));
+    expect(rows.map((row) => [row.id, row.extra, row.change, row.scenarioContactable])).toEqual([
+      ['az', 12, 2, 3],
+      ['ca', 40, 10, null],
+    ]);
+    expect(offMap.map((row) => [row.id, row.change, row.scenarioContactable])).toEqual([['vi', 1, null]]);
+    expect(empty.map((row) => [row.id, row.change, row.scenarioContactable])).toEqual([['wy', 0, 0]]);
+    // Every grid id lands in exactly one group, so the groups sum to the whole-book change.
+    expect([...rows, ...offMap, ...empty].reduce((sum, row) => sum + (row.change ?? 0), 0)).toBe(shownScenario.totalChange);
+  });
+
+  it('leaves the scenario cells off outside rate mode', () => {
+    const { rows } = buildMapTableRows(inputs());
+    expect(rows[0]).not.toHaveProperty('change');
+    expect(rows[0]).not.toHaveProperty('scenarioContactable');
   });
 
   it('gives a state row a drill button in filter mode only, and it drills with focus', () => {
@@ -141,7 +172,9 @@ describe('buildMapTableRows (d2 step 0 characterization)', () => {
     expect(offMapCaption(borrowers, 'count')).toBe('Includes 300 in PR (not drawn on the map)');
 
     // Rate mode adds the grid's ids; unattended mode the overlay units'.
-    const shownScenario: MapScenarioView = { step: 0, ratePct: 6.3, inTheMoneyById: { az: 1, vi: 7 }, total: 8 };
+    const shownScenario: MapScenarioView = {
+      step: 0, ratePct: 6.3, inTheMoneyById: { az: 1, vi: 7 }, total: 8, todayById: null, changeById: null, contactableById: null, totalChange: null,
+    };
     const rate = buildMapTableRows(inputs({ stateFacts: facts, shownScenario })).offMap;
     expect(rate.map((row) => [row.name, row.count, row.extra])).toEqual([['PR', 300, null], ['VI', null, 7]]);
     expect(offMapCaption(rate, 'extra')).toBe('Includes 7 in PR, VI (not drawn on the map)');

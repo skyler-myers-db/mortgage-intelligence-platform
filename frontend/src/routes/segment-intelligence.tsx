@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { api, type SegmentFilterMode } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
@@ -16,6 +16,8 @@ import { Icon } from '../components/Icon';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { AsyncStatus } from '../components/ui/AsyncState';
 import { FetchedAt } from '../components/ui/FetchedAt';
+import { LazyStaleDataNote } from '../components/ui/StaleDataNote.lazy';
+import type { Fresh } from '../lib/apiClients/headers';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
@@ -160,9 +162,10 @@ export default function SegmentIntelligence() {
     segmentMode: segmentCardMode,
   } = segmentCardQuerySelection(activeSegs, segmentMode);
 
-  const segmentsQuery = useWarmingUpRetry<SegmentSummary[]>(
+  // delivery-06: the catalog read carries the age of a retained value.
+  const segmentsQuery = useWarmingUpRetry<Fresh<SegmentSummary[]>>(
     (signal) =>
-      api.segments(
+      api.segmentsWithFreshness(
         signal,
         segmentCardCodes,
         segmentCardMode,
@@ -179,11 +182,18 @@ export default function SegmentIntelligence() {
     },
   );
   const {
-    data: segmentsData,
     warmingUp: segmentsWarming,
     error: segmentsError,
     isFetching: segmentsFetching,
   } = segmentsQuery;
+  const segmentsData = segmentsQuery.data?.data ?? null;
+  // ONE stale note for the page (delivery-06): the oldest last good read of
+  // the catalog and the map read on screen; it clears on the next response
+  // without the header. The map hands its read's age up instead of showing it.
+  const [mapLastGoodAt, setMapLastGoodAt] = useState<string | null>(null);
+  const staleAt = [segmentsQuery.data?.lastGoodAt ?? null, mapLastGoodAt]
+    .filter((at): at is string => at !== null)
+    .sort()[0] ?? null;
   const serverGeo = useMemo(
     () => ({
       state: mapSelection.state ?? selectedLocationState,
@@ -601,7 +611,10 @@ export default function SegmentIntelligence() {
         aria-busy={leadsUpdating || leadsInitialLoading}
       >
         {leadsMeasuredZero ? EmptyState && (
-          <EmptyState cause={leads.length === 0 && activeSegs.length > 1 && segmentMode === 'all' ? 'intersection' : 'filtered'} />
+          <div>
+            <LazyStaleDataNote lastGoodAt={staleAt} />
+            <EmptyState cause={leads.length === 0 && activeSegs.length > 1 && segmentMode === 'all' ? 'intersection' : 'filtered'} />
+          </div>
         ) : (
           <LeadTable
             leads={filtered}
@@ -613,12 +626,15 @@ export default function SegmentIntelligence() {
               exportBlockedReason: leadsPlaceholder ? 'Export waits for the rows of the current filters' : null,
             }}
             headerStatus={(
-              <FetchedAt
-                at={leadsQueryState.dataUpdatedAt}
-                subject="ranked borrowers"
-                isFetching={leadsFetching}
-                onRefresh={retryLeads}
-              />
+              <>
+                <LazyStaleDataNote lastGoodAt={staleAt} compact />
+                <FetchedAt
+                  at={leadsQueryState.dataUpdatedAt}
+                  subject="ranked borrowers"
+                  isFetching={leadsFetching}
+                  onRefresh={retryLeads}
+                />
+              </>
             )}
           />
         )}
@@ -633,6 +649,7 @@ export default function SegmentIntelligence() {
           step={mapMode.step}
           onModeChange={mapMode.setMode}
           onStepCommit={mapMode.setStep}
+          onReadStale={setMapLastGoodAt}
         />
       </div>
     </PageShell>

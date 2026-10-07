@@ -80,6 +80,30 @@ def test_live_validation_is_manual_only() -> None:
     assert "cron:" not in text
 
 
+def test_live_validation_triggers_stay_exactly_workflow_dispatch() -> None:
+    workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+    triggers = workflow.get("on", workflow.get(True))
+
+    assert list(triggers) == ["workflow_dispatch"]
+
+
+def test_the_release_gate_jobs_and_git_sha_checks_exist() -> None:
+    """tools/live_validation_gate.py requires these three jobs to succeed, and a
+    green run certifies its own commit only through the two --git-sha checks."""
+
+    from tools import live_validation_gate
+
+    text = NIGHTLY.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    names = {job.get("name") for job in workflow["jobs"].values()}
+
+    assert set(live_validation_gate.REQUIRED_JOBS) <= names
+    assert NIGHTLY.name == live_validation_gate.WORKFLOW_FILE
+    assert text.count('--git-sha "$GITHUB_SHA"') == 2
+    assert text.count("python -m tools.verify_deployed_app_contract") >= 2
+    assert "tools/live_validation_gate.py" in text.split("\non:", 1)[0]
+
+
 def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> None:
     workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
 

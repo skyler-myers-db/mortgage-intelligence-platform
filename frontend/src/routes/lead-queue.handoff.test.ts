@@ -122,6 +122,10 @@ describe('buildPortfolioBuilderUrlFromQueue', () => {
     expect(handoff('sort=equity&dir=asc&row=B-0000000000001&view=sales').notCarried).toEqual([]);
   });
 
+  it('never lists the Triage deck mode (D-approval-flow-a2)', () => {
+    expect(handoff('mode=triage&state=IL').notCarried).toEqual([]);
+  });
+
   it('ignores a queue-only filter left at its no-op value', () => {
     expect(handoff('loan_product=All+loan+products&origination_channel=all').notCarried).toEqual([]);
   });

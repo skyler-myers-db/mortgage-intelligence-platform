@@ -396,13 +396,39 @@
   border: 1px solid var(--line-1);
   border-radius: var(--r-md);
 }
+/* The panels in one grid row share one header row, chip or no chip, so
+   their header dividers line up. Each panel adopts two rows of the grid
+   (.surface__hdr, .surface__body) as a subgrid: the header row is as tall as
+   the tallest header, a chip-bearing one today (a .chip is 24.5px, the h-4
+   title line 21px), and the chip-less Audit ledger link card no longer sits
+   3.5px short. Same row-sharing as the Segments card row (SegmentCard.css):
+   a subgrid takes the grid's row gap as a gutter between its own rows, so
+   the grid has no row gap and each panel carries the gutter below itself;
+   the grid's negative end margin hands the last row's gutter back, so the
+   next panel's .mt-grid still sets the space below the grid, as the grid's
+   old bottom margin did when the two collapsed. */
 .admin-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--gap-grid);
-  margin-bottom: var(--gap-grid);
+  column-gap: var(--gap-grid);
+  margin-block-end: calc(-1 * var(--gap-grid));
+}
+.admin-grid > .surface {
+  display: grid;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 0;
+  margin-block-end: var(--gap-grid);
 }
 .admin-panel-body { display: flex; flex-direction: column; gap: var(--sp-3); }
+/* A button in a panel body keeps the prototype's own-width inline-flex box
+   (design_files/index.html:378-385). The column's default stretch made the
+   Audit ledger link span the whole card with its label flush left, so it
+   read as an input; the Offer rules thresholds toggle painted its hover fill
+   and focus ring across the card. The prose and rows beside them still fill
+   the column. */
+.admin-panel-body > .btn { align-self: flex-start; }
 .admin-rules-version {
   cursor: pointer;
 }
@@ -660,7 +686,8 @@
   gap: var(--sp-2);
   min-width: 0;
 }
-.campaign-setup__field span,
+.campaign-setup__field > span,
+.campaign-setup__toggle-copy > span,
 .campaign-setup__field > .field__label {
   color: var(--text-3);
   font-size: var(--fs-12);
@@ -719,10 +746,6 @@
 .campaign-setup__toggle .switch.on::after {
   translate: calc(var(--sp-10) - var(--sp-5) - var(--sp-1)) 0;
   background: var(--accent);
-}
-.campaign-setup__textarea {
-  min-height: calc(var(--sp-12) + var(--sp-8));
-  resize: vertical;
 }
 .campaign-setup__meta {
   display: flex;

@@ -23,9 +23,74 @@ import type {
 } from '../apiTypes';
 import { _newRequestId, getJson, postJson } from '../apiTransport';
 
+/** The `/api/genie/message` and `/api/genie/message/submit` body. */
+export interface GenieMessageRequest {
+  question: string;
+  conversation_id?: string | null;
+}
+
+/** The `/api/genie/message/progress` body. */
+export interface GenieProgressRequest {
+  conversation_id: string;
+  message_id: string;
+  progress_token: string;
+}
+
+/** The synchronous `/api/genie/message/complete` body (no `respond_async`). */
+export interface GenieCompleteAsyncRequest {
+  conversation_id: string;
+  message_id: string;
+  progress_token: string;
+  question: string;
+}
+
+/**
+ * The `/api/genie/start` body; its wire schema is an untyped object or null.
+ * An object type alias, like the inline literal it replaces, so it keeps the
+ * implicit index signature an open `{ [key: string]: unknown }` body needs.
+ */
+export type GenieStartBody = {
+  context: Record<string, never>;
+};
+
+/** The `/api/genie/sessions` response: past conversations, newest first. */
+export interface GenieSessionListResponse {
+  sessions: GenieSessionSummary[];
+}
+
+/** The `/api/genie/actions` body: exactly the fields `genieAction` sends. */
+export interface GenieActionRequest {
+  action_type: GenieActionSuggestion['action_type'];
+  conversation_id: string | null;
+  message_id: string | null;
+  question_hash: string | null;
+  borrower_ids: NonNullable<GenieActionSuggestion['borrower_ids']>;
+  criteria: NonNullable<GenieActionSuggestion['criteria']>;
+  route: NonNullable<GenieActionSuggestion['route']> | null;
+  request_id: NonNullable<GenieActionSuggestion['request_id']>;
+  confirmed: true;
+  confirmation_token: NonNullable<GenieActionSuggestion['confirmation_token']> | null;
+}
+
+/** The `/api/genie/feedback` body (the request id travels as the Idempotency-Key). */
+export interface GenieFeedbackRequest {
+  conversation_id: string;
+  message_id: string;
+  helpful: boolean;
+  comment?: string;
+}
+
+/** The `/api/genie/refusal-report` body: hash-only, never the question. */
+export interface GenieRefusalReportRequest {
+  question_hash: string;
+  refusal_reason: GenieRefusalReason;
+  conversation_id: string | null;
+  message_id: string | null;
+}
+
 export const genieApi = {
   genie: (question: string, conversationId?: string | null, signal?: AbortSignal) =>
-    postJson<GenieResult, { question: string; conversation_id?: string | null }>(
+    postJson<GenieResult, GenieMessageRequest>(
       '/api/genie/message',
       { question, conversation_id: conversationId ?? null },
       signal,
@@ -34,7 +99,7 @@ export const genieApi = {
   /** Creates a Genie message and carries no Idempotency-Key: re-sent only
    *  after a 429 the middleware returned before the handler ran. */
   genieSubmit: (question: string, conversationId?: string | null, signal?: AbortSignal) =>
-    postJson<GenieSubmitResult, { question: string; conversation_id?: string | null }>(
+    postJson<GenieSubmitResult, GenieMessageRequest>(
       '/api/genie/message/submit',
       { question, conversation_id: conversationId ?? null },
       signal,
@@ -48,10 +113,7 @@ export const genieApi = {
     progressToken: string,
     signal?: AbortSignal,
   ) =>
-    postJson<
-      GenieLiveProgress,
-      { conversation_id: string; message_id: string; progress_token: string }
-    >(
+    postJson<GenieLiveProgress, GenieProgressRequest>(
       '/api/genie/message/progress',
       { conversation_id: conversationId, message_id: messageId, progress_token: progressToken },
       signal,
@@ -64,15 +126,7 @@ export const genieApi = {
     question: string,
     signal?: AbortSignal,
   ) =>
-    postJson<
-      GenieResult,
-      {
-        conversation_id: string;
-        message_id: string;
-        progress_token: string;
-        question: string;
-      }
-    >(
+    postJson<GenieResult, GenieCompleteAsyncRequest>(
       '/api/genie/message/complete',
       {
         conversation_id: conversationId,
@@ -84,7 +138,7 @@ export const genieApi = {
     ),
 
   genieStart: (signal?: AbortSignal) =>
-    postJson<GenieStartResult, { context: Record<string, never> }>(
+    postJson<GenieStartResult, GenieStartBody>(
       '/api/genie/start',
       { context: {} },
       signal,
@@ -95,7 +149,7 @@ export const genieApi = {
    *  as "History unavailable" — it is an optional affordance, never a
    *  blocking dependency of the chat. */
   genieSessions: (signal?: AbortSignal) =>
-    getJson<{ sessions: GenieSessionSummary[] }>('/api/genie/sessions', signal).then(
+    getJson<GenieSessionListResponse>('/api/genie/sessions', signal).then(
       (body) => body.sessions ?? [],
     ),
 
@@ -115,7 +169,7 @@ export const genieApi = {
     },
     signal?: AbortSignal,
   ) =>
-    postJson<GenieActionResult, Record<string, unknown>>(
+    postJson<GenieActionResult, GenieActionRequest>(
       '/api/genie/actions',
       {
         action_type: action.action_type,
@@ -144,15 +198,7 @@ export const genieApi = {
     signal?: AbortSignal,
   ) => {
     const { request_id: requestId, ...body } = payload;
-    return postJson<
-      GenieFeedbackResult,
-      {
-        conversation_id: string;
-        message_id: string;
-        helpful: boolean;
-        comment?: string;
-      }
-    >(
+    return postJson<GenieFeedbackResult, GenieFeedbackRequest>(
       '/api/genie/feedback',
       body,
       signal,
@@ -174,15 +220,7 @@ export const genieApi = {
     },
     signal?: AbortSignal,
   ) =>
-    postJson<
-      GenieRefusalReportResult,
-      {
-        question_hash: string;
-        refusal_reason: GenieRefusalReason;
-        conversation_id: string | null;
-        message_id: string | null;
-      }
-    >(
+    postJson<GenieRefusalReportResult, GenieRefusalReportRequest>(
       '/api/genie/refusal-report',
       {
         question_hash: payload.question_hash,

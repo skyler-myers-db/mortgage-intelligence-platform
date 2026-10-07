@@ -58,6 +58,7 @@ from backend.services.audit_metadata_policy import (
     _RESULT_FILTER_NUMERIC_BOUNDS,
     _SALES_DISPOSITION_OUTCOMES,
     _SALES_STRATEGIES,
+    LEDGER_SURFACES,
     AuditMetadataValueViolation,
     _metadata_values_for,
 )
@@ -87,6 +88,43 @@ _PUBLIC_CEILING_FLOOR_TWINS: tuple[tuple[str, str], ...] = (
     ("max_opportunity_score", "min_opportunity_score"),
     ("max_rate_spread_bps", "min_rate_spread_bps"),
 )
+
+
+# The closed reasons a requested borrower can be skipped for (the
+# ApprovalRequestSkip.reason vocabulary).
+_APPROVAL_REQUEST_SKIP_REASONS: frozenset[str] = frozenset(
+    {"not_found", "not_contactable", "already_decided", "already_requested"}
+)
+_MAX_APPROVAL_REQUEST_BORROWERS = 500
+
+
+def _assert_approval_request_values(metadata: dict[str, Any]) -> None:
+    """Approval-request ledger values: bounded counts and reason-grouped ids."""
+
+    for field, value in _metadata_values_for(
+        metadata, {"requested_count", "skipped_count", "withdrawn_count"}
+    ):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"skipped_by_reason"}):
+        if value is None:
+            continue
+        if not isinstance(value, dict) or set(value) - _APPROVAL_REQUEST_SKIP_REASONS:
+            raise AuditMetadataValueViolation(field, "must group ids under the closed skip reasons")
+        for ids in value.values():
+            if not isinstance(ids, list) or len(ids) > _MAX_APPROVAL_REQUEST_BORROWERS:
+                raise AuditMetadataValueViolation(field, "must hold bounded borrower id lists")
+            for item in ids:
+                try:
+                    validate_public_borrower_id(str(item))
+                except ValueError as exc:
+                    raise AuditMetadataValueViolation(
+                        field, "must contain only app-scoped public borrower ids"
+                    ) from exc
 
 
 def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
@@ -485,7 +523,8 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             or not 0 <= value <= _MAX_DRAFT_AGE_SECONDS
         ):
             raise AuditMetadataValueViolation(field, "must be a bounded whole number of seconds")
-    for field, value in _metadata_values_for(metadata, {"exported_row_count"}):
+    _assert_approval_request_values(metadata)
+    for field, value in _metadata_values_for(metadata, {"exported_row_count", "matching_row_count"}):
         if value is None:
             continue
         try:
@@ -628,6 +667,12 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             validate_row_count(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"section_index"}):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < 20):
+            raise AuditMetadataValueViolation(field, "must be a planned section index")
+    for field, value in _metadata_values_for(metadata, {"verification_verdict"}):
+        if value is not None and str(value) not in {"verified", "verified_rows_digest"}:
+            raise AuditMetadataValueViolation(field, "must be a governed verification verdict")
     for field, value in _metadata_values_for(metadata, {"per_lo_counts"}):
         if value is None:
             continue
@@ -647,3 +692,19 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                 ) from exc
             if not isinstance(count, int) or count < 0 or count > 500:
                 raise AuditMetadataValueViolation(field, "must contain bounded integer counts")
+    # VIEW_AUDIT_LEDGER (D-audit-reads-c3): a closed surface token, a real
+    # boolean and a bounded count. read_audit_event_id takes the opaque-id
+    # rule above and filter_fingerprint the SHA-256 rule.
+    for field, value in _metadata_values_for(metadata, {"ledger_surface"}):
+        if value is not None and str(value) not in LEDGER_SURFACES:
+            raise AuditMetadataValueViolation(field, "must be a governed ledger surface")
+    for field, value in _metadata_values_for(metadata, {"has_cursor"}):
+        if value is not None and not isinstance(value, bool):
+            raise AuditMetadataValueViolation(field, "must be a boolean")
+    for field, value in _metadata_values_for(metadata, {"returned_row_count"}):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc

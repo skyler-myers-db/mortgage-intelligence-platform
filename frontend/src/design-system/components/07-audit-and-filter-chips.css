@@ -162,10 +162,6 @@
   margin-top: var(--sp-3);
   flex-wrap: wrap;
 }
-.save-build-form__label {
-  font-size: var(--fs-12);
-  color: var(--text-3);
-}
 .save-build-form__input {
   flex: 0 1 22rem;
   min-inline-size: 12rem;

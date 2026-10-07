@@ -22,6 +22,7 @@ import {
   parseChord,
   registerKeyBinding,
   subscribeKeyBindings,
+  survivesSingleKeySwitch,
   type KeyBindingSpec,
 } from './keymap';
 import {
@@ -325,15 +326,96 @@ describe('single-key preference', () => {
     setSingleKeyShortcutsEnabled(false);
     expect(singleKeyShortcutsEnabled()).toBe(false);
     expect(JSON.parse(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) ?? '{}')).toEqual({ [ACTOR_A]: 'off' });
+    expect(seen, 'once for the write').toHaveBeenCalledTimes(1);
 
+    // The change, as a NEW document (a mid-session change resets the tab,
+    // D-identity-review-a3): pending over A's stamps, then B first.
+    _resetActorScopeForTests({ status: 'pending', owner: ACTOR_A });
+    seen.mockClear();
     observeActor({ key: ACTOR_B });
 
     // B has no entry: the default. A keeps its own, which applies again when A returns.
     expect(singleKeyShortcutsEnabled()).toBe(true);
     expect(JSON.parse(window.localStorage.getItem(SINGLE_KEY_SHORTCUTS_STORAGE_KEY) ?? '{}')).toEqual({ [ACTOR_A]: 'off' });
-    // Once for the write, once per gate event of the change ('cleared', 'restamped').
-    expect(seen).toHaveBeenCalledTimes(3);
+    // Once per gate event of the first observation ('restamped', 'opened').
+    expect(seen).toHaveBeenCalledTimes(2);
     unsubscribe();
     _resetActorScopeForTests({ status: 'open', owner: NOBODY });
+  });
+});
+
+describe('function keys (the toast region F8, wave-3 review #13)', () => {
+  const cleanups: Array<() => void> = [];
+
+  beforeEach(() => {
+    installLocalStorage();
+    clearSingleKeyShortcutsPreference();
+  });
+
+  afterEach(() => {
+    while (cleanups.length > 0) cleanups.pop()?.();
+    document.body.innerHTML = '';
+    expect(listKeyBindings()).toHaveLength(0);
+  });
+
+  it('F8 still fires with the single-key shortcuts off (WCAG 2.1.4 covers character keys only)', () => {
+    const f8 = vi.fn();
+    cleanups.push(registerKeyBinding({ id: 'toast-region', scope: 'global', keys: ['F8'], description: 'toasts', allowInEditable: true, run: f8 }));
+    setSingleKeyShortcutsEnabled(false);
+    const event = press(document.body, { key: 'F8' });
+    expect(f8).toHaveBeenCalledOnce();
+    expect(event.defaultPrevented).toBe(true);
+    press(document.body, { key: 'F8', ctrlKey: true });
+    expect(f8, 'a modified F8 is another chord').toHaveBeenCalledOnce();
+    expect(chordKeycaps('F8')).toEqual(['F8']);
+    // The ? sheet marks a binding Off with the switch from the same rule
+    // (Shift+F8 is still no character key; F25 is no function key).
+    expect(['F8', 'F24', 'Shift+F8', 'Mod+K', 'F25', 'j'].map((text) => survivesSingleKeySwitch(parseChord(text)))).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it("'j' still does not fire with the single-key shortcuts off", () => {
+    const j = vi.fn();
+    cleanups.push(registerKeyBinding({ id: 'j', scope: 'lead-queue', keys: ['j'], description: 'next', run: j }));
+    setSingleKeyShortcutsEnabled(false);
+    press(document.body, { key: 'j' });
+    expect(j).not.toHaveBeenCalled();
+  });
+});
+
+describe('the Triage deck scope (D-approval-flow-a2)', () => {
+  const offs: Array<() => void> = [];
+
+  beforeEach(() => {
+    installLocalStorage();
+    clearSingleKeyShortcutsPreference();
+  });
+
+  afterEach(() => {
+    while (offs.length > 0) offs.pop()?.();
+    document.body.innerHTML = '';
+  });
+
+  it('is labelled for the sheet and beats the table and global scopes on a shared chord', async () => {
+    const { KEYMAP_SCOPE_LABELS } = await import('./keymap');
+    expect(KEYMAP_SCOPE_LABELS.triage).toBe('Triage deck');
+    const table = vi.fn();
+    const deck = vi.fn();
+    const global = vi.fn();
+    offs.push(registerKeyBinding({ id: 'g', scope: 'global', keys: ['j'], description: 'global j', run: global }));
+    offs.push(registerKeyBinding({ id: 't', scope: 'triage', keys: ['j'], description: 'skip', run: deck }));
+    offs.push(registerKeyBinding({ id: 'q', scope: 'lead-queue', keys: ['j'], description: 'next row', run: table }));
+    const event = new KeyboardEvent('keydown', { key: 'j', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(event);
+    expect(deck).toHaveBeenCalledOnce();
+    expect(table).not.toHaveBeenCalled();
+    expect(global).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
   });
 });

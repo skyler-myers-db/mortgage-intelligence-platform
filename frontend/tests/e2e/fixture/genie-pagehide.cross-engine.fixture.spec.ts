@@ -31,14 +31,16 @@ const PROGRESS_POLL_MS = 1_500;
 const ANSWER_TEXT = /leads the footprint with/;
 const INTERRUPTED =
   'Interrupted by a reload while the answer was being verified. It may still be recorded: check History, or Ask again.';
-/**
- * Found by this spec on WebKit 26.6 (local, 2/3 runs): WebKit rejects the
- * reload-cancelled complete fetch while the old document is still alive, so
- * the turn settles as unreachable and the reloaded page shows "Genie session
- * reset: The app could not be reached" instead of the interrupted note.
+/*
+ * History of (b): found by this spec on WebKit 26.6 (local, 2/3 runs; WebKit
+ * rejects the reload-cancelled complete fetch after beforeunload but before
+ * pagehide, so the turn settled as unreachable and the reloaded page showed
+ * "Genie session reset: The app could not be reached") and in Firefox on the
+ * first W5a CI cross-engine run (the interrupted note never showed). It was
+ * a named fixme until W5b w5-identity-reset fixed lib/genieInFlightTurn
+ * (lib/genieTurnUnload: a failure soon after a beforeunload heard while
+ * completing waits for pagehide).
  */
-const RELOAD_MID_COMPLETE_FIXME =
-  'w5-identity-reset-portfolio (W5b, owns lib/genieInFlightTurn.ts) · runtime-01 (wave-3 remainder) · WebKit and Firefox (first CI run, W5a): a reload during the complete call never shows the interrupted note (WebKit shows "The app could not be reached": the cancelled fetch rejects before pagehide)';
 
 function thread(page: Page) {
   return page.locator('#main-content .genie-thread');
@@ -53,8 +55,9 @@ async function askOnRoute(page: Page): Promise<void> {
 
 /**
  * A reload or close cancels the page's in-flight requests on purpose. The
- * harness ignores only Chromium's name for that (ERR_ABORTED): WebKit reports
- * "cancelled" and Firefox NS_BINDING_ABORTED. WebKit also surfaces the
+ * harness ignores only Chromium's name for that (ERR_ABORTED): WebKit on macOS
+ * reports "cancelled" and Firefox NS_BINDING_ABORTED (WebKit on Linux spells
+ * it differently; see allowHeldCompleteCancel). WebKit also surfaces the
  * cancelled first health poll (`/api/v1/health?idle_s=0`) of the unloading
  * document as a page error; it is recorded as a follow-up for the health
  * transport's owner, not hidden: the allowance matches only that message.
@@ -65,6 +68,19 @@ function allowNavigationCancel(hygiene: Hygiene, browserName: string): void {
   if (browserName === 'webkit') {
     hygiene.allow('pageerror', /^Fetch API cannot load \S+\/api\/v1\/health\?idle_s=0 due to access control checks/);
   }
+}
+
+/**
+ * (b) reloads while the complete POST is held open, so the reload cancels that
+ * one request by construction. WebKit on Linux (the e2e-cross-engine runner)
+ * names the cancellation "Load request cancelled", which the macOS spelling in
+ * allowNavigationCancel does not match (CI run 37521773357). Only (b) calls
+ * this, and it allows exactly that request in that spelling: every other
+ * failed request, and every other hygiene check, still fails the test.
+ */
+function allowHeldCompleteCancel(hygiene: Hygiene, browserName: string): void {
+  if (browserName !== 'webkit') return;
+  hygiene.allow('request-failed', /^POST https?:\/\/[^/\s]+\/api\/v1\/genie\/message\/complete failed: Load request cancelled$/);
 }
 
 /** Whether this engine exposes Web Locks; the unsupported path is annotated. */
@@ -107,7 +123,7 @@ test.describe('a Genie turn across a pagehide (runtime-01, every engine)', () =>
 
   test('(b) a reload during the complete call never completes again and shows the interrupted note', async ({ app, browserName, hygiene, mockApi, page }, testInfo) => {
     allowNavigationCancel(hygiene, browserName);
-    test.fixme(browserName === 'webkit' || browserName === 'firefox', RELOAD_MID_COMPLETE_FIXME);
+    allowHeldCompleteCancel(hygiene, browserName);
     const turn = registerGenieTurn(mockApi, { holdComplete: true });
     await app.gotoRoute('/ask-genie');
     await askOnRoute(page);

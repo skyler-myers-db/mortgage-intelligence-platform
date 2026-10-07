@@ -149,6 +149,18 @@ itself with:
 The SHA printed by this gate is the value advertised as `MIP_GIT_SHA` and
 verified by the live smoke test.
 
+Frontend dependencies are checked in step 0, before the confirmation prompt,
+by `python -m tools.frontend_deps_check`. If the install is `fresh`, the deploy
+continues. If it is `shared` (this checkout's `frontend/node_modules` is a
+symlink) or the check errors, the deploy stops. If it is `stale` (the install
+does not match `frontend/package-lock.json`), `npm --prefix frontend ci` runs
+in this checkout after the prompt. The check can only see an outbound symlink.
+A checkout whose real `node_modules` other worktrees link to (for example a
+main checkout shared by agent worktrees) looks like a private install, so a
+`stale` result there reinstalls the tree every linked worktree uses. Deploy
+from a checkout that owns its `node_modules` and that nothing else links to,
+or answer no at the prompt and refresh the shared install deliberately.
+
 ### Per-run M2M identities
 
 Live app validation and agent ownership use seven service principals and store only their OAuth
@@ -807,6 +819,72 @@ restore, prior app snapshots, source-regression rollback via
 and governed-action HMAC key rotation, use
 [`docs/disaster-recovery.md`](disaster-recovery.md).
 
+## Presenter mode (demo workspaces only)
+
+`MIP_PRESENTER_MODE` (default off) shows demo-only affordances to every user
+of a deployment; today that is the PROTOTYPE "Preview borrower view" on the
+Offer page, whose module is not even downloaded when the flag is off. It
+gates no guard, approval, audit or data path, and it is never an
+authorization input. The deploy payload accepts `0`/`false`/`no`/`off`/empty
+(off: the variable is omitted) or `1`/`true`/`yes`/`on` (on: the App receives
+`MIP_PRESENTER_MODE=1` and the deploy prints a notice); any other value fails
+the deploy, and a truthy value is refused for `-t prod`. At runtime an
+unparseable value reads as off instead of failing boot. Admin -> Deployment
+readiness and the admin health body (`presenter_mode`) show the current
+state.
+
+`MIP_PREVIEW_MIRROR` is a different flag: it gates the roadmap rows of the
+Admin capability panel (`backend/services/capabilities.py`), and it is not
+carried by the deploy payload, so deployed Apps run with it off.
+
+## Lender co-branding (optional)
+
+A deployment may draw its lender's reviewed mark beside the tenant name (the
+topbar tenant pill and the Console "Configured tenant" chip) and may set the
+theme and accent a user sees before choosing their own. Three optional
+`.env.local` controls, read only by `scripts/deploy.sh` preflight and the
+frontend build (no App env var, no API or Lakebase change):
+
+| Control | Default | Meaning |
+| --- | --- | --- |
+| `MIP_LENDER_MARK_FILE` | none | Absolute path to the lender-supplied mark (PNG or WebP). Empty means no mark. |
+| `MIP_DEFAULT_THEME` | `dark` | Tenant-default theme for users who have not chosen: `dark`, `light` or `system`. |
+| `MIP_DEFAULT_ACCENT` | `bright` | Tenant-default accent for users who have not chosen: `bright`, `teal`, `navy` or `red`. |
+
+Values equal to the defaults emit nothing, so a deployment that sets none of
+them renders exactly as before. A user's own Console choice always wins over
+a tenant default.
+
+The mark is accepted only when it matches a source-controlled entry in
+`backend/schemas/lender_branding.py` that is bound to the reviewed lender
+name and NMLS id in `backend/schemas/lender_identity.py`: same sha256, media
+type and pixel size, PNG or WebP without metadata, colour profile or
+animation, at most 64 KiB, 32-512 px tall and 1-2 times as wide as tall.
+Preflight checks it before any workspace mutation and stops the deploy on any
+mismatch; the log shows only the first 12 characters of its sha256, never the
+path. Step 1 copies the validated file into the ignored
+`frontend/.branding-stage/` right before the build, which emits it as
+`dist/branding/lender-mark.png` (or `.webp`). The Summit Mortgage sample
+lender has no mark.
+
+Keep the mark file outside the checkout (an absolute path) or in an ignored
+path: an untracked, non-ignored file inside the repo fails the exact-source
+gate before any mutation. Never commit the image.
+
+Reviewer checklist for adding a registry entry:
+
+1. View the lender-supplied file out of band.
+2. Confirm it matches the lender's current mark and the cited brand-use
+   authorisation.
+3. Record only its sha256, media type, dimensions, the `authorization_ref`
+   and the `reviewed_on` date beside the (name, NMLS) identity, in the same
+   reviewed change as any identity edit. Never commit the image.
+
+Fail-safe: a plain `npm run build` without the preflight exports ships the
+product defaults and no mark, and the app also hides a mark that was built
+for a different lender than the one the session reports. The mark's hash
+(`MIP_LENDER_MARK_SHA256`) is derived by preflight, never set by an operator.
+
 ## Resources
 
 Databricks App resources expected by `app.yaml`:
@@ -953,3 +1031,17 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
 - Frontend build passes (`npm --prefix frontend run build`).
 - Python tests pass (`pytest -q`).
 - Talk track rehearsed.
+- Live evidence is certified, never asserted. A customer release is the
+  `scripts/package_source.sh` zip plus `dist/release-readiness.json`
+  generated on the release sha (`python tools/release_readiness.py
+  --release-sha <sha>`) with an empty `cannot_claim`. Its six live checks
+  (SQL/Python parity, Lakebase round trip, Genie live, Playwright live,
+  the simulated resilience drill and the non-admin proof) reach `passed`
+  only from a green `live validation (on demand)` run certified by
+  `tools/live_validation_gate.py`: the newest completed run on `main` whose
+  code is runtime-equivalent to the release (deny-by-default: only docs,
+  repo-root `*.md`, tests and workflow files are non-runtime), 14 days old
+  or newer, with its three release jobs green. An operator `passed` without
+  such a run is recorded `unknown`. The `prod-readiness-gate` workflow
+  (`deploy-prod.yml`) runs the same gate as a convenience; neither
+  `scripts/deploy.sh` nor `scripts/package_source.sh` calls GitHub.

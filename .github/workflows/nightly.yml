@@ -17,6 +17,13 @@ name: live validation (on demand)
 # bundle/app changes, or when investigating a live workspace issue. Cheap
 # credential-free CI remains in ci.yml on every PR/push.
 #
+# Release gate: tools/live_validation_gate.py (run by deploy-prod.yml's
+# prod-readiness-gate and by tools/release_readiness.py) accepts a release only
+# when a green run of this workflow on main certifies runtime-equivalent code,
+# is at most 14 days old, and its parity, Playwright and simulated-drill jobs
+# all succeeded; the two verify_deployed_app_contract commit checks below are
+# what make a green run certify its own commit.
+#
 # On failure: a GitHub issue is created with the failing job name + a
 # link to the run. Slack/PagerDuty integration is deliberately deferred
 # until the user picks a notification channel.

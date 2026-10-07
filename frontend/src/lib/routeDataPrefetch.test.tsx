@@ -62,7 +62,7 @@ import { HOME_CONTACTABLE_PREVIEW_CRITERIA as HOME_BANNER_CRITERIA } from '../ro
 import AnalyticsRoute from '../routes/analytics';
 
 /** The five non-audited aggregate reads a prefetch may ever make. */
-const ALLOWED_READS = ['analyticsExecutive', 'analyticsRateWindow', 'homeSummary', 'portfolioPreview', 'stateRollups'];
+const ALLOWED_READS = ['analyticsExecutive', 'analyticsRateWindow', 'homeSummary', 'portfolioPreview', 'stateRollupsWithFreshness'];
 
 const SIGNAL = '<signal>';
 

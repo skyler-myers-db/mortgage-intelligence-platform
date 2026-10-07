@@ -14,6 +14,17 @@ import type {
 } from '../../types';
 import { _newRequestId, getJson, postJson } from '../apiTransport';
 
+/** The `/api/activation/stage` body as the client sends it. */
+export interface ActivationStageRequest {
+  borrower_id: string;
+  destination_key: string;
+  offer_code?: string | null;
+  channel: 'email' | 'sms' | 'direct_mail';
+  campaign_id?: string | null;
+  approval_id: string;
+  request_id: string;
+}
+
 export const activationApi = {
   activationSummary: (signal?: AbortSignal) =>
     getJson<ActivationSummary>('/api/activation/summary', signal),
@@ -48,15 +59,7 @@ export const activationApi = {
     },
     signal?: AbortSignal,
   ) =>
-    postJson<ActivationStageResponse, {
-      borrower_id: string;
-      destination_key: string;
-      offer_code?: string | null;
-      channel: 'email' | 'sms' | 'direct_mail';
-      campaign_id?: string | null;
-      approval_id: string;
-      request_id: string;
-    }>(
+    postJson<ActivationStageResponse, ActivationStageRequest>(
       '/api/activation/stage',
       {
         ...payload,

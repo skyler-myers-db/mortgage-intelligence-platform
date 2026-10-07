@@ -10,8 +10,10 @@ router without touching app assembly.
 from backend.api import (
     activation,
     admin,
+    admin_sse_probe,
     analytics,
     analytics_rate_window,
+    approval_requests,
     assets,
     audit,
     audit_receipt,
@@ -34,6 +36,7 @@ from backend.api import (
     lookup,
     offers,
     outreach,
+    outreach_revoke,
     portfolio,
     sales,
     segments,
@@ -62,6 +65,8 @@ API_ROUTERS = [
     lookup.router,
     offers.router,
     outreach.router,
+    approval_requests.router,
+    outreach_revoke.router,
     sales.router,
     loan_officers.router,
     geo.router,
@@ -75,4 +80,5 @@ API_ROUTERS = [
     audit_receipt.router,
     telemetry.router,
     workspace.router,
+    admin_sse_probe.router,
 ]

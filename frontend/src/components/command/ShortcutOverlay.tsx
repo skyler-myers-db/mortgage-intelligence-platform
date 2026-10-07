@@ -3,11 +3,11 @@ import { useModalDialog } from '../../hooks/useModalDialog';
 import {
   KEYMAP_SCOPE_LABELS,
   chordKeycaps,
-  isModifierChord,
   keyBindingsVersion,
   listKeyBindings,
   parseChord,
   subscribeKeyBindings,
+  survivesSingleKeySwitch,
   type KeymapScope,
 } from '../../lib/keymap';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
@@ -40,7 +40,7 @@ interface SheetEntry {
 }
 
 /** Page-specific scopes first, then what works everywhere. */
-const SCOPE_ORDER: readonly KeymapScope[] = ['lead-queue', 'global'];
+const SCOPE_ORDER: readonly KeymapScope[] = ['triage', 'lead-queue', 'global'];
 
 function sheetEntries(): Map<KeymapScope, SheetEntry[]> {
   const grouped = new Map<KeymapScope, SheetEntry[]>();
@@ -53,7 +53,7 @@ function sheetEntries(): Map<KeymapScope, SheetEntry[]> {
       key: entryKey,
       description: binding.description,
       keys: binding.keys,
-      singleKey: binding.keys.every((keys) => !isModifierChord(parseChord(keys))),
+      singleKey: binding.keys.every((keys) => !survivesSingleKeySwitch(parseChord(keys))),
     });
     grouped.set(binding.scope, entries);
   }

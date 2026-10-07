@@ -29,15 +29,18 @@ export interface BulkSampleCoverage {
   missingSampleIds: string[];
 }
 
-/** Does each offer in `rows` have a ready sample draft among `drafts`? */
+/**
+ * Does each offer in `rows` appear in a ready sample draft among `drafts`?
+ * An offer counts as covered only when a previewed draft really showed it
+ * (coveredOfferCodes: the draft's own offer_code, else its row's), never
+ * merely because its row has a ready sample (W5a integrator ruling R1).
+ * Arming-only: the in-run check and the canary already refuse a mismatch.
+ */
 export function bulkSampleCoverage(
   rows: readonly CoverageRow[],
   drafts: ReadonlyMap<string, OutreachDraftResult>,
 ): BulkSampleCoverage {
-  const covered = new Set<string>();
-  for (const row of rows) {
-    if (drafts.has(row.borrower_id)) covered.add(offerKeyOf(row));
-  }
+  const covered = coveredOfferCodes(rows, drafts);
   const missingOfferCodes: string[] = [];
   const missingSampleIds: string[] = [];
   for (const row of rows) {

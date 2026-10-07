@@ -2,8 +2,9 @@
  * The report half of the frontend budget gate (audit quality-08): absolute
  * budget TARGETS with dated waivers, a per-chunk JSON report, and the
  * markdown step summary with base-vs-head delta columns. Pure functions;
- * tools/check_frontend_budgets.mjs owns the measuring and the gates, and
- * imports this module from main() only.
+ * tools/check_frontend_budgets.mjs owns the measuring and the gates (their
+ * numbers live in frontend_budget_gates.mjs), and imports this module from
+ * main() only.
  *
  * The ratchet gates in check_frontend_budgets.mjs are a CHANGE DETECTOR
  * (measured + ~5%); a target in tools/frontend_budget_targets.json is the

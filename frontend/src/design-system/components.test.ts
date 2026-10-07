@@ -808,3 +808,39 @@ describe('hover states promise only real clicks (motion-09)', () => {
     expect(activeAt).toBeGreaterThan(hoverAt);
   });
 });
+
+/** W5b w5-theme-white-label: the success CTA fill, the Button loading state and the lender mark. */
+describe('success CTA, loading button and lender mark (a11y-01 / motion-08 / responsive-10)', () => {
+  const rule = (selector: string) => cssRules(designCss()).filter((r) => r.selector === selector).map((r) => r.block.trim());
+
+  it('fills .btn--success with --success-fill and keeps the solid fill on hover', () => {
+    expect(rule('.btn--success')).toEqual(['background: var(--success-fill); border-color: transparent; color: var(--text-on-solid);']);
+    expect(rule('.btn--success:hover')).toEqual(['background: var(--success-fill-hover); border-color: transparent;']);
+    expect(tokensCss()).toMatch(/:root, \[data-theme="dark"\] \{ --success-fill: #047857; --success-fill-hover: #065F46; \}/);
+  });
+
+  it('stacks the invisible label and the spinner in one cell while a button is loading', () => {
+    const css = designCss();
+    expect(rule('.btn--loading')).toEqual(['display: inline-grid; place-items: center; cursor: progress;']);
+    expect(rule('.btn--loading > .btn__label, .btn--loading > .btn__spinner')).toEqual(['grid-area: 1 / 1;']);
+    // Opacity, never visibility or display: the label stays the accessible name and keeps the box.
+    const label = rule('.btn__label').join(' ');
+    expect(label).toMatch(/opacity:\s*0;/);
+    expect(label).toMatch(/gap:\s*var\(--sp-2\);/);
+    expect(label).not.toMatch(/visibility|display:\s*none/);
+    expect(rule('.btn__spinner').join(' ')).toMatch(/animation:\s*btn-spin var\(--dur-spin\) var\(--ease-linear\) infinite;/);
+    expect(css).toMatch(/@keyframes btn-spin\s*\{\s*to\s*\{\s*rotate:\s*1turn;\s*\}\s*\}/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.btn__spinner\s*\{\s*animation:\s*none;\s*\}\s*\}/);
+    expect(tokensCss()).toMatch(/:root \{ --dur-spin: 900ms; --ease-linear: linear; \}/);
+  });
+
+  it('sizes the lender mark to the pill on a light plate, edged in forced colours', () => {
+    const css = designCss();
+    const mark = rule('.lender-mark');
+    expect(mark[0]?.replace(/\s+/g, ' ')).toBe(
+      'block-size: var(--sp-4); inline-size: auto; max-inline-size: var(--sp-8); object-fit: contain; border-radius: var(--r-sm); padding: 1px; background: var(--brand-mark-plate);',
+    );
+    expect(tokensCss()).toMatch(/:root \{ --brand-mark-plate: #FFFFFF; \}/);
+    expect(css).toMatch(/@media \(forced-colors: active\)\s*\{[\s\S]*?\.lender-mark\s*\{\s*background:\s*Canvas;\s*border:\s*1px solid CanvasText;\s*\}/);
+  });
+});

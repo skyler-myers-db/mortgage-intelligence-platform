@@ -19,6 +19,10 @@
  *    holds at 1150px and at every one of its eight anchors;
  *  - a narrow WHO column (a 1366 laptop, the Console open) shows every id and
  *    city whole, and whatever still truncates keeps its text in a tooltip;
+ *  - the hero's actions keep the two-row stack beside the title at full
+ *    width, and where the main column wraps them under the title (the
+ *    Console open, the 1150px canary) they are one start-aligned row, so the
+ *    hero is no taller than its title and one control row (home.css);
  *  - KPI values are at least the size of the page title;
  *  - no two cards touch: every measured gap is at least --gap-grid;
  *  - exactly one primary button above the fold, into the ranked queue;
@@ -35,7 +39,8 @@
  * legend row fails "the tallest answer band"; putting "Monitor for later"
  * back in the bar fails "WHAT TO OFFER reconciles"; dropping the WHO
  * column's narrow layout fails "a narrow WHO column keeps every id and city
- * whole".
+ * whole"; dropping home.css's wrapped-hero query, or its 42vw-cap lift, fails
+ * "the hero actions" (Console open, and the 1150px canary).
  */
 import type { Locator, Page } from '@playwright/test';
 import { expectAxeClean } from './axe';
@@ -131,12 +136,78 @@ async function mapHeadingBottom(page: Page): Promise<number> {
   return box.y + box.height;
 }
 
+/** The block-axis space between each item of a list and the next, in px. */
+async function itemGaps(list: Locator): Promise<number[]> {
+  return list.evaluate((node) => {
+    const items = Array.from(node.children).map((child) => child.getBoundingClientRect());
+    return items.slice(1).map((rect, index) => rect.top - items[index].bottom);
+  });
+}
+
+async function tokenPx(page: Page, token: string): Promise<number> {
+  const raw = await page.evaluate(
+    (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
+    token,
+  );
+  expect(raw, `${token} resolves to a pixel length`).toMatch(/^\d+(\.\d+)?px$/);
+  return Number.parseFloat(raw);
+}
+
 async function gapGridPx(page: Page): Promise<number> {
   const raw = await page.evaluate(() =>
     getComputedStyle(document.documentElement).getPropertyValue('--gap-grid').trim(),
   );
   expect(raw, '--gap-grid resolves to a pixel length').toMatch(/^\d+(\.\d+)?px$/);
   return Number.parseFloat(raw);
+}
+
+/**
+ * Let the shell's finite transitions end, so a sample taken while the Console
+ * slides in (and .main's gutter snaps) proves nothing about the settled layout.
+ */
+async function finishTransitions(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+        .map((animation) => animation.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+type HeroBox = Box & { height: number };
+
+interface HeroGeometry {
+  hero: HeroBox;
+  title: HeroBox;
+  actions: HeroBox;
+  /** The hero's row gap: the space between the title line and a wrapped actions line. */
+  rowGap: number;
+  /** The gold "Refreshed" chip, FetchedAt and the primary action, in DOM order. */
+  items: HeroBox[];
+}
+
+/** The Home hero: its title block, its actions slot and the three actions in it. */
+async function heroGeometry(page: Page): Promise<HeroGeometry> {
+  await expect(page.locator('.proto-hero__actions [data-testid="fetched-at"] .fetched-at__label')).toBeVisible();
+  return page.locator('#main-content .proto-hero').evaluate((hero) => {
+    const box = (element: Element, name: string) => {
+      const rect = element.getBoundingClientRect();
+      return { name, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, height: rect.height };
+    };
+    const actions = hero.querySelector('.proto-hero__actions')!;
+    const items = Array.from(actions.querySelectorAll('.chip, [data-testid="fetched-at"], .btn--primary'), (element) =>
+      box(element, element.className.split(' ')[0]),
+    );
+    return {
+      hero: box(hero, 'proto-hero'),
+      title: box(hero.firstElementChild!, 'title'),
+      actions: box(actions, 'proto-hero__actions'),
+      rowGap: Number.parseFloat(getComputedStyle(hero).rowGap),
+      items,
+    };
+  });
 }
 
 for (const theme of FIXTURE_THEMES) {
@@ -194,11 +265,13 @@ for (const theme of FIXTURE_THEMES) {
       await app.gotoRoute('/');
       const band = page.locator('.home-answer');
       // The payload really is the maximum: every actionable offer, the
-      // unverified-figures warning, five WHO rows, three triggers.
+      // unverified-figures warning, five WHO rows, the rate move since the
+      // visit plus five triggers (flow-05).
       await expect(band.locator('.offer-mix__seg')).toHaveCount(LIVE_ACTIONABLE_MIX.length);
       await expect(band.getByRole('status').filter({ hasText: 'could not be verified' })).toBeVisible();
       await expect(band.locator('.home-answer__who-row')).toHaveCount(5);
-      await expect(band.locator('.home-answer__trigger')).toHaveCount(MAX_HOME_SUMMARY.highlights.length);
+      await expect(band.locator('[data-testid="why-now-rate-move"]')).toBeVisible();
+      await expect(band.locator('.home-answer__trigger')).toHaveCount(MAX_HOME_SUMMARY.highlights.length + 1);
 
       const bandBox = (await band.boundingBox())!;
       const mapBox = (await page.locator('#main-content .map-wrap').boundingBox())!;
@@ -221,6 +294,47 @@ for (const theme of FIXTURE_THEMES) {
       );
       expect(overflowing).toEqual([]);
       await page.screenshot({ path: test.info().outputPath(`home-max-${theme}.png`) });
+    });
+
+    test('only the WHY NOW list drops its row gap: the WHO rows keep --sp-1 between them', async ({ app, mockApi, page }) => {
+      // The fold fix for the tallest band (flow-05) removes the trigger list's
+      // row gap. The WHO list and the WHY NOW loading skeleton share that
+      // list rule, so this pins that the five ranked rows and the skeleton's
+      // bars keep the prototype's --sp-1 spacing.
+      let releaseSummary = () => {};
+      const summaryHeld = new Promise<void>((resolve) => {
+        releaseSummary = resolve;
+      });
+      mockApi.register('POST', '/api/portfolio/preview', homePreviewHandler(MAX_HOME_PREVIEW));
+      mockApi.register('GET', '/api/home/summary', async () => {
+        await summaryHeld;
+        return { body: MAX_HOME_SUMMARY };
+      });
+      // A fresh document with no restored briefing, so WHY NOW starts loading.
+      await page.addInitScript(() => window.sessionStorage.removeItem('mip.queryCache.v1'));
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      const band = page.locator('.home-answer');
+      const sp1 = await tokenPx(page, '--sp-1');
+      expect(sp1, '--sp-1 is a non-zero gap').toBeGreaterThan(0);
+
+      const skeleton = band.locator('ul.home-answer__triggers[aria-hidden="true"]');
+      await expect(skeleton.locator('.skeleton')).toHaveCount(3);
+      const skeletonGaps = await itemGaps(skeleton);
+      expect(skeletonGaps, 'one gap between each pair of skeleton bars').toHaveLength(2);
+      for (const gap of skeletonGaps) expect(gap, 'WHY NOW skeleton bar gap').toBeCloseTo(sp1, 0);
+      releaseSummary();
+      await app.settle();
+
+      await expect(band.locator('.home-answer__who-row')).toHaveCount(5);
+      await expect(band.locator('.home-answer__trigger')).toHaveCount(MAX_HOME_SUMMARY.highlights.length + 1);
+
+      const whoGaps = await itemGaps(band.locator('ol.home-answer__who'));
+      expect(whoGaps, 'one gap between each pair of the five WHO rows').toHaveLength(4);
+      for (const gap of whoGaps) expect(gap, 'WHO row gap').toBeCloseTo(sp1, 0);
+
+      const triggerGaps = await itemGaps(band.locator('ul.home-answer__triggers'));
+      expect(triggerGaps, 'one gap between each pair of WHY NOW rows').toHaveLength(MAX_HOME_SUMMARY.highlights.length);
+      for (const gap of triggerGaps) expect(gap, 'WHY NOW row gap').toBeCloseTo(0, 0);
     });
 
     test('offer slices and swatches paint distinct segment hues, refi + HELOC striped (dataviz-09)', async ({ app, mockApi, page }) => {
@@ -273,16 +387,8 @@ for (const theme of FIXTURE_THEMES) {
       ]) {
         await page.setViewportSize({ width: narrow.width, height: FOLD });
         if (narrow.console) await app.openConsole();
-        // Let the shell's finite transitions end, then check the column really
-        // is narrow: a sample taken while the Console slides in proves nothing.
-        await page.evaluate(() =>
-          Promise.all(
-            document
-              .getAnimations()
-              .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
-              .map((animation) => animation.finished.catch(() => undefined)),
-          ),
-        );
+        // Then check the column really is narrow.
+        await finishTransitions(page);
         await expect
           .poll(() => who.evaluate((el) => el.getBoundingClientRect().width), { message: `${narrow.label}: WHO list width` })
           .toBeLessThan(WHO_ONE_LINE_MIN);
@@ -303,6 +409,52 @@ for (const theme of FIXTURE_THEMES) {
         await expect(place).toHaveAttribute('title', (await place.textContent()) ?? '');
         const chip = row.locator('.chip');
         await expect(chip).toHaveAttribute('title', (await chip.locator('.chip__label').textContent()) ?? '');
+      }
+    });
+
+    test('the hero actions: the stack beside the title at full width, one start-aligned row under it with the Console open', async ({ app, page }) => {
+      // Full width (the Console closed): the gold chip over FetchedAt and the
+      // action, beside the title, and the hero is its title block's height.
+      const wide = await heroGeometry(page);
+      expect(wide.items.map((item) => item.name)).toEqual(['chip', 'fetched-at', 'btn']);
+      expect(wide.actions.left, 'full width: the actions sit beside the title block').toBeGreaterThan(wide.title.right);
+      expect(wide.items[0].bottom, 'full width: the gold chip sits over the controls').toBeLessThanOrEqual(
+        Math.min(wide.items[1].top, wide.items[2].top),
+      );
+      expect(wide.hero.height, 'full width: the hero is as tall as its title block').toBeLessThanOrEqual(wide.title.height + 0.5);
+
+      // A main column too narrow for the stack beside the title wraps the
+      // actions under it. There the stack's second row grew the hero 32px and
+      // pushed the answer band down (W5b home-hero-wrap): the actions must be
+      // one start-aligned row, the hero the title plus one control row, as
+      // before FetchedAt joined the hero (the pre-W5b console capture).
+      for (const narrow of [
+        { label: '1440x900 with the Console open', width: 1440, console: true },
+        // responsive.spec.ts's narrow canary: the 42vw cap (483px) is narrower
+        // than the 528px row, so the row only holds if the wrapped slot lifts it.
+        { label: '1150x900, the Console closed', width: 1150, console: false },
+      ]) {
+        await page.setViewportSize({ width: narrow.width, height: FOLD });
+        if (narrow.console) await app.openConsole();
+        await finishTransitions(page);
+        const geometry = await heroGeometry(page);
+        const { title, actions, items } = geometry;
+        expect(actions.top, `${narrow.label}: the actions wrap under the title`).toBeGreaterThanOrEqual(title.bottom);
+        expect(Math.abs(items[0].left - title.left), `${narrow.label}: the row starts at the title's edge`).toBeLessThanOrEqual(0.5);
+        const centres = items.map((item) => item.top + item.height / 2);
+        const minHeight = Math.min(...items.map((item) => item.height));
+        expect(Math.max(...centres) - Math.min(...centres), `${narrow.label}: chip, FetchedAt and action centre on one row`).toBeLessThan(
+          minHeight / 2,
+        );
+        for (let index = 1; index < items.length; index += 1) {
+          expect(items[index].left, `${narrow.label}: ${items[index].name} follows ${items[index - 1].name}`).toBeGreaterThanOrEqual(
+            items[index - 1].right,
+          );
+        }
+        const controlRow = Math.max(...items.map((item) => item.height));
+        expect(geometry.hero.height, `${narrow.label}: the hero is its title and one control row`).toBeLessThanOrEqual(
+          title.height + geometry.rowGap + controlRow + 0.5,
+        );
       }
     });
 
@@ -396,11 +548,18 @@ test.describe('Home answer band links and reads', () => {
   test('WHY NOW and WHAT TO OFFER deep-link through the Lead Queue URL filter contract', async ({ app, page }) => {
     await app.gotoRoute('/');
     const why = page.locator('.home-answer .login-summary');
-    await expect(why.getByRole('link', { name: 'borrowers whose rate and equity pass the refinance screen' }))
+    await expect(why.getByRole('link', { name: 'borrowers who pass the refi screen' }))
       .toHaveAttribute('href', '/lead-queue?segment=itm');
-    await expect(why.getByRole('link', { name: /opportunity score of 75\+/ }))
+    await expect(why.getByRole('link', { name: /opportunity score 75\+/ }))
       .toHaveAttribute('href', '/lead-queue?funnel_stage=high_opportunity');
-    // "offers available" counts "Monitor for later" too; no queue filter is that population.
+    // flow-05: the event measures and the primary offer paths open the queue
+    // filter with the same predicate (offers_available, which had none, is gone).
+    await expect(why.getByRole('link', { name: 'borrowers with a listed home' }))
+      .toHaveAttribute('href', '/lead-queue?purchase_intent=Listed+for+sale');
+    await expect(why.getByRole('link', { name: 'borrowers with a competitor lien' }))
+      .toHaveAttribute('href', '/lead-queue?lender_relationship=Competitor+customer');
+    await expect(why.getByRole('link', { name: 'borrowers with a primary offer path' }))
+      .toHaveAttribute('href', '/lead-queue?funnel_stage=offer_recommended');
     await expect(why.getByRole('link', { name: 'borrowers with an offer decision' })).toHaveCount(0);
 
     const offers = page.locator('.offer-mix__legend');

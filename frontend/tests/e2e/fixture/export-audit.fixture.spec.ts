@@ -7,7 +7,11 @@
  *    receipt (422) downloads nothing and shows why;
  *  - the audit explorer's filters round-trip through the URL, a deep link
  *    opens its event, rows read as human labels with the raw code in a mono
- *    chip, and the current page downloads as CSV with its header row.
+ *    chip, and the current page downloads as CSV with its header row;
+ *  - D-approval-flow-b: a loaded-rows export of a larger cohort (500 of
+ *    2,340) reads "Export 500 loaded", declares matching_row_count, states
+ *    `# matching_rows` and the contact policy in the hashed file, and its
+ *    confirmation links to the campaign handoff.
  *
  * The download-ordering assertion reads an in-page probe (fetch + anchor
  * click, installed before the app boots), so it does not race Playwright's
@@ -16,6 +20,8 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from '../../../src/lib/apiClients/leadExport';
+import type { LeadSummary } from '../../../src/types';
+import { LEADS, maskedBorrowerId } from './data/borrowers';
 import {
   EXPLORER_ROWS,
   EXPORT_ACTOR,
@@ -128,12 +134,12 @@ test.describe('audited lead CSV export', () => {
     const receiptLine = page.getByTestId('lead-export-receipt');
     await expect(receiptLine).toHaveText(`Exported 2 rows · audit ${EXPORT_RECEIPT_ID}`);
     const receiptLink = receiptLine.getByRole('link', { name: EXPORT_RECEIPT_ID });
-    await expect(receiptLink).toHaveAttribute('href', `/admin-config?audit_event_id=${EXPORT_RECEIPT_ID}#audit`);
+    await expect(receiptLink).toHaveAttribute('href', `/audit-ledger?audit_event_id=${EXPORT_RECEIPT_ID}#audit`);
 
     // The audit id opens the explorer on that one LEAD_EXPORT row, in-app.
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage([]));
     await receiptLink.click();
-    await expect(page).toHaveURL(new RegExp(`/admin-config\\?audit_event_id=${EXPORT_RECEIPT_ID}#audit$`));
+    await expect(page).toHaveURL(new RegExp(`/audit-ledger\\?audit_event_id=${EXPORT_RECEIPT_ID}#audit$`));
     const explorer = page.locator('#audit');
     await expect(explorer.getByRole('button', { name: `Collapse audit event ${EXPORT_RECEIPT_ID}` }))
       .toHaveAttribute('aria-expanded', 'true');
@@ -207,11 +213,56 @@ test.describe('audited lead CSV export', () => {
   });
 });
 
+test.describe('export honesty (D-approval-flow-b)', () => {
+  /** 500 loaded rows of a 2,340-borrower cohort (synthetic masked ids). */
+  const LOADED: LeadSummary[] = Array.from({ length: 500 }, (_, index) => ({
+    ...LEADS[index % LEADS.length],
+    borrower_id: maskedBorrowerId(1000 + index),
+    approval_status: 'pending',
+    outreach_status: 'none',
+  }));
+
+  test('500 of 2,340: the label, the declaration, the hashed file and the notice say the export is partial', async ({ app, page, mockApi }) => {
+    mockApi.register<LeadSummary[]>('GET', '/api/leads', () => json<LeadSummary[]>(LOADED, {
+      headers: { 'X-Total-Matching': '2340', 'X-Returned-Rows': '500' },
+    }));
+    const receipts: LeadExportReceiptRequest[] = [];
+    mockApi.register<LeadExportReceipt>('POST', '/api/leads/export-receipt', ({ body }) => {
+      receipts.push(body as LeadExportReceiptRequest);
+      return json<LeadExportReceipt>(leadExportReceiptFor(body as LeadExportReceiptRequest));
+    });
+    await app.gotoRoute('/lead-queue');
+
+    const exportButton = page.getByTestId('lead-export');
+    await expect(exportButton).toHaveText('Export 500 loaded');
+    await expect(exportButton).toHaveAccessibleName('Export 500 loaded as CSV');
+    await expect(exportButton).toHaveAccessibleDescription('2,340 match these filters; only loaded leads are exported.');
+
+    const download = page.waitForEvent('download');
+    await exportButton.click();
+    const csv = await readFile(await (await download).path(), 'utf8');
+
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].scope).toBe('loaded');
+    expect(receipts[0].row_count).toBe(500);
+    expect(receipts[0].matching_row_count).toBe(2340);
+    expect(csv).toContain('\n# matching_rows=2340\n');
+    expect(csv).toContain('\n# contact_policy=human_approval_required; only rows with approval_status=approved are cleared for outreach\n');
+    // Both lines are inside the bytes the receipt's digest covers.
+    expect(createHash('sha256').update(csv, 'utf8').digest('hex')).toBe(receipts[0].csv_sha256);
+
+    const notice = page.getByTestId('lead-export-notice');
+    await expect(notice).toContainText('Only the loaded leads were exported. To work all 2,340, build a campaign.');
+    const link = notice.getByRole('link', { name: 'build a campaign' });
+    await expect(link).toHaveAttribute('href', /^\/portfolio-builder/);
+  });
+});
+
 test.describe('audit explorer', () => {
   test('filters round-trip through the URL and reach the API', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     const explorer = page.locator('#audit');
 
     await explorer.getByLabel('ACTOR', { exact: true }).fill(EXPORT_ACTOR);
@@ -252,7 +303,7 @@ test.describe('audit explorer', () => {
   test('an inverted day window is refused by the governed alert, on the date inputs', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     const explorer = page.locator('#audit');
     await expect(explorer.locator('table[aria-label="Audit events"] tbody tr[data-audit-event-id]'))
       .toHaveCount(EXPLORER_ROWS.length);
@@ -284,7 +335,7 @@ test.describe('audit explorer', () => {
   test('a day the URL cannot hold is refused on its own input, not silently dropped', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     const explorer = page.locator('#audit');
     await expect(explorer.locator('table[aria-label="Audit events"] tbody tr[data-audit-event-id]'))
       .toHaveCount(EXPLORER_ROWS.length);
@@ -312,7 +363,7 @@ test.describe('audit explorer', () => {
   test('removing a filter chip hands focus to the next chip, then to Apply', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute(`/admin-config?audit_actor=${encodeURIComponent(EXPORT_ACTOR)}&audit_event_type=APPROVE#audit`);
+    await app.gotoRoute(`/audit-ledger?audit_actor=${encodeURIComponent(EXPORT_ACTOR)}&audit_event_type=APPROVE#audit`);
     const explorer = page.locator('#audit');
     const chips = explorer.getByLabel('Applied audit filters');
     await expect(chips).toContainText('event = Outreach approved · APPROVE');
@@ -332,7 +383,7 @@ test.describe('audit explorer', () => {
   test('a deep link opens its event; its correlation id opens the whole request', async ({ app, page, mockApi }) => {
     const requests: URLSearchParams[] = [];
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage(requests));
-    await app.gotoRoute(`/admin-config?audit_event_id=${EXPORT_RECEIPT_ID}#audit`);
+    await app.gotoRoute(`/audit-ledger?audit_event_id=${EXPORT_RECEIPT_ID}#audit`);
     const explorer = page.locator('#audit');
 
     expect(requests[requests.length - 1].get('event_id')).toBe(EXPORT_RECEIPT_ID);
@@ -364,7 +415,7 @@ test.describe('audit explorer', () => {
 
   test('rows read as human labels with the raw code in a mono chip', async ({ app, page, mockApi }) => {
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage([]));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     const rows = page.locator('#audit table[aria-label="Audit events"] tbody tr[data-audit-event-id]');
     await expect(rows).toHaveCount(EXPLORER_ROWS.length);
 
@@ -386,7 +437,7 @@ test.describe('audit explorer', () => {
 
   test('the current page downloads as CSV with its header row', async ({ app, page, mockApi }) => {
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage([]));
-    await app.gotoRoute('/admin-config#audit');
+    await app.gotoRoute('/audit-ledger#audit');
     await expect(page.locator('#audit table[aria-label="Audit events"] tbody tr[data-audit-event-id]'))
       .toHaveCount(EXPLORER_ROWS.length);
 

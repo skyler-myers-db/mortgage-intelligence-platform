@@ -215,3 +215,60 @@ def test_every_schema_table_has_a_reviewed_privilege_entry() -> None:
     created = set(re.findall(r"CREATE TABLE IF NOT EXISTS mip_app\.([a-z_]+) \(", _SCHEMA))
 
     assert created == set(lakebase_migrate._APP_ROLE_TABLE_PRIVILEGES)
+
+
+# ------------------------------- 2026_10_01_genie_job_sections verified sections (genie-01 1b)
+
+
+def _sections_block() -> str:
+    start = _SCHEMA.index("-- Genie completion-job verified sections ---")
+    end = _SCHEMA.index("ON CONFLICT (version) DO NOTHING;", start)
+    return _SCHEMA[start:end]
+
+
+def test_the_sections_migration_adds_one_nullable_jsonb_column_with_a_named_size_check() -> None:
+    from backend.services import genie_completion_jobs as jobs
+
+    block = _sections_block()
+
+    assert re.search(
+        r"ALTER TABLE mip_app\.genie_completion_jobs\s+ADD COLUMN IF NOT EXISTS sections_json JSONB;", block
+    )
+    assert re.search(r"\bNOT NULL\b|CREATE (UNIQUE )?INDEX|CREATE TABLE|GRANT ", block) is None
+    assert re.search(
+        r"IF NOT EXISTS \(\s+SELECT 1 FROM pg_constraint\s+"
+        r"WHERE conrelid = 'mip_app\.genie_completion_jobs'::regclass\s+"
+        r"AND conname = 'genie_completion_jobs_sections_size_chk'\s+\) THEN\s+"
+        r"ALTER TABLE mip_app\.genie_completion_jobs\s+"
+        r"ADD CONSTRAINT genie_completion_jobs_sections_size_chk\s+"
+        r"CHECK \(sections_json IS NULL OR pg_column_size\(sections_json\) <= 8388608\);",
+        block,
+    )
+    assert "EXECUTE" not in block, "static DDL keeps the CHECK inside the replay scanner"
+    assert "genie_completion_jobs_sections_size_chk" in set(
+        re.findall(r"ADD CONSTRAINT\s+([a-z0-9_]+)\s+CHECK\s*\(", _SCHEMA)
+    )
+    comments = re.findall(r"COMMENT ON COLUMN mip_app\.genie_completion_jobs\.sections_json IS\s+'(.*?)';", block,
+                          flags=re.DOTALL)
+    assert len(comments) == 1 and "question" not in comments[0].lower()
+    assert "NULLed at every terminal state" in comments[0]
+    assert re.search(
+        r"INSERT INTO mip_app\.schema_migrations \(version, description\)\s+VALUES \(\s+"
+        r"'2026_10_01_genie_job_sections',",
+        block,
+    )
+    assert "'sections_json'" in jobs._PROBE_SQL and ") = 4 AS present" in jobs._PROBE_SQL
+
+
+def test_every_terminal_statement_nulls_the_sections() -> None:
+    from backend.services import genie_completion_jobs as jobs
+    from backend.services import genie_completion_record as record
+
+    for name, sql in (
+        ("_SUCCEED_SQL", jobs._SUCCEED_SQL),
+        ("_FAIL_SQL", jobs._FAIL_SQL),
+        ("_SWEEP_SQL", jobs._SWEEP_SQL),
+        ("_EXPIRE_JOB_SQL", jobs._EXPIRE_JOB_SQL),
+        ("_END_CANCELLED_SQL", record._END_CANCELLED_SQL),
+    ):
+        assert "sections_json = NULL" in sql, name

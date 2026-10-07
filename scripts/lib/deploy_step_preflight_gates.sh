@@ -60,6 +60,37 @@ else
   DEPLOY_INVENTORY_PRINCIPAL="dry-run-deployer@example.invalid"
 fi
 
+# >>> frontend dependency freshness: check >>>
+# Step 1 builds the App source from frontend/package-lock.json; an install
+# that drifted from the lock would ship a build the lock never described
+# (W5a carryover, audit stack-10). Check and report here, before the prompt;
+# the repair (`npm ci`) runs only after it. A shared/symlinked install is
+# never mutated. Exit codes of tools/frontend_deps_check.py: 0 fresh,
+# 10 stale or missing, 11 shared; anything else is a hard preflight error.
+FRONTEND_DEPS_STATE="skipped"
+if [[ -f tools/frontend_deps_check.py ]]; then
+  _frontend_deps_rc=0
+  "$PYTHON" -m tools.frontend_deps_check || _frontend_deps_rc=$?
+  case "$_frontend_deps_rc" in
+    0) FRONTEND_DEPS_STATE="fresh" ;;
+    10) FRONTEND_DEPS_STATE="stale" ;;
+    11) FRONTEND_DEPS_STATE="shared" ;;
+    *) FRONTEND_DEPS_STATE="error" ;;
+  esac
+  echo "  frontend deps: ${FRONTEND_DEPS_STATE}"
+  if [[ "$DRY_RUN" -eq 0 && "$FRONTEND_DEPS_STATE" == "shared" ]]; then
+    echo "${RED}[deploy] frontend/node_modules is a shared/symlinked install; run npm --prefix frontend ci in a private checkout.${RST}" >&2
+    exit 2
+  fi
+  if [[ "$DRY_RUN" -eq 0 && "$FRONTEND_DEPS_STATE" == "error" ]]; then
+    echo "${RED}[deploy] the frontend dependency check failed (exit ${_frontend_deps_rc}).${RST}" >&2
+    exit 2
+  fi
+else
+  echo "  frontend deps: skipped (tools/frontend_deps_check.py is not in this tree)"
+fi
+# <<< frontend dependency freshness: check <<<
+
 if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
   read -r -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans
   if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
@@ -67,6 +98,21 @@ if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
     exit 1
   fi
 fi
+
+# >>> frontend dependency freshness: repair >>>
+# After the confirmation prompt (or NO_CONFIRM): install exactly the lock into
+# this checkout's own frontend/node_modules, then prove it took.
+if [[ "$DRY_RUN" -eq 0 && "$FRONTEND_DEPS_STATE" == "stale" ]]; then
+  run npm --prefix frontend ci --no-audit --no-fund
+  _frontend_deps_rc=0
+  "$PYTHON" -m tools.frontend_deps_check || _frontend_deps_rc=$?
+  if [[ "$_frontend_deps_rc" -ne 0 ]]; then
+    echo "${RED}[deploy] frontend/node_modules still does not match frontend/package-lock.json after npm ci.${RST}" >&2
+    echo "  fix: npm --prefix frontend ci --no-audit --no-fund, then re-run ./scripts/deploy.sh" >&2
+    exit 2
+  fi
+fi
+# <<< frontend dependency freshness: repair <<<
 
 # Resolve deployment-scoped controls before any workspace mutation. A reviewed
 # shell export wins; otherwise the documented .env.local value wins; defaults
@@ -106,6 +152,46 @@ if [[ -z "$MIP_LENDER_NAME" || -z "$MIP_LENDER_NMLS_ID" || -z "$MIP_TENANT_ID" ]
   echo "${RED}[deploy] lender disclosure identity did not resolve completely.${RST}" >&2
   exit 2
 fi
+# Optional lender co-branding (audit responsive-10, report 12.4 #9). The mark
+# file is checked against the reviewed registry (backend/schemas/
+# lender_branding.py) before any workspace mutation; only its sha256 travels
+# on, to Step 1's stage and the frontend build. The path is never logged.
+# The theme and accent are tenant defaults for users who have not chosen;
+# the product defaults (dark, bright) emit nothing.
+MIP_LENDER_MARK_FILE="$(deployment_control_value MIP_LENDER_MARK_FILE)"
+MIP_DEFAULT_THEME="$(deployment_control_value MIP_DEFAULT_THEME dark)"
+MIP_DEFAULT_ACCENT="$(deployment_control_value MIP_DEFAULT_ACCENT bright)"
+if [[ ! "$MIP_DEFAULT_THEME" =~ ^(dark|light|system)$ ]]; then
+  echo "${RED}[deploy] MIP_DEFAULT_THEME must be dark, light or system.${RST}" >&2
+  exit 2
+fi
+if [[ ! "$MIP_DEFAULT_ACCENT" =~ ^(bright|teal|navy|red)$ ]]; then
+  echo "${RED}[deploy] MIP_DEFAULT_ACCENT must be bright, teal, navy or red.${RST}" >&2
+  exit 2
+fi
+if [[ -f tools/branding/lender_mark.py ]]; then
+  if ! MIP_LENDER_MARK_SHA256="$(
+      "$PYTHON" -m tools.branding.lender_mark validate --lender "$MIP_LENDER_NAME" \
+        --nmls "$MIP_LENDER_NMLS_ID" --file "$MIP_LENDER_MARK_FILE" --print-sha256
+    )" || [[ -n "$MIP_LENDER_MARK_SHA256" && ! "$MIP_LENDER_MARK_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "${RED}[deploy] lender mark did not pass the reviewed lender-mark registry.${RST}" >&2
+    exit 2
+  fi
+else
+  # Isolated shell-contract copies carry no branding tool (as the lender
+  # identity fallback above): the only safe answer there is no mark.
+  if [[ -n "$MIP_LENDER_MARK_FILE" ]]; then
+    echo "${RED}[deploy] lender mark tool is unavailable; unset MIP_LENDER_MARK_FILE.${RST}" >&2
+    exit 2
+  fi
+  MIP_LENDER_MARK_SHA256=''
+fi
+if [[ -n "$MIP_LENDER_MARK_SHA256" ]]; then
+  echo "[deploy] lender mark: ${MIP_LENDER_MARK_SHA256:0:12}"
+else
+  echo "[deploy] lender mark: none"
+fi
+export MIP_LENDER_MARK_FILE MIP_DEFAULT_THEME MIP_DEFAULT_ACCENT MIP_LENDER_MARK_SHA256
 _LAKEBASE_INSTANCE_NAME="$(deployment_control_value LAKEBASE_INSTANCE_NAME)"
 _MIP_LAKEBASE_INSTANCE="$(deployment_control_value MIP_LAKEBASE_INSTANCE)"
 if [[ -n "$_LAKEBASE_INSTANCE_NAME" && -n "$_MIP_LAKEBASE_INSTANCE" && \
@@ -296,6 +382,57 @@ if [[ -z "$_ADMIN_EMAILS_RESOLVED" ]]; then
 else
   echo "  admin allowlist: configured (MIP_ADMIN_EMAILS set)"
 fi
+
+# >>> auditor-sod-check
+# Auditor segregation-of-duties check (D-audit-reads-c3). Warn, never refuse; counts only.
+# Each list resolves from the shell env first, else .env.local (the admin
+# check's precedence above); no identity is ever printed.
+_AUDITOR_SOD="$(
+  MIP_AUDITOR_EMAILS="${MIP_AUDITOR_EMAILS:-}" \
+  MIP_AUDITOR_IDENTITIES="${MIP_AUDITOR_IDENTITIES:-}" \
+  MIP_ADMIN_EMAILS="${MIP_ADMIN_EMAILS:-}" \
+  MIP_ADMIN_IDENTITIES="${MIP_ADMIN_IDENTITIES:-}" \
+  MIP_APPROVER_EMAILS="${MIP_APPROVER_EMAILS:-}" \
+  MIP_APPROVER_IDENTITIES="${MIP_APPROVER_IDENTITIES:-}" \
+  "$PYTHON" - <<'PYEOF'
+import os
+from pathlib import Path
+
+try:
+    from dotenv import dotenv_values
+
+    DOTENV = dotenv_values(Path(".env.local"))
+except Exception:
+    DOTENV = {}
+
+
+def identities(*names):
+    found = set()
+    for name in names:
+        raw = (os.environ.get(name) or DOTENV.get(name) or "").strip()
+        found |= {token.strip().lower() for token in raw.split(",") if token.strip()}
+    return found
+
+
+AUDITORS = identities("MIP_AUDITOR_EMAILS", "MIP_AUDITOR_IDENTITIES")
+PRIVILEGED = identities(
+    "MIP_ADMIN_EMAILS", "MIP_ADMIN_IDENTITIES", "MIP_APPROVER_EMAILS", "MIP_APPROVER_IDENTITIES"
+)
+print(f"{len(AUDITORS)}\t{len(AUDITORS & PRIVILEGED)}")
+PYEOF
+)" || _AUDITOR_SOD=""
+[[ -n "$_AUDITOR_SOD" ]] || _AUDITOR_SOD=$'0\t0'
+IFS=$'\t' read -r _AUDITOR_COUNT _AUDITOR_OVERLAP <<<"$_AUDITOR_SOD"
+echo "  auditor allowlist: ${_AUDITOR_COUNT:-0} configured"
+if [[ "${_AUDITOR_OVERLAP:-0}" =~ ^[1-9][0-9]*$ ]]; then
+  if [[ "$_AUDITOR_OVERLAP" == "1" ]]; then
+    _AUDITOR_OVERLAP_TEXT="1 auditor identity also holds"
+  else
+    _AUDITOR_OVERLAP_TEXT="${_AUDITOR_OVERLAP} auditor identities also hold"
+  fi
+  echo "${YLW}[deploy] WARNING: ${_AUDITOR_OVERLAP_TEXT} the administrator or approver role; auditors should hold neither (segregation of duties).${RST}" >&2
+fi
+# <<< auditor-sod-check
 
 APP_RUNTIME_ENV="${APP_ENV:-}"
 if [[ -z "$APP_RUNTIME_ENV" ]]; then

@@ -49,6 +49,15 @@ function expectAdminVisible(html: string): void {
   expect(html).toContain('>Admin<');
 }
 
+/** The ledger's route-nav link ('Audit') and its rail item, counted apart. */
+function ledgerLinks(html: string): { nav: number; rail: number } {
+  const links = [...html.matchAll(/<a[^>]*href="\/audit-ledger"[^>]*>[\s\S]*?<\/a>/g)].map((match) => match[0]);
+  return {
+    nav: links.filter((link) => link.includes('route-nav__link') && link.includes('>Audit<')).length,
+    rail: links.filter((link) => link.includes('rail__item') && link.includes('aria-label="Audit ledger"')).length,
+  };
+}
+
 describe('role-aware navigation', () => {
   let queryClient: QueryClient;
 
@@ -59,7 +68,51 @@ describe('role-aware navigation', () => {
   });
 
   it('fails closed before the first successful session authorization', () => {
-    expectAdminHidden(renderNavigation(queryClient));
+    const html = renderNavigation(queryClient);
+    expectAdminHidden(html);
+    expect(ledgerLinks(html)).toEqual({ nav: 0, rail: 0 });
+  });
+
+  /**
+   * D-audit-reads-c3: a read-only auditor gets the ledger as 'Audit' in the
+   * route nav (in Admin's place) and as a rail item; never Admin. An admin
+   * keeps Admin in the nav (one more link would wrap the pinned one-line
+   * nav) and reaches the ledger from the rail. A plain user gets neither.
+   */
+  it('shows an auditor the ledger in the nav and the rail, and no Admin anywhere', () => {
+    queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, {
+      can_access_admin: false,
+      can_approve: false,
+      can_read_audit: true,
+    });
+    const html = renderNavigation(queryClient);
+
+    expectAdminHidden(html);
+    expect(ledgerLinks(html)).toEqual({ nav: 1, rail: 1 });
+  });
+
+  it('shows an admin Admin in the nav and both items in the rail, but no nav "Audit"', () => {
+    queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, {
+      can_access_admin: true,
+      can_approve: true,
+      can_read_audit: true,
+    });
+    const html = renderNavigation(queryClient);
+
+    expectAdminVisible(html);
+    expect(ledgerLinks(html)).toEqual({ nav: 0, rail: 1 });
+  });
+
+  it('shows a plain workspace user neither the ledger nor Admin', () => {
+    queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, {
+      can_access_admin: false,
+      can_approve: true,
+      can_read_audit: false,
+    });
+    const html = renderNavigation(queryClient);
+
+    expectAdminHidden(html);
+    expect(ledgerLinks(html)).toEqual({ nav: 0, rail: 0 });
   });
 
   it('shows the Admin destination in both navs after an affirmative session response', () => {

@@ -9,6 +9,12 @@ import {
   DEFAULT_THEME_PREFERENCE,
   THEME_CHOICE_KEY,
   THEME_PREFERENCES,
+  LENDER_MARK_LENDER_META,
+  LENDER_MARK_META,
+  TENANT_ACCENT_META,
+  TENANT_THEME_META,
+  lenderMarkLender,
+  lenderMarkUrl,
   persistAccent,
   persistDensity,
   persistThemePreference,
@@ -19,6 +25,8 @@ import {
   subscribeSystemTheme,
   syncThemeColorMeta,
   systemPrefersDark,
+  tenantDefaultAccent,
+  tenantDefaultTheme,
 } from './themePreference';
 
 type Listener = (event: { matches: boolean }) => void;
@@ -158,3 +166,47 @@ describe('theme preference model', () => {
     root.style.removeProperty('--bg-0');
   });
 });
+
+/** Deploy-time tenant defaults and the lender mark metas (audit responsive-10, 12.4 #9). */
+describe('tenant metas', () => {
+  const setMetas = (metas: Record<string, string>) => {
+    document.head.innerHTML = Object.entries(metas).map(([name, content]) => `<meta name="${name}" content="${content}">`).join('');
+  };
+  afterEach(() => {
+    document.head.innerHTML = '';
+  });
+
+  it('reads the tenant theme and accent defaults, else the product defaults', () => {
+    expect([tenantDefaultTheme(), tenantDefaultAccent()]).toEqual([DEFAULT_THEME_PREFERENCE, DEFAULT_ACCENT]);
+    setMetas({ [TENANT_THEME_META]: 'system', [TENANT_ACCENT_META]: 'red' });
+    expect([tenantDefaultTheme(), tenantDefaultAccent()]).toEqual(['system', 'red']);
+    setMetas({ [TENANT_THEME_META]: 'Light', [TENANT_ACCENT_META]: 'purple' });
+    expect([tenantDefaultTheme(), tenantDefaultAccent()]).toEqual([DEFAULT_THEME_PREFERENCE, DEFAULT_ACCENT]);
+  });
+
+  it('yields the lender mark URL only in its exact emitted shape and with its lender', () => {
+    const lender = { [LENDER_MARK_LENDER_META]: ' Fixture Test Lending ' };
+    setMetas({ [LENDER_MARK_META]: '/branding/lender-mark.png?v=0a1b2c3d', ...lender });
+    expect(lenderMarkUrl()).toBe('/branding/lender-mark.png?v=0a1b2c3d');
+    expect(lenderMarkLender()).toBe('Fixture Test Lending');
+    setMetas({ [LENDER_MARK_META]: '/branding/lender-mark.webp?v=0a1b2c3d', ...lender });
+    expect(lenderMarkUrl()).toBe('/branding/lender-mark.webp?v=0a1b2c3d');
+    for (const url of [
+      'https://cdn.example/branding/lender-mark.png?v=0a1b2c3d',
+      '//cdn.example/branding/lender-mark.png?v=0a1b2c3d',
+      '/branding/lender-mark.png',
+      '/branding/lender-mark.png?v=0A1B2C3D',
+      '/branding/lender-mark.svg?v=0a1b2c3d',
+      '/branding/lender-mark.png?v=0a1b2c3d&x=1',
+      'javascript:alert(1)',
+    ]) {
+      setMetas({ [LENDER_MARK_META]: url, ...lender });
+      expect(lenderMarkUrl(), url).toBeNull();
+    }
+    setMetas({ [LENDER_MARK_META]: '/branding/lender-mark.png?v=0a1b2c3d' });
+    expect(lenderMarkUrl(), 'no lender meta').toBeNull();
+    setMetas({ [LENDER_MARK_META]: '/branding/lender-mark.png?v=0a1b2c3d', [LENDER_MARK_LENDER_META]: '   ' });
+    expect(lenderMarkUrl(), 'a blank lender meta').toBeNull();
+  });
+});
+

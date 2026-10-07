@@ -36,6 +36,25 @@
    Console narrows the header ("Sales / ops" wrapped). */
 .lead-table__header-actions .filter { white-space: nowrap; }
 
+/* The title row carries `.btn--sm` controls (FetchedAt's Refresh, the
+   bordered Triage entry), which fill its full block size: the Triage button's
+   edge sat flush on the keycap hint (the W5b VRT). The hint takes the
+   prototype's title-then-sub spacing (`.seg-card__sub` / `.approval__sub`
+   margin-top, design_files/index.html:527, :650) as var(--sp-1).
+   deviation:lead-table-title-row-clearance: the header gives that var(--sp-1)
+   back from its block padding, half above and half below (DEPARTURE from
+   `.surface__hdr` padding var(--sp-4), design_files/Module 0
+   Prototype.html:362-366). The header keeps its height, so the 480px scroller
+   still ends above the fold at 1440x900 (queue-layout and queue-keyboard
+   fixture specs), and the centred icon and header actions do not move.
+   Screen only: print sets its own padding. */
+@media screen {
+  .surface__hdr.lead-table__header--title-row {
+    padding-block: calc(var(--sp-4) - var(--sp-1) / 2);
+  }
+}
+.lead-table__header--title-row .lead-table__hint { margin-block-start: var(--sp-1); }
+
 /* One line per cell: a primary value, then `+n`. Chips shrink with an
    ellipsis; the `+n` and compliance flags never do. */
 .lead-table__line {
@@ -143,6 +162,19 @@
   flex-direction: column;
   gap: var(--sp-1);
   min-inline-size: 0;
+}
+/* deviation:assignment-lifecycle-stepper: five prototype chips on one line. */
+.lead-row-workflow__steps {
+  flex-wrap: nowrap;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lead-row-workflow__steps .chip { font-size: var(--fs-11); }
+.lead-row-workflow__step--upcoming {
+  background: transparent;
+  color: var(--text-3);
 }
 
 /* Keyboard row cursor (audit tables-03): an active row on the native table,
@@ -263,12 +295,13 @@
    Shift+Tab from the first row): the table cannot move, and `.main` alone
    scrolls the header clear of the nav. A scroll-state container is not a
    size container, so the table's `cqw` units still resolve against `.main`.
-   An engine without scroll-state queries (WebKit 26) keeps the old
-   behaviour: no margin on the header. */
+   An engine without scroll-state queries (WebKit 26) gets the same rule
+   from useTableScrollClearance's `data-at-block-start` flag (a11y-v2). */
 .tbl-wrap:has(> .lead-table__table) { container-type: scroll-state; }
 @container not scroll-state(scrollable: top) {
   .lead-table__table thead * { scroll-margin-block-start: var(--tbl-focus-clear); }
 }
+.tbl-wrap[data-at-block-start] > .lead-table__table thead * { scroll-margin-block-start: var(--tbl-focus-clear); }
 
 /* Row expand motion (audit motion-08 slice 1, queue part): the expand
    column's one chevron turns a quarter on the expanded row (replacing the

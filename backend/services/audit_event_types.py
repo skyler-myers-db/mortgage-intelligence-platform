@@ -5,6 +5,9 @@ from __future__ import annotations
 SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "ACTIVATION_STAGE",
+        "APPROVAL_REQUEST_REFUSED",
+        "APPROVAL_REQUEST_WITHDRAWN",
+        "APPROVAL_REQUESTED",
         "APPROVE",
         "AUDIT_EXPORT",
         "CALL_DISPOSITION",
@@ -17,6 +20,7 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "GENIE_FEEDBACK",
         "GENIE_FEEDBACK_INTENT",
         "GENIE_REFUSAL_REPORT",
+        "GENIE_SECTION_REVEALED",
         "GENIE_TURN_CANCELLED",
         "GROWTH_AGENT_COMPOSE",
         "GROWTH_AGENT_MONITOR_SAVE",
@@ -31,6 +35,7 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "LEAD_OUTCOME_RECORDED",
         "OUTREACH_APPROVE",
         "OUTREACH_REJECT",
+        "OUTREACH_REVOKE",
         "PORTFOLIO_CREATE",
         "PROPERTY_LOOKUP",
         "RECOMMEND_OFFER",
@@ -42,6 +47,8 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "VIEW_BORROWER",
         "VIEW_BORROWER_PROOF",
         "VIEW_LEADS",
+        # D-audit-reads-c3: a served cross-actor ledger read (audit_ledger_reads).
+        "VIEW_AUDIT_LEDGER",
     }
 )
 

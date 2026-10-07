@@ -32,6 +32,7 @@ import {
   type GenieRowsExtent,
 } from './GenieAnswerRowsActions';
 import type { GenieAnswerExportBase, GenieRowsExportTarget } from './GenieAnswer.exportTarget';
+import { formatCount } from '../../lib/formatters';
 
 // Every row and column, loaded only when the reader asks for it (genie-06).
 const GenieAnswerAllRows = lazy(() => import('./GenieAnswerAllRows'));
@@ -59,6 +60,7 @@ export function GenieRowsVisual({
   dense = false,
   exportTarget = null,
   onAnnounce,
+  preview = false,
 }: {
   rows: Array<Record<string, unknown>>;
   plan: GenieVisualizationPlan;
@@ -74,6 +76,9 @@ export function GenieRowsVisual({
   exportTarget?: GenieRowsExportTarget | null;
   /** The surface's one announcer (a11y-06). */
   onAnnounce?: (text: string) => void;
+  /** Partial research (genie-01 phase 1b): no row actions, no CSV, no cell
+   *  or chart links; every row arrives with the recorded answer. */
+  preview?: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
   const chart = plan.chart;
@@ -94,6 +99,10 @@ export function GenieRowsVisual({
     columns: everyColumn.length,
     hiddenColumns: everyColumn.length - columns.length,
   };
+  // A preview has no "Show all": name the rows the compact table actually
+  // shows against every row the section holds or reports, so a 30-row
+  // section (held = reported) or a trimmed one never reads as complete.
+  const previewTotal = Math.max(rows.length, reportedRowCount ?? 0);
   const hiddenColumnsNote =
     hiddenColumns.length > 0 ? (
       <div className="genie-answer__more genie-answer__hidden-columns">
@@ -110,7 +119,7 @@ export function GenieRowsVisual({
       {plan.kind === 'strategy_board' && (
         <GenieStrategyBoard rows={rows} x={plan.viz?.x} y={plan.viz?.y} />
       )}
-      {plan.kind === 'borrower_list' && <GenieBorrowerList rows={rows} />}
+      {plan.kind === 'borrower_list' && <GenieBorrowerList rows={rows} preview={preview} />}
       {plan.kind === 'map' && (
         <GenieMapChart rows={rows} x={plan.viz?.x ?? chart?.labelCol} y={plan.viz?.y ?? chart?.valueCol} />
       )}
@@ -130,6 +139,9 @@ export function GenieRowsVisual({
           valueCol={chart.valueCol}
           tableRowCount={rows.length}
           tableExpanded={showAll}
+          sourceRows={rows}
+          cellCohort={cellCohort}
+          preview={preview}
         />
       )}
       {/* A single METRIC row is a set of headline facts, not a table —
@@ -202,7 +214,7 @@ export function GenieRowsVisual({
                         // geography map navigates to on a state click.
                         // Everything else (including city — no route filters
                         // by city) renders as plain text.
-                        const href = genieCellHref(c, v, cellCohort, row);
+                        const href = preview ? null : genieCellHref(c, v, cellCohort, row);
                         return (
                           <td key={c} className={isNum ? 'num' : undefined}>
                             {href ? (
@@ -224,8 +236,14 @@ export function GenieRowsVisual({
           </>
         )
       )}
+      {preview && previewTotal > visibleRows.length && (
+        <div className="genie-answer__more genie-answer__preview-note">
+          Preview: the first {formatCount(visibleRows.length)} of {formatCount(previewTotal)} rows. Every row
+          arrives with the recorded answer.
+        </div>
+      )}
       {/* The inert "+N more rows" became the control that shows them. */}
-      {rows.length > 0 && (
+      {!preview && rows.length > 0 && (
         <GenieAnswerRowsActions extent={extent} expanded={showAll} onToggle={() => setShowAll((open) => !open)}>
           {exportTarget && (
             <GenieRowsCsvDownload
@@ -254,12 +272,14 @@ export function GenieSectionVisual({
   dense = false,
   exportTarget = null,
   onAnnounce,
+  preview = false,
 }: {
   section: GenieAnswerSection;
   cellCohort?: GenieAnswerCohort;
   dense?: boolean;
   exportTarget?: GenieRowsExportTarget | null;
   onAnnounce?: (text: string) => void;
+  preview?: boolean;
 }) {
   const rows = Array.isArray(section.table_rows) ? section.table_rows : [];
   if (rows.length === 0) return null;
@@ -278,6 +298,7 @@ export function GenieSectionVisual({
       dense={dense}
       exportTarget={exportTarget}
       onAnnounce={onAnnounce}
+      preview={preview}
     />
   );
 }
@@ -305,6 +326,7 @@ export function GenieAnswerSections({
   dense = false,
   exportBase = null,
   onAnnounce,
+  preview = false,
 }: {
   summary?: string | null;
   sections: GenieAnswerSection[];
@@ -315,6 +337,8 @@ export function GenieAnswerSections({
   /** Set on a trusted, live answer: each section offers the audited CSV. */
   exportBase?: GenieAnswerExportBase | null;
   onAnnounce?: (text: string) => void;
+  /** Partial research (genie-01 phase 1b): see GenieRowsVisual. */
+  preview?: boolean;
 }) {
   const summaryText = (summary ?? '').trim();
   const collapsible = sections.length >= GENIE_ACCORDION_MIN_SECTIONS;
@@ -354,6 +378,7 @@ export function GenieAnswerSections({
               dense={dense}
               exportTarget={exportBase ? { ...exportBase, scope: 'section', sectionIndex: i + 1 } : null}
               onAnnounce={onAnnounce}
+              preview={preview}
             />
           </>
         );

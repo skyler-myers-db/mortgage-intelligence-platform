@@ -54,6 +54,20 @@ describe('BorrowerOfferPreviewMock', () => {
     expect(mock.textContent).not.toMatch(/\bapr\b|\$\s?\d|\d\s?%|per month|monthly payment|interest rate/i);
   });
 
+  it('never draws the lender mark, even on a co-branded build (responsive-10: no mark on borrower-facing surfaces)', () => {
+    document.head.innerHTML =
+      '<meta name="mip-lender-mark" content="/branding/lender-mark.png?v=0a1b2c3d"><meta name="mip-lender-mark-lender" content="Summit Mortgage">';
+    try {
+      act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} onClose={() => {}} />));
+      const mock = document.body.querySelector('[data-testid="borrower-offer-mock"]')!;
+      expect(mock.querySelector('.offer-mock__brand')).not.toBeNull();
+      expect(mock.querySelector('img')).toBeNull();
+      expect(mock.innerHTML).not.toContain('lender-mark');
+    } finally {
+      document.head.innerHTML = '';
+    }
+  });
+
   it('shows a qualitative, figure-free reason when a signal is present', () => {
     act(() =>
       root.render(

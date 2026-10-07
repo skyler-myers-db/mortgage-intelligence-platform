@@ -97,6 +97,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/growth-agent/workflows/{workflow_id}/run"): "tests/unit/test_growth_agent_api.py",
     ("GET", "/api/health"): "tests/unit/test_health_endpoint.py",
     ("GET", "/api/home/summary"): "tests/unit/test_home_api.py",
+    ("GET", "/api/home/summary/attribution"): "tests/unit/test_home_attribution.py",
     ("GET", "/api/leads"): "tests/unit/test_api_routes.py",
     ("GET", "/api/leads/count"): "tests/unit/test_leads_count_facets.py",
     ("GET", "/api/leads/facets"): "tests/unit/test_leads_count_facets.py",
@@ -121,6 +122,15 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/outreach/approve"): "tests/unit/test_api_routes.py",
     ("POST", "/api/outreach/draft"): "tests/unit/test_api_routes.py",
     ("POST", "/api/outreach/reject"): "tests/unit/test_outreach_reject.py",
+    ("POST", "/api/outreach/revoke"): "tests/unit/test_outreach_revoke.py",
+    # Maker-checker requests (report 12.4 #10): a request never decides; the
+    # approver still decides each borrower through approve/reject.
+    ("GET", "/api/outreach/approval-requests"): "tests/unit/test_approval_requests_api.py",
+    ("POST", "/api/outreach/approval-requests"): "tests/unit/test_approval_requests_api.py",
+    (
+        "POST",
+        "/api/outreach/approval-requests/{batch_id}/withdraw",
+    ): "tests/unit/test_approval_requests_api.py",
     ("GET", "/api/portfolio"): "tests/unit/test_portfolio_repo_timezone.py",
     ("POST", "/api/portfolio/campaign-recommendation"): "tests/unit/test_campaign_intelligence.py",
     ("POST", "/api/portfolio/create"): "tests/unit/test_api_routes.py",

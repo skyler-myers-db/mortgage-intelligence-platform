@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   MORE_FILTER_PARAMS,
+  hasLeadQueueFilters,
+  leadQueueFilterParams,
+  searchParamsCleared,
   leadBoundChipValue,
   leadQueueActiveFilterChips,
   moreFiltersActiveCount,
@@ -60,5 +63,13 @@ describe('score and rate-spread chips (audit tables-06)', () => {
       portfolioCriteria: { min_opportunity_score: '70', max_opportunity_score: '90', min_rate_spread_bps: '0' },
     });
     expect(moreFiltersActiveCount(chips)).toBe(2);
+  });
+});
+
+describe('the Triage deck mode is display state (D-approval-flow-a2)', () => {
+  it('is never a filter, never enables Clear all and survives it', () => {
+    expect(hasLeadQueueFilters(new URLSearchParams('mode=triage&row=B-0000000000001&view=sales-ops'))).toBe(false);
+    expect(leadQueueFilterParams(new URLSearchParams('mode=triage&state=IL')).toString()).toBe('state=IL');
+    expect(searchParamsCleared(new URLSearchParams('mode=triage&state=IL')).toString()).toBe('mode=triage');
   });
 });

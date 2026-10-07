@@ -71,6 +71,11 @@ export function buildMapTableRows(inputs: MapTableInputs): MapTableGroups {
   } = inputs;
   const value = (count: number, unitKey: string) =>
     shownScenario ? shownScenario.inTheMoneyById[unitKey] : overlayActive ? overlayByUnit[unitKey]?.unattended_count : count;
+  // Rate mode (wow-stage-1): change versus today and the contactable subset
+  // at the shown step, on every state row (drawn, not drawn, empty).
+  const scenarioCells = (id: string) => shownScenario
+    ? { change: shownScenario.changeById?.[id] ?? null, scenarioContactable: shownScenario.contactableById?.[id] ?? null }
+    : {};
   if (level === 'state') {
     if (!stateFacts || !usaMap) return { rows: [], offMap: [], empty: [] };
     const populated = (id: string) => (stateFacts[id]?.addressable ?? 0) > 0;
@@ -87,6 +92,7 @@ export function buildMapTableRows(inputs: MapTableInputs): MapTableGroups {
           contactable: rollup.contactable,
           // The value the fill encodes when it is not borrowers (table column).
           extra: shownScenario || overlayActive ? value(0, location.id) ?? null : undefined,
+          ...scenarioCells(location.id),
           cls: classify(scale, value(rollup.addressable, location.id)),
           // The row's button is gone after the drill, whatever pressed it.
           onOpen: drillBehavior === 'filter' ? () => activateState(location, true, true) : undefined,
@@ -100,6 +106,7 @@ export function buildMapTableRows(inputs: MapTableInputs): MapTableGroups {
         count: null,
         avgScore: null,
         extra: shownScenario || overlayActive ? value(0, location.id) ?? null : undefined,
+        ...scenarioCells(location.id),
         cls: null,
         note: footprintStates[location.id] ? EMPTY_GROUP_LABEL : OUT_OF_SCOPE_NOTE,
       }))
@@ -125,6 +132,7 @@ export function buildMapTableRows(inputs: MapTableInputs): MapTableGroups {
           topSegment: rollup?.top_segment_code ? safeSegmentName(rollup.top_segment_code) ?? undefined : undefined,
           contactable: rollup?.contactable,
           extra: shownScenario || overlayActive ? value(0, id) ?? null : undefined,
+          ...scenarioCells(id),
           cls: null,
         };
       });

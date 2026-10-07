@@ -66,7 +66,9 @@ from backend.services.repositories.databricks_genie_narrative import (
     _sentence_join,  # noqa: F401 - compatibility re-export
 )
 from backend.services.repositories.databricks_genie_numeric import (
-    _unsupported_answer_numeric_claims,
+    NumericClaimCheck,
+    check_numeric_claims,
+    claims_summary,
 )
 from backend.services.repositories.databricks_genie_policy import (
     _extract_asset_refs,
@@ -404,7 +406,7 @@ class DatabricksGenieRepository:
         draft = (turn.answer_text or "").strip()
         if not draft:
             return adapted
-        if _unsupported_answer_numeric_claims(draft, rows, question):
+        if (check := check_numeric_claims(draft, rows, question)).unsupported:
             return adapted
         scannable = _without_allowed_literals(draft, governed_row_literals(rows))
         if _answer_text_contains_pii(scannable) or genie_visible_text_unsafe(scannable):
@@ -434,6 +436,7 @@ class DatabricksGenieRepository:
                     update={
                         "known_data_gaps": gaps,
                         "reasoning_trace": [*proof.reasoning_trace, step],
+                        "claims": claims_summary(check),
                     }
                 ),
                 "reasoning_trace": [*adapted.reasoning_trace, step],
@@ -703,6 +706,7 @@ def _adapt_genie_response(
     prose_withheld_gap: str | None = None
     prose_withheld_reason: str | None = None
     answer_override: str | None = None
+    shipped_claims: NumericClaimCheck | None = None  # genie-10: only prose that ships
     if cross.count_reference is not None:
         # Audit teeth (2026-07-08 lineage): a live metric whose grain
         # contradicts the governed unique-borrower definition must not render
@@ -729,7 +733,7 @@ def _adapt_genie_response(
         )
         prose_withheld_reason = "the output safety guard flagged its wording."
         trace.narrative_withheld(reason=WITHHELD_UNSAFE_TEXT)
-    elif _unsupported_answer_numeric_claims(result.answer_text, rows, question):
+    elif (check := check_numeric_claims(result.answer_text, rows, question)).unsupported:
         prose_withheld_gap = (
             "Genie's draft narrative included numeric or financial claims that "
             "could not be verified against the returned rows; the prose was "
@@ -741,6 +745,7 @@ def _adapt_genie_response(
         trace.narrative_withheld(reason=WITHHELD_UNVERIFIED_NUMBERS)
     elif (result.answer_text or "").strip():
         trace.verified()
+        shipped_claims = check
     else:
         trace.narrative_withheld(reason=WITHHELD_NO_NARRATIVE)
     # Genie enhancement fields (2026-07): the deterministic pipeline trace above
@@ -768,6 +773,8 @@ def _adapt_genie_response(
         proof = proof.model_copy(
             update={"known_data_gaps": [*proof.known_data_gaps, *extra_gaps]}
         )
+    if shipped_claims is not None:
+        proof = proof.model_copy(update={"claims": claims_summary(shipped_claims)})
     # Presentation only: a flag co-occurrence result gets a readable cohort
     # label so its chart and table can be told apart row by row. The claims
     # verification above already ran on the untouched rows.

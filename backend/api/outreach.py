@@ -30,8 +30,11 @@ from backend.schemas.offer import (
     OutreachRejectRequest,
     OutreachRejectResponse,
 )
+from backend.services.approval_requests import (
+    ApprovalRequestLinkRefused,
+    verify_decision_link,
+)
 from backend.services.audit_decision_inputs import decision_inputs_from_borrower
-from backend.services.audit_metadata_validation import validate_free_text_metadata_value
 from backend.services.audit_store import (
     AuditMetadataValueViolation,
     AuditMetadataViolation,
@@ -83,6 +86,12 @@ from backend.services.outreach_drafts import (
     _verified_generated_draft,
 )
 from backend.services.outreach_intelligence import compose_intelligent_outreach
+from backend.services.outreach_text_policy import (
+    refuse_ungoverned_text as _refuse_ungoverned_text,
+)
+from backend.services.outreach_text_policy import (
+    text_policy_refusal as _text_policy_refusal,
+)
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.rbac import require_approver
 from backend.services.repositories import (
@@ -100,27 +109,32 @@ LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 
+_REQUEST_LINK_REFUSED = {
+    "not_open": (
+        "This approval request is no longer open for this borrower; "
+        "clear the request scope to decide directly."
+    ),
+    "self": "You raised this approval request; another approver must decide it.",
+}
 
-def _text_policy_refusal(exc: AuditMetadataValueViolation) -> HTTPException:
-    """422 naming the refused field; the refused text is never echoed."""
 
-    return HTTPException(status_code=422, detail=f"{exc.field} failed the governed text policy")
+def _verify_request_link(
+    lakebase: LakebaseClient, *, batch_id: str | None, borrower_id: str, actor: str
+) -> None:
+    """Maker-checker link (audit flow-02): an open request only, never one's own.
 
-
-def _refuse_ungoverned_text(values: dict[str, str | None]) -> None:
-    """Refuse free text the audit ledger would refuse, BEFORE any read or write.
-
-    The verdict only: the caller keeps its own scrubbed value, so the decision
-    intent's bytes never change. The same check runs again at the write.
+    Runs AFTER both replay lookups, so a retried linked decision returns its
+    stored body, and BEFORE contact eligibility and draft verification.
     """
 
-    for key, value in values.items():
-        if value is None:
-            continue
-        try:
-            validate_free_text_metadata_value(key, value)
-        except AuditMetadataValueViolation as exc:
-            raise _text_policy_refusal(exc) from exc
+    if batch_id is None:
+        return
+    try:
+        verify_decision_link(lakebase, batch_id=batch_id, borrower_id=borrower_id, actor=actor)
+    except ApprovalRequestLinkRefused as exc:
+        raise HTTPException(status_code=409, detail=_REQUEST_LINK_REFUSED[exc.kind]) from exc
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
 
 
 @router.post("/draft", response_model=OutreachDraft, responses=JSON_CONTENT_TYPE_RESPONSE)
@@ -344,6 +358,12 @@ def approve_outreach(
     )
     if existing is not None:
         return OutreachApproveResponse.model_validate(existing)
+    _verify_request_link(
+        lakebase,
+        batch_id=payload.approval_request_batch_id,
+        borrower_id=payload.borrower_id,
+        actor=actor,
+    )
     _enforce_contact_eligibility(
         borrower,
         audit=audit,
@@ -432,6 +452,8 @@ def approve_outreach(
         audit_payload["bulk_id"] = payload.bulk_id
     if safe_bulk_rationale:
         audit_payload["bulk_rationale"] = safe_bulk_rationale
+    if payload.approval_request_batch_id:
+        audit_payload["approval_request_batch_id"] = payload.approval_request_batch_id
     # Feature C: record the assignment + follow-up in the audit metadata so
     # the governance ledger shows who the borrower was routed to and when a
     # follow-up was scheduled. ``assigned_to_email`` is internal-staff-email
@@ -684,6 +706,12 @@ def reject_outreach(
     )
     if existing is not None:
         return OutreachRejectResponse.model_validate(existing)
+    _verify_request_link(
+        lakebase,
+        batch_id=payload.approval_request_batch_id,
+        borrower_id=payload.borrower_id,
+        actor=actor,
+    )
     approval_id = str(uuid4())
     audit_payload: dict[str, Any] = {
         "approval_id": approval_id,
@@ -701,6 +729,8 @@ def reject_outreach(
     audit_payload["request_id"] = effective_request_id
     if payload.bulk_id:
         audit_payload["bulk_id"] = payload.bulk_id
+    if payload.approval_request_batch_id:
+        audit_payload["approval_request_batch_id"] = payload.approval_request_batch_id
     if safe_rationale:
         audit_payload["rationale"] = safe_rationale
     response_payload = {

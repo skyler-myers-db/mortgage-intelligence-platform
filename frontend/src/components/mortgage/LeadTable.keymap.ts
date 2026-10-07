@@ -20,6 +20,8 @@ export const LEAD_TABLE_KEYS = {
 export interface LeadTableKeymapActions {
   /** A / R / Shift+A / Shift+R are registered only when this is true. */
   approverActive: boolean;
+  /** The Triage deck is open: the table registers no keys (its sheet lists the deck's). */
+  suspended?: boolean;
   move: (delta: 1 | -1) => void;
   /** Expand or collapse the cursor row; false when there is none. */
   toggleCursorRow: () => boolean;
@@ -44,6 +46,7 @@ function isNativeActivation(event: KeyboardEvent, scope: HTMLElement | null): bo
 }
 
 export function leadTableHotkeys(actions: LeadTableKeymapActions): LeadTableHotkey[] {
+  if (actions.suspended) return [];
   const hotkeys: LeadTableHotkey[] = [
     { id: 'next', keys: LEAD_TABLE_KEYS.next, description: 'Next borrower', run: () => actions.move(1) },
     { id: 'previous', keys: LEAD_TABLE_KEYS.previous, description: 'Previous borrower', run: () => actions.move(-1) },

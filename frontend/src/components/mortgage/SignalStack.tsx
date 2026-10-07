@@ -176,7 +176,7 @@ function SignalStackTable({ rows }: { rows: SegmentCombination[] }) {
   const exactTotal = rows.reduce((total, row) => total + row.addressable, 0);
   return (
     <div className="signal-stack__table-wrap">
-      <table className="tbl signal-stack__table">
+      <table className="tbl tbl--static signal-stack__table">
         <caption className="signal-stack__caption">Every exact combination of the six core signals, whole book</caption>
         <thead>
           <tr>

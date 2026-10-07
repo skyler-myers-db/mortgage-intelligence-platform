@@ -21,6 +21,33 @@ import {
   patchJson,
 } from '../apiTransport';
 
+/** The `/api/portfolio/preview` body. */
+export interface PortfolioPreviewRequest {
+  criteria: Record<string, unknown>;
+  campaign_build_config?: {
+    suppression_policy: Record<string, unknown>;
+    household_dedup: Record<string, unknown>;
+  };
+}
+
+/** The `/api/portfolio/campaign-recommendation` body. */
+export interface CampaignRecommendationRequest {
+  criteria: Record<string, unknown>;
+}
+
+/** The `/api/portfolio/create` body as the client sends it. */
+export interface PortfolioCreateRequest {
+  name: string;
+  criteria: Record<string, unknown>;
+  suppression_policy: Record<string, unknown>;
+  message_variants: Record<string, unknown>[];
+  channel_cascade: Record<string, unknown>[];
+  send_window: Record<string, unknown>;
+  holdout: Record<string, unknown>;
+  roi_assumptions: Record<string, unknown>;
+  household_dedup: Record<string, unknown>;
+}
+
 export const portfolioApi = {
   portfolioPreview: (
     criteria: Record<string, unknown> = {},
@@ -30,13 +57,7 @@ export const portfolioApi = {
       household_dedup: Record<string, unknown>;
     },
   ) =>
-    postJson<PortfolioPreview, {
-      criteria: Record<string, unknown>;
-      campaign_build_config?: {
-        suppression_policy: Record<string, unknown>;
-        household_dedup: Record<string, unknown>;
-      };
-    }>(
+    postJson<PortfolioPreview, PortfolioPreviewRequest>(
       '/api/portfolio/preview',
       campaignBuildConfig
         ? { criteria, campaign_build_config: campaignBuildConfig }
@@ -48,7 +69,7 @@ export const portfolioApi = {
     criteria: Record<string, unknown> = {},
     signal?: AbortSignal,
   ) =>
-    postJson<CampaignRecommendationResponse, { criteria: Record<string, unknown> }>(
+    postJson<CampaignRecommendationResponse, CampaignRecommendationRequest>(
       '/api/portfolio/campaign-recommendation',
       { criteria },
       signal,
@@ -69,17 +90,7 @@ export const portfolioApi = {
     }> = {},
     signal?: AbortSignal,
   ) =>
-    postJson<PortfolioCreateResponse, {
-      name: string;
-      criteria: Record<string, unknown>;
-      suppression_policy: Record<string, unknown>;
-      message_variants: Record<string, unknown>[];
-      channel_cascade: Record<string, unknown>[];
-      send_window: Record<string, unknown>;
-      holdout: Record<string, unknown>;
-      roi_assumptions: Record<string, unknown>;
-      household_dedup: Record<string, unknown>;
-    }>(
+    postJson<PortfolioCreateResponse, PortfolioCreateRequest>(
       '/api/portfolio/create',
       {
         name,
@@ -105,6 +116,12 @@ export const portfolioApi = {
     ),
 };
 
+/** The `PATCH /api/campaigns/{id}` body. */
+export interface CampaignStatusPatchRequest {
+  status: CampaignSummary['status'];
+  rationale?: string | null;
+}
+
 export const campaignApi = {
   campaigns: (signal?: AbortSignal) =>
     getJson<CampaignListResponse>('/api/campaigns', signal),
@@ -118,7 +135,7 @@ export const campaignApi = {
     rationale?: string | null,
     signal?: AbortSignal,
   ) =>
-    patchJson<CampaignSummary, { status: CampaignSummary['status']; rationale?: string | null }>(
+    patchJson<CampaignSummary, CampaignStatusPatchRequest>(
       `/api/campaigns/${encodeURIComponent(campaignId)}`,
       { status, rationale: rationale ?? null },
       signal,

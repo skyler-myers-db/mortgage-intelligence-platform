@@ -56,6 +56,7 @@ vi.mock('../lib/api', async (importOriginal) => ({
 }));
 
 import AnalyticsRoute from './analytics';
+import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
 import { ApiError } from '../lib/apiTransport';
 import { preloadDescribedError } from '../components/ui/DescribedError';
 
@@ -188,6 +189,45 @@ describe('Analytics Sales ops tab', () => {
     ).toContain('lo02@summit.example');
     // No roster entry -> render the key, never an invented name.
     expect(card?.textContent).toContain('manager@summit.example');
+  });
+
+  it('Sales ops and Offer\'s assignment share one roster read and narrow it each their own way (runtime-06)', async () => {
+    apiMocks.salesTeam.mockResolvedValue([
+      { email: 'lo02@summit.example', display_label: 'Summit LO 02', role: 'loan_officer', capacity_per_day: 25, active: true },
+      { email: 'sm01@summit.example', display_label: 'Summit SM 01', role: 'sales_manager', capacity_per_day: 5, active: true },
+    ]);
+    apiMocks.salesConversion.mockResolvedValue({
+      rows: [
+        { group_key: 'lo02@summit.example', application_start_rate: 0.4 },
+        { group_key: 'sm01@summit.example', application_start_rate: 0.1 },
+      ],
+    });
+    let reviewers: readonly string[] = [];
+    function OfferProbe() {
+      reviewers = useOfferSalesTeam().map((member) => member.email);
+      return null;
+    }
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/analytics?view=sales-ops']}>
+            <AnalyticsRoute />
+            <OfferProbe />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(apiMocks.salesTeam, 'one GET /sales/team for both surfaces').toHaveBeenCalledTimes(1);
+    // Sales ops narrows to loan officers: the manager's row keeps its raw key.
+    const card = [...document.querySelectorAll('.sales-ops-card')].find((node) =>
+      node.textContent?.includes('Week-to-date conversion'),
+    );
+    expect(card?.textContent).toContain('Summit LO 02');
+    expect(card?.textContent).not.toContain('Summit SM 01');
+    // Offer narrows the same entry to active loan officers and sales managers.
+    expect(reviewers).toEqual(['lo02@summit.example', 'sm01@summit.example']);
   });
 
   it('headlines the outcome window total so the card cannot contradict its subline', async () => {

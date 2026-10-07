@@ -8,6 +8,8 @@
  *    switches to (a view switch, not a pressed state, so no aria-pressed);
  *  - the plot or the caller's table node (the kit never imports a route
  *    module: callers pass their own DataTable over the rows the chart plots);
+ *    without a table node (a Genie answer prints its own table below the
+ *    chart, dataviz-05) there is no toggle and no table view;
  *  - a notice slot for a truncation or scale disclosure;
  *  - one persistent polite live region for the keyboard cursor.
  *
@@ -30,22 +32,26 @@ export interface ChartFrameProps {
   /** The plot's accessible name: the section title it sits under. */
   title: string;
   summary: string;
-  table: ReactNode;
+  /** The table twin; omit it when the surface already prints the rows. */
+  table?: ReactNode;
   notice?: ReactNode;
   liveText?: string;
   plotProps?: ChartCursorPlotProps;
   children: ReactNode;
 }
 
-export function ChartFrame({ title, summary, table, notice = null, liveText = '', plotProps, children }: ChartFrameProps) {
+export function ChartFrame({ title, summary, table = null, notice = null, liveText = '', plotProps, children }: ChartFrameProps) {
   const summaryId = useId();
-  const [asTable, setAsTable] = useState(false);
+  const [tableView, setAsTable] = useState(false);
+  const asTable = table !== null && tableView;
   return (
     <figure className="chart-frame">
       <figcaption id={summaryId} className="chart-frame__summary">{summary}</figcaption>
-      <button type="button" className="btn btn--sm chart-frame__toggle" onClick={() => setAsTable((current) => !current)}>
-        {asTable ? 'View as chart' : 'View as table'}
-      </button>
+      {table !== null && (
+        <button type="button" className="btn btn--sm chart-frame__toggle" onClick={() => setAsTable((current) => !current)}>
+          {asTable ? 'View as chart' : 'View as table'}
+        </button>
+      )}
       {asTable ? (
         <div className="chart-frame__table">{table}</div>
       ) : (

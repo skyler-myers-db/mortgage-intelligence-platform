@@ -61,6 +61,10 @@ NON_SECRET_OPERATOR_VARS = (
     "MIP_APPROVER_GROUP_NAME",
     "MIP_APPROVER_EMAILS",
     "MIP_APPROVER_IDENTITIES",
+    # Read-only Auditor role (D-audit-reads-c3). No safe default: empty means
+    # no auditors, and an empty value is dropped (the fail-closed default).
+    "MIP_AUDITOR_EMAILS",
+    "MIP_AUDITOR_IDENTITIES",
     "MIP_DEFAULT_ACTOR",
     "MIP_TRUST_FORWARDED_HEADERS",
     "MIP_RUM_ENABLED",
@@ -246,6 +250,30 @@ def _validated_keep_warm(dotenv: dict[str, str]) -> None:
         )
 
 
+_PRESENTER_MODE_ON = frozenset({"1", "true", "yes", "on"})
+_PRESENTER_MODE_OFF = frozenset({"", "0", "false", "no", "off"})
+PRESENTER_MODE_NOTICE = (
+    "presenter mode ON: roadmap rail slots and the PROTOTYPE borrower view are "
+    "visible to every user"
+)
+
+
+def _validated_presenter_mode(dotenv: dict[str, str], target: str) -> bool:
+    """Demo-only MIP_PRESENTER_MODE (D-shell-deviations-e1): parse it strictly.
+
+    An unparseable value fails the deploy (the runtime would read it as off),
+    and any truthy value is refused for ``-t prod``.
+    """
+
+    raw = _env_value("MIP_PRESENTER_MODE", dotenv).lower()
+    if raw not in _PRESENTER_MODE_ON | _PRESENTER_MODE_OFF:
+        raise ValueError("MIP_PRESENTER_MODE must be one of 0/1/true/false/yes/no/on/off")
+    enabled = raw in _PRESENTER_MODE_ON
+    if enabled and target == "prod":
+        raise ValueError("MIP_PRESENTER_MODE is demo-only and refused for target prod")
+    return enabled
+
+
 def build_payload(
     *,
     source_code_path: str,
@@ -277,6 +305,7 @@ def build_payload(
     }
     previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
     _validated_keep_warm(dotenv)
+    presenter_mode = _validated_presenter_mode(dotenv, target)
     if bool(otel_endpoint.strip()) != bool(otel_header_resource.strip()):
         raise ValueError(
             "MIP_OTEL_ENDPOINT and its App secret resource must be configured together"
@@ -305,6 +334,9 @@ def build_payload(
             "value": "1" if campaign_treatment_runtime_enabled else "0",
         },
     ]
+    if presenter_mode:
+        env_vars.append({"name": "MIP_PRESENTER_MODE", "value": "1"})
+        print(PRESENTER_MODE_NOTICE, file=sys.stderr)
 
     if otel_endpoint:
         env_vars.extend(

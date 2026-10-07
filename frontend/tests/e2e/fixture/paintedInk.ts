@@ -26,7 +26,7 @@
  * the stroke's coverage, not its colour.
  */
 import type { Locator, Page } from '@playwright/test';
-import { asComputedRgb, type Rgb } from './renderedColor';
+import { asComputedRgb, contrastRatio, type Rgb } from './renderedColor';
 
 /** Share of a sample that must reach the reported contrast to count as painted ink. */
 export const INK_SHARE = 0.03;
@@ -227,22 +227,111 @@ export async function insetRingBand(page: Page, target: Locator, band: number): 
   );
 }
 
+type Rgba = [number, number, number, number];
+
+/** A computed `rgb()` / `rgba()` colour with its alpha (1 when opaque). */
+function parseRgba(css: string): Rgba {
+  const match = /^rgba?\(([^)]+)\)$/.exec(css.trim());
+  if (!match) throw new Error(`unparseable colour: ${css}`);
+  const [r, g, b, a = '1'] = match[1].split(/[\s,/]+/).filter(Boolean);
+  return [Number(r), Number(g), Number(b), Number(a)];
+}
+
+/** `top` composited over an opaque `under`, as the browser paints it. */
+function over(top: Rgba, under: Rgb): Rgb {
+  return [0, 1, 2].map((i) => Math.round(top[i] * top[3] + under[i] * (1 - top[3]))) as Rgb;
+}
+
+/** The forced Canvas, which every system-colour fill composites over. */
+async function forcedCanvas(page: Page): Promise<Rgb> {
+  const canvas = parseRgba(await asComputedRgb(page, 'Canvas'));
+  if (canvas[3] !== 1) throw new Error('forced Canvas is expected to be opaque');
+  return [canvas[0], canvas[1], canvas[2]];
+}
+
 /**
  * The colour a system-colour fill paints over the forced Canvas behind it.
  * Chromium's forced palettes give Highlight an alpha (0.8), so the painted
  * fill is the composite, not the keyword's rgb.
  */
 export async function paintedSystemFill(page: Page, keyword: string): Promise<Rgb> {
-  const parse = (css: string) => {
-    const match = /^rgba?\(([^)]+)\)$/.exec(css.trim());
-    if (!match) throw new Error(`unparseable colour: ${css}`);
-    const [r, g, b, a = '1'] = match[1].split(/[\s,/]+/).filter(Boolean);
-    return [Number(r), Number(g), Number(b), Number(a)];
-  };
-  const top = parse(await asComputedRgb(page, keyword));
-  const under = parse(await asComputedRgb(page, 'Canvas'));
-  if (under[3] !== 1) throw new Error('forced Canvas is expected to be opaque');
-  return [0, 1, 2].map((i) => Math.round(top[i] * top[3] + under[i] * (1 - top[3]))) as Rgb;
+  return over(parseRgba(await asComputedRgb(page, keyword)), await forcedCanvas(page));
+}
+
+/**
+ * The system Highlight / HighlightText pair, resolved on a probe styled the
+ * way W5a ruling R2 styles a Highlight state (forced-color-adjust: none,
+ * background-color: Highlight, color: HighlightText), so it is the
+ * palette's pair, never the product's. `ground` is Highlight over the forced
+ * Canvas and `ink` is HighlightText over that ground (a palette may give
+ * either an alpha); `contrast` is the pair's own WCAG ratio, which the OS or
+ * the engine sets and the product cannot change.
+ */
+export interface SystemPair {
+  ground: Rgb;
+  ink: Rgb;
+  contrast: number;
+}
+
+export async function systemHighlightPair(page: Page): Promise<SystemPair> {
+  const computed = await page.evaluate(() => {
+    const probe = document.createElement('span');
+    probe.style.cssText = 'forced-color-adjust: none; background-color: Highlight; color: HighlightText;';
+    probe.textContent = 'Highlight';
+    document.body.appendChild(probe);
+    const style = getComputedStyle(probe);
+    const read = { background: style.backgroundColor, color: style.color };
+    probe.remove();
+    return read;
+  });
+  const ground = over(parseRgba(computed.background), await forcedCanvas(page));
+  const ink = over(parseRgba(computed.color), ground);
+  return { ground, ink, contrast: contrastRatio(ink, ground) };
+}
+
+/** The WCAG floors: 4.5:1 for a text run (1.4.3), 3:1 for a glyph (1.4.11). */
+export const INK_FLOOR: Readonly<Record<PaintedInk['kind'], number>> = { text: 4.5, glyph: 3 };
+
+/**
+ * Slack under a system pair's own ratio, for screenshot rounding. The ink
+ * and ground must each match the pair within sameColor's 2 per channel,
+ * which moves a ratio by at most 0.11 on Firefox's standin pair (#ffffff on
+ * #3399ff, 2.94:1) and by at most 0.25 on any pair under 4.5:1 (a sweep of
+ * random pairs; dark grounds move most).
+ */
+export const PAIR_EPSILON = 0.25;
+
+/** The contrast a sample on a Highlight state must reach: the floor, or the system pair's own ratio when the palette is weaker. */
+export function highlightFloor(kind: PaintedInk['kind'], pair: SystemPair): number {
+  return Math.min(INK_FLOOR[kind], pair.contrast - PAIR_EPSILON);
+}
+
+/**
+ * Every way one sample breaks the Highlight-state contract (W5a ruling R2),
+ * as failure lines; empty when it holds. The product owns the PAIRING: its
+ * ink must be the system HighlightText and its ground the system Highlight.
+ * The palette owns the pair's contrast, so readability is checked against
+ * the WCAG floor unless the system pair itself is weaker (see
+ * highlightFloor): a real high-contrast palette (Windows HC, >= 7:1) still
+ * enforces 4.5:1 and 3:1, while a weak emulated pair cannot fail correct CSS.
+ */
+export function highlightInkFaults(ink: PaintedInk, pair: SystemPair): string[] {
+  const show = (rgb: Rgb) => `rgb(${rgb.join(', ')})`;
+  const faults: string[] = [];
+  if (!ink.ink) faults.push('no ink is painted');
+  else if (!sameColor(ink.ink, pair.ink)) faults.push(`ink is not the system HighlightText ${show(pair.ink)}`);
+  if (!sameColor(ink.ground, pair.ground)) faults.push(`ground is not the system Highlight ${show(pair.ground)}`);
+  const floor = highlightFloor(ink.kind, pair);
+  if (ink.ratio < floor) {
+    faults.push(`${ink.ratio.toFixed(2)}:1 is under ${floor.toFixed(2)}:1 = min(${INK_FLOOR[ink.kind]}, system pair ${pair.contrast.toFixed(2)}:1 - ${PAIR_EPSILON})`);
+  }
+  return faults;
+}
+
+/** The system pair as one annotation line, so a run records the palette it measured. */
+export function describePair(pair: SystemPair): string {
+  const show = (rgb: Rgb) => `rgb(${rgb.join(', ')})`;
+  return `HighlightText ${show(pair.ink)} on Highlight ${show(pair.ground)} at ${pair.contrast.toFixed(2)}:1; floors text ${highlightFloor('text', pair).toFixed(2)}, glyph ${highlightFloor('glyph', pair).toFixed(2)}`;
 }
 
 /** Channel-wise equality within `tolerance` (screenshot rounding). */

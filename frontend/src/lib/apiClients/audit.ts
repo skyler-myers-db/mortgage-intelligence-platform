@@ -9,6 +9,13 @@
 import type { AuditEventRow, AuditEventPage, ActorAuditEventPage, DecisionReceipt } from '../apiTypes';
 import { getJson } from '../apiTransport';
 
+/** One `/api/audit/rollups` row. */
+export interface AuditRollupResponse {
+  bucket_start: string;
+  event_type: string;
+  event_count: number;
+}
+
 export const auditApi = {
   /**
    * Recent audit events for the Agent Activity Log. Routes through the
@@ -87,7 +94,7 @@ export const auditApi = {
   },
 
   auditRollups: (period: 'day' | 'week' | 'month' = 'week', signal?: AbortSignal) =>
-    getJson<Array<{ bucket_start: string; event_type: string; event_count: number }>>(
+    getJson<AuditRollupResponse[]>(
       `/api/audit/rollups?period=${period}`,
       signal,
     ),

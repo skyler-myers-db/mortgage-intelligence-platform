@@ -498,6 +498,12 @@
             ],
             "title": "App Env"
           },
+          "auditor_role_overlap": {
+            "default": 0,
+            "description": "Identities configured as auditor that are also configured as administrator or approver (segregation-of-duties signal). A count only.",
+            "title": "Auditor Role Overlap",
+            "type": "integer"
+          },
           "boundary_warning": {
             "anyOf": [
               {
@@ -594,6 +600,11 @@
           "mode": {
             "title": "Mode",
             "type": "string"
+          },
+          "presenter_mode": {
+            "default": false,
+            "title": "Presenter Mode",
+            "type": "boolean"
           },
           "recent_errors_count": {
             "default": 0,
@@ -1313,6 +1324,275 @@
           "source"
         ],
         "title": "ApprovalFunnelStage",
+        "type": "object"
+      },
+      "ApprovalRequestBatchView": {
+        "description": "One request as a reader may see it.",
+        "properties": {
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "is_mine": {
+            "title": "Is Mine",
+            "type": "boolean"
+          },
+          "rationale": {
+            "description": "The requester's screened justification.",
+            "title": "Rationale",
+            "type": "string"
+          },
+          "requested_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The requester's own identity, present only in their own scope=mine list.",
+            "title": "Requested By"
+          },
+          "requested_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A readable label derived from the requester's identity, never looked up.",
+            "title": "Requested By Display"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRequestRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_id",
+          "requested_by_display",
+          "is_mine",
+          "rationale",
+          "created_at",
+          "rows"
+        ],
+        "title": "ApprovalRequestBatchView",
+        "type": "object"
+      },
+      "ApprovalRequestCreate": {
+        "additionalProperties": false,
+        "description": "POST /outreach/approval-requests: ask an approver to review named borrowers.",
+        "properties": {
+          "borrower_ids": {
+            "description": "The masked borrower ids to request approval for, each named once.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Borrower Ids",
+            "type": "array"
+          },
+          "rationale": {
+            "description": "Why these borrowers: required, without personal details. It is screened by the governed text policy and recorded on the audit row.",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "request_key": {
+            "description": "Client idempotency key (a UUID); a retry with the same key replays the stored answer.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_ids",
+          "rationale",
+          "request_key"
+        ],
+        "title": "ApprovalRequestCreate",
+        "type": "object"
+      },
+      "ApprovalRequestCreated": {
+        "description": "The stored answer to one request; a replay of its key returns it unchanged.",
+        "properties": {
+          "audit_event_id": {
+            "description": "The APPROVAL_REQUESTED audit row written with the request.",
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "batch_id": {
+            "description": "Server-issued request id (UUID).",
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "requested": {
+            "description": "The borrowers the request now holds open.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Requested",
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRequestSkip"
+            },
+            "title": "Skipped",
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_id",
+          "audit_event_id",
+          "requested",
+          "skipped"
+        ],
+        "title": "ApprovalRequestCreated",
+        "type": "object"
+      },
+      "ApprovalRequestList": {
+        "description": "GET /outreach/approval-requests: audit-free, Lakebase app state only.",
+        "properties": {
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRequestBatchView"
+            },
+            "title": "Batches",
+            "type": "array"
+          },
+          "scope": {
+            "enum": [
+              "open",
+              "mine"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "batches"
+        ],
+        "title": "ApprovalRequestList",
+        "type": "object"
+      },
+      "ApprovalRequestRow": {
+        "description": "One requested borrower and the state derived for it.",
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The linked approvals row, for approved and rejected only.",
+            "title": "Approval Id"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "state": {
+            "description": "approved / rejected: an approver decided it through this request; decided_outside: decided without the request link; withdrawn: the requester withdrew it; expired: older than 30 days or reopened by a revoke; open: awaiting an approver.",
+            "enum": [
+              "open",
+              "approved",
+              "rejected",
+              "decided_outside",
+              "withdrawn",
+              "expired"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "state"
+        ],
+        "title": "ApprovalRequestRow",
+        "type": "object"
+      },
+      "ApprovalRequestSkip": {
+        "description": "A selected borrower the request did not include, and why.",
+        "properties": {
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "reason": {
+            "description": "not_found: no such borrower; not_contactable: not marketing eligible, do-not-contact, no opt-in consent or suppressed; already_decided: an approval decision exists; already_requested: another open request already holds the borrower.",
+            "enum": [
+              "not_found",
+              "not_contactable",
+              "already_decided",
+              "already_requested"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "reason"
+        ],
+        "title": "ApprovalRequestSkip",
+        "type": "object"
+      },
+      "ApprovalRequestWithdrawn": {
+        "description": "The requester's withdraw: open borrowers close; a repeat changes nothing.",
+        "properties": {
+          "already_closed": {
+            "description": "Borrowers that were no longer open.",
+            "title": "Already Closed",
+            "type": "integer"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The APPROVAL_REQUEST_WITHDRAWN audit row, only when this call withdrew any.",
+            "title": "Audit Event Id"
+          },
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "withdrawn_now": {
+            "description": "Borrowers this call withdrew.",
+            "title": "Withdrawn Now",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id",
+          "withdrawn_now",
+          "already_closed"
+        ],
+        "title": "ApprovalRequestWithdrawn",
         "type": "object"
       },
       "ApproverActivityRow": {
@@ -4846,7 +5126,8 @@
             "enum": [
               "approved",
               "rejected",
-              "held"
+              "held",
+              "revoked"
             ],
             "title": "Decision",
             "type": "string"
@@ -6518,6 +6799,37 @@
         "title": "GenieCancelResponse",
         "type": "object"
       },
+      "GenieClaimsSummary": {
+        "description": "How many of the shipped prose's figures were verified, and which.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GenieVerifiedClaim"
+            },
+            "maxItems": 40,
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "maximum": 500.0,
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "verified": {
+            "maximum": 500.0,
+            "minimum": 0.0,
+            "title": "Verified",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "verified",
+          "total"
+        ],
+        "title": "GenieClaimsSummary",
+        "type": "object"
+      },
       "GenieCompleteAsyncRequest": {
         "description": "``/message/complete`` body. ``respond_async`` opts in to the 202 job.\n\nOlder servers ignore the extra field and answer 200, which the browser\nrecognises (deploy-skew safety in both directions).",
         "properties": {
@@ -6561,7 +6873,7 @@
         "type": "object"
       },
       "GenieCompletionJobStatus": {
-        "description": "Where the governed completion of one live Genie turn is (audit genie-01).\n\nReturned with 202 by ``/message/complete`` when the browser asked for a\njob, and by every ``/message/status`` poll. Server-owned vocabulary only:\n``status`` and ``stage`` are closed enums, ``stage_label`` and\n``error_hint`` are fixed server copy (never exception or model text).\n``parts_done`` / ``parts_planned`` count the deep-research sweep's\ngoverned sub-analyses while it runs. ``response`` is the finished\ngoverned answer, present only when ``status`` is ``succeeded``; its\naction confirmation tokens are signed afresh for the caller at delivery.\n``cancelled`` is terminal and not failed: the owner stopped the turn\nbefore its governed record existed. ``typical_seconds`` (audit genie-01)\nis the recent median completion time of this job's class (deep or\nsingle), only while the job still runs and only with enough samples.",
+        "description": "Where the governed completion of one live Genie turn is (audit genie-01).\n\nReturned with 202 by ``/message/complete`` when the browser asked for a\njob, and by every ``/message/status`` poll. Server-owned vocabulary only:\n``status`` and ``stage`` are closed enums, ``stage_label`` and\n``error_hint`` are fixed server copy (never exception or model text).\n``parts_done`` / ``parts_planned`` count the deep-research sweep's\ngoverned sub-analyses while it runs. ``response`` is the finished\ngoverned answer, present only when ``status`` is ``succeeded``; its\naction confirmation tokens are signed afresh for the caller at delivery.\n``cancelled`` is terminal and not failed: the owner stopped the turn\nbefore its governed record existed. ``typical_seconds`` (audit genie-01)\nis the recent median completion time of this job's class (deep or\nsingle), only while the job still runs and only with enough samples.\n\nVerified sections (audit genie-01 phase 1b), only while the job runs and\nno cancel was requested: ``verified_sections`` counts the deep sweep's\nsub-analyses that passed their own checks so far, ``sections_rev`` is\ntheir revision, and ``revealed_sections`` carries them, in plan order,\nonce the count reaches the sweep's three-section floor and only when\nthe revision differs from the one the poll sent. Each was audited before\nit was stored; none carries actions. A terminal job never carries them.",
         "properties": {
           "error_hint": {
             "anyOf": [
@@ -6621,6 +6933,33 @@
               }
             ]
           },
+          "revealed_sections": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/GenieAnswerSection"
+                },
+                "maxItems": 12,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revealed Sections"
+          },
+          "sections_rev": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sections Rev"
+          },
           "stage": {
             "$ref": "#/components/schemas/GenieJobStage"
           },
@@ -6646,6 +6985,19 @@
               }
             ],
             "title": "Typical Seconds"
+          },
+          "verified_sections": {
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified Sections"
           }
         },
         "required": [
@@ -6658,7 +7010,7 @@
         "type": "object"
       },
       "GenieCompletionJobStatusRequest": {
-        "description": "``/message/status`` body: a POST so the token never lands in a URL.\n\n``question`` is hash-checked against the progress token exactly as on\ncomplete, and is how the answer gets its question back: the stored job\nresult never holds it.",
+        "description": "``/message/status`` body: a POST so the token never lands in a URL.\n\n``question`` is hash-checked against the progress token exactly as on\ncomplete, and is how the answer gets its question back: the stored job\nresult never holds it. ``sections_rev`` is the revision of the verified\nsections the poller already holds; the same revision is not re-sent.",
         "properties": {
           "conversation_id": {
             "maxLength": 256,
@@ -6688,6 +7040,19 @@
             "minLength": 1,
             "title": "Question",
             "type": "string"
+          },
+          "sections_rev": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sections Rev"
           }
         },
         "required": [
@@ -7218,6 +7583,16 @@
       },
       "GenieProof": {
         "properties": {
+          "claims": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenieClaimsSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -7635,6 +8010,54 @@
           "completed"
         ],
         "title": "GenieSubmitResponse",
+        "type": "object"
+      },
+      "GenieVerifiedClaim": {
+        "description": "One figure in the shipped prose that the claims verifier proved against\nthe returned rows (audit genie-10 phase 1). ``derivation`` says how: a\nvalue a reader can find in one returned cell, a figure derived from the\nrows (a total, average, share or change), or a stated threshold the\nreturned values satisfy. ``section`` names the deep-research section the\nfigure belongs to; None is the summary or a single-turn answer. An\nunsupported figure is never listed: its prose is withheld instead.",
+        "properties": {
+          "derivation": {
+            "enum": [
+              "returned_value",
+              "derived_from_rows",
+              "bound"
+            ],
+            "title": "Derivation",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "currency",
+              "percent",
+              "bps",
+              "number"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          },
+          "token": {
+            "maxLength": 32,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "kind",
+          "derivation"
+        ],
+        "title": "GenieVerifiedClaim",
         "type": "object"
       },
       "GenieVisualizationSpec": {
@@ -9465,10 +9888,34 @@
             ],
             "title": "Avg Opportunity Score"
           },
+          "competitor_lien": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitor Lien"
+          },
           "high_opportunity": {
             "minimum": 0.0,
             "title": "High Opportunity",
             "type": "integer"
+          },
+          "listed_for_sale": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listed For Sale"
           },
           "marketable_population": {
             "minimum": 0.0,
@@ -9608,6 +10055,269 @@
           "mode"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "HomeAttributionRate": {
+        "description": "The weekly par print for the baseline week and the latest week.",
+        "properties": {
+          "baseline_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Pct"
+          },
+          "baseline_week": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Week"
+          },
+          "latest_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Pct"
+          },
+          "latest_week": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Week"
+          },
+          "series_id": {
+            "title": "Series Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "series_id"
+        ],
+        "title": "HomeAttributionRate",
+        "type": "object"
+      },
+      "HomeAttributionState": {
+        "description": "One state's count at the two snapshots; None where it has no row.",
+        "properties": {
+          "baseline_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Count"
+          },
+          "change": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change"
+          },
+          "current_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Count"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "HomeAttributionState",
+        "type": "object"
+      },
+      "HomeSummaryAttributionResponse": {
+        "description": "Where one headline measure moved between two funnel snapshots.",
+        "properties": {
+          "baseline_snapshot_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Snapshot Date"
+          },
+          "baseline_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Total"
+          },
+          "current_snapshot_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Snapshot Date"
+          },
+          "current_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Total"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "measure": {
+            "enum": [
+              "refi_economics_screen",
+              "high_opportunity",
+              "offers_recommended",
+              "listed_for_sale"
+            ],
+            "title": "Measure",
+            "type": "string"
+          },
+          "nearest_snapshot": {
+            "default": false,
+            "title": "Nearest Snapshot",
+            "type": "boolean"
+          },
+          "note": {
+            "default": "These coincided with the change; they are not shown as causes.",
+            "title": "Note",
+            "type": "string"
+          },
+          "offer_rules_changed_since_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Rules Changed Since Baseline"
+          },
+          "offer_rules_last_updated": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Rules Last Updated"
+          },
+          "population": {
+            "const": "addressable",
+            "default": "addressable",
+            "title": "Population",
+            "type": "string"
+          },
+          "rate": {
+            "$ref": "#/components/schemas/HomeAttributionRate"
+          },
+          "requested_baseline_date": {
+            "format": "date",
+            "title": "Requested Baseline Date",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/components/schemas/HomeAttributionState"
+            },
+            "title": "States",
+            "type": "array"
+          },
+          "total_change": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Change"
+          },
+          "unattributed_change": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unattributed Change"
+          }
+        },
+        "required": [
+          "measure",
+          "label",
+          "requested_baseline_date",
+          "rate"
+        ],
+        "title": "HomeSummaryAttributionResponse",
         "type": "object"
       },
       "HomeSummaryHighlight": {
@@ -9900,9 +10610,31 @@
             ],
             "title": "Avg Opportunity Score"
           },
+          "competitor_lien": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitor Lien"
+          },
           "high_opportunity": {
             "title": "High Opportunity",
             "type": "integer"
+          },
+          "listed_for_sale": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listed For Sale"
           },
           "marketable_population": {
             "title": "Marketable Population",
@@ -10122,6 +10854,17 @@
             "title": "Filter Fingerprint",
             "type": "string"
           },
+          "matching_row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matching Row Count"
+          },
           "recorded_at": {
             "title": "Recorded At",
             "type": "string"
@@ -10182,6 +10925,19 @@
             "description": "The Lead Queue query parameters the exported rows were read with (the same string the CSV's `# filters=` metadata line carries). Only their fingerprint is written to the ledger.",
             "title": "Filters",
             "type": "object"
+          },
+          "matching_row_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many borrowers matched the filters when the file was built (the CSV's `# matching_rows=` line). Absent when unknown; never below row_count.",
+            "title": "Matching Row Count"
           },
           "row_count": {
             "maximum": 5000.0,
@@ -11640,6 +12396,19 @@
             "title": "Actor",
             "type": "string"
           },
+          "approval_request_batch_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The open approval request this decision answers (unbound queues only).",
+            "title": "Approval Request Batch Id"
+          },
           "assigned_to_email": {
             "anyOf": [
               {
@@ -12150,6 +12919,19 @@
             "title": "Actor",
             "type": "string"
           },
+          "approval_request_batch_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The open approval request this decision answers (unbound queues only).",
+            "title": "Approval Request Batch Id"
+          },
           "borrower_id": {
             "title": "Borrower Id",
             "type": "string"
@@ -12295,6 +13077,87 @@
           "audit_event_id"
         ],
         "title": "OutreachRejectResponse",
+        "type": "object"
+      },
+      "OutreachRevokeRequest": {
+        "additionalProperties": false,
+        "description": "POST /outreach/revoke: one borrower's current approval, with a reason.",
+        "properties": {
+          "approval_id": {
+            "description": "The approval being revoked: it must still be the borrower's current decision.",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "rationale": {
+            "description": "Why the approval is revoked: required, without personal details.",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Client idempotency key; a retry with the same key replays the stored answer.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "approval_id",
+          "rationale",
+          "request_id"
+        ],
+        "title": "OutreachRevokeRequest",
+        "type": "object"
+      },
+      "OutreachRevokeResponse": {
+        "description": "The revoke row and what it superseded.",
+        "properties": {
+          "approval_id": {
+            "description": "The revoke decision row.",
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "released_assignment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The not-yet-worked lead assignment the revoke released, if there was one.",
+            "title": "Released Assignment Id"
+          },
+          "revoked": {
+            "title": "Revoked",
+            "type": "boolean"
+          },
+          "revoked_approval_id": {
+            "description": "The approval it superseded.",
+            "title": "Revoked Approval Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revoked",
+          "approval_id",
+          "revoked_approval_id",
+          "audit_event_id"
+        ],
+        "title": "OutreachRevokeResponse",
         "type": "object"
       },
       "PlanStep": {
@@ -13576,7 +14439,7 @@
         "description": "Opaque version of the Lakebase decision ledgers behind the Lead Queue.",
         "properties": {
           "version": {
-            "description": "32 lowercase hex characters. Changes when an approval, a lead assignment (including its status), a call disposition or a loan officer outcome is recorded; equal versions mean none was.",
+            "description": "32 lowercase hex characters. Changes when an approval, a lead assignment (including its status), a call disposition, a loan officer outcome, an outreach delivery status or an imported CRM outcome is recorded; equal versions mean none was.",
             "pattern": "^[0-9a-f]{32}$",
             "title": "Version",
             "type": "string"
@@ -15517,6 +16380,12 @@
             "title": "Can Approve",
             "type": "boolean"
           },
+          "can_read_audit": {
+            "default": false,
+            "description": "Same fail-closed decision the audit-ledger reads enforce: an administrator or a configured auditor may read the full audit ledger. Grants no administrator or approver capability.",
+            "title": "Can Read Audit",
+            "type": "boolean"
+          },
           "lender_name": {
             "anyOf": [
               {
@@ -15529,8 +16398,14 @@
             "description": "The configured lender's display name (settings.mip_lender_name), the same value /api/config/options returns. Served here too so the shell's tenant label rides this zero-dependency call instead of the warehouse-backed options call (audit delivery-07).",
             "title": "Lender Name"
           },
+          "presenter_mode": {
+            "default": false,
+            "description": "Demo-only: gates demo affordances in product surfaces. Never an authorization input.",
+            "title": "Presenter Mode",
+            "type": "boolean"
+          },
           "role_labels": {
-            "description": "Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), else 'Workspace user' for a forwarded identity that holds neither tier. Empty only when the session holds neither tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract.",
+            "description": "Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), 'Auditor' (a configured auditor, read-only), else 'Workspace user' for a forwarded identity that holds no tier. Empty only when the session holds no tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract.",
             "items": {
               "type": "string"
             },
@@ -18103,7 +18978,7 @@
     "/api/audit/count": {
       "get": {
         "deprecated": true,
-        "description": "How many ledger rows match the /events/page filters, up to a cap (audit-free).",
+        "description": "How many ledger rows match the /events/page filters, up to a cap (a recorded read).",
         "operationId": "get_api_audit_count_count_events",
         "parameters": [
           {
@@ -18861,7 +19736,7 @@
     "/api/audit/facets": {
       "get": {
         "deprecated": true,
-        "description": "Distinct event types, actions and actors for the explorer's pickers (audit-free).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
+        "description": "Distinct event types, actions and actors for the explorer's pickers (a recorded read).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
         "operationId": "get_api_audit_facets_audit_facets",
         "parameters": [
           {
@@ -22042,6 +22917,66 @@
         ]
       }
     },
+    "/api/home/summary/attribution": {
+      "get": {
+        "deprecated": true,
+        "description": "Where one since-your-last-login measure moved (audit wow-ai-3).\n\nWhole-book state counts from the funnel snapshot nearest ``baseline``\nand the latest one, the 30-year par print on both weeks, and whether the\noffer rules changed since: gold and ref reads only. Audit-free: the\ndrawer issues it only when a supported measure's evidence is open, and\nit writes no row.",
+        "operationId": "get_api_home_summary_attribution_home_summary_attribution",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "measure",
+            "required": true,
+            "schema": {
+              "enum": [
+                "refi_economics_screen",
+                "high_opportunity",
+                "offers_recommended",
+                "listed_for_sale"
+              ],
+              "title": "Measure",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "baseline",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Baseline",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeSummaryAttributionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Home Summary Attribution",
+        "tags": [
+          "home"
+        ]
+      }
+    },
     "/api/leads": {
       "get": {
         "deprecated": true,
@@ -22773,6 +23708,25 @@
               ],
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
             }
           },
           {
@@ -23554,6 +24508,25 @@
               ],
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
             }
           }
         ],
@@ -24388,6 +25361,25 @@
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
             }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
+            }
           }
         ],
         "responses": {
@@ -25084,6 +26076,167 @@
         ]
       }
     },
+    "/api/outreach/approval-requests": {
+      "get": {
+        "deprecated": true,
+        "description": "Audit-free: Lakebase workflow app state, no borrower attribute.",
+        "operationId": "get_api_outreach_approval_requests_list_outreach_approval_requests",
+        "parameters": [
+          {
+            "description": "open: every open request (approvers only); mine: your own. Defaults by role.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "mine"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "open: every open request (approvers only); mine: your own. Defaults by role.",
+              "title": "Scope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Outreach Approval Requests",
+        "tags": [
+          "outreach"
+        ]
+      },
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_outreach_approval_requests_request_outreach_approval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Outreach Approval",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
+    "/api/outreach/approval-requests/{batch_id}/withdraw": {
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_outreach_approval_requests_batch_id_withdraw_withdraw_outreach_approval_request",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestWithdrawn"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Outreach Approval Request",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
     "/api/outreach/approve": {
       "post": {
         "deprecated": true,
@@ -25236,6 +26389,58 @@
           }
         },
         "summary": "Reject Outreach",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
+    "/api/outreach/revoke": {
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_outreach_revoke_revoke_outreach",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutreachRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutreachRevokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Outreach",
         "tags": [
           "outreach"
         ]
@@ -28162,7 +29367,7 @@
     },
     "/api/v1/audit/count": {
       "get": {
-        "description": "How many ledger rows match the /events/page filters, up to a cap (audit-free).",
+        "description": "How many ledger rows match the /events/page filters, up to a cap (a recorded read).",
         "operationId": "get_api_v1_audit_count_count_events",
         "parameters": [
           {
@@ -28915,7 +30120,7 @@
     },
     "/api/v1/audit/facets": {
       "get": {
-        "description": "Distinct event types, actions and actors for the explorer's pickers (audit-free).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
+        "description": "Distinct event types, actions and actors for the explorer's pickers (a recorded read).\n\nReads the ledger itself, so every event type that occurred in the window\nis offered, not only the seven workflow types /rollups groups.",
         "operationId": "get_api_v1_audit_facets_audit_facets",
         "parameters": [
           {
@@ -32048,6 +33253,65 @@
         ]
       }
     },
+    "/api/v1/home/summary/attribution": {
+      "get": {
+        "description": "Where one since-your-last-login measure moved (audit wow-ai-3).\n\nWhole-book state counts from the funnel snapshot nearest ``baseline``\nand the latest one, the 30-year par print on both weeks, and whether the\noffer rules changed since: gold and ref reads only. Audit-free: the\ndrawer issues it only when a supported measure's evidence is open, and\nit writes no row.",
+        "operationId": "get_api_v1_home_summary_attribution_home_summary_attribution",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "measure",
+            "required": true,
+            "schema": {
+              "enum": [
+                "refi_economics_screen",
+                "high_opportunity",
+                "offers_recommended",
+                "listed_for_sale"
+              ],
+              "title": "Measure",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "baseline",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Baseline",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeSummaryAttributionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Home Summary Attribution",
+        "tags": [
+          "home"
+        ]
+      }
+    },
     "/api/v1/leads": {
       "get": {
         "operationId": "get_api_v1_leads_list_leads",
@@ -32778,6 +34042,25 @@
               ],
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
             }
           },
           {
@@ -33558,6 +34841,25 @@
               ],
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
+            }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
             }
           }
         ],
@@ -34390,6 +35692,25 @@
               "description": "Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound.",
               "title": "Max Rate Spread Bps"
             }
+          },
+          {
+            "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+            "in": "query",
+            "name": "approval_request_batch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only.",
+              "title": "Approval Request Batch"
+            }
           }
         ],
         "responses": {
@@ -35074,6 +36395,164 @@
         ]
       }
     },
+    "/api/v1/outreach/approval-requests": {
+      "get": {
+        "description": "Audit-free: Lakebase workflow app state, no borrower attribute.",
+        "operationId": "get_api_v1_outreach_approval_requests_list_outreach_approval_requests",
+        "parameters": [
+          {
+            "description": "open: every open request (approvers only); mine: your own. Defaults by role.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "mine"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "open: every open request (approvers only); mine: your own. Defaults by role.",
+              "title": "Scope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Outreach Approval Requests",
+        "tags": [
+          "outreach"
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_outreach_approval_requests_request_outreach_approval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Outreach Approval",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
+    "/api/v1/outreach/approval-requests/{batch_id}/withdraw": {
+      "post": {
+        "operationId": "post_api_v1_outreach_approval_requests_batch_id_withdraw_withdraw_outreach_approval_request",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestWithdrawn"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Outreach Approval Request",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
     "/api/v1/outreach/approve": {
       "post": {
         "operationId": "post_api_v1_outreach_approve_approve_outreach",
@@ -35223,6 +36702,57 @@
           }
         },
         "summary": "Reject Outreach",
+        "tags": [
+          "outreach"
+        ]
+      }
+    },
+    "/api/v1/outreach/revoke": {
+      "post": {
+        "operationId": "post_api_v1_outreach_revoke_revoke_outreach",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutreachRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutreachRevokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Outreach",
         "tags": [
           "outreach"
         ]

@@ -11,6 +11,17 @@ this remediation pass.
 
 - Browser-shipped production dependencies have no known commercial-use license
   blockers.
+- Frontend `npm audit`, 2026-10-01, after the W5b dependency batch (see the
+  2026-10-01 W5b addendum below), read from the refreshed lock with
+  `npm audit --package-lock-only`: 0 advisories at any level (0 low, 0
+  moderate, 0 high, 0 critical) across 351 packages (19 prod, 333 dev, 46
+  optional), at both the `--audit-level=high` gate and the advisory
+  `--audit-level=moderate` level. The batch adds web-vitals and stylelint
+  (with its 97 dev-only transitive packages). Re-read by the W5b integrator
+  on the installed tree after `npm --prefix frontend ci` and the three holds
+  below (`@tanstack/react-virtual`, `happy-dom`, the TanStack Query pair):
+  `npm audit`, 0 advisories at any level across 351 packages (19 prod, 333
+  dev, 46 optional).
 - Frontend `npm audit`, 2026-09-25, after the wave-4 test-infra batch
   (Playwright 1.63.0 and oxlint 1.85.0; no other package moved): 0
   advisories at any level (0 low, 0 moderate, 0 high, 0 critical) across 251
@@ -29,6 +40,14 @@ this remediation pass.
   `.github/workflows/ci.yml`): a high or critical advisory fails CI;
   moderate and low advisories in dev-only tooling are tolerated and reviewed
   at the next dependency batch.
+- Backend `pip-audit`, 2026-10-06, after the multidict, werkzeug and mako
+  pins (see the 2026-10-06 addendum below): CI's command, `pip-audit -r
+  requirements.txt --strict` with its three ignores, reports no known
+  vulnerabilities from the default PyPI service (1 ignored) and none from
+  `-s osv` (2 ignored). Over the `uv.lock` pins with no ignores, `-s osv`
+  reports only the two ignored oauthlib advisories, under their PYSEC aliases
+  (PYSEC-2026-4113 for GHSA-hj66-6f7g-4r5v, PYSEC-2026-4114 for
+  GHSA-xpv3-w29h-x7cv).
 - Backend `pip-audit`, 2026-09-29, over the `uv.lock` pins
   (`pip-audit -r uv.lock --no-deps --disable-pip --strict`): one known
   vulnerability from the default PyPI service, GHSA-xpv3-w29h-x7cv (oauthlib
@@ -110,7 +129,7 @@ a batch lands, check each of these:
   in the same change, and the baselines are regenerated once, from that
   bump PR's pinned-image CI renders (never on a developer host).
 - **oxlint is an exact dev pin with platform bindings.** `oxlint` 1.85.0
-  (MIT) runs the jsx-a11y ratchet (`tools/oxlint_ratchet.mjs`, see
+  (MIT; 1.86.0 held in the W5b batch, see the addendum) runs the jsx-a11y ratchet (`tools/oxlint_ratchet.mjs`, see
   docs/testing.md). Its native binaries are the `@oxlint/binding-*`
   packages, declared as optional dependencies (npm installs only the host's
   one); its optional peers `vite-plus` and `oxlint-tsgolint` are never
@@ -123,7 +142,7 @@ a batch lands, check each of these:
   `frontend/.oxlintrc.json` explicitly and re-runs `node
   tools/oxlint_ratchet.mjs --ratchet frontend/oxlint-baseline.json`, which
   records the new version.
-- **typescript-eslint gates TypeScript 7.** typescript-eslint 8.70.1 peers
+- **typescript-eslint gates TypeScript 7.** typescript-eslint 8.71.0, like 8.70.1, still peers
   `typescript >=4.8.4 <6.1.0`. TypeScript 7 waits until a typescript-eslint
   release admits it; check the peer range with `npm view
   @typescript-eslint/parser peerDependencies`.
@@ -131,8 +150,9 @@ a batch lands, check each of these:
   `tests/e2e/fixture/axe.fixture.spec.ts` on the new version. New rule ids
   that fire are fixed in the lane that owns the surface, or the bump is held;
   they are never added to the `KNOWN_VIOLATIONS` ratchet.
-- **Update signal.** Dependency-update signal pending owner decision #7; no
-  bot branch (existing contract, see `docs/modernization-todo.md`).
+- **Update signal.** Ruled 2026-09-30 (owner decision #7): a weekly report
+  workflow and no bots, built in W5d (`w5-test-harness-deps-report`); no bot
+  branch (existing contract, see `docs/modernization-todo.md`).
 
 Additional manual checks:
 
@@ -338,4 +358,124 @@ patched release that resolves cleanly.
   urllib3`. Only those two packages move in uv.lock, plus urllib3's
   `-r requirements.in` provenance comment, and test_supply_chain_licenses pins
   both.
+
+## 2026-10-01 addendum: the W5b dependency batch
+
+Audit stack-10, W5b lane `w5-wire-contract-deps`. Every package was
+re-verified on 2026-10-01 with `npm view <pkg> version` and `npm view
+<pkg>@<current major> version`; the batch takes the newest version within each
+current major as an exact pin, except the holds below. The lock was refreshed
+with `npm install <pkg>@<ver> --save-exact --package-lock-only
+--ignore-scripts` over a scratch copy of `package.json` and
+`package-lock.json` with no `node_modules` (npm 11), then copied back; no
+shared `node_modules` was written. The lanes may not install, so the gates on
+the installed tree (build, the full vitest suite, lint with `lint:a11y` and
+both typechecks, React Compiler coverage, `dependencyContracts.test.ts`, the
+budget and the fixture suite) are the integrator's, after `npm --prefix
+frontend ci`; any bump that turns one of them red on another lane's files, or
+adds more than +0.3 KiB brotli initial JS or +4.0 KiB total JS, is held at its
+previous pin with a dated line here (an advisory-fixing bump is never held for
+bytes).
+
+| Package | Current | Latest | Taken | Note |
+|---|---|---|---|---|
+| `@tanstack/react-query` | 5.100.10 | 5.104.0 | **held 5.100.10** | Held 2026-10-01 by the W5b integrator: on the installed tree the fixture suite goes red in `tests/e2e/fixture/shell-wayfinding.fixture.spec.ts` ('Console motion under reduced motion: closing hides the Console at once', 3 of 3 runs): with query-core 5.104.0 the reduced-motion Console is still `display: flex` one macrotask after Close, where 5.100.10 has already swapped in the hidden placeholder. Bisected on the base tree (base lock green; base + vite 8.3.2 and @rolldown/plugin-babel 0.2.4 green; + TanStack Query 5.104.0 red). The lockstep still holds: one `@tanstack/query-core` and one `query-persist-client-core` in the lock, both 5.100.10. Re-take it with W5d `w5-test-harness-deps-report` once the exit timing is understood (5.104.0 also saved 0.22 KiB br initial JS). |
+| `@tanstack/react-query-persist-client` | 5.100.10 | 5.104.0 | **held 5.100.10** | Lockstep with `@tanstack/react-query` (held with it). |
+| `@tanstack/react-virtual` | 3.13.24 | 3.14.13 | **held 3.13.24** | Held 2026-10-01 by the W5b integrator: on the installed tree `@tanstack/virtual-core` 3.14.0 -> 3.17.11 grows the shared LeadTable lazy chunk (Lead Queue and Segment Intelligence) by +9.00 raw / +2.59 gzip / +2.28 brotli KiB (37.96 -> 40.31 br, measured by building the batch with and without it), which turns the largest-lazy-chunk budget gate red on base code that `w5-lead-triage-export` also extends. No W5b or W5c item needs a 3.14 API. Re-take it with a lane that funds the bytes (W5c `w5-lead-queue-paging` owns the chunk). |
+| `vite` | 8.3.0 | 8.3.2 | 8.3.2 | `rolldown` 1.2.10 -> 1.2.12. Moves VRT and budget bytes at most marginally; re-baselined once by the integrator. |
+| `@rolldown/plugin-babel` | 0.2.3 | 0.2.4 | 0.2.4 | Patch. |
+| `eslint` | 10.2.1 | 10.11.0 | 10.11.0 | Minor releases add no rule to `recommended`. |
+| `@typescript-eslint/eslint-plugin` / `parser` | 8.70.1 | 8.71.0 | 8.71.0 | Still peers `typescript >=4.8.4 <6.1.0`. |
+| `happy-dom` | 20.10.3 | 20.14.5 | **held 20.10.3** | Held 2026-10-01 by the W5b integrator: on the installed tree the full vitest suite goes red in `src/components/EvidenceHoverCard.test.tsx` (W5a platform-backend's anchored hover card): 20.14.5 invokes `CSSStyleDeclaration.prototype.setProperty` with a `this` that is not the element's `style` object (a probe on the bare library reproduces it), so the test's same-object proof of where `anchor-name` lands fails although the value is set. The suite is green on 20.10.3 (454 files / 4674 tests). Re-take it with W5d `w5-test-harness-deps-report`, which may re-model that proof on the observable value. |
+| `web-vitals` | (new) | 6.2.2 | 6.2.2 | Production dependency, Apache-2.0 (licence row added). Nothing imports it in W5b (0 bytes); W5c `w5-field-vitals` consumes it lazily. |
+| `stylelint` | (new) | 17.16.0 | **removed 2026-10-06** | Dev only, MIT; no script called it. Removed on 2026-10-06 because its `micromatch` -> `braces` path carries GHSA-vfj7-8cjw-p6xm with no patched release (see the 2026-10-06 npm addendum); W5e `w5-compiler-lint` re-adds it. |
+| `oxlint` | 1.85.0 | 1.86.0 | **held 1.85.0** | Held 2026-10-01: `frontend/oxlint-baseline.json` records the installed oxlint version and `--check` fails on a mismatch, and a new version's jsx-a11y rule list must be named in `.oxlintrc.json`; both need the installed binary, and the ratchet files belong to W5d `w5-compiler-lint`. |
+| `typescript` | 6.0.3 | 7.0.2 | **held 6.0.3** | typescript-eslint 8.71.0 peers `<6.1.0`; 6.0.3 is the newest 6.0.x (D-platform-process-a, review_by 2026-11-15). |
+| `vitest` | 4.1.11 | 5.0.3 | **held 4.1.11** | Newest 4.x; vitest 5 held by D-platform-process-a (review_by 2026-11-15). |
+| `@babel/core` | 7.29.7 | 8.0.6 | **held 7.29.7** | Newest 7.x; Babel 8 held by D-platform-process-a (review_by 2026-11-15). |
+| `@playwright/test` | 1.63.0 | 1.63.0 | 1.63.0 | Held to the VRT image (`mcr.microsoft.com/playwright:v1.63.0-noble`); any move belongs to W5d with the image tag. |
+
+Unchanged because already current: `react`, `react-dom`, `react-router`,
+`@types/react`, `@types/react-dom`, `@types/topojson-client`,
+`@vitejs/plugin-react`, `@axe-core/playwright`, `babel-plugin-react-compiler`,
+`eslint-plugin-react-hooks`, `topojson-client`, `us-atlas` and both
+`@fontsource-variable` fonts. `rollup-plugin-visualizer` (the bundle treemap)
+moved to W5d `w5-test-harness-deps-report` with the treemap itself (integrator
+correction C3). Both `GITLEAKS_VERSION` literals in `ci.yml` are now 8.30.1:
+the host's gitleaks 8.30.1 scanned all refs (`gitleaks detect --source .
+--config .gitleaks.toml --redact --log-opts="--all"`, 2,264 commits) with no
+finding, so `.gitleaks.toml` is unchanged.
+
+## 2026-10-06 addendum: multidict 6.9.1, werkzeug 3.1.9 and mako 1.4.2
+
+Two advisories published on 2026-10-05 turned the security job's pip-audit
+step red on PR #267 (CI run 37521773357): `Found 2 known vulnerabilities,
+ignored 1 in 2 packages`. Re-running CI's command with `-s osv` found a
+third, for mako, that PyPI's feed did not list yet. Each has a patched
+release that resolves cleanly, so all three are pins, not ignores.
+
+| Advisory | Package | First patched | Action |
+|---|---|---|---|
+| GHSA-54p9-h82j-f925 (medium, CVE-2026-104874): a reference leak in the C extension's `operand \| md.items()` and `md.items() - operand` | `multidict` 6.7.1 (range `>=6.7.0, <=6.9.0`) | 6.9.1 | `multidict==6.9.1`. Transitive through aiohttp (which caps it `<7`, so 7.0.0 is out of reach) and yarl. |
+| GHSA-g6x2-hccm-hh4m (medium, CVE-2026-102598): `safe_join` on Windows admitted special device names | `werkzeug` 3.1.8 (range `<3.1.9`) | 3.1.9 | `werkzeug==3.1.9`. Transitive through flask and flask-cors, which mlflow pulls in for its tracking server. |
+| GHSA-5639-2j2p-m4mx (medium, CVE-2026-102991): a drive-letter `TemplateLookup` URI escaped the template directory on Windows | `mako` 1.3.12 (range `<=1.4.1`) | 1.4.2 | `mako==1.4.2`. Transitive through alembic, which mlflow pulls in. Listed by OSV but not yet by PyPI's feed for 1.3.12 on 2026-10-06; without the pin, CI would go red again when the feed caught up. |
+
+- **The fix versions come from the advisories.** `gh api
+  /advisories/<id>` reports a `first_patched_version` for each of the three
+  (6.9.1, 3.1.9, 1.4.2), so none is a range artifact. Listing advisories by
+  package (`gh api '/advisories?ecosystem=pip&affects=<pkg>'`) found no other
+  open advisory against the new pins.
+- **No first-party code uses these packages.** Over backend, tools, jobs,
+  pipelines, scripts and tests, `grep -rhoE
+  '\b(multidict|werkzeug|mako)(\.[A-Za-z_][A-Za-z0-9_]*)+'` returns 0 dotted
+  tokens and there are 0 import lines. The same grep for `mlflow` returns 36
+  tokens, so the 0 is a real result. To check compatibility, every name the
+  installed consumers (aiohttp, yarl, flask, flask-cors, alembic, mlflow and
+  websockets) take from the three packages was resolved with importlib in a
+  private venv built from `requirements.txt`: 55 names, none unresolved. A
+  made-up name fails the same check.
+- **Upstream changelogs, checked against what the consumers use.** multidict
+  6.8.0 to 6.9.1 drops Python 3.9 and free-threaded 3.13 (this repo runs
+  3.11). Lookup and removal methods now reject extra keyword arguments with
+  `TypeError`; nothing in the repo calls multidict. The rest is C-extension
+  memory and threading fixes. werkzeug 3.1.9 is a patch release: the
+  `safe_join` fix plus parsing fixes (`get_host` port range, basic-auth
+  characters, `Range: -0`, urlencoded forms bounded by `max_content_length`
+  only) and faster header parsing. mako 1.4.0 to 1.4.2 raises the floors to
+  Python 3.10 and MarkupSafe 2.0 (the lock has 3.0.3). It also changes where
+  compile-time `SyntaxWarning`s and multi-line `SyntaxException`s are
+  reported, and makes the traversal check use `posixpath`. alembic uses mako
+  only to write migration files (`mako.template.Template` for its revision
+  template, `mako.pygen.PythonPrinter` for autogenerate output), never
+  `TemplateLookup`. The App and the deploy tools track to `databricks`; the
+  only local SQL store is the sqlite registry in
+  `tests/integration/test_gateway_mlflow_registry.py`, whose schema upgrade
+  imports mako through alembic and passes on 1.4.2.
+- **Lock refresh:** `uv pip compile requirements.in --python-version 3.11
+  --format requirements.txt --output-file uv.lock --upgrade-package multidict
+  --upgrade-package werkzeug`, then `--upgrade-package mako`. Only those three
+  packages move in uv.lock, each gaining a `-r requirements.in` provenance
+  line, and test_supply_chain_licenses pins all three in both files.
+- **Proof** (CI's literal command, run through the symlink-forcing driver
+  with pip-audit 2.9.0): before the change, the PyPI run reproduces CI's two
+  findings exactly, and `-s osv` adds mako. After it, `No known
+  vulnerabilities found, 1 ignored` (PyPI) and `No known vulnerabilities
+  found, 2 ignored` (`-s osv`). The lock-only read (`-r uv.lock --no-deps
+  --disable-pip`) and an installed-mode read of the private venv agree.
+  A targeted pytest run against that venv passes: the supply-chain test, the
+  mlflow-importing gateway and agent-eval suites,
+  `tests/integration/test_gateway_mlflow_registry.py`, the health endpoint
+  and the error sanitizer, 456 tests. The run loaded mako 1.4.2 through
+  alembic.
+
+## 2026-10-06 addendum: npm audit, source-map-js 1.2.2 and stylelint removed
+
+PR #267's second CI run turned the `npm --prefix frontend audit --audit-level=high` step red on two high advisories (both published 2026-09-18, surfaced by the npm feed between the run's two pushes):
+
+| Advisory | Package | Range | First patched | Path | Action |
+|---|---|---|---|---|---|
+| GHSA-68fv-2mgg-jv7q | `source-map-js` | `>= 1.0.0, < 1.2.2` | 1.2.2 | `postcss` / `vite` (build time) | Lock-only bump to 1.2.2 (`npm update source-map-js --package-lock-only`); `main` carries 1.2.1 too, so this also clears the ambient red there once W5b merges. |
+| GHSA-vfj7-8cjw-p6xm | `braces` | `<= 3.0.3` | none | `stylelint` -> `micromatch` -> `braces` (dev only) | No patched release exists. `stylelint` was added by the W5b batch with no script calling it, so it is removed (`npm uninstall stylelint --package-lock-only`) rather than excused; `braces` is no longer in the lock. `tests/unit/test_dependency_pins.py::test_stylelint_waits_for_a_patched_braces` pins its absence until W5e `w5-compiler-lint` re-adds it on a patched path. |
+
+After `npm --prefix frontend ci` on the refreshed lock: `npm audit --audit-level=high` reports 0 vulnerabilities. The only other lock change is npm's dedupe re-hoisting `fast-json-stable-stringify` 2.1.0 once stylelint's tree left.
 

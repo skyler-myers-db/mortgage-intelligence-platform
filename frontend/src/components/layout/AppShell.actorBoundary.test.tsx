@@ -5,7 +5,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACTOR_SCOPE_REGISTRY, NOBODY, _resetActorScopeForTests, actorScopeStatus } from '../../lib/actorScope';
+import {
+  ACTOR_SCOPE_REGISTRY,
+  NOBODY,
+  _resetActorScopeForTests,
+  _setResetDocumentForTests,
+  actorScopeStatus,
+} from '../../lib/actorScope';
 import { api } from '../../lib/api';
 import { GENIE_IN_FLIGHT_TURN_KEY } from '../../lib/genieConversation';
 import { GENIE_CONVERSATION_TURNS_KEY, getGenieTurns } from '../../lib/genieConversationStore';
@@ -363,11 +369,14 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     expect(getGenieTurns().map((turn) => turn.question)).toEqual(['previous actor question']);
   });
 
-  it('(iii) a, then b: clears', async () => {
+  it('(iii) a, then b: clears and resets the document (D-identity-review-a3)', async () => {
     await midSession();
+    const resetDocument = vi.fn();
+    _setResetDocumentForTests(resetDocument);
     await nextProbe(okFor(ACTOR_B));
+    expect(resetDocument).toHaveBeenCalledOnce();
     expect(survivingState()).toEqual([]);
-    expect(lastBorrower()).toBe('');
+    // No lastBorrower assertion: the shell's memory goes with the document.
     expect(stamps()).toEqual([ACTOR_B, ACTOR_B]);
   });
 

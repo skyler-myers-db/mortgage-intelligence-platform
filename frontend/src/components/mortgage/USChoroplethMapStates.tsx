@@ -23,7 +23,8 @@ import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GeoAssignmentOverlayUnit } from '../../lib/api';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import type { StateRollup } from '../../types';
-import type { MapScenarioView } from './rateScenario.logic';
+import { RATE_COHORT_NOTE, type MapScenarioView } from './rateScenario.logic';
+import { stateScenario } from './USChoroplethMap.hover';
 import {
   MAP_UNIT_ATTR,
   claimDrillFocus,
@@ -121,6 +122,9 @@ export function USChoroplethMapStates({
   // listed by the table view, and said so to assistive technology.
   const skippedNoteId = useId();
   const skipped = loading ? 0 : views.filter((view) => !view.populated).length;
+  // Rate Lever (wow-stage-1): ONE description, the cohort note, for every
+  // state path while a scenario is shown; each name carries its numbers.
+  const rateNoteId = `${useId()}-rate-note`;
 
   // One set of handlers on the <svg> (D-dataviz-geo-d1): the card follows
   // the unit under the pointer or focus, and focusing a state makes it the
@@ -190,7 +194,9 @@ export function USChoroplethMapStates({
                 : undefined,
               loading ? 'loading' : 'ready',
               view.inFootprint,
+              stateScenario(location.id, scenario),
             )}
+            aria-describedby={scenario ? rateNoteId : undefined}
             aria-keyshortcuts={populated ? 'Enter' : undefined}
             onClick={populated ? () => activate(false) : undefined}
             onKeyDown={populated ? (event) => {
@@ -222,6 +228,11 @@ export function USChoroplethMapStates({
     {skipped > 0 && (
       <span id={skippedNoteId} className="sr-only">
         {skippedStatesNote(skipped)}
+      </span>
+    )}
+    {scenario && (
+      <span id={rateNoteId} className="sr-only">
+        {RATE_COHORT_NOTE}
       </span>
     )}
     </>

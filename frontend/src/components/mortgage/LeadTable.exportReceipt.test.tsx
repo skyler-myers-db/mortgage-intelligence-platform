@@ -11,6 +11,9 @@
  *    audit id is shown next to the export button;
  * 3. a refused receipt (422) means no download and a visible error;
  * 4. the digests match what the file and the id list actually hash to.
+ * 5. D-approval-flow-b: the `# matching_rows` and `# contact_policy` lines
+ *    are inside the hashed text, matching_row_count rides the declaration
+ *    only when known, and the digest changes with it.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -158,7 +161,7 @@ describe('LeadTable audited export', () => {
     vi.restoreAllMocks();
   });
 
-  function mount(leads: LeadSummary[]) {
+  function mount(leads: LeadSummary[], totalMatching: number | null = null) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     act(() => {
       root.render(
@@ -166,6 +169,7 @@ describe('LeadTable audited export', () => {
           <MemoryRouter>
             <LeadTable
               leads={leads}
+              totalMatching={totalMatching}
               exportContext={{
                 generatedAt: '2026-09-21T00:00:00.000Z',
                 filters: 'states=IL&segment=itm',
@@ -242,7 +246,7 @@ describe('LeadTable audited export', () => {
     const receipt = container.querySelector('[data-testid="lead-export-receipt"]');
     expect(receipt?.textContent).toBe('Exported 2 rows · audit evt-receipt-4242');
     const link = receipt?.querySelector('a');
-    expect(link?.getAttribute('href')).toBe('/admin-config?audit_event_id=evt-receipt-4242#audit');
+    expect(link?.getAttribute('href')).toBe('/audit-ledger?audit_event_id=evt-receipt-4242#audit');
     expect(exportButton().disabled).toBe(false);
     expect(exportButton().hasAttribute('aria-disabled')).toBe(false);
     expect(exportButton().textContent).toContain('Export 2 leads');
@@ -287,6 +291,37 @@ describe('LeadTable audited export', () => {
     expect(container.querySelector('[data-testid="lead-export-error"]')?.textContent).toBe(
       'Export refused: the audit ledger would not record this export. Nothing was downloaded.',
     );
+  });
+
+  it('hashes the matching_rows and contact_policy lines and declares matching_row_count (D-approval-flow-b)', async () => {
+    mount(ROWS, 2340);
+    await clickExport();
+    await vi.waitFor(() => expect(blobs).toHaveLength(1));
+
+    const csv = await blobs[0].text();
+    expect(csv).toContain('\n# matching_rows=2340\n');
+    expect(csv).toContain('\n# contact_policy=human_approval_required; only rows with approval_status=approved are cleared for outreach\n');
+    expect(receiptCalls).toHaveLength(1);
+    expect(receiptCalls[0].matching_row_count).toBe(2340);
+    // Both lines are inside the bytes the receipt's digest covers.
+    expect(receiptCalls[0].csv_sha256).toBe(await sha256Hex(csv));
+    const withoutLines = csv.split('\n').filter((line) => !/^# (matching_rows|contact_policy)=/.test(line)).join('\n');
+    expect(await sha256Hex(withoutLines)).not.toBe(receiptCalls[0].csv_sha256);
+  });
+
+  it('sends no matching_row_count when the count is unknown, and the digest changes with it', async () => {
+    mount(ROWS);
+    await clickExport();
+    await vi.waitFor(() => expect(blobs).toHaveLength(1));
+    const unknownCsv = await blobs[0].text();
+    expect(unknownCsv).toContain('# matching_rows=unknown');
+    expect('matching_row_count' in receiptCalls[0]).toBe(false);
+
+    mount(ROWS, 2340);
+    await clickExport();
+    await vi.waitFor(() => expect(blobs).toHaveLength(2));
+    // The same rows at the same generated_at: only the matching line differs.
+    expect(receiptCalls[1].csv_sha256).not.toBe(receiptCalls[0].csv_sha256);
   });
 
   it('ignores a second click while the first receipt is in flight', async () => {

@@ -8,10 +8,14 @@
  * Audit critic-06: verb-first advance labels; the outcome is picked, then
  * confirmed ("Record <outcome> for <id>?"); Cancel and Escape close the
  * picker with zero writes and return focus to "Record outcome"; only
- * Record posts, once. (The compact stepper is this lane's budget cut 2:
- * deferred.)
+ * Record posts, once. The compact stepper (critic-06 item d) is
+ * lifecycleSteps.
+ *
+ * Audit states-09: both writes run on keyed mutations under
+ * ['mip','sales'], so the Lead Queue's own-write store sees them.
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,6 +34,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 }));
 
 import { AssignmentLifecycleAdvance } from './AssignmentLifecycleAdvance';
+import { lifecycleSteps } from './AssignmentLifecycleSteps';
 
 const ASSIGNMENT_ID = '66666666-6666-4666-8666-666666666601';
 const BORROWER = 'B-48291';
@@ -42,17 +47,25 @@ async function settle(): Promise<void> {
 }
 
 let root: Root;
+let queryClient: QueryClient;
 const onAdvanced = vi.fn();
 
 function render(status: AssignmentLifecycleStatus): void {
   root.render(
-    <AssignmentLifecycleAdvance
-      assignmentId={ASSIGNMENT_ID}
-      status={status}
-      borrowerId={BORROWER}
-      onAdvanced={onAdvanced}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <AssignmentLifecycleAdvance
+        assignmentId={ASSIGNMENT_ID}
+        status={status}
+        borrowerId={BORROWER}
+        onAdvanced={onAdvanced}
+      />
+    </QueryClientProvider>,
   );
+}
+
+/** The mutation keys this control ran, in order. */
+function mutationKeys(): unknown[] {
+  return queryClient.getMutationCache().getAll().map((mutation) => mutation.options.mutationKey);
 }
 
 function buttonByText(text: string): HTMLButtonElement | undefined {
@@ -79,6 +92,7 @@ describe('AssignmentLifecycleAdvance', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
+    queryClient = new QueryClient();
   });
 
   afterEach(() => {
@@ -102,6 +116,8 @@ describe('AssignmentLifecycleAdvance', () => {
     expect(apiMocks.updateAssignmentStatus).toHaveBeenCalledTimes(1);
     expect(apiMocks.updateAssignmentStatus).toHaveBeenCalledWith(ASSIGNMENT_ID, 'contact_drafted');
     expect(onAdvanced).toHaveBeenCalledWith(BORROWER, { assignment_status: 'contact_drafted' });
+    // states-09: a keyed sales mutation, which the own-write store counts.
+    expect(mutationKeys()).toEqual([['mip', 'sales', 'lifecycle']]);
   });
 
   it('names every advance verb-first', async () => {
@@ -134,6 +150,7 @@ describe('AssignmentLifecycleAdvance', () => {
     expect(apiMocks.recordAssignmentOutcome).toHaveBeenCalledTimes(1);
     expect(apiMocks.recordAssignmentOutcome).toHaveBeenCalledWith(ASSIGNMENT_ID, 'declined');
     expect(onAdvanced).toHaveBeenCalledWith(BORROWER, { assignment_status: 'outcome_recorded' });
+    expect(mutationKeys(), 'one keyed sales write per Record').toEqual([['mip', 'sales', 'outcome']]);
   });
 
   it('Back returns to the outcome choice with no write', async () => {
@@ -216,6 +233,20 @@ describe('AssignmentLifecycleAdvance', () => {
     expect(apiMocks.recordAssignmentOutcome).toHaveBeenCalledTimes(1);
     expect(onAdvanced).not.toHaveBeenCalled();
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('assignment is not actioned');
+  });
+
+  it('the stepper marks the current step with aria-current, terminal included', async () => {
+    for (const [status, label, done] of [
+      ['assigned', 'Assigned', 0],
+      ['actioned', 'Actioned', 3],
+      ['outcome_recorded', 'Outcome recorded', 4],
+    ] as const) {
+      await act(async () => root.render(lifecycleSteps(status)));
+      const items = [...document.querySelectorAll('[data-testid="assignment-lifecycle-steps"] > li')];
+      expect(items).toHaveLength(5);
+      expect(document.querySelector('[aria-current="step"]')?.textContent, status).toBe(label);
+      expect(document.querySelectorAll('.chip--success'), `${status}: done steps`).toHaveLength(done);
+    }
   });
 
   it('renders nothing once the lifecycle is terminal', async () => {

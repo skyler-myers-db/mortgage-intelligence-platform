@@ -16,6 +16,7 @@ export { LeadBulkRunProgress, LeadBulkRunResult } from './LeadBulkRunStatus';
 export { LeadBulkRejectGate } from './LeadBulkRejectGate';
 export { LeadBulkCampaignHandoff } from './LeadBulkCampaignHandoff';
 export { bulkCanaryNotice } from './LeadBulkRunStatus.copy';
+export { canaryNotice } from './LeadTable.canary';
 export { runBulkApprove, runBulkReject } from './leadBulkDecisions';
 export { offerCounts } from './LeadBulkApproveReview.counts';
 

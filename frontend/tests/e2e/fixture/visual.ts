@@ -93,7 +93,14 @@ export async function parkPointerAndBlur(page: Page): Promise<void> {
       }
       for (const [x, y] of candidates) {
         const element = document.elementFromPoint(x, y);
-        if (element && !element.closest(interactive)) return { x, y };
+        if (!element) continue;
+        const hit = element.closest(interactive);
+        // An open modal dialog makes the page behind it inert, and every point
+        // on its backdrop hits the dialog itself. An interactive ANCESTOR of the
+        // dialog (the [tabindex] section that hosts it) cannot be hovered, so
+        // only controls inside the dialog count.
+        const modal = element.closest('dialog:modal');
+        if (!hit || (modal && !modal.contains(hit))) return { x, y };
       }
       return null;
     },

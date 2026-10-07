@@ -52,7 +52,8 @@ vi.mock('../../lib/api', async (importOriginal) => {
   };
 });
 
-import { Console } from './Console';
+import { AUDIT_EVENT_TYPE_LABELS } from '../admin/AdminAuditExplorer.labels';
+import { Console, recentActivityPresentation } from './Console';
 
 describe('Console actor-scoped recent activity', () => {
   let container: HTMLDivElement;
@@ -156,5 +157,18 @@ describe('Console actor-scoped recent activity', () => {
       'cursor-page-2',
     );
     expect(activity?.textContent).toContain('B-BBBBBBBBBBBB2');
+  });
+});
+
+describe('recentActivityPresentation', () => {
+  it('names an audit-ledger read the way the audit explorer does (D-audit-reads-c3)', () => {
+    const presented = recentActivityPresentation({
+      event_type: 'VIEW_AUDIT_LEDGER',
+      entity_type: 'audit_ledger',
+      subject_id: null,
+      created_at: '2026-10-01T12:00:00Z',
+    });
+    expect(presented.label).toBe('Audit ledger read');
+    expect(presented.label).toBe(AUDIT_EVENT_TYPE_LABELS.VIEW_AUDIT_LEDGER);
   });
 });

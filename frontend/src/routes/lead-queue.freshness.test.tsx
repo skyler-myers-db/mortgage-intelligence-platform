@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { QUEUE_VERSION_SERVER_TTL_MS } from '../lib/queueVersion';
+import { QUEUE_VERSION_KEY, QUEUE_VERSION_SERVER_TTL_MS } from '../lib/queueVersion';
+import { AssignmentLifecycleAdvance } from '../components/mortgage/AssignmentLifecycleAdvance';
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -65,6 +66,14 @@ beforeEach(() => {
       versionReads += 1;
       readTimes.push(Date.now() - T0);
       return new Response(JSON.stringify({ version: serverRead() }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (path === '/api/v1/loan-officers/assignments/asg-own-1/status') {
+      // The lifecycle write commits (the ledger moves) before it returns.
+      ledger = ledger === V1 ? V2 : V3;
+      return new Response(JSON.stringify({
+        assignment: { assignment_id: 'asg-own-1', borrower_id: 'B-OWNWRITE00001', status: 'contact_drafted' },
+        audit_event_id: 'audit-lifecycle-1',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     otherPaths.push(path);
     throw new Error(`unexpected request ${path}`);
@@ -248,6 +257,52 @@ describe('useLeadQueueFreshness', () => {
     ledger = V3;
     await advanceTo(120_001);
     expect(pill()).not.toBeNull();
+  });
+
+  it('an own lifecycle advance (the keyed mutation) never reads as someone else\'s change', async () => {
+    // states-09: the advance used to call the api directly, outside the
+    // MutationCache, so the next poll's moved version raised the pill.
+    const onRefresh = vi.fn();
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Harness enabled dataUpdatedAt={T0} onRefresh={onRefresh} />
+          <AssignmentLifecycleAdvance
+            assignmentId="asg-own-1"
+            status="assigned"
+            borrowerId="B-OWNWRITE00001"
+            onAdvanced={() => undefined}
+          />
+        </QueryClientProvider>,
+      );
+    });
+    await advance(1);
+    await advanceTo(10_000);
+    const advanceButton = [...document.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.trim() === 'Mark contact drafted');
+    await act(async () => advanceButton!.click());
+    await advance(1);
+    expect(ledger, 'the advance committed').toBe(V2);
+    for (const at of [60_001, 90_000, 120_001, 150_000]) {
+      await advanceTo(at);
+      expect(pill(), `no pill at t=${at} ms`).toBeNull();
+    }
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('a version reading cached before mount never becomes the baseline', async () => {
+    // A remount within the version query's gcTime: the cache still holds the
+    // PRE-write version an earlier mount read; the ledgers have moved since
+    // (a write long enough ago to fall outside the pre-mount window).
+    queryClient.setQueryData(QUEUE_VERSION_KEY, { version: V1, requestedAt: T0 - 95_000 }, { updatedAt: T0 - 95_000 });
+    ledger = V2;
+    await render();
+    expect(versionReads, 'the stale cached reading is re-read at mount').toBe(1);
+    expect(pill(), 'the cached pre-write version is no baseline').toBeNull();
+    for (const at of [60_001, 120_001]) {
+      await advanceTo(at);
+      expect(pill(), `no pill at t=${at} ms`).toBeNull();
+    }
   });
 
   it('polls nothing while the rows are not settled', async () => {

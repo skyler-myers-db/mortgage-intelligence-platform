@@ -15,6 +15,7 @@ import {
   NOBODY,
   _resetActorScopeForTests,
   _setProvenChangeHandlerForTests,
+  _setResetDocumentForTests,
   actorScopeStatus,
   documentOwnerKey,
   observeActor,
@@ -126,6 +127,7 @@ describe('registry', () => {
       QUEUE_CONTEXT_STORAGE_KEY,
       'mip.bulkApprove.lastCancelled',
       'mip.queryCache.v1',
+      'mip.portfolio.campaignDraft.v1',
     ]);
     expect(GENIE_IN_FLIGHT_TURN_KEY).toBe('mip.genie.inFlightTurn');
     expect(ACTOR_SCOPE_REGISTRY.ACTOR_PREFERENCE_LOCAL).toEqual([PREF]);
@@ -234,14 +236,19 @@ describe('document-level proven change', () => {
     expect(snapshot()).toBe(before);
   });
 
-  it('the interim default runs the rows, reports cleared even with nothing stored, and moves the owner', () => {
-    freshDocument();
+  it('the default resets the document (D-identity-review-a3): restamped only, both stamps k, the owner kept, one reset', () => {
+    freshDocument(ownedBy(ACTOR_A));
     observeActor({ key: ACTOR_A });
     events.length = 0;
+    const reset = vi.fn();
+    _setResetDocumentForTests(reset);
     observeActor({ key: ACTOR_B });
-    expect(events).toEqual(['cleared', 'restamped']);
+    expect(events, 'never cleared or closed: no query-cache clear before the page goes').toEqual(['restamped']);
+    expect(privateLeft()).toEqual([]);
     expect(stamps()).toEqual([ACTOR_B, ACTOR_B]);
-    expect(documentOwnerKey()).toBe(ACTOR_B);
+    expect(actorScopeStatus()).toBe('closed');
+    expect(documentOwnerKey(), 'the document stays A until it is replaced').toBe(ACTOR_A);
+    expect(reset).toHaveBeenCalledOnce();
   });
 
   it('a cross-tab restamp of the shared local stamp cannot hide the change: the handler fires once', () => {
@@ -414,25 +421,34 @@ describe('the preference map', () => {
 });
 
 describe('ported from the shell reset guard and actorScopedBrowserState', () => {
-  it('the first trusted key after a first visit clears nothing; a swapped key clears; a disappearing key closes', () => {
+  it('the first trusted key after a first visit clears nothing; a disappearing key closes; a swapped key resets the document', () => {
     observeActor({ key: ACTOR_A });
     expect(events).not.toContain('cleared');
-    observeActor({ key: ACTOR_B });
-    expect(events).toContain('cleared');
     events.length = 0;
     observeActor({ key: null });
     expect(events).toEqual(['closed']);
+    observeActor({ key: ACTOR_A });
+    events.length = 0;
+    const resetDocument = vi.fn();
+    _setResetDocumentForTests(resetDocument);
+    observeActor({ key: ACTOR_B });
+    expect(events).toEqual(['restamped']);
+    expect(resetDocument).toHaveBeenCalledOnce();
   });
 
-  it('an actor change removes every private key and resets the mounted Genie surfaces once', () => {
-    freshDocument({
-      local: { ...ownedBy(ACTOR_A).local },
-      session: {
-        ...ownedBy(ACTOR_A).session,
-        [QUEUE_CONTEXT_STORAGE_KEY]: '{"borrower_id":"B-0OXOBYLW8MNCK"}',
-        'mip.bulkApprove.lastCancelled': '{"ok":1}',
-      },
-    });
+  /** A's private keys in every PRIVATE slot the registry knows. */
+  const everyPrivateOfA = () => ({
+    local: { ...ownedBy(ACTOR_A).local },
+    session: {
+      ...ownedBy(ACTOR_A).session,
+      [QUEUE_CONTEXT_STORAGE_KEY]: '{"borrower_id":"B-0OXOBYLW8MNCK"}',
+      'mip.bulkApprove.lastCancelled': '{"ok":1}',
+      'mip.queryCache.v1': '{}',
+    },
+  });
+
+  it('a first observation of another actor removes every private key and resets the mounted Genie surfaces once', () => {
+    freshDocument(everyPrivateOfA());
     const reset = vi.fn();
     window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, reset);
     try {
@@ -442,6 +458,25 @@ describe('ported from the shell reset guard and actorScopedBrowserState', () => 
     }
     expect(privateLeft()).toEqual([]);
     expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  it('a mid-session actor change removes every private key and replaces the document (the reset contract)', () => {
+    freshDocument(everyPrivateOfA());
+    observeActor({ key: ACTOR_A });
+    expect(privateLeft(), 'the same actor kept everything').toHaveLength(7);
+    const genieReset = vi.fn();
+    const resetDocument = vi.fn();
+    _setResetDocumentForTests(resetDocument);
+    window.addEventListener(GENIE_CONVERSATION_RESET_EVENT, genieReset);
+    try {
+      observeActor({ key: ACTOR_B });
+    } finally {
+      window.removeEventListener(GENIE_CONVERSATION_RESET_EVENT, genieReset);
+    }
+    expect(privateLeft()).toEqual([]);
+    expect(stamps()).toEqual([ACTOR_B, ACTOR_B]);
+    expect(resetDocument, 'every mounted Genie surface goes with the document').toHaveBeenCalledOnce();
+    expect(genieReset, 'no in-place reset: the document is replaced').not.toHaveBeenCalled();
   });
 
   it('a trusted nobody after a real owner resets the Genie surfaces too (the W5a bridge)', () => {

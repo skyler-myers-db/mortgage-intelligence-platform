@@ -1562,10 +1562,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       /No borrower identities, contact data, or outbound messages are included/i,
     );
     await campaign.getByRole('button', { name: 'Apply variants' }).click();
-    await expect(page.getByLabel('Benefit-led subject')).not.toHaveValue('');
-    await expect(page.getByLabel('Guidance-led subject')).not.toHaveValue('');
-    await expect(page.getByLabel('Benefit-led message')).not.toHaveValue('');
-    await expect(page.getByLabel('Guidance-led message')).not.toHaveValue('');
+    for (const readout of ['Benefit-led subject', 'Guidance-led subject', 'Benefit-led message', 'Guidance-led message']) {
+      // critic-04: the applied copy is a readout (a labelled group of text), never an input.
+      await expect(page.getByRole('group', { name: readout, exact: true }).locator('.field__value:not(.field__readout--empty)')).not.toHaveText('');
+    }
 
     const leadQueue = page.getByRole('link', { name: /Open lead queue/i });
     await expect(leadQueue).toBeVisible({ timeout: 30_000 });
@@ -2240,6 +2240,14 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(appearanceToggle).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/grant needed|read error/i)).toHaveCount(0);
 
+    // The audit explorer moved to its own page, /audit-ledger
+    // (D-audit-reads-c3); Admin keeps a link card in its place. Each read
+    // below writes one attributable VIEW_AUDIT_LEDGER row.
+    await expect(page.locator('#audit').getByRole('link', { name: 'Open audit ledger' })).toHaveAttribute(
+      'href',
+      '/audit-ledger',
+    );
+    await gotoApp(page, '/audit-ledger');
     const auditExplorer = page.locator('#audit');
     await expect(auditExplorer.getByText('Audit explorer', { exact: true })).toBeVisible({
       timeout: 30_000,
@@ -2253,6 +2261,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(auditExplorer.getByRole('button', { name: /Copy Lakebase query for audit event/i }))
       .toBeVisible();
     await expect(auditExplorer.getByText('REVIEWED METADATA', { exact: true })).toBeVisible();
+    await gotoApp(page, '/admin-config');
+    await expect(appearanceToggle).toBeVisible({ timeout: 30_000 });
 
     const html = page.locator('html');
 

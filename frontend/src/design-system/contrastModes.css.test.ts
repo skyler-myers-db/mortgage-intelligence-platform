@@ -3,14 +3,16 @@
  * a11y-10, responsive-v3). The rendered proofs are
  * tests/e2e/fixture/css-hygiene.modes.fixture.spec.ts.
  *
- *  - forced-colors: active. Interactive states take a Highlight fill. Their
- *    text keeps its forced ink, because Chromium backs every text run with a
- *    Canvas readability backplate (HighlightText text painted invisible on
- *    it); only svg glyphs, which get no backplate, are inked HighlightText.
+ *  - forced-colors: active. Interactive states take a Highlight fill and
+ *    paint HighlightText on themselves and everything in them, with forcing
+ *    off (`forced-color-adjust: none`): Firefox paints no Canvas backplate
+ *    behind forced text, so a forced ink sat on Highlight at 1.18:1, and with
+ *    forcing on Chromium's backplate hid a HighlightText label. Otherwise
  *    `forced-color-adjust: none` is reserved for non-text data marks (and the
  *    switch knob), each edged in a system colour; every colour a forced-colors
  *    block writes is a system keyword (or, on a data mark, its ramp / segment
- *    token). The painted proof is css-hygiene.forced-ink.fixture.spec.ts.
+ *    token). The painted proofs are css-hygiene.forced-ink.fixture.spec.ts
+ *    (Chromium) and forced-colors.firefox.fixture.spec.ts (Firefox, CI).
  *  - prefers-contrast: more. Raises exactly --text-3, --text-4 and
  *    --line-1..3 per theme and the ring width, to measured targets.
  *  - prefers-reduced-transparency: reduce. Every frosted surface and scrim
@@ -136,18 +138,39 @@ const DATA_MARKS = [
   '.offer-mix',
   '.offer-mix__seg',
   '.offer-mix__swatch',
+  // The Genie kit charts (dataviz-05): bars and points in CanvasText on a
+  // Canvas track edged in CanvasText, and the line stroke.
+  '.genie-bars__bar',
+  '.genie-line__point',
+  '.genie-bars__track',
+  '.genie-line__path',
+];
+
+/** The Highlight-filled interactive states that paint the system pair themselves (W5b, Firefox backplate). */
+const HIGHLIGHT_STATES = [
+  '.segmented.segmented button.is-active',
+  '.filter.is-active',
+  '.rail__item.is-active',
+  '.topbar__icon-btn.is-active',
+  '.drawer__tab.is-active',
+  '.proof-tab.is-active',
+  '.cmdk__row.is-active',
+  '.filter-menu__item:is(.is-focused, .is-selected)',
+  '.topbar__search-result.is-active',
+  '.layout-tabs.layout-tabs button.is-active',
 ];
 
 describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
   const declarations = mediaDeclarations(FORCED);
 
-  it('opts only non-text data marks and the switch knob out of forcing', () => {
+  it('opts only non-text data marks, the switch knob and the Highlight states out of forcing', () => {
     const optedOut = declarations
       .filter((d) => d.property === 'forced-color-adjust' && d.value === 'none')
       .flatMap((d) => d.selector.split(/,(?![^(]*\))/).map((part) => part.trim()));
+    const allowed = [...DATA_MARKS, ...HIGHLIGHT_STATES];
     expect(optedOut.length).toBeGreaterThan(0);
-    expect(optedOut.filter((selector) => !DATA_MARKS.includes(selector)), 'forced-color-adjust: none off the data-mark list').toEqual([]);
-    expect(new Set(optedOut)).toEqual(new Set(DATA_MARKS));
+    expect(optedOut.filter((selector) => !allowed.includes(selector)), 'forced-color-adjust: none off the allowed list').toEqual([]);
+    expect(new Set(optedOut)).toEqual(new Set(allowed));
   });
 
   it('writes only system colours inside forced-colors blocks', () => {
@@ -162,7 +185,7 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
     expect(offenders, 'use a system colour keyword').toEqual([]);
   });
 
-  it('fills every active / selected / on state with Highlight and leaves its text ink forced', () => {
+  it('fills every active / selected / on state with Highlight, with forcing off on the text-bearing ones', () => {
     const highlighted = declarations
       .filter((d) => d.property === 'background-color' && d.value === 'Highlight')
       .flatMap((d) => d.selector.split(/,(?![^(]*\))/).map((part) => part.trim()));
@@ -185,46 +208,64 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
     expect(Object.fromEntries(rule.map((d) => [d.property, d.value]))).toEqual({
       'background-color': 'Highlight',
       'border-color': 'Highlight',
+      'forced-color-adjust': 'none',
     });
   });
 
-  // Chromium paints a Canvas backplate behind every text run in forced
-  // colors, whatever the element's background is. Text inked HighlightText
-  // therefore painted as a solid Canvas box with no visible words (round-2
-  // review, pixel probe in both palettes); left alone, text keeps Chromium's
-  // forced ink (CanvasText, LinkText or ButtonText) on that backplate.
-  it('never inks text HighlightText: only an svg glyph takes it', () => {
+  // Chromium paints a Canvas backplate behind every forced text run, so a
+  // HighlightText label painted as a solid Canvas box (round-2 review);
+  // Firefox paints none, so a forced ink sat on Highlight at 1.18:1 (W5a CI).
+  // HighlightText text is therefore only right where forcing is off.
+  it('inks text HighlightText only inside a state that opts out of forcing', () => {
+    const unDoubled = (selector: string) => selector.replace(/(\.[\w-]+)\1(?![\w-])/g, '$1');
+    const optedOut = new Set(HIGHLIGHT_STATES.map(unDoubled));
     const inked = declarations.filter((d) => d.property === 'color' && /^HighlightText\b/.test(d.value));
     expect(inked.length).toBeGreaterThan(0);
-    const textSubjects = inked.flatMap((d) => selectorList(d.selector).filter((selector) => !/ svg$/.test(selector)));
-    expect(textSubjects, 'a text-bearing subject inked HighlightText').toEqual([]);
+    const stray = inked
+      .flatMap((d) => selectorList(d.selector))
+      .flatMap((selector) => {
+        const subject = selector.replace(/ (\*:not\(svg \*\)|svg)$/, '');
+        const grouped = /^:is\((.*)\)([^()]*)$/.exec(subject);
+        return grouped ? selectorList(grouped[1]).map((part) => unDoubled(part + grouped[2])) : [unDoubled(subject)];
+      })
+      .filter((subject) => !optedOut.has(subject));
+    expect(stray, 'a subject inked HighlightText with forcing on').toEqual([]);
   });
 
-  it('inks the svg glyphs of exactly the Highlight states, over any author rule', () => {
+  it('inks exactly the Highlight states and everything in them, over any author rule', () => {
     const unDoubled = (selector: string) => selector.replace(/(\.[\w-]+)\1(?![\w-])/g, '$1');
     // A switch is a childless button: its knob is ::after, set by the knob rule.
     const states = declarations
       .filter((d) => d.property === 'background-color' && d.value === 'Highlight')
       .flatMap((d) => selectorList(d.selector).map((part) => unDoubled(part)))
-      .filter((state) => state !== '.switch.on');
-    const glyphRules = declarations.filter((d) => d.property === 'color' && d.value === 'HighlightText !important');
-    expect(glyphRules).toHaveLength(1);
-    // `:is(A, B).is-active svg` covers `A.is-active` and `B.is-active`.
-    const covered = selectorList(glyphRules[0]?.selector ?? '').flatMap((selector) => {
-      const subject = selector.replace(/ svg$/, '');
-      if (subject === selector) return [`not a glyph selector: ${selector}`];
+      .filter((state) => state !== '.switch.on' && !state.endsWith('::before'));
+    const inkRules = declarations.filter((d) => d.property === 'color' && d.value === 'HighlightText !important');
+    expect(inkRules).toHaveLength(1);
+    // `:is(A, B).is-active` and `:is(A, B).is-active *:not(svg *)` cover `A.is-active` and `B.is-active`, self and descendants.
+    const subjects = selectorList(inkRules[0]?.selector ?? '').map((selector) => {
+      const subject = selector.replace(/ \*:not\(svg \*\)$/, '');
+      return { subject, descendants: subject !== selector };
+    });
+    const expand = (subject: string) => {
       const grouped = /^:is\((.*)\)([^()]*)$/.exec(subject);
       return grouped ? selectorList(grouped[1]).map((part) => part + grouped[2]) : [subject];
-    });
-    expect(states.length).toBeGreaterThanOrEqual(9);
-    expect(new Set(covered)).toEqual(new Set(states));
+    };
+    const self = subjects.filter((s) => !s.descendants).flatMap((s) => expand(s.subject));
+    const inside = subjects.filter((s) => s.descendants).flatMap((s) => expand(s.subject));
+    expect(states.length).toBeGreaterThanOrEqual(10);
+    expect(new Set(self)).toEqual(new Set(states));
+    expect(new Set(inside)).toEqual(new Set(states));
+    expect(new Set(states)).toEqual(new Set(HIGHLIGHT_STATES.map(unDoubled)));
   });
 
   it("returns a nested control's glyph to ButtonText on its forced hover and focus fill", () => {
     // `.filter__remove:hover` / `:focus-visible` fill with --bg-3, which is
     // forced to ButtonFace: a HighlightText cross vanished on it (1:1).
+    // The remove button keeps forcing inside the unforced chip, so that fill
+    // stays the forced ButtonFace the ButtonText glyph is chosen for.
     const carveOut = declarations.filter((d) => d.selector.includes('.filter__remove'));
     expect(carveOut.map((d) => [d.file, d.selector, d.property, d.value])).toEqual([
+      ['design-system/components.css (partials)', '.filter.is-active .filter__remove', 'forced-color-adjust', 'auto'],
       ['src/routes/lead-queue.css', '.filter.is-active .filter__remove:is(:hover, :focus-visible) svg', 'color', 'ButtonText !important'],
     ]);
   });

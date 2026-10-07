@@ -71,6 +71,8 @@ export interface ResponseSchemas {
     actor_cache_key: string | null;
     agent_gateway_binding_sha256: string | null;
     app_env: string | null;
+    /** Identities configured as auditor that are also configured as administrator or approver (segregation-of-duties signal). A count only. */
+    auditor_role_overlap: number;
     boundary_warning: ResponseSchemas['BoundaryWarning'] | null;
     breaker_state_changes_last_hour: number;
     campaign_treatment_runtime: string | null;
@@ -85,6 +87,7 @@ export interface ResponseSchemas {
     git_sha: string | null;
     log_export: string;
     mode: string;
+    presenter_mode: boolean;
     recent_errors_count: number;
     status: string;
     warehouse_id: string | null;
@@ -193,6 +196,58 @@ export interface ResponseSchemas {
     source: string;
     stage: "population" | "high_opportunity" | "approved" | "actioned" | "outcome_recorded";
     stage_order: number;
+  };
+  /** One request as a reader may see it. */
+  ApprovalRequestBatchView: {
+    batch_id: string;
+    created_at: string;
+    is_mine: boolean;
+    /** The requester's screened justification. */
+    rationale: string;
+    /** The requester's own identity, present only in their own scope=mine list. */
+    requested_by: string | null;
+    /** A readable label derived from the requester's identity, never looked up. */
+    requested_by_display: string | null;
+    rows: ResponseSchemas['ApprovalRequestRow'][];
+  };
+  /** The stored answer to one request; a replay of its key returns it unchanged. */
+  ApprovalRequestCreated: {
+    /** The APPROVAL_REQUESTED audit row written with the request. */
+    audit_event_id: string;
+    /** Server-issued request id (UUID). */
+    batch_id: string;
+    /** The borrowers the request now holds open. */
+    requested: string[];
+    skipped: ResponseSchemas['ApprovalRequestSkip'][];
+  };
+  /** GET /outreach/approval-requests: audit-free, Lakebase app state only. */
+  ApprovalRequestList: {
+    batches: ResponseSchemas['ApprovalRequestBatchView'][];
+    scope: "open" | "mine";
+  };
+  /** One requested borrower and the state derived for it. */
+  ApprovalRequestRow: {
+    /** The linked approvals row, for approved and rejected only. */
+    approval_id: string | null;
+    borrower_id: string;
+    /** approved / rejected: an approver decided it through this request; decided_outside: decided without the request link; withdrawn: the requester withdrew it; expired: older than 30 days or reopened by a revoke; open: awaiting an approver. */
+    state: "open" | "approved" | "rejected" | "decided_outside" | "withdrawn" | "expired";
+  };
+  /** A selected borrower the request did not include, and why. */
+  ApprovalRequestSkip: {
+    borrower_id: string;
+    /** not_found: no such borrower; not_contactable: not marketing eligible, do-not-contact, no opt-in consent or suppressed; already_decided: an approval decision exists; already_requested: another open request already holds the borrower. */
+    reason: "not_found" | "not_contactable" | "already_decided" | "already_requested";
+  };
+  /** The requester's withdraw: open borrowers close; a repeat changes nothing. */
+  ApprovalRequestWithdrawn: {
+    /** Borrowers that were no longer open. */
+    already_closed: number;
+    /** The APPROVAL_REQUEST_WITHDRAWN audit row, only when this call withdrew any. */
+    audit_event_id: string | null;
+    batch_id: string;
+    /** Borrowers this call withdrew. */
+    withdrawn_now: number;
   };
   /** Who approved what — one row per human approve decision. */
   ApproverActivityRow: {
@@ -672,7 +727,7 @@ export interface ResponseSchemas {
     copy_hash: string | null;
     correlation_id: string | null;
     created_at: string;
-    decision: "approved" | "rejected" | "held";
+    decision: "approved" | "rejected" | "held" | "revoked";
     event_type: string;
     evidence_assets: string[];
     evidence_ids: string[];
@@ -912,6 +967,12 @@ export interface ResponseSchemas {
     outcome: "cancelled" | "recorded" | "ended";
     status: ResponseSchemas['GenieJobStatus'];
   };
+  /** How many of the shipped prose's figures were verified, and which. */
+  GenieClaimsSummary: {
+    items: ResponseSchemas['GenieVerifiedClaim'][];
+    total: number;
+    verified: number;
+  };
   /**
    * Where the governed completion of one live Genie turn is (audit genie-01).
    *
@@ -927,6 +988,14 @@ export interface ResponseSchemas {
    * before its governed record existed. ``typical_seconds`` (audit genie-01)
    * is the recent median completion time of this job's class (deep or
    * single), only while the job still runs and only with enough samples.
+   *
+   * Verified sections (audit genie-01 phase 1b), only while the job runs and
+   * no cancel was requested: ``verified_sections`` counts the deep sweep's
+   * sub-analyses that passed their own checks so far, ``sections_rev`` is
+   * their revision, and ``revealed_sections`` carries them, in plan order,
+   * once the count reaches the sweep's three-section floor and only when
+   * the revision differs from the one the poll sent. Each was audited before
+   * it was stored; none carries actions. A terminal job never carries them.
    */
   GenieCompletionJobStatus: {
     error_hint: string | null;
@@ -936,11 +1005,14 @@ export interface ResponseSchemas {
     parts_done: number | null;
     parts_planned: number | null;
     response: ResponseSchemas['GenieMessageResponse'] | null;
+    revealed_sections: ResponseSchemas['GenieAnswerSection'][] | null;
+    sections_rev: number | null;
     stage: ResponseSchemas['GenieJobStage'];
     stage_label: string;
     status: ResponseSchemas['GenieJobStatus'];
     terminal: boolean;
     typical_seconds: number | null;
+    verified_sections: number | null;
   };
   GenieDataFreshness: {
     asset: string;
@@ -1015,6 +1087,7 @@ export interface ResponseSchemas {
     terminal: boolean;
   };
   GenieProof: {
+    claims: ResponseSchemas['GenieClaimsSummary'] | null;
     conversation_id: string | null;
     data_freshness: ResponseSchemas['GenieDataFreshness'][];
     elapsed_ms: number | null;
@@ -1087,6 +1160,21 @@ export interface ResponseSchemas {
     progress_token: string | null;
     question_hash: string | null;
     response: ResponseSchemas['GenieMessageResponse'] | null;
+  };
+  /**
+   * One figure in the shipped prose that the claims verifier proved against
+   * the returned rows (audit genie-10 phase 1). ``derivation`` says how: a
+   * value a reader can find in one returned cell, a figure derived from the
+   * rows (a total, average, share or change), or a stated threshold the
+   * returned values satisfy. ``section`` names the deep-research section the
+   * figure belongs to; None is the summary or a single-turn answer. An
+   * unsupported figure is never listed: its prose is withheld instead.
+   */
+  GenieVerifiedClaim: {
+    derivation: "returned_value" | "derived_from_rows" | "bound";
+    kind: "currency" | "percent" | "bps" | "number";
+    section: string | null;
+    token: string;
   };
   GenieVisualizationSpec: {
     kind: string;
@@ -1297,7 +1385,9 @@ export interface ResponseSchemas {
   /** One reading of the S1 headline aggregates (live or snapshotted). */
   HeadlineKpis: {
     avg_opportunity_score: number | null;
+    competitor_lien: number | null;
     high_opportunity: number;
+    listed_for_sale: number | null;
     marketable_population: number;
     offers_available: number;
     offers_recommended: number;
@@ -1316,6 +1406,41 @@ export interface ResponseSchemas {
     mode: string;
     status: string;
     workspace_host?: string | null;
+  };
+  /** The weekly par print for the baseline week and the latest week. */
+  HomeAttributionRate: {
+    baseline_pct: number | null;
+    baseline_week: string | null;
+    latest_pct: number | null;
+    latest_week: string | null;
+    series_id: string;
+  };
+  /** One state's count at the two snapshots; None where it has no row. */
+  HomeAttributionState: {
+    baseline_count: number | null;
+    change: number | null;
+    current_count: number | null;
+    state: string;
+  };
+  /** Where one headline measure moved between two funnel snapshots. */
+  HomeSummaryAttributionResponse: {
+    baseline_snapshot_date: string | null;
+    baseline_total: number | null;
+    current_snapshot_date: string | null;
+    current_total: number | null;
+    label: string;
+    measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+    nearest_snapshot: boolean;
+    note: string;
+    offer_rules_changed_since_baseline: boolean | null;
+    offer_rules_last_updated: string | null;
+    population: "addressable";
+    rate: ResponseSchemas['HomeAttributionRate'];
+    requested_baseline_date: string;
+    sources: string[];
+    states: ResponseSchemas['HomeAttributionState'][];
+    total_change: number | null;
+    unattributed_change: number | null;
   };
   /**
    * One number in the summary sentence, traceable to its sources.
@@ -1371,7 +1496,9 @@ export interface ResponseSchemas {
   /** Signed current-minus-baseline differences per headline measure. */
   KpiDeltas: {
     avg_opportunity_score: number | null;
+    competitor_lien: number | null;
     high_opportunity: number;
+    listed_for_sale: number | null;
     marketable_population: number;
     offers_available: number;
     offers_recommended: number;
@@ -1417,6 +1544,7 @@ export interface ResponseSchemas {
     csv_sha256: string;
     event_type: "LEAD_EXPORT";
     filter_fingerprint: string;
+    matching_row_count: number | null;
     recorded_at: string;
     row_count: number;
     scope: "selected" | "loaded";
@@ -1645,6 +1773,17 @@ export interface ResponseSchemas {
     audit_event_id: string;
     rejected: boolean;
   };
+  /** The revoke row and what it superseded. */
+  OutreachRevokeResponse: {
+    /** The revoke decision row. */
+    approval_id: string;
+    audit_event_id: string;
+    /** The not-yet-worked lead assignment the revoke released, if there was one. */
+    released_assignment_id: string | null;
+    revoked: boolean;
+    /** The approval it superseded. */
+    revoked_approval_id: string;
+  };
   /** One validated, deterministic step of a composed plan. */
   PlanStep: {
     params: { [key: string]: unknown };
@@ -1789,7 +1928,7 @@ export interface ResponseSchemas {
   };
   /** Opaque version of the Lakebase decision ledgers behind the Lead Queue. */
   QueueVersionResponse: {
-    /** 32 lowercase hex characters. Changes when an approval, a lead assignment (including its status), a call disposition or a loan officer outcome is recorded; equal versions mean none was. */
+    /** 32 lowercase hex characters. Changes when an approval, a lead assignment (including its status), a call disposition, a loan officer outcome, an outreach delivery status or an imported CRM outcome is recorded; equal versions mean none was. */
     version: string;
   };
   /** Evidence manifest: every table and rule the grid was read or derived from. */
@@ -2081,9 +2220,13 @@ export interface ResponseSchemas {
     actor_email: string | null;
     can_access_admin: boolean;
     can_approve: boolean;
+    /** Same fail-closed decision the audit-ledger reads enforce: an administrator or a configured auditor may read the full audit ledger. Grants no administrator or approver capability. */
+    can_read_audit: boolean;
     /** The configured lender's display name (settings.mip_lender_name), the same value /api/config/options returns. Served here too so the shell's tenant label rides this zero-dependency call instead of the warehouse-backed options call (audit delivery-07). */
     lender_name: string | null;
-    /** Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), else 'Workspace user' for a forwarded identity that holds neither tier. Empty only when the session holds neither tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract. */
+    /** Demo-only: gates demo affordances in product surfaces. Never an authorization input. */
+    presenter_mode: boolean;
+    /** Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), 'Auditor' (a configured auditor, read-only), else 'Workspace user' for a forwarded identity that holds no tier. Empty only when the session holds no tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract. */
     role_labels: string[];
     /** Whether the browser may install the opt-in RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). */
     rum_enabled: boolean | null;
@@ -2298,6 +2441,15 @@ export interface RequestSchemas {
     reason?: "operator_refresh" | "release_validation" | "source_update" | "support_triage" | null;
     request_id?: string | null;
   };
+  /** POST /outreach/approval-requests: ask an approver to review named borrowers. */
+  ApprovalRequestCreate: {
+    /** The masked borrower ids to request approval for, each named once. */
+    borrower_ids: string[];
+    /** Why these borrowers: required, without personal details. It is screened by the governed text policy and recorded on the audit row. */
+    rationale: string;
+    /** Client idempotency key (a UUID); a retry with the same key replays the stored answer. */
+    request_key: string;
+  };
   AssignLeadRequest: {
     assigned_to_email: string;
     expires_in_hours?: number | null;
@@ -2463,7 +2615,8 @@ export interface RequestSchemas {
    *
    * ``question`` is hash-checked against the progress token exactly as on
    * complete, and is how the answer gets its question back: the stored job
-   * result never holds it.
+   * result never holds it. ``sections_rev`` is the revision of the verified
+   * sections the poller already holds; the same revision is not re-sent.
    */
   GenieCompletionJobStatusRequest: {
     conversation_id: string;
@@ -2471,6 +2624,7 @@ export interface RequestSchemas {
     message_id: string;
     progress_token: string;
     question: string;
+    sections_rev?: number | null;
   };
   GenieFeedbackRequest: {
     comment?: string | null;
@@ -2557,6 +2711,8 @@ export interface RequestSchemas {
     csv_sha256: string;
     /** The Lead Queue query parameters the exported rows were read with (the same string the CSV's `# filters=` metadata line carries). Only their fingerprint is written to the ledger. */
     filters?: { [key: string]: string };
+    /** How many borrowers matched the filters when the file was built (the CSV's `# matching_rows=` line). Absent when unknown; never below row_count. */
+    matching_row_count?: number | null;
     row_count: number;
     scope: "selected" | "loaded";
   };
@@ -2577,6 +2733,8 @@ export interface RequestSchemas {
   };
   OutreachApproveRequest: {
     actor?: string;
+    /** The open approval request this decision answers (unbound queues only). */
+    approval_request_batch_id?: string | null;
     assigned_to_email?: string | null;
     borrower_id: string;
     bulk_id?: string | null;
@@ -2613,6 +2771,8 @@ export interface RequestSchemas {
    */
   OutreachRejectRequest: {
     actor?: string;
+    /** The open approval request this decision answers (unbound queues only). */
+    approval_request_batch_id?: string | null;
     borrower_id: string;
     bulk_id?: string | null;
     campaign_id?: string | null;
@@ -2623,6 +2783,16 @@ export interface RequestSchemas {
     rationale_code: "out_of_footprint" | "do_not_call" | "opt_out" | "fair_lending_review" | "low_intent" | "data_quality" | "other_with_text";
     request_id?: string | null;
     variant_name?: string | null;
+  };
+  /** POST /outreach/revoke: one borrower's current approval, with a reason. */
+  OutreachRevokeRequest: {
+    /** The approval being revoked: it must still be the borrower's current decision. */
+    approval_id: string;
+    borrower_id: string;
+    /** Why the approval is revoked: required, without personal details. */
+    rationale: string;
+    /** Client idempotency key; a retry with the same key replays the stored answer. */
+    request_id: string;
   };
   PortfolioCreateRequest: {
     channel_cascade?: { [key: string]: unknown }[];
@@ -3378,6 +3548,16 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['HomeSummaryResponse'];
   };
+  "GET /api/v1/home/summary/attribution": {
+    pathParams: Record<string, never>;
+    query: {
+      measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+      baseline: string;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['HomeSummaryAttributionResponse'];
+  };
   "GET /api/v1/leads": {
     pathParams: Record<string, never>;
     query: {
@@ -3457,6 +3637,8 @@ export interface ApiOperations {
       min_rate_spread_bps?: number | null;
       /** Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
       max_rate_spread_bps?: number | null;
+      /** Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only. */
+      approval_request_batch?: string | null;
       /** Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N — refine filters'. */
       limit?: number;
     };
@@ -3543,6 +3725,8 @@ export interface ApiOperations {
       min_rate_spread_bps?: number | null;
       /** Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
       max_rate_spread_bps?: number | null;
+      /** Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only. */
+      approval_request_batch?: string | null;
     };
     headers: Record<string, never>;
     body: never;
@@ -3629,6 +3813,8 @@ export interface ApiOperations {
       min_rate_spread_bps?: number | null;
       /** Optional inclusive upper bound on the signed rate spread in basis points. Borrowers with no spread never match a spread bound. */
       max_rate_spread_bps?: number | null;
+      /** Optional approval request id: the list shows that request's open borrowers (approvers, or the requester). GET /leads only. */
+      approval_request_batch?: string | null;
     };
     headers: Record<string, never>;
     body: never;
@@ -3668,6 +3854,16 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['LoanOfficerAssignment'][];
+  };
+  "GET /api/v1/outreach/approval-requests": {
+    pathParams: Record<string, never>;
+    query: {
+      /** open: every open request (approvers only); mine: your own. Defaults by role. */
+      scope?: "open" | "mine" | null;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['ApprovalRequestList'];
   };
   "GET /api/v1/portfolio": {
     pathParams: Record<string, never>;
@@ -4088,6 +4284,22 @@ export interface ApiOperations {
     body: RequestSchemas['OfferRecommendRequest'];
     ok: ResponseSchemas['OfferRecommendation'];
   };
+  "POST /api/v1/outreach/approval-requests": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['ApprovalRequestCreate'];
+    ok: ResponseSchemas['ApprovalRequestCreated'];
+  };
+  "POST /api/v1/outreach/approval-requests/{batch_id}/withdraw": {
+    pathParams: {
+      batch_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['ApprovalRequestWithdrawn'];
+  };
   "POST /api/v1/outreach/approve": {
     pathParams: Record<string, never>;
     query: Record<string, never>;
@@ -4108,6 +4320,13 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['OutreachRejectRequest'];
     ok: ResponseSchemas['OutreachRejectResponse'];
+  };
+  "POST /api/v1/outreach/revoke": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['OutreachRevokeRequest'];
+    ok: ResponseSchemas['OutreachRevokeResponse'];
   };
   "POST /api/v1/portfolio/campaign-recommendation": {
     pathParams: Record<string, never>;

@@ -28,6 +28,7 @@ import {
   type PersistedTurnRecord,
 } from './genieInFlightRecord';
 import { requestGenieTurnCancel, type GenieTurnCancelTarget } from './genieTurnCancel';
+import { forgetLeave, leaveWaitMs, unwatchLeave, watchLeave } from './genieTurnUnload';
 import {
   GENIE_RESUME_FAILED_REASON,
   GENIE_STOP_CONFIRMED_REASON,
@@ -96,12 +97,19 @@ export type { GenieTurnLockOutcome, GenieTurnLockRequester } from './genieTurnLo
  *   - a resumed question stays hidden until the first 200;
  *   - 'submitting', a legacy (non-job) 'completing', a stale record and a v:1
  *     record from before jobs become an 'interrupted' note with no request.
- * The submit is never re-POSTed.
+ * The submit is never re-POSTed. The reload's own cancelled request is not
+ * the turn failing, in any engine's page-lifecycle order: failTurn waits for
+ * pagehide (one task in Chromium; after a beforeunload heard while
+ * completing, up to GENIE_LEAVE_DECISION_MS in WebKit and Firefox).
  *
  * Fail-closed identity boundary: a GENIE_CONVERSATION_RESET_EVENT listener,
  * added when this module loads, aborts the turn, removes the record, releases
  * the lock and clears everything, the shared transcript included, whether or
- * not a surface is mounted.
+ * not a surface is mounted. When the reset came from a CLOSED gate (a trusted
+ * nobody, D-identity-review-a2) the gate dropped those removals, so the
+ * record survives; the 'closed' event re-arms the resume and the next
+ * 'opened' (the same owner or an alias) resumes it. Another actor never
+ * reopens a document (lib/actorScope resets it).
  */
 
 export type GenieTurnSurface = 'panel' | 'route';
@@ -305,6 +313,7 @@ function finishActive(): void {
   controller = null;
   removeRecord();
   releaseLock();
+  unwatchLeave();
 }
 
 // ------------------------------------------------------------------ settling
@@ -363,13 +372,25 @@ function failTurn(gen: number, err: unknown, deferred = false): void {
     deferredFailure = () => failTurn(gen, err, true);
     return;
   }
-  // Chromium 153 runs the cancelled fetch's rejection in a microtask during
-  // the pagehide dispatch, before this chunk's own (later-registered) pagehide
-  // listener has set pageHidden; Chromium 147 ran every listener first.
-  // Decide one task later, after the whole dispatch: an unloading page then
-  // finds pageHidden set (or never runs the timer), and the record survives.
+  // Engine orders of a reload during the complete call (genie-pagehide
+  // cross-engine (b)). Chromium 147 ran every pagehide listener before the
+  // cancelled fetch's rejection. Chromium 153 runs the rejection in a
+  // microtask during the pagehide dispatch, before this chunk's own
+  // (later-registered) listener has set pageHidden: decide one task later,
+  // after the whole dispatch.
   if (!deferred) {
     setTimeout(() => failTurn(gen, err, true), 0);
+    return;
+  }
+  // WebKit 26.6 (captured) and Firefox (CI) cancel the old document's
+  // requests when the navigation starts: beforeunload, the rejection a few ms
+  // later, at least one task, then pagehide. After a beforeunload heard while
+  // completing, wait for pagehide (or the page's end) up to
+  // GENIE_LEAVE_DECISION_MS; a page that stayed lands the failure then
+  // (lib/genieTurnUnload).
+  const leaving = leaveWaitMs();
+  if (leaving > 0) {
+    setTimeout(() => failTurn(gen, err, true), leaving);
     return;
   }
   const turn = active;
@@ -448,6 +469,7 @@ async function followJob(
   startedAt: number,
   signal: AbortSignal,
 ): Promise<void> {
+  watchLeave();
   const response = await pollGenieJob(ids, question, jobId, {
     signal,
     deadline: startedAt + JOB_RESUME_WINDOW_MS,
@@ -466,6 +488,7 @@ async function completeTurn(
   startedAt: number,
   signal: AbortSignal,
 ): Promise<void> {
+  watchLeave();
   const completion = await requestGenieCompletion(ids, question, { asyncComplete, signal });
   if (!isCurrent(gen)) return;
   if (completion.kind === 'answer') {
@@ -762,6 +785,7 @@ function onPageHide(): void {
 
 function onPageShow(): void {
   pageHidden = false;
+  forgetLeave();
   const failure = deferredFailure;
   deferredFailure = null;
   failure?.();
@@ -774,6 +798,15 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 }
 
 subscribeActorScope(({ reason }) => {
+  // D-identity-review-a2: a closed gate (a trusted nobody) kept the record
+  // (genieConversation's listener, which runs first, has already reset the
+  // live turn, and the gate dropped its removals). Re-arm the resume, so a
+  // reopen for the same owner (or an alias) resumes the kept record.
+  if (reason === 'closed') {
+    resumeChecked = false;
+    resumePending = true;
+    return;
+  }
   if (reason === 'opened' && resumePending) resumeGenieTurnFromSession();
 });
 

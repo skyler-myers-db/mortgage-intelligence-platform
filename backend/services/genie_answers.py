@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from backend.services.genie_completion_stages import GenieJobStage, GenieJobStatus
 from backend.services.genie_refusal_reason import GenieRefusalReason
@@ -42,6 +42,35 @@ class GenieNativeVisualization(BaseModel):
     title: str | None = None
 
 
+class GenieVerifiedClaim(BaseModel):
+    """One figure in the shipped prose that the claims verifier proved against
+    the returned rows (audit genie-10 phase 1). ``derivation`` says how: a
+    value a reader can find in one returned cell, a figure derived from the
+    rows (a total, average, share or change), or a stated threshold the
+    returned values satisfy. ``section`` names the deep-research section the
+    figure belongs to; None is the summary or a single-turn answer. An
+    unsupported figure is never listed: its prose is withheld instead."""
+
+    token: str = Field(max_length=32)
+    kind: Literal["currency", "percent", "bps", "number"]
+    derivation: Literal["returned_value", "derived_from_rows", "bound"]
+    section: str | None = Field(default=None, max_length=200)
+
+
+class GenieClaimsSummary(BaseModel):
+    """How many of the shipped prose's figures were verified, and which."""
+
+    verified: int = Field(ge=0, le=500)
+    total: int = Field(ge=0, le=500)
+    items: list[GenieVerifiedClaim] = Field(default_factory=list, max_length=40)
+
+    @model_validator(mode="after")
+    def _verified_within_total(self) -> GenieClaimsSummary:
+        if self.verified > self.total:
+            raise ValueError("verified figures cannot exceed the figures checked")
+        return self
+
+
 class GenieProof(BaseModel):
     sql_query: str | None = None
     source_assets: list[str] = Field(default_factory=list)
@@ -55,6 +84,9 @@ class GenieProof(BaseModel):
     message_id: str | None = None
     elapsed_ms: int | None = None
     generated_at: str | None = None
+    #: Figures verified against the rows (audit genie-10 phase 1); None when
+    #: the prose was withheld, rescued, refused or recorded before this field.
+    claims: GenieClaimsSummary | None = None
 
 
 class GenieVisualizationSpec(BaseModel):
@@ -290,6 +322,14 @@ class GenieCompletionJobStatus(BaseModel):
     before its governed record existed. ``typical_seconds`` (audit genie-01)
     is the recent median completion time of this job's class (deep or
     single), only while the job still runs and only with enough samples.
+
+    Verified sections (audit genie-01 phase 1b), only while the job runs and
+    no cancel was requested: ``verified_sections`` counts the deep sweep's
+    sub-analyses that passed their own checks so far, ``sections_rev`` is
+    their revision, and ``revealed_sections`` carries them, in plan order,
+    once the count reaches the sweep's three-section floor and only when
+    the revision differs from the one the poll sent. Each was audited before
+    it was stored; none carries actions. A terminal job never carries them.
     """
 
     kind: Literal["genie_completion_job"] = "genie_completion_job"
@@ -304,6 +344,9 @@ class GenieCompletionJobStatus(BaseModel):
     error_hint: str | None = None
     response: GenieMessageResponse | None = None
     typical_seconds: int | None = None
+    verified_sections: int | None = Field(default=None, ge=0, le=20)
+    sections_rev: int | None = Field(default=None, ge=0)
+    revealed_sections: list[GenieAnswerSection] | None = Field(default=None, max_length=12)
 
 
 class GenieCancelResponse(BaseModel):

@@ -5,6 +5,7 @@ import type { DrawerSource } from '../AppContext';
 import { Chip, EvidenceChip } from '../Primitives';
 import { Icon } from '../Icon';
 import { catalogExplorerUrl } from '../../lib/ucAssetLinks';
+import { GenieClaimsList, GenieClaimsMetric, shownClaims } from './GenieAnswerClaims';
 
 export function GenieProofPanel({
   payload,
@@ -20,6 +21,8 @@ export function GenieProofPanel({
   const proof = payload.proof;
   if (!proof) return null;
   const assets = proof.source_assets ?? payload.trusted_assets ?? [];
+  // deviation:genie-figures-verified (genie-10 phase 1)
+  const claims = shownClaims(proof.claims);
   return (
     <div className="genie-proof" role="region" aria-label="Genie proof">
       <div className="genie-proof__grid">
@@ -39,7 +42,9 @@ export function GenieProofPanel({
             {proof.elapsed_ms !== null && proof.elapsed_ms !== undefined ? `${proof.elapsed_ms} ms` : '—'}
           </div>
         </div>
+        {claims && <GenieClaimsMetric claims={claims} />}
       </div>
+      {claims && <GenieClaimsList claims={claims} />}
       {assets.length > 0 && (
         <div className="genie-proof__section">
           <div className="eyebrow">Source UC assets</div>

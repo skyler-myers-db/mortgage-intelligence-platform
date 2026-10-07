@@ -26,6 +26,12 @@ export interface LeadExportContext {
   scope?: 'selected_rows' | 'loaded_rows';
   /** On-screen order the rows were written in, e.g. `rank` or `equity desc`. */
   rowOrder?: string;
+  /**
+   * How many borrowers matched the filters (D-approval-flow-b): the file's
+   * `# matching_rows=` line. Stated only when known and not below the file's
+   * row count; otherwise the line reads `unknown`.
+   */
+  matchingRows?: number | null;
 }
 
 /**
@@ -37,6 +43,16 @@ export interface LeadExportContext {
 export interface LeadTableCampaignHandoff {
   href: string;
   notCarried: string[];
+}
+
+/**
+ * The Triage deck (D-approval-flow-a2): the Lead Queue keeps the mode in
+ * `?mode=triage`. Segment Intelligence never passes it.
+ */
+export interface LeadTableTriage {
+  mode: 'triage' | null;
+  /** Enter (a new entry) or leave (replace, with the row the table returns to). */
+  onModeChange: (mode: 'triage' | null, row?: string | null) => void;
 }
 
 export interface LeadTableProps {
@@ -80,6 +96,8 @@ export interface LeadTableProps {
   headerStatus?: ReactNode;
   /** "Build a campaign from these filters" (lead-queue.handoff.ts); absent elsewhere. */
   campaignHandoff?: LeadTableCampaignHandoff | null;
+  /** The Triage deck's URL contract (the Lead Queue only). */
+  triage?: LeadTableTriage | null;
 }
 
 export type RejectReasonCode =

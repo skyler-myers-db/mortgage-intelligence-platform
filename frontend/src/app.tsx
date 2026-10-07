@@ -11,6 +11,7 @@ import {
   AnalyticsRoute,
   AskGenieRoute,
   AssetRoute,
+  AuditLedgerRoute,
   Borrower360Route,
   GlossaryRoute,
   HomeRoute,
@@ -21,17 +22,41 @@ import {
   SegmentIntelligenceRoute,
   preloadLikelyNextRoutes,
 } from './lib/routePreloaders';
-import { api } from './lib/api';
+import { legacyLedgerRedirect } from './lib/legacyLedgerRedirect';
 import { ROUTE_IDS, ROUTES, routeSurfacePath, type RouteId } from './lib/routeMeta';
-import type { SessionResponse } from './types';
+import { canReadAuditLedger, sessionQueryOptions } from './lib/sessionQuery';
 import './app.transitions.css';
 // The evidence hover card's sheet ships with the initial CSS (it was in
 // partial 02 before): every route renders evidence chips, and as a lazy sheet
 // with its hook it counted against every route closure (+0.56 KiB br each).
 import './components/EvidenceHoverCard.css';
 
-// Lazy: the denied page must not cost the initial bundle anything.
+// Lazy: the denied pages must not cost the initial bundle anything.
 const AdminAccessDeniedRoute = lazy(() => import('./routes/admin-config.access-denied'));
+const AuditLedgerAccessDeniedRoute = lazy(() => import('./routes/audit-ledger.access-denied'));
+
+/**
+ * The ONE session gate both gated routes share (the shell's
+ * `['session', 'access']` read, never retried): Administration, or with
+ * `ledger` the audit ledger (an administrator or a read-only auditor, the
+ * decision `require_audit_reader` enforces). Pending renders the route
+ * fallback; a denied or failed check renders the route's own 403 surface,
+ * never the route chunk and never one of its reads.
+ */
+function SessionRouteGate({ ledger = false }: { ledger?: boolean }) {
+  const session = useQuery(sessionQueryOptions());
+
+  if (session.isPending) return <RouteFallback />;
+  const unverified = session.isError;
+  if (ledger) {
+    return canReadAuditLedger(session.data)
+      ? <AuditLedgerRoute />
+      : <AuditLedgerAccessDeniedRoute unverified={unverified} />;
+  }
+  return session.data?.can_access_admin
+    ? <AdminConfigRoute />
+    : <AdminAccessDeniedRoute unverified={unverified} />;
+}
 
 /**
  * AdminRouteGate keeps the server-authoritative session decision at the route
@@ -42,17 +67,24 @@ const AdminAccessDeniedRoute = lazy(() => import('./routes/admin-config.access-d
  * A denied actor gets a 403 surface naming the required role and a way back,
  * not a silent redirect to Home (2026-09-21 audit shell-06). A session check
  * that failed stays closed too, but says so instead of claiming a missing role.
+ *
+ * An old explorer link (`/admin-config?audit_…`, D-audit-reads-c3) is sent on
+ * to /audit-ledger BEFORE the admin decision, so an auditor following it
+ * lands on the ledger instead of the admin 403.
  */
 export function AdminRouteGate() {
-  const session = useQuery<SessionResponse>({
-    queryKey: ['session', 'access'],
-    queryFn: ({ signal }) => api.session(signal),
-    retry: false,
-  });
+  const { search } = useLocation();
+  const ledger = legacyLedgerRedirect(search);
+  return ledger ? <Navigate replace to={ledger} /> : <SessionRouteGate />;
+}
 
-  if (session.isPending) return <RouteFallback />;
-  if (!session.data?.can_access_admin) return <AdminAccessDeniedRoute unverified={session.isError} />;
-  return <AdminConfigRoute />;
+/**
+ * The audit ledger (D-audit-reads-c3): administrators and the read-only
+ * Auditor role, by the same decision `require_audit_reader` enforces. A
+ * denied actor loads no ledger chunk and issues no ledger read.
+ */
+export function AuditLedgerGate() {
+  return <SessionRouteGate ledger />;
 }
 
 /**
@@ -78,6 +110,7 @@ const ROUTE_ELEMENTS = {
   offer: <OfferOrchestratorRoute />,
   askGenie: <AskGenieRoute />,
   askGenieConversation: <AskGenieRoute />,
+  auditLedger: <AuditLedgerGate />,
   admin: <AdminRouteGate />,
   legacyOutreach: <Navigate to={ROUTES.legacyOutreach.redirectTo} replace />,
   legacyOutreachDetail: <Navigate to={ROUTES.legacyOutreachDetail.redirectTo} replace />,

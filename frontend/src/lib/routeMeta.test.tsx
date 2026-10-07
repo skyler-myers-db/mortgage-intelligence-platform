@@ -63,6 +63,7 @@ describe('documentTitleFor / routePageLabel', () => {
     ['/ask-genie', 'Ask Genie'],
     ['/glossary', 'Glossary'],
     ['/admin-config', 'Admin'],
+    ['/audit-ledger', 'Audit ledger'],
     ['/data-estate/assets/gold.lead_population', 'Governed asset'],
   ])('%s is titled "%s · Mortgage Intelligence Platform"', (pathname, name) => {
     expect(routePageLabel(pathname)).toBe(name);
@@ -131,6 +132,53 @@ describe('documentTitleFor / routePageLabel', () => {
   });
 });
 
+const ADMIN_SESSION: SessionResponse = { can_access_admin: true, can_approve: true, actor_email: null };
+const AUDITOR_SESSION: SessionResponse = {
+  can_access_admin: false,
+  can_approve: false,
+  can_read_audit: true,
+  actor_email: null,
+};
+
+function renderNav(session: SessionResponse): string {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  queryClient.setQueryData<SessionResponse>(['session', 'access'], session);
+  return renderToStaticMarkup(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/']}>
+        <RouteNav />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe('the audit ledger route (D-audit-reads-c3)', () => {
+  it('is registered as its own lazy route, nav label "Audit", right before Admin', () => {
+    expect(ROUTES.auditLedger).toEqual({
+      pattern: '/audit-ledger',
+      name: 'Audit ledger',
+      navLabel: 'Audit',
+      icon: 'audit',
+      chunk: 'auditLedger',
+    });
+    expect(NAVIGATION_ROUTE_IDS.indexOf('auditLedger')).toBe(NAVIGATION_ROUTE_IDS.indexOf('admin') - 1);
+    expect(routePreloaders['/audit-ledger']).toBeTypeOf('function');
+  });
+
+  it('puts "Audit" in the route nav only for a non-admin auditor, in Admin\'s place', () => {
+    const admin = [...renderNav(ADMIN_SESSION).matchAll(/<a[^>]*href="([^"]+)"/g)].map((match) => match[1]);
+    const auditor = [...renderNav(AUDITOR_SESSION).matchAll(/<a[^>]*href="([^"]+)"/g)].map((match) => match[1]);
+
+    expect(admin).toContain('/admin-config');
+    expect(admin).not.toContain('/audit-ledger');
+    expect(auditor).toContain('/audit-ledger');
+    expect(auditor).not.toContain('/admin-config');
+    expect(auditor).toHaveLength(admin.length);
+  });
+});
+
 describe('route tables stay pinned to routeMeta', () => {
   it('app.tsx serves exactly the registry: no hand-written route path, one element per route id', () => {
     // Resolved from the Vitest root (the `frontend` package), like src/test/designCss.ts.
@@ -180,27 +228,15 @@ describe('route tables stay pinned to routeMeta', () => {
   });
 
   it('route-nav chip labels are the routeMeta nav labels', () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
-    queryClient.setQueryData<SessionResponse>(['session', 'access'], {
-      can_access_admin: true,
-      can_approve: true,
-      actor_email: null,
-    });
-    const html = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/']}>
-          <RouteNav />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-    const chips = [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>.*?<span class="route-nav__label">([^<]+)<\/span><\/a>/g)]
-      .map((match) => ({ to: match[1], label: match[2] }));
-    expect(chips.length).toBe(10);
-    expect(chips.length).toBe(NAVIGATION_ROUTE_IDS.length);
-    for (const { to, label } of chips) {
-      expect({ to, label }).toEqual({ to, label: resolveRouteMeta(to).navLabel });
+    for (const session of [ADMIN_SESSION, AUDITOR_SESSION]) {
+      const chips = [...renderNav(session).matchAll(/<a[^>]*href="([^"]+)"[^>]*>.*?<span class="route-nav__label">([^<]+)<\/span><\/a>/g)]
+        .map((match) => ({ to: match[1], label: match[2] }));
+      // Ten links either way: Admin for an admin, 'Audit' for an auditor.
+      expect(chips.length).toBe(10);
+      expect(chips.length).toBe(NAVIGATION_ROUTE_IDS.length - 1);
+      for (const { to, label } of chips) {
+        expect({ to, label }).toEqual({ to, label: resolveRouteMeta(to).navLabel });
+      }
     }
   });
 
@@ -213,27 +249,13 @@ describe('route tables stay pinned to routeMeta', () => {
   it('the nav links and the palette list the destinations in the same product-flow order', () => {
     expect(NAVIGATION_ROUTE_IDS).toEqual([
       'home', 'portfolio', 'segments', 'leads', 'borrowerIndex',
-      'offerIndex', 'analytics', 'askGenie', 'glossary', 'admin',
+      'offerIndex', 'analytics', 'askGenie', 'glossary', 'auditLedger', 'admin',
     ]);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
-    queryClient.setQueryData<SessionResponse>(['session', 'access'], {
-      can_access_admin: true,
-      can_approve: true,
-      actor_email: null,
-    });
-    const html = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/']}>
-          <RouteNav />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-    const navOrder = [...html.matchAll(/<a[^>]*href="([^"]+)"/g)].map((match) => match[1]);
+    const navOrder = [...renderNav(ADMIN_SESSION).matchAll(/<a[^>]*href="([^"]+)"/g)].map((match) => match[1]);
     const paletteOrder = COMMAND_ACTIONS.flatMap((action) => (action.target.kind === 'route' ? [action.target.to] : []));
     const flowOrder = NAVIGATION_ROUTE_IDS.map((id) => ROUTES[id].pattern);
-    expect(navOrder).toEqual(flowOrder);
+    // An admin's nav is the flow minus the ledger (reached from the rail).
+    expect(navOrder).toEqual(flowOrder.filter((to) => to !== '/audit-ledger'));
     expect(paletteOrder).toEqual(flowOrder);
     expect(navOrder.indexOf('/analytics'), 'Analytics follows Offer').toBe(navOrder.indexOf('/offer-orchestrator') + 1);
   });
@@ -245,21 +267,8 @@ describe('route tables stay pinned to routeMeta', () => {
    * one the palette row names.
    */
   it('a route shows the same icon in the nav chip and the command palette', () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-    });
-    queryClient.setQueryData<SessionResponse>(['session', 'access'], {
-      can_access_admin: true,
-      can_approve: true,
-      actor_email: null,
-    });
-    const html = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/']}>
-          <RouteNav />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
+    // The admin nav and the auditor nav together draw every destination.
+    const html = renderNav(ADMIN_SESSION) + renderNav(AUDITOR_SESSION);
     const chipIcons = new Map(
       [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>(<svg[\s\S]*?<\/svg>)<span class="route-nav__label">/g)]
         .map((match) => [match[1], match[2]] as const),
@@ -267,7 +276,7 @@ describe('route tables stay pinned to routeMeta', () => {
     const paletteRoutes = COMMAND_ACTIONS.flatMap((action) =>
       action.target.kind === 'route' ? [{ to: action.target.to, icon: action.icon }] : [],
     );
-    expect(paletteRoutes.length).toBe(10);
+    expect(paletteRoutes.length).toBe(11);
     for (const { to, icon } of paletteRoutes) {
       const drawn = chipIcons.get(to);
       expect(drawn, `the nav has a chip for ${to}`).toBeDefined();

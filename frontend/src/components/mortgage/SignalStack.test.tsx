@@ -6,6 +6,9 @@
  * read, the headline and the largest overlap, the disclosure, the UpSet
  * columns' accessible names, the table alternative and the evidence chip.
  */
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads the colocated stylesheet under Vitest only.
+import { readFileSync } from 'node:fs';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -16,6 +19,8 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import type { SegmentCombinationResponse } from '../../types/segmentCombinations';
 import { preloadAsyncFailure } from '../ui/AsyncState';
 import { SignalStack } from './SignalStack';
+
+declare const process: { cwd(): string };
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -186,6 +191,19 @@ describe('SignalStack', () => {
     ]);
     expect(table?.querySelector('[data-testid="signal-stack-total"]')?.textContent).toBe('12,200');
     expect(button('View as chart')).toBeDefined();
+    // Rows act only through their Open links, so the table is static (no row hover or pointer).
+    expect(table?.classList.contains('tbl--static')).toBe(true);
+  });
+
+  it("gives the row headers the .tbl td cell box, not the user agent's 1px padding and missing rule", () => {
+    const declarations = (block: string) => block.split(';').map((part) => part.trim()).filter(Boolean);
+    const tblCss = readFileSync(`${process.cwd()}/src/design-system/components/03-score-and-table.css`, 'utf8') as string;
+    const tdBox = declarations(tblCss.match(/\n\.tbl td \{([^}]*)\}/)?.[1] ?? '')
+      .filter((declaration) => /^(padding|height|border-bottom|vertical-align):/.test(declaration));
+    expect(tdBox).toHaveLength(4);
+    const css = readFileSync(`${process.cwd()}/src/components/mortgage/SignalStack.css`, 'utf8') as string;
+    const th = declarations(css.match(/\.signal-stack__table tbody th,\s*\.signal-stack__table tfoot th \{([^}]*)\}/)?.[1] ?? '');
+    expect(th).toEqual(expect.arrayContaining([...tdBox, 'text-align: start', 'font-weight: 500', 'color: var(--text-1)']));
   });
 
   it('opens the evidence drawer on the gold table', async () => {

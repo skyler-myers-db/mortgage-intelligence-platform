@@ -92,4 +92,14 @@ describe('ChartFrame', () => {
     expect(container.querySelector('[data-testid="plot-marks"]')).not.toBeNull();
     expect(toggle?.textContent).toBe('View as table');
   });
+
+  it('without a table node it offers no toggle and no table view (a Genie answer prints its own rows)', () => {
+    render({ table: undefined });
+
+    expect(container.querySelector('button.chart-frame__toggle')).toBeNull();
+    expect(container.querySelector('.chart-frame__table')).toBeNull();
+    expect(container.querySelector('[data-testid="plot-marks"]')).not.toBeNull();
+    expect(container.querySelector('figcaption.chart-frame__summary')?.textContent).toBe('89,553 borrowers scored.');
+    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
+  });
 });

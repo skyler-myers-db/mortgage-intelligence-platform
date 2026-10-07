@@ -27,6 +27,8 @@ export interface LeadExportReceiptRequest {
   borrower_ids_sha256: string;
   /** The queue's query parameters (the CSV's `# filters=` line); fingerprinted server-side. */
   filters: Record<string, string>;
+  /** How many borrowers matched (the CSV's `# matching_rows=` line); sent only when known. */
+  matching_row_count?: number;
 }
 
 export interface LeadExportReceipt {
@@ -39,6 +41,7 @@ export interface LeadExportReceipt {
   borrower_ids_sha256: string;
   filter_fingerprint: string;
   recorded_at: string;
+  matching_row_count?: number | null;
 }
 
 /**
@@ -82,11 +85,16 @@ export function leadExportFiltersFromQuery(filters: string | undefined | null): 
   return out;
 }
 
-/** The declaration for one planned export, digests included. */
+/**
+ * The declaration for one planned export, digests included. `matchingRows`
+ * is the count the file states (decided once by the caller); the field is
+ * sent only when it is a number.
+ */
 export async function buildLeadExportDeclaration(
   csv: string,
   plan: LeadExportPlanLike,
   filters: string | undefined | null,
+  matchingRows: number | null = null,
 ): Promise<LeadExportReceiptRequest> {
   const borrowerIds = plan.rows.map((row) => row.borrower_id);
   const [csvSha256, idsSha256] = await Promise.all([
@@ -100,5 +108,6 @@ export async function buildLeadExportDeclaration(
     borrower_ids: borrowerIds,
     borrower_ids_sha256: idsSha256,
     filters: leadExportFiltersFromQuery(filters),
+    ...(typeof matchingRows === 'number' ? { matching_row_count: matchingRows } : {}),
   };
 }

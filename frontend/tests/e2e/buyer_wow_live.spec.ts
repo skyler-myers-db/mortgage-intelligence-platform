@@ -125,10 +125,19 @@ test.describe('Buyer-Wow live inspection @desktop', () => {
     await expect(page.locator('.topbar__search-kbd')).toBeVisible();
   });
 
-  test('Auto-offer Slice 1: borrower-offer prototype mock is reachable + clearly labelled', async ({ page, request }) => {
+  test('Auto-offer Slice 1: borrower-offer prototype mock is presenter-only, reachable + clearly labelled', async ({ page, request }) => {
     const id = await firstBorrowerId(request);
+    // A demo affordance (D-shell-deviations-e1): customer deployments run with
+    // presenter mode off, and then the preview must not be offered at all.
+    const session = await request.get('/api/session');
+    const presenterMode = session.ok() && (await session.json()).presenter_mode === true;
     await page.goto(`/offer-orchestrator/${id}`, { waitUntil: 'domcontentloaded' });
     const preview = page.locator('[data-testid="preview-borrower-offer"]');
+    if (!presenterMode) {
+      await expect(page.locator('#main-content h1')).toBeVisible({ timeout: 30_000 });
+      await expect(preview).toHaveCount(0);
+      return;
+    }
     await expect(preview).toBeVisible({ timeout: 30_000 });
     await preview.click();
     const mock = page.locator('[data-testid="borrower-offer-mock"]');
