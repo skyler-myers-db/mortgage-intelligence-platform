@@ -120,18 +120,60 @@
 /* ============================================================
    EIGHT RANKED ROWS ABOVE THE FOLD WITH THE CONSOLE OPEN (W5c,
    integrator C2; 12.3 R2-N2). At 1440x900 the Console narrows the
-   hero to 985px, and the title block (sized by its one-line lede)
-   plus this action stack no longer fit side by side: the stack
-   wrapped onto its own 104px row and only six rows cleared the fold.
-   The title block now shrinks first (its lede may take a second
-   line), so the stack stays beside it; below a 384px title block the
-   hero still wraps as before (and a 640px container stacks it, as
-   10-native-analytics.css does). Console closed, the title block only
-   widens beyond its content: nothing moves.
+   hero to 985px. Two things then took the fold, and only six ranked
+   rows cleared it:
+   - the hero's title block (sized by its one-line lede) and the action
+     stack no longer fit side by side, so the stack wrapped onto its own
+     row (hero 80 -> 180px). The title block now shrinks first (its lede
+     may take a second line) down to 384px, so the stack stays beside it;
+     a 640px container still stacks the hero (10-native-analytics.css).
+     Console closed, the title block only widens beyond its content.
+   - the ranked table header's hint ran under the title only, beside the
+     action row, and wrapped (header 83 -> 101px). From a 960px container
+     the header is a two-row grid: the title in row 1, the hint in row 2
+     spanning under the actions too, the actions spanning both rows from
+     the top, so the header keeps one hint line and its 83px height. A
+     declared deviation (deviation:ranked-table-header-hint-row).
+   Scoped to the Lead Queue's painted route (`.route-transition--lead-queue`,
+   components/layout/LeadQueueKeepAlive) with plain descendant selectors:
+   a `:has()` subject here re-styled ~2,300 elements on every table scroll
+   (focus-clearance-cost.fixture.spec.ts). Segment Intelligence's header is
+   unchanged (its 101px remainder is recorded for W5e).
    ============================================================ */
 @container main (min-width: 641px) {
-  .proto-hero:has(> .proto-hero__actions > .lead-queue-hero) > :first-child {
+  .route-transition--lead-queue .proto-hero > :first-child {
     flex: 1 1 calc(var(--sp-16) * 6);
     min-inline-size: 0;
+  }
+}
+@container main (min-width: 960px) {
+  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr--split {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: var(--sp-3);
+    row-gap: 0;
+  }
+  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main,
+  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main > div:not(.surface__icon) {
+    display: contents;
+  }
+  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main .surface__icon {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main > div:not(.surface__icon) > :first-child {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main > div:not(.surface__icon) > .muted {
+    grid-column: 2 / span 2;
+    grid-row: 2;
+  }
+  .route-transition--lead-queue .stable-refresh-region--table .lead-table__header-actions {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    align-self: start;
   }
 }

@@ -82,7 +82,7 @@ export default function LeadQueueKeepAlive() {
   if (!kept) return null;
   const painted = (
     <div
-      className={visible ? 'route-transition' : undefined}
+      className={visible ? 'route-transition route-transition--lead-queue' : undefined}
       data-route-path={visible ? QUEUE_PATH : undefined}
       aria-busy={visible && pending ? 'true' : undefined}
     >
