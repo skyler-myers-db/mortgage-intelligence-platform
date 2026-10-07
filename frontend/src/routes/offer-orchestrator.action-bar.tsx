@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
+import { Field } from '../components/ui/Field';
 import type { SalesTeamMember } from '../types';
 import { useGenieClearance } from './offer-orchestrator.genie-clearance';
 import './offer-orchestrator.action-bar.css';
@@ -144,39 +145,49 @@ export function OfferActionBar({
       )}
       {rejectReview}
       <div className="offer-action-bar__row">
+        {/* Field on both routing selects (critic-04): the ids stay pinned for
+            tests and the live walk; the follow-up says nothing reaches the borrower. */}
         <div className="outreach-routing" data-testid="outreach-routing">
-          <div className="outreach-routing__field">
-            <label htmlFor="lo-assign" className="outreach-routing__label">Assign to loan officer</label>
-            <select
-              id="lo-assign"
-              className="outreach-routing__select"
-              value={assignedTo}
-              onChange={(e) => onAssignedToChange(e.target.value)}
-              disabled={approving}
-            >
-              <option value="">Unassigned</option>
-              {salesTeam.map((m) => (
-                <option key={m.email} value={m.email}>
-                  {m.display_label}
-                  {m.region ? ` · ${m.region}` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="outreach-routing__field">
-            <label htmlFor="lo-followup" className="outreach-routing__label">Follow-up reminder</label>
-            <select
-              id="lo-followup"
-              className="outreach-routing__select"
-              value={followUpDays}
-              onChange={(e) => onFollowUpDaysChange(Number(e.target.value))}
-              disabled={approving}
-            >
-              {FOLLOW_UP_OPTIONS.map((option) => (
-                <option key={option.days} value={option.days}>{option.label}</option>
-              ))}
-            </select>
-          </div>
+          <Field label="Assign to loan officer" controlId="lo-assign" className="outreach-routing__field">
+            {(control) => (
+              <select
+                {...control}
+                className="outreach-routing__select"
+                value={assignedTo}
+                onChange={(e) => onAssignedToChange(e.target.value)}
+                disabled={approving}
+              >
+                <option value="">Unassigned</option>
+                {salesTeam.map((m) => (
+                  <option key={m.email} value={m.email}>
+                    {m.display_label}
+                    {m.region ? ` · ${m.region}` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field
+            label="Follow-up reminder"
+            controlId="lo-followup"
+            className="outreach-routing__field"
+            unit="days"
+            hint="A reminder for the assigned loan officer; nothing is sent to the borrower."
+          >
+            {(control) => (
+              <select
+                {...control}
+                className="outreach-routing__select"
+                value={followUpDays}
+                onChange={(e) => onFollowUpDaysChange(Number(e.target.value))}
+                disabled={approving}
+              >
+                {FOLLOW_UP_OPTIONS.map((option) => (
+                  <option key={option.days} value={option.days}>{option.label}</option>
+                ))}
+              </select>
+            )}
+          </Field>
         </div>
         <ApprovalBanner
           text={`${borrowerId ? `Borrower ${borrowerId}` : 'Borrower'} pending review. Approve outreach writes an audit event and places the decision in the governed internal queue.`}

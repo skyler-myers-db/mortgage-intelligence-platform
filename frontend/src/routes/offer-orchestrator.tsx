@@ -96,6 +96,9 @@ export default function OfferOrchestrator() {
   // ledger is one a reviewer chose.
   const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode | ''>('');
   const rejectReasonRef = useRef<HTMLSelectElement>(null);
+  // 'Other' needs a note: a field error on the note (critic-04), never a bar alert.
+  const rejectNoteRef = useRef<HTMLTextAreaElement>(null);
+  const [rejectNoteError, setRejectNoteError] = useState<string | null>(null);
   const salesTeam = useOfferSalesTeam();
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
@@ -340,7 +343,8 @@ export default function OfferOrchestrator() {
       return;
     }
     if (rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0) {
-      setApproveError('Rejection reason "Other" requires a rationale note.');
+      setRejectNoteError('Add a note when the reason is Other.');
+      rejectNoteRef.current?.focus();
       return;
     }
     // Confirm reject waits for this open's snapshot read, like Approve.
@@ -375,6 +379,7 @@ export default function OfferOrchestrator() {
     setRejectReviewOpen(false);
     setRejectReasonCode('');
     setRejectRationale('');
+    setRejectNoteError(null);
   };
 
   // A 409 offers an explicit Regenerate draft in the alert: one audited
@@ -562,16 +567,25 @@ export default function OfferOrchestrator() {
             <RejectRationalePanel
               reasonCode={rejectReasonCode}
               rationale={rejectRationale}
-              onReasonChange={setRejectReasonCode}
-              onRationaleChange={setRejectRationale}
+              onReasonChange={(reason) => {
+                setRejectReasonCode(reason);
+                setRejectNoteError(null);
+              }}
+              onRationaleChange={(note) => {
+                setRejectRationale(note);
+                setRejectNoteError(null);
+              }}
               onCancel={() => {
                 setRejectReviewOpen(false);
                 setRejectRationale('');
                 setRejectReasonCode('');
+                setRejectNoteError(null);
               }}
               onSubmit={() => void onReject()}
               submitDisabled={snapshot.reading}
               reasonRef={rejectReasonRef}
+              noteError={rejectNoteError}
+              noteRef={rejectNoteRef}
             />
           )}
         />

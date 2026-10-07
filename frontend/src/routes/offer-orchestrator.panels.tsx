@@ -7,6 +7,7 @@ import { ScoreAnatomyGate } from '../components/mortgage/ScoreAnatomyGate';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { Button, Chip, EvidenceChip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { Field } from '../components/ui/Field';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
@@ -70,6 +71,10 @@ interface RejectRationalePanelProps {
   submitDisabled?: boolean;
   /** The route's handle on Reason, so the bar's own Reject can focus it too. */
   reasonRef?: RefObject<HTMLSelectElement | null>;
+  /** 'Other' with an empty note: the route's field error, shown on the note. */
+  noteError?: string | null;
+  /** The route's handle on the note, focused with that error. */
+  noteRef?: RefObject<HTMLTextAreaElement | null>;
 }
 
 /**
@@ -87,6 +92,8 @@ export function RejectRationalePanel({
   onSubmit,
   submitDisabled = false,
   reasonRef: routeReasonRef,
+  noteError = null,
+  noteRef,
 }: RejectRationalePanelProps) {
   const ownReasonRef = useRef<HTMLSelectElement>(null);
   const reasonRef = routeReasonRef ?? ownReasonRef;
@@ -115,28 +122,21 @@ export function RejectRationalePanel({
             Capture a committee-visible reason before dropping this lead.
           </div>
         </div>
-        <label className="decision-panel__field">
-          <span className="field__label">Reason</span>
-          <select
-            ref={reasonRef}
-            value={reasonCode}
-            onChange={(e) => onReasonChange(e.target.value as RejectReasonCode | '')}
-          >
-            <option value="">Choose a reason</option>
-            {REJECT_REASONS.map((reason) => (
-              <option key={reason.code} value={reason.code}>{reason.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="decision-panel__field decision-panel__field--wide">
-          <span className="field__label">Rationale note</span>
-          <textarea
-            value={rationale}
-            onChange={(e) => onRationaleChange(e.target.value)}
-            maxLength={500}
-            placeholder="Optional unless reason is Other."
-          />
-        </label>
+        <Field label="Reason" className="decision-panel__field">
+          {(control) => (
+            <select {...control} ref={reasonRef} value={reasonCode} onChange={(e) => onReasonChange(e.target.value as RejectReasonCode | '')}>
+              <option value="">Choose a reason</option>
+              {REJECT_REASONS.map((reason) => (
+                <option key={reason.code} value={reason.code}>{reason.label}</option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Rationale note" className="decision-panel__field decision-panel__field--wide" hint="Up to 500 characters." error={noteError}>
+          {(control) => (
+            <textarea {...control} ref={noteRef} value={rationale} onChange={(e) => onRationaleChange(e.target.value)} maxLength={500} placeholder="Optional unless reason is Other." />
+          )}
+        </Field>
         <div className="decision-panel__actions">
           <Button
             type="button"
@@ -151,10 +151,10 @@ export function RejectRationalePanel({
             variant="primary"
             size="sm"
             icon="cross"
-            disabled={submitDisabled || (reasonCode === 'other_with_text' && rationale.trim().length === 0)}
-            // aria-disabled, never native `disabled`, until a reason is chosen:
-            // the submit then moves focus to Reason instead of sending.
-            aria-disabled={reasonCode === '' || undefined}
+            disabled={submitDisabled}
+            // aria-disabled, never native `disabled`, until a reason (and for
+            // Other, a note) is given: the submit then lands on the missing field.
+            aria-disabled={reasonCode === '' || (reasonCode === 'other_with_text' && rationale.trim().length === 0) || undefined}
           >
             Confirm reject
           </Button>

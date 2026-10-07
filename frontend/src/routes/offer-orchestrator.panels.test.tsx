@@ -119,10 +119,10 @@ describe('OfferReviewGrid message intelligence', () => {
     expect(container.textContent).not.toContain('recommended for this borrower');
   });
 
-  it('requires text for Other rejection and preserves cancel and submit actions', () => {
+  it('Other without a note: Confirm stays aria-disabled, the note error lands on the Field (critic-04)', () => {
     const cancel = vi.fn();
     const submit = vi.fn();
-    const renderPanel = (rationale: string) => act(() => root.render(
+    const renderPanel = (rationale: string, noteError: string | null = null) => act(() => root.render(
       <MemoryRouter>
         <RejectRationalePanel
           reasonCode="other_with_text"
@@ -131,15 +131,30 @@ describe('OfferReviewGrid message intelligence', () => {
           onRationaleChange={vi.fn()}
           onCancel={cancel}
           onSubmit={submit}
+          noteError={noteError}
         />
       </MemoryRouter>,
     ));
-
-    renderPanel('');
-    const confirm = [...container.querySelectorAll('button')].find(
+    const confirm = () => [...container.querySelectorAll('button')].find(
       (button) => button.textContent?.trim() === 'Confirm reject',
     );
-    expect(confirm?.disabled).toBe(true);
+    const note = () => container.querySelector('textarea');
+
+    renderPanel('');
+    // Never native disabled: the submit reaches the route, which marks the note.
+    expect(confirm()?.disabled).toBe(false);
+    expect(confirm()?.getAttribute('aria-disabled')).toBe('true');
+    expect(note()?.labels?.[0]?.textContent).toBe('Rationale note');
+    const hint = document.getElementById((note()?.getAttribute('aria-describedby') ?? '').split(' ')[0]);
+    expect(hint?.textContent).toBe('Up to 500 characters.');
+    expect(note()?.hasAttribute('aria-invalid')).toBe(false);
+    act(() => confirm()?.click());
+    expect(submit).toHaveBeenCalledTimes(1);
+
+    renderPanel('', 'Add a note when the reason is Other.');
+    expect(note()?.getAttribute('aria-invalid')).toBe('true');
+    const described = (note()?.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent);
+    expect(described).toContain('Add a note when the reason is Other.');
     const cancelButton = [...container.querySelectorAll('button')].find(
       (button) => button.textContent?.trim() === 'Cancel',
     );
@@ -147,12 +162,10 @@ describe('OfferReviewGrid message intelligence', () => {
     expect(cancel).toHaveBeenCalledTimes(1);
 
     renderPanel('Signal was not appropriate for this borrower.');
-    const enabledConfirm = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent?.trim() === 'Confirm reject',
-    );
-    expect(enabledConfirm?.disabled).toBe(false);
-    act(() => enabledConfirm?.click());
-    expect(submit).toHaveBeenCalledTimes(1);
+    expect(confirm()?.hasAttribute('aria-disabled')).toBe(false);
+    expect(container.querySelector('select')?.labels?.[0]?.textContent).toBe('Reason');
+    act(() => confirm()?.click());
+    expect(submit).toHaveBeenCalledTimes(2);
   });
 
   it('opens on "Choose a reason", stays aria-disabled without one, and a submit focuses Reason', () => {
