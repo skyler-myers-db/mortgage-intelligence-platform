@@ -1,6 +1,10 @@
+import { useEffect, useRef, useState } from 'react';
 import { EmptyState } from '../ui/EmptyState';
+import { Button } from '../Primitives';
 import { GenieAskAbout } from './GenieAskAbout';
-import { genieLeadPrompt, genieSegmentPrompt, genieStatePrompt } from '../../lib/genieContext';
+import { genieContextFromQueueFilters, genieLeadPrompt, genieSegmentPrompt, genieStatePrompt } from '../../lib/genieContext';
+import { requestGenieContextScope, type GenieContext } from '../../lib/apiClients/genieContextScope';
+import { openGenie } from '../../lib/genieOpen';
 
 /**
  * The Lead Queue's measured zero (audit 2026-09-21 `states-v2`): its cause
@@ -13,13 +17,22 @@ import { genieLeadPrompt, genieSegmentPrompt, genieStatePrompt } from '../../lib
  *   - filtered      any other filtered zero; an unfiltered zero says what
  *                   the default view lists and offers no Clear.
  *
- * "Ask Genie" prefills (never submits) a REVIEWED prompt, and only when the
- * active filters are one state and/or one segment: counties, ZIPs, cities,
- * borrower ids, counts, lender names and free text never reach a prompt.
+ * "Ask Genie" prefills (never submits) a REVIEWED prompt. Phase 1 renders it
+ * client-side when the filters are one state and/or one segment. Phase 2
+ * (genie-04 states-v2) covers the rest of the closed grammar in
+ * `genieContextFromQueueFilters` (a segment intersection, a county, a ZIP, a
+ * governed city, a Competitor ref, the assignee preset): on CLICK only, the
+ * codes go to `POST /api/genie/context-scope`, which renders and
+ * battery-tests the question server-side; the composer then holds that
+ * prompt verbatim. Borrower ids, criteria, emails and free text never reach
+ * either path.
  */
 
 const UNFILTERED_SECONDARY = 'The default view lists marketing-eligible borrowers only.';
 const PROMPT_FILTER_PARAMS: ReadonlySet<string> = new Set(['state', 'states', 'segment', 'segment_codes', 'segment_mode']);
+/** Fixed copy: nothing about a withheld or failed render is improvised client-side. */
+export const GENIE_SCOPE_UNAVAILABLE_COPY = "Genie can't take this filter set as a question.";
+const ASSIGNEE_SUFFIX = ' without the assignee filter';
 
 function csv(filters: URLSearchParams, ...keys: string[]): string[] {
   return [...new Set(keys.flatMap((key) => (filters.get(key) ?? '').split(',')).map((value) => value.trim()).filter(Boolean))];
@@ -52,6 +65,58 @@ export function queueFilterGeniePrompt(filters: URLSearchParams): string | null 
   return null;
 }
 
+type ScopePhase = 'idle' | 'pending' | 'unavailable';
+
+/**
+ * The phase-2 Ask: one POST per click (never on render, hover or focus),
+ * pending while it runs, aborted on unmount. A prompt whose `omitted` list is
+ * what this context expects prefills the composer; a withheld render, an
+ * unexpected `omitted` or a failed request replaces the button with a fixed
+ * muted line inside the empty state's role=status region.
+ */
+function GenieScopedAsk({ context }: { context: GenieContext }) {
+  const [phase, setPhase] = useState<ScopePhase>('idle');
+  const controllerRef = useRef<AbortController | null>(null);
+  useEffect(() => () => controllerRef.current?.abort(), []);
+  if (phase === 'unavailable') return <span className="muted fs-12">{GENIE_SCOPE_UNAVAILABLE_COPY}</span>;
+  const withoutAssignee = context.assignee === 'me';
+  const suffix = withoutAssignee ? ASSIGNEE_SUFFIX : '';
+  const ask = () => {
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setPhase('pending');
+    requestGenieContextScope(context, controller.signal).then(
+      (response) => {
+        if (controller.signal.aborted) return;
+        const omittedAsExpected = response.omitted.length === (withoutAssignee ? 1 : 0);
+        if (response.prompt && response.withheld === null && omittedAsExpected) {
+          setPhase('idle');
+          openGenie({ prompt: response.prompt });
+          return;
+        }
+        setPhase('unavailable');
+      },
+      () => {
+        if (!controller.signal.aborted) setPhase('unavailable');
+      },
+    );
+  };
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="genie-ask-about"
+      icon="sparkle"
+      loading={phase === 'pending'}
+      aria-label={`Ask Genie about this filter selection${suffix}`}
+      onClick={ask}
+    >
+      {`Ask Genie${suffix}`}
+    </Button>
+  );
+}
+
 interface LeadQueueEmptyStateProps {
   /** The queue's filter params (no column preset, no table place). */
   filterParams: URLSearchParams;
@@ -66,6 +131,7 @@ export function LeadQueueEmptyState({ filterParams, countyNoCoverage, intersecti
   const filtersActive = [...filterParams.keys()].length > 0;
   const cause = countyNoCoverage ? 'coverage' : intersection ? 'intersection' : 'filtered';
   const prompt = cause === 'filtered' ? queueFilterGeniePrompt(filterParams) : null;
+  const context = cause !== 'coverage' && prompt === null ? genieContextFromQueueFilters(filterParams) : null;
   return (
     <EmptyState
       cause={cause}
@@ -76,7 +142,12 @@ export function LeadQueueEmptyState({ filterParams, countyNoCoverage, intersecti
             Clear filters
           </button>
         ) : null,
-        prompt ? <GenieAskAbout prompt={prompt} subject="filter selection" /> : null,
+        prompt ? (
+          <GenieAskAbout prompt={prompt} subject="filter selection" />
+        ) : context ? (
+          // Keyed by the selection: a new filter set starts a fresh Ask.
+          <GenieScopedAsk key={filterParams.toString()} context={context} />
+        ) : null,
       ]}
     />
   );
