@@ -55,6 +55,13 @@ describe('highlightableFigures', () => {
     expect(highlightableFigures(text, [cell('1', 2)]).size).toBe(0);
   });
 
+  it('refuses a token when only the full-text count disagrees (the text differs from the checked prose)', () => {
+    // The rendered segments hold one "1" and one "7" each way the server
+    // could have counted them, but the text the answer renders carries more.
+    expect(highlightableFigures('1. Illinois holds 1 borrower in scope.', [cell('1', 1)]).size).toBe(0);
+    expect(highlightableFigures('See [the 7 rates](https://example.test/7) for 7 borrowers.', [cell('7', 2)]).size).toBe(0);
+  });
+
   it('refuses a token inside a link target the renderer drops (rendered-segment count)', () => {
     const text = 'See [the 7 rates](https://example.test/7) for 7 borrowers.';
     expect(highlightableFigures(text, [cell('7', 3)]).size).toBe(0);
