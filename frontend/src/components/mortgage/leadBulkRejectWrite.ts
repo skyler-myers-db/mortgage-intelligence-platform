@@ -6,7 +6,7 @@
  * useLeadApprovalActions' DecisionWriteDeps. Same invariants as every
  * decision write there.
  */
-import { clientFailureReason } from '../../lib/apiTransport';
+import { ApiError, clientFailureReason } from '../../lib/apiTransport';
 import { markUnrecordedWrite } from '../../lib/sessionStatus';
 import { decisionFailure } from '../../lib/mutations/outreach';
 import { intentFingerprint } from '../../lib/mutations/requestIds';
@@ -55,6 +55,8 @@ export function rejectWithReport(
       const failure = decisionFailure(err);
       if (failure === 'aborted') return { outcome: 'aborted', message: null };
       const message = err instanceof Error ? err.message : null;
+      // D-identity-review-a4: the user changed; nothing recorded (the run stops).
+      if (err instanceof ApiError && err.reason === 'actor_changed') return { outcome: 'actor_changed', message };
       if (clientFailureReason(err) === 'session_expired') {
         markUnrecordedWrite('rejection');
         return { outcome: 'session_expired', message };

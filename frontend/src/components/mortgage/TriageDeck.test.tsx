@@ -130,6 +130,8 @@ import { LeadTable } from './LeadTable';
 beforeAll(async () => {
   await import('./TriageDeck');
   await import('./LeadApproveReview');
+  // A failure toast's wording loads with this chunk: settled within a task.
+  await import('../ui/AsyncFailure');
 }, 60_000);
 
 const IDS = Array.from({ length: 6 }, (_, index) => `B-TRIAGE000000${index + 1}`);
@@ -429,6 +431,27 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     act(() => redraft()!.click());
     await waitForReview();
     expect(draftOutreach).toHaveBeenCalledTimes(2);
+  });
+
+  it('a 409 actor_changed is never read as a stale draft: no "Review draft again", no toast (a4)', async () => {
+    approve.mockImplementation(() => Promise.reject(new ApiError('The signed-in user changed.', {
+      path: '/api/v1/outreach/approve', status: 409, reason: 'actor_changed',
+    })));
+    // An earlier test's failure toast lands asynchronously: start from none.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    clearToasts();
+    mount();
+    await enterDeck();
+    press('a');
+    await waitForReview();
+    enterOnConfirm();
+    await flush(3);
+    await vi.waitFor(() => expect(approve).toHaveBeenCalledTimes(1));
+    await flush(3);
+    expect(q('[data-testid="lead-approve-review-redraft"]')).toBeNull();
+    expect(getToasts()).toEqual([]);
+    expect(draftOutreach).toHaveBeenCalledTimes(1);
+    expect(position()).toBe('Borrower 1 of 6');
   });
 
   it('a fresh review after a 409 is never offered "Review draft again"', async () => {

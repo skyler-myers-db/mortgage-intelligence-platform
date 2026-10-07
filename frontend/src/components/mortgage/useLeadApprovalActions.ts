@@ -312,7 +312,7 @@ export function useLeadApprovalActions({
     reviewedDraft: OutreachDraftResult | null = null,
   ): Promise<LeadDecisionOutcome> {
     return approveWithReport(borrowerId, signal, extras, reviewedDraft).then(
-      ({ outcome }) => (outcome === 'session_expired' ? 'backend' : outcome),
+      ({ outcome }) => (outcome === 'session_expired' || outcome === 'actor_changed' ? 'backend' : outcome),
     );
   }
 

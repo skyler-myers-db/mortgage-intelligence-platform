@@ -24,6 +24,9 @@ import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetSessionStatusForTests, getSessionStatus, markSessionExpired } from '../../lib/sessionStatus';
+import { NOBODY, _resetActorScopeForTests } from '../../lib/actorScope';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { LeadBulkRunResult } from './LeadBulkRunStatus';
 import { readCancelledBulk } from './bulkApproveStash';
 import { bulkCanaryNotice, formatMinutesLeft } from './LeadBulkRunStatus.copy';
 import { bulkRunMinutesLeft, runBulk } from './leadBulkRunLoop';
@@ -202,6 +205,65 @@ describe('useLeadBulkRun', () => {
     expect(result?.failed).toEqual([{ borrowerId: IDS[1], outcome: 'session_expired', message: null }]);
     expect(result?.notStarted).toEqual(IDS.slice(4));
     expect(getSessionStatus().unrecorded).toBe('bulk_approval');
+  });
+
+  describe('the signed-in user changed (D-identity-review-a4, Lead Queue half)', () => {
+    it('a 409 actor_changed row stops the run as Stop does: no later group is sent', async () => {
+      const done = start();
+      await settleWire(['ok']);
+      expect(decide).toHaveBeenCalledTimes(4);
+      await settleWire(['actor_changed', 'ok', 'ok']);
+      const result = await done;
+      expect(decide, 'rows 5-9 send nothing').toHaveBeenCalledTimes(4);
+      expect(result?.actorChanged).toBe(true);
+      expect(result?.notStarted).toEqual(IDS.slice(4));
+      expect(result?.failed).toEqual([{ borrowerId: IDS[1], outcome: 'actor_changed', message: null }]);
+      expect(getSessionStatus().unrecorded, 'not an ended session').toBeNull();
+      expect(run!.announcement).toBe(
+        'Stopped: the signed-in user changed. 3 approvals were recorded before the change; 5 were not sent.',
+      );
+      const html = renderToStaticMarkup(<LeadBulkRunResult result={result!} onDismiss={() => undefined} />);
+      expect(html).toContain('bulk-actions__toast--danger');
+      expect(html).toContain('the signed-in user changed; not recorded');
+    });
+
+    it('an actor_changed canary sends nothing else', async () => {
+      const done = start(1, 'reject');
+      await settleWire(['actor_changed']);
+      const result = await done;
+      expect(decide).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ actorChanged: true, canary: null, ok: 0 });
+      expect(run!.announcement).toBe(
+        'Stopped: the signed-in user changed. 0 rejections were recorded before the change; 8 were not sent.',
+      );
+    });
+
+    it('a gate that closed between groups sends nothing more', async () => {
+      const done = start();
+      expect(decide).toHaveBeenCalledTimes(1);
+      _resetActorScopeForTests({ status: 'closed', owner: NOBODY });
+      await settleWire(['ok']);
+      const result = await done;
+      expect(decide).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ ok: 1, actorChanged: true });
+      expect(result?.notStarted).toEqual(IDS.slice(1));
+    });
+
+    it('a pending gate before the first group sends nothing at all', async () => {
+      _resetActorScopeForTests({ status: 'pending', owner: NOBODY });
+      const result = await start();
+      expect(decide).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ ok: 0, actorChanged: true, notStarted: IDS });
+    });
+
+    it('an ended session keeps its own path, never read as a user change', async () => {
+      markSessionExpired({ method: 'POST', path: '/api/v1/outreach/approve' });
+      _resetActorScopeForTests({ status: 'closed', owner: NOBODY });
+      const done = start();
+      await settleWire(['session_expired']);
+      const result = await done;
+      expect(result).toMatchObject({ sessionEnded: true, actorChanged: false });
+    });
   });
 
   it('reports a duplicate as skipped, not failed, and lists failures with their reasons', async () => {

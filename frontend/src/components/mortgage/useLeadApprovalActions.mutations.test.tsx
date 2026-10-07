@@ -681,6 +681,21 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     });
   });
 
+  it('a 409 actor_changed approve reads as backend, raises no toast and marks nothing for the session dialog (a4)', async () => {
+    apiMocks.approve.mockRejectedValueOnce(new ApiError('The signed-in user changed.', {
+      path: '/api/outreach/approve', status: 409, reason: 'actor_changed',
+    }));
+    mount();
+    let outcome: string | undefined;
+    await act(async () => {
+      outcome = await actions!.approveLead(BORROWER, undefined, {}, draft('gen-actor'));
+    });
+    await flush();
+    expect(outcome).toBe('backend');
+    expect(getToasts()).toEqual([]);
+    expect(setApproval).not.toHaveBeenCalled();
+  });
+
   it('sends one reject POST for a double submit and replays its request_id after a failure', async () => {
     let releaseReject: (value: unknown) => void = () => undefined;
     apiMocks.reject

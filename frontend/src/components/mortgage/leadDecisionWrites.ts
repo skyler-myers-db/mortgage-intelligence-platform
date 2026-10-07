@@ -172,6 +172,12 @@ export function approveWithReport(
     (err: unknown): BulkRowReport => {
       const failure = decisionFailure(err);
       if (failure === 'aborted') return { outcome: 'aborted', message: null };
+      // D-identity-review-a4: the signed-in user changed under this write. Told
+      // apart BEFORE the 409 conflict, the offer check, the toast and the
+      // session path: nothing was recorded, no draft goes stale, no toast.
+      if (err instanceof ApiError && err.reason === 'actor_changed') {
+        return { outcome: 'actor_changed', message: err.message };
+      }
       if (err instanceof ApiError && err.status === 409) extras.onConflict?.();
       // The drafted offer was never previewed: nothing was sent; the row
       // stays selected for an individual review.

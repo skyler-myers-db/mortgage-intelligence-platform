@@ -26,8 +26,8 @@ const CREATED: ApprovalRequestCreated = {
 };
 
 let client: QueryClient;
-let onCancel: ReturnType<typeof vi.fn>;
-let onRequested: ReturnType<typeof vi.fn>;
+let onCancel: ReturnType<typeof vi.fn<() => void>>;
+let onRequested: ReturnType<typeof vi.fn<(created: ApprovalRequestCreated) => void>>;
 
 async function flush() {
   await act(async () => {
@@ -62,8 +62,8 @@ async function submit() {
 
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  onCancel = vi.fn();
-  onRequested = vi.fn();
+  onCancel = vi.fn<() => void>();
+  onRequested = vi.fn<(created: ApprovalRequestCreated) => void>();
   clearToasts();
 });
 
