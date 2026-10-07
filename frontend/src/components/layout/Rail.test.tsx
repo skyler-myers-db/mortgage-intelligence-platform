@@ -7,17 +7,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionResponse } from '../../types';
 
 const apiMocks = vi.hoisted(() => ({ session: vi.fn() }));
-const roadmapLoads = vi.hoisted(() => ({ count: 0 }));
+const roadmapLoads = vi.hoisted(() => {
+  let markLoaded: () => void = () => undefined;
+  const loaded = new Promise<void>((resolve) => {
+    markLoaded = resolve;
+  });
+  return { count: 0, loaded, markLoaded };
+});
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: apiMocks,
 }));
 
-// Counts every load of the lazy roadmap chunk (the real module is served).
+// Counts every load of the lazy roadmap chunk (the real module is served) and
+// signals when Rail's own request for it has been transformed and evaluated.
 vi.mock('./RailRoadmap', async (importOriginal) => {
   roadmapLoads.count += 1;
-  return importOriginal<typeof import('./RailRoadmap')>();
+  const roadmap = await importOriginal<typeof import('./RailRoadmap')>();
+  roadmapLoads.markLoaded();
+  return roadmap;
 });
 
 import { Rail } from './Rail';
@@ -54,6 +63,34 @@ async function settle(until: () => boolean = () => false): Promise<void> {
   }
 }
 
+/** Only turns a chunk Rail never requests into a named failure; a load that arrives ends the wait. */
+const ROADMAP_LOAD_LIMIT_MS = 10_000;
+/** The presenter tests' budget: the first chunk load transforms RailRoadmap and Tooltip. */
+const PRESENTER_TEST_TIMEOUT_MS = 15_000;
+
+/**
+ * Waits on Rail's own request for the lazy roadmap chunk, not on a tick
+ * budget: the first load runs the React Compiler transform of RailRoadmap
+ * and Tooltip, which outran a 40-tick wait under machine load. The test never
+ * imports the chunk itself, so the load count stays Rail's alone.
+ */
+async function awaitRoadmapChunk(): Promise<void> {
+  let timer = 0;
+  const limit = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(
+      () => reject(new Error('presenter mode never loaded the RailRoadmap chunk')),
+      ROADMAP_LOAD_LIMIT_MS,
+    );
+  });
+  try {
+    await act(async () => {
+      await Promise.race([roadmapLoads.loaded, limit]);
+    });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 async function renderRail(expectRoadmap = false): Promise<HTMLElement> {
   await act(async () => {
     root.render(
@@ -65,7 +102,8 @@ async function renderRail(expectRoadmap = false): Promise<HTMLElement> {
       </QueryClientProvider>,
     );
   });
-  // A customer rail is settled after a few ticks; the roadmap chunk resolves later.
+  if (expectRoadmap) await awaitRoadmapChunk();
+  // A customer rail is settled after a few ticks, and so is a loaded chunk's render.
   await settle(() => !expectRoadmap || document.querySelectorAll('button.rail__item--disabled').length > 0);
   const rail = document.querySelector<HTMLElement>('nav.rail');
   if (!rail) throw new Error('no rail');
@@ -140,7 +178,7 @@ describe('the module rail', () => {
     expect([...rail.children].map((child) => child.querySelector('.mod')?.textContent ?? child.className)).toEqual([
       'rail__brand', 'M0', 'M1', 'M2', 'M3', 'M4', 'rail__spacer', 'rail__item', 'rail__item',
     ]);
-  });
+  }, PRESENTER_TEST_TIMEOUT_MS);
 
   it('a roadmap slot goes nowhere when clicked or pressed', async () => {
     queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, PRESENTER);
@@ -157,5 +195,5 @@ describe('the module rail', () => {
     }
     expect(location()).toBe(before);
     expect(apiMocks.session).not.toHaveBeenCalled();
-  });
+  }, PRESENTER_TEST_TIMEOUT_MS);
 });
