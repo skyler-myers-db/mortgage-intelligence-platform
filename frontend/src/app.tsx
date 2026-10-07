@@ -1,6 +1,6 @@
-import { Fragment, lazy, Suspense, useEffect, useState, ViewTransition, type ReactElement } from 'react';
+import { Activity, Fragment, lazy, Suspense, useEffect, useState, ViewTransition, type ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Navigate, Route, Routes, useLocation } from 'react-router';
+import { Navigate, Route, Routes, useLocation, useNavigate, type Location } from 'react-router';
 import { RouteErrorBoundary } from './components/ErrorBoundaryRoute';
 import { AppShell } from './components/layout/AppShell';
 import { RouteNav } from './components/layout/RouteNav';
@@ -23,7 +23,7 @@ import {
   preloadLikelyNextRoutes,
 } from './lib/routePreloaders';
 import { legacyLedgerRedirect } from './lib/legacyLedgerRedirect';
-import { ROUTE_IDS, ROUTES, routeSurfacePath, type RouteId } from './lib/routeMeta';
+import { indexPathOf, ROUTE_IDS, ROUTES, routeSurfacePath, type RouteId } from './lib/routeMeta';
 import { canReadAuditLedger, sessionQueryOptions } from './lib/sessionQuery';
 import './app.transitions.css';
 // The evidence hover card's sheet ships with the initial CSS (it was in
@@ -122,6 +122,9 @@ const ROUTE_ELEMENTS = {
  */
 const ROUTE_EXIT_CLASS = 'mip-route-exit';
 const ROUTE_ENTER_CLASS = 'mip-route-enter';
+
+const QUEUE_PATH = ROUTES.leads.pattern;
+const DOSSIER_PATH = indexPathOf(ROUTES.borrower.pattern);
 
 function prefersReducedMotionAtMount(): boolean {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -233,7 +236,8 @@ function RouteTransition() {
           </div>
         )}
       >
-        {reducedMotion ? (
+        {/* The Lead Queue paints in its keep-alive slot (LeadQueueSlot) instead. */}
+        {pathname === QUEUE_PATH ? null : reducedMotion ? (
           <Fragment key={surfacePath}>{painted}</Fragment>
         ) : (
           <ViewTransition
@@ -251,12 +255,94 @@ function RouteTransition() {
   );
 }
 
+interface KeptQueue {
+  location: Location;
+  instance: number;
+}
+
+const queueSearch = (location: Location): string => {
+  const params = new URLSearchParams(location.search);
+  params.delete('row');
+  return params.toString();
+};
+
+/** The kept Lead Queue after a navigation from `prior` to `next`. */
+function nextKeptQueue(kept: KeptQueue | null, prior: Location, next: Location): KeptQueue | null {
+  if (next.pathname === QUEUE_PATH) {
+    // Live on the queue, or back to it with the same filters: the kept view.
+    if (kept && (kept.location.key === prior.key || queueSearch(kept.location) === queueSearch(next))) {
+      return { ...kept, location: next };
+    }
+    // The bare Leads link while a view is kept reveals it (the URL is replaced below).
+    if (kept && next.search === '') return kept;
+    return { location: next, instance: (kept?.instance ?? 0) + 1 };
+  }
+  const dossier = next.pathname === DOSSIER_PATH || next.pathname.startsWith(`${DOSSIER_PATH}/`);
+  return kept && dossier ? kept : null;
+}
+
+/**
+ * The Lead Queue's keep-alive slot (W5c, audit runtime-08; w5b_rulings[3]):
+ * the queue renders here, OUTSIDE the keyed route boundary, so opening a
+ * borrower dossier hides it under `<Activity>` instead of unmounting it. Its
+ * sort, expanded row, selection, loaded pages and table scroll survive, and
+ * Back reveals it with no /api/leads read (every served page writes a
+ * VIEW_LEADS row). Hidden, its effects are unmounted (hotkeys, the queue
+ * version poll, focus listeners) and it reads the kept location. A return
+ * with other filters starts a new queue; any other destination unmounts it
+ * (the query cache keeps its pages). The hidden slot carries no
+ * `data-route-path`: exactly one painted marker, as the harness reads it.
+ */
+function LeadQueueSlot() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const pending = useRoutePending();
+  const [reducedMotion] = useState(prefersReducedMotionAtMount);
+  const visible = location.pathname === QUEUE_PATH;
+  const [kept, setKept] = useState<KeptQueue | null>(visible ? { location, instance: 0 } : null);
+  const [seen, setSeen] = useState(location);
+  if (seen.key !== location.key) {
+    setSeen(location);
+    setKept(nextKeptQueue(kept, seen, location));
+  }
+  const revealing = visible && kept !== null && kept.location.key !== location.key;
+  useEffect(() => {
+    if (revealing && kept) void navigate(`${QUEUE_PATH}${kept.location.search}`, { replace: true });
+  }, [revealing, kept, navigate]);
+  if (!kept) return null;
+  const painted = (
+    <div
+      className="route-transition"
+      data-route-path={visible ? QUEUE_PATH : undefined}
+      aria-busy={visible && pending ? 'true' : undefined}
+    >
+      <Routes location={kept.location}>
+        <Route path={QUEUE_PATH} element={ROUTE_ELEMENTS.leads} />
+      </Routes>
+    </div>
+  );
+  return (
+    <Activity mode={visible ? 'visible' : 'hidden'}>
+      <RouteErrorBoundary key={kept.instance} pathname={QUEUE_PATH}>
+        <Suspense fallback={<div className="route-transition route-transition--fallback"><RouteFallback /></div>}>
+          {reducedMotion ? painted : (
+            <ViewTransition enter={ROUTE_ENTER_CLASS} exit={ROUTE_EXIT_CLASS} update="none" default="none">
+              {painted}
+            </ViewTransition>
+          )}
+        </Suspense>
+      </RouteErrorBoundary>
+    </Activity>
+  );
+}
+
 export default function App() {
   useEffect(() => preloadLikelyNextRoutes(), []);
   return (
     <AppShell>
       <RouteNav />
       <RouteTransition />
+      <LeadQueueSlot />
     </AppShell>
   );
 }

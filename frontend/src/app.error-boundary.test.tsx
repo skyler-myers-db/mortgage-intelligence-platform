@@ -50,8 +50,11 @@ const chunks = vi.hoisted(() => {
     });
     return { promise, resolve, reject };
   }
-  return { portfolio: gate(), segments: gate(), genie: gate() };
+  return { portfolio: gate(), segments: gate(), genie: gate(), offer: gate(), asset: gate() };
 });
+
+/** The Lead Queue stub throws unless a test turns it healthy (the keep-alive slot cases). */
+const queueRoute = vi.hoisted(() => ({ throws: true }));
 
 vi.mock('./lib/routePreloaders', async () => {
   const { lazy } = await import('react');
@@ -59,6 +62,7 @@ vi.mock('./lib/routePreloaders', async () => {
   const held = (chunk: { promise: Promise<void> }, label: string) =>
     lazy(() => chunk.promise.then(() => ({ default: Ok(label) })));
   const Throwing = () => {
+    if (!queueRoute.throws) return <div data-testid="route-ok">lead-queue</div>;
     throw new Error('Cannot read score of borrower B-0TESTBORROWER');
   };
   const StaleChunk = lazy(() =>
@@ -71,12 +75,12 @@ vi.mock('./lib/routePreloaders', async () => {
     AnalyticsRoute: StaleChunk,
     LeadQueueRoute: Throwing,
     GlossaryRoute: Ok('glossary'),
-    AssetRoute: Ok('asset'),
+    AssetRoute: held(chunks.asset, 'asset'),
     PortfolioBuilderRoute: held(chunks.portfolio, 'portfolio'),
     SegmentIntelligenceRoute: held(chunks.segments, 'segments'),
     Borrower360Route: Ok('borrower'),
     NotFoundRoute: Ok('not-found'),
-    OfferOrchestratorRoute: Ok('offer'),
+    OfferOrchestratorRoute: held(chunks.offer, 'offer'),
     AskGenieRoute: held(chunks.genie, 'genie'),
     AdminConfigRoute: Ok('admin'),
     preloadLikelyNextRoutes: () => () => undefined,
@@ -98,6 +102,7 @@ describe('App route error boundary', () => {
     await act(async () => root.unmount());
     container.remove();
     vi.restoreAllMocks();
+    queueRoute.throws = true;
   });
 
   let navigate: NavigateFunction = () => undefined;
@@ -228,6 +233,49 @@ describe('App route error boundary', () => {
       expect(container.querySelector('.route-transition > [data-testid="route-ok"]')).not.toBeNull();
       expect(mounts()).toBe(0);
       expect(paintedRoutePaths()).toEqual(['/portfolio-builder']);
+    });
+
+    it('keeps ONE painted marker with the Lead Queue kept hidden behind a dossier and a held navigation (W5c runtime-08)', async () => {
+      queueRoute.throws = false;
+      await renderAt('/lead-queue?state=IL');
+      expect(paintedRoutePaths()).toEqual(['/lead-queue']);
+
+      await act(async () => {
+        void navigate('/borrower-360/B-0TESTBORROWER0');
+      });
+      await flushChunk();
+      // The kept queue is still in the DOM, hidden, and names no route.
+      const queue = Array.from(container.querySelectorAll('[data-testid="route-ok"]'))
+        .find((node) => node.textContent === 'lead-queue');
+      expect(queue).toBeDefined();
+      expect(queue?.closest('.route-transition')?.hasAttribute('data-route-path')).toBe(false);
+      expect(paintedRoutePaths()).toEqual(['/borrower-360/B-0TESTBORROWER0']);
+
+      // A held navigation from the dossier: the marker still names the painted dossier.
+      await act(async () => {
+        void navigate('/offer-orchestrator');
+      });
+      await flushChunk();
+      expect(paintedRoutePaths()).toEqual(['/borrower-360/B-0TESTBORROWER0']);
+      await act(async () => {
+        chunks.offer.resolve();
+        await chunks.offer.promise;
+      });
+      await flushChunk();
+      expect(paintedRoutePaths()).toEqual(['/offer-orchestrator']);
+      expect(container.querySelector('.route-transition > [data-testid="route-ok"]')?.textContent).toBe('offer');
+      expect(container.textContent, 'leaving for another page unmounts the kept queue').not.toContain('lead-queue');
+    });
+
+    it('a navigation off the Lead Queue to a held chunk keeps the queue painted and named until it arrives', async () => {
+      queueRoute.throws = false;
+      await renderAt('/lead-queue');
+      await act(async () => {
+        void navigate('/data-estate/assets/mip.gold.lead_population');
+      });
+      await flushChunk();
+      expect(paintedRoutePaths()).toEqual(['/lead-queue']);
+      expect(container.querySelector('.route-transition[data-route-path] > [data-testid="route-ok"]')?.textContent).toBe('lead-queue');
     });
 
     it('shows the page-shaped fallback on the first render of a route whose chunk is pending', async () => {
