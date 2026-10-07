@@ -13,8 +13,6 @@
   "files": {
     "frontend/src/components/feedback/Toaster.tsx": {"jsx-a11y/no-noninteractive-element-interactions":1},
     "frontend/src/components/layout/Console.tsx": {"jsx-a11y/label-has-associated-control":11,"jsx-a11y/no-redundant-roles":1},
-    "frontend/src/components/layout/IdentityMenuPanel.tsx": {"jsx-a11y/control-has-associated-label":1,"jsx-a11y/interactive-supports-focus":1},
-    "frontend/src/components/layout/ShellPanelBoundaries.tsx": {"jsx-a11y/no-redundant-roles":1},
     "frontend/src/components/layout/Topbar.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/interactive-supports-focus":2},
     "frontend/src/components/mortgage/AssignmentLifecycleAdvance.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-static-element-interactions":1},
     "frontend/src/components/mortgage/GenieAnswer.markdown.tsx": {"jsx-a11y/no-noninteractive-tabindex":1},
@@ -22,14 +20,11 @@
     "frontend/src/components/mortgage/GenieAnswerAllRows.tsx": {"jsx-a11y/control-has-associated-label":1,"jsx-a11y/no-noninteractive-tabindex":1},
     "frontend/src/components/mortgage/LeadTable.tsx": {"jsx-a11y/no-noninteractive-tabindex":1},
     "frontend/src/components/mortgage/LeadTableRow.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-static-element-interactions":1},
-    "frontend/src/components/mortgage/LeadTableStatusSortMenu.tsx": {"jsx-a11y/interactive-supports-focus":1},
     "frontend/src/components/mortgage/ScoreSpine.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-static-element-interactions":1},
     "frontend/src/components/mortgage/USChoroplethMap.tsx": {"jsx-a11y/no-autofocus":3,"jsx-a11y/no-static-element-interactions":1},
     "frontend/src/components/mortgage/USChoroplethMapStates.tsx": {"jsx-a11y/no-noninteractive-element-interactions":1},
     "frontend/src/components/mortgage/USChoroplethMapTable.tsx": {"jsx-a11y/control-has-associated-label":2},
     "frontend/src/components/mortgage/USChoroplethMapZipLevel.tsx": {"jsx-a11y/no-noninteractive-element-interactions":1,"jsx-a11y/no-redundant-roles":1},
-    "frontend/src/components/ui/FilterSelect.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-noninteractive-element-to-interactive-role":2},
-    "frontend/src/components/ui/MultiFilterSelect.tsx": {"jsx-a11y/click-events-have-key-events":1,"jsx-a11y/no-noninteractive-element-to-interactive-role":2},
     "frontend/src/routes/analytics.equity-scatter.tsx": {"jsx-a11y/no-static-element-interactions":2},
     "frontend/src/routes/portfolio-builder.tsx": {"jsx-a11y/no-autofocus":1}
   }
