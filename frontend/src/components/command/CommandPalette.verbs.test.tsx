@@ -14,6 +14,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
+import { registerKeyBinding } from '../../lib/keymap';
 import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { commandVerbActions } from './commandActions';
 import { publishCommandSelection, type CommandSelectionContext } from './commandSelection';
@@ -27,8 +28,11 @@ vi.mock('../AppContext', () => ({
     setConsoleOpen: vi.fn(),
     setGenieOpen: vi.fn(),
     canAccessAdmin: false,
+    savedLeads: {},
   }),
 }));
+// The palette's Saved views group (useCommandPaletteSources) reads this client.
+vi.mock('../../lib/apiClients/savedViews', () => ({ fetchSavedViews: () => Promise.resolve({ saved_views: [] }) }));
 const approve = vi.fn();
 // The ledger entry reads the shared session (useAuditLedgerAccess); this
 // harness has no QueryClient, so the decision is mocked like useApp's flags.
@@ -185,6 +189,32 @@ describe('CommandPalette selection verbs', () => {
     }
     openPalette();
     expect(palette(), 'the chord works again once the modal is gone').not.toBeNull();
+  });
+
+  it('shows Shift A / Shift R on the verbs only while the Lead Queue binds them and single keys are on', () => {
+    act(() => {
+      unpublish = publishCommandSelection(selection());
+    });
+    openPalette();
+    const verbRow = (label: string) => [...(verbGroup()?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])]
+      .find((row) => row.textContent?.includes(label));
+    const keycaps = (row: HTMLElement | undefined) => [...(row?.querySelectorAll('.cmdk__row-hint kbd') ?? [])].map((kbd) => kbd.textContent);
+    // No table on this page: no binding, no keycap.
+    expect(verbRow('Approve 11 selected…')?.hasAttribute('aria-keyshortcuts')).toBe(false);
+    let unregister = () => undefined as void;
+    act(() => {
+      unregister = registerKeyBinding({
+        id: 'lead-table-bulk-approve', scope: 'lead-queue', keys: ['Shift+A', 'Shift+R'], description: 'Bulk', run: () => undefined,
+      });
+    });
+    expect(verbRow('Approve 11 selected…')?.getAttribute('aria-keyshortcuts')).toBe('Shift+A');
+    expect(keycaps(verbRow('Approve 11 selected…'))).toEqual(['Shift', 'A']);
+    expect(verbRow('Reject 11 selected…')?.getAttribute('aria-keyshortcuts')).toBe('Shift+R');
+    expect(verbRow('Assign 12 selected…')?.hasAttribute('aria-keyshortcuts')).toBe(false);
+    act(() => setSingleKeyShortcutsEnabled(false));
+    expect(verbRow('Approve 11 selected…')?.hasAttribute('aria-keyshortcuts')).toBe(false);
+    expect(keycaps(verbRow('Approve 11 selected…'))).toEqual([]);
+    act(() => unregister());
   });
 
   it('Cmd-K is a modifier chord: it opens with single-key shortcuts switched off', () => {

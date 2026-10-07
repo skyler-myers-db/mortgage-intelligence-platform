@@ -28,8 +28,11 @@ vi.mock('../AppContext', () => ({
     setConsoleOpen,
     setGenieOpen,
     canAccessAdmin: access.admin,
+    savedLeads: {},
   }),
 }));
+// The palette's Saved views group (useCommandPaletteSources) reads this client.
+vi.mock('../../lib/apiClients/savedViews', () => ({ fetchSavedViews: () => Promise.resolve({ saved_views: [] }) }));
 
 // The ledger entry reads the shared session (useAuditLedgerAccess); this
 // harness has no QueryClient, so the decision is mocked like useApp's flags.

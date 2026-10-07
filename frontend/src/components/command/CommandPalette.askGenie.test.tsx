@@ -24,8 +24,11 @@ vi.mock('../AppContext', () => ({
     setConsoleOpen: vi.fn(),
     setGenieOpen,
     canAccessAdmin: false,
+    savedLeads: {},
   }),
 }));
+// The palette's Saved views group (useCommandPaletteSources) reads this client.
+vi.mock('../../lib/apiClients/savedViews', () => ({ fetchSavedViews: () => Promise.resolve({ saved_views: [] }) }));
 
 const borrowerSearch = vi.fn();
 // The ledger entry reads the shared session (useAuditLedgerAccess); this
