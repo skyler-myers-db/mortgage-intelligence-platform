@@ -5,6 +5,7 @@
  */
 import type { ConfigOptions, SessionResponse, WorkspaceState } from '../../../../src/types';
 import type { ActorAuditEventPage, HealthPayload } from '../../../../src/lib/apiTypes';
+import type { FollowupSummary } from '../../../../src/lib/apiClients/followUpsSummary';
 import type { ContractSample } from '../contractSamples';
 import { fixture, json, type FixtureEntry, type MockApi } from '../mockApi';
 import { LEADS } from './borrowers';
@@ -134,6 +135,10 @@ export const shellFixtures: FixtureEntry[] = [
       next_cursor: null,
     }),
   ),
+  // The rail's Follow-ups poll (D-shell-deviations-a): SESSION names an actor,
+  // so every route sends it. Not eligible by default: no rail item, no list
+  // read; data/followUps.ts registers the eligible actor's bodies.
+  fixture('GET', '/api/sales/followups/summary', () => json<FollowupSummary>({ eligible: false, next_due_at: null })),
 ];
 
 /**

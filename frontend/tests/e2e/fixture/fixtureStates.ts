@@ -26,6 +26,7 @@ import type { HealthPayload } from '../../../src/lib/apiTypes';
 import type { LeadSummary } from '../../../src/types';
 import type { AppDriver } from './app';
 import { WAREHOUSE_OUTAGE_503 } from './data/errorSurfaces';
+import { registerFollowUps } from './data/followUps';
 import { HEALTH_OK } from './data/shell';
 import { json, type MockApi } from './mockApi';
 import { expect } from './test';
@@ -45,7 +46,9 @@ export type FixtureState =
   | 'stale-note'
   | 'delta-explainer'
   | 'evidence-how-we-got'
-  | 'evidence-under-the-hood';
+  | 'evidence-under-the-hood'
+  // W5d w5-followups-snooze: an eligible actor's Follow-ups tray, open.
+  | 'followups-tray';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -95,6 +98,8 @@ export function prepareState(mockApi: MockApi, state: FixtureState, routeName?: 
     const endpoints = STALE_NOTE_ENDPOINTS[routeName ?? ''];
     if (!endpoints) throw new Error(`stale-note names no reads for route ${routeName ?? '(none)'}`);
     for (const endpoint of endpoints) mockApi.withHeaders('GET', endpoint, { 'X-Data-Last-Good-At': STALE_NOTE_LAST_GOOD_AT });
+  } else if (state === 'followups-tray') {
+    registerFollowUps(mockApi);
   } else if (state === 'empty') {
     mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
       json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
@@ -176,6 +181,15 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
         await drawer.getByRole('tab', { name: 'Under the hood' }).click();
         await expect(drawer.locator('[data-testid="evidence-kpi-proof"] .proof-sql-card__sql')).toBeVisible();
       }
+      break;
+    }
+    case 'followups-tray': {
+      // The rail item appears for the eligible actor; opening the tray reads
+      // the audit-free list (never an audited read).
+      const trigger = page.locator('.rail button.rail__item', { hasText: 'Due' });
+      await trigger.click();
+      await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.locator('.followups .followups__row').first()).toBeVisible();
       break;
     }
   }

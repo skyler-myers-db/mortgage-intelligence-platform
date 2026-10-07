@@ -102,6 +102,13 @@ export const queryKeys = {
   assetFreshness: (assetKey: string | null | undefined) => ['mip', 'asset-freshness', assetKey ?? ''] as const,
   /** One KPI's server-emitted reproduce SQL (flow-06): fixed text, never persisted. */
   kpiProof: (kpi: string | null | undefined) => ['mip', 'kpi-proof', kpi ?? ''] as const,
+  /**
+   * The Follow-ups rail poll and tray list (D-shell-deviations-a): audit-free,
+   * never persisted; under ['mip','followups'] so a snooze invalidates both
+   * and the actor boundary's clear drops them.
+   */
+  followUpsSummary: () => ['mip', 'followups', 'summary'] as const,
+  followUpsList: (windowDays: number) => ['mip', 'followups', 'list', windowDays] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {

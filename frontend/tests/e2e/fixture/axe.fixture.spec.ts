@@ -34,7 +34,7 @@ import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 const OVERLAY_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail', 'offer-orchestrator-detail', 'ask-genie']);
 const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
   'lead-queue': ['filter-menu', 'expanded-row', 'read-failed', 'triage'],
-  home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood'],
+  home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood', 'followups-tray'],
   'segment-intelligence': ['read-failed', 'stale-note'],
   'admin-config': ['run-dialog-open'],
 };

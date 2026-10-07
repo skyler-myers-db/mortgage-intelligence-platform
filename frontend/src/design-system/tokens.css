@@ -826,3 +826,11 @@ input[type="checkbox"] {
  * topbar (deviation:lender-mark).
  */
 :root { --brand-mark-plate: #FFFFFF; }
+
+/* ---------- Follow-ups tray layer (D-shell-deviations-a; W5d) ----------
+ * The tray's fallback layer where the Popover API is missing (it is a top-
+ * layer popover elsewhere): above the docked Console (--z-console 50), the
+ * Console sheet (--z-sheet 25) and Genie (--z-genie 30); equal to
+ * --z-topbar-menu, which lives inside the topbar's own context.
+ */
+:root { --z-tray: 55; }
