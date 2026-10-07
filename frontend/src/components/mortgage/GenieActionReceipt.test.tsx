@@ -8,7 +8,7 @@
  * client-only `action_audit_event_id` never leaves the client.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -65,7 +65,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function renderReceipt(seed: SessionResponse | 'pending' | 'errored'): Promise<void> {
+async function renderWithSession(seed: SessionResponse | 'pending' | 'errored', node: ReactNode): Promise<void> {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (seed === 'pending') apiMocks.session.mockImplementation(() => new Promise(() => undefined));
   else if (seed === 'errored') apiMocks.session.mockRejectedValue(new Error('session unavailable'));
@@ -73,17 +73,34 @@ async function renderReceipt(seed: SessionResponse | 'pending' | 'errored'): Pro
   await act(async () => {
     root.render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <p>
-            <GenieActionReceipt message={MESSAGE} auditEventId={EVENT} />
-          </p>
-        </MemoryRouter>
+        <MemoryRouter>{node}</MemoryRouter>
       </QueryClientProvider>,
     );
   });
   await act(async () => {
     await Promise.resolve();
   });
+}
+
+function renderReceipt(seed: SessionResponse | 'pending' | 'errored'): Promise<void> {
+  return renderWithSession(
+    seed,
+    <p>
+      <GenieActionReceipt message={MESSAGE} auditEventId={EVENT} />
+    </p>,
+  );
+}
+
+function governedBubble(partial: Partial<GenieAnswer> = {}): GenieAnswer {
+  return {
+    answer: MESSAGE,
+    question: '',
+    source: GOVERNED_ACTION_SOURCE,
+    trusted_assets: [],
+    conversation_id: 'conv-1',
+    action_audit_event_id: EVENT,
+    ...partial,
+  };
 }
 
 describe('GenieActionReceipt', () => {
@@ -110,6 +127,26 @@ describe('GenieActionReceipt', () => {
     expect(container.textContent).toBe(`${MESSAGE} Audit event ${EVENT}.`);
     expect(container.querySelector('a')).toBeNull();
     expect(container.querySelector('span.mono')?.textContent).toBe(EVENT);
+  });
+
+  it("renders in a governed bubble's text slot: the first paragraph, before the follow-up chips", async () => {
+    await renderWithSession(session({}), <GenieAnswerView payload={governedBubble()} onFollowUp={() => undefined} dense />);
+
+    const answer = container.querySelector('.genie-answer');
+    const receipt = answer?.querySelector(':scope > p.genie-md-p.genie-md-p--first');
+    expect(receipt?.textContent).toBe(`${MESSAGE} Audit event ${EVENT}.`);
+    expect(answer?.querySelectorAll('p.genie-md-p')).toHaveLength(1);
+    const chips = answer?.querySelector('.genie-answer__followups');
+    expect(chips).not.toBeNull();
+    expect(receipt && chips ? receipt.compareDocumentPosition(chips) & Node.DOCUMENT_POSITION_FOLLOWING : 0).toBeTruthy();
+  });
+
+  it('leaves an older stored bubble (the id in its text, no field) unchanged', async () => {
+    const older = governedBubble({ answer: `${MESSAGE} Audit event ${EVENT}.`, action_audit_event_id: undefined });
+    await renderWithSession(session({ can_read_audit: true }), <GenieAnswerView payload={older} onFollowUp={() => undefined} dense />);
+
+    expect(container.querySelector('.genie-answer p.genie-md-p--first')?.textContent).toBe(`${MESSAGE} Audit event ${EVENT}.`);
+    expect(container.querySelector('.genie-answer a')).toBeNull();
   });
 });
 
@@ -148,18 +185,8 @@ describe('action_audit_event_id never leaves the client', () => {
     // so the trusted-answer feedback control renders and posts.
     clearGenieAnswerMemory();
     apiMocks.genieFeedback.mockResolvedValue({ accepted: true, audit_event_id: 'evt-feedback' });
-    const bubble: GenieAnswer = {
-      answer: MESSAGE,
-      question: '',
-      source: GOVERNED_ACTION_SOURCE,
-      trusted_assets: [],
-      conversation_id: 'conv-1',
-      message_id: 'msg-1',
-      action_audit_event_id: EVENT,
-    };
-    await act(async () => {
-      root.render(<GenieAnswerView payload={bubble} onFollowUp={() => undefined} dense />);
-    });
+    const bubble = governedBubble({ message_id: 'msg-1' });
+    await renderWithSession(session({}), <GenieAnswerView payload={bubble} onFollowUp={() => undefined} dense />);
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-testid="genie-feedback-up"]')?.click();

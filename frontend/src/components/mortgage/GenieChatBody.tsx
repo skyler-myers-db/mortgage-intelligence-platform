@@ -5,8 +5,6 @@ import type { GenieInFlightTurn, GenieTurnNote as GenieTurnNoteShape } from '../
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Chip, EvidenceChip } from '../Primitives';
-import { GOVERNED_ACTION_SOURCE } from '../../lib/genieTurnOutcome';
-import { GenieActionReceipt } from './GenieActionReceipt';
 import { GenieAnswer } from './GenieAnswer';
 import {
   shouldRenderGenieSourceAssets,
@@ -160,29 +158,17 @@ export function GenieChatBody({
     const question = prev && prev.who === 'user' ? prev.text : undefined;
     const reaskKind = question ? answerReask(m.payload) : null;
     const presentation = collapse.presentation(m.payload);
-    // A governed action's receipt (flow-04): its message and audit event id,
-    // the id a ledger link for readers. An older stored bubble (the id in its
-    // text, no field) renders unchanged.
-    const receiptId =
-      m.payload.source === GOVERNED_ACTION_SOURCE ? (m.payload.action_audit_event_id ?? null) : null;
     const fullAnswer = (
-      <>
-        <GenieAnswer
-          payload={receiptId ? { ...m.payload, answer: '' } : m.payload}
-          question={question}
-          onFollowUp={(q, followUpConversationId) => onAsk(q, followUpConversationId)}
-          followUpDisabledReason={busyReason}
-          onAction={(action) => onAction(action, m.payload)}
-          onEditQuestion={onEdit}
-          onAnnounce={onAnnounce}
-          dense
-        />
-        {receiptId ? (
-          <p className="genie-md-p">
-            <GenieActionReceipt message={m.payload.answer} auditEventId={receiptId} />
-          </p>
-        ) : null}
-      </>
+      <GenieAnswer
+        payload={m.payload}
+        question={question}
+        onFollowUp={(q, followUpConversationId) => onAsk(q, followUpConversationId)}
+        followUpDisabledReason={busyReason}
+        onAction={(action) => onAction(action, m.payload)}
+        onEditQuestion={onEdit}
+        onAnnounce={onAnnounce}
+        dense
+      />
     );
     transcript.push(
       <div

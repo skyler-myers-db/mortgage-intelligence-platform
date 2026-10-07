@@ -207,8 +207,25 @@ test.describe('(b) the governed action receipt (flow-04)', () => {
         await runSave(dialog);
 
         const bubble = dialog.locator('.genie__msg--ai').last();
-        await expect(bubble.locator('.genie-answer__api-source')).toContainText('Governed action result', WAIT);
-        await expectReceipt(bubble.locator('p.genie-md-p', { hasText: 'Audit event' }), linked);
+        const note = bubble.locator('.genie-answer__api-source');
+        await expect(note).toContainText('Governed action result', WAIT);
+        const receipt = bubble.locator('p.genie-md-p', { hasText: 'Audit event' });
+        await expectReceipt(receipt, linked);
+        // The receipt sits where an older bubble's in-answer text did: one
+        // --sp-2 under the source note and above the follow-up chips.
+        const followUps = bubble.locator('.genie-answer__followups');
+        await expect(followUps).toBeVisible();
+        const [noteBox, receiptBox, followUpsBox] = await Promise.all([
+          note.boundingBox(),
+          receipt.boundingBox(),
+          followUps.boundingBox(),
+        ]);
+        if (!noteBox || !receiptBox || !followUpsBox) throw new Error('the note, receipt and chips are laid out');
+        const sp2 = await receipt.evaluate((p) => parseFloat(getComputedStyle(p).getPropertyValue('--sp-2')));
+        const gap = receiptBox.y - (noteBox.y + noteBox.height);
+        expect(sp2).toBeGreaterThan(0);
+        expect(Math.abs(gap - sp2), `gap ${gap}px, --sp-2 ${sp2}px`).toBeLessThanOrEqual(1);
+        expect(receiptBox.y + receiptBox.height).toBeLessThanOrEqual(followUpsBox.y);
         await expectAxeClean(dialog.page(), {
           key: { route: 'home', state: `genie-panel-action-receipt-${who}` },
           theme,
