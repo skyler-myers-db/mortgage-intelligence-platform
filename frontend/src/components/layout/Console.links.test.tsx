@@ -7,6 +7,11 @@
  * module, never a borrower or offer read (those write VIEW_BORROWER,
  * RECOMMEND_OFFER and DRAFT_OUTREACH and stay click-only), and nothing at
  * all under Save-Data.
+ *
+ * And the Console's labels (a11y-05, deviation console-row-captions): every
+ * <label> names a control (the three switches, by htmlFor), the row captions
+ * are .tweak-row__label spans that name their groups, and the <aside> is a
+ * complementary landmark by its name alone.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -139,5 +144,75 @@ describe('Console saved-workspace links (bundle-09 item 1)', () => {
     hover(link(`/borrower-360/${LEAD}`));
     act(() => link(`/offer-orchestrator/${DRAFT}`).focus());
     expect(preloadRouteForPath).not.toHaveBeenCalled();
+  });
+});
+
+describe('Console labels and captions (a11y-05)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(async () => {
+    installLocalStorage();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter><Console /></MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('every <label> names an existing control', () => {
+    // The row labels (the property-lookup form inside a row has its own).
+    const labels = [...container.querySelectorAll<HTMLLabelElement>('.tweak-row > label, .tweak-row > .row > label')];
+    expect(labels.map((label) => label.textContent)).toEqual([
+      'Show evidence chips',
+      'Show signal meters',
+      'Single-key shortcuts',
+    ]);
+    for (const label of labels) {
+      const control = document.getElementById(label.htmlFor);
+      expect(control?.classList.contains('switch'), label.textContent ?? '').toBe(true);
+    }
+  });
+
+  it('keeps each switch\'s accessible name (fixture specs pin them)', () => {
+    expect(document.getElementById('console-evidence-switch')?.getAttribute('aria-label')).toBe('Toggle evidence chips');
+    expect(document.getElementById('console-signal-switch')?.getAttribute('aria-label')).toBe('Toggle signal strength meters');
+    expect(document.getElementById('console-single-key-switch')?.getAttribute('aria-labelledby')).toBe('console-single-key-label');
+  });
+
+  it('captions the rows with spans that name their groups', () => {
+    const captions = [...container.querySelectorAll('.tweak-row > .tweak-row__label, .tweak-row > .row > .tweak-row__label')];
+    expect(captions.map((caption) => caption.textContent)).toEqual([
+      'Theme', 'Accent', 'Density', 'Property lookup', 'Recent activity', 'Configured tenant', 'Saved workspace', 'Ask Genie',
+    ]);
+    expect(captions.every((caption) => caption.tagName === 'SPAN')).toBe(true);
+    const accent = container.querySelector('.swatches');
+    expect(accent?.getAttribute('role')).toBe('group');
+    expect(document.getElementById(accent?.getAttribute('aria-labelledby') ?? '')?.textContent).toBe('Accent');
+    const density = [...container.querySelectorAll('.tweak-row > .segmented')]
+      .find((group) => group.textContent?.includes('Comfortable'));
+    expect(density?.getAttribute('role')).toBe('group');
+    expect(density?.hasAttribute('aria-label')).toBe(false);
+    expect(document.getElementById(density?.getAttribute('aria-labelledby') ?? '')?.textContent).toBe('Density');
+    // "Open Genie" keeps its own name: no label renames it.
+    const genie = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Open Genie');
+    expect(genie?.labels?.length ?? 0).toBe(0);
+  });
+
+  it('is a complementary landmark by its name alone, with no redundant role', () => {
+    const aside = container.querySelector('aside#workspace-console');
+    expect(aside?.hasAttribute('role')).toBe(false);
+    expect(aside?.getAttribute('aria-label')).toBe('Workspace console');
   });
 });

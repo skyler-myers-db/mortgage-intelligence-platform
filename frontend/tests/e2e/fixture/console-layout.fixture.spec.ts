@@ -198,7 +198,7 @@ test.describe('Console rail fits its own panel', () => {
   test('the Console labels stop restyling the embedded property-lookup form', async ({ app }) => {
     await app.gotoRoute('/');
     const panel = await app.openConsole();
-    const rowLabel = panel.locator('.tweak-row > label').first();
+    const rowLabel = panel.locator('.tweak-row > :is(label, .tweak-row__label)').first();
     await expect(rowLabel).toHaveCSS('text-transform', 'uppercase');
     const fieldLabel = panel.locator('.property-lookup form label').first();
     await expect(fieldLabel).toHaveCSS('text-transform', 'none');
