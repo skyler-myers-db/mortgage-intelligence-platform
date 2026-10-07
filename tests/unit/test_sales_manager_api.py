@@ -123,7 +123,6 @@ def test_disposition_requires_callback_time_and_updates_lifecycle() -> None:
             "lo_email": "lo01@summit.example",
             "outcome": "callback_scheduled",
             "callback_at": callback_at,
-            "notes": "Callback requested after rate review.",
         },
     )
     assert logged.status_code == 200
@@ -199,7 +198,6 @@ def test_disposition_request_id_replays_without_duplicate_or_breaker(fake_lakeba
     payload = {
         "lo_email": "lo01@summit.example",
         "outcome": "connected",
-        "notes": "Reviewed scenario and next steps.",
         "request_id": request_id,
     }
 
@@ -280,7 +278,6 @@ def test_disposition_deactivated_cached_lo_is_rejected(fake_lakebase_client) -> 
         json={
             "lo_email": stale_lo_email,
             "outcome": "connected",
-            "notes": "This should not persist.",
             "request_id": str(uuid4()),
         },
     )

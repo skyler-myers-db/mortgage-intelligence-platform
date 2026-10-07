@@ -162,12 +162,14 @@ export interface GenieFeedbackResult {
   audit_event_id?: string | null;
 }
 
-/** `/api/genie/refusal-report` body: hash-only "this was legitimate". */
+/** `/api/genie/refusal-report` body: the "this was legitimate" report. */
 export interface GenieRefusalReportResult {
   accepted: boolean;
   duplicate: boolean;
   report_id?: string | null;
   audit_event_id?: string | null;
+  /** True when the reporter's question is held for review (D-audit-reads-d). */
+  question_captured?: boolean;
 }
 
 /** Async Genie lifecycle (2026-07): `/api/genie/message/submit` body. */

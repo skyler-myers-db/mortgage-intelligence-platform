@@ -47,6 +47,11 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/audit/events/page"): "tests/unit/test_api_boundaries.py",
     ("GET", "/api/audit/my-events"): "tests/unit/test_audit_my_events.py",
     ("GET", "/api/audit/receipt/{audit_event_id}"): "tests/unit/test_audit_receipt.py",
+    ("GET", "/api/audit/refusal-reports"): "tests/unit/test_refusal_report_text_access.py",
+    (
+        "GET",
+        "/api/audit/refusal-reports/{report_id}/question",
+    ): "tests/unit/test_refusal_report_text_access.py",
     ("GET", "/api/audit/rollups"): "tests/unit/test_sales_manager_api.py",
     ("GET", "/api/audit/count"): "tests/unit/test_audit_explorer_api.py",
     ("GET", "/api/audit/facets"): "tests/unit/test_audit_explorer_api.py",

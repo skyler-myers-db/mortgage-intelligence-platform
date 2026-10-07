@@ -39,6 +39,7 @@ export const LO_SESSION: SessionResponse = {
   can_read_audit: false,
   presenter_mode: false,
   actor_email: LO_EMAIL,
+  refusal_text_capture_enabled: false,
   actor_cache_key: null,
 };
 

@@ -256,7 +256,6 @@ def log_disposition(
             outcome=payload.outcome,
             occurred_at=payload.occurred_at,
             callback_at=payload.callback_at,
-            notes=payload.notes,
             subject_clip=borrower.clip,
             request_id=payload.request_id,
         )

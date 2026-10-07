@@ -15,6 +15,7 @@ import type { FootprintPayload } from '../components/FootprintProvider';
 import type { HealthPayload as BannerHealthPayload } from '../components/mortgage/DegradedBanner';
 import type { adminApi } from '../lib/apiClients/admin';
 import type { AuditRollupResponse } from '../lib/apiClients/audit';
+import type { RefusalReportFamilyCount, RefusalReportItem, RefusalReportListResponse, RefusalReportQuestionResponse } from '../lib/apiClients/refusalReports';
 import type { ActorAuditEventPage, ActorAuditEventSummary, AuditEventPage, AuditEventRow, DecisionReceipt, HealthPayload as LibHealthPayload } from '../lib/apiTypes';
 import type { AssetFreshnessResponse, KpiProofParam, KpiProofResponse } from '../lib/apiTypes';
 import type { AssetColumn, AssetLineageNode, AssetMetadataResponse, AssetProperty, AssetTag, DataEstateAsset, DataEstateLane, DataEstateResponse } from '../types';
@@ -34,6 +35,14 @@ export type WireContractAdmin = [
   Expect<NoPhantomKeys<AuditEventPage, ApiResponse<'AuditEventPage'>>>,
   Expect<WireFits<ApiResponse<'DecisionReceipt'>, DecisionReceipt>>,
   Expect<NoPhantomKeys<DecisionReceipt, ApiResponse<'DecisionReceipt'>>>,
+  Expect<WireFits<ApiResponse<'RefusalReportFamilyCount'>, RefusalReportFamilyCount>>,
+  Expect<NoPhantomKeys<RefusalReportFamilyCount, ApiResponse<'RefusalReportFamilyCount'>>>,
+  Expect<WireFits<ApiResponse<'RefusalReportItem'>, RefusalReportItem>>,
+  Expect<NoPhantomKeys<RefusalReportItem, ApiResponse<'RefusalReportItem'>>>,
+  Expect<WireFits<ApiResponse<'RefusalReportListResponse'>, RefusalReportListResponse>>,
+  Expect<NoPhantomKeys<RefusalReportListResponse, ApiResponse<'RefusalReportListResponse'>>>,
+  Expect<WireFits<ApiResponse<'RefusalReportQuestionResponse'>, RefusalReportQuestionResponse>>,
+  Expect<NoPhantomKeys<RefusalReportQuestionResponse, ApiResponse<'RefusalReportQuestionResponse'>>>,
   Expect<WireFits<ApiResponse<'AssetColumn'>, AssetColumn>>,
   Expect<NoPhantomKeys<AssetColumn, ApiResponse<'AssetColumn'>>>,
   Expect<WireFits<ApiResponse<'AssetLineageNode'>, AssetLineageNode>>,

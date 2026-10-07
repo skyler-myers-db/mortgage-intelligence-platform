@@ -84,7 +84,6 @@ def _dispose(borrower_id: str, lo_email: str = "lo01@summit.example") -> None:
         json={
             "lo_email": lo_email,
             "outcome": "connected",
-            "notes": "Reviewed refinance options.",
             "request_id": str(uuid4()),
         },
     )

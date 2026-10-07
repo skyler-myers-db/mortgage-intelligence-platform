@@ -367,6 +367,42 @@ def test_presenter_mode_is_not_an_operator_passthrough() -> None:
     assert "MIP_PRESENTER_MODE" not in app_deploy_payload.SAFE_RUNTIME_DEFAULTS
 
 
+def test_refusal_text_capture_ships_enabled_by_default_and_passes_an_opt_out(monkeypatch) -> None:
+    """D-audit-reads-d: the payload's explicit safe default is 'enabled' (an
+    empty value would be dropped), and a lender's 'disabled' rides through."""
+    assert "MIP_GENIE_REFUSAL_TEXT_CAPTURE" in app_deploy_payload.NON_SECRET_OPERATOR_VARS
+    for target in ("dev", "prod"):
+        env = _env_map(build_payload(source_code_path="/Workspace/app/files", target=target))
+        assert env["MIP_GENIE_REFUSAL_TEXT_CAPTURE"] == {
+            "name": "MIP_GENIE_REFUSAL_TEXT_CAPTURE",
+            "value": "enabled",
+        }
+
+    monkeypatch.setenv("MIP_GENIE_REFUSAL_TEXT_CAPTURE", "disabled")
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+    assert env["MIP_GENIE_REFUSAL_TEXT_CAPTURE"]["value"] == "disabled"
+
+
+@pytest.mark.parametrize("raw", ["on", "Enabled", "true", "disable"])
+def test_refusal_text_capture_refuses_a_typo_before_boot(monkeypatch, raw) -> None:
+    monkeypatch.setenv("MIP_GENIE_REFUSAL_TEXT_CAPTURE", raw)
+
+    with pytest.raises(ValueError, match="MIP_GENIE_REFUSAL_TEXT_CAPTURE must be enabled or disabled"):
+        build_payload(source_code_path="/Workspace/app/files", target="dev")
+
+
+def test_refusal_text_capture_values_match_the_runtime_literal() -> None:
+    from typing import get_args
+
+    from backend.config.settings import Settings
+
+    annotation = Settings.model_fields["mip_genie_refusal_text_capture"].annotation
+    assert get_args(annotation) == app_deploy_payload.REFUSAL_TEXT_CAPTURE_VALUES
+    # Fail-closed runtime default (W5c C8) vs the payload's explicit 'enabled'.
+    assert Settings.model_fields["mip_genie_refusal_text_capture"].default == "disabled"
+    assert app_deploy_payload.SAFE_RUNTIME_DEFAULTS["MIP_GENIE_REFUSAL_TEXT_CAPTURE"] == "enabled"
+
+
 def test_payload_allows_operator_to_enable_lead_rewarm(monkeypatch) -> None:
     monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM", "scheduled")
     monkeypatch.setenv("MIP_LEADS_WARM_INTERVAL_S", "120")

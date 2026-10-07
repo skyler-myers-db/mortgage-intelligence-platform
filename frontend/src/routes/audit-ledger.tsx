@@ -1,5 +1,9 @@
+import { lazy, Suspense, useState } from 'react';
 import { PageShell } from '../components/layout/PageShell';
 import { AdminAuditExplorer } from '../components/admin/AdminAuditExplorer';
+
+// D-audit-reads-d: its own chunk, fetched on the explicit open only.
+const RefusalReportsPanel = lazy(() => import('../components/admin/RefusalReportsPanel'));
 
 /**
  * Audit ledger — the append-only Lakebase ledger on its own page
@@ -20,8 +24,47 @@ import { AdminAuditExplorer } from '../components/admin/AdminAuditExplorer';
  * Every ledger read the explorer makes (a page, a filter change, a page turn,
  * the rollups) is itself recorded server-side as one VIEW_AUDIT_LEDGER row,
  * so the explorer reads only on an explicit open or interaction: never on
- * hover, prefetch, a poll or window focus.
+ * hover, prefetch, a poll or window focus. The refusal reports below follow
+ * the same rule more strictly: nothing loads with the route; "Show refusal
+ * reports" loads the panel chunk and makes its first (recorded) list read
+ * (deviation:refusal-reports-panel).
  */
+function RefusalReportsSlot() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-grid">
+      <button
+        type="button"
+        className="btn btn--ghost btn--sm"
+        aria-expanded={open}
+        aria-controls={open ? 'refusal-reports' : undefined}
+        onClick={() => setOpen((current) => !current)}
+        data-testid="refusal-reports-toggle"
+      >
+        {open ? 'Hide refusal reports' : 'Show refusal reports'}
+      </button>
+      {open && (
+        <div id="refusal-reports">
+          <Suspense
+            fallback={
+              <div className="surface mt-grid" role="status" aria-busy="true">
+                <div className="surface__hdr">
+                  <span className="skeleton skeleton--heading" aria-hidden="true" />
+                </div>
+                <div className="surface__body surface__body--reserve">
+                  <span className="sr-only">Loading refusal reports</span>
+                </div>
+              </div>
+            }
+          >
+            <RefusalReportsPanel />
+          </Suspense>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AuditLedger() {
   return (
     <PageShell
@@ -30,7 +73,7 @@ export default function AuditLedger() {
       lede="Every governed decision, export and borrower-level read, append-only in Lakebase. Reading this ledger is itself recorded."
     >
       <AdminAuditExplorer />
-      {/* W5c (w5-refusal-capture-sales) mounts RefusalReportsPanel here, behind the same gate. */}
+      <RefusalReportsSlot />
     </PageShell>
   );
 }

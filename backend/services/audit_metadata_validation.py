@@ -21,6 +21,7 @@ from backend.schemas._validators_person_names import (
     contains_human_name_shape,
     titlecase_pair_is_non_person,
 )
+from backend.schemas.approval_request import SKIP_REASONS
 from backend.schemas.borrower_copy_claims import (
     contains_unsupported_borrower_qualification_claim,
 )
@@ -89,6 +90,24 @@ def _metadata_keys_deep(value: Any) -> set[str]:
     return set()
 
 
+# NB-1 (W5c): a masked borrower id is ``B-`` plus 13 upper-case base-36
+# characters, so roughly one in a few thousand carries a ten-digit run that
+# reads as a phone number and used to refuse the whole write (a 500). Only that
+# exact shape, as a list element directly under one of these reviewed id-list
+# paths, skips the free-text scan; every other value at those paths, and the
+# same id anywhere else, is still scanned. Closed on purpose: the public
+# borrower-id pattern is looser and strips first, so it would admit
+# ``B-555-123-4567``.
+_MASKED_BORROWER_ID_RE = re.compile(r"B-[0-9A-Z]{13}")
+_MASKED_ID_LIST_PATHS: frozenset[str] = frozenset(
+    {
+        "metadata.borrower_ids",
+        "metadata.rendered_borrower_ids",
+        *(f"metadata.skipped_by_reason.{reason}" for reason in SKIP_REASONS),
+    }
+)
+
+
 def _metadata_pii_value_paths(value: Any, *, path: str = "metadata") -> set[str]:
     """Return JSON paths whose scalar values contain obvious PII markers.
 
@@ -121,7 +140,14 @@ def _metadata_pii_value_paths(value: Any, *, path: str = "metadata") -> set[str]
             hits.update(_metadata_pii_value_paths(nested, path=f"{path}.{key}"))
         return hits
     if isinstance(value, list):
+        exempt_ids = path in _MASKED_ID_LIST_PATHS
         for idx, nested in enumerate(value):
+            if (
+                exempt_ids
+                and isinstance(nested, str)
+                and _MASKED_BORROWER_ID_RE.fullmatch(nested) is not None
+            ):
+                continue
             hits.update(_metadata_pii_value_paths(nested, path=f"{path}[{idx}]"))
         return hits
     if value is None or isinstance(value, bool | int | float):

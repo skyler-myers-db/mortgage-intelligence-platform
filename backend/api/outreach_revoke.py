@@ -16,7 +16,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from backend.schemas.outreach_revoke import OutreachRevokeRequest, OutreachRevokeResponse
-from backend.services.audit_store import AuditMetadataValueViolation
+from backend.services.audit_store import AuditMetadataValueViolation, AuditPIIError
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.job_trigger import enqueue_lifecycle_trigger
@@ -38,6 +38,10 @@ router = APIRouter(prefix="/outreach", tags=["outreach"])
 
 RepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
+# NB-1: the ledger's PII scan refused the audit payload. A fixed, unaudited
+# 422 (never str(exc), which lists metadata paths, and never the governed-text
+# refusal O1 reserves); the revoke transaction rolled back.
+REVOKE_NOT_RECORDED = "The request could not be recorded."
 
 
 @router.post("/revoke", response_model=OutreachRevokeResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
@@ -82,6 +86,8 @@ def revoke_outreach(
         raise HTTPException(status_code=409, detail=REVOKE_REFUSED_DETAIL[exc.kind]) from exc
     except AuditMetadataValueViolation as exc:
         raise text_policy_refusal(exc) from exc
+    except AuditPIIError as exc:
+        raise HTTPException(status_code=422, detail=REVOKE_NOT_RECORDED) from exc
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     if created:

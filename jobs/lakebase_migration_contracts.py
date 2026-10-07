@@ -54,6 +54,10 @@ _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     # row is ever deleted, so no DELETE.
     "approval_request_batches": ("SELECT", "INSERT", "UPDATE"),
     "approval_request_items": ("SELECT", "INSERT", "UPDATE"),
+    # Consented refusal question text (D-audit-reads-d): written once, then
+    # only purged (question_text -> NULL) by a trigger-enforced UPDATE; never
+    # deleted, so no DELETE.
+    "genie_refusal_report_texts": ("SELECT", "INSERT", "UPDATE"),
 }
 
 _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {
@@ -103,6 +107,7 @@ _APP_ROLE_ROUTINE_PRIVILEGES: dict[tuple[str, str], tuple[str, ...]] = {
     ("enforce_approval_finalize_only", ""): (),
     ("enforce_approval_request_batch_finalize_only", ""): (),
     ("enforce_approval_request_item_transition", ""): (),
+    ("prevent_refusal_text_mutation", ""): (),
 }
 
 # Exact non-internal trigger surface for the dedicated application-state
@@ -210,6 +215,16 @@ _APP_TRIGGER_CONTRACT: dict[
         "mip_app",
         "approval_request_items",
         "trg_approval_request_items_no_remove",
+    ): ("mip_app", "prevent_outreach_evidence_mutation", "", 42),
+    (
+        "mip_app",
+        "genie_refusal_report_texts",
+        "trg_genie_refusal_report_texts_purge_only",
+    ): ("mip_app", "prevent_refusal_text_mutation", "", 19),
+    (
+        "mip_app",
+        "genie_refusal_report_texts",
+        "trg_genie_refusal_report_texts_no_remove",
     ): ("mip_app", "prevent_outreach_evidence_mutation", "", 42),
 }
 

@@ -171,7 +171,7 @@ export function useLeadSalesActions({
     salesInFlightRef.current = true;
     const borrowerId = pendingDisposition;
     const intent = intentFingerprint(
-      'disposition', borrowerId, payload.lo_email, payload.outcome, payload.callback_at, payload.notes,
+      'disposition', borrowerId, payload.lo_email, payload.outcome, payload.callback_at,
     );
     return latched(logDisposition.mutateAsync({ borrowerId, payload, requestId: requestIds.idFor(intent) }).then(
       (result) => {

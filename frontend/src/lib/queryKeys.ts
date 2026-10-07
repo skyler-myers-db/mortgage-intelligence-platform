@@ -70,6 +70,13 @@ export const queryKeys = {
     ['mip', 'audit', 'rollups', period, groupBy ?? 'event_type'] as const,
   auditReceipt: (auditEventId: string | null | undefined) =>
     ['mip', 'audit', 'receipt', auditEventId ?? ''] as const,
+  /**
+   * The refusal-reports page (D-audit-reads-d): every served page writes one
+   * VIEW_AUDIT_LEDGER row, so it is read only on an explicit open, a filter
+   * change, Load more or Retry, and never persisted. Never the question text.
+   */
+  refusalReports: (family: string | null, cursor: string | null) =>
+    ['mip', 'audit', 'refusal-reports', family ?? '', cursor ?? ''] as const,
   genieStart: () => ['mip', 'genie', 'start'] as const,
   growthAgent: () => ['mip', 'growth-agent'] as const,
   growthAgentCapabilities: () => ['mip', 'growth-agent', 'capabilities'] as const,

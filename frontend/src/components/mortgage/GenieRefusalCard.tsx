@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useInRouterContext } from 'react-router';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
-import { ApiError, api } from '../../lib/api';
+import { ApiError } from '../../lib/api';
+import { genieRefusalReportApi, type GenieRefusalReportRequest } from '../../lib/apiClients/genieRefusalReport';
 import { glossaryAnchor } from '../../lib/mortgageGlossary';
+import { useRefusalTextCapture } from '../../lib/optionalQueryReads';
 import { Icon } from '../Icon';
+import { lazyModule, useLazyModule } from './useLazyModule';
 import {
   GENIE_REFUSAL_FAMILIES,
   refusalFamilyFor,
@@ -22,10 +25,16 @@ import './GenieRefusalCard.css';
  *   - "Edit question", which puts the ORIGINAL prompt back in the composer
  *     (client-side only: the panel still holds it until the user leaves);
  *   - the reviewed vocabulary in the glossary;
- *   - "This was legitimate", a hash-only false-positive report. The POST
- *     carries the family and the `refusal_report_hash` the turn returned,
- *     never the question text, and is latched so a double-click cannot
- *     file twice.
+ *   - "This was legitimate", a false-positive report latched so a
+ *     double-click cannot file twice. One click files it hash-only (the
+ *     family and the `refusal_report_hash` the turn returned). When the
+ *     tenant's capture switch is on, the card holds the question and the
+ *     family is not pii_request, it instead reveals the consented step
+ *     (GenieRefusalReportConfirm, D-audit-reads-d), whose "Report with my
+ *     question" adds the question exactly as it was asked. The confirm
+ *     loads through useLazyModule, not lazyWithPreload, because it needs
+ *     props (deviation:genie-refusal-confirm); a chunk that fails to load
+ *     shows a line and never files.
  *
  * The copy explains the product's scope; it never says the guard was wrong.
  * `.genie-answer__refusal*` is a documented BEM extension of the
@@ -45,16 +54,19 @@ interface GenieRefusalCardProps {
 
 const GLOSSARY_HREF = glossaryAnchor('reviewedVocabulary');
 
-type ReportOutcome = { ok: true } | { ok: false; message: string };
+type ReportOutcome = { ok: true; captured: boolean } | { ok: false; message: string };
+
+const REPORT_CONFIRM = lazyModule(() => import('./GenieRefusalReportConfirm'));
+const CONFIRM_UNAVAILABLE = 'The report options could not load. Please try again.';
 
 /**
- * File the hash-only report. Never rejects: a failure becomes its fixed
- * line. Outside the component so the report handler needs no try statement
- * (audit 2026-09-21 `runtime-03`: a try/finally stops the React Compiler).
+ * File the report. Never rejects: a failure becomes its fixed line. Outside
+ * the component so the report handler needs no try statement (audit
+ * 2026-09-21 `runtime-03`: a try/finally stops the React Compiler).
  */
-function fileRefusalReport(body: Parameters<typeof api.genieRefusalReport>[0]): Promise<ReportOutcome> {
-  return api.genieRefusalReport(body).then(
-    (): ReportOutcome => ({ ok: true }),
+function fileRefusalReport(body: GenieRefusalReportRequest): Promise<ReportOutcome> {
+  return genieRefusalReportApi.report(body).then(
+    (result): ReportOutcome => ({ ok: true, captured: result.question_captured === true }),
     (err: unknown): ReportOutcome => ({
       ok: false,
       message:
@@ -95,9 +107,17 @@ export function GenieRefusalCard({
   const family = GENIE_REFUSAL_FAMILIES[reason];
   const chips = refusalRephraseChips(reason);
   const reportHash = payload.refusal_report_hash ?? null;
-  const [reported, setReported] = useState(false);
+  const [reported, setReported] = useState<string | null>(null);
   const [reporting, setReporting] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  // The consented step is offered only when the server would keep the text:
+  // capture on, the question held, and not a refused request for PII.
+  const offerQuestion = useRefusalTextCapture() && Boolean(question) && reason !== 'pii_request';
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const confirmChunk = useLazyModule(REPORT_CONFIRM, confirmOpen);
+  const Confirm = confirmChunk.module?.GenieRefusalReportConfirm ?? null;
+  const confirmId = useId();
+  const reportButtonRef = useRef<HTMLButtonElement>(null);
   // Async latch: a second click before React re-renders the disabled state
   // must not file a second report (mirrors GenieAnswerFeedback).
   const inFlightRef = useRef(false);
@@ -110,34 +130,44 @@ export function GenieRefusalCard({
   useEffect(() => {
     identityRef.current = identity;
     inFlightRef.current = false;
-    setReported(false);
+    setReported(null);
     setReporting(false);
     setReportError(null);
+    setConfirmOpen(false);
   }, [identity]);
 
   useEffect(() => {
     if (reported) reportedRef.current?.focus();
   }, [reported]);
 
-  const report = () => {
+  const report = (withQuestion: boolean) => {
     if (!reportHash || inFlightRef.current || reported) return;
     inFlightRef.current = true;
     setReporting(true);
     setReportError(null);
     const submitted = identity;
-    void fileRefusalReport({
+    const body: GenieRefusalReportRequest = {
       question_hash: reportHash,
       refusal_reason: reason,
       conversation_id: payload.conversation_id ?? null,
       message_id: payload.message_id ?? null,
-    }).then((outcome) => {
+    };
+    if (withQuestion && question) body.question_text = question;
+    void fileRefusalReport(body).then((outcome) => {
       // A report for a card that now shows another refusal changes nothing.
       if (identityRef.current !== submitted) return;
-      if (outcome.ok) setReported(true);
-      else setReportError(outcome.message);
+      if (outcome.ok) {
+        setReported(withQuestion && !outcome.captured ? 'Reported without your question' : 'Reported for review');
+        setConfirmOpen(false);
+      } else setReportError(outcome.message);
       inFlightRef.current = false;
       setReporting(false);
     });
+  };
+
+  const closeConfirm = () => {
+    setConfirmOpen(false);
+    reportButtonRef.current?.focus();
   };
 
   return (
@@ -192,10 +222,13 @@ export function GenieRefusalCard({
         <GlossaryLink />
         {reportHash && !reported && (
           <button
+            ref={reportButtonRef}
             type="button"
             className="btn btn--ghost btn--sm"
-            onClick={() => void report()}
+            onClick={() => (offerQuestion ? setConfirmOpen((open) => !open) : report(false))}
             disabled={reporting}
+            aria-expanded={offerQuestion ? confirmOpen : undefined}
+            aria-controls={offerQuestion && confirmOpen ? confirmId : undefined}
             // WCAG 2.5.3: the accessible name starts with the visible label.
             aria-label="This was legitimate: report this refusal for review"
             data-testid="genie-refusal-report"
@@ -212,10 +245,18 @@ export function GenieRefusalCard({
             tabIndex={-1}
           >
             <Icon name="check" size={12} className="icon-accent" />
-            Reported for review
+            {reported}
           </span>
         )}
       </div>
+      {confirmOpen && !reported && Confirm && question && (
+        <Confirm id={confirmId} question={question} onReport={report} onCancel={closeConfirm} />
+      )}
+      {confirmOpen && confirmChunk.failed && (
+        <p className="genie-answer__refusal-error" role="alert">
+          {CONFIRM_UNAVAILABLE}
+        </p>
+      )}
       {reportError && (
         <p className="genie-answer__refusal-error" role="alert">
           {reportError}

@@ -49,6 +49,9 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "VIEW_LEADS",
         # D-audit-reads-c3: a served cross-actor ledger read (audit_ledger_reads).
         "VIEW_AUDIT_LEDGER",
+        # D-audit-reads-d: an administrator or auditor read one consented
+        # refusal question (fail-closed, before the text is returned).
+        "VIEW_REFUSAL_REPORT_TEXT",
     }
 )
 

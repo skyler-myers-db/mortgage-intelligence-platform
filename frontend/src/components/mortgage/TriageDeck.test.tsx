@@ -82,7 +82,11 @@ const rows = vi.hoisted(() => {
     },
   };
 });
-const session = vi.hoisted(() => ({ canApprove: true as boolean, sessionStatus: 'ready' as 'loading' | 'ready' | 'error' }));
+const session = vi.hoisted(() => ({
+  canApprove: true as boolean,
+  sessionStatus: 'ready' as 'loading' | 'ready' | 'error',
+  canAccessAdmin: true as boolean,
+}));
 
 const draftOutreach = vi.fn();
 const approve = vi.fn();
@@ -101,8 +105,8 @@ vi.mock('../AppContext', async () => {
       setDrawer: vi.fn(),
       showEvidence: true,
       showConfidence: true,
-      canAccessAdmin: true,
       actorEmail: 'approver.one@summit.example',
+      // canAccessAdmin rides `session` (true by default; the receipt-gate cases flip it).
       ...session,
     }),
   };
@@ -119,6 +123,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   },
 }));
 
+import { auditEventHref } from '../../lib/auditLinks';
 import { LeadTable } from './LeadTable';
 
 beforeAll(async () => {
@@ -204,6 +209,7 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     rows.reset();
     session.canApprove = true;
     session.sessionStatus = 'ready';
+    session.canAccessAdmin = true;
     installLocalStorage();
     clearSingleKeyShortcutsPreference();
     draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draftFor(borrowerId)));
@@ -223,8 +229,9 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     container.remove();
   });
 
-  function mount(initialEntry = '/lead-queue') {
+  function mount(initialEntry = '/lead-queue', cachedSession?: { can_access_admin: boolean; can_read_audit: boolean }) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    if (cachedSession) queryClient.setQueryData(['session', 'access'], { ...cachedSession, can_approve: true });
     router = createMemoryRouter([{ path: '/lead-queue', element: <QueueHarness /> }], { initialEntries: [initialEntry] });
     act(() => {
       root.render(
@@ -344,6 +351,29 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     expect(q('[data-testid="triage-status"]')?.textContent).toBe(`Approved ${IDS[0]}. Borrower 2 of 6.`);
     expect(document.activeElement?.textContent).toContain(IDS[1]);
     expect(q('[data-testid="triage-last-receipt"]')?.textContent).toBe(`Approved ${IDS[0]} · audit audit-${IDS[0]}`);
+  });
+
+  it.each([
+    ['an administrator', true, { can_access_admin: true, can_read_audit: true }, true],
+    ['an auditor', false, { can_access_admin: false, can_read_audit: true }, true],
+    ['anyone else', false, { can_access_admin: false, can_read_audit: false }, false],
+  ])('the receipt audit id links into the ledger for %s only when they may read it (flow-04)', async (_who, admin, cached, linked) => {
+    session.canAccessAdmin = admin;
+    mount('/lead-queue', cached);
+    await enterDeck();
+    press('a');
+    await waitForReview();
+    enterOnConfirm();
+    await flush(3);
+    const receipt = q('[data-testid="triage-last-receipt"]');
+    expect(receipt?.textContent).toBe(`Approved ${IDS[0]} · audit audit-${IDS[0]}`);
+    const link = receipt?.querySelector<HTMLAnchorElement>('a.mono');
+    if (linked) {
+      expect(link?.getAttribute('href')).toBe(auditEventHref(`audit-${IDS[0]}`));
+    } else {
+      expect(link).toBeNull();
+      expect(receipt?.querySelector('span.mono')?.textContent).toBe(`audit-${IDS[0]}`);
+    }
   });
 
   it('stays on the card when the approve fails', async () => {

@@ -7,9 +7,15 @@
  *   - a chip asks its text through onFollowUp; "Edit question" hands the
  *     ORIGINAL question back unchanged
  *   - "This was legitimate" POSTs the hash and family only (never the
- *     question), once, and shows the confirmation
+ *     question), once, and shows the confirmation, whenever the consented
+ *     step is not offered (capture off, no question, pii_request, no provider)
+ *   - with capture on it reveals the consented step (D-audit-reads-d): focus
+ *     moves in, each button posts its body (question_text only on "Report with
+ *     my question"), Esc and Cancel return focus, and a hash-only answer to a
+ *     text post reads "Reported without your question"
  *   - without a report hash (older backend) the report control is absent
  */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,12 +31,16 @@ vi.mock('../../lib/api', async () => {
     ...actual,
     api: {
       genieFeedback: vi.fn().mockResolvedValue({ accepted: true }),
-      genieRefusalReport: (...args: unknown[]) => genieRefusalReport(...args),
     },
   };
 });
+vi.mock('../../lib/apiClients/genieRefusalReport', () => ({
+  genieRefusalReportApi: { report: (...args: unknown[]) => genieRefusalReport(...args) },
+}));
 
 import { GenieAnswer } from './GenieAnswer';
+import { GenieRefusalCard } from './GenieRefusalCard';
+import { REFUSAL_CAPTURE_DISCLOSURE } from './GenieRefusalReportConfirm';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -214,5 +224,147 @@ describe('GenieRefusalCard inside GenieAnswer', () => {
     await flush();
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('could not be recorded');
     expect(container.querySelector('[data-testid="genie-refusal-report"]')).not.toBeNull();
+  });
+});
+
+
+/** Wait out the lazy confirm chunk (a dynamic import) and its render. */
+async function settle() {
+  for (let i = 0; i < 4; i += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
+function sessionClient(captureEnabled: boolean): QueryClient {
+  const client = new QueryClient();
+  client.setQueryData(['session', 'access'], {
+    can_access_admin: false,
+    can_approve: false,
+    refusal_text_capture_enabled: captureEnabled,
+  });
+  return client;
+}
+
+describe('GenieRefusalCard consented capture (D-audit-reads-d)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  beforeEach(() => {
+    genieRefusalReport.mockReset();
+    genieRefusalReport.mockResolvedValue({ accepted: true, duplicate: false, report_id: 'r-1', question_captured: true });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function renderCard(options: { capture?: boolean; reason?: GenieRefusalReason; question?: string | null; provider?: boolean } = {}) {
+    const { capture = true, reason = 'unreviewed_criterion', question = QUESTION, provider = true } = options;
+    const card = (
+      <GenieRefusalCard payload={refused(reason, { conversation_id: 'conv-1' })} question={question ?? undefined} />
+    );
+    act(() => root.render(provider ? <QueryClientProvider client={sessionClient(capture)}>{card}</QueryClientProvider> : card));
+  }
+  const reportButton = () => container.querySelector<HTMLButtonElement>('[data-testid="genie-refusal-report"]');
+  const confirm = () => container.querySelector<HTMLElement>('[data-testid="genie-refusal-confirm"]');
+
+  it('reveals the step, names it from the report button and moves focus to its first button', async () => {
+    renderCard();
+    expect(reportButton()?.getAttribute('aria-expanded')).toBe('false');
+    act(() => reportButton()?.click());
+    await settle();
+    const step = confirm();
+    expect(step).not.toBeNull();
+    expect(reportButton()?.getAttribute('aria-expanded')).toBe('true');
+    expect(reportButton()?.getAttribute('aria-controls')).toBe(step?.id);
+    expect(container.querySelector('[data-testid="genie-refusal-question"]')?.textContent).toBe(QUESTION);
+    expect(step?.querySelector('.genie-answer__refusal-disclosure')?.textContent).toBe(REFUSAL_CAPTURE_DISCLOSURE);
+    expect(document.activeElement?.textContent).toBe('Report with my question');
+    expect(genieRefusalReport).not.toHaveBeenCalled();
+  });
+
+  it('"Report with my question" posts the question exactly as asked, once', async () => {
+    renderCard();
+    act(() => reportButton()?.click());
+    await settle();
+    const withButton = container.querySelector<HTMLButtonElement>('[data-testid="genie-refusal-report-with"]');
+    act(() => {
+      withButton?.click();
+      withButton?.click();
+    });
+    await settle();
+    expect(genieRefusalReport).toHaveBeenCalledTimes(1);
+    expect(genieRefusalReport.mock.calls[0][0]).toEqual({
+      question_hash: HASH,
+      refusal_reason: 'unreviewed_criterion',
+      conversation_id: 'conv-1',
+      message_id: null,
+      question_text: QUESTION,
+    });
+    expect(confirm()).toBeNull();
+    const done = container.querySelector<HTMLElement>('.genie-answer__refusal-reported');
+    expect(done?.textContent).toContain('Reported for review');
+    expect(done?.getAttribute('role')).toBe('status');
+    expect(document.activeElement).toBe(done);
+  });
+
+  it('"Report without it" posts the hash-only body', async () => {
+    renderCard();
+    act(() => reportButton()?.click());
+    await settle();
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="genie-refusal-report-without"]')?.click());
+    await settle();
+    const body = genieRefusalReport.mock.calls[0][0] as Record<string, unknown>;
+    expect(body).toEqual({ question_hash: HASH, refusal_reason: 'unreviewed_criterion', conversation_id: 'conv-1', message_id: null });
+    expect('question_text' in body).toBe(false);
+  });
+
+  it('says "Reported without your question" when the server kept the report hash-only', async () => {
+    genieRefusalReport.mockResolvedValueOnce({ accepted: true, duplicate: false, question_captured: false });
+    renderCard();
+    act(() => reportButton()?.click());
+    await settle();
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="genie-refusal-report-with"]')?.click());
+    await settle();
+    expect(container.querySelector('.genie-answer__refusal-reported')?.textContent).toContain('Reported without your question');
+  });
+
+  it('Esc and Cancel close the step and return focus to "This was legitimate"', async () => {
+    renderCard();
+    act(() => reportButton()?.click());
+    await settle();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(confirm()).toBeNull();
+    expect(document.activeElement).toBe(reportButton());
+    expect(reportButton()?.getAttribute('aria-expanded')).toBe('false');
+
+    act(() => reportButton()?.click());
+    await settle();
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="genie-refusal-cancel"]')?.click());
+    expect(confirm()).toBeNull();
+    expect(document.activeElement).toBe(reportButton());
+    expect(genieRefusalReport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['capture is disabled', { capture: false }],
+    ['the refusal was a PII request', { reason: 'pii_request' as const }],
+    ['the card holds no question', { question: null }],
+    ['there is no QueryClientProvider', { provider: false }],
+  ])('files one-click hash-only when %s', async (_label, options) => {
+    renderCard(options);
+    expect(reportButton()?.hasAttribute('aria-expanded')).toBe(false);
+    act(() => reportButton()?.click());
+    await settle();
+    expect(confirm()).toBeNull();
+    expect(genieRefusalReport).toHaveBeenCalledTimes(1);
+    expect('question_text' in (genieRefusalReport.mock.calls[0][0] as object)).toBe(false);
+    expect(container.querySelector('.genie-answer__refusal-reported')?.textContent).toContain('Reported for review');
   });
 });

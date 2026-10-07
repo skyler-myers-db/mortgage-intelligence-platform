@@ -552,7 +552,6 @@ export interface ResponseSchemas {
     callback_at: string | null;
     disposition_id: string;
     lo_email: string;
-    notes: string | null;
     occurred_at: string;
     outcome: "called_no_answer" | "called_left_voicemail" | "connected" | "callback_scheduled" | "application_started" | "not_interested" | "not_now" | "dead";
   };
@@ -1127,6 +1126,8 @@ export interface ResponseSchemas {
     accepted: boolean;
     audit_event_id: string | null;
     duplicate: boolean;
+    /** True when the reporter's question is held for review (stored now, or already held for this report). False for a report without the question or one kept hash-only. */
+    question_captured: boolean;
     report_id: string | null;
   };
   GenieSessionDetailResponse: {
@@ -2070,6 +2071,36 @@ export interface ResponseSchemas {
     /** Week-starting Monday, ISO date (YYYY-MM-DD). */
     week: string;
   };
+  RefusalReportFamilyCount: {
+    count: number;
+    refusal_reason: "protected_class" | "unreviewed_criterion" | "pii_request" | "instruction_override" | "outreach_instruction" | "scope_bypass" | "out_of_scope" | "output_policy" | "unknown";
+  };
+  RefusalReportItem: {
+    audit_event_id: string | null;
+    conversation_id: string | null;
+    /** A consented question text is held (unpurged and unexpired). */
+    has_text: boolean;
+    message_id: string | null;
+    refusal_reason: "protected_class" | "unreviewed_criterion" | "pii_request" | "instruction_override" | "outreach_instruction" | "scope_bypass" | "out_of_scope" | "output_policy" | "unknown";
+    report_id: string;
+    reported_at: string;
+    /** The reporting staff member's identity (actor_email). */
+    reporter: string;
+    text_expires_at: string | null;
+  };
+  RefusalReportListResponse: {
+    /** Reports per refusal family for the whole window (every family filter). */
+    family_counts: ResponseSchemas['RefusalReportFamilyCount'][];
+    items: ResponseSchemas['RefusalReportItem'][];
+    next_cursor: string | null;
+  };
+  RefusalReportQuestionResponse: {
+    captured_at: string;
+    expires_at: string;
+    question_text: string;
+    /** Contact details were masked before the question was kept. */
+    redacted: boolean;
+  };
   RumAcceptedResponse: {
     accepted: number;
     enabled: boolean;
@@ -2262,6 +2293,8 @@ export interface ResponseSchemas {
     lender_name: string | null;
     /** Demo-only: gates demo affordances in product surfaces. Never an authorization input. */
     presenter_mode: boolean;
+    /** Whether a refused Genie question may be attached to a 'This was legitimate' report (settings.mip_genie_refusal_text_capture): the effective tenant switch. False offers only the report without the question. Never an authorization input. */
+    refusal_text_capture_enabled: boolean;
     /** Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), 'Auditor' (a configured auditor, read-only), else 'Workspace user' for a forwarded identity that holds no tier. Empty only when the session holds no tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract. */
     role_labels: string[];
     /** Whether the browser may install the opt-in RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). */
@@ -2560,6 +2593,7 @@ export interface RequestSchemas {
   DispositionRequest: {
     callback_at?: string | null;
     lo_email: string;
+    /** Retired 2026-10: must be absent, null or blank; free-text disposition notes are no longer accepted */
     notes?: string | null;
     occurred_at?: string | null;
     outcome: "called_no_answer" | "called_left_voicemail" | "connected" | "callback_scheduled" | "application_started" | "not_interested" | "not_now" | "dead";
@@ -2683,11 +2717,19 @@ export interface RequestSchemas {
     message_id: string;
     progress_token: string;
   };
-  /** Hash-only report body. There is deliberately no field for prompt text. */
+  /**
+   * Report body. The question text is optional and consented.
+   *
+   * ``question_text`` is sent only when the reporter chose "Report with my
+   * question"; it is checked against ``question_hash`` and stored, if at all,
+   * only in ``genie_refusal_report_texts`` (never on the report row).
+   */
   GenieRefusalReportRequest: {
     conversation_id?: string | null;
     message_id?: string | null;
     question_hash: string;
+    /** Only when the reporter opts in: the refused question exactly as it was asked. It must hash to question_hash; it is kept, scrubbed and for 90 days, only when capture is enabled, it names no person or borrower, and the reporter's own ledger holds the refusal. */
+    question_text?: string | null;
     refusal_reason: "protected_class" | "unreviewed_criterion" | "pii_request" | "instruction_override" | "outreach_instruction" | "scope_bypass" | "out_of_scope" | "output_policy" | "unknown";
   };
   GrowthAgentCustomRunRequest: {
@@ -3338,6 +3380,27 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['DecisionReceipt'];
+  };
+  "GET /api/v1/audit/refusal-reports": {
+    pathParams: Record<string, never>;
+    query: {
+      since?: string | null;
+      family?: "protected_class" | "unreviewed_criterion" | "pii_request" | "instruction_override" | "outreach_instruction" | "scope_bypass" | "out_of_scope" | "output_policy" | "unknown" | null;
+      limit?: number;
+      cursor?: string | null;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['RefusalReportListResponse'];
+  };
+  "GET /api/v1/audit/refusal-reports/{report_id}/question": {
+    pathParams: {
+      report_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['RefusalReportQuestionResponse'];
   };
   "GET /api/v1/audit/rollups": {
     pathParams: Record<string, never>;
