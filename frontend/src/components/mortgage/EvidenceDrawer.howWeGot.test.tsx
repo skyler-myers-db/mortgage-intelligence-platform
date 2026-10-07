@@ -214,10 +214,15 @@ describe('EvidenceDrawer How we got and Under the hood', () => {
   it('asks nothing while the retained drawer is closing', async () => {
     const client = await render(ITM_KPI);
     expect(apiMocks.kpiProof).toHaveBeenCalledTimes(1);
+    // Non-vacuity for the freshness gate: the open drawer read it once.
+    expect(apiMocks.assetFreshness).toHaveBeenCalledTimes(1);
     client.clear();
     appMocks.drawer = null;
     await render(null as unknown as DrawerSource, client);
     expect(apiMocks.kpiProof).toHaveBeenCalledTimes(1);
+    // The closing drawer re-reads neither the proof nor the freshness
+    // (EvidenceFreshness is enabled only while `open`).
+    expect(apiMocks.assetFreshness).toHaveBeenCalledTimes(1);
   });
 
   it('starts every open on Overview and marks the dialog for field attribution', async () => {
