@@ -1,7 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 import { NavLink } from 'react-router';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
+import { useRouteNavDock } from '../../hooks/useRouteNavDock';
 import { saveDataRequested } from '../../lib/prefetch';
 import { prefetchRouteData } from '../../lib/routeDataPrefetch';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
@@ -56,6 +58,10 @@ export function RouteNav() {
   const canAccessAdmin = useAdminNavigationAccess();
   const canReadLedger = useAuditLedgerAccess();
   const queryClient = useQueryClient();
+  // Docked (sticky) only while the measured nav is at most a sixth of the
+  // scroller (hooks/useRouteNavDock, report 12.4 #5).
+  const navRef = useRef<HTMLElement>(null);
+  useRouteNavDock(navRef);
   // Intent (hover / focus) preloads the route chunk. Analytics alone also
   // prefetches its unfiltered hero reads (non-audited aggregates, audit
   // delivery-03), unless the browser asks to save data. Home prefetches no
@@ -74,7 +80,7 @@ export function RouteNav() {
     .filter((id) => (id === 'admin' ? canAccessAdmin : id === 'auditLedger' ? canReadLedger && !canAccessAdmin : true))
     .map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] }));
   return (
-    <nav aria-label="Main navigation" className="route-nav">
+    <nav ref={navRef} aria-label="Main navigation" className="route-nav">
       {items.map((i) => {
         const end = i.to === '/';
         return (

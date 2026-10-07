@@ -349,18 +349,33 @@
   backdrop-filter: blur(8px);
   flex-wrap: wrap;
 }
-/* Docked only with the vertical room for it: the Offer decision bar's
-   breakpoint (routes/offer-orchestrator.action-bar.css). In rem, so it tracks
-   browser zoom: at 400% (1440x900 is then 360x225) the wrapped, sticky nav
-   covered the whole .main scrollport, so no heading or content could be
-   scrolled into view (WCAG 1.4.10 Reflow; wave-1c follow-up #14). Below it
-   the nav is in flow and scrolls away with the page. */
-@media (min-height: 40rem) {
-  .route-nav {
-    position: sticky;
-    top: 0;
-    z-index: var(--z-sticky);
-  }
+/* Docked (sticky) only while the nav is at most one sixth of .main's
+   content box, MEASURED (hooks/useRouteNavDock sets data-docked; report
+   12.4 #5): the one-line 57px nav docks from a 342px scrollport, so a
+   1366x768 laptop keeps it, and a wrapped nav needs proportionally more. It
+   replaces a fixed 40rem height query. At 400% zoom (1440x900 is then
+   360x225) a wrapped, sticky nav covered the whole scrollport, so no heading
+   or content could be scrolled into view (WCAG 1.4.10 Reflow; wave-1c
+   follow-up #14). Fails safe: without the measurement the nav is in flow and
+   scrolls away with the page. */
+.route-nav[data-docked] {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+}
+/* The measured nav block, written on .main: not inherited, so a write
+   re-styles .main alone. The clearance derived from it while docked
+   (38-focus-clearance.css) is a length every descendant inherits; 0px while
+   undocked, so nothing clears a nav that scrolls away. */
+@property --route-nav-block {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --nav-clear {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
 }
 /* Route nav links (2026-09-21 audit visual-05, M part). APP-ADDED ELEMENT:
    the prototype has a rail plus `.segmented` (design_files/index.html:

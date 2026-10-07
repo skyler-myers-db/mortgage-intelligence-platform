@@ -11,6 +11,7 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import { PRIMARY_ASSET_KEY } from './data/dataEstate';
+import { gapBelowRouteNav, settleFrames, tableUpUnderRouteNav } from './focusWalk';
 import { asComputedRgb, contrastRatio, parseRgb, renderedColors, settleTransitions, tokenValue } from './renderedColor';
 import { expect, test, type FixtureTheme } from './test';
 
@@ -456,24 +457,121 @@ async function hitTestableWhileScrolling(page: Page, targets: Locator[]): Promis
   }, handles);
 }
 
-test.describe('route nav docks only with vertical room (follow-up #14)', () => {
-  for (const path of ['/', '/lead-queue']) {
-    test(`320x256 (400% zoom) on ${path}: the nav is in flow and the heading and first panel can be reached`, async ({ app, page }) => {
-      await page.setViewportSize({ width: 320, height: 256 });
-      await app.gotoRoute(path);
-      expect(await page.locator('.route-nav').evaluate((el) => getComputedStyle(el).position)).toBe('static');
-      const heading = page.locator('#main-content h1').first();
-      const surface = page.locator('#main-content .surface').first();
-      await expect(surface).toBeAttached();
-      expect(await hitTestableWhileScrolling(page, [heading, surface])).toEqual([true, true]);
+/** The nav's block size, `.main`'s content box and whether the nav is sticky (and marked docked). */
+async function dockState(page: Page): Promise<{ nav: number; scrollport: number; sticky: boolean; docked: boolean }> {
+  return page.locator('.main').evaluate((main) => {
+    const nav = main.querySelector<HTMLElement>(':scope > .route-nav');
+    if (!nav) throw new Error('no route nav in .main');
+    const style = getComputedStyle(main);
+    return {
+      nav: nav.getBoundingClientRect().height,
+      scrollport: main.clientHeight - Number.parseFloat(style.paddingTop) - Number.parseFloat(style.paddingBottom),
+      sticky: getComputedStyle(nav).position === 'sticky',
+      docked: nav.hasAttribute('data-docked'),
+    };
+  });
+}
+
+/** The ruling (report 12.4 #5): sticky exactly when six navs fit `.main`'s content box. */
+async function expectDockInvariant(page: Page, label: string): Promise<{ nav: number; scrollport: number; sticky: boolean }> {
+  await expect.poll(async () => {
+    const state = await dockState(page);
+    return state.sticky === state.nav * 6 <= state.scrollport && state.docked === state.sticky;
+  }, { message: `${label}: sticky iff navHeight * 6 <= .main content box` }).toBe(true);
+  return dockState(page);
+}
+
+/**
+ * Off Linux the nav's labels are widened toward Linux Chromium's wider text
+ * (the LINUX_TEXT_EMULATION pattern of charts.fixture.spec.ts), so a nav that
+ * wraps on CI wraps here too.
+ */
+const NAV_TEXT_EMULATION = '.route-nav__label { letter-spacing: 0.5px; }';
+
+test.describe('route nav docks by its measured share of the scrollport (report 12.4 #5, follow-up #14)', () => {
+  for (const [width, height] of [[1440, 900], [1366, 768], [1366, 660], [1366, 620], [1280, 720]] as const) {
+    test(`${width}x${height}: the nav is docked on /lead-queue`, async ({ app, page }) => {
+      await page.setViewportSize({ width, height });
+      await app.gotoRoute('/lead-queue');
+      const state = await expectDockInvariant(page, `${width}x${height}`);
+      expect(state.sticky, `${width}x${height}: docked (${state.nav}px nav, ${state.scrollport}px scrollport)`).toBe(true);
     });
   }
 
-  for (const [width, height] of [[1440, 900], [1366, 768]] as const) {
-    test(`${width}x${height}: the nav stays docked`, async ({ app, page }) => {
-      await page.setViewportSize({ width, height });
-      await app.gotoRoute('/lead-queue');
-      expect(await page.locator('.route-nav').evaluate((el) => getComputedStyle(el).position)).toBe('sticky');
-    });
+  for (const [width, height] of [[720, 450], [360, 225], [320, 256]] as const) {
+    for (const path of ['/', '/lead-queue']) {
+      test(`${width}x${height} on ${path}: the nav is in flow and the heading and first panel can be reached`, async ({ app, page }) => {
+        await page.setViewportSize({ width, height });
+        await app.gotoRoute(path);
+        const state = await expectDockInvariant(page, `${width}x${height} ${path}`);
+        expect(state.sticky, `${width}x${height}: in flow (${state.nav}px nav, ${state.scrollport}px scrollport)`).toBe(false);
+        expect(await page.locator('.route-nav').evaluate((el) => getComputedStyle(el).position)).toBe('static');
+        const heading = page.locator('#main-content h1').first();
+        const surface = page.locator('#main-content .surface').first();
+        await expect(surface).toBeAttached();
+        expect(await hitTestableWhileScrolling(page, [heading, surface])).toEqual([true, true]);
+      });
+    }
   }
+
+  test('375x812: the invariant holds on a phone', async ({ app, page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await app.gotoRoute('/lead-queue');
+    await expectDockInvariant(page, '375x812');
+  });
+
+  test('1366x620 with the Console open: the nav wraps past a sixth and goes in flow', async ({ app, page }) => {
+    await page.setViewportSize({ width: 1366, height: 620 });
+    await app.gotoRoute('/lead-queue');
+    if (process.platform !== 'linux') await page.addStyleTag({ content: NAV_TEXT_EMULATION });
+    expect((await dockState(page)).docked, 'precondition: docked with the Console closed').toBe(true);
+    await app.openConsole();
+    // Non-vacuity: the open Console's gutter wraps the nav to two lines.
+    await expect.poll(() => page.locator('.route-nav').evaluate((el) => (el as HTMLElement).offsetHeight)).toBeGreaterThanOrEqual(97);
+    const state = await expectDockInvariant(page, '1366x620, Console open');
+    expect(state.sticky, `in flow (${state.nav}px nav, ${state.scrollport}px scrollport)`).toBe(false);
+  });
+
+  test('1024x768 with the Console open (bottom sheet): the sheet shrinks the content box and the nav goes in flow', async ({ app, page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await app.gotoRoute('/lead-queue');
+    await app.openConsole();
+    const state = await expectDockInvariant(page, '1024x768, Console open');
+    expect(state.sticky, `in flow (${state.nav}px nav, ${state.scrollport}px content box)`).toBe(false);
+  });
+
+  test('a wrapped, docked nav clears the row controls Shift+Tab walks up under it', async ({ app, page }) => {
+    // The widest 768px-tall viewport at which the nav wraps while it still
+    // docks (1024x768 first); the wrap is asserted, never assumed.
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await app.gotoRoute('/lead-queue');
+    if (process.platform !== 'linux') await page.addStyleTag({ content: NAV_TEXT_EMULATION });
+    let wrapped: { width: number; nav: number } | null = null;
+    for (const width of [1024, 1000, 980, 960, 940, 920, 900, 880, 860, 840, 820, 800]) {
+      await page.setViewportSize({ width, height: 768 });
+      const state = await expectDockInvariant(page, `${width}x768`);
+      if (state.nav > 57 && state.sticky) {
+        wrapped = { width, nav: state.nav };
+        break;
+      }
+    }
+    expect(wrapped, 'precondition: a 768px-tall viewport where the nav wraps and stays docked').not.toBeNull();
+    const { width, nav } = wrapped ?? { width: 0, nav: 0 };
+    test.info().annotations.push({ type: 'wrapped-nav', description: `${width}x768: a ${nav}px nav, docked` });
+    expect(nav, 'precondition: wrapped').toBeGreaterThan(57);
+
+    const start = await tableUpUnderRouteNav(page);
+    await start.focus();
+    await settleFrames(page);
+    const gaps: number[] = [];
+    for (let press = 0; press < 8; press += 1) {
+      await page.keyboard.press('Shift+Tab');
+      await settleFrames(page);
+      const active = page.locator(':focus');
+      if (!(await active.evaluate((el) => Boolean(el.closest('tr[data-borrower-row]'))))) continue;
+      gaps.push(await gapBelowRouteNav(active));
+    }
+    expect(gaps.length, 'non-vacuity: Shift+Tab stopped on row controls').toBeGreaterThan(2);
+    for (const gap of gaps) expect(gap, `every row stop sits below the ${nav}px nav (gaps ${gaps.join(', ')})`).toBeGreaterThanOrEqual(-0.5);
+  });
 });

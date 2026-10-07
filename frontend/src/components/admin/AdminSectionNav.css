@@ -10,10 +10,11 @@
 
    One line, never wrapping: it scrolls sideways instead, so its block size is
    exact and the sections below can clear it. With the vertical room for it
-   (the route nav's own 40rem condition) it is sticky directly under the
-   one-line route nav, whose block size is the expression
-   38-focus-clearance.css documents (57px at 1440x900), below the route nav's
-   --z-sticky. */
+   (40rem) it is sticky directly under the route nav while that is docked,
+   at the route nav's MEASURED block size (--nav-clear less the ring:
+   38-focus-clearance.css, report 12.4 #5; a wrapped, docked nav included),
+   and at the top of .main while the route nav is in flow (--nav-clear is
+   0px then); below the route nav's --z-sticky. */
 
 /* The sections sit in one wrapper (the scroll-margin scope below), so the
    shell's direct-child surface rules (09-console-and-layout.css
@@ -69,7 +70,7 @@
 @media (min-height: 40rem) {
   .admin-section-nav {
     position: sticky;
-    inset-block-start: calc(var(--sp-3) * 2 + var(--sp-8) + 1px);
+    inset-block-start: max(0px, calc(var(--nav-clear) - var(--focus-ring-width) - var(--focus-ring-offset)));
     z-index: var(--z-raised-4);
   }
 
