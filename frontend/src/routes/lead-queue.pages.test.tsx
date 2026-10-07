@@ -160,6 +160,12 @@ describe('useLeadQueuePages', () => {
     });
     await settle();
     expect(fetchMock.calls).toHaveLength(1);
+
+    // A decision taken elsewhere invalidated the view (now stale): returning
+    // to the queue still shows the loaded pages with no GET.
+    await unmount();
+    await mount();
+    expect(fetchMock.calls, 'a remount of an invalidated view reads nothing').toHaveLength(1);
     expect(pages().data?.leads).toHaveLength(500);
   });
 
@@ -195,6 +201,8 @@ describe('useLeadQueuePages', () => {
     await act(async () => {
       pages().paging.loadNext();
     });
+    // TanStack notifies observers on a 0 ms timer: let it land (the page stays held).
+    await settle();
     expect(pages().paging.fetchingNext).toBe(true);
     await act(async () => {
       pages().paging.loadNext();
