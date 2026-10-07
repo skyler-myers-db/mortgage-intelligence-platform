@@ -233,6 +233,34 @@ describe('USChoroplethMapZctaLevel', () => {
     expect(handlers.onSelectZip).toHaveBeenCalledWith('60611');
   });
 
+  it('leaves the ctrl / cmd zoom chords to the browser on a focused ZCTA; only the bare keys zoom the map (WCAG 1.4.4)', async () => {
+    await render();
+    await until(() => svg() !== null);
+    const first = unit('60611') as SVGPathElement;
+    act(() => first.focus());
+    const fitted = svg()?.getAttribute('viewBox');
+    const press = (key: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      // Set explicitly, whatever the environment's KeyboardEvent init keeps.
+      for (const [name, value] of Object.entries(modifiers)) Object.defineProperty(event, name, { value });
+      act(() => {
+        first.dispatchEvent(event);
+      });
+      return event.defaultPrevented;
+    };
+    const chords = [
+      press('=', { ctrlKey: true }),
+      press('=', { metaKey: true }),
+      press('-', { ctrlKey: true }),
+      press('0', { metaKey: true }),
+      press('+', { altKey: true }),
+    ];
+    expect(chords, 'no chord is prevented').toEqual([false, false, false, false, false]);
+    expect(svg()?.getAttribute('viewBox'), 'no chord moved the map').toBe(fitted);
+    expect(press('+')).toBe(true);
+    expect(svg()?.getAttribute('viewBox')).not.toBe(fitted);
+  });
+
   it('deep-links once per click on a populated ZCTA and never from context', async () => {
     await render();
     await until(() => svg() !== null);

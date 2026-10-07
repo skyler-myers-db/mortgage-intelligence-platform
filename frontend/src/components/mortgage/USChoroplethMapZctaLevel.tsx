@@ -228,7 +228,10 @@ function ZctaStage({
       return unit && svg.contains(unit) ? unit.getAttribute(UNIT_ATTR) : null;
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (onKey(event.key)) {
+      // Only the bare + = - 0 zoom the map: a ctrl / cmd / alt chord (the
+      // browser's own text zoom, WCAG 1.4.4) is left to the browser.
+      const chord = event.ctrlKey || event.metaKey || event.altKey;
+      if (!chord && onKey(event.key)) {
         event.preventDefault();
         return;
       }

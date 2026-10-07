@@ -14,7 +14,9 @@
  *    and the page would zoom. A plain wheel is never taken: the page scrolls.
  *  - A pointer drag pans (pointer capture); a drag past 4px swallows the one
  *    click that ends it, so panning never opens a ZIP's Lead Queue.
- *  - `onKey` answers + (and =), - and 0 for the stage's keydown listener.
+ *  - `onKey` answers + (and =), - and 0 for the stage's keydown listener,
+ *    which passes only unmodified keys: a ctrl / cmd / alt chord is the
+ *    browser's own zoom (WCAG 1.4.4) and is never taken.
  *  - motion-10: the first frame is the national `from` view, tweened to the
  *    fit over --dur-slow; instant under prefers-reduced-motion, and the first
  *    user gesture stops it where it is.
