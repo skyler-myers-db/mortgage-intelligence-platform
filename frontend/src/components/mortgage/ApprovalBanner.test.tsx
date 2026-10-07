@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { outreachMutationKeys } from '../../lib/mutations/outreach';
 import { APPROVE_OUTREACH_LABEL, ApprovalBanner } from './ApprovalBanner';
+
+const BORROWER = 'B-0000000000001';
+
+/** A client whose cache holds a decision on the wire for `borrowerId` (never settles). */
+function clientWithPending(decision: 'approve' | 'reject', borrowerId: string): QueryClient {
+  const client = new QueryClient();
+  const mutation = client.getMutationCache().build(client, {
+    mutationKey: decision === 'approve' ? outreachMutationKeys.approve : outreachMutationKeys.reject,
+    mutationFn: () => new Promise(() => undefined),
+  });
+  void mutation.execute({ decision, borrowerId, requestId: 'req-1', body: {} });
+  return client;
+}
 
 /**
  * ApprovalBanner busy-state contract (R5-11, 2026-04-23).
@@ -111,5 +126,40 @@ describe('ApprovalBanner', () => {
     expect(one).toContain('1 borrower pending review.');
     const many = renderToStaticMarkup(<ApprovalBanner count={4} />);
     expect(many).toContain('4 borrowers pending review.');
+  });
+
+  describe('a decision in flight from any surface (stack-09 item 5)', () => {
+    const banner = (client: QueryClient, borrowerId: string | null = BORROWER) => renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <ApprovalBanner borrowerId={borrowerId} onApprove={() => undefined} onReject={() => undefined} />
+      </QueryClientProvider>,
+    );
+
+    it('a pending approve for this borrower: busy, both buttons disabled, one status line', () => {
+      const html = banner(clientWithPending('approve', BORROWER));
+      expect(html).toContain('aria-busy="true"');
+      expect((html.match(/<button[^>]*disabled/g) ?? []).length).toBe(2);
+      expect(html).toMatch(/<div class="approval__sub" role="status" data-testid="approval-pending">Approval being recorded…<\/div>/);
+      // Pessimistic: never an approved state before the write returns.
+      expect(html).not.toMatch(/\bApproved\b/);
+    });
+
+    it('a pending reject reads as a rejection being recorded', () => {
+      expect(banner(clientWithPending('reject', BORROWER))).toContain('Rejection being recorded…');
+    });
+
+    it('another borrower\'s decision, or none, leaves the banner idle', () => {
+      const idle = banner(clientWithPending('approve', 'B-0000000000002'));
+      expect(idle).toContain('aria-busy="false"');
+      expect(idle).not.toMatch(/<button[^>]*disabled/);
+      expect(idle).toMatch(/<div class="sr-only" role="status" data-testid="approval-pending"><\/div>/);
+      expect(banner(clientWithPending('approve', BORROWER), null)).toContain('aria-busy="false"');
+    });
+
+    it('renders idle without a QueryClientProvider (the inert fallback client)', () => {
+      const html = renderToStaticMarkup(<ApprovalBanner borrowerId={BORROWER} />);
+      expect(html).toContain('aria-busy="false"');
+      expect(html).toContain(APPROVE_OUTREACH_LABEL);
+    });
   });
 });

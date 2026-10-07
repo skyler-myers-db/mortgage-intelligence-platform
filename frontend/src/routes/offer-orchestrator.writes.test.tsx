@@ -489,10 +489,14 @@ describe('Offer Orchestrator writes', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(apiMocks.approve).not.toHaveBeenCalled();
+    expect(button('Approve outreach').disabled).toBe(true);
     await act(async () => {
       releaseQueueWrite({ approved: true });
     });
     await waitUntil(() => !isDecisionPending(queryClient, ID));
+    // The banner holds both buttons disabled while the queue's decision is on
+    // the wire (stack-09 item 5): let its mutation-state read settle first.
+    await waitUntil(() => !button('Approve outreach').disabled);
     await act(async () => {
       button('Approve outreach').click();
     });

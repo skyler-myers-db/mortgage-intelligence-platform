@@ -1,6 +1,7 @@
 import { useId, useRef } from 'react';
 import { Icon } from '../Icon';
 import { Button } from '../Primitives';
+import { usePendingApprovalBanner } from './usePendingApprovalBanner';
 
 /**
  * ApprovalBanner — prototype `.approval` BEM. Gradient amber banner with
@@ -27,6 +28,14 @@ import { Button } from '../Primitives';
  * One approve label (audit critic-11): the primary action always reads
  * APPROVE_OUTREACH_LABEL, the word the surrounding prose uses too; the
  * approveLabel / rejectLabel overrides had no caller and are gone.
+ *
+ * A decision in flight from ANY surface (audit stack-09 item 5;
+ * deviation:approval-pending-line): given `borrowerId`, the banner reads the
+ * shared mutation cache, so an approve or reject for that borrower started
+ * elsewhere (the Lead Queue row, another view of the same cache) makes it
+ * busy too: aria-busy, both buttons disabled, and one role=status
+ * `.approval__sub` line, 'Approval being recorded…' or 'Rejection being
+ * recorded…'. Pessimistic: it never shows 'approved' before the write returns.
  */
 
 /** The approve button's one label, everywhere the banner renders. */
@@ -54,7 +63,11 @@ interface ApprovalBannerProps {
   approverGate?: string | null;
   /** The signed-in actor's own forwarded identity, when the edge sent one. */
   actorEmail?: string | null;
+  /** The borrower this gate decides: a decision for it in flight anywhere makes the banner busy. */
+  borrowerId?: string | null;
 }
+
+const PENDING_LINE = { approve: 'Approval being recorded…', reject: 'Rejection being recorded…' } as const;
 
 export function ApprovalBanner({
   text,
@@ -67,6 +80,7 @@ export function ApprovalBanner({
   isSubmitting,
   approverGate = null,
   actorEmail = null,
+  borrowerId = null,
 }: ApprovalBannerProps) {
   const sub =
     text ?? `${count} borrower${count === 1 ? '' : 's'} pending review.`;
@@ -74,7 +88,8 @@ export function ApprovalBanner({
   // double-click within the same microtask can't fire two POSTs even
   // when the caller doesn't pass `isSubmitting`.
   const inFlightRef = useRef<boolean>(false);
-  const busy = Boolean(isSubmitting);
+  const pendingDecision = usePendingApprovalBanner(borrowerId);
+  const busy = Boolean(isSubmitting) || pendingDecision !== null;
   const gated = approverGate !== null;
   const gateId = useId();
 
@@ -120,6 +135,11 @@ export function ApprovalBanner({
             Approving as <span className="mono">{actorEmail}</span>
           </div>
         )}
+        {/* Always mounted, so the line is announced when a decision starts;
+            empty, it takes no room. */}
+        <div className={pendingDecision ? 'approval__sub' : 'sr-only'} role="status" data-testid="approval-pending">
+          {pendingDecision ? PENDING_LINE[pendingDecision] : ''}
+        </div>
       </div>
       <div className="approval__actions">
         <Button
@@ -142,7 +162,9 @@ export function ApprovalBanner({
           aria-describedby={gated ? gateId : undefined}
           title={approverGate ?? undefined}
         >
-          {busy ? 'Submitting…' : APPROVE_OUTREACH_LABEL}
+          {/* The caller's own write swaps the label; a decision from another
+              surface is told by the status line, the button keeps its name. */}
+          {isSubmitting ? 'Submitting…' : APPROVE_OUTREACH_LABEL}
         </Button>
       </div>
     </div>

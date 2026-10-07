@@ -197,6 +197,7 @@ export function OfferActionBar({
           isSubmitting={isSubmitting}
           approverGate={approverGate}
           actorEmail={actorEmail}
+          borrowerId={borrowerId}
         />
       </div>
     </section>
