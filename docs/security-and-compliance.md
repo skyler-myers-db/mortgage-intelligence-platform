@@ -72,7 +72,9 @@ Genie surface.** Its posture:
 - **Tenant switch.** `MIP_GENIE_REFUSAL_TEXT_CAPTURE` (`enabled` |
   `disabled`). The runtime default is `disabled` (fail-closed); the deploy
   payload ships `enabled` unless the lender sets `disabled`. Off, every report
-  is hash-only.
+  is hash-only. Switching capture off does not purge questions already kept;
+  they remain readable to administrators and auditors until their 90-day
+  expiry.
 - **PII gate.** A refused PII request never keeps its text, and neither does
   a question that names a person or a borrower (the prompt guards' PII and
   identity matches, the human-name shape, the borrower-copy contextual name,

@@ -788,7 +788,9 @@ deploy payload ships `enabled` unless the environment or `.env.local` sets
 `disabled`, and `./scripts/deploy.sh` step 0 refuses any other value. A bare
 UI deploy drops every payload env var, so capture turns OFF there (never
 on): a lender who set `disabled` keeps it, but one who wants capture must
-deploy with `./scripts/deploy.sh`. Kept questions expire after 90 days: an
+deploy with `./scripts/deploy.sh`. Switching capture off does not purge
+questions already kept; they remain readable to administrators and auditors
+until their 90-day expiry. Kept questions expire after 90 days: an
 hourly App loop (structured event `refusal_text_purged`, a count only;
 `refusal_text_purge_failed` on an error) plus a bounded sweep on every report
 and auditor read null the text in place; the report and its audit rows stay.
