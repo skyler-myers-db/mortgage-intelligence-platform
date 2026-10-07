@@ -822,8 +822,9 @@ and governed-action HMAC key rotation, use
 ## Presenter mode (demo workspaces only)
 
 `MIP_PRESENTER_MODE` (default off) shows demo-only affordances to every user
-of a deployment; today that is the PROTOTYPE "Preview borrower view" on the
-Offer page, whose module is not even downloaded when the flag is off. It
+of a deployment: the PROTOTYPE "Preview borrower view" on the Offer page and
+the M1-M4 roadmap rail slots, neither of whose modules is downloaded when the
+flag is off. It
 gates no guard, approval, audit or data path, and it is never an
 authorization input. The deploy payload accepts `0`/`false`/`no`/`off`/empty
 (off: the variable is omitted) or `1`/`true`/`yes`/`on` (on: the App receives

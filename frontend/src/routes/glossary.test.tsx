@@ -70,7 +70,8 @@ describe('GlossaryRoute hash targets', () => {
   it('styles the target from tokens and clears the sticky route nav', () => {
     const css: string = readFileSync(join(process.cwd(), 'src', 'routes', 'glossary.css'), 'utf8');
 
-    expect(css).toMatch(/\.glossary-section,\s*\.glossary-entry\s*\{\s*scroll-margin-top:\s*var\(--sp-16\);/);
+    // The docked route nav's measured clearance (0 while it is in flow; report 12.4 #5).
+    expect(css).toMatch(/\.glossary-section,\s*\.glossary-entry\s*\{\s*scroll-margin-top:\s*var\(--nav-clear\);/);
     expect(css).toMatch(
       /\.glossary-entry:target,\s*\.glossary-entry\.is-target\s*\{\s*background:\s*var\(--accent-soft\);/,
     );

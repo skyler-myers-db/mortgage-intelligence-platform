@@ -18,8 +18,10 @@
  *     Home's WHY NOW rate move and the watchlist briefings card        8
  *  J. W5c w5-evidence-drawer: a Home KPI drawer's How we got and
  *     its Under the hood tab                                           4
+ *  K. W5c: Home with the presenter-mode roadmap rail (M1-M4)           2
+ *  L. W5c w5-lead-queue-paging: the Lead Queue paged footer            2
  *                                                                     --
- *                                                                    116
+ *                                                                    120
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -32,9 +34,10 @@
 import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
 import { enterState, prepareState, type FixtureState } from './fixtureStates';
-import type { HomeSummary } from '../../../src/types';
+import type { HomeSummary, SessionResponse } from '../../../src/types';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
 import { registerPagedQueue } from './data/leadPages';
+import { PRESENTER_SESSION } from './data/shell';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
 import { expect, test } from './test';
@@ -174,6 +177,15 @@ for (const theme of FIXTURE_THEMES) {
       expectNoAuditedReadSince(mockApi, naturalLoad, 'home · why now rate move');
     });
 
+    // K (W5c w5-shell-nav-followups): the M1-M4 roadmap slots, presenter mode only.
+    test('home · presenter rail', async ({ app, mockApi, page }) => {
+      mockApi.register('GET', '/api/session', () => json<SessionResponse>(PRESENTER_SESSION));
+      const { naturalLoad } = await load(app, mockApi, route('home'), theme);
+      await expect(page.locator('.rail button.rail__item--disabled')).toHaveCount(4);
+      await check(page, 'home', theme, 'presenter-rail');
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'home · presenter rail');
+    });
+
     // E: compact density.
     test('lead-queue · compact density', async ({ app, mockApi, page }) => {
       await app.setDensity('compact');
@@ -183,7 +195,7 @@ for (const theme of FIXTURE_THEMES) {
       expectNoAuditedReadSince(mockApi, naturalLoad, 'lead-queue · compact');
     });
 
-    // W5c w5-lead-queue-paging: the paged footer after one Load next (the
+    // L (W5c w5-lead-queue-paging): the paged footer after one Load next (the
     // next-page control, the polite status line). Load next is the reader's
     // own audited read, so this capture makes no no-audited-read claim.
     test('lead-queue · paged footer', async ({ app, mockApi, page }) => {

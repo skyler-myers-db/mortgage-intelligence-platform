@@ -158,8 +158,9 @@ function sourceSummary(sources: SourceSummary[] | undefined, loading = false, er
 
 /**
  * Presenter mode (D-shell-deviations-e1): whether this deployment shows the
- * demo-only affordances. The OFF detail names only the PROTOTYPE borrower
- * view until the roadmap rail slots are gated too (D-shell-deviations-e2).
+ * demo-only affordances, the PROTOTYPE borrower view and the M1-M4 roadmap
+ * rail slots (both gated since W5c, D-shell-deviations-e2), so the OFF
+ * detail covers them all.
  */
 function presenterModeSummary(presenterMode: boolean): ReadinessItem {
   return presenterMode
@@ -175,7 +176,7 @@ function presenterModeSummary(presenterMode: boolean): ReadinessItem {
         value: 'Off',
         status: 'customer mode',
         tone: 'success',
-        detail: 'The PROTOTYPE borrower view is hidden.',
+        detail: 'Demo-only affordances are hidden.',
       };
 }
 
