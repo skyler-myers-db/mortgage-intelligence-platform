@@ -110,13 +110,13 @@ export function useBorrowerSearch(query: string, { enabled = true }: BorrowerSea
     return queryClient.fetchQuery(searchQueryOptions(nextTerm));
   };
 
-  if (!typed) return { term: '', dataTerm: '', rows: NO_ROWS, status: 'idle', searchNow };
-  const rows = search.isError ? NO_ROWS : search.data ?? NO_ROWS;
-  if (!enabled) return { term, dataTerm: answered ? term : carryTerm, rows, status: 'idle', searchNow };
+  // One result object (the shell's initial chunk carries this hook: one
+  // memoized return, not one per branch). Under two characters `term` and
+  // `carryTerm` are '' (reset above), so the idle defaults fall out.
+  const rows = !typed || search.isError ? NO_ROWS : search.data ?? NO_ROWS;
   const settled = answered && term === trimmed;
-  if (search.isError) {
-    return { term, dataTerm: term, rows, status: settled ? 'error' : 'loading', searchNow };
-  }
-  const status: BorrowerSearchStatus = !settled ? 'loading' : rows.length > 0 ? 'idle' : 'empty';
+  const status: BorrowerSearchStatus = !typed || !enabled
+    ? 'idle'
+    : !settled ? 'loading' : search.isError ? 'error' : rows.length > 0 ? 'idle' : 'empty';
   return { term, dataTerm: answered ? term : carryTerm, rows, status, searchNow };
 }
