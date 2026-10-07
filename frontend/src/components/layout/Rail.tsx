@@ -1,17 +1,22 @@
+import { lazy, Suspense } from 'react';
 import { Link, useLocation } from 'react-router';
-import { Icon, type IconName } from '../Icon';
+import { Icon } from '../Icon';
 import { EntradaMark } from '../brand/Entrada';
+import { usePresenterMode } from '../../lib/presenterMode';
 import { ROUTES } from '../../lib/routeMeta';
 import { useAuditLedgerAccess } from '../../lib/sessionQuery';
 import { useAdminNavigationAccess } from './RouteNav';
 
 /**
- * Left module rail. Vertical strip, 72px wide. M0 ships today; M1–M4
- * are modules on the published roadmap and render as inactive, non-
- * interactive rail items (persona review 2026-04-22 blocker #5: M1-M4
- * previously linked to /admin-config which was an unrelated dead link).
- * The active M0 rail item lights up whenever the user is on any
- * Module 0 route.
+ * Left module rail. Vertical strip, 72px wide. M0 ships today and lights up
+ * whenever the user is on any Module 0 route (all current routes are).
+ *
+ * M1-M4, the modules on the published roadmap, render only in presenter mode
+ * (deviation:rail-roadmap-presenter-only; critic-05, shell-09;
+ * D-shell-deviations-e2): a customer workspace shows only what it can open.
+ * They live in RailRoadmap, a lazy chunk requested only while the flag is
+ * on, as aria-disabled buttons with a Tooltip description; a chunk that
+ * fails to load renders nothing (never a shell error).
  *
  * Copy note (2026-04-23 hole-finder round 2): avoid the word "live" on
  * the rail since Module 0 data refreshes nightly via Delta Share, not
@@ -19,66 +24,36 @@ import { useAdminNavigationAccess } from './RouteNav';
  * streaming-data posture.
  */
 
-interface ModuleItem {
-  id: number;
-  name: string;
-  icon: IconName;
-  desc: string;
-}
+const M0 = { id: 0, name: 'Top-of-Funnel', desc: 'Lead generation + borrower segmentation (ships today).' } as const;
 
-const MODULES: ModuleItem[] = [
-  { id: 0, name: 'Top-of-Funnel',        icon: 'target', desc: 'Lead generation + borrower segmentation (ships today).' },
-  { id: 1, name: 'Pipeline Optimization', icon: 'flow',   desc: 'Lead → app → approval throughput and stalls (on roadmap).' },
-  { id: 2, name: 'LO Workbench',          icon: 'money',  desc: 'Officer assist with explainable borrower guidance (on roadmap).' },
-  { id: 3, name: 'Underwriting Copilot',  icon: 'shield', desc: 'Condition handling and exception triage (on roadmap).' },
-  { id: 4, name: 'Risk & Retention',      icon: 'audit',  desc: 'Portfolio-level retention and recapture (on roadmap).' },
-];
+const RailRoadmap = lazy(() => import('./RailRoadmap').catch(() => ({ default: () => null })));
 
 export function Rail() {
   const { pathname } = useLocation();
   const canAccessAdmin = useAdminNavigationAccess();
   const canReadLedger = useAuditLedgerAccess();
+  // False while the session is pending or errored: a customer never sees a demo slot by accident.
+  const presenterMode = usePresenterMode();
   const onLedger = pathname === ROUTES.auditLedger.pattern;
-  // All current routes are Module 0.
-  const activeModuleId = 0;
-  const isM0 = activeModuleId === 0 && pathname !== '/__unused';
   return (
     <nav className="rail" aria-label="Primary navigation">
       <Link to="/" className="rail__brand" title="Entrada — Mortgage Intelligence Platform" aria-label="Entrada home">
         <EntradaMark size={32} />
       </Link>
-      {MODULES.map((m) => {
-        if (m.id === 0) {
-          const active = isM0;
-          const cls = `rail__item ${active ? 'is-active' : ''}`;
-          return (
-            <Link
-              key={m.id}
-              to="/"
-              className={cls}
-              title={`Module ${m.id}: ${m.name} — ${m.desc}`}
-              aria-current={active ? 'page' : undefined}
-            >
-              <Icon name={m.icon} size={18} className="ico" />
-              <span className="mod">M{m.id}</span>
-            </Link>
-          );
-        }
-        // M1-M4: inactive, non-interactive. Render as <span> with
-        // tooltip + reduced-opacity visual cue. Not navigable.
-        return (
-          <span
-            key={m.id}
-            className="rail__item rail__item--disabled"
-            role="presentation"
-            aria-disabled="true"
-            title={`Module ${m.id}: ${m.name} — ${m.desc}`}
-          >
-            <Icon name={m.icon} size={18} className="ico" />
-            <span className="mod">M{m.id}</span>
-          </span>
-        );
-      })}
+      <Link
+        to="/"
+        className="rail__item is-active"
+        title={`Module ${M0.id}: ${M0.name} — ${M0.desc}`}
+        aria-current="page"
+      >
+        <Icon name="target" size={18} className="ico" />
+        <span className="mod">M{M0.id}</span>
+      </Link>
+      {presenterMode && (
+        <Suspense fallback={null}>
+          <RailRoadmap />
+        </Suspense>
+      )}
       <div className="rail__spacer" />
       {/* The audit ledger for administrators and auditors (D-audit-reads-c3):
           the prototype rail ends with Settings only

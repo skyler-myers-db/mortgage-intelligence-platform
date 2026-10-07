@@ -8,14 +8,15 @@
  *     route nav's focus margin (measured, with its non-vacuity twin), and a
  *     census of the nested scrollers that hold a focusable element;
  *   - the route nav's two clusters for the admin, auditor and plain
- *     sessions (geometry and axe), and the item 3e measurement.
+ *     sessions (geometry and axe), and the item 3e measurement;
+ *   - the presenter-only roadmap rail slots.
  * Every test also proves the interaction opened no audited read (no VIEW_*
  * from a hover, a focus or a rail click).
  */
 import type { Page } from '@playwright/test';
 import type { SessionResponse } from '../../../src/types';
 import { expectAxeClean } from './axe';
-import { AUDITOR_ONLY_SESSION, SESSION, WORKSPACE_USER_SESSION } from './data/shell';
+import { AUDITOR_ONLY_SESSION, PRESENTER_SESSION, SESSION, WORKSPACE_USER_SESSION } from './data/shell';
 import { json } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
@@ -288,4 +289,70 @@ test.describe('the route nav\'s two clusters (flow-07, shell-09)', () => {
     expect(heights.after, 'an eleventh link wraps the one-line nav: admins keep the ledger on the rail and in the palette').toBeGreaterThan(57);
     expectNoAuditedReadSince(mockApi, naturalLoad, 'item 3e measurement');
   });
+});
+
+test.describe('the roadmap rail slots show only in presenter mode (critic-05, D-shell-deviations-e2)', () => {
+  /** Every request for the lazy RailRoadmap chunk, from now on. */
+  function roadmapRequests(page: Page): string[] {
+    const seen: string[] = [];
+    page.on('request', (request) => {
+      if (/\/RailRoadmap-[^/]*\.js(?:$|\?)/.test(request.url())) seen.push(request.url());
+    });
+    return seen;
+  }
+
+  test('a customer session shows M0 alone and never requests the roadmap chunk', async ({ app, mockApi, page }) => {
+    const requested = roadmapRequests(page);
+    await app.gotoRoute('/');
+    const naturalLoad = markNaturalLoad(mockApi);
+    const rail = page.getByRole('navigation', { name: 'Primary navigation' });
+    await expect(rail.locator('.rail__item .mod')).toHaveText(['M0']);
+    await expect(rail.locator('button')).toHaveCount(0);
+    await rail.locator('.rail__item').first().hover();
+    await rail.locator('.rail__item').first().click();
+    await app.settle();
+    expect(requested, 'the RailRoadmap chunk is never requested').toEqual([]);
+    expectNoAuditedReadSince(mockApi, naturalLoad, 'customer rail');
+  });
+
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: presenter mode shows M1-M4 as Tab-reachable disabled buttons with a keyboard tooltip, going nowhere`, async ({ app, mockApi, page }) => {
+      mockApi.register('GET', '/api/session', () => json<SessionResponse>(PRESENTER_SESSION));
+      const requested = roadmapRequests(page);
+      await app.setTheme(theme);
+      await app.gotoRoute('/');
+      const naturalLoad = markNaturalLoad(mockApi);
+      const rail = page.getByRole('navigation', { name: 'Primary navigation' });
+      const slots = rail.locator('button.rail__item--disabled');
+      await expect(slots).toHaveCount(4);
+      expect(requested.length, 'presenter mode loads the chunk').toBeGreaterThan(0);
+      await expect(rail.locator('.rail__item .mod')).toHaveText(['M0', 'M1', 'M2', 'M3', 'M4']);
+      await expect(page.locator('#mip-tooltip')).toBeAttached();
+
+      // Tab from M0 visits each slot in order; keyboard focus opens its tooltip.
+      await rail.locator('a.rail__item.is-active').focus();
+      for (let index = 0; index < 4; index += 1) {
+        await page.keyboard.press('Tab');
+        const slot = slots.nth(index);
+        await expect(slot).toBeFocused();
+        await expect(slot).toHaveAttribute('aria-disabled', 'true');
+        await expect(slot).not.toHaveAttribute('title', /.*/);
+        await expect(slot).toHaveAccessibleName(`M${index + 1}`);
+        await expect(page.locator('#mip-tooltip[role="tooltip"]:not([hidden])')).toContainText(`Module ${index + 1}:`);
+        await expect(page.locator('#mip-tooltip')).toContainText('On the roadmap; not part of this workspace.');
+      }
+      await expectAxeClean(page, { key: { route: 'home', state: 'presenter-rail' }, theme, known: {}, include: '.rail, #mip-tooltip' });
+
+      // Activation goes nowhere and asks the API for nothing.
+      const url = page.url();
+      const calls = mockApi.calls.length;
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('Space');
+      await slots.first().click();
+      await page.waitForTimeout(300);
+      expect(page.url()).toBe(url);
+      expect(mockApi.calls.slice(calls), 'no request from a roadmap slot').toEqual([]);
+      expectNoAuditedReadSince(mockApi, naturalLoad, `presenter rail · ${theme}`);
+    });
+  }
 });

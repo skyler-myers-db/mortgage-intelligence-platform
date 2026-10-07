@@ -42,6 +42,15 @@ describe('route nav clusters (flow-07, shell-09)', () => {
   });
 });
 
+describe('the presenter-mode roadmap rail slots (critic-05, D-shell-deviations-e2)', () => {
+  it('gives .rail__item no padding, so a <button> slot renders as the link items do', () => {
+    expect(rule(shell(), '.rail__item')).toMatch(/padding:\s*0;/);
+    // Disabled slots keep their muted look and no pressed scale.
+    expect(rule(shell(), '.rail__item--disabled')).toMatch(/cursor:\s*default;/);
+    expect(shell()).toMatch(/\.rail__item:active:not\(\.rail__item--disabled\)\s*\{[^}]*scale:/);
+  });
+});
+
 describe('the Ask tab clears the route nav only while it is docked (report 12.4 #5)', () => {
   const askGenie = (): string => {
     const sheet = featureStylesheets().find((entry) => entry.file === 'src/routes/ask-genie.css');

@@ -449,6 +449,8 @@
 }
 .rail__item {
   width: 56px; height: 56px; margin: 0 auto;
+  /* A presenter-mode roadmap slot is a <button> (RailRoadmap.tsx): no UA padding, so it renders as the links do. */
+  padding: 0;
   /* The rail's 1px right border makes its content box 55px, so a fixed 56px
      item overflowed by 0.5px on each side — enough to push the M0-M4 boxes
      off the mark's center line and to bleed the active pill into the border.
