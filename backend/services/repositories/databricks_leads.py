@@ -247,6 +247,9 @@ class DatabricksLeadRepository:
                 "after": list(after) if after is not None else None,
             },
         )
+        # Captured before the read: a snapshot advance mid-read must not stamp
+        # this page as current (TTLCache.generation_for).
+        generation = self._cache.generation_for(cache_key)
         cached = self._get_cached_page(cache_key)
         if cached is not None:
             return cached
@@ -378,7 +381,7 @@ class DatabricksLeadRepository:
                 limit=sql_limit,
             )
             rows = self._client.execute(sql, params)
-            return self._store_cached_page(cache_key, self._page_of(rows, bounded, order))
+            return self._store_cached_page(cache_key, self._page_of(rows, bounded, order), generation)
 
         lifecycle_clause, lifecycle_params = self._cohort_queries.lifecycle_filter_clause(
             source_alias="lp",
@@ -408,7 +411,7 @@ class DatabricksLeadRepository:
                 limit=sql_limit,
             )
             rows = self._client.execute(sql, lifecycle_params)
-        return self._store_cached_page(cache_key, self._page_of(rows, bounded, order))
+        return self._store_cached_page(cache_key, self._page_of(rows, bounded, order), generation)
 
     @staticmethod
     def _page_of(rows: list[dict[str, Any]], bounded: int, order: LeadOrder) -> LeadPage:
@@ -474,6 +477,7 @@ class DatabricksLeadRepository:
                 "max_rate_spread_bps": max_rate_spread_bps,
             },
         )
+        generation = self._cache.generation_for(cache_key)  # before the read
         if self._cache_ttl_s > 0:
             cached = self._cache.get(cache_key)
             if isinstance(cached, int):
@@ -504,7 +508,7 @@ class DatabricksLeadRepository:
             ),
             aggregate_select="COUNT(*) AS n",
         )
-        return self._store_cached_count(cache_key, int(row.get("n") or 0))
+        return self._store_cached_count(cache_key, int(row.get("n") or 0), generation)
 
     def cohort_identity(
         self,
@@ -692,12 +696,12 @@ class DatabricksLeadRepository:
     def _get_cached_page(self, cache_key: str) -> LeadPage | None:
         return self._pages.get(cache_key)
 
-    def _store_cached_page(self, cache_key: str, page: LeadPage) -> LeadPage:
-        return self._pages.put(cache_key, page)
+    def _store_cached_page(self, cache_key: str, page: LeadPage, generation: int) -> LeadPage:
+        return self._pages.put(cache_key, page, generation=generation)
 
-    def _store_cached_count(self, cache_key: str, value: int) -> int:
+    def _store_cached_count(self, cache_key: str, value: int, generation: int) -> int:
         if self._cache_ttl_s > 0:
-            self._cache.set(cache_key, value, self._cache_ttl_s)
+            self._cache.set(cache_key, value, self._cache_ttl_s, generation=generation)
         return value
 
     @staticmethod

@@ -79,12 +79,21 @@ class LeadPageCache:
             return None
         return cached.page.copy_with(_copy(cached.page.leads))
 
-    def put(self, key: str, page: LeadPage) -> LeadPage:
-        """Record an uncached read's stamp, cache the page, and return a copy."""
+    def put(self, key: str, page: LeadPage, *, generation: int | None = None) -> LeadPage:
+        """Record an uncached read's stamp, cache the page, and return a copy.
+
+        ``generation`` is the gold snapshot generation captured before the
+        read (``TTLCache.generation_for``); see ``TTLCache.set``.
+        """
 
         refreshed_at = self.observe(page.leads)
         if self._ttl_s > 0:
-            self._cache.set(key, _CachedLeadPage(page.copy_with(_copy(page.leads)), refreshed_at), self._ttl_s)
+            self._cache.set(
+                key,
+                _CachedLeadPage(page.copy_with(_copy(page.leads)), refreshed_at),
+                self._ttl_s,
+                generation=generation,
+            )
         return page.copy_with(_copy(page.leads))
 
     def observe(self, leads: list[LeadSummary]) -> datetime | None:

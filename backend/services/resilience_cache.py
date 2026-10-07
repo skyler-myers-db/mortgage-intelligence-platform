@@ -119,8 +119,20 @@ class TTLCache:
             report_stale(last_good_wall)
         return value
 
-    def set(self, key: str, value: Any, ttl_s: float) -> None:
-        self._set(key, value, ttl_s, None, _generation_for(key))
+    def generation_for(self, key: str) -> int:
+        """The gold snapshot generation an entry under ``key`` would carry now.
+
+        A caller that reads outside ``get_or_set`` captures this BEFORE its
+        read and passes it to ``set(generation=...)``: a snapshot that advances
+        while the read runs then leaves the entry at the generation the read
+        began under (a miss on the next lookup), instead of stamping rows read
+        before the advance as current until the TTL ends.
+        """
+
+        return _generation_for(key)
+
+    def set(self, key: str, value: Any, ttl_s: float, *, generation: int | None = None) -> None:
+        self._set(key, value, ttl_s, None, _generation_for(key) if generation is None else generation)
 
     def _set(
         self,
