@@ -8,7 +8,7 @@
  * client's mutation cache. Only lib/api is mocked.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/apiTransport';
@@ -51,8 +51,14 @@ const DRAFT = { borrower_id: BORROWER, channel: 'email' } as SavedDraft;
 const ACTOR_CHANGED = 'Nothing was recorded. This tab resets for the new user.';
 
 let app: ReturnType<typeof useApp> | null = null;
+const seen: Array<string | null> = [];
+/** Records the facade and every workspaceError it shows, after each commit. */
 function Capture() {
-  app = useApp();
+  const context = useApp();
+  useEffect(() => {
+    app = context;
+    if (seen[seen.length - 1] !== context.workspaceError) seen.push(context.workspaceError);
+  }, [context]);
   return null;
 }
 const current = () => {
@@ -62,7 +68,6 @@ const current = () => {
 
 let root: Root;
 let queryClient: QueryClient;
-const seen: Array<string | null> = [];
 
 beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
@@ -81,19 +86,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function Recorder() {
-  const { workspaceError } = useApp();
-  if (seen[seen.length - 1] !== workspaceError) seen.push(workspaceError);
-  return null;
-}
-
 async function mount() {
   await act(async () => {
     root.render(
       <QueryClientProvider client={queryClient}>
         <AppProvider>
           <Capture />
-          <Recorder />
         </AppProvider>
       </QueryClientProvider>,
     );
