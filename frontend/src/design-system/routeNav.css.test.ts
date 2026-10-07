@@ -80,3 +80,38 @@ describe('the Ask tab clears the route nav only while it is docked (report 12.4 
     );
   });
 });
+
+describe('the Administration section nav\'s overflow cue (deviation:admin-section-nav-overflow-cue)', () => {
+  const sheet = (): string => {
+    const found = featureStylesheets().find((entry) => entry.file === 'src/components/admin/AdminSectionNav.css');
+    expect(found, 'AdminSectionNav.css is a feature stylesheet').toBeDefined();
+    return stripComments(found!.css);
+  };
+
+  it('keeps the scrollbar hidden and paints two scrolling covers over two fixed edge shadows on --bg-1', () => {
+    const nav = rule(sheet(), '.admin-section-nav');
+    expect(nav).toMatch(/scrollbar-width:\s*none;/);
+    const background = /background:([^;]*);/.exec(nav)?.[1] ?? '';
+    // Top-level commas only (a comma inside gradient() or color-mix() stays in its layer).
+    const layers: string[] = [];
+    let depth = 0;
+    let start = 0;
+    [...background].forEach((char, index) => {
+      if (char === '(') depth += 1;
+      else if (char === ')') depth -= 1;
+      else if (char === ',' && depth === 0) {
+        layers.push(background.slice(start, index).trim());
+        start = index + 1;
+      }
+    });
+    layers.push(background.slice(start).trim());
+    expect(layers).toHaveLength(5);
+    expect(layers.slice(0, 2).every((layer) => /var\(--bg-1\)/.test(layer) && /\blocal$/.test(layer))).toBe(true);
+    expect(layers.slice(2, 4).every((layer) => /color-mix\(in oklab, var\(--text-1\)/.test(layer) && /\bscroll$/.test(layer))).toBe(true);
+    expect(layers[4]).toBe('var(--bg-1)');
+  });
+
+  it('drops the images in forced colours', () => {
+    expect(sheet()).toMatch(/@media \(forced-colors: active\)\s*\{\s*\.admin-section-nav\s*\{\s*background-image:\s*none;\s*\}\s*\}/);
+  });
+});

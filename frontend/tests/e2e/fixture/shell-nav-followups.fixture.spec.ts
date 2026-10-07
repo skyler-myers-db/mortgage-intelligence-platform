@@ -9,7 +9,8 @@
  *     census of the nested scrollers that hold a focusable element;
  *   - the route nav's two clusters for the admin, auditor and plain
  *     sessions (geometry and axe), and the item 3e measurement;
- *   - the presenter-only roadmap rail slots.
+ *   - the presenter-only roadmap rail slots;
+ *   - the Administration section nav's overflow cue (scrolling shadows).
  * Every test also proves the interaction opened no audited read (no VIEW_*
  * from a hover, a focus or a rail click).
  */
@@ -18,6 +19,7 @@ import type { SessionResponse } from '../../../src/types';
 import { expectAxeClean } from './axe';
 import { AUDITOR_ONLY_SESSION, PRESENTER_SESSION, SESSION, WORKSPACE_USER_SESSION } from './data/shell';
 import { json } from './mockApi';
+import { asComputedRgb, parseRgb } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 import { expect, test } from './test';
@@ -353,6 +355,66 @@ test.describe('the roadmap rail slots show only in presenter mode (critic-05, D-
       expect(page.url()).toBe(url);
       expect(mockApi.calls.slice(calls), 'no request from a roadmap slot').toEqual([]);
       expectNoAuditedReadSince(mockApi, naturalLoad, `presenter rail · ${theme}`);
+    });
+  }
+});
+
+/** The section nav's start- and end-edge pixels (2px down, in its top padding), from a real screenshot. */
+async function edgePixels(page: Page): Promise<{ start: number[]; end: number[] }> {
+  const png = await page.locator('.admin-section-nav').screenshot();
+  return page.evaluate(async (base64) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${base64}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('2d canvas unavailable');
+    context.drawImage(image, 0, 0);
+    const at = (x: number) => [...context.getImageData(x, 2, 1, 1).data.slice(0, 3)];
+    return { start: at(1), end: at(image.width - 2) };
+  }, png.toString('base64'));
+}
+
+const sameRgb = (a: number[], b: number[], tolerance = 2) => a.every((value, index) => Math.abs(value - b[index]) <= tolerance);
+
+test.describe('the Administration section nav shows where it overflows (W5b AL fix rounds; deviation:admin-section-nav-overflow-cue)', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: an edge shadow marks only the side with more links, and the cue moves no layout`, async ({ app, mockApi, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/admin-config');
+      const naturalLoad = markNaturalLoad(mockApi);
+      const nav = page.locator('.admin-section-nav');
+      // Independent of the section count (w5-field-vitals adds one): a spec-local
+      // extra link and a narrow box make the nav overflow either way.
+      await nav.evaluate((element) => {
+        const last = element.lastElementChild;
+        if (last) element.append(last.cloneNode(true));
+        element.style.maxInlineSize = '420px';
+        element.scrollLeft = 0;
+      });
+      const overflow = await nav.evaluate((element) => element.scrollWidth - element.clientWidth);
+      expect(overflow, 'precondition: the section nav overflows sideways').toBeGreaterThan(100);
+      const bg = parseRgb(await asComputedRgb(page, 'var(--bg-1)'));
+
+      const atStart = await edgePixels(page);
+      expect(sameRgb(atStart.start, bg), `at the start, the start edge is plain --bg-1 (${atStart.start} vs ${bg})`).toBe(true);
+      expect(sameRgb(atStart.end, bg), `at the start, the end edge carries the shadow (${atStart.end})`).toBe(false);
+
+      await nav.evaluate((element) => {
+        element.scrollLeft = element.scrollWidth;
+      });
+      const atEnd = await edgePixels(page);
+      expect(sameRgb(atEnd.end, bg), `at the end, the end edge is plain --bg-1 (${atEnd.end})`).toBe(true);
+      expect(sameRgb(atEnd.start, bg), `at the end, the start edge carries the shadow (${atEnd.start})`).toBe(false);
+
+      // Paint only: the block size is the same without the cue.
+      const withCue = await nav.evaluate((element) => (element as HTMLElement).offsetHeight);
+      await page.addStyleTag({ content: '.admin-section-nav { background: var(--bg-1) !important; }' });
+      const withoutCue = await nav.evaluate((element) => (element as HTMLElement).offsetHeight);
+      expect(withCue).toBe(withoutCue);
+      expectNoAuditedReadSince(mockApi, naturalLoad, `admin section nav overflow cue · ${theme}`);
     });
   }
 });
