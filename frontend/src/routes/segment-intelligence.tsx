@@ -650,6 +650,7 @@ export default function SegmentIntelligence() {
           onModeChange={mapMode.setMode}
           onStepCommit={mapMode.setStep}
           onReadStale={setMapLastGoodAt}
+          zipAreas
         />
       </div>
     </PageShell>

@@ -144,6 +144,11 @@ export function MapTipBody({ card: hover, activeSegNames }: MapTipBodyProps) {
           </span>
         </div>
       )}
+      {hover.note && (
+        <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
+          <span className="v map-tip__value--small">{hover.note}</span>
+        </div>
+      )}
       <div className="map-tip__row map-tip__row--compact">
         <span>Source</span>
         <span className="v mono map-tip__value--small">

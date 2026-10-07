@@ -30,6 +30,9 @@ const MAP_UNITS = [
   'useMapModeParams.ts',
   // Wave 5a's Segment Intelligence addition, compiled under the same bar.
   'SignalStack.tsx',
+  // W5c (dataviz-01): the ZCTA rung and its pan / zoom hook.
+  'USChoroplethMapZctaLevel.tsx',
+  'useSvgViewBox.ts',
 ];
 
 interface CompiledFunction { name: string; emitted: boolean; memoSlots: number }

@@ -46,10 +46,18 @@ interface USChoroplethMapZipLevelProps {
   onSelectZip: (zip: string) => void;
   /** Open the whole drilled state in the Lead Queue. */
   onOpenStateQueue: () => void;
+  /**
+   * A role=status line above the grid: the tiles are standing in for the
+   * ZIP-area polygons (USChoroplethMapZctaLevel's fallback, ZCTA_TILES_STATUS).
+   */
+  status?: string | null;
 }
 
+/** The ZIP rung's fallback line when the ZCTA polygons cannot be drawn (W5c, dataviz-01). */
+export const ZCTA_TILES_STATUS = 'ZIP boundaries could not load; showing the densest ZIPs as tiles.';
+
 /** A ZIP with borrowers in the selection (never the fill value). */
-const zipPopulated = (rollup: ZipRollup) => (rollup.addressable_borrowers ?? 0) > 0;
+export const zipPopulated = (rollup: ZipRollup) => (rollup.addressable_borrowers ?? 0) > 0;
 
 export function USChoroplethMapZipLevel({
   drillStateName,
@@ -64,6 +72,7 @@ export function USChoroplethMapZipLevel({
   hover,
   onSelectZip,
   onOpenStateQueue,
+  status = null,
 }: USChoroplethMapZipLevelProps) {
   const zipsFromApi = Object.values(byZip);
   // The densest ZIP_TILE_CAP, largest first (Pareto): the set the fill scale is built over.
@@ -133,6 +142,7 @@ export function USChoroplethMapZipLevel({
   const hiddenZipCount = zipsFromApi.length - visible.length;
   return (
     <>
+    {status && <p className="zip-tiles__status text-2" role="status">{status}</p>}
     <ul
       ref={listRef}
       className="zip-tiles"

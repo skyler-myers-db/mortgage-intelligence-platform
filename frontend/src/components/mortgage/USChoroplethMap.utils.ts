@@ -177,6 +177,8 @@ export interface HoverState {
   zipUnassigned?: number | null;
   /** The Rate Lever at the shown step (state cards in rate mode only; wow-stage-1). */
   scenario?: HoverScenario;
+  /** A muted line under the facts (the ZCTA rung's "Counts are ... in this ZIP area."). */
+  note?: string;
 }
 
 /** A state's scenario facts at the shown step: server counts, and their difference from today. */

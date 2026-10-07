@@ -21,6 +21,8 @@ export const geoQueryKeys = {
   assignmentOverlay: (level: GeoOverlayLevel, state: string | null) =>
     [...queryKeys.all, 'geo', 'assignment-overlay', level, state ?? ''] as const,
   rateSensitivity: () => [...queryKeys.all, 'geo', 'rate-sensitivity'] as const,
+  /** A drilled state's committed ZCTA geometry (a static asset; never persisted). */
+  zctaGeometry: (usps: string) => [...queryKeys.all, 'geo', 'zcta-geometry', usps] as const,
 };
 
 /**

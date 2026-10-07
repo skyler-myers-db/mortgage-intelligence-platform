@@ -12,7 +12,7 @@
  * the lazy control chunk (best effort: a failed warm is swallowed); no API
  * call is made until it is picked.
  */
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
 import { genieStatePrompt } from '../../lib/genieContext';
@@ -61,6 +61,12 @@ interface USChoroplethMapHeaderProps {
   setView: (view: MapView) => void;
   campaignPrefillPath: string | null;
   onStartCampaign: (path: string) => void;
+  /**
+   * The ZCTA rung's Zoom in / Zoom out / Fit buttons (WCAG 2.5.7, the
+   * single-pointer alternative to dragging), registered once by the rung
+   * while its polygons show; null otherwise (W5c, deviation:zcta-level).
+   */
+  zoomControls?: ReactNode;
 }
 
 export function USChoroplethMapHeader({
@@ -79,6 +85,7 @@ export function USChoroplethMapHeader({
   setView,
   campaignPrefillPath,
   onStartCampaign,
+  zoomControls = null,
 }: USChoroplethMapHeaderProps) {
   // A control that ends the drill can remove itself (Segment Intelligence's
   // "Clear geography", a vanished ZIP tile on Back), and focus would fall to
@@ -193,6 +200,7 @@ export function USChoroplethMapHeader({
             </span>
           )}
         </div>
+        {zoomControls}
         {/* The label names the view it switches to (the rate-window pattern:
             one mechanism, no aria-pressed on top). */}
         <button

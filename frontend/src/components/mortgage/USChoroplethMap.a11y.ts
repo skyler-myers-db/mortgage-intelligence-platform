@@ -10,7 +10,6 @@
  *  - The hover card also opens on keyboard focus, anchored to the focused
  *    element's box instead of the pointer.
  */
-import type { KeyboardEvent } from 'react';
 import { formatCount, formatNumber, ratePct, signedCount } from '../../lib/formatters';
 import type { HoverScenario } from './USChoroplethMap.utils';
 
@@ -82,20 +81,34 @@ export function zipAriaLabel(zip: string, facts: UnitFacts): string {
 }
 
 /**
+ * The parts of a keydown moveRovingFocus reads: a React KeyboardEvent (the
+ * state and tile stages) or a native one (the ZCTA stage's single listener)
+ * both fit; the stage the handler sits on is `currentTarget`.
+ */
+export interface RovingKeyEvent {
+  key: string;
+  target: EventTarget | null;
+  currentTarget: EventTarget | null;
+  preventDefault: () => void;
+}
+
+/**
  * Arrow keys / Home / End move focus between the populated
  * `[data-map-unit][data-populated]` elements inside the handler's element,
  * wrapping at the ends; Home / End go to the first / last populated unit.
  * Anything else (Enter, Space, Tab, Escape) is left to the unit's own
  * handlers and the browser.
  */
-export function moveRovingFocus(event: KeyboardEvent<Element>): void {
+export function moveRovingFocus(event: RovingKeyEvent): void {
   const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown'
     ? 1
     : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
       ? -1
       : 0;
   if (direction === 0 && event.key !== 'Home' && event.key !== 'End') return;
-  const units = [...event.currentTarget.querySelectorAll<HTMLElement | SVGElement>(`[${MAP_UNIT_ATTR}][${MAP_POPULATED_ATTR}]`)];
+  const stage = event.currentTarget;
+  if (!(stage instanceof Element)) return;
+  const units = [...stage.querySelectorAll<HTMLElement | SVGElement>(`[${MAP_UNIT_ATTR}][${MAP_POPULATED_ATTR}]`)];
   const current = units.findIndex((unit) => unit === event.target);
   if (current < 0 || units.length === 0) return;
   event.preventDefault();

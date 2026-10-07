@@ -112,6 +112,13 @@ describe('buildMapCard (D-dataviz-geo-d1)', () => {
     expect(card).not.toHaveProperty('zipUnassigned');
   });
 
+  it('says whose counts a ZIP area shows in the polygon view only (a ZCTA can cross a state line)', () => {
+    expect(buildMapCard('zip', '77002', inputs({ zipAreas: true }))?.note).toBe('Counts are Texas borrowers in this ZIP area.');
+    expect(buildMapCard('zip', '77002', inputs({ zipAreas: false }))?.note).toBeUndefined();
+    expect(buildMapCard('zip', '77002', inputs())?.note).toBeUndefined();
+    expect(buildMapCard('state', 'tx', inputs({ zipAreas: true }))?.note).toBeUndefined();
+  });
+
   // wow-stage-1: the Rate Lever's rows ride on the STATE card only.
   const SCENARIO: MapScenarioView = {
     step: -50,

@@ -74,6 +74,8 @@ interface USChoroplethMapLegendProps {
   scale: ChoroplethScale | null;
   /** Which units the scale was built over, when not all of them ("over the 24 densest of 212 ZIPs"). */
   scaleScope?: string | null;
+  /** One more caption clause for the units on screen (the ZCTA rung's "ZIP areas are Census 2020 ZCTAs..."). */
+  caption?: string | null;
   /**
    * The whole-book total includes ids the map cannot draw (wow-stage-1):
    * "Includes 1,234 in PR, VI (not drawn on the map)", in the fill's value;
@@ -103,6 +105,7 @@ export function USChoroplethMapLegend({
   totalCount,
   scale,
   scaleScope = null,
+  caption = null,
   offMapNote = null,
   segmentCaption,
   segmentFilter,
@@ -206,6 +209,7 @@ export function USChoroplethMapLegend({
             {scaleScope ? ` ${scaleScope}` : ''}
           </span>
         )}
+        {caption && <span className="map-legend__scale">{` · ${caption}`}</span>}
         {offMapNote && <span className="map-legend__scale">{` · ${offMapNote}`}</span>}
       </div>
       <LazyStaleDataNote lastGoodAt={staleLastGoodAt} />

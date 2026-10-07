@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { useOptionalFootprint } from '../FootprintProvider';
 import {
@@ -28,11 +28,14 @@ import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { buildMapCard } from './USChoroplethMap.hover';
 import { useMapHover } from './useMapHover';
 import { snapStep, useMapColoring } from './useMapModeParams';
-import { USChoroplethMapZipLevel } from './USChoroplethMapZipLevel';
+import { USChoroplethMapZipLevel, ZCTA_TILES_STATUS, zipPopulated } from './USChoroplethMapZipLevel';
+import type { ZipRung } from './USChoroplethMapZctaLevel';
+import { ZCTA_LEVEL } from './zctaLevel.lazy';
 import { useChoroplethLiveFacts, type GeoRead } from './useChoroplethLiveFacts';
 import { indexRateScenario, scenarioView } from './rateScenario.logic';
 import { RATE_SCENARIO_CONTROL } from './rateScenario.lazy';
 import { useLazyModule } from './useLazyModule';
+import { preloadBestEffort } from '../../lib/lazyPreload';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 import { formatCount, ratePct } from '../../lib/formatters';
 import './USChoroplethMap.css';
@@ -102,6 +105,14 @@ export type { MapSelection } from './USChoroplethMap.selection';
  * Runtime-06 (map slice): a changed cohort keeps the previous fill up,
  * labelled "Updating…" (`.stable-refresh-region.is-updating` on the stage and
  * the legend, one announcement in `.map-status`), instead of blanking.
+ *
+ * ZIP areas (W5c, audit dataviz-01 / visual-09 / motion-10;
+ * deviation:zcta-level): with `zipAreas` (Segment Intelligence), a map-view
+ * drill draws the state's committed Census ZCTAs in a lazy rung
+ * (USChoroplethMapZctaLevel); the legend's scale covers every populated ZIP
+ * and its caption says what a ZCTA is. The densest-ZIP tiles are the degraded
+ * fallback (a status line says so). Home never sets it, so it never loads the
+ * rung or fetches geometry.
  */
 
 interface USChoroplethMapProps {
@@ -132,6 +143,12 @@ interface USChoroplethMapProps {
    * note; without it the legend shows the note itself.
    */
   onReadStale?: (lastGoodAt: string | null) => void;
+  /**
+   * Draw the ZIP level as committed Census ZIP areas (the lazy ZCTA rung)
+   * when drilled in the map view; tiles otherwise. Opt-in per host: only
+   * Segment Intelligence sets it (Home must never fetch geometry).
+   */
+  zipAreas?: boolean;
 }
 
 /**
@@ -150,6 +167,7 @@ export function USChoroplethMap({
   onModeChange,
   onStepCommit,
   onReadStale,
+  zipAreas = false,
 }: USChoroplethMapProps) {
   const [ownSelection, setOwnSelection] = useState<MapSelection>(EMPTY_MAP_SELECTION);
   const current = selection ?? ownSelection;
@@ -184,6 +202,18 @@ export function USChoroplethMap({
   const [view, setView] = useState<MapView>('map');
   // The table view's own chunk, loaded the first time the table is picked.
   const tableView = useLazyModule(MAP_TABLE, view === 'table');
+  // The ZCTA rung (dataviz-01): its chunk loads on a map-view drill; the
+  // rung reports polygons or tiles per state, and registers its zoom buttons.
+  const zipRungHost = zipAreas && drillBehavior === 'filter';
+  const zctaWanted = zipRungHost && level === 'zip' && view === 'map';
+  const zcta = useLazyModule(ZCTA_LEVEL, zctaWanted);
+  const [rungFor, setRungFor] = useState<{ state: string; rung: ZipRung } | null>(null);
+  const zipRung: ZipRung | 'loading' | null = !zctaWanted
+    ? null
+    : zcta.failed ? 'tiles' : rungFor?.state === drillStateUC ? rungFor.rung : 'loading';
+  const polygons = zctaWanted && zipRung !== 'tiles';
+  const onRung = useCallback((rung: ZipRung) => setRungFor({ state: drillStateUC, rung }), [drillStateUC]);
+  const [zoomControls, setZoomControls] = useState<ReactNode>(null);
   // A keyboard drill, and any drill from a table row, removes the control
   // that had focus (the state path, the row's button). Focus then moves on to
   // the drilled level (a ZIP tile, the empty state's action or the ZIP table)
@@ -246,11 +276,15 @@ export function USChoroplethMap({
   const scale = useMemo(() => {
     if (shownScenario) return rateIndex?.scale ?? null;
     if (overlayActive && overlayData) return buildChoroplethScale(overlayData.units.map((u) => u.unattended_count));
-    if (level === 'zip') return zipFacts ? buildChoroplethScale(densestZips(zipFacts).map((r) => r.addressable_borrowers)) : null;
+    if (level === 'zip') {
+      // Polygons paint every populated ZIP; the tiles, the densest they show.
+      const shown = zipFacts && (polygons ? Object.values(zipFacts).filter(zipPopulated) : densestZips(zipFacts));
+      return shown ? buildChoroplethScale(shown.map((r) => r.addressable_borrowers)) : null;
+    }
     return stateFacts ? buildChoroplethScale(Object.values(stateFacts).map((r) => r.addressable)) : null;
-  }, [level, overlayActive, overlayData, rateIndex, shownScenario, stateFacts, zipFacts]);
+  }, [level, overlayActive, overlayData, polygons, rateIndex, shownScenario, stateFacts, zipFacts]);
   const zipCount = zipFacts ? Object.keys(zipFacts).length : 0;
-  const scaleScope = level === 'zip' && !overlayActive && zipCount > ZIP_TILE_CAP
+  const scaleScope = level === 'zip' && !overlayActive && !polygons && zipCount > ZIP_TILE_CAP
     ? `over the ${ZIP_TILE_CAP} densest of ${formatCount(zipCount)} ZIPs`
     : null;
 
@@ -282,7 +316,7 @@ export function USChoroplethMap({
   useEffect(() => {
     onReadStale?.(staleAt);
   }, [onReadStale, staleAt]);
-  const mapBusy = !usaMap || primary.loading || (level === 'zip' && states.loading);
+  const mapBusy = !usaMap || primary.loading || (level === 'zip' && states.loading) || zipRung === 'loading';
   // Borrowers in the drilled state that the ZIP layer cannot show. The
   // backend derives it as (state total - sum of ZIP tiles) off one refresh
   // anchor, so it IS the on-screen gap rather than a second estimate of it.
@@ -365,6 +399,7 @@ export function USChoroplethMap({
         zipFacts,
         selectedZip: current.zip,
         scenario: shownScenario,
+        zipAreas: zipRung === 'polygons',
       })
     : null;
 
@@ -448,27 +483,42 @@ export function USChoroplethMap({
     if (!zipFacts) {
       return <div className="map-stage map-stage--empty">Loading ZIPs…</div>;
     }
-    return (
-      <USChoroplethMapZipLevel
-        drillStateName={drillStateName}
-        byZip={zipFacts}
-        stateFacts={drillStateId ? stateFacts?.[drillStateId] : undefined}
-        scale={scale}
-        overlayActive={overlayActive}
-        overlayByUnit={overlayByUnit}
-        selectedZip={current.zip}
-        autoFocus={drillFocus}
-        onAutoFocused={onDrillFocused}
-        hover={hoverStage}
-        onSelectZip={(zip) => {
-          // Record the ZIP on this entry, then open its queue: Back returns
-          // to this drill with the tile selected.
-          changeSelection({ state: drillStateUC, county: null, zip }, { replace: true });
-          navigate(leadQueuePath({ state: drillStateUC, zip }));
-        }}
-        onOpenStateQueue={() => navigate(leadQueuePath({ state: drillStateUC }))}
-      />
-    );
+    const zipProps = {
+      drillStateName,
+      byZip: zipFacts,
+      stateFacts: drillStateId ? stateFacts?.[drillStateId] : undefined,
+      scale,
+      overlayActive,
+      overlayByUnit,
+      selectedZip: current.zip,
+      autoFocus: drillFocus,
+      onAutoFocused: onDrillFocused,
+      hover: hoverStage,
+      onSelectZip: (zip: string) => {
+        // Record the ZIP on this entry, then open its queue: Back returns
+        // to this drill with the tile (or ZIP area) selected.
+        changeSelection({ state: drillStateUC, county: null, zip }, { replace: true });
+        navigate(leadQueuePath({ state: drillStateUC, zip }));
+      },
+      onOpenStateQueue: () => navigate(leadQueuePath({ state: drillStateUC })),
+    };
+    const ZctaLevel = zctaWanted ? zcta.module?.USChoroplethMapZctaLevel ?? null : null;
+    if (zctaWanted && !zcta.failed) {
+      return ZctaLevel ? (
+        <ZctaLevel
+          key={drillStateUC}
+          {...zipProps}
+          usps={drillStateUC}
+          nationalViewBox={usaMap.viewBox}
+          onRung={onRung}
+          onZoomControls={setZoomControls}
+        />
+      ) : (
+        <div className="map-stage map-stage--empty">Loading ZIP areas…</div>
+      );
+    }
+    // The rung's chunk failed (a retired chunk, a network blip): the tiles say so.
+    return <USChoroplethMapZipLevel {...zipProps} status={zctaWanted ? ZCTA_TILES_STATUS : null} />;
   };
 
   return (
@@ -496,6 +546,7 @@ export function USChoroplethMap({
         setView={setView}
         campaignPrefillPath={campaignPrefillPath}
         onStartCampaign={(path) => navigate(path)}
+        zoomControls={zipRung === 'polygons' ? zoomControls : null}
       />
 
       {/* Animated level transitions (Buyer-Wow #4): keying on `level`
@@ -504,9 +555,11 @@ export function USChoroplethMap({
           child stage fills it. Not busy while a rollup is warming up or
           failed: aria-busy would silence the WarmingUpBlock's live region. */}
       <div
-        className={`map-levels stable-refresh-region ${updating ? 'is-updating' : ''}`}
+        className={`map-levels stable-refresh-region ${updating ? 'is-updating' : ''}${zctaWanted ? ' map-levels--tween' : ''}`}
         key={level}
         aria-busy={mapBusy}
+        // Warm the ZCTA rung's JS (never geometry) when the national stage is pointed at.
+        onPointerEnter={zipRungHost && level === 'state' ? () => preloadBestEffort(ZCTA_LEVEL.load) : undefined}
         // Escape hides an open card and stops there, so the same keypress
         // never also closes a menu that listens on window. With no card, at
         // the ZIP level (map or table) it backs out one level, a history push
@@ -547,6 +600,7 @@ export function USChoroplethMap({
         totalCount={totalCount}
         scale={scale}
         scaleScope={scaleScope}
+        caption={level === 'zip' && polygons ? 'ZIP areas are Census 2020 ZCTAs, an approximation of USPS delivery areas' : null}
         offMapNote={offMapCaption(tableGroups.offMap, shownScenario || overlayActive ? 'extra' : 'count')}
         segmentCaption={segmentCaption}
         segmentFilter={segmentFilter}
