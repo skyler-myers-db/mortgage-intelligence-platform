@@ -47,7 +47,9 @@ suffix: a suffix would lengthen every key, break ``workflow_key``'s
 ``family:generation`` parsing in ``drop_workflow_generations`` and orphan the
 last-good value ``stale_if_error`` needs across a refresh. The snapshot probe
 rides only reads that already go to the warehouse (an inline miss schedules it
-on this executor; a background refresh runs it first).
+on this executor, asynchronously; a background refresh runs it first). A
+single-flight follower takes the value its leader stored during the flight
+whatever generation it carries: only a leader FAILURE yields a marked serve.
 Factories must read only process-level state (the SQL client and settings),
 never the request actor or headers, because a refresh runs outside any request.
 
@@ -294,6 +296,8 @@ class GoldAggregateCache:
         event: Event | None = None
         served: _Entry | None = None
         advanced = False
+        # The entry a follower saw when it joined the flight (see _follow).
+        joined: _Entry | None = None
         with self._lock:
             entry = self._entries.get(key)
             now = self._now()
@@ -316,6 +320,8 @@ class GoldAggregateCache:
                     event = Event()
                     self._inflight[key] = event
                     leader = True
+                else:
+                    joined = entry
         if outcome != "miss":
             self._emit(f"gold_cache_{outcome}", key)
             _record_cache(outcome)
@@ -329,7 +335,8 @@ class GoldAggregateCache:
         assert event is not None
         if not leader:
             return self._follow(
-                key, event, factory, ttl_s, hard_s, stale_if_error, wait_timeout_s, generation
+                key, event, factory, ttl_s, hard_s, stale_if_error, wait_timeout_s,
+                generation, joined,
             )
         # An inline miss already goes to the warehouse: the snapshot probe
         # rides it, on the gold-swr executor, at most once per soft TTL.
@@ -352,7 +359,12 @@ class GoldAggregateCache:
         *,
         miss_reason: str | None = None,
     ) -> Any:
-        # Read just before the factory, after any probe the miss scheduled.
+        # Read just before the factory. The probe this miss scheduled runs
+        # ASYNCHRONOUSLY on the gold-swr executor, so it can bump the
+        # generation while the factory runs; the value then stores under the
+        # generation its read began in (the read may predate the refresh), so
+        # the next read of this key misses once more, and a follower accepts
+        # it by identity (_follow).
         generation = snapshot_generation()
         try:
             value, degraded_since = run_in_staleness_scope(factory)
@@ -392,16 +404,21 @@ class GoldAggregateCache:
         stale_if_error: bool,
         wait_timeout_s: float,
         generation: int,
+        joined: _Entry | None,
     ) -> Any:
         if event.wait(timeout=wait_timeout_s):
             with self._lock:
                 entry = self._entries.get(key)
-                # An older-generation entry the leader failed to replace is
-                # not fresh: it goes through _stale_after_error and its marker.
+                # _store_locked always builds a new _Entry, so an entry that is
+                # not the one seen at join is this flight's successful read,
+                # whatever generation it carries (a probe can bump it while the
+                # leader's factory runs). Only an older-generation entry the
+                # leader failed to replace goes through _stale_after_error and
+                # its marker.
                 fresh = (
                     entry is not None
                     and self._now() < entry.hard_expiry
-                    and entry.generation >= generation
+                    and (entry.generation >= generation or entry is not joined)
                 )
                 value = entry.value if entry is not None else None
             if fresh:

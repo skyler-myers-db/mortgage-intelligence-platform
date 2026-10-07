@@ -14,11 +14,18 @@ generation when it advances; ``GoldAggregateCache`` and the gold-versioned
   failed probe keeps the generation; TTL <= 0 means no probe; no watch under
   pytest unless installed;
 * the workflow_key sweep is intact, the e1 invariants hold, and the closed
-  TTL prefixes behave as specified (each still occurs in backend/).
+  TTL prefixes behave as specified (each still occurs in backend/);
+* under the REAL executor's ordering (the inline miss's probe runs
+  asynchronously, so it can bump the generation mid-read; ``_Deferred``) a
+  single-flight follower takes the value its successful leader stored with no
+  marker, only a failed leader yields a marked serve, and the read that
+  overlapped the advance keeps the generation it began in.
 """
 from __future__ import annotations
 
+import functools
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Executor, Future
@@ -28,7 +35,7 @@ from typing import Any
 import pytest
 
 from backend.config.settings import settings
-from backend.services import gold_snapshot, server_timing
+from backend.services import gold_cache, gold_snapshot, resilience_cache, server_timing
 from backend.services.gold_cache import (
     GoldAggregateCache,
     bump_workflow_generation,
@@ -56,6 +63,23 @@ class _Inline(Executor):
         future: Future[Any] = Future()
         future.set_result(fn(*args, **kwargs))
         return future
+
+
+class _Deferred(Executor):
+    """Holds submitted work until ``run_all``: the real executor's async ordering."""
+
+    def __init__(self) -> None:
+        self.pending: list[Callable[[], Any]] = []
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        self.pending.append(functools.partial(fn, *args, **kwargs))
+        future: Future[Any] = Future()
+        future.set_result(None)
+        return future
+
+    def run_all(self) -> None:
+        while self.pending:
+            self.pending.pop(0)()
 
 
 class _Clock:
@@ -375,3 +399,179 @@ def test_every_registered_ttl_prefix_still_occurs_in_backend() -> None:
         assert prefix in sources or f'"{family}"' in sources, (
             f"{prefix!r} no longer names a backend cache key: update GOLD_VERSIONED_TTL_PREFIXES"
         )
+
+
+# -- the real executor's ordering: the probe lands mid-read -------------------
+
+
+@pytest.fixture
+def follower_waiting(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
+    """Set once a single-flight follower starts waiting on its leader's event."""
+    waiting = threading.Event()
+
+    class _SignallingEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            waiting.set()
+            return super().wait(timeout)
+
+    monkeypatch.setattr(gold_cache, "Event", _SignallingEvent)
+    monkeypatch.setattr(resilience_cache, "Event", _SignallingEvent)
+    return waiting
+
+
+class _HeldRead:
+    """A factory that blocks inside the read until the test releases it."""
+
+    def __init__(self, value: Any, *, fail: BaseException | None = None) -> None:
+        self.value = value
+        self.fail = fail
+        self.calls = 0
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self) -> Any:
+        self.calls += 1
+        self.started.set()
+        assert self.release.wait(5), "the test never released the read"
+        if self.fail is not None:
+            raise self.fail
+        return self.value
+
+
+def _leader_and_follower(
+    read: Callable[[], Any],
+    held: _HeldRead,
+    follower_waiting: threading.Event,
+    mid_read: Callable[[], None],
+) -> dict[str, tuple[Any, str | None]]:
+    """Run ``read`` as a leader held in its factory, then as a follower.
+
+    ``mid_read`` runs while the leader is inside its read and before the
+    follower joins; the follower is known to be waiting before the release.
+    """
+    results: dict[str, tuple[Any, str | None]] = {}
+
+    def run(name: str) -> None:
+        results[name] = _served(read)
+
+    leader = threading.Thread(target=run, args=("leader",))
+    leader.start()
+    assert held.started.wait(5)
+    mid_read()
+    follower = threading.Thread(target=run, args=("follower",))
+    follower.start()
+    assert follower_waiting.wait(5), "the follower never joined the flight"
+    held.release.set()
+    leader.join(5)
+    follower.join(5)
+    assert not leader.is_alive() and not follower.is_alive()
+    return results
+
+
+def _events(caplog: pytest.LogCaptureFixture, name: str) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if getattr(r, "mip_event", None) == name]
+
+
+def test_a_follower_of_a_successful_leader_takes_its_value_without_a_marker(
+    watch: GoldSnapshotWatch,
+    clock: _Clock,
+    follower_waiting: threading.Event,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    watch.probe_if_due()  # learns the first snapshot, generation 0
+    clock.now += 300  # the next probe is due
+    executor = _Deferred()
+    cache = GoldAggregateCache(now=clock, executor=executor, wall=lambda: _WALL0)
+    held = _HeldRead("hero@read-1")
+
+    def probe_lands_mid_read() -> None:
+        assert len(executor.pending) == 1, "the inline miss scheduled the probe"
+        executor.run_all()  # a new snapshot: generation 1, the leader still reading
+        assert watch.generation() == 1
+
+    with caplog.at_level(logging.DEBUG):
+        results = _leader_and_follower(
+            lambda: cache.get_or_set("hero", held, ttl_s=900, stale_if_error=True),
+            held,
+            follower_waiting,
+            probe_lands_mid_read,
+        )
+
+    assert results["leader"] == ("hero@read-1", None)
+    assert results["follower"] == ("hero@read-1", None), "a successful leader is no stale serve"
+    assert held.calls == 1
+    assert not [
+        r
+        for r in _events(caplog, "gold_cache_stale")
+        if r.mip_extras.get("reason") == "factory_error"  # type: ignore[attr-defined]
+    ]
+
+
+def test_a_follower_of_a_failed_leader_after_an_advance_serves_last_good_with_the_marker(
+    watch: GoldSnapshotWatch, clock: _Clock, follower_waiting: threading.Event
+) -> None:
+    wall = [_WALL0]
+    cache = GoldAggregateCache(now=clock, executor=_Deferred(), wall=lambda: wall[0])
+    watch.probe_if_due()  # generation 0, the next probe due in one TTL
+    cache.get_or_set("k", _Factory("v1"), ttl_s=900, stale_if_error=True)
+    clock.now += 300
+    wall[0] += 300
+    watch.probe_if_due()
+    assert watch.generation() == 1
+    held = _HeldRead("never", fail=RuntimeError("warehouse flap"))
+
+    results = _leader_and_follower(
+        lambda: cache.get_or_set("k", held, ttl_s=900, stale_if_error=True),
+        held,
+        follower_waiting,
+        lambda: None,
+    )
+
+    assert results["leader"] == ("v1", _iso(_WALL0))
+    assert results["follower"] == ("v1", _iso(_WALL0)), "only a failure yields the marker"
+    assert held.calls == 1
+
+
+def test_a_read_that_overlaps_an_advance_keeps_the_generation_it_began_in(
+    watch: GoldSnapshotWatch, clock: _Clock
+) -> None:
+    watch.probe_if_due()
+    clock.now += 300
+    executor = _Deferred()
+    cache = GoldAggregateCache(now=clock, executor=executor)
+    calls = [0]
+
+    def factory() -> str:
+        calls[0] += 1
+        executor.run_all()  # the scheduled probe completes while the read runs
+        return f"v{calls[0]}"
+
+    assert cache.get_or_set("k", factory, ttl_s=900) == "v1"
+    assert watch.generation() == 1
+    assert cache._entries["k"].generation == 0, "the read may predate the refresh"
+    assert cache.get_or_set("k", factory, ttl_s=900) == "v2", "so it misses once more"
+    assert cache.get_or_set("k", factory, ttl_s=900) == "v2" and calls[0] == 2
+
+
+def test_a_versioned_ttl_follower_of_a_successful_leader_takes_its_value_without_a_marker(
+    watch: GoldSnapshotWatch, clock: _Clock, follower_waiting: threading.Event
+) -> None:
+    watch.probe_if_due()
+    ttl = TTLCache(now=clock, wall=lambda: _WALL0)
+    held = _HeldRead(41)
+
+    def advance_mid_read() -> None:
+        clock.now += 300
+        watch.probe_if_due()
+        assert watch.generation() == 1
+
+    results = _leader_and_follower(
+        lambda: ttl.get_or_set("lead_count:{}", held, ttl_s=900, stale_if_error=True),
+        held,
+        follower_waiting,
+        advance_mid_read,
+    )
+
+    assert results["leader"] == (41, None)
+    assert results["follower"] == (41, None), "a successful leader is no stale serve"
+    assert held.calls == 1

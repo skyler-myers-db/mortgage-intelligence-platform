@@ -679,7 +679,23 @@ moves a process-wide GENERATION when it advances.
   every other key is unaffected.
 - Cost. One advance is a coordinated miss: each hot key a reader touches pays
   one inline warehouse read once. The cold-cache Locust profile's scenario B
-  (docs/load-baseline.md, "Cold-cache profile") measures it.
+  (docs/load-baseline.md, "Cold-cache profile") measures it. The inline miss
+  that carries the advancing probe pays one more: the probe runs
+  asynchronously, so the generation can move while that key's own read is in
+  flight, and the read stores under the generation it BEGAN in (it may have
+  read the previous snapshot), so its next read misses once more. One extra
+  warehouse round trip per advance per process, never an old read served as
+  the new generation. A single-flight follower of that read still takes its
+  value with no `X-Data-Last-Good-At`: only a FAILED leader yields a marked
+  serve (`tests/unit/test_gold_cache_snapshot_keys.py`, the `_Deferred`
+  executor cases).
+- The get/set window. The versioned `TTLCache` callers (the dossier, lead
+  list, lead count and lead facets repositories) read with `get`, query the
+  warehouse, then `set`; `set` stamps the generation current when it stores.
+  A query that began before an advance and finished after it is therefore
+  stored under the newer generation and can be served for up to one soft TTL,
+  the same bound as before the generation existed. `get_or_set` callers
+  capture the generation before the read and have no such window.
 - Per process. Each App process learns on its own next warehouse-bound read,
   so two processes can disagree for up to one soft TTL.
 - The funnel lag. `gold.funnel_snapshot_daily` is recorded at deploy step 9

@@ -163,6 +163,8 @@ class TTLCache:
 
         leader = False
         generation = _generation_for(key)
+        # The entry a follower saw when it joined the flight.
+        joined: tuple[Any, float, float, bool, int] | None = None
         with self._lock:
             entry = self._entries.get(key)
             if entry is not None:
@@ -179,11 +181,15 @@ class TTLCache:
                 event = Event()
                 self._inflight[key] = event
                 leader = True
+            else:
+                joined = entry
 
         if not leader:
             self._emit_cache_event("ttl_cache_wait", key)
             if event.wait(timeout=wait_timeout_s):
-                cached = self.get(key)
+                cached = self._stored_since(key, joined)
+                if cached is None:
+                    cached = self.get(key)
                 if cached is not None:
                     record_cache("miss")
                     return cached
@@ -220,6 +226,27 @@ class TTLCache:
                     finished = self._inflight.pop(key, None)
                     if finished is not None:
                         finished.set()
+
+    def _stored_since(
+        self, key: str, joined: tuple[Any, float, float, bool, int] | None
+    ) -> Any | None:
+        """The value this flight's leader stored, whatever its generation.
+
+        ``_set`` always stores a new tuple, so an entry that is not the one
+        seen at join is the leader's successful read; a gold snapshot bump
+        while it ran leaves it at the generation the read began under, which
+        is no reason to serve a follower the retained value with a marker.
+        """
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None or entry is joined or self._now() >= entry[1]:
+                return None
+            self._entries.move_to_end(key)
+            value, _expires_at, last_good_wall, degraded, _generation = entry
+            self._emit_cache_event("ttl_cache_hit", key, reason="singleflight_follower")
+        if degraded:
+            report_stale(last_good_wall)
+        return value
 
     def get_stale(self, key: str) -> Any | None:
         with self._lock:
