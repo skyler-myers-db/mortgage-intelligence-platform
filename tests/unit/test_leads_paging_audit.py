@@ -773,3 +773,37 @@ def test_a_decision_without_a_view_records_none_and_a_malformed_one_is_422(
     assert plain.status_code == 200, plain.text
     assert "declared_lead_view_id" not in audit.list(limit=5)[0].payload_json
     assert bad.status_code == 422
+
+
+def test_a_phone_shaped_masked_id_on_each_page_still_writes_one_row_per_page(audit: InMemoryAuditStore) -> None:
+    """NB-1 (w5-refusal-capture-sales) across paging (w5-lead-queue-paging), W5c integration.
+
+    ``B-5551234567XYZ`` is a valid masked id whose ten-digit run the deep PII
+    scan once read as a phone number. Rank 1 (index 0, order positions 0-20)
+    lands on page 0 and rank 31 (index 30, positions 630-650) on page 1, so
+    each served page renders one phone-shaped id: each page must still answer
+    200 and write exactly one VIEW_LEADS row carrying it.
+    """
+
+    rows = [gold_lead_row(index) for index in range(1_050)]
+    rows[0]["borrower_id"] = "B-5551234567XYZ"
+    rows[30]["borrower_id"] = "B-1555123456789"
+    repo = DatabricksLeadRepository(SqliteLeadWarehouse(rows), cache_ttl_s=0.0)  # type: ignore[arg-type]
+    prior = _override(get_lead_repository, repo)
+    try:
+        first = client.get("/api/leads", headers=HEADERS)
+        assert first.status_code == 200, first.text
+        second = client.get("/api/leads", params={"cursor": first.headers["X-Next-Cursor"]}, headers=HEADERS)
+        assert second.status_code == 200, second.text
+    finally:
+        _restore(get_lead_repository, prior)
+
+    page0, page1 = _rows(audit)
+    assert (page0["page_index"], page1["page_index"]) == (0, 1)
+    assert page0["view_id"] == page1["view_id"] == first.headers["X-Lead-View-Id"]
+    rendered = set(page0["rendered_borrower_ids"]) | set(page1["rendered_borrower_ids"])
+    assert {"B-5551234567XYZ", "B-1555123456789"} <= rendered
+    assert page0["rendered_borrower_ids"] == _ids(first)
+    assert page1["rendered_borrower_ids"] == _ids(second)
+    assert {"B-5551234567XYZ", "B-1555123456789"} & set(page0["rendered_borrower_ids"])
+    assert {"B-5551234567XYZ", "B-1555123456789"} & set(page1["rendered_borrower_ids"])
