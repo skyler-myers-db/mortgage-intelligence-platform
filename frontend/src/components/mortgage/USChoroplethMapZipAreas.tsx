@@ -10,7 +10,9 @@
  * when the national stage is pointed at). The tiles are the degraded
  * fallback, never a mock: the rung's chunk fails, or the rung reports
  * 'tiles' (no committed file for the state, or a geometry read that failed
- * its retries), and the unchanged tiles render under a status line. The view
+ * its retries), and the unchanged tiles render under a status line. A state
+ * with an empty ZIP rollup is not a fallback: the tiles' empty card renders
+ * as it does on Home, with no status line and no rung or geometry load. The view
  * reported to the map makes the legend's scale and caption, the header's zoom
  * buttons, the ZIP card's line and the busy flag follow what is on screen.
  */
@@ -33,18 +35,23 @@ export const ZCTA_TILES_STATUS = 'ZIP boundaries could not load; showing the den
 const KIT: ZctaKit = { claimDrillFocus, moveRovingFocus, zipAriaLabel };
 
 function ZipAreasStage({ onView, usps, nationalViewBox, ...tiles }: ZipStageProps) {
-  const chunk = useLazyModule(ZCTA_LEVEL, true);
+  // An empty ZIP rollup has no area to draw: the tiles' own empty card shows
+  // unchanged (its "Open Lead Queue for {State}" action is a keyboard drill's
+  // focus target), with no status line, and no rung chunk or geometry loads.
+  const hasRows = Object.keys(tiles.byZip).length > 0;
+  const chunk = useLazyModule(ZCTA_LEVEL, hasRows);
   const [rung, setRung] = useState<ZipRung | null>(null);
   const [controls, setControls] = useState<ReactNode>(null);
   const tilesOnly = chunk.failed || rung === 'tiles';
-  const polygons = !tilesOnly && rung === 'polygons';
-  const busy = !tilesOnly && !polygons;
+  const polygons = hasRows && !tilesOnly && rung === 'polygons';
+  const busy = hasRows && !tilesOnly && !polygons;
   const shownControls = polygons ? controls : null;
   // A cross-line ZCTA is drawn in each state it touches; its counts are this state's.
   const cardNote = polygons ? `Counts are ${tiles.drillStateName} borrowers in this ZIP area.` : null;
   useLayoutEffect(() => {
     onView({ polygons, busy, controls: shownControls, caption: polygons ? ZCTA_CAPTION : null, cardNote });
   }, [busy, cardNote, onView, polygons, shownControls]);
+  if (!hasRows) return <USChoroplethMapZipLevel {...tiles} />;
   if (tilesOnly) {
     return (
       <>

@@ -14,9 +14,11 @@
  *    note; forced colours keep the outline; axe clean; report-only TX
  *    drill-to-paint at 4x CPU ('[zcta-drill]').
  *  - Always (no geometry needed): Home never loads the rung or any geometry;
- *    the national hover on Segments warms JS only; a geometry read that
- *    fails (or a state with no file) falls back to the densest-ZIP tiles
- *    with their status line.
+ *    the national hover on Segments warms JS only; a keyboard drill into a
+ *    state with an empty ZIP rollup keeps the tiles' empty card (focus on
+ *    its Lead Queue action, no status line, no rung load); a geometry read
+ *    that fails (or a state with no file) falls back to the densest-ZIP
+ *    tiles with their status line.
  *
  * Every polygon-dependent case is a fixme until the approved operator build
  * commits frontend/src/geo/zcta (it lifts itself once manifest.json exists).
@@ -27,6 +29,7 @@ import type { Page, Request } from '@playwright/test';
 import type { ZipRollupResponse } from '../../../src/types';
 import type { FixtureTheme } from './app';
 import { expectAxeClean } from './axe';
+import { emptyZipRollupsFixture } from './data/mapEncoding';
 import { json } from './mockApi';
 import { expect, test } from './test';
 import { auditedReadsAfter, markNaturalLoad } from './visual';
@@ -277,6 +280,23 @@ test.describe('the rung without geometry (always)', () => {
     await expect.poll(() => rung.length).toBe(1);
     await app.settle();
     expect(geometry).toEqual([]);
+  });
+
+  test('a keyboard drill into a state with an empty ZIP rollup focuses its Lead Queue action, with no status line and no rung load', async ({ app, mockApi, page }) => {
+    const rung = track(page, RUNG_CHUNK);
+    mockApi.register(emptyZipRollupsFixture.method, emptyZipRollupsFixture.pattern, emptyZipRollupsFixture.handler);
+    await app.gotoRoute(SEGMENTS);
+    await expect(page.locator('#main-content path.map-region.has-data').first()).toBeVisible();
+    await expect(page.locator('#main-content .map-levels')).toHaveAttribute('aria-busy', 'false');
+    // The keyboard drill: no pointer reaches the national stage, so nothing warms the rung either.
+    await statePath(page, 'az').focus();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/geo_state=AZ/);
+    await expect(page.locator('#main-content .map-wrap')).toContainText('No ZIP-level rollup for Arizona.');
+    await expect(page.getByRole('button', { name: 'Open Lead Queue for Arizona' })).toBeFocused();
+    await expect(page.locator('#main-content .zip-tiles__status')).toHaveCount(0);
+    await app.settle();
+    expect(rung).toEqual([]);
   });
 
   test('a geometry read that fails falls back to the densest-ZIP tiles with their status line', async ({ app, hygiene, page }) => {

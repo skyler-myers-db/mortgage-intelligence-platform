@@ -91,8 +91,16 @@ const handlers = {
 };
 const KIT = { claimDrillFocus, moveRovingFocus, zipAriaLabel };
 
+/** What a case changes from the Illinois drill above. */
+interface DrillOverrides {
+  byZip?: Record<string, ZipRollup>;
+  /** undefined: the drilled state has no state rollup either. */
+  stateFacts?: StateRollup | undefined;
+  autoFocus?: boolean;
+}
+
 /** The rung alone, or (`stage`) through Segment Intelligence's ZIP_AREAS stage. */
-function Harness({ stage = false, children }: { stage?: boolean; children?: ReactNode }) {
+function Harness({ stage = false, drill = {}, children }: { stage?: boolean; drill?: DrillOverrides; children?: ReactNode }) {
   const { stage: hover } = useMapHover();
   const tiles = {
     usps: 'IL',
@@ -107,6 +115,7 @@ function Harness({ stage = false, children }: { stage?: boolean; children?: Reac
     hover,
     onSelectZip: handlers.onSelectZip,
     onOpenStateQueue: handlers.onOpenStateQueue,
+    ...drill,
   };
   return (
     <>
@@ -133,12 +142,12 @@ async function until(check: () => boolean): Promise<void> {
   expect(check()).toBe(true);
 }
 
-async function render(stage = false): Promise<void> {
+async function render(stage = false, drill: DrillOverrides = {}): Promise<void> {
   const client = createMipQueryClient();
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
-        <Harness stage={stage} />
+        <Harness stage={stage} drill={drill} />
       </QueryClientProvider>,
     );
   });
@@ -310,6 +319,19 @@ describe('USChoroplethMapZctaLevel', () => {
     await until(() => document.querySelector('.zip-tiles') !== null);
     expect(document.querySelector('.zip-tiles__status')?.textContent).toBe(ZCTA_TILES_STATUS);
     expect(geo.load).toHaveBeenCalledTimes(3);
+    expect(handlers.onView).toHaveBeenLastCalledWith({ polygons: false, busy: false, controls: null, caption: null, cardNote: null });
+  });
+
+  it('through ZIP_AREAS: an empty ZIP rollup keeps the tiles\' empty card, its Lead Queue action takes the drill focus, and nothing loads', async () => {
+    await render(true, { byZip: {}, stateFacts: undefined, autoFocus: true });
+    await until(() => document.activeElement?.textContent === 'Open Lead Queue for Illinois');
+    expect(document.body.textContent).toContain('No ZIP-level rollup for Illinois.');
+    expect(document.querySelector('.zip-tiles__status')).toBeNull();
+    expect(document.body.textContent).not.toContain('Loading ZIP areas');
+    expect(svg()).toBeNull();
+    // The rung never mounted: no geometry lookup, no geometry read.
+    expect(geo.has).not.toHaveBeenCalled();
+    expect(geo.load).not.toHaveBeenCalled();
     expect(handlers.onView).toHaveBeenLastCalledWith({ polygons: false, busy: false, controls: null, caption: null, cardNote: null });
   });
 
