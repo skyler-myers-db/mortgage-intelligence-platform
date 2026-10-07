@@ -139,19 +139,28 @@ export const shellFixtures: FixtureEntry[] = [
  * a read-only auditor (Audit in the tools cluster) and a plain workspace user
  * (neither Audit nor Admin). Synthetic identity only.
  */
-export const PRESENTER_SESSION: SessionResponse = { ...SESSION, presenter_mode: true };
+export const PRESENTER_SESSION: SessionResponse = {
+  ...SESSION,
+  presenter_mode: true,
+  actor_display_name: null,
+  role_labels: ['Administrator', 'Approver'],
+};
 export const AUDITOR_ONLY_SESSION: SessionResponse = {
   ...SESSION,
   can_access_admin: false,
   can_approve: false,
   can_read_audit: true,
   actor_email: 'auditor@summit-mortgage.example',
+  actor_display_name: null,
+  role_labels: ['Auditor'],
 };
 export const WORKSPACE_USER_SESSION: SessionResponse = {
   ...SESSION,
   can_access_admin: false,
   can_read_audit: false,
   actor_email: 'officer@summit-mortgage.example',
+  actor_display_name: null,
+  role_labels: ['Approver'],
 };
 
 export function contractSamples(): ContractSample[] {
