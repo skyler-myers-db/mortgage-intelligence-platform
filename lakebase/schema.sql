@@ -4161,7 +4161,7 @@ COMMENT ON COLUMN mip_app.call_dispositions.notes IS
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_01_disposition_notes_retired',
+    '2026_10_07_disposition_notes_retired',
     'Retired the free-text call disposition note: column kept for legacy rows, no longer written'
 )
 ON CONFLICT (version) DO NOTHING;

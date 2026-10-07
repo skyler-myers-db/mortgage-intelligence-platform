@@ -609,7 +609,7 @@ def test_approval_request_tables_have_no_destructive_dml_or_unreviewed_hooks() -
 _REFUSAL_TEXTS_MARKER = "-- Genie refusal report texts (consented, 90 days, purge-only) ---"
 _REFUSAL_TEXTS_VERSION = "2026_10_07_genie_refusal_report_texts"
 _NOTES_RETIRED_MARKER = "-- Disposition notes retired ---"
-_NOTES_RETIRED_VERSION = "2026_10_01_disposition_notes_retired"
+_NOTES_RETIRED_VERSION = "2026_10_07_disposition_notes_retired"
 
 
 def _block_from(marker: str) -> str:

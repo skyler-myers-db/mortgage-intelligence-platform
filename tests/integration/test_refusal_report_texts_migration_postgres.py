@@ -2,7 +2,7 @@
 
 ``2026_10_07_genie_refusal_report_texts`` (D-audit-reads-d) adds the
 consented, purge-only question-text table, and
-``2026_10_01_disposition_notes_retired`` (D-shell-deviations-g2) re-comments
+``2026_10_07_disposition_notes_retired`` (D-shell-deviations-g2) re-comments
 the retired disposition-note column. The suite starts from the schema as it
 stood before the first block, then applies the full governed migration TWICE
 through ``lakebase_migrate._run_transaction`` (each wrapped in
@@ -41,7 +41,7 @@ _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
 _TEXTS_MARKER = "-- Genie refusal report texts (consented, 90 days, purge-only) ---"
 _TEXTS_VERSION = "2026_10_07_genie_refusal_report_texts"
-_NOTES_VERSION = "2026_10_01_disposition_notes_retired"
+_NOTES_VERSION = "2026_10_07_disposition_notes_retired"
 _HASH = "a" * 64
 
 
