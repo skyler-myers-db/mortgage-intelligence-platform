@@ -14,7 +14,9 @@
  * 4. a failed Load next keeps a Retry; ten pages or an unpaged server say
  *    "Narrow the filters to see more" instead of a button;
  * 5. the polite status line is always mounted and announces a page only when
- *    the SAME view grows, never for a new view.
+ *    the SAME view grows, never for a new view;
+ * 6. focus never falls to <body>: Load next and Retry are one button, and
+ *    the count line takes focus when that button leaves while focused.
  */
 
 import { act } from 'react';
@@ -103,6 +105,7 @@ describe('LeadTableFooter', () => {
     render({ paging: view });
     const button = byTestId('lead-load-next');
     expect(button?.getAttribute('aria-disabled')).toBe('true');
+    expect(button?.getAttribute('aria-busy'), 'the pending-button rule (Primitives Button)').toBe('true');
     expect(button?.hasAttribute('disabled')).toBe(false);
     act(() => button?.click());
     expect(view.loadNext).not.toHaveBeenCalled();
@@ -116,15 +119,59 @@ describe('LeadTableFooter', () => {
     expect(byTestId('lead-sort-scope')?.textContent).toContain('sorted within the loaded 500');
   });
 
-  it('turns a failed Load next into Retry and keeps the loaded rows', () => {
+  it('turns a failed Load next into Retry on the same button and keeps the loaded rows', () => {
+    render({ paging: paging() });
+    const button = byTestId('lead-load-next');
     const view = paging({ nextError: true });
     render({ paging: view });
-    expect(byTestId('lead-load-next')).toBeNull();
+    expect(byTestId('lead-load-next'), 'the same button, never remounted').toBe(button);
+    expect(button?.textContent).toBe('Retry');
+    expect(button?.getAttribute('aria-label'), 'the visible "Retry" starts the name').toBe('Retry: load the next 500');
     const failure = byTestId('lead-load-next-error');
-    expect(failure?.textContent?.replace(/\s+/g, ' ').trim()).toBe("Couldn't load the next 500 · Retry");
-    act(() => failure?.querySelector('button')?.click());
+    expect(failure?.getAttribute('role')).toBe('alert');
+    expect(failure?.querySelector('button'), 'the alert holds no control').toBeNull();
+    expect(text()).toContain("Couldn't load the next 500 · Retry");
+    act(() => button?.click());
     expect(view.retryNext).toHaveBeenCalledTimes(1);
+    expect(view.loadNext).not.toHaveBeenCalled();
     expect(text()).toContain('Showing 500 ranked borrowers of 1,284');
+
+    render({ paging: paging({ nextError: true, fetchingNext: true }) });
+    expect(button?.getAttribute('aria-disabled'), 'a Retry on the wire is inert too').toBe('true');
+  });
+
+  it('keeps focus on the paging button through a failure and a Retry, and hands it to the count at the end', () => {
+    render({ paging: paging() });
+    const button = byTestId('lead-load-next');
+    act(() => button?.focus());
+    expect(document.activeElement).toBe(button);
+
+    render({ paging: paging({ nextError: true }) });
+    expect(document.activeElement, 'a failed Load next').toBe(button);
+    render({ loadedCount: 1_000, sortedCount: 1_000, paging: paging({ pagesLoaded: 2 }) });
+    expect(document.activeElement, 'a successful Retry').toBe(button);
+    expect(button?.textContent).toBe('Load next 284');
+    expect(button?.hasAttribute('aria-label'), 'Load next is named by its text').toBe(false);
+
+    render({ loadedCount: 1_284, sortedCount: 1_284, paging: paging({ pagesLoaded: 3, hasMore: false }) });
+    expect(byTestId('lead-load-next')).toBeNull();
+    const count = byTestId('lead-paging-count');
+    expect(document.activeElement, 'the last page: the count line, never <body>').toBe(count);
+    expect(count?.getAttribute('tabindex')).toBe('-1');
+    expect(count?.textContent).toBe('Showing 1,284 ranked borrowers of 1,284 total matching filters');
+  });
+
+  it('leaves focus alone when the button leaves while focus is elsewhere', () => {
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    try {
+      render({ paging: paging() });
+      act(() => outside.focus());
+      render({ paging: paging({ pagesLoaded: 10, capped: true, hasMore: false }) });
+      expect(document.activeElement).toBe(outside);
+    } finally {
+      outside.remove();
+    }
   });
 
   it('says to narrow the filters at ten pages or when the server cannot page', () => {

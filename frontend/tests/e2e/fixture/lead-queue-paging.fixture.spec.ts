@@ -13,12 +13,15 @@
  *   - A later page answering 409 or 422 lead_view_cursor_invalid restarts
  *     the view at page 0 and says the queue was updated; any other failure
  *     keeps the loaded rows and Retry reads the same page once.
+ *   - Keyboard focus never falls to <body>: a failed Load next and a
+ *     successful Retry keep it on the one paging button, and the last page
+ *     (or a view restart) hands it to the count line.
  *   - A server that cannot page says "Narrow the filters to see more".
  *   - An approve and the CSV export declare the view they were taken on.
  *   - axe stays clean on the paged footer, in both themes.
  */
 import fs from 'node:fs';
-import type { Locator, Page } from '@playwright/test';
+import type { ElementHandle, Locator, Page } from '@playwright/test';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from '../../../src/lib/apiClients/leadExport';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { PRIMARY_BORROWER } from './data/borrowers';
@@ -36,6 +39,15 @@ function footer(page: Page): Locator {
 
 function tableWrap(page: Page): Locator {
   return page.getByRole('region', { name: 'Ranked borrowers table scroll region' });
+}
+
+/** The element keyboard focus is on is THIS (still mounted) element. */
+function holdsFocus(page: Page, element: ElementHandle<HTMLElement | SVGElement>): Promise<boolean> {
+  return page.evaluate((node) => node.isConnected && document.activeElement === node, element);
+}
+
+function focusIsOnBody(page: Page): Promise<boolean> {
+  return page.evaluate(() => document.activeElement === null || document.activeElement === document.body);
 }
 
 test.describe('Load next', () => {
@@ -125,11 +137,12 @@ test.describe('a page that fails', () => {
     await app.gotoRoute('/lead-queue');
     await page.getByTestId('lead-load-next').click();
     const failure = page.getByTestId('lead-load-next-error');
-    await expect(failure).toContainText("Couldn't load the next 500 · Retry");
+    await expect(failure).toHaveText("Couldn't load the next 500 ·");
+    await expect(footer(page)).toContainText("Couldn't load the next 500 · Retry");
     await expect(footer(page)).toContainText('Showing 500 ranked borrowers of 1,284');
     await expect(page.locator('[role="alert"]').filter({ hasText: "Couldn't load ranked borrowers" })).toHaveCount(0);
 
-    await failure.getByRole('button', { name: 'Retry' }).click();
+    await page.getByRole('button', { name: 'Retry: load the next 500' }).click();
     await expect(footer(page)).toContainText('Showing 1,000 ranked borrowers of 1,284');
     expect(queue.reads.map((read) => read.cursor)).toEqual([null, queue.reads[1].cursor, queue.reads[1].cursor]);
     expect(queue.reads).toHaveLength(3);
@@ -140,6 +153,61 @@ test.describe('a page that fails', () => {
     await app.gotoRoute('/lead-queue');
     await expect(page.getByTestId('lead-load-next')).toHaveCount(0);
     await expect(page.getByTestId('lead-paging-narrow')).toContainText('Narrow the filters to see more');
+  });
+});
+
+test.describe('focus through the paging transitions, by keyboard', () => {
+  test('a failed Load next and a successful Retry keep focus on the one paging button', async ({ app, hygiene, mockApi, page }) => {
+    hygiene.allow('console.error', /status of 500/);
+    const queue = registerPagedQueue(mockApi, { failOnce: { page: 1, status: 500, detail: 'Internal Server Error' } });
+    await app.gotoRoute('/lead-queue');
+    const control = page.getByTestId('lead-load-next');
+    await control.focus();
+    const button = await control.elementHandle();
+    if (button === null) throw new Error('no paging button');
+
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('lead-load-next-error')).toHaveText("Couldn't load the next 500 ·");
+    await expect(control).toHaveAccessibleName('Retry: load the next 500');
+    await expect(control, 'after a failed Load next').toBeFocused();
+    expect(await holdsFocus(page, button), 'the same button, never remounted').toBe(true);
+
+    await page.keyboard.press('Enter');
+    await expect(footer(page)).toContainText('Showing 1,000 ranked borrowers of 1,284');
+    await expect(control).toHaveText('Load next 284');
+    await expect(control, 'after a successful Retry').toBeFocused();
+    expect(await holdsFocus(page, button), 'the same button, never remounted').toBe(true);
+    expect(queue.reads.map((read) => [read.page, read.status])).toEqual([[0, 200], [1, 500], [1, 200]]);
+  });
+
+  test('the last page hands focus to the count line, never to <body>', async ({ app, mockApi, page }) => {
+    const queue = registerPagedQueue(mockApi);
+    await app.gotoRoute('/lead-queue');
+    const control = page.getByTestId('lead-load-next');
+    await control.focus();
+
+    await page.keyboard.press('Enter');
+    await expect(control).toHaveText('Load next 284');
+    await expect(control, 'a page that is not the last keeps focus').toBeFocused();
+
+    await page.keyboard.press('Enter');
+    await expect(footer(page)).toContainText('Showing 1,284 ranked borrowers of 1,284 total matching filters');
+    await expect(control).toHaveCount(0);
+    await expect(page.getByTestId('lead-paging-count'), 'after the last page').toBeFocused();
+    expect(await focusIsOnBody(page)).toBe(false);
+    expect(queue.reads.map((read) => read.page)).toEqual([0, 1, 2]);
+  });
+
+  test('a view restart on 409 keeps focus off <body>', async ({ app, hygiene, mockApi, page }) => {
+    hygiene.allow('console.error', /status of 409/);
+    registerPagedQueue(mockApi, { failOnce: { page: 1, status: 409, detail: 'lead_view_stale' } });
+    await app.gotoRoute('/lead-queue');
+    await page.getByTestId('lead-load-next').focus();
+
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('lead-paging-queue-updated')).toBeVisible();
+    await expect(page.getByTestId('lead-load-next')).toHaveText('Load next 500');
+    expect(await focusIsOnBody(page)).toBe(false);
   });
 });
 

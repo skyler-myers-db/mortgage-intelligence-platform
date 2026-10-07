@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { formatCount } from '../../lib/formatters';
 import type { LeadTablePaging, LeadTableSortScope, SortKey } from './LeadTable.types';
 
@@ -36,6 +36,13 @@ export interface LeadTableFooterProps {
  * which would drop focus) while a page is on the wire. A polite status line
  * announces each loaded page; at ten pages, or when the server cannot page,
  * it says to narrow the filters instead.
+ *
+ * Focus never falls to <body> on a paging transition. Load next and its
+ * Retry are ONE button whose label and action switch (the failure is a
+ * separate alert), so a failure or a successful Retry never unmounts the
+ * focused control. When the button leaves for good while it holds focus
+ * (the last page, ten pages, a view restart), the count line takes focus:
+ * the reader stays where they acted and hears how many rows are loaded.
  */
 export function LeadTableFooter({
   loadedCount,
@@ -73,10 +80,36 @@ export function LeadTableFooter({
   const nextCount = totalMatching !== null ? Math.min(LEAD_PAGE_SIZE, totalMatching - loadedCount) : LEAD_PAGE_SIZE;
   const canLoadNext = paging !== null && paging.hasMore && !paging.capped && !paging.unavailable;
 
-  return (
-    <div className="surface__ft">
+  // The paging button's ref cleanup runs while it is still in the document,
+  // before React removes it: it records whether the button held focus. The
+  // layout effect after that commit hands focus to the count line.
+  const pagingFocusLost = useRef(false);
+  const countRef = useRef<HTMLSpanElement>(null);
+  const pagingControlRef = useCallback((node: HTMLButtonElement | null) => {
+    if (node === null) return undefined;
+    return () => {
+      pagingFocusLost.current = node.ownerDocument.activeElement === node;
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (!pagingFocusLost.current) return;
+    pagingFocusLost.current = false;
+    const active = document.activeElement;
+    if (active === null || active === document.body) countRef.current?.focus({ preventScroll: true });
+  });
+
+  const count = (
+    <>
       Showing {formatCount(loadedCount)} ranked borrower{loadedCount === 1 ? '' : 's'}
       {totalMatching !== null && <>{' '}of {formatCount(totalMatching)} total matching filters</>}
+    </>
+  );
+
+  return (
+    <div className="surface__ft">
+      {paging === null ? count : (
+        <span ref={countRef} tabIndex={-1} data-testid="lead-paging-count">{count}</span>
+      )}
       {paging === null && truncatedAt !== null && totalMatching !== null && totalMatching > loadedCount && (
         <span className="muted"> · capped at {formatCount(truncatedAt)}</span>
       )}
@@ -110,26 +143,29 @@ export function LeadTableFooter({
           {paging.queueUpdated && (
             <span className="muted" data-testid="lead-paging-queue-updated"> · Queue updated: reloaded from the top</span>
           )}
-          {canLoadNext && !paging.nextError && (
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              aria-disabled={paging.fetchingNext ? 'true' : undefined}
-              onClick={() => {
-                if (!paging.fetchingNext) paging.loadNext();
-              }}
-              data-testid="lead-load-next"
-            >
-              Load next {formatCount(nextCount)}
-            </button>
-          )}
           {paging.nextError && (
             <span className="text-danger" role="alert" data-testid="lead-load-next-error">
               {' '}Couldn&apos;t load the next {formatCount(nextCount)} ·{' '}
-              <button type="button" className="btn btn--ghost btn--sm" onClick={paging.retryNext}>
-                Retry
-              </button>
             </span>
+          )}
+          {(canLoadNext || paging.nextError) && (
+            <button
+              ref={pagingControlRef}
+              type="button"
+              className="btn btn--ghost btn--sm"
+              aria-disabled={paging.fetchingNext ? 'true' : undefined}
+              aria-busy={paging.fetchingNext ? 'true' : undefined}
+              // The visible "Retry" starts the name (label in name).
+              aria-label={paging.nextError ? `Retry: load the next ${formatCount(nextCount)}` : undefined}
+              onClick={() => {
+                if (paging.fetchingNext) return;
+                if (paging.nextError) paging.retryNext();
+                else paging.loadNext();
+              }}
+              data-testid="lead-load-next"
+            >
+              {paging.nextError ? 'Retry' : `Load next ${formatCount(nextCount)}`}
+            </button>
           )}
           {(paging.capped || paging.unavailable) && moreExist && (
             <span className="muted" data-testid="lead-paging-narrow"> · Narrow the filters to see more</span>
