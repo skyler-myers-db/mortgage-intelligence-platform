@@ -500,7 +500,7 @@ test.describe('the ranked table fits 1440x900 with the Console open (W5c, integr
       // The Console narrows the header once its width settles.
       await expect.poll(() => page.locator('#main-content .main__inner').first().evaluate((element) => Math.round(element.getBoundingClientRect().width)))
         .toBeLessThan(1100);
-      if (route === '/segment-intelligence') await expect.poll(height).toBeGreaterThan(heights[`${route} closed`]);
+      await app.settle();
       heights[`${route} open`] = await height();
     }
     const measured = JSON.stringify(heights);
@@ -511,9 +511,9 @@ test.describe('the ranked table fits 1440x900 with the Console open (W5c, integr
     // Segment Intelligence keeps its pre-existing remainder (83 -> 101px, one
     // more hint line, Console open): a shared rule could not fix it without
     // either a :has() restyle cost or a markup change, so it is recorded for
-    // W5e w5-lead-queue-columns (integrator C3).
+    // W5e w5-lead-queue-columns (integrator C3). Only the regression bound is
+    // pinned (no more than that one line), so the W5e fix stays green here.
     expect(heights['/segment-intelligence closed'], measured).toBe(heights['/lead-queue closed']);
-    expect(heights['/segment-intelligence open'] - heights['/segment-intelligence closed'], measured).toBeGreaterThanOrEqual(16);
     expect(heights['/segment-intelligence open'] - heights['/segment-intelligence closed'], measured).toBeLessThanOrEqual(24);
   });
 });
