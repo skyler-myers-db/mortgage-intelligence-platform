@@ -4,4 +4,5 @@
 - [R6-09 health disclosure scope](project_r6_09_health_disclosure_scope.md) — R6-09 covers anonymous recon only; test new authenticated-health keys against lineage/data-estate (no auth dep) for marginal exposure
 - [Guard regex private copies](project_guard_regex_private_copies.md) — round-6 Genie fixes never reached 5 files holding stale title-case/9-digit copies; grep every copy before changing a shared validator
 - [Mask/guard separator parity + control values](project_mask_guard_separator_parity.md) — detector reads space as `[- ]`, guards written with a literal space launder; and every exemption sweep needs a non-exempt control city
+- [Brief hand-off self-attestation](project_brief_handoff_self_attestation.md) — "nothing assigned to this lane" claims were wrong 3/9 in W5d; grep every hand-off source per lane key
 - [_normalize_criterion truncation laundering](project_normalize_criterion_truncation.md) — " for the campaign and <X>" is cut before the vocabulary check; any branch newly consulting the attribute regex inherits the hole
