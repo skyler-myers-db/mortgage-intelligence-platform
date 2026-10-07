@@ -191,6 +191,17 @@ describe('BorrowerDecisionHistory', () => {
     const receiptButton = ownRow.querySelector('button');
     expect(receiptButton?.textContent).toBe('Receipt');
     expect(receiptButton?.getAttribute('aria-expanded')).toBe('false');
+    // Each same-named Receipt is described by its own row's what and when.
+    const describedBy = (row: Element) => {
+      const ids = (row.querySelector('button')?.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
+      const parts = ids.map((id) => document.getElementById(id));
+      expect(parts.every((part) => part !== null && row.contains(part))).toBe(true);
+      return parts.map((part) => part?.textContent).join(' ');
+    };
+    const rowWords = (row: Element) => `${row.querySelector('.audit__what')?.textContent} ${row.querySelector('.audit__time')?.textContent}`;
+    expect(describedBy(ownRow)).toBe(rowWords(ownRow));
+    expect(describedBy(revokeRow)).toBe(rowWords(revokeRow));
+    expect(describedBy(ownRow)).not.toBe(describedBy(revokeRow));
     expect(document.querySelector('[data-testid="receipt-probe"]')).toBeNull();
 
     await act(async () => {

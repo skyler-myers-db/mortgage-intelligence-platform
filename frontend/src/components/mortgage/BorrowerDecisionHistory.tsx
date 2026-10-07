@@ -62,20 +62,24 @@ export interface BorrowerDecisionHistoryProps {
 function DecisionRow({ item }: { item: BorrowerDecisionEvent }) {
   const [receiptOpen, setReceiptOpen] = useState(false);
   const receiptId = useId();
+  // Several rows can each offer a "Receipt"; the row's what and when tell them apart.
+  const rowId = useId();
+  const whatId = `${rowId}what`;
+  const timeId = `${rowId}time`;
   const decision = receiptDecision(item);
   const receipt = useLazyModule(RECEIPT_CHUNK, receiptOpen);
   const DecisionReceipt = receipt.module?.DecisionReceipt;
   const offersReceipt = item.receipt_available && decision !== null;
   return (
     <li className="audit">
-      <time className="audit__time mono" dateTime={isoDateTimeAttr(item.occurred_at) ?? undefined}>
+      <time id={timeId} className="audit__time mono" dateTime={isoDateTimeAttr(item.occurred_at) ?? undefined}>
         {formatDateTimeShort(item.occurred_at)}
       </time>
       <div className={`audit__ico ${decisionTone(item.outcome)}`} aria-hidden="true">
         <Icon name={ICON_BY_OUTCOME[item.outcome]} size={11} />
       </div>
       <div className="audit__body">
-        <div className="audit__what">{decisionWhat(item)}</div>
+        <div id={whatId} className="audit__what">{decisionWhat(item)}</div>
         <div className="audit__who">{decisionWho(item)}</div>
       </div>
       {offersReceipt && (
@@ -84,6 +88,7 @@ function DecisionRow({ item }: { item: BorrowerDecisionEvent }) {
           size="sm"
           aria-expanded={receiptOpen}
           aria-controls={receiptId}
+          aria-describedby={`${whatId} ${timeId}`}
           onClick={() => setReceiptOpen((open) => !open)}
         >
           Receipt
