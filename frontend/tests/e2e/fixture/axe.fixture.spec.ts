@@ -127,3 +127,62 @@ test.describe('named groups in the evidence drawer', () => {
     expect(await flaggedIn('evidence-drawer-groups-under-the-hood'), 'aria-label on a role that prohibits it, under the hood').toEqual([]);
   });
 });
+
+// W5d w5-palette-offer-sales-loop: the palette's provider groups, the ? sheet
+// in two columns at 1440x720 with the Triage deck open, and the Offer's
+// reject-note field error.
+test.describe('palette groups, the short-viewport sheet and the Offer note error', () => {
+  const offerDetail = FIXTURE_ROUTES.find((route) => route.name === 'offer-orchestrator-detail');
+  for (const theme of FIXTURE_THEMES) {
+    test(`home · command-palette-groups · ${theme}`, async ({ app, mockApi, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/');
+      const naturalLoad = markNaturalLoad(mockApi);
+      const palette = await app.openCommandPalette();
+      await palette.getByRole('combobox').fill('refi');
+      await expect(palette.getByRole('group', { name: 'Glossary' })).toBeVisible();
+      await app.settle();
+      await expectAxeClean(page, {
+        key: { route: 'home', state: 'command-palette-groups' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: 'dialog.cmdk[open]',
+      });
+      expectNoAuditedReadSince(mockApi, naturalLoad, `palette groups · ${theme}`);
+    });
+
+    test(`lead-queue · shortcut sheet at 1440x720 with the Triage deck · ${theme}`, async ({ app, page }) => {
+      await page.setViewportSize({ width: 1440, height: 720 });
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      await page.getByTestId('lead-triage-enter').click();
+      await expect(page.getByTestId('triage-deck')).toBeVisible();
+      await page.keyboard.press('?');
+      await expect(page.getByTestId('shortcut-sheet')).toBeVisible();
+      await expectAxeClean(page, {
+        key: { route: 'lead-queue', state: 'shortcut-sheet-1440x720-triage' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: '[data-testid="shortcut-sheet"]',
+      });
+    });
+
+    test(`offer-orchestrator-detail · reject note error · ${theme}`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute(offerDetail?.path ?? '/offer-orchestrator');
+      const bar = page.getByTestId('offer-action-bar');
+      await bar.getByRole('button', { name: 'Reject', exact: true }).click();
+      await bar.getByLabel('Reason').selectOption('other_with_text');
+      // aria-disabled until a note is given: a keyboard press still submits.
+      await bar.getByRole('button', { name: 'Confirm reject' }).focus();
+      await page.keyboard.press('Enter');
+      await expect(bar.getByLabel('Rationale note')).toHaveAttribute('aria-invalid', 'true');
+      await expectAxeClean(page, {
+        key: { route: 'offer-orchestrator-detail', state: 'reject-note-error' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: '[data-testid="offer-action-bar"]',
+      });
+    });
+  }
+});
