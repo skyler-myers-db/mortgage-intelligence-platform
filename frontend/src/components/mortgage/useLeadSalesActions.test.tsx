@@ -46,7 +46,7 @@ const loopMocks = vi.hoisted(() => ({
 vi.mock('../../lib/apiClients/salesLoop', () => ({ salesLoopApi: loopMocks }));
 
 import { ApiError } from '../../lib/apiTransport';
-import { UNDO_CONFLICT_COPY } from './salesUndoToasts';
+import { UNDO_CONFLICT_COPY } from './salesUndoRun';
 import { useLeadSalesActions } from './useLeadSalesActions';
 
 const LO_A = 'lo.alpha@summit.example';

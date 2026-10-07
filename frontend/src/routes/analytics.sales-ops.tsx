@@ -2,7 +2,7 @@
 // budget; the analytics route family opts out. Keep this section explicit.
 'use no memo';
 
-import { lazy, Suspense, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useId, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 import { api } from '../lib/api';
@@ -10,7 +10,6 @@ import { queryKeys } from '../lib/queryKeys';
 import { loanOfficersOnly, useSalesRoster } from '../lib/salesRoster';
 import { Chip, SurfaceTitle } from '../components/Primitives';
 import { DescribedErrorBody as ErrorBody } from '../components/ui/DescribedError';
-import { Field } from '../components/ui/Field';
 import type {
   SalesAgingLead,
   SalesConversionResponse,
@@ -49,6 +48,8 @@ import './analytics.sales-ops.css';
  */
 
 const DistributionBoard = lazy(() => import('../components/mortgage/DistributionBoard'));
+// Field and its stylesheet load only when a manager picks Custom.
+const SalesPeriodRange = lazy(() => import('../components/mortgage/SalesPeriodRange'));
 
 function relativeIsoDate(days: number): string {
   const date = new Date();
@@ -76,38 +77,6 @@ function CardValue({
   return <div className="kpi__value">{state === 'error' ? '—' : children}</div>;
 }
 
-/** A native date field applied on its `change` event (or Enter), never per keystroke. */
-function PeriodDate({ label, value, max, onApply }: { label: string; value: string; max: string; onApply: (value: string) => void }) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    const input = inputRef.current;
-    if (!input) return undefined;
-    const apply = () => {
-      if (input.value) onApply(input.value);
-    };
-    input.addEventListener('change', apply);
-    return () => input.removeEventListener('change', apply);
-  });
-  return (
-    <Field label={label} className="sales-ops-period__date">
-      {(control) => (
-        <input
-          {...control}
-          ref={inputRef}
-          type="date"
-          className="form-input"
-          defaultValue={value}
-          key={value}
-          max={max}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && event.currentTarget.value) onApply(event.currentTarget.value);
-          }}
-        />
-      )}
-    </Field>
-  );
-}
-
 function SalesPeriodControl({ period, onChange }: {
   period: SalesPeriod;
   onChange: (preset: SalesPeriodPreset, range?: { from: string; to: string }) => void;
@@ -131,10 +100,9 @@ function SalesPeriodControl({ period, onChange }: {
         ))}
       </div>
       {period.preset === 'custom' && (
-        <div className="sales-ops-period__range">
-          <PeriodDate label="From" value={period.from} max={today} onApply={(from) => onChange('custom', { from, to: period.to })} />
-          <PeriodDate label="To" value={period.to} max={today} onApply={(to) => onChange('custom', { from: period.from, to })} />
-        </div>
+        <Suspense fallback={<span className="skeleton kpi__delta-skeleton sales-ops-period__pending" aria-hidden="true" />}>
+          <SalesPeriodRange from={period.from} to={period.to} max={today} onApply={(range) => onChange('custom', range)} />
+        </Suspense>
       )}
     </div>
   );

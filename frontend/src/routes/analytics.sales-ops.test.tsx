@@ -390,7 +390,14 @@ describe('Analytics Sales ops tab', () => {
     it('reads a custom range and normalises an invalid one to week to date with replace', async () => {
       await renderView('/analytics?view=sales-ops&sales_period=custom&sales_from=2026-01-05&sales_to=2026-01-20');
       expect(conversionWindows()).toEqual(['2026-01-05..2026-01-20']);
-      expect(document.querySelectorAll('.sales-ops-period input[type="date"]').length).toBe(2);
+      // The range fields are their own lazy chunk (Field stays out of the route).
+      await vi.waitFor(async () => {
+        await settle();
+        expect(document.querySelectorAll('.sales-ops-period input[type="date"]').length).toBe(2);
+      }, { timeout: 10_000 });
+      const from = document.querySelector<HTMLInputElement>('.sales-ops-period input[type="date"]');
+      expect(from?.value).toBe('2026-01-05');
+      expect(document.querySelector('.sales-ops-period label')?.textContent).toBe('From');
 
       act(() => root.unmount());
       root = createRoot(document.getElementById('root') as HTMLElement);
