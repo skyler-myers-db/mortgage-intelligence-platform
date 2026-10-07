@@ -378,7 +378,7 @@ test.describe('decision receipt', () => {
     await approve.click();
 
     const failure = page.locator('#main-content .surface--danger[role="alert"]');
-    await expect(failure).toContainText("Couldn't write approval: audit write failed (fixture)");
+    await expect(failure).toContainText("Couldn't write approval.");
     await expect(approve).toBeEnabled();
     await expect(page.getByTestId('decision-receipt')).toHaveCount(0);
     await expect(page.getByTestId('decision-receipt-pending')).toHaveCount(0);

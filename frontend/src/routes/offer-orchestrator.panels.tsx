@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Link } from 'react-router';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
@@ -20,6 +20,7 @@ import {
 } from './offer-orchestrator.constants';
 import { humanizeThresholdKey, shortSourceLabel } from './offer-orchestrator.helpers';
 import { CertifiedCopyPreview } from './offer-orchestrator.preview';
+import { OfferFailureBody } from './offer-orchestrator.errors';
 
 export function OfferOrchestratorEmptyState() {
   return (
@@ -173,6 +174,8 @@ interface OfferReviewGridProps {
   draftPending?: boolean;
   draftLoaded: boolean;
   draftError: string | null;
+  /** What failed, described after 'Offer draft unavailable.' (states-04). */
+  draftErrorCause?: unknown;
   draftSubject: string;
   draftText: string;
   draftChannel: OutreachChannel;
@@ -192,7 +195,7 @@ interface OfferReviewGridProps {
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
   draftSavePending?: boolean;
-  draftSaveError?: string | null;
+  draftSaveError?: ReactNode;
   savedDraftExists: boolean;
   resetCurrentDraft: () => void;
   draftReady: boolean;
@@ -210,6 +213,7 @@ export function OfferReviewGrid({
   draftPending = false,
   draftLoaded,
   draftError,
+  draftErrorCause = null,
   draftSubject,
   draftText,
   draftChannel,
@@ -259,6 +263,7 @@ export function OfferReviewGrid({
         draftPending={draftPending}
         draftLoaded={draftLoaded}
         draftError={draftError}
+        draftErrorCause={draftErrorCause}
         draftSubject={draftSubject}
         draftText={draftText}
         draftChannel={draftChannel}
@@ -386,6 +391,8 @@ interface DraftOutreachPanelProps {
   draftPending?: boolean;
   draftLoaded: boolean;
   draftError: string | null;
+  /** What failed, described after 'Offer draft unavailable.' (states-04). */
+  draftErrorCause?: unknown;
   draftSubject: string;
   draftText: string;
   draftChannel: OutreachChannel;
@@ -405,7 +412,7 @@ interface DraftOutreachPanelProps {
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
   draftSavePending?: boolean;
-  draftSaveError?: string | null;
+  draftSaveError?: ReactNode;
   savedDraftExists: boolean;
   resetCurrentDraft: () => void;
   draftReady: boolean;
@@ -419,6 +426,7 @@ function DraftOutreachPanel({
   draftPending = false,
   draftLoaded,
   draftError,
+  draftErrorCause = null,
   draftSubject,
   draftText,
   draftChannel,
@@ -479,7 +487,10 @@ function DraftOutreachPanel({
             className="status-callout status-callout--warning mb-3"
             role="alert"
           >
-            <span>{draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}</span>
+            <span>
+              {draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}
+              {draftErrorCause != null && <> <OfferFailureBody cause={draftErrorCause} subject="the offer draft" /></>}
+            </span>
             {draftError && (
               <div className="chip-row mt-2">
                 <Button

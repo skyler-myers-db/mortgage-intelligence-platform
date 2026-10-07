@@ -9,6 +9,7 @@ import {
   OfferOrchestratorEmptyHero,
   OfferOrchestratorEmptyState,
 } from './offer-orchestrator.panels';
+import { OfferFailureBody } from './offer-orchestrator.errors';
 
 export interface OfferCampaignBinding {
   campaign_id: string;
@@ -74,13 +75,17 @@ export function OfferWarmingRoute({
 export function OfferLoadErrorRoute({
   borrowerId,
   loadError,
+  loadErrorCause = null,
   notFound,
   onRetry,
   backTo,
   pager = null,
 }: {
   borrowerId: string;
+  /** "Couldn't load borrower or offer." (the lead phrase). */
   loadError: string;
+  /** What failed: described in buyer-safe copy after the lead, never its message (states-04). */
+  loadErrorCause?: unknown;
   notFound: boolean;
   onRetry: () => void;
   /** The exact filtered queue the page was opened from (queueHref), else '/lead-queue'. */
@@ -91,7 +96,9 @@ export function OfferLoadErrorRoute({
     <PageShell
       eyebrow="Offer & Outreach"
       title={notFound ? `Borrower ${borrowerId} not found` : `Couldn't load ${borrowerId}`}
-      lede={notFound ? `Borrower ${borrowerId} was not found. Check the ID, use search, or return to the lead queue.` : loadError}
+      lede={notFound
+        ? `Borrower ${borrowerId} was not found. Check the ID, use search, or return to the lead queue.`
+        : <>{loadError} <OfferFailureBody cause={loadErrorCause} subject="the borrower and offer" /></>}
     >
       {pager}
       <div className="surface">

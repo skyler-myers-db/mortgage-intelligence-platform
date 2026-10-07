@@ -58,8 +58,16 @@ export interface OfferSnapshot {
 export const OFFER_SNAPSHOT_MISMATCH_MESSAGE =
   'The borrower and offer snapshots changed while loading. Retry after the data refresh completes.';
 
+/**
+ * An error whose message is fixed app copy the reviewer acts on (never server
+ * detail), so the failure surfaces show it as written (states-04;
+ * offer-orchestrator.errors). Every other failure is described by the shared
+ * buyer-safe vocabulary instead of its message.
+ */
+export class FixedCopyError extends Error {}
+
 /** The borrower and offer reads cited different gold refreshes: retried fresh, then surfaced. */
-export class OfferSnapshotMismatchError extends Error {
+export class OfferSnapshotMismatchError extends FixedCopyError {
   constructor() {
     super(OFFER_SNAPSHOT_MISMATCH_MESSAGE);
     this.name = 'OfferSnapshotMismatchError';
@@ -123,9 +131,9 @@ async function readOfferSnapshot(id: string, signal: AbortSignal, fresh: boolean
   return { borrower, recommendation, lifecycle };
 }
 
+/** The lead phrase only: the cause is described, never interpolated (states-04). */
 function loadErrorCopy(error: unknown): string | null {
-  if (!error) return null;
-  return error instanceof Error ? `Couldn't load borrower or offer: ${error.message}` : "Couldn't load borrower or offer.";
+  return error ? "Couldn't load borrower or offer." : null;
 }
 
 export interface OfferSnapshotRead {
@@ -135,8 +143,10 @@ export interface OfferSnapshotRead {
   warmingUp: WarmingUpState | null;
   /** A refresh landed between the reads and the retry is running. */
   reconciling: boolean;
-  /** "Couldn't load borrower or offer: …" once the read has failed for good. */
+  /** "Couldn't load borrower or offer." once the read has failed for good. */
   loadError: string | null;
+  /** What failed, for the described sentence after the lead (null with no error). */
+  loadErrorCause: unknown;
   notFound: boolean;
   /** Re-read the snapshot now (cancels a read in flight, as the effect's re-run did). */
   refetch: () => void;
@@ -171,6 +181,7 @@ export function useOfferSnapshot(id: string | undefined, binding: OfferQueryBind
     warmingUp: fetching ? warmingState(failure, query.failureCount) : null,
     reconciling: fetching && failure instanceof OfferSnapshotMismatchError,
     loadError: loadErrorCopy(error),
+    loadErrorCause: error ?? null,
     notFound: error instanceof ApiError && error.status === 404,
     refetch: () => {
       void refetch();
@@ -194,6 +205,8 @@ export interface OfferDraftView {
   loaded: boolean;
   warming: WarmingUpState | null;
   error: string | null;
+  /** What failed, for the described sentence after 'Offer draft unavailable.' (null otherwise). */
+  errorCause: unknown;
   body: string;
   subject: string;
   proof: OfferDraftProof | null;
@@ -225,14 +238,13 @@ async function readOfferDraft(
       || draft.channel !== channel
     )
   ) {
-    throw new Error('Campaign variant proof is stale. Reopen the saved campaign before approval.');
+    throw new FixedCopyError('Campaign variant proof is stale. Reopen the saved campaign before approval.');
   }
   return draft;
 }
 
-function draftErrorCopy(error: unknown): string {
-  return error instanceof Error ? `Offer draft unavailable: ${error.message}` : 'Offer draft unavailable.';
-}
+/** The lead phrase only: the cause is described, never interpolated (states-04). */
+const DRAFT_ERROR_COPY = 'Offer draft unavailable.';
 
 const NO_DRAFT = {
   body: '',
@@ -245,6 +257,7 @@ const NO_DRAFT = {
   strategy: null,
   evidence: [] as string[],
   evidenceAssets: [] as string[],
+  errorCause: null,
 };
 
 /** The route's one observer of the governed draft for this open. */
@@ -285,7 +298,8 @@ export function useOfferDraft(
       pending: !failed,
       loaded: false,
       warming: query.isFetching ? warmingState(query.failureReason, query.failureCount) : null,
-      error: failed ? draftErrorCopy(query.error) : null,
+      error: failed ? DRAFT_ERROR_COPY : null,
+      errorCause: failed ? query.error : null,
       reset,
     };
   }
@@ -297,6 +311,7 @@ export function useOfferDraft(
     loaded: true,
     warming: null,
     error: null,
+    errorCause: null,
     body: draft.body,
     subject: draft.subject ?? '',
     proof: {

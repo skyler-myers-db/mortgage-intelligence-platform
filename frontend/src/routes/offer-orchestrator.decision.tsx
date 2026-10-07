@@ -16,6 +16,7 @@
  * the durable lifecycle row), so a read-back this viewer may not make (403:
  * another approver's row) or that fails still says Approved / Rejected.
  */
+import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import type { DecisionRouting } from '../components/mortgage/DecisionReceipt.copy';
@@ -41,7 +42,7 @@ export interface OfferDecisionOutcomeProps {
   /** The decision was made in this view (borrower + load generation): play the receipt reveal. */
   justDecided: boolean;
   approvalId: string | null;
-  approveError: string | null;
+  approveError: ReactNode;
   /**
    * The borrower's score as loaded now. Shown on the receipt as "Score at
    * decision" only for a decision made in this view: a durable decision

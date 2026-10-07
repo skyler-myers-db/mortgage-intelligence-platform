@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation, useParams } from 'react-router';
 import type { ApproveResult, RejectResult } from '../lib/apiTypes';
@@ -37,6 +37,7 @@ import { OfferDecisionOutcome } from './offer-orchestrator.decision';
 import { OfferPriorDecisions } from './offer-orchestrator.priorDecisions';
 import { bindingShowsPager, useVerifiedOfferBinding } from './offer-orchestrator.binding';
 import { announceApprovalRouting, offerUnsavedMessage } from './offer-orchestrator.feedback';
+import { OfferFailureBody, OfferWriteFailureCopy, type OfferWriteFailure } from './offer-orchestrator.errors';
 import {
   OfferLoadErrorRoute,
   OfferOrchestratorEmptyRoute,
@@ -55,15 +56,6 @@ const PREVIEW_MOCK_CHUNK = lazyModule(() => import('../components/mortgage/Borro
 // carries and verifies additional stored channel variants.
 const SAVED_CAMPAIGN_OUTREACH_CHANNELS: readonly OutreachChannel[] = ['email'];
 
-/** "Couldn't write approval: …" / "Couldn't record rejection: …", verbatim from before the port. */
-function writeErrorCopy(err: unknown, lead: string): string {
-  return err instanceof Error ? `${lead}: ${err.message}` : `${lead}.`;
-}
-
-function draftSaveErrorCopy(err: unknown): string {
-  return err instanceof Error ? `Couldn't save draft: ${err.message}` : "Couldn't save draft.";
-}
-
 export default function OfferOrchestrator() {
   const { id } = useParams();
   const location = useLocation();
@@ -76,7 +68,9 @@ export default function OfferOrchestrator() {
   const binding = useVerifiedOfferBinding(campaignBinding, campaignBindingError, queue);
   const steppingQueue = bindingShowsPager(binding.state) ? queue : null;
   const queryClient = useQueryClient();
-  const [approveError, setApproveError] = useState<string | null>(null);
+  // A local gate refusal is a plain sentence; a failed write keeps its lead
+  // phrase and a described cause, never err.message (states-04).
+  const [approveError, setApproveError] = useState<string | OfferWriteFailure | null>(null);
   // Counts this view's explicit re-reads (Regenerate / Retry draft, a saved
   // draft's reset, the load-error Retry): the old effect's reloadToken, kept
   // only so a decision's one-shot receipt reveal is tied to the load it was
@@ -141,7 +135,9 @@ export default function OfferOrchestrator() {
   const requestIds = useIntentRequestIds();
   const approving = approveMutation.isPending || rejectMutation.isPending;
   const draftSavePending = draftSave.isPending;
-  const draftSaveError = draftSave.error ? draftSaveErrorCopy(draftSave.error) : null;
+  const draftSaveError: ReactNode = draftSave.error
+    ? <>{"Couldn't save draft."} <OfferFailureBody cause={draftSave.error} subject="the draft" /></>
+    : null;
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${activeDraftChannel}` : null;
   // The route is the ONE observer of both reads (offer-orchestrator.queries):
@@ -303,7 +299,7 @@ export default function OfferOrchestrator() {
     try {
       res = await approveMutation.mutateAsync(variables);
     } catch (err: unknown) {
-      setApproveError(writeErrorCopy(err, "Couldn't write approval"));
+      setApproveError({ lead: "Couldn't write approval.", cause: err });
       return;
     }
     if (!res.approved) {
@@ -365,7 +361,7 @@ export default function OfferOrchestrator() {
     try {
       res = await rejectMutation.mutateAsync(variables);
     } catch (err: unknown) {
-      setApproveError(writeErrorCopy(err, "Couldn't record rejection"));
+      setApproveError({ lead: "Couldn't record rejection.", cause: err });
       return;
     }
     if (!res.rejected) {
@@ -381,6 +377,21 @@ export default function OfferOrchestrator() {
     setRejectRationale('');
   };
 
+  // A 409 offers an explicit Regenerate draft in the alert: one audited
+  // draft read on the reviewer's click, never automatic, never a reload.
+  const approveErrorNode: ReactNode = approveError === null || typeof approveError === 'string'
+    ? approveError
+    : (
+      <OfferWriteFailureCopy
+        failure={approveError}
+        onRegenerate={() => {
+          setApproveError(null);
+          regenerateDraft();
+        }}
+        regenerateDisabled={approving}
+      />
+    );
+
   if (snapshot.warmingUp) {
     return <OfferWarmingRoute borrowerId={id} warmingUp={snapshot.warmingUp} pager={pager} />;
   }
@@ -390,6 +401,7 @@ export default function OfferOrchestrator() {
       <OfferLoadErrorRoute
         borrowerId={id}
         loadError={snapshot.loadError}
+        loadErrorCause={snapshot.loadErrorCause}
         notFound={snapshot.notFound}
         backTo={queueHref(queue)}
         pager={pager}
@@ -479,6 +491,7 @@ export default function OfferOrchestrator() {
         draftPending={draft.pending}
         draftLoaded={draftLoaded}
         draftError={draft.error}
+        draftErrorCause={draft.errorCause}
         draftSubject={draftSubject}
         draftText={draftText}
         draftChannel={activeDraftChannel}
@@ -520,7 +533,7 @@ export default function OfferOrchestrator() {
         auditId={auditId}
         justDecided={justDecided}
         approvalId={approvalId}
-        approveError={decisionPending ? null : approveError}
+        approveError={decisionPending ? null : approveErrorNode}
         score={b ? { opportunityScore: b.opportunity_score, confidence: b.confidence } : null}
         routing={approvalRouting?.id === id ? approvalRouting : null}
         queue={binding.state === 'validating' ? null : steppingQueue}
@@ -543,7 +556,7 @@ export default function OfferOrchestrator() {
           isSubmitting={approving || snapshotReconciling}
           approverGate={approverGate}
           actorEmail={actorEmail}
-          approveError={approveError}
+          approveError={approveErrorNode}
           genieOpen={genieOpen}
           rejectReview={rejectReviewOpen && (
             <RejectRationalePanel

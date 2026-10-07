@@ -399,7 +399,7 @@ describe('Offer Orchestrator writes', () => {
     await act(async () => {
       button('Approve outreach').click();
     });
-    await waitUntil(() => container.textContent?.includes("Couldn't write approval: Lakebase unavailable") === true);
+    await waitUntil(() => container.textContent?.includes("Couldn't write approval.") === true && !container.textContent.includes('Lakebase unavailable'));
     // Nothing reads "Approved" after a failed write.
     expect(appMocks.approvals[ID]).toBeUndefined();
     await act(async () => {

@@ -78,8 +78,8 @@ export interface OfferActionBarProps {
   isSubmitting: boolean;
   approverGate: string | null;
   actorEmail: string | null;
-  /** The failed approve / reject write, shown beside the buttons that made it. */
-  approveError: string | null;
+  /** The failed approve / reject write (lead phrase, described cause), beside the buttons that made it. */
+  approveError: ReactNode;
   /** The reject rationale form while it is open (Reject's first click opens it). */
   rejectReview?: ReactNode;
   /** The floating Genie panel is open: the bar keeps its buttons clear of it. */
