@@ -8,8 +8,10 @@ writes a keyed-by-borrower_id mirror into
 ``approval_rate`` and ``outreach_rate`` without a runtime federated join.
 
 Authority model (non-negotiable):
-    Lakebase is authoritative for approval + outreach state. This job is a
-    one-directional mirror. It NEVER writes back to Lakebase.
+    Lakebase is authoritative for approval + outreach state. The mirror is
+    one-directional and NEVER writes that state back. The one Lakebase write is
+    the snooze wake (wow-power-3): lead_snoozes.woken_at / wake_reason only, under
+    a woken_at IS NULL guard (never approvals, dispositions, assignments, audit).
 
 Run cadence:
     Event-triggered by the app as a durable retry after a warehouse-path
@@ -625,6 +627,104 @@ def _sql_timestamp(value: Any) -> str:
     return "CAST(" + _sql_string(value) + " AS TIMESTAMP)"
 
 
+# --- Snooze wake on signal (wow-power-3 phase 2) ------------------------------
+# The event-dated signals of gold_evidence_events.sql (listing date, refi event
+# date, payoff release date, sale date). Excluded: competitor_lien is stamped
+# with ingest time (it would re-wake every snooze on every refresh), and the
+# continuous rate/equity/market/propensity signals and foreclosure_stage.
+WAKE_SIGNAL_TYPES = ("listing", "recent_refi", "recent_payoff", "recent_sale")
+_SNOOZE_PROBE_CHUNK = 250
+_MASKED_BORROWER_ID_RE = re.compile(r"^B-[0-9A-Z]{13}$")
+_OPEN_SNOOZES_SQL = (
+    "SELECT snooze_id::text, borrower_id, snoozed_at FROM mip_app.lead_snoozes "
+    "WHERE woken_at IS NULL AND wake_at > now() ORDER BY snoozed_at LIMIT 500"
+)
+_WAKE_SIGNAL_SQL = (
+    "UPDATE mip_app.lead_snoozes SET woken_at = now(), wake_reason = 'signal' "
+    "WHERE snooze_id = ANY(%(ids)s::uuid[]) AND woken_at IS NULL"
+)
+_WAKE_TIMER_SQL = (
+    "UPDATE mip_app.lead_snoozes SET woken_at = wake_at, wake_reason = 'timer' "
+    "WHERE woken_at IS NULL AND wake_at <= now()"
+)
+
+
+def _fetch_open_snoozes(conn_kwargs: dict) -> list[dict[str, Any]]:
+    import psycopg
+
+    with psycopg.connect(**conn_kwargs) as conn, conn.cursor() as cur:
+        cur.execute(_OPEN_SNOOZES_SQL)
+        return [dict(zip(("snooze_id", "borrower_id", "snoozed_at"), row, strict=True)) for row in cur.fetchall()]
+
+
+def _build_snooze_signal_probe(borrower_ids: list[str], *, catalog: str) -> list[str]:
+    """One gold statement per 250 valid masked ids; only an id and a date leave the warehouse."""
+    ids = [value for value in dict.fromkeys(borrower_ids) if _MASKED_BORROWER_ID_RE.fullmatch(value)]
+    tables = (_qualified_uc_table(catalog, "gold", "borrower_dossier"), _qualified_uc_table(catalog, "gold", "evidence_events"))
+    signal_types = ", ".join(_sql_string(signal) for signal in WAKE_SIGNAL_TYPES)
+    return [
+        "SELECT d.borrower_id, MAX(CAST(try_to_timestamp(e.`timestamp`) AS DATE)) AS latest_signal_date "
+        f"FROM {tables[0]} d JOIN {tables[1]} e ON e.clip = d.clip "
+        f"WHERE d.borrower_id IN ({', '.join(_sql_string(v) for v in ids[start : start + _SNOOZE_PROBE_CHUNK])}) "
+        f"AND e.signal_type IN ({signal_types}) GROUP BY d.borrower_id"
+        for start in range(0, len(ids), _SNOOZE_PROBE_CHUNK)
+    ]
+
+
+def _as_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return (value.astimezone(UTC) if value.tzinfo else value).date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip()[:10]) if value else None
+    except ValueError:
+        return None
+
+
+def _signal_wakes(snoozes: list[dict[str, Any]], probe: list[dict[str, Any]]) -> list[str]:
+    """Snooze ids whose latest signal is dated AFTER the snooze's UTC day (never same-day)."""
+    latest = {str(row.get("borrower_id")): _as_date(row.get("latest_signal_date")) for row in probe}
+    woken: list[str] = []
+    for snooze in snoozes:
+        signal_day, snoozed_day = latest.get(str(snooze["borrower_id"])), _as_date(snooze["snoozed_at"])
+        if signal_day is not None and snoozed_day is not None and signal_day > snoozed_day:
+            woken.append(str(snooze["snooze_id"]))
+    return woken
+
+
+def _apply_snooze_wakes(conn_kwargs: dict, snooze_ids: list[str]) -> tuple[int, int]:
+    """One transaction: signal wakes, then timer closes; only open rows ever change."""
+    import psycopg
+
+    with psycopg.connect(**conn_kwargs) as conn, conn.cursor() as cur:
+        signal = 0
+        if snooze_ids:
+            cur.execute(_WAKE_SIGNAL_SQL, {"ids": snooze_ids})
+            signal = max(cur.rowcount, 0)
+        cur.execute(_WAKE_TIMER_SQL)
+        return signal, max(cur.rowcount, 0)
+
+
+def wake_lead_snoozes(
+    execute: Callable[[str], list[dict[str, Any]]],
+    conn_kwargs: dict,
+    *,
+    catalog: str,
+    fetch_open: Callable[[dict], list[dict[str, Any]]] | None = None,
+) -> tuple[int, int, int]:
+    """(open, signal_woken, timer_closed). Writes only lead_snoozes.woken_at / wake_reason
+    (woken_at IS NULL guard); with nothing open it touches nothing."""
+    snoozes = (fetch_open or _fetch_open_snoozes)(conn_kwargs)
+    if not snoozes:
+        return 0, 0, 0
+    probe: list[dict[str, Any]] = []
+    for statement in _build_snooze_signal_probe([str(row["borrower_id"]) for row in snoozes], catalog=catalog):
+        probe.extend(execute(statement))
+    signal, timer = _apply_snooze_wakes(conn_kwargs, _signal_wakes(snoozes, probe))
+    return len(snoozes), signal, timer
+
+
 def _get_spark() -> Any:
     """Return the active SparkSession. Exits 4 when unavailable."""
     try:
@@ -716,6 +816,14 @@ def main(argv: list[str] | None = None) -> None:
         prune_legacy_defaults=args.prune_legacy_defaults,
     )
     print("[sync-lifecycle] gold mirror refreshed")
+    # Follow-ups snoozes: fail-soft, counts only; never changes the exit code.
+    try:
+        open_count, signal, timer = wake_lead_snoozes(
+            _spark_executor(_get_spark()), conn_kwargs, catalog=args.catalog
+        )
+        print(f"[sync-lifecycle] snooze wake: open={open_count} signal={signal} timer={timer}")
+    except Exception as exc:  # noqa: BLE001 -- the mirror already landed
+        print(f"[sync-lifecycle] snooze wake skipped: {type(exc).__name__}", file=sys.stderr)
     # The bundle job's record_funnel_snapshot SQL task runs next and MERGEs
     # every funnel column, so an existing table gains them here first.
     if _ensure_funnel_snapshot_schema(_spark_executor(_get_spark()), catalog=args.catalog):

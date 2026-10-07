@@ -28,9 +28,11 @@ from jobs.sync_lifecycle_state import (
     _ensure_funnel_snapshot_schema,
     _ensure_lifecycle_schema,
     _fetch_lakebase_rows,
+    _fetch_open_snoozes,
     _missing_funnel_snapshot_columns,
     _qualified_uc_table,
     _resolve_connection,
+    wake_lead_snoozes,
 )
 
 log = logging.getLogger(__name__)
@@ -62,7 +64,8 @@ def sync_lifecycle_state_via_warehouse(
 
     resolved_catalog = catalog or settings.mip_default_catalog
     client = sql_client or get_sql_client()
-    rows = _fetch_lakebase_rows(_resolve_connection())
+    conn_kwargs = _resolve_connection()
+    rows = _fetch_lakebase_rows(conn_kwargs)
     _ensure_lifecycle_schema(client.execute, catalog=resolved_catalog)
     if prune_legacy_defaults:
         client.execute(_build_legacy_default_prune(catalog=resolved_catalog))
@@ -85,6 +88,7 @@ def sync_lifecycle_state_via_warehouse(
         )
         funnel_rows = _int_or_none(funnel.get("n") if funnel else None)
 
+    _wake_snoozes(client, catalog=resolved_catalog, conn_kwargs=conn_kwargs)
     return LifecycleSyncResult(
         lakebase_rows=len(rows),
         # Statement Execution does not expose Delta MERGE affected-row metrics
@@ -123,6 +127,22 @@ def _funnel_snapshot_schema_ready(
         emit(log, "funnel_snapshot_schema_deferred", level=logging.WARNING, missing_columns=len(missing))
         return False
     return True
+
+
+def _wake_snoozes(client: DatabricksSqlClient, *, catalog: str, conn_kwargs: dict[str, Any]) -> None:
+    """Wake Follow-ups snoozes on a newer signal (wow-power-3). Fail-soft, counts only.
+
+    Never raises and never changes the sync's result, its 503 behaviour or the
+    funnel path; a wake writes no audit row (the lead_snoozes row is the record).
+    """
+    try:
+        open_count, signal, timer = wake_lead_snoozes(
+            client.execute, conn_kwargs, catalog=catalog, fetch_open=_fetch_open_snoozes
+        )
+    except Exception as exc:  # noqa: BLE001 -- a wake must never fail the sync
+        emit(log, "lead_snooze_wake_failed", level=logging.WARNING, exc_type=type(exc).__name__)
+        return
+    emit(log, "lead_snooze_wake", open=open_count, signal=signal, timer=timer)
 
 
 def _is_permission_refusal(exc: BaseException) -> bool:

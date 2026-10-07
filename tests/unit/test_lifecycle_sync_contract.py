@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
@@ -16,6 +17,16 @@ if str(JOBS_DIR) not in sys.path:
     sys.path.insert(0, str(JOBS_DIR))
 
 sync_lifecycle = importlib.import_module("sync_lifecycle_state")
+
+
+@pytest.fixture(autouse=True)
+def _no_open_snoozes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No snooze is open, so every case keeps its exact statement sequence
+    (the wake cases live in tests/unit/test_lead_snooze_wake.py)."""
+    from backend.services import lifecycle_sync
+
+    monkeypatch.setattr(lifecycle_sync, "_fetch_open_snoozes", lambda _conn: [])
+    monkeypatch.setattr(sync_lifecycle, "_fetch_open_snoozes", lambda _conn: [])
 
 
 def _sqlite_value(value: Any) -> Any:

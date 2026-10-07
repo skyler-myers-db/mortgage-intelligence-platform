@@ -7,7 +7,8 @@ wrapped in ``contract_as_of``. Then: the CHECKs refuse a bad id length, a
 woken row without a reason, a reason without a wake and a wake_at not after
 snoozed_at; the open-pair unique index refuses a second open row; the REAL
 snooze service transaction supersedes, closes on the timer and replays a
-request_id; and the grant postflight gives the App
+request_id; the REAL wake UPDATEs of the lifecycle job wake only open rows
+(an already-woken row never changes); and the grant postflight gives the App
 role SELECT, INSERT and UPDATE only. Skipped unless ``MIP_TEST_POSTGRES_DSN``
 names a disposable database.
 """
@@ -33,6 +34,7 @@ from backend.services.repositories.databricks_borrower_contactability import (
     BorrowerContactabilityRow,
 )
 from jobs import lakebase_migrate
+from jobs import sync_lifecycle_state as job
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
@@ -218,6 +220,35 @@ def test_the_real_snooze_transaction_supersedes_closes_and_replays(dsn: str) -> 
     assert [audit["event_type"] for audit in audits] == ["LEAD_SNOOZE", "LEAD_SNOOZE"]
     assert {audit["metadata"]["snooze_days"] for audit in audits} == {1, 7}
     assert all(audit["entity_id"] == borrower for audit in audits)
+
+
+def test_the_real_wake_updates_wake_only_open_rows(dsn: str) -> None:
+    actor = _actor()
+    signal_open, already_woken, expired, still_open = _bid(), _bid(), _bid(), _bid()
+    for borrower, extra in (
+        (signal_open, {}),
+        (already_woken, {"woken_at": NOW - timedelta(hours=1), "wake_reason": "superseded"}),
+        (expired, {"snoozed_at": NOW - timedelta(days=3), "wake_at": NOW - timedelta(days=1)}),
+        (still_open, {}),
+    ):
+        _insert(dsn, **{"actor_email": actor, "borrower_id": borrower, "snoozed_at": NOW - timedelta(days=1),
+                        "wake_at": NOW + timedelta(days=2), **extra})
+    by_borrower = {row["borrower_id"]: row for row in _rows(dsn, actor)}
+    before_woken = by_borrower[already_woken]
+    ids = [str(by_borrower[signal_open]["snooze_id"]), str(before_woken["snooze_id"])]
+
+    open_rows = job._fetch_open_snoozes({"conninfo": dsn})
+    signal, timer = job._apply_snooze_wakes({"conninfo": dsn}, ids)
+
+    assert {row["borrower_id"] for row in open_rows} >= {signal_open, still_open}
+    assert expired not in {row["borrower_id"] for row in open_rows}, "an expired row is not open for a wake"
+    assert signal == 1, "the already-woken row is not counted"
+    assert timer >= 1
+    after = {row["borrower_id"]: row for row in _rows(dsn, actor)}
+    assert after[signal_open]["wake_reason"] == "signal" and after[signal_open]["woken_at"] is not None
+    assert after[already_woken] == before_woken, "an already-woken row never changes"
+    assert (after[expired]["wake_reason"], after[expired]["woken_at"]) == ("timer", after[expired]["wake_at"])
+    assert after[still_open]["woken_at"] is None
 
 
 def test_the_app_role_postflight_grants_select_insert_update_only(
