@@ -9,6 +9,7 @@ AUDIT EXEMPT docstring.
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -236,6 +237,35 @@ def test_the_read_writes_no_audit_row(
     lakebase.rows = [_row("lcp", "/", [900.0] * 30)]
     assert client.get(PATH, params={"days": 7}, headers=ADMIN_HEADERS).status_code == 200
     assert audit_store.list(limit=50) == []
+
+
+def _capped(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if getattr(record, "mip_event", None) == "field_performance_read_capped"]
+
+
+def test_a_read_that_reaches_the_row_cap_says_so_with_counts_only(
+    client: TestClient, lakebase: _Lakebase, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(admin_field_performance, "READ_LIMIT", 2)
+    lakebase.rows = [_row("lcp", "/", [900.0] * 30), _row("lcp", "/lead-queue", [900.0] * 30)]
+    with caplog.at_level(logging.INFO):
+        assert client.get(PATH, params={"days": 28}, headers=ADMIN_HEADERS).status_code == 200
+
+    [(_sql, _params, limit)] = lakebase.calls
+    assert limit == 2
+    [warning] = _capped(caplog)
+    assert warning.levelno == logging.WARNING
+    assert getattr(warning, "mip_extras", None) == {"rows": 2, "limit": 2, "days": 28}
+    assert "/lead-queue" not in caplog.text
+
+
+def test_a_read_under_the_row_cap_logs_nothing(
+    client: TestClient, lakebase: _Lakebase, caplog: pytest.LogCaptureFixture
+) -> None:
+    lakebase.rows = [_row("lcp", "/", [900.0] * 30)]
+    with caplog.at_level(logging.INFO):
+        assert client.get(PATH, params={"days": 7}, headers=ADMIN_HEADERS).status_code == 200
+    assert _capped(caplog) == []
 
 
 def test_the_handler_is_documented_audit_exempt() -> None:

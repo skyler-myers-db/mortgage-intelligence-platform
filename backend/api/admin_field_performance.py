@@ -7,6 +7,7 @@ borrower data, no identifier, no audit row and no warehouse statement.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
@@ -17,10 +18,12 @@ from backend.config.settings import settings
 from backend.schemas.field_performance import FieldPerformanceResponse
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.lakebase import LakebaseError, get_lakebase_client
+from backend.services.observability import emit
 from backend.services.rbac import AdminDep
 from backend.services.rum_field_performance import FIELD_PERFORMANCE_SQL, READ_LIMIT, summarize
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+log = logging.getLogger(__name__)
 
 
 def _query_int(value: object) -> object:
@@ -49,4 +52,9 @@ def field_performance(response: Response, _actor: AdminDep, days: Days = 7) -> F
         rows = get_lakebase_client().fetchall(FIELD_PERFORMANCE_SQL, {"since": since}, limit=READ_LIMIT)
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    if len(rows) >= READ_LIMIT:
+        # Day-grain keys over closed vocabularies stay far below the cap; a
+        # read that reaches it summarizes a partial window, so it says so.
+        emit(log, "field_performance_read_capped", level=logging.WARNING, rows=len(rows), limit=READ_LIMIT,
+             days=days)
     return summarize(rows, days=days, since=since, enabled=settings.mip_rum_enabled)

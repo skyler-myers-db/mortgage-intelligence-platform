@@ -938,6 +938,7 @@ Log lines (counts only, never a value, route or identifier):
 | --- | --- | --- | --- |
 | `rum_rollup_flushed` | INFO | `rows`, `events`, `dropped`, `duration_ms` | one flush wrote `rows` aggregate rows from `events` browser events; `dropped` events found the 1000-key cap full |
 | `rum_rollup_flush_failed` | WARNING | `rows`, `events`, `dropped` | the upsert failed; that batch is dropped, never retried |
+| `field_performance_read_capped` | WARNING | `rows`, `limit`, `days` | a panel read reached the 100,000-row read cap, so that window's summary is partial; day-grain keys stay far below it, so this points at a vocabulary or ring defect |
 
 An open Lakebase breaker skips the flush silently and keeps the aggregates
 (bounded at 1000 keys) for the next minute.
