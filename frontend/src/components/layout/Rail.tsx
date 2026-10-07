@@ -36,7 +36,7 @@ export function Rail() {
   const presenterMode = usePresenterMode();
   const onLedger = pathname === ROUTES.auditLedger.pattern;
   return (
-    <nav className="rail" aria-label="Primary navigation">
+    <nav className="rail" aria-label="Primary navigation" data-rum-target="nav">
       <Link to="/" className="rail__brand" title="Entrada — Mortgage Intelligence Platform" aria-label="Entrada home">
         <EntradaMark size={32} />
       </Link>

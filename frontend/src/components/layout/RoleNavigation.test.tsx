@@ -170,6 +170,23 @@ describe('role-aware navigation', () => {
     }
   });
 
+  /**
+   * D-platform-process-d2 item 4 (runtime-09 / stack-08): both nav roots name
+   * the RUM interaction target "nav" (nearestRumTarget walks ancestors, so
+   * the links are covered); a static word, no identifier, nothing else
+   * carries one.
+   */
+  it('marks both navigation roots, and nothing inside them, as the "nav" RUM target', () => {
+    queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, { can_access_admin: true, can_approve: true, can_read_audit: true });
+    const host = document.createElement('div');
+    host.innerHTML = renderNavigation(queryClient);
+    const targets = [...host.querySelectorAll('[data-rum-target]')];
+    expect(targets.map((element) => [element.tagName, element.className, element.getAttribute('data-rum-target')])).toEqual([
+      ['NAV', 'rail', 'nav'],
+      ['NAV', 'route-nav', 'nav'],
+    ]);
+  });
+
   it('shows the Admin destination in both navs after an affirmative session response', () => {
     queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, { can_access_admin: true, can_approve: true });
     expectAdminVisible(renderNavigation(queryClient));

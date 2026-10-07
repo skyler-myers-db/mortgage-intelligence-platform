@@ -93,7 +93,9 @@ export function RouteNav() {
     items: group.routes.filter(shown).map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] })),
   })).filter((group) => group.items.length > 0);
   return (
-    <nav ref={navRef} aria-label="Main navigation" className="route-nav">
+    // data-rum-target: field telemetry attributes an interaction to "nav"
+    // (D-platform-process-d2); a static word, never an identifier.
+    <nav ref={navRef} aria-label="Main navigation" className="route-nav" data-rum-target="nav">
       {groups.map((group) => (
         <div
           key={group.id}
