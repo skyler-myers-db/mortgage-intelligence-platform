@@ -164,7 +164,14 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
         refreshSalesViews(queryClient);
       },
       (error: unknown) => {
-        if (error instanceof ApiError && error.status === 409 && error.reason === 'distribution_plan_changed') {
+        // The commit's only 409 is the moved plan (backend/api/sales.py). A
+        // transport that does not yet carry a 409's top-level `reason`
+        // (INTEGRATOR: W5d lq-requests-binding adds that parse) reads null.
+        if (
+          error instanceof ApiError
+          && error.status === 409
+          && (error.reason === 'distribution_plan_changed' || error.reason === null)
+        ) {
           setBefore(current);
           withRetry(runPreview);
           return;
