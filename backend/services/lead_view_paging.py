@@ -241,6 +241,20 @@ def _read_with_identity(repo: object, resolved: ResolvedLeadQuery, view: LeadVie
     return LeadViewRead(leads, int(identity.get("total") or 0), identity, page)
 
 
+def refuse_an_emptied_view(cursor: str | None) -> None:
+    """409 when a later page's population emptied since page 0.
+
+    The assignee lost every borrower, or the approval request has no open
+    borrower left: the view changed under the reader like a refresh does, so
+    the client restarts at page 0 (which answers the empty view and writes
+    its one row) instead of appending an empty page of a new view to rows
+    the server no longer lists. Nothing is written for the 409.
+    """
+
+    if cursor is not None:
+        raise HTTPException(status_code=409, detail=LEAD_VIEW_REFRESHED_DETAIL)
+
+
 def refuse_a_refreshed_page(view: LeadView, leads: list[LeadSummary]) -> None:
     """409 when a later page's rows come from another gold refresh than page 0's."""
 

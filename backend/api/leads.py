@@ -56,6 +56,7 @@ from backend.services.lead_view_paging import (
     open_lead_view,
     read_lead_view,
     refuse_a_refreshed_page,
+    refuse_an_emptied_view,
     stamp_lead_view,
 )
 from backend.services.observability import emit
@@ -218,6 +219,7 @@ def list_leads(
     if request_batch is not None:
         open_ids = _approval_request_scope(request, request_batch, params)
         if not open_ids:
+            refuse_an_emptied_view(cursor)
             # Never an empty borrower_ids: it parses to None, the whole queue.
             return _empty_view(
                 response,
@@ -246,6 +248,7 @@ def list_leads(
         verify_handoff=cursor is None,
     )
     if resolved.assignment_empty:
+        refuse_an_emptied_view(cursor)
         return _empty_view(
             response,
             background,

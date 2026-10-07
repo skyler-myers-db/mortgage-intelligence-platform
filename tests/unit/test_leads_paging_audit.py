@@ -542,6 +542,49 @@ def test_an_assignment_change_between_pages_is_not_refused(
     assert second.headers["X-Page-Index"] == "1"
 
 
+def test_an_assignment_emptied_between_pages_is_409_and_writes_nothing(
+    gold: tuple[SqliteLeadWarehouse, DatabricksLeadRepository], audit: InMemoryAuditStore
+) -> None:
+    sales = _Sales([lead_id(index) for index in range(900)])
+    prior = _override(get_sales_state_store, sales)
+    try:
+        params = {"assigned_to": "lo.two@summit.example"}
+        first = client.get("/api/leads", params=params, headers=HEADERS)
+        sales.ids = []  # every borrower was reassigned meanwhile
+        second = client.get("/api/leads", params={**params, "cursor": first.headers["X-Next-Cursor"]}, headers=HEADERS)
+        restart = client.get("/api/leads", params=params, headers=HEADERS)
+    finally:
+        _restore(get_sales_state_store, prior)
+
+    assert first.status_code == 200
+    assert second.status_code == 409, "never a new empty page 0 appended to the loaded rows"
+    assert second.json()["detail"] == "The queue refreshed since this view loaded"
+    assert restart.status_code == 200 and restart.json() == []
+    rows = _rows(audit)
+    assert [row["page_index"] for row in rows] == [0, 0]  # page 0 and the restart; the 409 wrote nothing
+    assert rows[1]["total_matching"] == 0 and rows[1]["view_id"] != rows[0]["view_id"]
+
+
+def test_an_approval_request_emptied_between_pages_is_409_and_writes_nothing(
+    gold: tuple[SqliteLeadWarehouse, DatabricksLeadRepository],
+    audit: InMemoryAuditStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.api import leads as leads_api
+
+    open_ids = [lead_id(index) for index in range(600)]
+    monkeypatch.setattr(leads_api, "_approval_request_scope", lambda *_args: list(open_ids))
+    params = {"approval_request_batch": "22222222-2222-4222-8222-222222222222"}
+    first = client.get("/api/leads", params=params, headers=HEADERS)
+    open_ids.clear()  # the approver decided every open borrower meanwhile
+
+    second = client.get("/api/leads", params={**params, "cursor": first.headers["X-Next-Cursor"]}, headers=HEADERS)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 409
+    assert len(_rows(audit)) == 1
+
+
 def test_an_actor_who_lost_admin_gets_403_on_page_one(
     gold: tuple[SqliteLeadWarehouse, DatabricksLeadRepository], audit: InMemoryAuditStore
 ) -> None:
