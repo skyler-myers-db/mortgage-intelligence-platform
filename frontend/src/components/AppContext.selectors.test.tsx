@@ -52,6 +52,10 @@ import { EvidenceChip } from './Primitives';
 import { ConfidenceMeter } from './mortgage/ConfidenceMeter';
 import { RouteNav } from './layout/RouteNav';
 
+// The three Profiler pins (each row, the keyed probe) were re-verified by
+// mutation in W5d (2026-10-07): EvidenceChip, ConfidenceMeter or the probe
+// reading the whole useApp() facade turns the first case red, so none needed
+// converting to a render counter (RouteNav's was, above).
 const ROWS = 6;
 const SOURCE: DrawerSource = { title: 'Lien history', short: 'Cotality lien' };
 const commits = new Map<string, number>();

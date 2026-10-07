@@ -11,7 +11,7 @@ import {
   type PropsWithChildren,
   type SetStateAction,
 } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
@@ -39,6 +39,7 @@ import {
   type ThemePreference,
 } from '../lib/themePreference';
 import { changeTheme } from '../lib/themeTransition';
+import { reportWorkspaceFailure, runWorkspaceWrite, withEntry, withoutKey } from '../lib/mutations/workspace';
 import { AppStoreContext, createAppStore, type AppStoreKey } from './appStore';
 import type {
   ConfigOptions,
@@ -69,9 +70,13 @@ import type {
  * just those keys and re-renders only when one of them changes. A non-store
  * key is a type error, and a test's `vi.mock` of useApp ignores the keys, so
  * every mock keeps working. On it now: EvidenceChip and ConfidenceMeter
- * (Primitives.tsx, ConfidenceMeter.tsx). Next (W5c): LeadTable and
- * LeadTableRow (w5-lead-queue-paging), RouteNav's lastBorrowerId
- * (w5-shell-nav-followups).
+ * (Primitives.tsx, ConfidenceMeter.tsx); RouteNav's lastBorrowerId moved in
+ * W5c. LeadTable moves to the keyed store in W5e w5-lead-table-compile;
+ * LeadTableRow has read no AppContext since W5b.
+ *
+ * Workspace writes (saved leads and drafts) run on the TanStack mutation
+ * cache (lib/mutations/workspace): optimistic with rollback, serialised per
+ * target, and their failure copy never carries an error's own message.
  */
 
 export type { Accent, Density, Theme, ThemePreference };
@@ -172,6 +177,16 @@ interface AppCtxValue {
 
 const AppCtx = createContext<AppCtxValue | null>(null);
 
+/** Store the Console preference. A module function: a value block inside
+ *  try/catch is a React Compiler bailout (runtime-03). */
+function persistConsoleOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(CONSOLE_OPEN_STORAGE_KEY, open ? 'true' : 'false');
+  } catch {
+    // ignore
+  }
+}
+
 function readStoredBool(key: string, fallback: boolean): boolean {
   if (typeof window === 'undefined') return fallback;
   try {
@@ -259,6 +274,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   // to settle: an options answer that lands first cannot install what the
   // session would have vetoed. A failed session check falls back to options.
   const rumEnabled = !sessionQuery.isPending && shouldInstallRum(configOptionsQuery.data, sessionQuery.data);
+  const queryClient = useQueryClient();
   const [store] = useState(createAppStore);
   const app = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   // Console is opt-in so the first demo viewport uses the full prototype
@@ -295,13 +311,17 @@ export function AppProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     if (!rumEnabled) return;
     let cancelled = false;
+    // Budget trade (W5d cut 1, runtime-03): this dynamic import is the one
+    // React Compiler bailout left in AppProvider; compiling AppProvider cost
+    // more initial JS than the lane's cap (moved to W5e w5-compiler-lint).
     void import('../lib/rum')
       .then(({ installRum }) => {
         if (!cancelled) installRum();
       })
       .catch(() => {
-        // RUM is best-effort and opt-in. A telemetry chunk load failure must
-        // never block the app shell or change user-visible behavior.
+        // RUM is best-effort and on by default (D-platform-process-d1). A
+        // telemetry chunk load failure must never block the app shell or
+        // change user-visible behavior.
       });
     return () => {
       cancelled = true;
@@ -327,11 +347,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   // Console overlays the right edge) and persist the presenter's preference.
   useEffect(() => {
     document.documentElement.setAttribute('data-console', consoleOpen ? 'open' : 'closed');
-    try {
-      window.localStorage.setItem(CONSOLE_OPEN_STORAGE_KEY, consoleOpen ? 'true' : 'false');
-    } catch {
-      // ignore
-    }
+    persistConsoleOpen(consoleOpen);
   }, [consoleOpen]);
 
   useEffect(() => {
@@ -348,11 +364,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     }
     if (workspaceQuery.isError) {
       setWorkspaceStatus('error');
-      setWorkspaceError(
-        workspaceQuery.error instanceof Error
-          ? `Couldn't load saved workspace: ${workspaceQuery.error.message}`
-          : "Couldn't load saved workspace.",
-      );
+      reportWorkspaceFailure('load', workspaceQuery.error, setWorkspaceError);
     }
   }, [
     workspaceQuery.data,
@@ -414,115 +426,90 @@ export function AppProvider({ children }: PropsWithChildren) {
     if (!lead.borrower_id) return;
     const now = new Date().toISOString();
     store.getSnapshot().setLastBorrowerId(lead.borrower_id);
+    const id = lead.borrower_id;
     let prior: SavedLead | undefined;
     setSavedLeads((cur) => {
-      prior = cur[lead.borrower_id];
-      return {
-        ...cur,
-        [lead.borrower_id]: {
-          ...prior,
-          ...lead,
-          saved_at: prior?.saved_at ?? now,
-          updated_at: now,
-        },
-      };
+      prior = cur[id];
+      return withEntry(cur, id, { ...prior, ...lead, saved_at: prior?.saved_at ?? now, updated_at: now });
     });
-    void api.saveWorkspaceLead(lead)
+    void runWorkspaceWrite(queryClient, { kind: 'lead', op: 'save', target: id, write: () => api.saveWorkspaceLead(lead) })
       .then((saved) => {
-        setSavedLeads((cur) => ({ ...cur, [saved.borrower_id]: saved }));
+        setSavedLeads((cur) => withEntry(cur, saved.borrower_id, saved));
         setWorkspaceStatus('ready');
         setWorkspaceError(null);
       })
       .catch((err: unknown) => {
-        setSavedLeads((cur) => {
-          const { [lead.borrower_id]: _discard, ...rest } = cur;
-          return prior ? { ...rest, [lead.borrower_id]: prior } : rest;
-        });
+        setSavedLeads((cur) => (prior ? withEntry(cur, id, prior) : withoutKey(cur, id)));
         setWorkspaceStatus('error');
-        setWorkspaceError(
-          err instanceof Error
-            ? `Couldn't save lead: ${err.message}`
-            : "Couldn't save lead.",
-        );
+        reportWorkspaceFailure('saveLead', err, setWorkspaceError);
       });
-  }, [store]);
+  }, [queryClient, store]);
   const removeSavedLead = useCallback((borrowerId: string) => {
     let prior: SavedLead | undefined;
     setSavedLeads((cur) => {
       prior = cur[borrowerId];
-      const { [borrowerId]: _discard, ...rest } = cur;
-      return rest;
+      return withoutKey(cur, borrowerId);
     });
-    void api.deleteWorkspaceLead(borrowerId)
+    void runWorkspaceWrite(queryClient, { kind: 'lead', op: 'remove', target: borrowerId, write: () => api.deleteWorkspaceLead(borrowerId) })
       .then(() => {
         setWorkspaceStatus('ready');
         setWorkspaceError(null);
       })
       .catch((err: unknown) => {
-        if (prior) setSavedLeads((cur) => ({ ...cur, [borrowerId]: prior as SavedLead }));
+        if (prior) setSavedLeads((cur) => withEntry(cur, borrowerId, prior as SavedLead));
         setWorkspaceStatus('error');
-        setWorkspaceError(
-          err instanceof Error
-            ? `Couldn't remove saved lead: ${err.message}`
-            : "Couldn't remove saved lead.",
-        );
+        reportWorkspaceFailure('removeLead', err, setWorkspaceError);
       });
-  }, []);
+  }, [queryClient]);
   const isLeadSaved = useCallback(
     (borrowerId: string) => Boolean(savedLeads[borrowerId]),
     [savedLeads],
   );
-  const saveDraft = useCallback(async (draft: SavedDraftInput): Promise<SavedDraft> => {
+  // A promise chain, not try/catch: a value block inside try/catch is a
+  // React Compiler bailout (runtime-03). The draft's channel is the server's
+  // (the input names none), so draft writes share one scope per borrower.
+  const saveDraft = useCallback((draft: SavedDraftInput): Promise<SavedDraft> => {
     if (
       !draft.borrower_id
       || !draft.generation_id
       || !/^[0-9a-f]{64}$/.test(draft.response_hash)
     ) {
-      throw new Error('A borrower and audited draft proof are required.');
+      return Promise.reject(new Error('A borrower and audited draft proof are required.'));
     }
     store.getSnapshot().setLastBorrowerId(draft.borrower_id);
-    try {
-      const saved = await api.saveWorkspaceDraft(draft);
-      setSavedDrafts((cur) => ({
-        ...cur,
-        [draftKey(saved.borrower_id, saved.channel)]: saved,
-      }));
-      setWorkspaceStatus('ready');
-      setWorkspaceError(null);
-      return saved;
-    } catch (err: unknown) {
-      setWorkspaceStatus('error');
-      setWorkspaceError(
-        err instanceof Error
-          ? `Couldn't save draft: ${err.message}`
-          : "Couldn't save draft.",
-      );
-      throw err;
-    }
-  }, [store]);
+    const write = () => api.saveWorkspaceDraft(draft);
+    return runWorkspaceWrite(queryClient, { kind: 'draft', op: 'save', target: draft.borrower_id, write }).then(
+      (saved) => {
+        setSavedDrafts((cur) => withEntry(cur, draftKey(saved.borrower_id, saved.channel), saved));
+        setWorkspaceStatus('ready');
+        setWorkspaceError(null);
+        return saved;
+      },
+      (err: unknown) => {
+        setWorkspaceStatus('error');
+        reportWorkspaceFailure('saveDraft', err, setWorkspaceError);
+        throw err;
+      },
+    );
+  }, [queryClient, store]);
   const removeSavedDraft = useCallback((borrowerId: string, channel: SavedDraft['channel'] = 'email') => {
     let prior: SavedDraft | undefined;
     const key = draftKey(borrowerId, channel);
     setSavedDrafts((cur) => {
       prior = cur[key];
-      const { [key]: _discard, ...rest } = cur;
-      return rest;
+      return withoutKey(cur, key);
     });
-    void api.deleteWorkspaceDraft(borrowerId, channel)
+    void runWorkspaceWrite(queryClient, { kind: 'draft', op: 'remove', target: borrowerId, write: () => api.deleteWorkspaceDraft(borrowerId, channel) })
       .then(() => {
         setWorkspaceStatus('ready');
         setWorkspaceError(null);
       })
       .catch((err: unknown) => {
-        if (prior) setSavedDrafts((cur) => ({ ...cur, [key]: prior as SavedDraft }));
+        if (prior) setSavedDrafts((cur) => withEntry(cur, key, prior as SavedDraft));
         setWorkspaceStatus('error');
-        setWorkspaceError(
-          err instanceof Error
-            ? `Couldn't remove draft: ${err.message}`
-            : "Couldn't remove draft.",
-        );
+        reportWorkspaceFailure('removeDraft', err, setWorkspaceError);
       });
-  }, []);
+  }, [queryClient]);
   const refreshWorkspace = useCallback(() => {
     setWorkspaceStatus((cur) => (cur === 'ready' ? cur : 'loading'));
     setWorkspaceReloadToken((n) => n + 1);

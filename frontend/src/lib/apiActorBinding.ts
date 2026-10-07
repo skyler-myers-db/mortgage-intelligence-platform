@@ -24,6 +24,8 @@ import { requestHealthRecheck } from './healthRecheck';
 
 export const ACTOR_KEY_HEADER = 'X-MIP-Actor-Key';
 export const ACTOR_CHANGED_REASON = 'actor_changed';
+/** What a refused request means for the reader (describeApiError, the workspace copy). */
+export const ACTOR_CHANGED_COPY = 'Nothing was recorded. This tab resets for the new user.';
 
 /** Route paths (apiTransport's `_routePath` form) that never carry the key. */
 const UNBOUND_ROUTES: readonly string[] = ['/api/health', '/api/session'];

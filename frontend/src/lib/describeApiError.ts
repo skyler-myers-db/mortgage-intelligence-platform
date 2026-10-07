@@ -17,6 +17,7 @@
  */
 import { ApiError, COHORT_PROOF_MESSAGES, clientFailureReason, isAbortError } from './apiTransport';
 import { CLIENT_FAILURE_MESSAGES } from './apiFailure';
+import { ACTOR_CHANGED_COPY, ACTOR_CHANGED_REASON } from './apiActorBinding';
 import { friendlyDependencyName } from '../components/healthRecovery';
 
 export type ApiErrorKind =
@@ -213,13 +214,13 @@ export function describeApiError(error: unknown, ctx: DescribeContext): ApiError
       action: 'none',
     }, error);
   }
-  if (error.reason === 'actor_changed') {
+  if (error.reason === ACTOR_CHANGED_REASON) {
     // D-identity-review-a4: the server refused a request bound to the
     // previous user. Never 'reload': that re-requests the URL as the new actor.
     return build('actor_changed', {
       tone: 'warning',
       title: 'The signed-in user changed',
-      body: 'Nothing was recorded. This tab resets for the new user.',
+      body: ACTOR_CHANGED_COPY,
       action: 'none',
     }, error);
   }
