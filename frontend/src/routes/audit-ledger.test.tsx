@@ -98,6 +98,20 @@ vi.mock('../lib/api', async (importOriginal) => ({
   api: apiMocks,
 }));
 
+// The Action filter is a FilterSelect fed by the facets read, which the
+// explorer makes only on an explicit menu open (W5d tables-10).
+vi.mock('../lib/apiClients/auditExplorer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/apiClients/auditExplorer')>()),
+  auditFacets: (window: { since: string | null; until: string | null }) => Promise.resolve({
+    event_types: [{ value: 'APPROVE', count: 1 }],
+    actions: [{ value: 'outreach.approve', count: 1 }],
+    actors: [],
+    truncated: { event_types: false, actions: false, actors: false },
+    since: window.since ?? '2026-07-01T00:00:00Z',
+    until: window.until,
+  }),
+}));
+
 import AuditLedger from './audit-ledger';
 
 let root: Root;
@@ -130,6 +144,12 @@ function buttonByLabel(label: RegExp): HTMLButtonElement {
   ));
   if (!(button instanceof HTMLButtonElement)) throw new Error(`Button not found: ${label}`);
   return button;
+}
+
+/** A menu option by its label (a counted option also carries its count). */
+function optionByLabel(label: string): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>('[role="option"]')]
+    .find((candidate) => candidate.firstChild?.textContent === label);
 }
 
 function setNativeValue(input: HTMLInputElement, value: string): void {
@@ -227,18 +247,16 @@ describe('Audit ledger page', () => {
   it('applies borrower, action, and event filters to the audit query key', async () => {
     await renderLedger();
     const entity = document.querySelector<HTMLInputElement>('input[placeholder="B-... or approval UUID"]');
-    const action = document.querySelector<HTMLInputElement>('input[placeholder="outreach.approve"]');
-    expect(entity && action).toBeTruthy();
+    expect(entity).toBeTruthy();
 
-    act(() => {
-      setNativeValue(entity!, 'B-ABC123');
-      setNativeValue(action!, 'outreach.approve');
-    });
+    act(() => setNativeValue(entity!, 'B-ABC123'));
+    // Action is a FilterSelect over the facet values, read on this open (W5d).
+    act(() => buttonByLabel(/^Action: /).click());
+    await vi.waitFor(() => expect(optionByLabel('outreach.approve')).toBeTruthy());
+    act(() => optionByLabel('outreach.approve')!.click());
     // Event type is a FilterSelect fed by the labels registry (tables-10).
     act(() => buttonByLabel(/^Event type: /).click());
-    const option = [...document.querySelectorAll('[role="option"]')]
-      .find((candidate) => candidate.textContent === 'Outreach approved');
-    act(() => (option as HTMLElement).click());
+    act(() => optionByLabel('Outreach approved')!.click());
     act(() => buttonByLabel(/^Apply filters$/).click());
     await settle();
 

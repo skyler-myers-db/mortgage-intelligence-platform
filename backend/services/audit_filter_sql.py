@@ -10,6 +10,12 @@ byte-identical to before the move.
 Every statement here is a read of ``mip_app.action_audit`` and writes no
 audit row: the explorer's facets and count (``read_audit_facets``,
 ``read_audit_count``) are audit-free reads.
+
+``exclude_ledger_reads_by`` (W5d, tables-10 'Exclude my ledger reads') drops
+the VIEW_AUDIT_LEDGER rows one reader wrote. The router passes the SERVER
+identity of the reader (``AuditReaderDep``), never a query value, and the
+clause is NULL-safe (``IS DISTINCT FROM``), so a row with a NULL event type
+or actor is never dropped by it.
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ def audit_filter_clauses(
     correlation_id: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    exclude_ledger_reads_by: str | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """The WHERE clauses and bound parameters for the explorer's filters."""
 
@@ -83,6 +90,12 @@ def audit_filter_clauses(
     if until:
         clauses.append("event_at <= %(until)s")
         params["until"] = until
+    if exclude_ledger_reads_by:
+        clauses.append(
+            "(event_type IS DISTINCT FROM 'VIEW_AUDIT_LEDGER' "
+            "OR actor_email IS DISTINCT FROM %(exclude_ledger_reads_by)s)"
+        )
+        params["exclude_ledger_reads_by"] = exclude_ledger_reads_by
     return clauses, params
 
 

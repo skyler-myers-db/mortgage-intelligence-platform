@@ -18,6 +18,7 @@ import type { AuditRollupResponse } from '../lib/apiClients/audit';
 import type { RefusalReportFamilyCount, RefusalReportItem, RefusalReportListResponse, RefusalReportQuestionResponse } from '../lib/apiClients/refusalReports';
 import type { FieldPerformanceCell, FieldPerformanceResponse } from '../lib/apiClients/fieldPerformance';
 import type { PrintReceipt, PrintReceiptRequest } from '../lib/apiClients/printReceipt';
+import type { AuditCountResponse, AuditExportReceipt, AuditExportReceiptRequest, AuditFacetsResponse, AuditFacetValue } from '../lib/apiClients/auditExplorer';
 import type { ActorAuditEventPage, ActorAuditEventSummary, AuditEventPage, AuditEventRow, DecisionReceipt, HealthPayload as LibHealthPayload } from '../lib/apiTypes';
 import type { AssetFreshnessResponse, KpiProofParam, KpiProofResponse } from '../lib/apiTypes';
 import type { AssetColumn, AssetLineageNode, AssetMetadataResponse, AssetProperty, AssetTag, DataEstateAsset, DataEstateLane, DataEstateResponse } from '../types';
@@ -77,6 +78,16 @@ export type WireContractAdmin = [
   Expect<NoPhantomKeys<PrintReceipt, ApiResponse<'PrintReceipt'>>>,
   Expect<WireFits<PrintReceiptRequest, ApiRequest<'PrintReceiptRequest'>>>,
   Expect<DeepNoPhantomKeys<PrintReceiptRequest, ApiRequest<'PrintReceiptRequest'>>>,
+  Expect<WireFits<ApiResponse<'AuditFacetsResponse'>, AuditFacetsResponse>>,
+  Expect<NoPhantomKeys<AuditFacetsResponse, ApiResponse<'AuditFacetsResponse'>>>,
+  Expect<WireFits<ApiResponse<'AuditFacetValue'>, AuditFacetValue>>,
+  Expect<NoPhantomKeys<AuditFacetValue, ApiResponse<'AuditFacetValue'>>>,
+  Expect<WireFits<ApiResponse<'AuditCountResponse'>, AuditCountResponse>>,
+  Expect<NoPhantomKeys<AuditCountResponse, ApiResponse<'AuditCountResponse'>>>,
+  Expect<WireFits<ApiResponse<'AuditExportReceipt'>, AuditExportReceipt>>,
+  Expect<NoPhantomKeys<AuditExportReceipt, ApiResponse<'AuditExportReceipt'>>>,
+  Expect<WireFits<AuditExportReceiptRequest, ApiRequest<'AuditExportReceiptRequest'>>>,
+  Expect<DeepNoPhantomKeys<AuditExportReceiptRequest, ApiRequest<'AuditExportReceiptRequest'>>>,
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'GET /api/v1/config/options'>, ConfigOptions>>,
   Expect<NoPhantomKeys<ConfigOptions, ApiOk<'GET /api/v1/config/options'>>>,

@@ -3,8 +3,11 @@
  *
  * The audit explorer's URL-synced filters, labels, deep links and page CSV
  * (audit flow-04 phase 1 / tables-10), pinned on the rendered explorer with
- * the real query hook: what reaches `api.auditEventPage`, what the URL holds,
- * and what the table shows.
+ * the real query hook: what reaches the explorer's page read, what the URL
+ * holds, and what the table shows. W5d adds the recorded-read discipline of
+ * the facets and the count (an explicit menu open, a click; never on
+ * mount), the per-viewer exclusion, the presets and the audited, admin-only
+ * page CSV.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect } from 'react';
@@ -22,6 +25,10 @@ const mocks = vi.hoisted(() => ({
   rows: [] as AuditEventRow[],
   pageError: null as Error | null,
   rollupsError: null as Error | null,
+  facetCalls: [] as Array<{ since: string | null; until: string | null }>,
+  countCalls: [] as PageFilters[],
+  receiptCalls: [] as Array<{ row_count: number; filters: Record<string, string> }>,
+  order: [] as string[],
 }));
 
 // The explorer reads the session's role and lender name (Export PDF's
@@ -34,15 +41,46 @@ vi.mock('../../lib/api', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      auditEventPage: (_limit: number, _signal: AbortSignal | undefined, filters: PageFilters) => {
-        mocks.pageCalls.push(filters);
-        if (mocks.pageError) return Promise.reject(mocks.pageError);
-        const rows = filters.event_id
-          ? mocks.rows.filter((row) => row.event_id === filters.event_id)
-          : mocks.rows;
-        return Promise.resolve<AuditEventPage>({ items: rows, next_cursor: null });
-      },
       auditRollups: () => (mocks.rollupsError ? Promise.reject(mocks.rollupsError) : Promise.resolve([])),
+    },
+  };
+});
+
+vi.mock('../../lib/apiClients/auditExplorer', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/apiClients/auditExplorer')>();
+  return {
+    ...actual,
+    auditEventPage: (_limit: number, _signal: AbortSignal | undefined, filters: PageFilters) => {
+      mocks.pageCalls.push(filters);
+      if (mocks.pageError) return Promise.reject(mocks.pageError);
+      const rows = filters.event_id
+        ? mocks.rows.filter((row) => row.event_id === filters.event_id)
+        : mocks.rows;
+      return Promise.resolve<AuditEventPage>({ items: rows, next_cursor: null });
+    },
+    auditFacets: (window: { since: string | null; until: string | null }) => {
+      mocks.facetCalls.push(window);
+      return Promise.resolve({
+        event_types: [{ value: 'LEAD_EXPORT', count: 7 }],
+        actions: [
+          { value: 'leads.view', count: 3 },
+          { value: 'lead_queue.export', count: 9 },
+          { value: 'not an action!', count: 50 },
+        ],
+        actors: [],
+        truncated: { event_types: false, actions: false, actors: false },
+        since: window.since ?? '2026-07-01T00:00:00Z',
+        until: window.until,
+      });
+    },
+    auditCount: (query: PageFilters) => {
+      mocks.countCalls.push(query);
+      return Promise.resolve({ count: 60_000, capped: true, cap: 50_000 });
+    },
+    createAuditExportReceipt: (body: { row_count: number; filters: Record<string, string> }) => {
+      mocks.receiptCalls.push(body);
+      mocks.order.push('receipt');
+      return Promise.resolve({ audit_event_id: '6f2a9c1e-3b4d-4e5f-8a6b-7c8d9e0f1a2b' });
     },
   };
 });
@@ -133,6 +171,11 @@ const lastCall = () => mocks.pageCalls[mocks.pageCalls.length - 1];
 describe('AdminAuditExplorer', () => {
   beforeEach(() => {
     mocks.pageCalls.length = 0;
+    mocks.facetCalls.length = 0;
+    mocks.countCalls.length = 0;
+    mocks.receiptCalls.length = 0;
+    mocks.order.length = 0;
+    appContext.canAccessAdmin = true;
     mocks.rows = [row(1), row(2, { event_type: 'VIEW_LEADS', action: 'leads.view', entity_type: 'borrower', entity_id: 'B-AAAAAAAAAAAA2' })];
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -249,7 +292,7 @@ describe('AdminAuditExplorer', () => {
       expect(input(label).getAttribute('aria-invalid')).toBe('true');
       expect(input(label).getAttribute('aria-describedby')).toBe(alert?.id);
     }
-    for (const label of ['ACTOR', 'CORRELATION ID', 'ENTITY ID', 'ACTION']) {
+    for (const label of ['ACTOR', 'CORRELATION ID', 'ENTITY ID']) {
       expect(input(label).getAttribute('aria-invalid')).toBe('false');
       expect(input(label).hasAttribute('aria-describedby')).toBe(false);
     }
@@ -368,11 +411,120 @@ describe('AdminAuditExplorer', () => {
     await render('/audit-ledger');
 
     act(() => button(/^Download page 1 of the audit explorer as CSV$/).click());
+    await vi.waitFor(() => expect(blobs).toHaveLength(1));
 
-    expect(blobs).toHaveLength(1);
+    expect(mocks.receiptCalls).toHaveLength(1);
     expect(clicks[0]).toMatch(/^mip-audit-page-1-\d{4}-\d{2}-\d{2}\.csv$/);
     const lines = (await blobs[0].text()).trimEnd().split('\n');
     expect(lines[0]).toBe(AUDIT_PAGE_CSV_HEADER.join(','));
     expect(lines.slice(1).map((line) => line.split(',')[0])).toEqual(['evt-fixture-1', 'evt-fixture-2']);
+  });
+
+  // --- W5d (tables-10): recorded reads only on a deliberate act -------------
+
+  it('reads no facets and no count on mount', async () => {
+    await render('/audit-ledger?audit_since=2026-07-01');
+    // Hovering or focusing a counted menu reads nothing either.
+    const action = button(/^Action: /);
+    act(() => {
+      action.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      action.focus();
+    });
+    await settle();
+    expect(mocks.facetCalls).toEqual([]);
+    expect(mocks.countCalls).toEqual([]);
+    expect(mocks.pageCalls).toHaveLength(1);
+  });
+
+  it('reads the facets on an explicit Action menu open, for the applied window, and feeds its options', async () => {
+    await render('/audit-ledger?audit_since=2026-07-01&audit_until=2026-07-14&audit_action=outreach.approve');
+    act(() => button(/^Action: /).click());
+    // The read resolves on its own schedule; wait for the counts it feeds.
+    await vi.waitFor(() => expect(container.querySelectorAll('.filter-menu__count')).toHaveLength(3));
+
+    expect(mocks.facetCalls).toEqual([
+      { since: auditDayBoundary('2026-07-01', false), until: auditDayBoundary('2026-07-14', true) },
+    ]);
+    const labels = [...container.querySelectorAll('[role="option"]')].map((option) => option.firstChild?.textContent);
+    // Most frequent first; a value the URL would refuse is dropped; the applied action is kept.
+    expect(labels).toEqual(['All actions', 'lead_queue.export', 'leads.view', 'outreach.approve']);
+    const counts = [...container.querySelectorAll('.filter-menu__count')].map((count) => count.textContent);
+    expect(counts).toEqual(['9', '3', '0']);
+
+    // Closing and reopening within the stale window reads nothing more.
+    act(() => button(/^Action: /).click());
+    act(() => button(/^Action: /).click());
+    await settle();
+    expect(mocks.facetCalls).toHaveLength(1);
+  });
+
+  it('counts matching rows only on a click, and a filter change hides the count', async () => {
+    await render('/audit-ledger?audit_event_type=LEAD_EXPORT');
+    expect(mocks.countCalls).toEqual([]);
+
+    act(() => button(/^Count matching rows$/).click());
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="audit-count"]')).not.toBeNull());
+
+    expect(mocks.countCalls).toHaveLength(1);
+    expect(mocks.countCalls[0]).toMatchObject({ event_type: 'LEAD_EXPORT', exclude_own_ledger_reads: false });
+    expect(container.querySelector('[data-testid="audit-count"]')?.textContent)
+      .toBe('Showing rows 1–2 of more than 60,000 matching');
+
+    type(input('ACTOR'), 'approver@summit-mortgage.example');
+    act(() => button(/^Apply filters$/).click());
+    await settle();
+    expect(container.querySelector('[data-testid="audit-count"]')).toBeNull();
+    expect(mocks.countCalls).toHaveLength(1);
+  });
+
+  it('sends Exclude my ledger reads on the page read, keeps it out of the URL and restarts on page 1', async () => {
+    await render('/audit-ledger?audit_event_type=LEAD_EXPORT#audit');
+    const toggle = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+      .find((box) => box.parentElement?.textContent === 'Exclude my ledger reads');
+    expect(toggle?.checked).toBe(false);
+    expect(lastCall()).toMatchObject({ exclude_own_ledger_reads: false });
+
+    act(() => toggle!.click());
+    await settle();
+
+    expect(lastCall()).toMatchObject({ event_type: 'LEAD_EXPORT', exclude_own_ledger_reads: true, cursor: null });
+    expect(seen.location.search).toBe('?audit_event_type=LEAD_EXPORT');
+  });
+
+  it('applies a date preset at once, keeping the other filters and dropping the deep link', async () => {
+    await render('/audit-ledger?audit_event_type=LEAD_EXPORT&audit_event_id=evt-fixture-1');
+    const preset = button(/^Last 7 days$/);
+    expect(preset.getAttribute('aria-pressed')).toBe('false');
+
+    act(() => preset.click());
+    await settle();
+
+    const params = Object.fromEntries(new URLSearchParams(seen.location.search));
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
+    const day = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    expect(params).toEqual({ audit_event_type: 'LEAD_EXPORT', audit_since: day(start), audit_until: day(today) });
+    expect(button(/^Last 7 days$/).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('waits for the AUDIT_EXPORT receipt before the CSV download', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      mocks.order.push('download');
+      return 'blob:audit-page';
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    await render('/audit-ledger?audit_event_type=LEAD_EXPORT');
+
+    act(() => button(/^Download page 1 of the audit explorer as CSV$/).click());
+    await vi.waitFor(() => expect(mocks.order).toEqual(['receipt', 'download']));
+    expect(mocks.receiptCalls[0]).toMatchObject({ row_count: 2, filters: { event_type: 'LEAD_EXPORT' } });
+  });
+
+  it('shows a read-only auditor no page CSV, and Export PDF still', async () => {
+    appContext.canAccessAdmin = false;
+    await render('/audit-ledger');
+    expect([...container.querySelectorAll('button')].some((candidate) => /CSV/.test(candidate.getAttribute('aria-label') ?? candidate.textContent ?? ''))).toBe(false);
+    expect(container.querySelector('[data-testid="audit-export-pdf"]')).not.toBeNull();
   });
 });

@@ -14,6 +14,11 @@
  * greys out an inverted window, but a refused draft is reported by the
  * governed `role=alert` message below, not the browser's own bubble, and
  * only the control(s) at fault carry `aria-invalid`.
+ *
+ * W5d (tables-10; deviation:audit-explorer-controls): the ACTION free-text
+ * box is an 'Action' FilterSelect fed by the facets (AdminAuditExplorer.
+ * facets.tsx: read only on an explicit menu open), and Today / Last 7 days /
+ * Last 30 days presets apply a window at once beside SINCE / UNTIL.
  */
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { Chip } from '../Primitives';
@@ -24,6 +29,14 @@ import {
   eventTypeCodeLabel,
   eventTypeFilterOptions,
 } from './AdminAuditExplorer.labels';
+import {
+  ACTION_FILTER_LABEL,
+  ALL_ACTIONS_OPTION,
+  EVENT_TYPE_FILTER_LABEL,
+  actionFilterOptions,
+  useAuditActionFacets,
+} from './AdminAuditExplorer.facets';
+import { AUDIT_DATE_PRESETS, isPresetApplied, withPreset } from './AdminAuditExplorer.presets';
 import {
   EMPTY_AUDIT_FILTERS,
   auditFilterDraftError,
@@ -66,6 +79,7 @@ export function AuditExplorerFilterForm({ applied, onApply, applyButtonRef }: Fi
     return { 'aria-invalid': invalid, 'aria-describedby': invalid ? ERROR_ID : undefined };
   };
   const draftDirty = hasActiveAuditFilters(draft);
+  const actionFacets = useAuditActionFacets();
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -130,23 +144,20 @@ export function AuditExplorerFilterForm({ applied, onApply, applyButtonRef }: Fi
       </label>
       <div className="filter-row__group">
         <FilterSelect
-          label="Event type"
+          label={EVENT_TYPE_FILTER_LABEL}
           value={eventTypeValue}
           options={eventTypeFilterOptions(draft.eventType || null)}
           onChange={(option) => edit('eventType', eventTypeCodeForOption(option, draft.eventType || null) ?? '')}
         />
       </div>
-      <label className="filter-row__group">
-        <span className="field__label">ACTION</span>
-        <input
-          className="form-input"
-          value={draft.action}
-          onChange={(event) => edit('action', event.target.value)}
-          placeholder="outreach.approve"
-          spellCheck={false}
-          {...fieldErrorProps('action')}
+      <div className="filter-row__group">
+        <FilterSelect
+          label={ACTION_FILTER_LABEL}
+          value={draft.action || ALL_ACTIONS_OPTION}
+          options={actionFilterOptions(actionFacets, draft.action)}
+          onChange={(option) => edit('action', option === ALL_ACTIONS_OPTION ? '' : option)}
         />
-      </label>
+      </div>
       <label className="filter-row__group filter-row__group--date">
         <span className="field__label">SINCE</span>
         <input
@@ -169,6 +180,19 @@ export function AuditExplorerFilterForm({ applied, onApply, applyButtonRef }: Fi
           {...fieldErrorProps('until')}
         />
       </label>
+      <div className="filter-row__group audit-date-presets" role="group" aria-label="Date presets">
+        {AUDIT_DATE_PRESETS.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            className="btn btn--ghost btn--sm"
+            aria-pressed={isPresetApplied(applied, preset)}
+            onClick={() => onApply(withPreset(applied, preset))}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
       <label className="filter-row__group">
         <span className="field__label">CORRELATION ID</span>
         <input

@@ -2,6 +2,7 @@
  * @vitest-environment happy-dom
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
@@ -82,11 +83,14 @@ describe('AdminAuditExplorer receipt deep link', () => {
 
   function render() {
     act(() => {
+      // The facet and count controls hold (disabled) queries of their own.
       root.render(
-        <MemoryRouter initialEntries={[`/audit-ledger?audit_event_id=${PINNED_ID}#audit`]}>
-          <AdminAuditExplorer />
-          <LocationProbe />
-        </MemoryRouter>,
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter initialEntries={[`/audit-ledger?audit_event_id=${PINNED_ID}#audit`]}>
+            <AdminAuditExplorer />
+            <LocationProbe />
+          </MemoryRouter>
+        </QueryClientProvider>,
       );
     });
   }

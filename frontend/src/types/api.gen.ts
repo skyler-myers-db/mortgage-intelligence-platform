@@ -3445,6 +3445,7 @@ export interface ApiOperations {
       correlation_id?: string | null;
       since?: string | null;
       until?: string | null;
+      exclude_own_ledger_reads?: boolean;
     };
     headers: Record<string, never>;
     body: never;
@@ -3465,6 +3466,7 @@ export interface ApiOperations {
       since?: string | null;
       until?: string | null;
       event_id?: string | null;
+      exclude_own_ledger_reads?: boolean;
     };
     headers: Record<string, never>;
     body: never;
@@ -3485,6 +3487,7 @@ export interface ApiOperations {
       since?: string | null;
       until?: string | null;
       event_id?: string | null;
+      exclude_own_ledger_reads?: boolean;
     };
     headers: Record<string, never>;
     body: never;

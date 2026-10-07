@@ -80,6 +80,13 @@ export const queryKeys = {
   auditReceipt: (auditEventId: string | null | undefined) =>
     ['mip', 'audit', 'receipt', auditEventId ?? ''] as const,
   /**
+   * The explorer's facets and total count (W5d, tables-10): recorded
+   * VIEW_AUDIT_LEDGER reads, started only by an explicit menu open (facets,
+   * per since / until window) or a click (count, per applied filter set).
+   */
+  auditFacets: (windowKey: string) => ['mip', 'audit', 'facets', windowKey] as const,
+  auditCount: (filtersKey: string) => ['mip', 'audit', 'count', filtersKey] as const,
+  /**
    * The refusal-reports page (D-audit-reads-d): every served page writes one
    * VIEW_AUDIT_LEDGER row, so it is read only on an explicit open, a filter
    * change, Load more or Retry, and never persisted. Never the question text.

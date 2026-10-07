@@ -10,9 +10,20 @@
  * links to the explorer opened on that row (`?audit_event_id=`), which the
  * explorer expands and scrolls into view on arrival; and the current page
  * downloads as CSV.
+ *
+ * W5d (tables-10; deviation:audit-explorer-controls): the Action menu and the
+ * menus' counts come from the facets, read only on an explicit menu open;
+ * Today / 7 / 30-day presets; an on-demand total ('Count matching rows');
+ * 'Exclude my ledger reads', a per-viewer, server-side filter kept out of the
+ * URL (a shared link must not silently mean 'hide the recipient's reads');
+ * the page CSV, for administrators only, downloads only after its
+ * AUDIT_EXPORT receipt (AdminAuditExplorer.export.ts, loaded on click); and
+ * Export PDF behind a PRINT_EXPORT receipt for every ledger reader.
  */
 import { lazy, Suspense, useRef, useState, type ComponentType } from 'react';
 import { useLocation, useNavigate } from 'react-router';
+import { useApp } from '../AppContext';
+import { GlossaryTerm } from '../GlossaryTerm';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
@@ -20,9 +31,12 @@ import { PrintProvenance } from '../print/PrintProvenance';
 import { usePrintReceipt } from '../print/usePrintReceipt';
 import type { PrintReceiptRequest } from '../../lib/apiClients/printReceipt';
 import { api, type AuditEventPage } from '../../lib/api';
+import { auditEventPage, auditQueryFilters, type AuditExplorerQuery } from '../../lib/apiClients/auditExplorer';
 import { queryKeys } from '../../lib/queryKeys';
+import { toast } from '../../lib/toast';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
-import { downloadAuditPageCsv } from './AdminAuditExplorer.csv';
+import { AuditMatchingCount } from './AdminAuditExplorer.count';
+import { AuditFacetsProvider } from './AdminAuditExplorer.facets';
 import { useScrollDeepLinkedRow } from './AdminAuditExplorer.deepLink';
 import { AuditAppliedFilterChips, AuditExplorerFilterForm } from './AdminAuditExplorer.filters';
 import { auditEventLabel } from './AdminAuditExplorer.labels';
@@ -36,6 +50,7 @@ import {
 } from './AdminAuditExplorer.params';
 import { AUDIT_TABLE_CONTEXT, AuditEventTableRow, formatAuditTimestamp } from './AdminAuditExplorer.row';
 import { formatCount } from '../../lib/formatters';
+import './AdminAuditExplorer.css';
 
 interface ErrorBodyProps {
   error: unknown;
@@ -86,7 +101,16 @@ export function AdminAuditExplorer() {
   const applyButtonRef = useRef<HTMLButtonElement>(null);
   const searchParams = new URLSearchParams(location.search);
   const applied = parseAuditExplorerFilters(searchParams);
-  const appliedKey = auditFiltersKey(applied);
+  // 'Exclude my ledger reads': per viewer, default off, never in the URL. It
+  // is part of the page's identity (query and cursor-reset key).
+  const [excludeOwnReads, setExcludeOwnReads] = useState(false);
+  const appliedKey = `${auditFiltersKey(applied)}${excludeOwnReads ? '|exclude-own-ledger-reads' : ''}`;
+  const explorerQuery: AuditExplorerQuery = {
+    ...auditEventPageQuery(applied),
+    exclude_own_ledger_reads: excludeOwnReads,
+  };
+  const { canAccessAdmin } = useApp();
+  const [csvPending, setCsvPending] = useState(false);
   // Cursor pages and the expanded row belong to one applied filter set; a
   // new set (Apply, a chip removal, a deep link, Back) starts on page 1.
   const [cursorState, setCursorState] = useState<{ key: string; cursors: Array<string | null> }>(
@@ -121,10 +145,7 @@ export function AdminAuditExplorer() {
     error: errorObj,
     isFetching,
   } = useWarmingUpRetry<AuditEventPage>(
-    (signal) => api.auditEventPage(AUDIT_PAGE_SIZE, signal, {
-      ...auditEventPageQuery(applied),
-      cursor: pageCursor,
-    }),
+    (signal) => auditEventPage(AUDIT_PAGE_SIZE, signal, { ...explorerQuery, cursor: pageCursor }),
     {
       queryKey: queryKeys.auditEvents(['explorer', appliedKey, pageCursor]),
       keepPreviousData: false,
@@ -155,16 +176,22 @@ export function AdminAuditExplorer() {
   );
   const rollupsError = rollupsErrorObj;
 
-  // The applied query of the page on screen, as the receipt's fingerprinted
-  // filters (only the set parameters, as the page request sends them).
-  const printFilters: Record<string, string> = {};
-  for (const [key, value] of Object.entries(auditEventPageQuery(applied))) {
-    if (value !== null) printFilters[key] = value;
-  }
+  // The query of the page on screen, as the receipts' fingerprinted filters
+  // (only the set parameters, as the page request sends them).
+  const receiptFilters = auditQueryFilters(explorerQuery);
   const printRequest: PrintReceiptRequest = {
     surface: 'audit_ledger',
-    filters: printFilters,
+    filters: receiptFilters,
     row_count: events?.length ?? 0,
+  };
+  const exportCsv = () => {
+    if (!events?.length) return;
+    setCsvPending(true);
+    import('./AdminAuditExplorer.export')
+      .then((module) => module.exportAuditPageCsv({ events, page, filters: receiptFilters }))
+      // Only the chunk itself can fail here: the flow toasts its own failures.
+      .catch(() => toast.error('Audit page not exported', { detail: 'Reload the page, then export again.' }))
+      .finally(() => setCsvPending(false));
   };
 
   const goToPage = (cursors: Array<string | null>) => {
@@ -196,7 +223,8 @@ export function AdminAuditExplorer() {
         <div>
           <SurfaceTitle id="audit-explorer-title">Audit explorer</SurfaceTitle>
           <div className="muted fs-12">
-            Filter the Lakebase ledger by actor, day, event type, entity or correlation id.
+            Filter the <GlossaryTerm term="auditLogging">Lakebase ledger</GlossaryTerm> by actor, day, event
+            type, entity or correlation id.
           </div>
         </div>
         <div className="chip-row">
@@ -212,17 +240,28 @@ export function AdminAuditExplorer() {
               ? 'Copied table context'
               : 'Copy table context'}
           </button>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={() => events && downloadAuditPageCsv(events, page)}
-            disabled={!events?.length || updating}
-            aria-label={`Download page ${page + 1} of the audit explorer as CSV`}
-            title="Download the rows on this page as CSV"
-          >
-            <Icon name="export" size={12} />
-            Page CSV
-          </button>
+          <label className="audit-exclude-own">
+            <input
+              type="checkbox"
+              checked={excludeOwnReads}
+              onChange={(event) => setExcludeOwnReads(event.target.checked)}
+            />
+            Exclude my ledger reads
+          </label>
+          {canAccessAdmin && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={exportCsv}
+              disabled={!events?.length || updating || csvPending}
+              aria-busy={csvPending || undefined}
+              aria-label={`Download page ${page + 1} of the audit explorer as CSV`}
+              title="Download the rows on this page as CSV"
+            >
+              <Icon name="export" size={12} />
+              Page CSV
+            </button>
+          )}
           <button
             type="button"
             className="btn btn--ghost btn--sm"
@@ -257,12 +296,20 @@ export function AdminAuditExplorer() {
             {copyState.message}
           </div>
         )}
-        <AuditExplorerFilterForm applied={applied} onApply={applyFilters} applyButtonRef={applyButtonRef} />
+        <AuditFacetsProvider since={applied.since} until={applied.until} eventType={applied.eventType}>
+          <AuditExplorerFilterForm applied={applied} onApply={applyFilters} applyButtonRef={applyButtonRef} />
+        </AuditFacetsProvider>
         <AuditAppliedFilterChips
           applied={applied}
           emptiedFocusRef={applyButtonRef}
           summary={`Showing rows ${firstShownRow}-${lastShownRow} that match the applied filters.`}
           onRemove={(key) => applyFilters({ ...applied, [key]: '' })}
+        />
+        <AuditMatchingCount
+          query={explorerQuery}
+          filtersKey={appliedKey}
+          firstRow={firstShownRow}
+          lastRow={lastShownRow}
         />
         {warmingUp && events === null && (
           <div className="mt-3">

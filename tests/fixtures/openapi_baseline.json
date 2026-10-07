@@ -20443,6 +20443,16 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -20722,6 +20732,16 @@
               ],
               "title": "Event Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -20959,6 +20979,16 @@
                 }
               ],
               "title": "Event Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
             }
           }
         ],
@@ -31277,6 +31307,16 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -31554,6 +31594,16 @@
               ],
               "title": "Event Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -31790,6 +31840,16 @@
                 }
               ],
               "title": "Event Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
             }
           }
         ],
