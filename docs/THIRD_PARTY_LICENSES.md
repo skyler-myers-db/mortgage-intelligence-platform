@@ -15,6 +15,7 @@ about.
 | `pg8000` / `scramp` / `asn1crypto` | Structured PostgreSQL authentication and replication-denial proof for Lakebase | `BSD-3-Clause` / `MIT-0` / `MIT` | Permissive. Preserve the upstream copyright and license notices in distributions. |
 | `us-atlas` | U.S. state TopoJSON for browser maps | `ISC` | Permissive. Replaced the prior no-commercial-use map package. |
 | `topojson-client` | Runtime TopoJSON-to-GeoJSON decoding | `ISC` | Permissive. |
+| U.S. Census Bureau 2020 cartographic boundary and relationship files (`cb_2020_us_zcta520_500k`, `cb_2020_us_state_500k`, `tab20_zcta520_county20_natl`) | Per-state ZCTA geometry for the map's ZIP rung, committed under `frontend/src/geo/zcta/` and shipped as hashed `frontend/dist` assets (W5c, audit `dataviz-01`) | Public domain (17 U.S.C. 105) | No license obligation; provenance and SHA-256 pins are kept in `frontend/src/geo/zcta/README.md` and its `manifest.json`. Shape-only: no demographic overlay ships on it. |
 | `web-vitals` | Core Web Vitals measurement (LCP, INP, CLS), to be consumed lazily by field vitals (W5c) | `Apache-2.0` | Permissive. Installed but not yet imported, so the browser build ships none of it today; once field vitals lands it will ship unmodified in a lazy browser chunk, and distributions must then preserve the upstream copyright, license and NOTICE materials. |
 | `@fontsource-variable/geist` / `@fontsource-variable/geist-mono` | Geist and Geist Mono variable webfonts (latin wght woff2), bundled into the browser build | `OFL-1.1` | Permitted for commercial use, embedding and bundling. The fonts are not sold on their own, and the Reserved Font Name is not used for a modified version (the files ship unmodified). Keep the copyright and OFL notice with distributions. |
 
@@ -49,6 +50,7 @@ https://openfontlicense.org.
 | `hypothesis` | Python property/fuzz tests | `MPL-2.0` | Test only. No project files derive from or modify the MPL source. |
 | `lightningcss` | Vite/build-time CSS transform dependency | `MPL-2.0` | Build-time transitive dependency. No project files derive from or modify the MPL source. |
 | `stylelint` | CSS lint for the design-token literal gate | `MIT` | Dev only; never shipped in the browser build or the App source. |
+| `tools/geo`: `shapefile`, `d3-geo`, `d3-geo-projection`, `topojson-server`, `topojson-simplify` (plus `topojson-client`) and their dependencies | The operator-only ZCTA geometry build (`tools/geo/build_zcta_topojson.mjs`) | `BSD-3-Clause` / `ISC` (transitive `MIT`, `Unlicense`) | Operator-only, with its own `package.json` and lock: never installed by CI's app jobs or deploy, never in the browser build, excluded from the App source by `databricks.yml` `sync.exclude`. CI audits its lock (`npm --prefix tools/geo audit --audit-level=high`). |
 
 MPL-2.0 is file-level weak copyleft. Because these packages are consumed
 unmodified, the practical obligation is attribution and preservation of the
