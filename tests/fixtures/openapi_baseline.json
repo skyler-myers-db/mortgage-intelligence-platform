@@ -27501,7 +27501,7 @@
     "/api/segments/combinations": {
       "get": {
         "deprecated": true,
-        "description": "Where several Cotality signals fire on the same borrower (audit wow-stage-5).\n\nOne row per non-empty exact set of the six core segment codes, whole book\nand never narrowed by a filter, with the addressable count from\n``mip.gold.segment_combination_rollup`` and a live contactable subset.\n``built`` is False until the gold refresh job has built the table. A cold\nwarehouse surfaces as the resilience layer's 503 ``warming_up``; there is\nno fallback, and the route writes no audit row.",
+        "description": "Where several Cotality signals fire on the same borrower (audit wow-stage-5).\n\nOne row per non-empty exact set of the six core segment codes, whole book\nand never narrowed by a filter, with the addressable count from\n``mip.gold.segment_combination_rollup`` and a live contactable subset.\n``built`` is False until the gold refresh job has built the table. A cold\nwarehouse surfaces as the resilience layer's 503 ``warming_up``; there is\nno fallback, and the route writes no audit row. A built table whose every\nrow fails the projection contract answers a non-retryable 503 with reason\n``contract_failure`` and no dependency, unless a last good projection is\nstill cached.",
         "operationId": "get_api_segments_combinations_segment_combinations",
         "responses": {
           "200": {
@@ -37798,7 +37798,7 @@
     },
     "/api/v1/segments/combinations": {
       "get": {
-        "description": "Where several Cotality signals fire on the same borrower (audit wow-stage-5).\n\nOne row per non-empty exact set of the six core segment codes, whole book\nand never narrowed by a filter, with the addressable count from\n``mip.gold.segment_combination_rollup`` and a live contactable subset.\n``built`` is False until the gold refresh job has built the table. A cold\nwarehouse surfaces as the resilience layer's 503 ``warming_up``; there is\nno fallback, and the route writes no audit row.",
+        "description": "Where several Cotality signals fire on the same borrower (audit wow-stage-5).\n\nOne row per non-empty exact set of the six core segment codes, whole book\nand never narrowed by a filter, with the addressable count from\n``mip.gold.segment_combination_rollup`` and a live contactable subset.\n``built`` is False until the gold refresh job has built the table. A cold\nwarehouse surfaces as the resilience layer's 503 ``warming_up``; there is\nno fallback, and the route writes no audit row. A built table whose every\nrow fails the projection contract answers a non-retryable 503 with reason\n``contract_failure`` and no dependency, unless a last good projection is\nstill cached.",
         "operationId": "get_api_v1_segments_combinations_segment_combinations",
         "responses": {
           "200": {
