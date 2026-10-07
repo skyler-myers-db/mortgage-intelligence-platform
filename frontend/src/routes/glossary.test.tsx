@@ -82,3 +82,44 @@ describe('GlossaryRoute hash targets', () => {
     expect(designCss()).not.toContain('is-target');
   });
 });
+
+/**
+ * Glossary search (W5d, critic-07): ?q= filters the entries by term, alias or
+ * short text; categories with no match leave the index and the sections; a
+ * polite status line counts the matches; the chips keep ?q=. Typing and Clear
+ * search are driven in print-glossary-sales-manager.fixture.spec.ts.
+ */
+describe('GlossaryRoute search', () => {
+  it('labels a search field with the query from ?q=', () => {
+    const html = render('/glossary?q=automated%20valuation');
+    expect(html).toMatch(/<label class="glossary-search"><span class="field__label">Search the glossary<\/span><input/);
+    expect(html).toMatch(/<input[^>]*type="search"[^>]*value="automated valuation"/);
+  });
+
+  it('keeps only matching entries and categories, and counts them politely', () => {
+    const html = render('/glossary?q=automated%20valuation');
+
+    expect(openingTag(html, 'avm')).not.toBe('');
+    expect(openingTag(html, 'clip')).toBe('');
+    expect(openingTag(html, 'property')).not.toBe('');
+    expect(openingTag(html, 'governance')).toBe('');
+    expect(html).not.toContain('href="/glossary?q=automated%20valuation#governance"');
+    expect(html).toContain('href="/glossary?q=automated%20valuation#property"');
+    expect(html).toMatch(/role="status"[^>]*>1 term matches</);
+  });
+
+  it('says nothing matched, offers Clear search and shows no section', () => {
+    const html = render('/glossary?q=zzqx');
+
+    expect(html).toContain('No terms match &quot;zzqx&quot;');
+    expect(html).toContain('>Clear search</button>');
+    expect(html).not.toContain('glossary-section');
+  });
+
+  it('lists every category without a query, with an empty status line', () => {
+    const html = render('/glossary');
+    expect(html).toContain('href="/glossary#principles"');
+    expect(html).toMatch(/class="glossary-search__status muted fs-12 sr-only" role="status" aria-live="polite"><\/p>/);
+    expect(html).not.toContain('Clear search');
+  });
+});

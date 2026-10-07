@@ -1,7 +1,9 @@
-import { Link, useLocation } from 'react-router';
+import { useRef } from 'react';
+import { Link, useLocation, useSearchParams } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { glossaryQueryTokens, matchesGlossaryQuery } from '../lib/glossarySearch';
 import { glossaryEntries, type GlossaryCategory } from '../lib/mortgageGlossary';
 import './glossary.css';
 
@@ -29,8 +31,24 @@ export default function GlossaryRoute() {
   // does not follow client-side navigation, so the addressed entry is marked
   // here. Entries and sections take tabIndex=-1 so the shell can also move
   // keyboard / screen-reader focus to the addressed term.
-  const targetId = hashTargetId(useLocation().hash);
-  const grouped = glossaryEntries.reduce<Record<GlossaryCategory, typeof glossaryEntries>>(
+  const location = useLocation();
+  const targetId = hashTargetId(location.hash);
+  // Search (W5d, critic-07; deviation:glossary-search): the query lives in
+  // ?q=, so a filtered glossary can be linked; matching reads nothing.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = searchParams.get('q') ?? '';
+  const tokens = glossaryQueryTokens(query);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const setQuery = (next: string) => {
+    setSearchParams((current) => {
+      const params = new URLSearchParams(current);
+      if (next) params.set('q', next);
+      else params.delete('q');
+      return params;
+    }, { replace: true, preventScrollReset: true });
+  };
+  const matching = glossaryEntries.filter((entry) => matchesGlossaryQuery(entry, tokens));
+  const grouped = matching.reduce<Record<GlossaryCategory, typeof glossaryEntries>>(
     (acc, entry) => {
       acc[entry.category].push(entry);
       return acc;
@@ -44,6 +62,12 @@ export default function GlossaryRoute() {
       principles: [],
     },
   );
+
+  // Categories with no match are hidden in the index and in the sections.
+  const categories = (Object.keys(CATEGORY_LABELS) as GlossaryCategory[]).filter(
+    (category) => grouped[category].length > 0,
+  );
+  const searching = tokens.length > 0;
 
   return (
     <PageShell
@@ -64,10 +88,46 @@ export default function GlossaryRoute() {
             <SurfaceTitle>Categories</SurfaceTitle>
           </div>
           <div className="surface__body">
+            {/* A native labelled field (the .field__label / .form-input pair the
+                audit explorer's filters use): ui/Field and its stylesheet
+                measured +1.5 KiB br on this route's closure. */}
+            <label className="glossary-search">
+              <span className="field__label">Search the glossary</span>
+              <input
+                ref={searchRef}
+                type="search"
+                className="form-input"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            {/* Always mounted (a live region must exist before its text
+                changes); visually hidden while there is no query. */}
+            <p className={`glossary-search__status muted fs-12${searching ? '' : ' sr-only'}`} role="status" aria-live="polite">
+              {searching
+                ? matching.length > 0
+                  ? `${matching.length} ${matching.length === 1 ? 'term matches' : 'terms match'}`
+                  : `No terms match "${query.trim()}"`
+                : ''}
+            </p>
+            {searching && matching.length === 0 && (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => {
+                  setQuery('');
+                  searchRef.current?.focus();
+                }}
+              >
+                Clear search
+              </button>
+            )}
             <div className="chip-row">
-              {Object.entries(CATEGORY_LABELS).map(([category, label]) => (
-                <Link key={category} className="chip chip--neutral" to={{ hash: `#${category}` }}>
-                  <span className="chip__label">{label}</span>
+              {categories.map((category) => (
+                <Link key={category} className="chip chip--neutral" to={{ search: location.search, hash: `#${category}` }}>
+                  <span className="chip__label">{CATEGORY_LABELS[category]}</span>
                 </Link>
               ))}
             </div>
@@ -75,7 +135,7 @@ export default function GlossaryRoute() {
         </aside>
 
         <div className="stack-grid">
-          {(Object.keys(CATEGORY_LABELS) as GlossaryCategory[]).map((category) => (
+          {categories.map((category) => (
             <section
               key={category}
               id={category}

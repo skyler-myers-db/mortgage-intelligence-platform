@@ -24,3 +24,21 @@
 .glossary-section.is-target {
   border-color: var(--chip-line);
 }
+
+/* Search (W5d, critic-07; deviation:glossary-search): the field heads the
+   Categories aside; the polite status line and Clear search sit under it,
+   above the category chips (which keep ?q=). */
+.glossary-search {
+  display: grid;
+  gap: var(--sp-1);
+  margin-block-end: var(--sp-2);
+}
+.glossary-search .form-input {
+  inline-size: 100%;
+}
+.glossary-search__status {
+  margin: 0 0 var(--sp-2);
+}
+.glossary-search__status + .btn {
+  margin-block-end: var(--sp-3);
+}
