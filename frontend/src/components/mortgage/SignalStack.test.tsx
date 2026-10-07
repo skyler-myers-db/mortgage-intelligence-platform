@@ -6,6 +6,8 @@
  * read, the headline and the largest overlap, the disclosure, the UpSet
  * columns' accessible names, the table alternative and the evidence chip.
  */
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads the colocated stylesheet under Vitest only.
 import { readFileSync } from 'node:fs';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -17,6 +19,8 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import type { SegmentCombinationResponse } from '../../types/segmentCombinations';
 import { preloadAsyncFailure } from '../ui/AsyncState';
 import { SignalStack } from './SignalStack';
+
+declare const process: { cwd(): string };
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
