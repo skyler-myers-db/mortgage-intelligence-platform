@@ -353,8 +353,10 @@ def test_a_report_raises_the_cancel_only_on_the_owner_thread_and_after_the_callb
         worker.start()
         worker.join()
 
-    assert recorder.stages == ["verifying"], "the report is made before the cancel"
-    assert raised_off_thread == []
+    assert recorder.stages == ["verifying"], "the report is made before the cancel; off-thread never reports"
+    # W5c genie-03: off the owner thread a report is still a cancel point
+    # under the runner's cancel scope (here inherited by the copied context).
+    assert [type(exc) for exc in raised_off_thread] == [GenieTurnCancelled]
     report_stage(GenieJobStage.FINALIZING)  # no sink: never raises
 
 

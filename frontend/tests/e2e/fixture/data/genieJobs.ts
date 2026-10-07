@@ -129,9 +129,19 @@ export function genieJobStatusFixture(
   };
 }
 
+/** The job status each outcome usually carries; `recording` names why. */
+const CANCEL_STATUS: Record<GenieCancelResult['outcome'], GenieCancelResult['status']> = {
+  cancelled: 'running',
+  recorded: 'succeeded',
+  recording: 'running',
+  ended: 'failed',
+};
+
 /** The server's answer to a Stop (backend GenieCancelResponse). */
-export function genieCancelFixture(outcome: GenieCancelResult['outcome']): GenieCancelResult {
-  const status = outcome === 'cancelled' ? 'running' : outcome === 'recorded' ? 'succeeded' : 'failed';
+export function genieCancelFixture(
+  outcome: GenieCancelResult['outcome'],
+  status: GenieCancelResult['status'] = CANCEL_STATUS[outcome],
+): GenieCancelResult {
   return { kind: 'genie_completion_cancel', job_id: GENIE_JOB_ID, outcome, status };
 }
 
@@ -176,9 +186,15 @@ export interface GenieJobScript {
   holdComplete?: boolean;
   /** Stamped on every running status (audit genie-01 duration hint). */
   typicalSeconds?: number;
-  /** How `/message/cancel` answers (audit genie-03): its outcome, a real
-   *  delay before the reply, and the HTTP status (default 200). */
-  cancel?: { outcome: GenieCancelResult['outcome']; delayMs?: number; status?: number };
+  /** How `/message/cancel` answers (audit genie-03): its outcome, the job
+   *  status it carries, a real delay before the reply, and the HTTP status
+   *  (default 200). */
+  cancel?: {
+    outcome: GenieCancelResult['outcome'];
+    jobStatus?: GenieCancelResult['status'];
+    delayMs?: number;
+    status?: number;
+  };
 }
 
 export interface GenieJobController {
@@ -256,7 +272,7 @@ export function registerGenieJob(mockApi: MockApi, script: GenieJobScript = {}):
     if (cancel.delayMs) await new Promise((resolve) => setTimeout(resolve, cancel.delayMs));
     const reply: FixtureReply<GenieCancelResult | { detail: string }> =
       (cancel.status ?? 200) === 200
-        ? { body: genieCancelFixture(cancel.outcome) }
+        ? { body: genieCancelFixture(cancel.outcome, cancel.jobStatus) }
         : { status: cancel.status, body: { detail: 'lakebase is temporarily unavailable' } };
     return reply;
   });
@@ -338,6 +354,10 @@ export function contractSamples(): ContractSample[] {
     sample('/api/genie/message/complete', 202, genieJobStatusFixture({ stage: 'queued' }, undefined, 42)),
     ...(['cancelled', 'recorded', 'ended'] as const).map((outcome) =>
       sample('/api/genie/message/cancel', 200, genieCancelFixture(outcome)),
+    ),
+    // The 2026-09-30 Stop copy ruling: too late, and no History row (yet).
+    ...(['running', 'succeeded', 'failed', 'expired'] as const).map((status) =>
+      sample('/api/genie/message/cancel', 200, genieCancelFixture('recording', status)),
     ),
   ];
 }

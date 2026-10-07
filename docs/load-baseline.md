@@ -178,6 +178,13 @@ not asserted in CI.
 | disconnect | pending integrator run | |
 | Decision | pending integrator run | build / keep_polling |
 
+2026-10-06 (W5c w5-genie-stop-context): delivery-04 not built: the Decision
+row above is still 'pending integrator run' (W5b was not yet deployed when
+W5c started), so the job-events stream is deferred to W5d
+w5-genie-provenance-tiles, not cut; the 1.5 s status poll stays. When it is
+built, the job-events route (`POST /api/v1/genie/message/events`) joins
+rumApiRoute.ts EXCLUDED_TEMPLATES beside the status poll's template.
+
 ## Cold-cache profile (delivery-09)
 
 The baselines above are WARM. delivery-09 asks the cold question: on a cold

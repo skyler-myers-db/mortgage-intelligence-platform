@@ -66,14 +66,9 @@ export type WireContractGenie = [
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'POST /api/v1/genie/message'>, GenieResult>>,
   Expect<NoPhantomKeys<GenieResult, ApiOk<'POST /api/v1/genie/message'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-genie-stop-context: the complete ok is GenieMessageResponse | GenieCompletionJobStatus; the sync call never sends respond_async, but GenieResult covers only the first member
-  Expect<WireFits<ApiOk<'POST /api/v1/genie/message/complete'>, GenieResult>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-genie-stop-context: against the union ok only the keys both members share are wire keys, so every GenieResult answer field reads as phantom
-  Expect<NoPhantomKeys<GenieResult, ApiOk<'POST /api/v1/genie/message/complete'>>>,
   Expect<WireFits<ApiOk<'POST /api/v1/genie/message/submit'>, GenieSubmitResult>>,
   Expect<NoPhantomKeys<GenieSubmitResult, ApiOk<'POST /api/v1/genie/message/submit'>>>,
   Expect<WireFits<ApiOk<'POST /api/v1/genie/message/progress'>, GenieLiveProgress>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-genie-stop-context: GenieLiveProgress declares deep, which askGenieLive stamps client-side and GenieProgressResponse does not carry
   Expect<NoPhantomKeys<GenieLiveProgress, ApiOk<'POST /api/v1/genie/message/progress'>>>,
   Expect<WireFits<ApiOk<'POST /api/v1/genie/feedback'>, GenieFeedbackResult>>,
   Expect<NoPhantomKeys<GenieFeedbackResult, ApiOk<'POST /api/v1/genie/feedback'>>>,

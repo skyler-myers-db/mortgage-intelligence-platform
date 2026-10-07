@@ -14,6 +14,7 @@ import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { GenieProofPanel } from './GenieAnswerProof';
 import { GenieAnswerFeedback } from './GenieAnswerFeedback';
+import { GenieActionReceipt } from './GenieActionReceipt';
 import { GenieRefusalCard } from './GenieRefusalCard';
 import { isWithheldGenieSource } from './genieRefusal';
 import { isTrustedGenieSource, usePinnedInsights } from '../../lib/pinnedInsights';
@@ -114,6 +115,9 @@ export function GenieAnswer({
   const narrative = hasSections && summaryText ? summaryText : cleanedAnswer;
   const isGenieApiAnswer = payload.source === 'genie';
   const isGovernedActionResult = payload.source === GOVERNED_ACTION_SOURCE;
+  // A governed action's receipt (flow-04) takes its text's place: an older
+  // stored bubble (the id in its text, no field) renders unchanged.
+  const receiptId = isGovernedActionResult ? (payload.action_audit_event_id ?? null) : null;
   // Live Genie identifiers are duplicated into proof so the governed audit
   // binding survives canonical answer rewrites. Prefer the top-level wire
   // fields and consume the proof copies when an older response shape omits
@@ -285,6 +289,10 @@ export function GenieAnswer({
           exportBase={exportBase}
           onAnnounce={onAnnounce}
         />
+      ) : receiptId ? (
+        <p className="genie-md-p genie-md-p--first">
+          <GenieActionReceipt message={answer} auditEventId={receiptId} />
+        </p>
       ) : (
         cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} workspaceHost={workspaceHost} />
       )}

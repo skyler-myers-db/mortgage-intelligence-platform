@@ -18,11 +18,15 @@ modules (``sys.setprofile``) and characters handed to the scanners. One
 representative answer's prose scan, on the same counters, is the narrative
 baseline. Wall time is informational only and printed with the load average.
 
-The ``--live`` probe (message retention by age, execute-attachment state and
-duration, warehouse state, identity) is deferred to W5c w5-genie-stop-context
-with the conditional build; see docs/genie-tiles-spike.md. Output carries
-only counts, sizes and timings, never question text, SQL text or row values.
-Nothing in backend/ or frontend/ imports this tool.
+``--live`` (W5c, tools/genie_tiles_live.py) probes criteria 2-4 against a
+deployed space with the SDK's read calls and a capped number of attachment
+executes: ``python -m tools.genie_tiles_spike --live --profile P --space-id S
+[--other-profile P2] [--max-executions 2] [--allow-wake] [--app-identity]
+[--json out]``; exit 0 PASS, 1 FAIL, 2 INCONCLUSIVE, and 64 (EX_USAGE)
+for a usage error, never argparse's 2. See docs/genie-tiles-spike.md.
+Output carries only ids, states, counts, sizes and timings, never question
+text, SQL text or row values. Nothing in backend/ or frontend/ imports this
+tool.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import Any, NoReturn
 
 from backend.services.genie_message_policy import genie_visible_text_unsafe, governed_row_literals
 from backend.services.repositories.databricks_genie_policy_helpers import _redact_genie_rows
@@ -212,19 +216,52 @@ def measure_offline() -> dict[str, Any]:
     }
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("--offline", action="store_true", help="run the deterministic guard-cost measurement")
+USAGE_EXIT = 64  # sysexits EX_USAGE: --live reserves 2 for INCONCLUSIVE
+
+
+class _Parser(argparse.ArgumentParser):
+    """argparse exits 2 on a usage error, which --live means as INCONCLUSIVE."""
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        self.exit(USAGE_EXIT, f"{self.prog}: error: {message}\n")
+
+
+def main(argv: list[str] | None = None, *, client_factory: Callable[[str], Any] | None = None) -> int:
+    parser = _Parser(description=__doc__.split("\n", 1)[0])
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--offline", action="store_true", help="run the deterministic guard-cost measurement")
+    mode.add_argument("--live", action="store_true", help="probe criteria 2-4 against a deployed Genie space")
+    parser.add_argument("--profile", help="--live: the Databricks CLI profile to read with")
+    parser.add_argument("--space-id", help="--live: the Genie space id")
+    parser.add_argument("--other-profile", help="--live: a second identity for the isolation execute")
+    parser.add_argument("--max-executions", type=int, default=2, help="--live: executes per age bucket (default 2)")
+    parser.add_argument("--allow-wake", action="store_true", help="--live: execute even when the warehouse is not RUNNING")
+    parser.add_argument("--app-identity", action="store_true", help="--live: the profile IS the App's service principal")
     parser.add_argument("--json", dest="json_out", default=None)
     args = parser.parse_args(argv)
-    if not args.offline:
-        parser.error("only --offline is built in W5b; the --live probe moved to w5-genie-stop-context")
-    result = measure_offline()
+    code = 0
+    if args.offline:
+        result = measure_offline()
+    else:
+        if not args.profile or not args.space_id:
+            parser.error("--live needs --profile and --space-id")
+        from tools.genie_tiles_live import measure_live, sdk_client_factory
+
+        result, code = measure_live(
+            client_factory or sdk_client_factory,
+            profile=args.profile,
+            space_id=args.space_id,
+            other_profile=args.other_profile,
+            max_executions=args.max_executions,
+            allow_wake=args.allow_wake,
+            app_identity=args.app_identity,
+        )
     text = json.dumps(result, indent=2, sort_keys=True)
     print(text)
     if args.json_out:
         Path(args.json_out).write_text(text + "\n", encoding="utf-8")
-    return 0
+    return code
 
 
 if __name__ == "__main__":

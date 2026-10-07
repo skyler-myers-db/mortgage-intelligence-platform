@@ -35,6 +35,7 @@ vi.mock('./apiClients/genieJobs', () => ({
   },
 }));
 
+import { NOBODY, _resetActorScopeForTests, _setResetDocumentForTests, observeActor } from './actorScope';
 import { GENIE_CONVERSATION_RESET_EVENT, GENIE_IN_FLIGHT_TURN_KEY } from './genieConversation';
 import { clearGenieTurns } from './genieConversationStore';
 import {
@@ -45,7 +46,14 @@ import {
   startGenieTurn,
   stopGenieTurn,
 } from './genieInFlightTurn';
-import { GENIE_STOP_CONFIRMED_REASON, GENIE_STOP_RECORDED_REASON, GENIE_STOPPED_REASON } from './genieTurnOutcome';
+import {
+  GENIE_STOP_CONFIRMED_REASON,
+  GENIE_STOP_INCOMPLETE_REASON,
+  GENIE_STOP_NOT_KEPT_REASON,
+  GENIE_STOP_RECORDED_REASON,
+  GENIE_STOP_RECORDING_REASON,
+  GENIE_STOPPED_REASON,
+} from './genieTurnOutcome';
 
 const QUESTION = 'Which states have the most prime refi candidates?';
 const JOB_ID = '0a1b2c3d-0000-4000-8000-000000000001';
@@ -107,8 +115,11 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
   return { promise, resolve, reject };
 }
 
-function cancelResult(outcome: GenieCancelResult['outcome']): GenieCancelResult {
-  return { kind: 'genie_completion_cancel', job_id: JOB_ID, outcome, status: 'running' };
+function cancelResult(
+  outcome: GenieCancelResult['outcome'],
+  status: GenieCancelResult['status'] = 'running',
+): GenieCancelResult {
+  return { kind: 'genie_completion_cancel', job_id: JOB_ID, outcome, status };
 }
 
 function installStorage(): void {
@@ -218,6 +229,54 @@ describe('Stop on a job turn', () => {
     expect(getGenieTurnSnapshot().announcementSeq).toBe(seq + 1);
   });
 
+  it.each([
+    ['recorded', 'succeeded', GENIE_STOP_RECORDED_REASON],
+    ['recorded', 'expired', GENIE_STOP_RECORDED_REASON],
+    ['recording', 'running', GENIE_STOP_RECORDING_REASON],
+    ['recording', 'succeeded', GENIE_STOP_NOT_KEPT_REASON],
+    ['recording', 'failed', GENIE_STOP_INCOMPLETE_REASON],
+    ['recording', 'expired', GENIE_STOP_INCOMPLETE_REASON],
+  ] as const)('a too-late Stop (%s / %s) rewrites the note and announces it once', async (outcome, status, reason) => {
+    await startedJobTurn();
+    mocks.genieCancel.mockResolvedValue(cancelResult(outcome, status));
+    stopGenieTurn();
+    const seq = getGenieTurnSnapshot().announcementSeq;
+    await flush();
+
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([reason]);
+    expect(getGenieTurnSnapshot().announcement).toBe(reason);
+    expect(getGenieTurnSnapshot().announcementSeq).toBe(seq + 1);
+  });
+
+  it.each([
+    ['cancelled', 'cancelled'],
+    ['ended', 'failed'],
+    ['ended', 'expired'],
+  ] as const)('a confirmed Stop (%s / %s) is the confirmed copy, never announced', async (outcome, status) => {
+    await startedJobTurn();
+    mocks.genieCancel.mockResolvedValue(cancelResult(outcome, status));
+    stopGenieTurn();
+    const seq = getGenieTurnSnapshot().announcementSeq;
+    await flush();
+
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOP_CONFIRMED_REASON]);
+    expect(getGenieTurnSnapshot().announcementSeq).toBe(seq);
+  });
+
+  it.each([
+    ['recording', 'queued'],
+    ['recording', 'cancelled'],
+  ] as const)('an answer the ruling does not cover (%s / %s) keeps the unconfirmed note', async (outcome, status) => {
+    await startedJobTurn();
+    mocks.genieCancel.mockResolvedValue(cancelResult(outcome, status));
+    stopGenieTurn();
+    const seq = getGenieTurnSnapshot().announcementSeq;
+    await flush();
+
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOPPED_REASON]);
+    expect(getGenieTurnSnapshot().announcementSeq).toBe(seq);
+  });
+
   it('a failed cancel leaves the unconfirmed note unchanged', async () => {
     await startedJobTurn();
     mocks.genieCancel.mockRejectedValue(new Error('lakebase unavailable'));
@@ -242,28 +301,62 @@ describe('Stop on a job turn', () => {
   });
 });
 
-describe('no cancel is sent', () => {
-  it('for a Stop in the polling phase', async () => {
+describe('a Stop before the 202 named the job sends ONE turn-keyed cancel (W5c pre-cancel)', () => {
+  it('in the polling phase: job_id null, never the question, and the note confirms', async () => {
     mocks.genieSubmit.mockResolvedValue(submitted());
     mocks.genieProgress.mockResolvedValue(progress(false));
+    mocks.genieCancel.mockResolvedValue(cancelResult('cancelled', 'cancelled'));
     startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
     await flush();
 
     expect(stopGenieTurn()).toBe(QUESTION);
-    expect(mocks.genieCancel).not.toHaveBeenCalled();
+    expect(mocks.genieCancel).toHaveBeenCalledTimes(1);
+    expect(mocks.genieCancel.mock.calls[0]).toEqual([IDS, null, LABEL]);
+    expect(JSON.stringify(mocks.genieCancel.mock.calls[0])).not.toContain(QUESTION);
+    await flush();
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOP_CONFIRMED_REASON]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.genieCompleteAsync).not.toHaveBeenCalled();
+    expect(mocks.genieCancel).toHaveBeenCalledTimes(1);
   });
 
-  it('for a job turn stopped before its 202 named the job', async () => {
+  it('while the complete is held before its 202', async () => {
     mocks.genieSubmit.mockResolvedValue(submitted());
     mocks.genieProgress.mockResolvedValue(progress(true));
     mocks.genieCompleteAsync.mockImplementation(() => never());
+    mocks.genieCancel.mockResolvedValue(cancelResult('cancelled', 'cancelled'));
     startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
     await flush();
 
     expect(mocks.genieCompleteAsync).toHaveBeenCalledTimes(1);
     expect(stopGenieTurn()).toBe(QUESTION);
-    expect(mocks.genieCancel).not.toHaveBeenCalled();
+    expect(mocks.genieCancel.mock.calls).toEqual([[IDS, null, LABEL]]);
+    await flush();
+    expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOP_CONFIRMED_REASON]);
+    expect(mocks.genieJobStatus).not.toHaveBeenCalled();
+  });
+
+  it('a reply naming no job UUID keeps the unconfirmed note', async () => {
+    mocks.genieSubmit.mockResolvedValue(submitted());
+    mocks.genieProgress.mockResolvedValue(progress(false));
+    mocks.genieCancel.mockResolvedValue({ ...cancelResult('cancelled', 'cancelled'), job_id: 'job-1' });
+    startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
+    await flush();
+
+    stopGenieTurn();
+    await flush();
     expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOPPED_REASON]);
+  });
+});
+
+describe('no cancel is sent', () => {
+  it('for a Stop while the submit is still in flight (no ids yet)', async () => {
+    mocks.genieSubmit.mockImplementation(() => never());
+    startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
+    await flush();
+
+    expect(stopGenieTurn()).toBe(QUESTION);
+    expect(mocks.genieCancel).not.toHaveBeenCalled();
   });
 
   it('for a turn without completion jobs', async () => {
@@ -320,5 +413,70 @@ describe('a reload-resumed job turn', () => {
 
     expect(mocks.genieCancel.mock.calls[0]).toEqual([IDS, JOB_ID, LABEL]);
     expect(stoppedNotes().map((note) => note.reason)).toEqual([GENIE_STOP_CONFIRMED_REASON]);
+  });
+});
+
+describe('the verified-sections reveal lives in the turn, keyed to its job (W5c)', () => {
+  const OTHER_JOB = '0a1b2c3d-0000-4000-8000-0000000000ff';
+  const sections = [0, 1, 2].map((n) => ({ title: `Part ${n}`, question: `Part ${n}?`, answer: 'Illinois leads.' }));
+
+  /** A job turn whose first status poll revealed three verified sections. */
+  async function revealedJobTurn(...later: GenieCompletionJobStatus[]): Promise<void> {
+    mocks.genieSubmit.mockResolvedValue(submitted());
+    mocks.genieProgress.mockResolvedValue(progress(true));
+    mocks.genieCompleteAsync.mockResolvedValue(running());
+    mocks.genieJobStatus.mockResolvedValueOnce({
+      ...running(),
+      verified_sections: 3,
+      sections_rev: 2,
+      revealed_sections: sections,
+    });
+    for (const status of later) mocks.genieJobStatus.mockResolvedValueOnce(status);
+    mocks.genieJobStatus.mockImplementation(() => never());
+    startGenieTurn({ question: QUESTION, conversationId: null, surface: 'panel', startedAt: Date.now() });
+    await flush();
+    expect(getGenieTurnSnapshot().inFlight?.progress?.job?.reveal?.sections).toEqual(sections);
+  }
+
+  it('a status of another job never renders: the stage and the reveal stay this job\'s', async () => {
+    await revealedJobTurn({ ...running(), job_id: OTHER_JOB, stage: 'synthesizing', verified_sections: 0 });
+    await vi.advanceTimersByTimeAsync(1_600);
+
+    expect(mocks.genieJobStatus).toHaveBeenCalledTimes(2);
+    const job = getGenieTurnSnapshot().inFlight?.progress?.job;
+    expect(job?.stage).toBe('researching');
+    expect(job?.reveal).toMatchObject({ jobId: JOB_ID, verified: 3, sections });
+  });
+
+  it('a Stop removes the reveal with the turn', async () => {
+    await revealedJobTurn();
+    mocks.genieCancel.mockResolvedValue(cancelResult('cancelled'));
+
+    stopGenieTurn();
+
+    expect(getGenieTurnSnapshot().inFlight).toBeNull();
+  });
+
+  it('an actor sign-out (closed) leaves no reveal, and a proven change leaves the document', async () => {
+    try {
+      _resetActorScopeForTests({ status: 'pending', owner: 'actor-a' });
+      const resetDocument = vi.fn();
+      _setResetDocumentForTests(resetDocument);
+      observeActor({ key: 'actor-a' });
+      await revealedJobTurn();
+
+      observeActor({ key: null });
+
+      expect(getGenieTurnSnapshot().inFlight).toBeNull();
+      expect(getGenieTurnSnapshot().notes).toEqual([]);
+
+      _resetActorScopeForTests({ status: 'pending', owner: 'actor-a' });
+      _setResetDocumentForTests(resetDocument);
+      observeActor({ key: 'actor-a' });
+      observeActor({ key: 'actor-b' });
+      expect(resetDocument, 'the document (and every in-memory reveal) is replaced').toHaveBeenCalledOnce();
+    } finally {
+      _resetActorScopeForTests({ status: 'open', owner: NOBODY });
+    }
   });
 });

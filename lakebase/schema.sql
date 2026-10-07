@@ -3818,21 +3818,35 @@ ON CONFLICT (version) DO NOTHING;
 -- and the summary omits that measure). The CHECKs use comparisons only; no
 -- table, routine, trigger or privilege is added, and the App role keeps
 -- SELECT. Placed before the watchlist series block, which its own contract
--- test pins as the schema's last block.
+-- test pins as the schema's last block. Each CHECK is added only when
+-- pg_constraint lacks it (static ADD CONSTRAINT text, reviewed by the
+-- executable-hook replay scanner): a re-run never drops and re-validates it
+-- (W5c, R1 NB-8).
 ALTER TABLE mip_app.kpi_snapshots
     ADD COLUMN IF NOT EXISTS listed_for_sale BIGINT;
 ALTER TABLE mip_app.kpi_snapshots
     ADD COLUMN IF NOT EXISTS competitor_lien BIGINT;
-ALTER TABLE mip_app.kpi_snapshots
-    DROP CONSTRAINT IF EXISTS kpi_snapshots_listed_for_sale_chk;
-ALTER TABLE mip_app.kpi_snapshots
-    ADD CONSTRAINT kpi_snapshots_listed_for_sale_chk
-    CHECK (listed_for_sale IS NULL OR listed_for_sale >= 0);
-ALTER TABLE mip_app.kpi_snapshots
-    DROP CONSTRAINT IF EXISTS kpi_snapshots_competitor_lien_chk;
-ALTER TABLE mip_app.kpi_snapshots
-    ADD CONSTRAINT kpi_snapshots_competitor_lien_chk
-    CHECK (competitor_lien IS NULL OR competitor_lien >= 0);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.kpi_snapshots'::regclass
+          AND conname = 'kpi_snapshots_listed_for_sale_chk'
+    ) THEN
+        ALTER TABLE mip_app.kpi_snapshots
+            ADD CONSTRAINT kpi_snapshots_listed_for_sale_chk
+            CHECK (listed_for_sale IS NULL OR listed_for_sale >= 0);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.kpi_snapshots'::regclass
+          AND conname = 'kpi_snapshots_competitor_lien_chk'
+    ) THEN
+        ALTER TABLE mip_app.kpi_snapshots
+            ADD CONSTRAINT kpi_snapshots_competitor_lien_chk
+            CHECK (competitor_lien IS NULL OR competitor_lien >= 0);
+    END IF;
+END $$;
 COMMENT ON COLUMN mip_app.kpi_snapshots.listed_for_sale IS
     'Borrowers whose home is listed for sale (SUM(listed_for_sale) over the headline metric view). NULL on rows written before this column existed; never backfilled with 0.';
 COMMENT ON COLUMN mip_app.kpi_snapshots.competitor_lien IS
@@ -4192,5 +4206,52 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_10_07_borrower_decision_history_index',
     'Borrower decision history: partial index idx_action_audit_decision_entity on action_audit (entity_id, audit_sequence DESC) over the governed decision types'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Genie completion-job pre-cancel ----------------------------------------
+-- Audit 2026-09-21 genie-03 (W5c). A Stop that arrives before the browser's
+-- complete call named the turn's job (Genie still answering, or the complete
+-- not answered yet) is recorded as the turn's job row itself, created already
+-- cancelled: the table's UNIQUE (actor_email, conversation_id, message_id)
+-- serializes it against the complete's create-or-join, so a later complete
+-- joins a terminal row and runs nothing (no RUN_GENIE row, no action tokens).
+-- precancelled_at marks such a row; it is set only in the same transaction as
+-- the row's GENIE_TURN_CANCELLED audit row. Nullable, no index, no grant,
+-- trigger or routine change: the existing SELECT/INSERT/UPDATE covers it.
+-- Rollback-safe: older App code never reads the column. The CHECK is static
+-- ADD CONSTRAINT text (same-type comparisons only) so the executable-hook
+-- replay scanner reviews it on every re-run. No question text.
+ALTER TABLE mip_app.genie_completion_jobs
+    ADD COLUMN IF NOT EXISTS precancelled_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.genie_completion_jobs'::regclass
+          AND conname = 'genie_completion_jobs_precancel_shape_chk'
+    ) THEN
+        ALTER TABLE mip_app.genie_completion_jobs
+            ADD CONSTRAINT genie_completion_jobs_precancel_shape_chk
+            CHECK (
+                precancelled_at IS NULL
+                OR (
+                    status = 'cancelled'
+                    AND cancel_requested_at IS NOT NULL
+                    AND recorded_at IS NULL
+                    AND result_json IS NULL
+                )
+            );
+    END IF;
+END $$;
+
+COMMENT ON COLUMN mip_app.genie_completion_jobs.precancelled_at IS
+    'When the owning actor stopped this turn before its completion job existed: the row was created already cancelled, in the same transaction as its GENIE_TURN_CANCELLED audit row, so a later complete joins it and runs nothing. NULL on every job a complete created.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_0X_genie_job_precancel',
+    'Genie completion-job pre-cancel: nullable precancelled_at with a named shape CHECK (cancelled, cancel requested, nothing recorded); a Stop before the job exists inserts the turn''s row already cancelled'
 )
 ON CONFLICT (version) DO NOTHING;

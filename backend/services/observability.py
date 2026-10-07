@@ -63,6 +63,8 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from backend.services.cooperative_cancel import CooperativeCancel
+
 # ---------------------------------------------------------------------------
 # Correlation-ID context
 # ---------------------------------------------------------------------------
@@ -428,6 +430,18 @@ def timed_dependency(
     start = time.monotonic()
     try:
         yield ctx
+    except CooperativeCancel:
+        # The owner's stop (genie-03): an INFO end, never an error count.
+        emit(
+            log,
+            "dependency_call_end",
+            dependency=name,
+            duration_ms=round((time.monotonic() - start) * 1000.0, 2),
+            outcome="cancelled",
+            operation=operation,
+            **ctx,
+        )
+        raise
     except BaseException as exc:
         duration_ms = (time.monotonic() - start) * 1000.0
         emit(

@@ -50,10 +50,59 @@ describe('genieJobsApi.genieCancel', () => {
 });
 
 describe('requestGenieTurnCancel', () => {
-  it.each(['cancelled', 'recorded', 'ended'] as const)('reports the server outcome %s', async (outcome) => {
-    vi.spyOn(genieJobsApi, 'genieCancel').mockResolvedValue(result({ outcome }));
+  it.each(['cancelled', 'recorded', 'recording', 'ended'] as const)('reports the server outcome %s with its status', async (outcome) => {
+    vi.spyOn(genieJobsApi, 'genieCancel').mockResolvedValue(result({ outcome, status: 'succeeded' }));
 
-    await expect(requestGenieTurnCancel(TARGET)).resolves.toBe(outcome);
+    await expect(requestGenieTurnCancel(TARGET)).resolves.toEqual({ outcome, status: 'succeeded' });
+  });
+
+  it.each(['queued', 'running', 'succeeded', 'failed', 'expired', 'cancelled'] as const)(
+    'keeps the job status %s',
+    async (status) => {
+      vi.spyOn(genieJobsApi, 'genieCancel').mockResolvedValue(result({ outcome: 'recording', status }));
+
+      await expect(requestGenieTurnCancel(TARGET)).resolves.toEqual({ outcome: 'recording', status });
+    },
+  );
+
+  it('a turn-keyed Stop (no job yet) sends job_id null and takes the job the server names', async () => {
+    const post = vi.spyOn(transport, 'postJson').mockResolvedValue(result({ status: 'cancelled' }));
+
+    await expect(requestGenieTurnCancel({ ...TARGET, jobId: null })).resolves.toEqual({
+      outcome: 'cancelled',
+      status: 'cancelled',
+    });
+    expect(post.mock.calls[0][1]).toEqual({
+      conversation_id: 'conv-1',
+      message_id: 'msg-1',
+      progress_token: 'tok-1',
+      job_id: null,
+      question_hash: '0123456789abcdef',
+    });
+  });
+
+  it('a reply whose job id is not a UUID is null, with or without a named job', async () => {
+    const cancel = vi.spyOn(genieJobsApi, 'genieCancel');
+    cancel.mockResolvedValueOnce(result({ job_id: 'job-1' }));
+    cancel.mockResolvedValueOnce(result({ job_id: 'job-1' }));
+    cancel.mockResolvedValueOnce({ ...result(), job_id: null } as unknown as GenieCancelResult);
+
+    const outcomes = [
+      await requestGenieTurnCancel({ ...TARGET, jobId: null }),
+      await requestGenieTurnCancel(TARGET),
+      await requestGenieTurnCancel({ ...TARGET, jobId: null }),
+    ];
+
+    expect(outcomes).toEqual([null, null, null]);
+  });
+
+  it('an unknown job status is null, whatever the outcome', async () => {
+    vi.spyOn(genieJobsApi, 'genieCancel').mockResolvedValue({
+      ...result({ outcome: 'recording' }),
+      status: 'paused',
+    } as unknown as GenieCancelResult);
+
+    await expect(requestGenieTurnCancel(TARGET)).resolves.toBeNull();
   });
 
   it('never throws: a failed request is null', async () => {

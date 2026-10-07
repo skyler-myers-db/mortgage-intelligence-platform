@@ -23,6 +23,14 @@ modelled, the sections writer's UPDATE runs inside that transaction (or
 alone) under its running/owner/unrecorded/uncancelled guard, the status
 poll's sections read gates on the poller's revision, and every terminal
 statement NULLs the column. ``sections_writes`` records each stored payload.
+
+The Stop's History settle (the 2026-09-30 copy ruling): ``history_rows``
+models ``mip_app.genie_messages`` (``add_history_row``), the settle read
+matches the turn's message id, or the question label on a row written at or
+after the job's creation; ``settle_reads`` counts the reads,
+``fail_settle_reads`` makes the next N raise, and ``on_settle_read`` (called
+with the read's number before it is answered) lets a test move the job or
+write the row between reads.
 """
 
 from __future__ import annotations
@@ -42,6 +50,7 @@ from backend.services import genie_completion_durations as durations
 from backend.services import genie_completion_jobs as jobs
 from backend.services import genie_completion_record as record
 from backend.services import genie_completion_sections as sections
+from backend.services import genie_turn_record as turn_record
 from backend.services.lakebase import LakebaseError
 
 _LIVE = ("queued", "running")
@@ -75,6 +84,11 @@ class FakeJobLakebase:
         self.job_statements: list[str] = []
         self.audit_rows: list[dict[str, Any]] = []
         self.fail_audit_inserts = 0
+        #: ``mip_app.genie_messages`` rows (History), for the Stop's settle.
+        self.history_rows: list[dict[str, Any]] = []
+        self.settle_reads = 0
+        self.fail_settle_reads = 0
+        self.on_settle_read: Callable[[int], None] | None = None
         #: Called with the statement name before each job statement runs.
         self.before: Callable[[str], None] | None = None
         self._lock = threading.RLock()
@@ -108,6 +122,46 @@ class FakeJobLakebase:
             self.rows[row["job_id"]] = row
             return dict(row)
 
+    def add_history_row(self, **fields: Any) -> dict[str, Any]:
+        """A History row (``genie_messages``); ``source`` is never consulted."""
+
+        with self._lock:
+            row = {"source": "genie", "created_at": self.now, **fields}
+            self.history_rows.append(row)
+            return dict(row)
+
+    def _settle_read(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        """The settle read; its hook runs OUTSIDE the lock, so it may wait for
+        another thread (the runner) to write the History row."""
+
+        with self._lock:
+            self._require_table()
+            self.job_statements.append("settle")
+            self.settle_reads += 1
+            read = self.settle_reads
+        if self.on_settle_read is not None:
+            self.on_settle_read(read)
+        with self._lock:
+            return self._settle(params)
+
+    def _settle(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        if self.fail_settle_reads:
+            self.fail_settle_reads -= 1
+            raise LakebaseError("settle read refused (fake)")
+        job = self.rows.get(str(params["job_id"]))
+        if job is None or job["actor_email"] != params["actor_email"]:
+            return None
+        history = any(
+            row["actor_email"] == job["actor_email"]
+            and row["conversation_id"] == job["conversation_id"]
+            and (
+                row["message_id"] == job["message_id"]
+                or (row["question_hash"] == params["question_label"] and row["created_at"] >= job["created_at"])
+            )
+            for row in self.history_rows
+        )
+        return {"status": job["status"], "recorded": job["recorded_at"] is not None, "history_row": history}
+
     def _new_row(self, params: dict[str, Any]) -> dict[str, Any]:
         return {
             "job_id": str(uuid4()),
@@ -129,6 +183,7 @@ class FakeJobLakebase:
             "recorded_at": None,
             "deep": params.get("deep"),
             "sections_json": None,
+            "precancelled_at": None,
             "created_at": self.now,
         }
 
@@ -142,6 +197,7 @@ class FakeJobLakebase:
             "recorded_at",
             "created_at",
             "sections_json",
+            "precancelled_at",
         }
     )
 
@@ -159,6 +215,13 @@ class FakeJobLakebase:
             raise LakebaseError("genie_completion_jobs_cancel_or_record_chk (fake)")
         if row["status"] == "cancelled" and (row["cancel_requested_at"] is None or row["result_json"] is not None):
             raise LakebaseError("genie_completion_jobs_cancelled_shape_chk (fake)")
+        if row["precancelled_at"] is not None and (
+            row["status"] != "cancelled"
+            or row["cancel_requested_at"] is None
+            or row["recorded_at"] is not None
+            or row["result_json"] is not None
+        ):
+            raise LakebaseError("genie_completion_jobs_precancel_shape_chk (fake)")
 
     def _by_turn(self, params: dict[str, Any]) -> dict[str, Any] | None:
         for row in self.rows.values():
@@ -185,6 +248,8 @@ class FakeJobLakebase:
         params = params or {}
         if sql in _JOB_SQL and self.before is not None:
             self.before(_JOB_SQL[sql])
+        if sql is cancel._HISTORY_SETTLE_SQL:
+            return self._settle_read(params)
         with self._lock:
             if sql is jobs._PROBE_SQL:
                 return {"present": self.jobs_table and self.cancel_columns and self.sections_column}
@@ -249,6 +314,18 @@ class FakeJobLakebase:
                     self.stage_writes.append((params["stage"], params["parts_done"], params["parts_planned"]))
                 return
             self.executed.append(sql)
+            if sql is turn_record._GENIE_MESSAGE_INSERT_SQL:
+                # The turn's History row, as the settle reads it.
+                self.history_rows.append(
+                    {
+                        "actor_email": params["actor_email"],
+                        "conversation_id": params["conversation_id"],
+                        "message_id": params["message_id"],
+                        "question_hash": params["question_hash"],
+                        "source": params["source"],
+                        "created_at": self.now,
+                    }
+                )
 
     # ------------------------------------------------ the cancel transaction
 
@@ -282,10 +359,11 @@ class FakeJobLakebase:
             return self._write_sections(params)
         if sql is cancel._LOCK_SQL:
             self.job_statements.append("cancel_lock")
-            row = self.rows.get(str(params["job_id"]))
-            if row is None or self._by_turn(params) is not row:
+            row = self._by_turn(params)
+            if row is None:
                 return None
             return {
+                "job_id": row["job_id"],
                 "status": row["status"],
                 "stage": row["stage"],
                 "question_hash": row["question_hash"],
@@ -305,9 +383,25 @@ class FakeJobLakebase:
                 return None
             row["cancel_requested_at"] = self.now
             if row["status"] == "queued":
-                row.update(status="cancelled", stage="cancelled", finished_at=self.now)
+                row.update(status="cancelled", stage="cancelled", finished_at=self.now, sections_json=None)
             self._check(row)
             return {"status": row["status"], "lease_owner": row["lease_owner"]}
+        if sql is cancel._PRECANCEL_SQL:
+            self.job_statements.append("cancel_precancel")
+            if self._by_turn(params) is not None:
+                return None
+            row = self._new_row(params)
+            row.update(
+                status="cancelled",
+                stage="cancelled",
+                lease_until=self.now,
+                cancel_requested_at=self.now,
+                finished_at=self.now,
+                precancelled_at=self.now,
+            )
+            self._check(row)
+            self.rows[row["job_id"]] = row
+            return {"job_id": row["job_id"]}
         if "INSERT INTO mip_app.action_audit" in sql:
             if self.fail_audit_inserts:
                 self.fail_audit_inserts -= 1

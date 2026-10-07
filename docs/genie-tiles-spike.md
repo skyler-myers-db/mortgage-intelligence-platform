@@ -7,8 +7,9 @@ re-executes a Genie query after the answer was shown. This page records how the
 spike is measured, what the offline run found, and the pass criteria a later
 build must meet. The build itself (an `execute_attachment_query` client, a
 `mip_app.genie_tiles` table, routes, a server-backed pin store and a refresh
-job) is deferred to W5c `w5-genie-stop-context`, and only if every criterion
-below passes; otherwise it is recorded as not built with the measured reason.
+job) is deferred to W5d `w5-genie-provenance-tiles`, and only if every
+criterion below passes; otherwise it is recorded as not built with the
+measured reason. The `--live` probe for criteria 2-4 is built (W5c).
 
 ## Method
 
@@ -72,16 +73,71 @@ the fail-closed behaviour the build must keep.
    most once per gold refresh stamp, never from render, hover or poll, and a
    warm-warehouse refresh fits the Genie budget. *Live probe, not yet run.*
 
-## Integrator checklist (after the W5b deploy)
+## The live probe (`--live`, W5c)
+
+```bash
+python -m tools.genie_tiles_spike --live --profile P --space-id S \
+  [--other-profile P2] [--max-executions 2] [--allow-wake] [--app-identity] \
+  [--json out.json]
+```
+
+`tools/genie_tiles_live.py` uses the Databricks SDK's `WorkspaceClient`
+(profile `P`) for READ calls: `genie.get_space(S).warehouse_id`,
+`genie.list_conversations` and `genie.list_conversation_messages` (at most
+200 conversations). It buckets COMPLETED messages that carry a query
+attachment by age (<= 1 day, 1-7 days, 7-30 days, > 30 days). Per bucket it
+then makes at most `--max-executions` calls of
+`execute_message_attachment_query`, each only after `warehouses.get(id)`
+(state and size) and `genie.get_message` show the warehouse RUNNING (or
+`--allow-wake`; otherwise `skipped_cold`) and the message COMPLETED or
+EXECUTING_QUERY (otherwise `skipped_state`). With `--other-profile` it tries
+ONE execute of the first identity's attachment under the other identity.
+`--app-identity` asserts that `P` is the App's service principal.
+
+It records ids, states, the HTTP status or exception class, durations, row
+counts and the warehouse state and size only: never question text,
+conversation titles, SQL text, row values, emails or headers (an exception's
+message is never recorded). Each execute ends `ok`, `refused` (403/404: the
+identity may not run it), `error` (any other answer: a measured failure) or
+`unavailable` (401, 429, 5xx, a timeout or a transport error: nothing was
+measured). A `warehouses.get` or `genie.get_message` read that fails mid-run
+is `unavailable` with its `failed_read`, and an unexpected exception after
+start-up returns INCONCLUSIVE (`phase: measure`). Only `ok`, `refused` and
+`error` executes count towards a verdict, so an auth or network failure
+mid-run is never a FAIL. Verdicts:
+
+- criterion 2 PASS when a 7-30 day attachment executed with 200, FAIL when
+  every measured 7-30 day execute failed, otherwise INCONCLUSIVE;
+- criterion 3 needs the same identity's 200, the other identity refused (a
+  401 under the other identity is `unavailable`, not a refusal), and
+  the App service principal's half: INCONCLUSIVE without `--other-profile`,
+  and INCONCLUSIVE for the App half unless run with `--app-identity` under
+  the App's own identity (the reason is recorded in the JSON);
+- criterion 4 PASS when a warm (RUNNING) execute returned within 15 s (the
+  docs/load-baseline.md Genie p95); each refresh is one Genie API call, so
+  one Genie-budget call.
+
+Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE (auth or network, or nothing
+measurable), 64 a usage error (argparse's own 2 would read as INCONCLUSIVE).
+
+| Criterion | Live verdict |
+| --- | --- |
+| 2. COMPLETED attachments executable for at least 7 days | pending integrator run (after the W5c deploy) |
+| 3. Own-identity execute, other identity refused, App identity | pending integrator run (after the W5c deploy) |
+| 4. Warm refresh within the Genie p95, one Genie-budget call | pending integrator run (after the W5c deploy) |
+
+## Integrator checklist (after the W5c deploy)
 
 - [ ] Re-run `python -m tools.genie_tiles_spike --offline` on the deployed
       commit and confirm the counters match this page within noise.
-- [ ] The live probe (`--live`: message status by age bucket 1/7/30 days,
-      `execute-message-attachment-query` only while `COMPLETED` or
-      `EXECUTING_QUERY`, warehouse state before the call, App identity versus
-      another identity) moved to W5c `w5-genie-stop-context` with the
-      conditional build. Its output may carry only ids, states, counts,
-      durations and HTTP status, never question text, SQL text or row values.
-- [ ] Record the verdict for criteria 2-4 here, and size the build into the
-      `w5-genie-stop-context` brief, or record it as not built with the
-      measured reason (criterion 1 already fails as measured above).
+- [ ] Run `python -m tools.genie_tiles_spike --live --profile <dev profile>
+      --space-id <space> --other-profile <second identity> --json
+      live.json` (add `--allow-wake` only when a warehouse start is
+      acceptable) and record the three verdicts in the table above.
+- [ ] Criterion 1 already FAILS offline (104x one prose scan). The
+      conditional living-tiles build (an `execute_attachment_query` client,
+      `mip_app.genie_tiles`, routes, a server pin store, a refresh job)
+      belongs to W5d `w5-genie-provenance-tiles`, and only on a 'build'
+      verdict; it must first cap rows per tile or prove a cheaper
+      fail-closed row scan. Otherwise record it here as not built with the
+      measured reason.

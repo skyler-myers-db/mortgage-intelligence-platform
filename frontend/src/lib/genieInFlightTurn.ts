@@ -27,12 +27,12 @@ import {
   writeRecord,
   type PersistedTurnRecord,
 } from './genieInFlightRecord';
+import { nextJobReveal } from './genieJobReveal';
 import { requestGenieTurnCancel, type GenieTurnCancelTarget } from './genieTurnCancel';
+import { stopNoteFor, stopTargetFor } from './genieTurnStop';
 import { forgetLeave, leaveWaitMs, unwatchLeave, watchLeave } from './genieTurnUnload';
 import {
   GENIE_RESUME_FAILED_REASON,
-  GENIE_STOP_CONFIRMED_REASON,
-  GENIE_STOP_RECORDED_REASON,
   GENIE_STOPPED_REASON,
   genieTurnOutcome,
   genieOutcomeAnnouncement,
@@ -435,11 +435,15 @@ const COMPLETED_GENIE_PROGRESS: GenieLiveProgress = {
   error_hint: null,
 };
 
-/** Show the job's stage on the rail, keeping Genie's own last progress. A
- *  status poll's 200 (never the 202) reveals a resumed turn's question. */
+/** Show the job's stage on the rail, keeping Genie's own last progress, and
+ *  fold its verified sections into `job.reveal` (lib/genieJobReveal). Only
+ *  the turn's own job renders. A status poll's 200 (never the 202) reveals a
+ *  resumed turn's question. */
 function showJob(gen: number, job: GenieCompletionJobStatus, reveal: boolean): void {
   const inFlight = snapshot.inFlight;
   if (!isCurrent(gen) || !inFlight) return;
+  const named = active?.record.jobId;
+  if (named && job.job_id !== named) return;
   if (job.terminal) {
     // The answer (or the failure) lands next: never flash a terminal stage.
     if (reveal && active) patchTurn(gen, { question: active.question, revealed: true });
@@ -455,6 +459,7 @@ function showJob(gen: number, job: GenieCompletionJobStatus, reveal: boolean): v
       parts_done: job.parts_done,
       parts_planned: job.parts_planned,
       typical_seconds: job.typical_seconds,
+      reveal: nextJobReveal(inFlight.progress?.job?.reveal, job),
     },
   };
   patchTurn(gen, reveal && active ? { progress, question: active.question, revealed: true } : { progress });
@@ -616,31 +621,28 @@ export function startGenieTurn({ question, conversationId, surface, startedAt }:
 /** Replace Stopped note `stopId` with the server's confirmed copy; nothing
  *  when the note is gone (a reset or an actor change) or the call failed. */
 function confirmStop(stopId: number, target: GenieTurnCancelTarget): void {
-  void requestGenieTurnCancel(target).then((outcome) => {
+  void requestGenieTurnCancel(target).then((result) => {
     const index = snapshot.notes.findIndex((note) => note.kind === 'stopped' && note.stopId === stopId);
-    if (outcome === null || index < 0) return;
-    const reason = outcome === 'recorded' ? GENIE_STOP_RECORDED_REASON : GENIE_STOP_CONFIRMED_REASON;
+    const confirmed = stopNoteFor(result);
+    if (confirmed === null || index < 0) return;
+    const { reason, announce } = confirmed;
     const notes = snapshot.notes.map((note, at) => (at === index ? { ...note, reason } : note));
-    update(outcome === 'recorded' ? { notes, ...announcing(reason, snapshot.inFlight) } : { notes });
+    update(announce ? { notes, ...announcing(reason, snapshot.inFlight) } : { notes });
   });
 }
 
 /**
  * Stop waiting for the in-flight turn. The generation bump makes a reply
- * that still arrives land nowhere. Once a 202 has named the turn's job, the
- * server is also asked not to record the answer (audit `genie-03`); its
- * reply only rewrites the note. Returns the stopped question, or null when
- * nothing (visible) was stopped.
+ * that still arrives land nowhere. On a job turn the server is also asked
+ * not to record the answer (audit `genie-03`), by job once a 202 named it and
+ * turn-keyed before (lib/genieTurnStop); its reply only rewrites the note.
+ * Returns the stopped question, or null when nothing (visible) was stopped.
  */
 export function stopGenieTurn(): string | null {
   const inFlight = snapshot.inFlight;
   if (!inFlight) return null;
   const question = inFlight.revealed ? (active?.question ?? inFlight.question) : '';
-  const record = active?.record;
-  const target: GenieTurnCancelTarget | null =
-    record?.asyncComplete && record.jobId && record.ids && record.questionHash
-      ? { ids: record.ids, jobId: record.jobId, questionHash: record.questionHash }
-      : null;
+  const target = stopTargetFor(active?.record);
   const stopId = inFlight.generation;
   generation += 1;
   controller?.abort();
