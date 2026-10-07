@@ -14,7 +14,9 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieActionSuggestion, GenieAnswer, SessionResponse } from '../../types';
 
-const apiMocks = vi.hoisted(() => ({ session: vi.fn(), genieAction: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({ session: vi.fn(), genieAction: vi.fn(), genieFeedback: vi.fn() }));
+
+vi.mock('../AppContext', () => ({ useApp: () => ({ setDrawer: vi.fn() }) }));
 
 vi.mock('../../lib/api', () => {
   class ApiError extends Error {
@@ -31,10 +33,12 @@ vi.mock('../../lib/api', () => {
 import * as transport from '../../lib/apiTransport';
 import { genieApi } from '../../lib/apiClients/genie';
 import { auditEventHref } from '../../lib/auditLinks';
+import { clearGenieAnswerMemory } from '../../lib/genieAnswerMemory';
 import { sessionQueryOptions } from '../../lib/sessionQuery';
 import { GOVERNED_ACTION_SOURCE } from '../../lib/genieTurnOutcome';
 import { runGenieActionRequest } from './GenieChat.helpers';
 import { GenieActionReceipt } from './GenieActionReceipt';
+import { GenieAnswer as GenieAnswerView } from './GenieAnswer';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -137,5 +141,33 @@ describe('action_audit_event_id never leaves the client', () => {
     expect(JSON.stringify(apiMocks.genieAction.mock.calls)).not.toContain('action_audit_event_id');
     expect(JSON.stringify(post.mock.calls)).not.toContain('action_audit_event_id');
     expect(JSON.stringify(post.mock.calls)).not.toContain(EVENT);
+  });
+
+  it('a feedback vote on such a bubble carries no trace of it either', async () => {
+    // The worst case: a governed-action bubble that also had a message id,
+    // so the trusted-answer feedback control renders and posts.
+    clearGenieAnswerMemory();
+    apiMocks.genieFeedback.mockResolvedValue({ accepted: true, audit_event_id: 'evt-feedback' });
+    const bubble: GenieAnswer = {
+      answer: MESSAGE,
+      question: '',
+      source: GOVERNED_ACTION_SOURCE,
+      trusted_assets: [],
+      conversation_id: 'conv-1',
+      message_id: 'msg-1',
+      action_audit_event_id: EVENT,
+    };
+    await act(async () => {
+      root.render(<GenieAnswerView payload={bubble} onFollowUp={() => undefined} dense />);
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="genie-feedback-up"]')?.click();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.genieFeedback).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(apiMocks.genieFeedback.mock.calls)).not.toContain('action_audit_event_id');
+    expect(JSON.stringify(apiMocks.genieFeedback.mock.calls)).not.toContain(EVENT);
   });
 });
