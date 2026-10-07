@@ -37,6 +37,21 @@ Sample line:
 {"ts":"2026-04-22T19:18:41.332Z","level":"INFO","logger":"mip.databricks_sql","event":"warehouse_query_end","correlation_id":"a1b2c3d4e5f6789012345678abcdef01","dependency":"warehouse","duration_ms":142.73,"outcome":"ok","statement_hash":"4f8b2e1c9a7d3e55","rows_returned":127}
 ```
 
+### Actor binding refusals (D-identity-review-a4)
+
+| Logger              | Event                    | Level   | Fields                         |
+|---------------------|--------------------------|---------|--------------------------------|
+| `mip.actor_binding` | `actor_binding_mismatch` | WARNING | `method`, `correlation_id` only |
+
+One line per request refused with `409 actor_changed` (section 5): a browser
+tab that was opened for one signed-in user sent a request after the cookie
+changed. The line never carries the path (it can hold a masked borrower or a
+conversation id), the `X-MIP-Actor-Key` value, the identity or a key; join it
+to the same request's `http_request` line (templated path, status 409) by
+`correlation_id`. A burst after a shared-machine sign-in swap is expected; a
+steady rate from one replica can mean two replicas run different
+`MIP_GENIE_ACTION_SECRET_CURRENT` values (`docs/disaster-recovery.md`).
+
 ## 2. Where the logs go by default
 
 On Databricks Apps the runtime captures the container's stdout and
@@ -401,6 +416,22 @@ the App service principal cannot read the warehouse, every probe logs
 a good read re-arms it) and falls back to `SELECT 1`; that restores the
 pre-2026-09 behaviour (including the accidental keep-warm), so check for that
 event after the first deploy.
+
+The request binding (D-identity-review-a4, W5d) adds one refusal, never
+sent for `/api[/v1]/health`, `/api[/v1]/session` or `/api[/v1]/telemetry/*`:
+a request whose `X-MIP-Actor-Key` names neither the forwarded identity's
+`actor_cache_key` nor one of its `actor_cache_key_aliases` (or carries the
+header twice, or arrives with no forwarded identity) answers
+
+```json
+{"detail": "The signed-in user changed in this browser. Nothing was recorded.", "reason": "actor_changed"}
+```
+
+with status `409` and `application/json`, before routing: nothing ran,
+nothing was written, no audit row. A request without the header is never
+refused by it. The authenticated and admin health bodies carry
+`actor_cache_key_aliases` (a list, `[]` outside a rotation); the anonymous
+body stays exactly `{status, mode}`.
 
 ## 6. Server-Timing (per-request attribution)
 

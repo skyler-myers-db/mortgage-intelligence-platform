@@ -206,12 +206,25 @@ The browser's "Failed to load resource" line for a degraded call is allowed auto
 The app's actor gate (`frontend/src/lib/actorScope.ts`, [docs/security/identity-boundary.md](security/identity-boundary.md)) removes private browser data it finds without an owner stamp, so a spec that seeds pins, a Genie transcript, a conversation id or an in-flight record before boot seeds it owned:
 
 ```ts
-import { FIXTURE_NOBODY, seedOwnedStorage } from './ownedStorage';
+import { FIXTURE_DEFAULT_ACTOR, seedOwnedStorage } from './ownedStorage';
 
-await seedOwnedStorage(page, FIXTURE_NOBODY, { session: { 'mip-genie-conversation-v1': JSON.stringify(turns) } });
+await seedOwnedStorage(page, FIXTURE_DEFAULT_ACTOR, { session: { 'mip-genie-conversation-v1': JSON.stringify(turns) } });
 ```
 
-`seedOwnedStorage(page, owner, {local, session})` writes both stamps (`mip.actorOwner`, `mip.actorCacheKey`) and the entries in one init script, once per tab. The default fixtures are the actor `~nobody` (`SESSION.actor_cache_key` is null and `HEALTH_OK` carries no key). A spec that needs a real actor, or changes it, serves `GET /api/v1/session` and `GET /api/v1/health` from one variable with `serveActor(mockApi, () => actor)` (`data/shell.ts`) and uses the well-formed `FIXTURE_ACTOR_A` / `FIXTURE_ACTOR_B` keys: the shell ignores a key that is not `actor_` plus 16 lowercase hex characters. A spec that writes storage after boot (the stamps then exist) needs neither.
+`seedOwnedStorage(page, owner, {local, session})` writes both stamps (`mip.actorOwner`, `mip.actorCacheKey`) and the entries in one init script, once per tab. The default fixtures are a REAL actor, `FIXTURE_DEFAULT_ACTOR` (`actor_dddddddddddddddd`, D-identity-review-a4): `SESSION` and `HEALTH_OK` carry that key with `actor_cache_key_aliases: []`, so the gate opens for an owner and the app binds its requests to it, as it does live. Every default session variant (`PRESENTER_SESSION`, `AUDITOR_ONLY_SESSION`, `WORKSPACE_USER_SESSION`, `LO_SESSION`, `SIGNED_IN_APPROVER`) carries the SAME key, because a different one would read as a proven actor change at the first probe; `test_e2e_fixture_contract.py` checks that every sampled `/session` body pairs a null key with a null `actor_email` and carries `actor_cache_key_aliases`. A spec that needs another actor, or changes it, serves `GET /api/v1/session` and `GET /api/v1/health` from one variable with `serveActor(mockApi, () => actor, () => aliases)` (`data/shell.ts`; the session's `actor_email` is null exactly when the key is, and the aliases ride health only) and uses the well-formed `FIXTURE_ACTOR_A` / `FIXTURE_ACTOR_B` keys: the shell ignores a key that is not `actor_` plus 16 lowercase hex characters. `FIXTURE_NOBODY` (`~nobody`) is for a spec that serves no key. A spec that writes storage after boot (the stamps then exist) needs neither.
+
+### Actor binding in fixture specs
+
+Once the gate opens for a real actor, every app request carries `X-MIP-Actor-Key` (`frontend/src/lib/apiActorBinding.ts`); the mock API ignores it. A spec about the binding installs the server emulation AFTER the mock API, so it runs first:
+
+```ts
+import { installActorBinding } from './actorBinding';
+
+hygiene.allow('console.error', /status of 409/);   // the browser logs each refused request
+const binding = await installActorBinding(page, () => actor, () => aliases);
+```
+
+For a non-exempt `/api` request whose key names neither the served actor nor an alias it answers the real `409 actor_changed` body; everything else falls back to the mock API (health, session and telemetry are exempt, the server's closed set, and a request without the header passes). `binding.log` records method, path, key, the actor served at the time and the outcome (`exempt`, `passed`, `refused`); `binding.bound(from)` filters out the exempt routes. `actor-binding.fixture.spec.ts` is the lane spec; `identity-boundary.fixture.spec.ts` uses it in the mid-session and two-page cases.
 
 Every new browser-storage key registers in `ACTOR_SCOPE_REGISTRY` (`frontend/src/lib/actorScope.ts`), and only the files listed in `actorScope.registry.test.ts` may touch storage: that AST gate fails on an unregistered `mip` key, an unreviewed storage call, or a whole-area `.clear()`.
 
