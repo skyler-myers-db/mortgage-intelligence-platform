@@ -96,7 +96,11 @@ describe('MyApprovalRequestsPanel', () => {
     await act(async () => byTestId(`approval-request-withdraw-${BATCH}`)!.click());
     expect(document.body.textContent).toContain('Withdraw 2 open borrowers? Approvers stop seeing them.');
     expect(withdraw).not.toHaveBeenCalled();
-    await act(async () => byTestId(`approval-request-withdraw-confirm-${BATCH}`)!.click());
+    // A double click inside one task (before isPending renders), then a third click after it.
+    await act(async () => {
+      byTestId(`approval-request-withdraw-confirm-${BATCH}`)!.click();
+      byTestId(`approval-request-withdraw-confirm-${BATCH}`)!.click();
+    });
     await act(async () => byTestId(`approval-request-withdraw-confirm-${BATCH}`)!.click());
     await flush();
     expect(withdraw).toHaveBeenCalledTimes(1);

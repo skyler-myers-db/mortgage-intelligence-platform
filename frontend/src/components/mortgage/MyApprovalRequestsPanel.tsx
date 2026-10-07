@@ -40,10 +40,17 @@ function MyRequest({ batch }: { batch: ApprovalRequestBatchView }) {
   const queryClient = useQueryClient();
   const withdraw = useWithdrawApprovalRequest(queryClient);
   const [confirming, setConfirming] = useState(false);
+  // A synchronous latch: TanStack Query publishes isPending on a later task,
+  // so a second click inside that window would otherwise send a second POST.
+  const inFlight = useRef(false);
   const open = batch.rows.filter((row) => row.state === 'open').length;
   const confirmWithdraw = () => {
-    if (withdraw.isPending) return;
+    if (inFlight.current || withdraw.isPending) return;
+    inFlight.current = true;
     withdraw.mutate(batch.batch_id, {
+      onSettled: () => {
+        inFlight.current = false;
+      },
       onSuccess: (result) => {
         setConfirming(false);
         if (result.withdrawn_now > 0) toast.success('Request withdrawn', { auditEventId: result.audit_event_id });

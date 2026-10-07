@@ -115,14 +115,21 @@ export function RequestApprovalForm({ borrowerIds, onCancel, onRequested }: Requ
     });
   };
 
+  // A synchronous latch: isPending is published on a later task, so a second
+  // submit inside that window would otherwise send a second POST.
+  const inFlight = useRef(false);
   const submit = () => {
-    if (create.isPending) return;
+    if (inFlight.current || create.isPending) return;
     if (blank) {
       fieldRef.current?.focus();
       return;
     }
     setFailure(null);
+    inFlight.current = true;
     create.mutate({ borrowerIds, rationale: reason.trim() }, {
+      onSettled: () => {
+        inFlight.current = false;
+      },
       onSuccess: (created) => {
         toast.success(`Approval requested for ${borrowerNoun(created.requested.length)}`, {
           auditEventId: created.audit_event_id,

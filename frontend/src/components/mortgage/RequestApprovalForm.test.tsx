@@ -119,6 +119,18 @@ describe('RequestApprovalForm', () => {
     expect(calls.some((call) => call.path.includes('/outreach/draft'))).toBe(false);
   });
 
+  it('sends one POST for a double click that lands before the pending state renders', async () => {
+    const create = vi.spyOn(approvalRequestsApi, 'create').mockImplementation(() => new Promise(() => undefined));
+    await render();
+    await type('Rate-sensitive refinance candidates.');
+    await act(async () => {
+      send().click();
+      send().click();
+    });
+    await flush();
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it('is pessimistic: no toast and no close before the 200; then the toast carries the audit id and the skips', async () => {
     let release: (value: ApprovalRequestCreated) => void = () => undefined;
     vi.spyOn(approvalRequestsApi, 'create').mockImplementation(() => new Promise((resolve) => {
