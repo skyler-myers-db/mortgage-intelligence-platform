@@ -57,7 +57,9 @@ export function useAdminNavigationAccess(): boolean {
 }
 
 export function RouteNav() {
-  const { lastBorrowerId } = useApp();
+  // The keyed read (runtime-05): a drawer open or another app-state change
+  // leaves the nav alone; only the last borrower moves its two detail links.
+  const { lastBorrowerId } = useApp('lastBorrowerId');
   const canAccessAdmin = useAdminNavigationAccess();
   const canReadLedger = useAuditLedgerAccess();
   const queryClient = useQueryClient();

@@ -12,6 +12,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, memo, Profiler, useEffect, type ProfilerOnRenderCallback } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../test/installLocalStorage';
 
@@ -29,10 +30,22 @@ vi.mock('../lib/api', async (importOriginal) => ({
 
 vi.mock('../lib/configOptionsQuery', () => ({ useConfigOptionsQuery: () => ({ data: { lender_name: 'Summit Mortgage', rum_enabled: false } }) }));
 
+// RouteNav calls its dock hook once per render: a render counter that sees
+// every re-render. A Profiler's onRender missed the ones a context change
+// propagates into a child (measured: the facade re-rendered RouteNav on a
+// drawer open and the Profiler count stayed put).
+const navRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock('../hooks/useRouteNavDock', () => ({
+  useRouteNavDock: () => {
+    navRenders.count += 1;
+  },
+}));
+
 import { AppProvider, useApp, type DrawerSource } from './AppContext';
 import { createAppStore } from './appStore';
 import { EvidenceChip } from './Primitives';
 import { ConfidenceMeter } from './mortgage/ConfidenceMeter';
+import { RouteNav } from './layout/RouteNav';
 
 const ROWS = 6;
 const SOURCE: DrawerSource = { title: 'Lien history', short: 'Cotality lien' };
@@ -139,6 +152,34 @@ describe('AppContext selector store (runtime-05)', () => {
     // Non-vacuity: a keyed lastBorrowerId reader re-renders exactly once.
     expect(probeRenders()).toBe(probeAtMount + 1);
     expect(document.querySelector('[data-testid="last-borrower"]')?.textContent).toBe('B-ABCDEFGHJKLMN');
+  });
+
+  it('RouteNav reads lastBorrowerId by key: a drawer open leaves it alone, a new last borrower re-links it', async () => {
+    navRenders.count = 0;
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <AppProvider>
+              <FacadeConsumer />
+              <RouteNav />
+            </AppProvider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    const navCommits = () => navRenders.count;
+    const borrowerHref = () => document.querySelector('a.route-nav__link[href^="/borrower-360"]')?.getAttribute('href');
+    expect(borrowerHref()).toBe('/borrower-360');
+    const atMount = navCommits();
+
+    await act(async () => current().setDrawer(SOURCE));
+    expect(current().drawer).toBe(SOURCE);
+    expect(navCommits(), 'a drawer open does not re-render the nav').toBe(atMount);
+
+    await act(async () => current().setLastBorrowerId('B-ABCDEFGHJKLMN'));
+    expect(navCommits(), 'non-vacuity: the last borrower re-renders it').toBeGreaterThan(atMount);
+    expect(borrowerHref()).toBe('/borrower-360/B-ABCDEFGHJKLMN');
   });
 
   it('toggling showEvidence re-renders the chips, and the meters follow showConfidence', async () => {
