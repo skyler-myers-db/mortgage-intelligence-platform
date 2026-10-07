@@ -30,6 +30,7 @@ import { LEADS } from './borrowers';
 import { outreachDraftFor } from './offers';
 import { SALES_TEAM } from './portfolio';
 import { TOTALS } from './reference';
+import { FIXTURE_DEFAULT_ACTOR } from './shell';
 
 export const LO_EMAIL = SALES_TEAM[0].email;
 
@@ -40,7 +41,8 @@ export const LO_SESSION: SessionResponse = {
   presenter_mode: false,
   actor_email: LO_EMAIL,
   refusal_text_capture_enabled: false,
-  actor_cache_key: null,
+  actor_cache_key: FIXTURE_DEFAULT_ACTOR,
+  actor_cache_key_aliases: [],
 };
 
 function rankedPage(rows: readonly LeadSummary[], query: URLSearchParams): FixtureReply<LeadSummary[]> {

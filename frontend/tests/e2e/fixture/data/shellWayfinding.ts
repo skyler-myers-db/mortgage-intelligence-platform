@@ -6,6 +6,7 @@
  */
 import type { SessionResponse } from '../../../../src/types';
 import { json, type FixtureReply } from '../mockApi';
+import { FIXTURE_DEFAULT_ACTOR } from './shell';
 
 export const SIGNED_IN_APPROVER: SessionResponse = {
   can_access_admin: true,
@@ -16,7 +17,8 @@ export const SIGNED_IN_APPROVER: SessionResponse = {
   actor_display_name: 'Jane Doe',
   role_labels: ['Administrator', 'Approver'],
   refusal_text_capture_enabled: true,
-  actor_cache_key: null,
+  actor_cache_key: FIXTURE_DEFAULT_ACTOR,
+  actor_cache_key_aliases: [],
 };
 
 export function sessionReply(session: SessionResponse = SIGNED_IN_APPROVER): FixtureReply<SessionResponse> {

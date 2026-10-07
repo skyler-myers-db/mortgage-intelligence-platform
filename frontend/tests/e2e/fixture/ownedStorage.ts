@@ -7,8 +7,10 @@
  * 1). A spec that seeds private data before boot therefore seeds it OWNED:
  * both owner stamps ('mip.actorOwner' in localStorage, 'mip.actorCacheKey' in
  * this tab's sessionStorage) name the actor the mocked /api/session and
- * /api/health will report ('~nobody' for the default fixtures, whose session
- * and health bodies carry a null / absent actor_cache_key).
+ * /api/health will report. The default fixtures are a REAL actor now
+ * (FIXTURE_DEFAULT_ACTOR, D-identity-review-a4: their session and health
+ * bodies carry that key, so the app binds its requests to it as it does
+ * live); FIXTURE_NOBODY is for a spec that serves no key.
  *
  * One addInitScript per call, applied once per tab: a sessionStorage marker
  * remembers the seed, so a reload keeps what the app wrote since (the same
@@ -18,8 +20,10 @@
  */
 import type { Page } from '@playwright/test';
 
-/** The owner of data no actor owns: the default fixtures' actor. */
+/** The owner of data no actor owns: a spec whose session and health serve no key. */
 export const FIXTURE_NOBODY = '~nobody';
+/** The default fixtures' actor: data/shell.ts SESSION and HEALTH_OK carry it. */
+export { FIXTURE_DEFAULT_ACTOR } from './data/shell';
 
 const LOCAL_OWNER_KEY = 'mip.actorOwner';
 const TAB_OWNER_KEY = 'mip.actorCacheKey';

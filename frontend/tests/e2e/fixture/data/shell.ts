@@ -47,12 +47,22 @@ export const GEOGRAPHY_SCOPE: GeographyScope = {
  */
 export const FIXTURE_ACTOR_A = 'actor_aaaaaaaaaaaaaaaa';
 export const FIXTURE_ACTOR_B = 'actor_bbbbbbbbbbbbbbbb';
+/**
+ * The default fixtures' signed-in actor (D-identity-review-a4): a REAL key,
+ * so the actor gate opens for an owner and the app sends X-MIP-Actor-Key, as
+ * it does live. SESSION, HEALTH_OK and every default session variant carry
+ * this same key (a different one would read as a proven change at the first
+ * probe); its actor_email is non-null exactly as the real /session pairs them.
+ */
+export const FIXTURE_DEFAULT_ACTOR = 'actor_dddddddddddddddd';
 
 export const HEALTH_OK: HealthPayload = {
   status: 'ok',
   mode: 'live',
   dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
   circuit_breakers: { warehouse: 'closed', lakebase: 'closed', genie: 'closed' },
+  actor_cache_key: FIXTURE_DEFAULT_ACTOR,
+  actor_cache_key_aliases: [],
   campaign_treatment_runtime: 'enabled',
   forced_degraded: null,
 };
@@ -91,19 +101,34 @@ export const SESSION: SessionResponse = {
   // The deploy payload's default (D-audit-reads-d): the refusal card offers
   // "Report with my question".
   refusal_text_capture_enabled: true,
-  // Coherent with HEALTH_OK, which carries no key: the default fixture actor
-  // is '~nobody' to the actor gate (the session seed and every probe agree).
-  actor_cache_key: null,
+  // The same key as HEALTH_OK (the session seed and every probe agree); the
+  // SPA reads rotation aliases from /health only, the real /session sends [].
+  actor_cache_key: FIXTURE_DEFAULT_ACTOR,
+  actor_cache_key_aliases: [],
 };
 
 /**
  * One shared actor variable for a spec: GET /api/session and GET /api/health
  * both report `key()` (null: nobody), read per request, so flipping the
  * variable moves the next probe, the next page load and a new tab together.
+ * The session keeps the real invariant (actor_email null exactly when the key
+ * is); `aliases` names the rotation aliases a probe carries (health only, the
+ * one place the SPA reads them).
  */
-export function serveActor(mockApi: MockApi, key: () => string | null): void {
-  mockApi.register('GET', '/api/session', () => json<SessionResponse>({ ...SESSION, actor_cache_key: key() }));
-  mockApi.register('GET', '/api/health', () => json<HealthPayload>({ ...HEALTH_OK, actor_cache_key: key() ?? undefined }));
+export function serveActor(mockApi: MockApi, key: () => string | null, aliases?: () => string[]): void {
+  mockApi.register('GET', '/api/session', () => {
+    const k = key();
+    const actor_email = k === null ? null : SESSION.actor_email;
+    return json<SessionResponse>({ ...SESSION, actor_cache_key: k, actor_cache_key_aliases: [], actor_email });
+  });
+  mockApi.register('GET', '/api/health', () => {
+    const k = key();
+    return json<HealthPayload>({
+      ...HEALTH_OK,
+      actor_cache_key: k ?? undefined,
+      actor_cache_key_aliases: k === null ? undefined : (aliases?.() ?? []),
+    });
+  });
 }
 
 export const shellFixtures: FixtureEntry[] = [

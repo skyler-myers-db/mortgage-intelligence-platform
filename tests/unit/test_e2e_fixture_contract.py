@@ -369,6 +369,32 @@ def test_every_default_fixture_yields_a_validated_2xx_sample(samples: list[dict[
     assert sorted(registered - validated) == []
 
 
+def test_every_session_body_pairs_its_actor_key_with_its_identity(samples: list[dict[str, Any]]) -> None:
+    """D-identity-review-a4 (W5a identity-foundation review1 NB[2]): the real
+    /session sends actor_cache_key null exactly when actor_email is null, and
+    always sends actor_cache_key_aliases, so a fixture session cannot open the
+    actor gate for nobody while it names a signed-in person."""
+    sessions = [
+        sample
+        for sample in samples
+        if sample["method"] == "GET"
+        and _canonical_path(sample["path"]) == f"/api/{API_VERSION}/session"
+        and 200 <= int(sample["status"]) < 300
+    ]
+    assert len(sessions) >= 5, "the exporter sampled too few /session bodies"
+    problems = [
+        f"{sample['source']}: actor_cache_key {sample['body'].get('actor_cache_key')!r} "
+        f"vs actor_email {sample['body'].get('actor_email')!r}"
+        for sample in sessions
+        if (sample["body"].get("actor_cache_key") is None) != (sample["body"].get("actor_email") is None)
+    ] + [
+        f"{sample['source']}: no actor_cache_key_aliases"
+        for sample in sessions
+        if "actor_cache_key_aliases" not in sample["body"]
+    ]
+    assert problems == []
+
+
 def test_known_drift_is_shrink_only(samples: list[dict[str, Any]]) -> None:
     by_source = {sample["source"]: sample for sample in samples}
     for source, entry in KNOWN_DRIFT.items():

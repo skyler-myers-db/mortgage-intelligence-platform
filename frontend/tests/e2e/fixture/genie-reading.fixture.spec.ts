@@ -31,7 +31,7 @@ import {
   type StoredTurn,
 } from './data/genieReading';
 import { registerGenieTurn } from './data/genieTurn';
-import { FIXTURE_NOBODY, seedOwnedStorage } from './ownedStorage';
+import { FIXTURE_DEFAULT_ACTOR, seedOwnedStorage } from './ownedStorage';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
@@ -50,7 +50,7 @@ declare global {
 /** Seed the transcript store once per tab, before the app boots, OWNED by
  *  the default fixture actor (the actor gate removes unowned private data). */
 async function seedTurns(page: Page, turns: StoredTurn[]): Promise<void> {
-  await seedOwnedStorage(page, FIXTURE_NOBODY, { session: { [TURNS_KEY]: JSON.stringify(turns) } });
+  await seedOwnedStorage(page, FIXTURE_DEFAULT_ACTOR, { session: { [TURNS_KEY]: JSON.stringify(turns) } });
 }
 
 /** Record, in page order, the receipt request, its response and every anchor download. */
