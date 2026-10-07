@@ -4145,7 +4145,7 @@ COMMENT ON TABLE mip_app.genie_refusal_report_texts IS
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_01_genie_refusal_report_texts',
+    '2026_10_07_genie_refusal_report_texts',
     'Consented Genie refusal report texts: scrubbed question, 90-day expiry set by the insert, purge-only UPDATE trigger and no-remove trigger, no DELETE grant'
 )
 ON CONFLICT (version) DO NOTHING;
