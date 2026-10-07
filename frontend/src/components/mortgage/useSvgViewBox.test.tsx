@@ -164,6 +164,18 @@ describe('useSvgViewBox', () => {
     expect(clicks).toHaveBeenCalledTimes(1);
   });
 
+  it('reveal centres a target whose in-bounds centre is out of view, keeping the zoom, and is a no-op otherwise', async () => {
+    await mount();
+    act(() => api?.reveal({ x: 110, y: 110, w: 5, h: 5 }));
+    expect(api?.committed).toEqual(FIT);
+    // Its raw centre (75, 115) is out of the fit, its in-bounds part's (125, 115) is not.
+    act(() => api?.reveal({ x: -100, y: 100, w: 350, h: 30 }));
+    expect(api?.committed).toEqual(FIT);
+    act(() => api?.reveal({ x: 300, y: 200, w: 10, h: 10 }));
+    expect(api?.committed).toEqual({ x: 285, y: 190, w: 40, h: 30 });
+    expect(attr()).toEqual([285, 190, 40, 30]);
+  });
+
   it('a drag that ends with no click (pointercancel) never swallows the next press\'s click', async () => {
     await mount();
     act(() => api?.zoomIn());

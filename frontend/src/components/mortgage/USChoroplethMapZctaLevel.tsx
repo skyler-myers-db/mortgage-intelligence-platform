@@ -23,7 +23,8 @@
  *    view to the fit (instant under reduced motion).
  *  - one native keydown and one native click listener on the stage (roving,
  *    activation, zoom keys), so the paths carry no handlers; Escape stays
- *    with .map-levels (card first, then up a level).
+ *    with .map-levels (card first, then up a level). A ZIP area that takes
+ *    keyboard focus outside a zoomed view is panned into it (WCAG 2.4.11).
  *  - the reconcile note names the ZIPs with borrowers and no ZIP-area
  *    boundary (PO-box and unique ZIPs) and the borrowers with no ZIP.
  *
@@ -194,7 +195,7 @@ function ZctaStage({
   // Stable by value: the tween runs once per drill.
   const from = useMemo<ViewBox | null>(() => parseViewBox(nationalViewBox), [nationalViewBox]);
   const view = useSvgViewBox({ svgRef, fit, bounds, from });
-  const { onKey } = view;
+  const { onKey, reveal } = view;
   const [store] = useState(() => createZoomStore({ zoomIn: view.zoomIn, zoomOut: view.zoomOut, fit: view.fitView }));
   useEffect(() => {
     store.set({ canIn: view.zoom < MAX_ZOOM - 1e-6, canOut: view.zoom > 1 + 1e-6 });
@@ -222,7 +223,8 @@ function ZctaStage({
     ?? null;
   const stageHandlers = hover.handlers('zip', setActiveZip);
 
-  // One native keydown and one native click listener on the stage.
+  // One native keydown and one native click listener on the stage, plus the
+  // focus reveal (focusin, and the pointer press that exempts a click).
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return undefined;
@@ -250,13 +252,38 @@ function ZctaStage({
       const zip = populatedUnit(event.target);
       if (zip) onSelectZip(zip);
     };
+    // WCAG 2.4.11: a ZIP area that takes keyboard focus (the roving arrows,
+    // Tab) outside a zoomed view is panned into it. A pointer press focuses
+    // what is already under the pointer, so it never moves the map.
+    let pressing = false;
+    const onPress = () => {
+      pressing = true;
+    };
+    const onRelease = () => {
+      pressing = false;
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      const fromPointer = pressing;
+      pressing = false;
+      const zip = fromPointer ? null : populatedUnit(event.target);
+      const area = zip ? geometry.byZip.get(zip) : undefined;
+      if (area) reveal(boxView(area.box));
+    };
     svg.addEventListener('keydown', onKeyDown);
     svg.addEventListener('click', onClick);
+    svg.addEventListener('pointerdown', onPress);
+    svg.addEventListener('pointerup', onRelease);
+    svg.addEventListener('pointercancel', onRelease);
+    svg.addEventListener('focusin', onFocusIn);
     return () => {
       svg.removeEventListener('keydown', onKeyDown);
       svg.removeEventListener('click', onClick);
+      svg.removeEventListener('pointerdown', onPress);
+      svg.removeEventListener('pointerup', onRelease);
+      svg.removeEventListener('pointercancel', onRelease);
+      svg.removeEventListener('focusin', onFocusIn);
     };
-  }, [kit, onKey, onSelectZip]);
+  }, [geometry, kit, onKey, onSelectZip, reveal]);
 
   useEffect(() => {
     if (!autoFocus) return;

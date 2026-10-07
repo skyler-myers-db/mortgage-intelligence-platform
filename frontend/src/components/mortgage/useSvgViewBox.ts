@@ -17,6 +17,8 @@
  *  - `onKey` answers + (and =), - and 0 for the stage's keydown listener,
  *    which passes only unmodified keys: a ctrl / cmd / alt chord is the
  *    browser's own zoom (WCAG 1.4.4) and is never taken.
+ *  - `reveal` pans a keyboard-focused unit back into a zoomed view (WCAG
+ *    2.4.11), keeping the zoom.
  *  - motion-10: the first frame is the national `from` view, tweened to the
  *    fit over --dur-slow; instant under prefers-reduced-motion, and the first
  *    user gesture stops it where it is.
@@ -60,6 +62,8 @@ export interface SvgViewBox {
   fitView: () => void;
   /** +, =, - and 0 (true when handled; the caller prevents the default). */
   onKey: (key: string) => boolean;
+  /** Pan, keeping the zoom, to centre `target`'s in-bounds part when its centre is out of view; else a no-op. */
+  reveal: (target: ViewBox) => void;
 }
 
 export const viewBoxAttr = (view: ViewBox) =>
@@ -148,6 +152,23 @@ export function useSvgViewBox({ svgRef, fit, bounds, from = null }: SvgViewBoxIn
     else return false;
     return true;
   }, [fitView, zoomIn, zoomOut]);
+  const reveal = useCallback((target: ViewBox) => {
+    const { fit: f, bounds: b } = limits.current;
+    // The target's part inside the bounds (a cross-line ZIP area's in-state
+    // part). The fit holds every such centre, so the drill's first view, and
+    // every frame of its tween, never pans.
+    const x0 = Math.max(target.x, b.x);
+    const y0 = Math.max(target.y, b.y);
+    const x1 = Math.min(target.x + target.w, b.x + b.w);
+    const y1 = Math.min(target.y + target.h, b.y + b.h);
+    if (x1 < x0 || y1 < y0) return;
+    const cx = (x0 + x1) / 2;
+    const cy = (y0 + y1) / 2;
+    const view = live.current;
+    if (cx >= view.x && cx <= view.x + view.w && cy >= view.y && cy <= view.y + view.h) return;
+    const next = clampView({ ...view, x: cx - view.w / 2, y: cy - view.h / 2 }, f, b);
+    if (!same(next, view)) settle(next);
+  }, [settle]);
 
   // motion-10: start on the national view and tween to the fit, before paint.
   // The rung is keyed by state, so this runs once per drill; an unmount
@@ -266,5 +287,5 @@ export function useSvgViewBox({ svgRef, fit, bounds, from = null }: SvgViewBoxIn
     };
   }, [commit, paint, stopTween, svgRef]);
 
-  return { committed, zoom: fit.w / committed.w, zoomIn, zoomOut, fitView, onKey };
+  return { committed, zoom: fit.w / committed.w, zoomIn, zoomOut, fitView, onKey, reveal };
 }

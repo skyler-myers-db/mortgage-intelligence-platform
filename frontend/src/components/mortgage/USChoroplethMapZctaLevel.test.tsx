@@ -27,7 +27,9 @@ import { claimDrillFocus, moveRovingFocus, zipAriaLabel } from './USChoroplethMa
 import { buildChoroplethScale } from './USChoroplethMap.scale';
 import type { ZipStageView } from './USChoroplethMap.zipStage';
 import { useMapHover } from './useMapHover';
+import { viewBoxAttr } from './useSvgViewBox';
 import type { ZctaArea, ZctaGeometry } from './zctaGeometry';
+import { fitZctaView } from './zctaLevel.logic';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 declare const process: { cwd(): string };
@@ -276,6 +278,45 @@ describe('USChoroplethMapZctaLevel', () => {
     expect(svg()?.getAttribute('viewBox'), 'no chord moved the map').toBe(fitted);
     expect(press('+')).toBe(true);
     expect(svg()?.getAttribute('viewBox')).not.toBe(fitted);
+  });
+
+  it('pans a keyboard-focused ZIP area back into a zoomed view, and never for a pointer press (WCAG 2.4.11)', async () => {
+    await render(false, { autoFocus: true });
+    // The keyboard drill's own focus leaves the fitted first view where it is.
+    await until(() => document.activeElement === unit('60611'));
+    expect(svg()?.getAttribute('viewBox')).toBe(viewBoxAttr(fitZctaView(AREAS, BY_ZIP, GEOMETRY.stateBox)));
+    const view = () => (svg()?.getAttribute('viewBox') ?? '').split(' ').map(Number);
+    const shows = ([cx, cy]: [number, number]) => {
+      const [x, y, w, h] = view();
+      return cx >= x && cx <= x + w && cy >= y && cy <= y + h;
+    };
+    const key = (target: Element, name: string) => act(() => {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }));
+    });
+    const first = unit('60611') as SVGPathElement;
+    const second = unit('60612') as SVGPathElement;
+    // 12x around the fit's centre: neither ZIP area's centre is in view.
+    for (let i = 0; i < 7; i += 1) key(first, '+');
+    const zoomed = view();
+    expect(zoomed[2]).toBeLessThan(5);
+    expect(shows([15, 15]) || shows([30.25, 10.25])).toBe(false);
+    // A pointer press focuses what is under the pointer: the map stays put.
+    const press = (type: string) => new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, isPrimary: true });
+    act(() => {
+      second.dispatchEvent(press('pointerdown'));
+      second.focus();
+      second.dispatchEvent(press('pointerup'));
+    });
+    expect(document.activeElement).toBe(second);
+    expect(view()).toEqual(zoomed);
+    // The roving arrows bring the focused area's centre into view, the zoom kept.
+    key(second, 'ArrowRight');
+    expect(document.activeElement).toBe(first);
+    expect(shows([15, 15])).toBe(true);
+    expect(view()[2]).toBeCloseTo(zoomed[2], 3);
+    key(first, 'ArrowRight');
+    expect(document.activeElement).toBe(second);
+    expect(shows([30.25, 10.25])).toBe(true);
   });
 
   it('deep-links once per click on a populated ZCTA and never from context', async () => {
