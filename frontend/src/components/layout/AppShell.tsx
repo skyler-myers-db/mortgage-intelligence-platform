@@ -193,7 +193,7 @@ function AppShellInner({ children }: PropsWithChildren) {
   // first trusted observation the gate stays pending and private storage
   // reads nothing.
   useEffect(() => {
-    if (actorIdentity !== null) observeActor({ key: actorIdentity.key });
+    if (actorIdentity !== null) observeActor({ key: actorIdentity.key, aliases: actorIdentity.aliases });
   }, [actorIdentity]);
 
   const openGenie = useCallback(() => {

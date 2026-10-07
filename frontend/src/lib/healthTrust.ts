@@ -32,6 +32,10 @@ import type { HealthPayload } from './apiTypes';
  *
  * `sessionActorObservation` applies the same key rule to the /api/session
  * body, which seeds the actor gate before the first probe (HealthProvider).
+ *
+ * Rotation aliases (D-identity-review-a4) come from /health ONLY: the
+ * well-formed entries of `actor_cache_key_aliases`, [] for a null key or an
+ * absent / non-array field. A session seed carries none.
  */
 
 /** The server's opaque per-actor key: `actor_` + 16 lowercase hex. */
@@ -49,11 +53,27 @@ export function markAuthFailedHealth(payload: HealthPayload): HealthPayload {
   return payload;
 }
 
-export type HealthActorObservation = { trusted: false } | { trusted: true; key: string | null };
+export type HealthActorObservation =
+  | { trusted: false }
+  | { trusted: true; key: string | null; aliases: readonly string[] };
 
 /** The last trusted actor observation HealthProvider publishes. */
 export interface ActorIdentity {
   key: string | null;
+  /** The same actor's key under the previous rotation secret (health only). */
+  aliases: readonly string[];
+}
+
+const NO_ALIASES: readonly string[] = Object.freeze([]);
+
+/** The same key and the same aliases in the same order. */
+export function sameActorIdentity(a: ActorIdentity, b: ActorIdentity): boolean {
+  return a.key === b.key && a.aliases.length === b.aliases.length && a.aliases.every((alias, i) => alias === b.aliases[i]);
+}
+
+function healthAliases(key: string | null, value: unknown): readonly string[] {
+  if (key === null || !Array.isArray(value)) return NO_ALIASES;
+  return value.filter(isActorCacheKey);
 }
 
 /** Absent, null or a well-formed key: the only values a real body carries. */
@@ -64,13 +84,15 @@ function isKeyOrNothing(value: unknown): value is string | null | undefined {
 /** What a raw (not debounced) health payload says about the actor. */
 export function healthActorObservation(payload: HealthPayload): HealthActorObservation {
   if (payload.status === 'unreachable') {
-    return authFailedPayloads.has(payload) ? { trusted: true, key: null } : { trusted: false };
+    return authFailedPayloads.has(payload) ? { trusted: true, key: null, aliases: NO_ALIASES } : { trusted: false };
   }
   const real =
     payload.mode === 'live' &&
     (payload.status === 'ok' || payload.status === 'degraded') &&
     isKeyOrNothing(payload.actor_cache_key);
-  return real ? { trusted: true, key: payload.actor_cache_key ?? null } : { trusted: false };
+  if (!real) return { trusted: false };
+  const key = payload.actor_cache_key ?? null;
+  return { trusted: true, key, aliases: healthAliases(key, payload.actor_cache_key_aliases) };
 }
 
 /**
@@ -87,6 +109,6 @@ export function sessionActorObservation(body: unknown): HealthActorObservation {
   }
   if (!Object.prototype.hasOwnProperty.call(session, 'actor_cache_key')) return { trusted: false };
   const key = session.actor_cache_key;
-  if (key === null) return { trusted: true, key: null };
-  return isActorCacheKey(key) ? { trusted: true, key } : { trusted: false };
+  if (key === null) return { trusted: true, key: null, aliases: NO_ALIASES };
+  return isActorCacheKey(key) ? { trusted: true, key, aliases: NO_ALIASES } : { trusted: false };
 }

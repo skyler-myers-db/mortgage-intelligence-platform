@@ -6,10 +6,11 @@ import {
   healthActorObservation,
   isActorCacheKey,
   markAuthFailedHealth,
+  sameActorIdentity,
   sessionActorObservation,
 } from './healthTrust';
 import { _resetSessionStatusForTests } from './sessionStatus';
-import { ACTOR_A, ACTOR_B } from '../test/actorKeys';
+import { ACTOR_A, ACTOR_B, ACTOR_C } from '../test/actorKeys';
 
 /**
  * Which health probes may say who the actor is (Genie residual #3). Driven
@@ -72,12 +73,12 @@ describe('health actor trust through api.health', () => {
 
   it('a reachable probe is trusted, with its key', async () => {
     stubFetch(() => json(200, { status: 'ok', mode: 'live', actor_cache_key: ACTOR_A }));
-    expect((await observe()).observation).toEqual({ trusted: true, key: ACTOR_A });
+    expect((await observe()).observation).toEqual({ trusted: true, key: ACTOR_A, aliases: [] });
   });
 
   it('the anonymous {status, mode} body is a trusted nobody', async () => {
     stubFetch(() => json(200, { status: 'ok', mode: 'live' }));
-    expect((await observe()).observation).toEqual({ trusted: true, key: null });
+    expect((await observe()).observation).toEqual({ trusted: true, key: null, aliases: [] });
   });
 
   describe('authentication failures are a trusted nobody', () => {
@@ -85,14 +86,14 @@ describe('health actor trust through api.health', () => {
       stubFetch(() => json(401, {}));
       const { payload, observation } = await observe();
       expect(payload).toEqual(UNREACHABLE);
-      expect(observation).toEqual({ trusted: true, key: null });
+      expect(observation).toEqual({ trusted: true, key: null, aliases: [] });
     });
 
     it('403', async () => {
       stubFetch(() => json(403, { detail: 'forbidden' }));
       const { payload, observation } = await observe();
       expect(payload).toEqual(UNREACHABLE);
-      expect(observation).toEqual({ trusted: true, key: null });
+      expect(observation).toEqual({ trusted: true, key: null, aliases: [] });
     });
 
     it('a sign-in redirect the session probe confirms', async () => {
@@ -100,12 +101,12 @@ describe('health actor trust through api.health', () => {
       const { payload, observation } = await observe();
       expect(paths).toEqual([HEALTH, HEALTH]);
       expect(payload).toEqual(UNREACHABLE);
-      expect(observation).toEqual({ trusted: true, key: null });
+      expect(observation).toEqual({ trusted: true, key: null, aliases: [] });
     });
 
     it('an unreadable 2xx body the session probe calls expired', async () => {
       stubFetch(() => html(200), () => json(401, {}));
-      expect((await observe()).observation).toEqual({ trusted: true, key: null });
+      expect((await observe()).observation).toEqual({ trusted: true, key: null, aliases: [] });
     });
   });
 
@@ -147,7 +148,7 @@ describe('health actor trust through api.health', () => {
   it('the mark cannot be forged from JSON: only the marked object is trusted', () => {
     const marked = markAuthFailedHealth({ status: 'unreachable', mode: 'unknown', dependencies: {} });
     const lookalike = JSON.parse(JSON.stringify(marked)) as HealthPayload;
-    expect(healthActorObservation(marked)).toEqual({ trusted: true, key: null });
+    expect(healthActorObservation(marked)).toEqual({ trusted: true, key: null, aliases: [] });
     expect(healthActorObservation(lookalike)).toEqual({ trusted: false });
   });
 });
@@ -166,13 +167,14 @@ describe('healthActorObservation trusts only a real health body', () => {
   });
 
   it('{status: ok, mode: live} is a trusted nobody', () => {
-    expect(healthActorObservation({ status: 'ok', mode: 'live' })).toEqual({ trusted: true, key: null });
+    expect(healthActorObservation({ status: 'ok', mode: 'live' })).toEqual({ trusted: true, key: null, aliases: [] });
   });
 
   it('a degraded live body with a well-formed key is trusted', () => {
     expect(healthActorObservation({ status: 'degraded', mode: 'live', actor_cache_key: ACTOR_A })).toEqual({
       trusted: true,
       key: ACTOR_A,
+      aliases: [],
     });
   });
 
@@ -180,6 +182,7 @@ describe('healthActorObservation trusts only a real health body', () => {
     expect(healthActorObservation({ status: 'ok', mode: 'live', actor_cache_key: null })).toEqual({
       trusted: true,
       key: null,
+      aliases: [],
     });
   });
 
@@ -197,15 +200,56 @@ describe('healthActorObservation trusts only a real health body', () => {
   });
 });
 
+describe('rotation aliases come from a trusted health body only (D-identity-review-a4)', () => {
+  const live = (extra: Partial<HealthPayload>): HealthPayload => ({ status: 'ok', mode: 'live', ...extra });
+
+  it('keeps the well-formed aliases in order and drops malformed ones', () => {
+    const payload = { ...live({ actor_cache_key: ACTOR_A }), actor_cache_key_aliases: [ACTOR_B, 'bob@x', 42, `actor_${'C'.repeat(16)}`, ACTOR_C] };
+    expect(healthActorObservation(payload as unknown as HealthPayload)).toEqual({
+      trusted: true,
+      key: ACTOR_A,
+      aliases: [ACTOR_B, ACTOR_C],
+    });
+  });
+
+  it.each([
+    ['absent', live({ actor_cache_key: ACTOR_A })],
+    ['not an array', { ...live({ actor_cache_key: ACTOR_A }), actor_cache_key_aliases: ACTOR_B }],
+    ['null', { ...live({ actor_cache_key: ACTOR_A }), actor_cache_key_aliases: null }],
+  ])('a field that is %s gives none', (_label, payload) => {
+    expect(healthActorObservation(payload as unknown as HealthPayload)).toEqual({ trusted: true, key: ACTOR_A, aliases: [] });
+  });
+
+  it('a null key carries no aliases, whatever the field says', () => {
+    expect(healthActorObservation(live({ actor_cache_key: null, actor_cache_key_aliases: [ACTOR_B] }))).toEqual({
+      trusted: true,
+      key: null,
+      aliases: [],
+    });
+  });
+
+  it('a session body never seeds aliases', () => {
+    const body = { can_access_admin: false, can_approve: false, actor_cache_key: ACTOR_A, actor_cache_key_aliases: [ACTOR_B] };
+    expect(sessionActorObservation(body)).toEqual({ trusted: true, key: ACTOR_A, aliases: [] });
+  });
+
+  it('sameActorIdentity compares the key and the aliases in order', () => {
+    expect(sameActorIdentity({ key: ACTOR_A, aliases: [ACTOR_B] }, { key: ACTOR_A, aliases: [ACTOR_B] })).toBe(true);
+    expect(sameActorIdentity({ key: ACTOR_A, aliases: [] }, { key: ACTOR_A, aliases: [ACTOR_B] })).toBe(false);
+    expect(sameActorIdentity({ key: ACTOR_A, aliases: [ACTOR_B, ACTOR_C] }, { key: ACTOR_A, aliases: [ACTOR_C, ACTOR_B] })).toBe(false);
+    expect(sameActorIdentity({ key: ACTOR_A, aliases: [] }, { key: ACTOR_B, aliases: [] })).toBe(false);
+  });
+});
+
 describe('sessionActorObservation seeds only from a real session body', () => {
   const session = (extra: Record<string, unknown>) => ({ can_access_admin: false, can_approve: true, ...extra });
 
   it('a well-formed key is trusted', () => {
-    expect(sessionActorObservation(session({ actor_cache_key: ACTOR_A }))).toEqual({ trusted: true, key: ACTOR_A });
+    expect(sessionActorObservation(session({ actor_cache_key: ACTOR_A }))).toEqual({ trusted: true, key: ACTOR_A, aliases: [] });
   });
 
   it('an explicit null key is a trusted nobody', () => {
-    expect(sessionActorObservation(session({ actor_cache_key: null }))).toEqual({ trusted: true, key: null });
+    expect(sessionActorObservation(session({ actor_cache_key: null }))).toEqual({ trusted: true, key: null, aliases: [] });
   });
 
   it.each([

@@ -18,11 +18,12 @@ import { HealthProvider, useHealth } from './HealthProvider';
  * An unreachable probe, or a fetcher that throws, never touches it.
  */
 
-const payload = (key: string | null | undefined): HealthPayload => ({
+const payload = (key: string | null | undefined, aliases?: string[]): HealthPayload => ({
   status: 'ok',
   mode: 'live',
   dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
   ...(key === undefined ? {} : { actor_cache_key: key }),
+  ...(aliases === undefined ? {} : { actor_cache_key_aliases: aliases }),
 });
 const unreachable = (): HealthPayload => ({ status: 'unreachable', mode: 'unknown', dependencies: {} });
 
@@ -89,7 +90,7 @@ describe('HealthProvider actorIdentity', () => {
     await nextPoll();
     expect(latest(), 'a thrown probe is untrusted').toBeNull();
     await nextPoll();
-    expect(latest()).toEqual({ key: ACTOR_A });
+    expect(latest()).toEqual({ key: ACTOR_A, aliases: [] });
   });
 
   it('an untrusted probe after a trusted one keeps the SAME object', async () => {
@@ -102,7 +103,7 @@ describe('HealthProvider actorIdentity', () => {
       async () => payload(ACTOR_A),
     ]);
     const first = latest();
-    expect(first).toEqual({ key: ACTOR_A });
+    expect(first).toEqual({ key: ACTOR_A, aliases: [] });
     await nextPoll();
     await nextPoll();
     await nextPoll();
@@ -118,15 +119,34 @@ describe('HealthProvider actorIdentity', () => {
       async () => payload(ACTOR_B),
       async () => markAuthFailedHealth(unreachable()),
     ]);
-    expect(latest()).toEqual({ key: ACTOR_A });
+    expect(latest()).toEqual({ key: ACTOR_A, aliases: [] });
     await nextPoll();
-    expect(latest()).toEqual({ key: ACTOR_B });
+    expect(latest()).toEqual({ key: ACTOR_B, aliases: [] });
     await nextPoll();
-    expect(latest(), 'the anonymous body is a trusted nobody').toEqual({ key: null });
+    expect(latest(), 'the anonymous body is a trusted nobody').toEqual({ key: null, aliases: [] });
     await nextPoll();
-    expect(latest()).toEqual({ key: ACTOR_B });
+    expect(latest()).toEqual({ key: ACTOR_B, aliases: [] });
     await nextPoll();
-    expect(latest(), 'a marked auth failure is a trusted nobody').toEqual({ key: null });
+    expect(latest(), 'a marked auth failure is a trusted nobody').toEqual({ key: null, aliases: [] });
+  });
+
+  it('a change of the rotation aliases alone republishes; an unchanged pair keeps the object (a4)', async () => {
+    await mount([
+      async () => payload(ACTOR_A),
+      async () => payload(ACTOR_A, [ACTOR_B]),
+      async () => payload(ACTOR_A, [ACTOR_B]),
+      async () => payload(ACTOR_A, []),
+    ]);
+    const first = latest();
+    expect(first).toEqual({ key: ACTOR_A, aliases: [] });
+    await nextPoll();
+    const rotated = latest();
+    expect(rotated, 'a new alias list is a new object').not.toBe(first);
+    expect(rotated).toEqual({ key: ACTOR_A, aliases: [ACTOR_B] });
+    await nextPoll();
+    expect(latest(), 'the same key and aliases keep the SAME object').toBe(rotated);
+    await nextPoll();
+    expect(latest(), 'the alias retired').toEqual({ key: ACTOR_A, aliases: [] });
   });
 });
 
@@ -189,7 +209,7 @@ describe('HealthProvider actorIdentity: the /api/session seed', () => {
   it('a primed session seeds the identity before the first probe, with no observer and no session fetch', async () => {
     queryClient.setQueryData(SESSION_KEY, sessionBody(ACTOR_A));
     await mount();
-    expect(latest()).toEqual({ key: ACTOR_A });
+    expect(latest()).toEqual({ key: ACTOR_A, aliases: [] });
     expect(queryClient.getQueryCache().find({ queryKey: SESSION_KEY })?.getObserversCount()).toBe(0);
     expect(fetches.filter((url) => url.includes('/session'))).toEqual([]);
   });
@@ -200,12 +220,18 @@ describe('HealthProvider actorIdentity: the /api/session seed', () => {
     await act(async () => {
       queryClient.setQueryData(SESSION_KEY, sessionBody(null));
     });
-    expect(latest(), 'a null key is a trusted nobody').toEqual({ key: null });
+    expect(latest(), 'a null key is a trusted nobody').toEqual({ key: null, aliases: [] });
     await act(async () => {
       queryClient.setQueryData(SESSION_KEY, sessionBody(ACTOR_B));
     });
-    expect(latest(), 'a later success never re-seeds').toEqual({ key: null });
+    expect(latest(), 'a later success never re-seeds').toEqual({ key: null, aliases: [] });
     expect(fetches).toEqual([]);
+  });
+
+  it('a session body that carries aliases seeds none: they come from /health only (a4)', async () => {
+    queryClient.setQueryData(SESSION_KEY, { ...sessionBody(ACTOR_A), actor_cache_key_aliases: [ACTOR_B] });
+    await mount();
+    expect(latest()).toEqual({ key: ACTOR_A, aliases: [] });
   });
 
   it('a malformed session body seeds nothing', async () => {
@@ -222,10 +248,10 @@ describe('HealthProvider actorIdentity: the /api/session seed', () => {
     await act(async () => {
       answer(payload(ACTOR_B));
     });
-    expect(latest()).toEqual({ key: ACTOR_B });
+    expect(latest()).toEqual({ key: ACTOR_B, aliases: [] });
     await act(async () => {
       queryClient.setQueryData(SESSION_KEY, sessionBody(ACTOR_A));
     });
-    expect(latest(), 'health spoke first').toEqual({ key: ACTOR_B });
+    expect(latest(), 'health spoke first').toEqual({ key: ACTOR_B, aliases: [] });
   });
 });
