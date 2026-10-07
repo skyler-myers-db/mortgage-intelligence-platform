@@ -32,6 +32,7 @@ import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
 import { enterState, prepareState, type FixtureState } from './fixtureStates';
 import type { HomeSummary } from '../../../src/types';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
+import { registerPagedQueue } from './data/leadPages';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
 import { expect, test } from './test';
@@ -175,6 +176,20 @@ for (const theme of FIXTURE_THEMES) {
       await expect(page.locator('html')).toHaveAttribute('data-density', 'compact');
       await check(page, 'lead-queue', theme, 'compact');
       expectNoAuditedReadSince(mockApi, naturalLoad, 'lead-queue · compact');
+    });
+
+    // W5c w5-lead-queue-paging: the paged footer after one Load next (the
+    // next-page control, the polite status line). Load next is the reader's
+    // own audited read, so this capture makes no no-audited-read claim.
+    test('lead-queue · paged footer', async ({ app, mockApi, page }) => {
+      registerPagedQueue(mockApi);
+      await load(app, mockApi, route('lead-queue'), theme);
+      await page.getByTestId('lead-load-next').click();
+      const footer = page.locator('.surface:has(> .tbl-wrap) > .surface__ft');
+      await expect(footer).toContainText('Showing 1,000 ranked borrowers');
+      await footer.scrollIntoViewIfNeeded();
+      await app.settle();
+      await capture(page, `lead-queue--${theme}--paged-footer.png`, { element: footer });
     });
 
     // F: a 1280x720 laptop.

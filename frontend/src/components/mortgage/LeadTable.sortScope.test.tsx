@@ -157,6 +157,71 @@ describe('LeadTable sort-scope disclosure', () => {
 });
 
 /**
+ * W5c (tables-02, D-audit-reads-a): on the paged Lead Queue a warehouse
+ * column is the SERVER's sort of the whole view, so the rows already arrive
+ * in that order: the table keeps it (no client re-sort) and the footer names
+ * the column. A Lakebase-hydrated key still sorts the loaded rows here.
+ */
+describe('LeadTable server sort scope', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  const PAGING = {
+    viewId: '0123456789abcdef0123456789abcdef', pagesLoaded: 1, hasMore: true, unavailable: false, capped: false,
+    fetchingNext: false, nextError: false, queueUpdated: false, loadNext: () => undefined, retryNext: () => undefined,
+  };
+
+  function mount(sort: LeadTableSort, sortScope: 'server' | 'loaded') {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <LeadTable
+              leads={RANKED}
+              totalMatching={1_200}
+              truncatedAt={3}
+              sort={sort}
+              onSortChange={() => undefined}
+              paging={PAGING}
+              sortScope={sortScope}
+            />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+  }
+
+  const rowOrder = () => Array.from(container.querySelectorAll('.lead-table__borrower')).map((node) => node.textContent);
+  const scope = () => container.querySelector('[data-testid="lead-sort-scope"]')?.textContent;
+
+  it('keeps the server order for a warehouse column and names it', () => {
+    // The rows as the server answered sort=equity: the table must not re-sort them.
+    mount({ key: 'equity', dir: 'desc' }, 'server');
+    expect(rowOrder()).toEqual(['B-AAAAAAAAAAAA1', 'B-AAAAAAAAAAAA2', 'B-AAAAAAAAAAAA3']);
+    expect(scope()).toBe(' · sorted by Equity');
+    expect(container.querySelector('.surface__ft')?.textContent).not.toContain('capped at');
+  });
+
+  it('still sorts the loaded rows client-side when the scope is the loaded rows', () => {
+    mount({ key: 'equity', dir: 'desc' }, 'loaded');
+    expect(rowOrder()).toEqual(['B-AAAAAAAAAAAA2', 'B-AAAAAAAAAAAA3', 'B-AAAAAAAAAAAA1']);
+    expect(scope()).toContain('sorted within the loaded 3, not across all 1,200 matching');
+  });
+});
+
+/**
  * Controlled place (audit shell-03 / runtime-08): the Lead Queue owns the
  * sort and the expanded row (in the URL); without the props the table keeps
  * its own state, so Segment Intelligence is unchanged.

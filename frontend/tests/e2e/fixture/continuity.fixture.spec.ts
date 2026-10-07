@@ -8,7 +8,9 @@
 import type { Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
 import { PRIMARY_BORROWER } from './data/borrowers';
+import type { AppDriver } from './app';
 import { HEALTH_OK } from './data/shell';
+import type { MockApi } from './mockApi';
 import { expect, test } from './test';
 
 const PRODUCT = 'Mortgage Intelligence Platform';
@@ -132,7 +134,8 @@ test.describe('new-version notice', () => {
 });
 
 test.describe('recovery refetch', () => {
-  test('a panel that failed on a warehouse outage refetches by itself when health reports the warehouse back', async ({ app, mockApi, page }) => {
+  /** A warehouse outage on /api/leads and a health payload the test flips back up. */
+  function warehouseOutage(app: AppDriver, mockApi: MockApi): { recover: () => void } {
     let warehouse: 'down' | 'up' = 'down';
     mockApi.register<HealthPayload>('GET', '/api/health', () => ({
       body:
@@ -152,22 +155,52 @@ test.describe('recovery refetch', () => {
         correlation_id: 'fixture-correlation-0002',
       },
     });
+    return {
+      recover: () => {
+        restoreLeads();
+        warehouse = 'up';
+      },
+    };
+  }
 
-    await app.gotoRoute('/lead-queue');
+  const leadReads = (mockApi: MockApi, status: number) =>
+    mockApi.calls.filter((call) => call.path === '/api/leads' && call.status === status).length;
+
+  // Segment Intelligence's ranked table (a plain, non-paged leads read).
+  test('a panel that failed on a warehouse outage refetches by itself when health reports the warehouse back', async ({ app, mockApi, page }) => {
+    const outage = warehouseOutage(app, mockApi);
+    await app.gotoRoute('/segment-intelligence');
     const banner = page.locator('.degraded-banner').first();
     await expect(banner).toContainText(/Reconnecting/);
     await expect(page.locator('table.tbl:not([aria-hidden="true"])')).toHaveCount(0);
-    const failedReads = mockApi.calls.filter((call) => call.path === '/api/leads' && call.status === 503).length;
-    expect(failedReads).toBeGreaterThan(0);
+    expect(leadReads(mockApi, 503)).toBeGreaterThan(0);
 
     // The warehouse comes back. Nothing is clicked from here on.
-    restoreLeads();
-    warehouse = 'up';
-    await expect(page.locator('table.tbl:not([aria-hidden="true"]) tbody tr').first(), 'the queue refetched on the down → up edge').toBeVisible({
+    outage.recover();
+    await expect(page.locator('table.tbl:not([aria-hidden="true"]) tbody tr').first(), 'the table refetched on the down → up edge').toBeVisible({
       timeout: 30_000,
     });
     await expect(page.locator('.degraded-banner:not(.degraded-banner--info)')).toHaveCount(0);
-    const okReads = mockApi.calls.filter((call) => call.path === '/api/leads' && call.status === 200).length;
-    expect(okReads).toBeGreaterThan(0);
+    expect(leadReads(mockApi, 200)).toBeGreaterThan(0);
+  });
+
+  // W5c (D-audit-reads-a): every served page of the Lead Queue's paged view
+  // writes a VIEW_LEADS row, so a recovery never re-reads it by itself; the
+  // reader's Retry reads page 0 once.
+  test('the paged Lead Queue waits for the reader after a recovery: Retry reads page 0 once', async ({ app, mockApi, page }) => {
+    const outage = warehouseOutage(app, mockApi);
+    await app.gotoRoute('/lead-queue');
+    await expect(page.locator('.degraded-banner').first()).toContainText(/Reconnecting/);
+    expect(leadReads(mockApi, 503)).toBeGreaterThan(0);
+
+    outage.recover();
+    await expect(page.locator('.degraded-banner:not(.degraded-banner--info)')).toHaveCount(0, { timeout: 30_000 });
+    await app.settle();
+    expect(leadReads(mockApi, 200), 'no passive re-read of an audited view').toBe(0);
+    await expect(page.locator('table.tbl:not([aria-hidden="true"])')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Retry loading ranked borrowers' }).click();
+    await expect(page.locator('table.tbl:not([aria-hidden="true"]) tbody tr').first()).toBeVisible();
+    expect(leadReads(mockApi, 200), 'one page 0 for one Retry').toBe(1);
   });
 });
