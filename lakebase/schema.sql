@@ -4190,7 +4190,7 @@ COMMENT ON INDEX mip_app.idx_action_audit_decision_entity IS
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_02_borrower_decision_history_index',
+    '2026_10_07_borrower_decision_history_index',
     'Borrower decision history: partial index idx_action_audit_decision_entity on action_audit (entity_id, audit_sequence DESC) over the governed decision types'
 )
 ON CONFLICT (version) DO NOTHING;

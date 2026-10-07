@@ -125,7 +125,7 @@ def test_the_partial_index_predicate_is_the_service_literal_list() -> None:
     assert not any(code.startswith("VIEW_") for code in predicate)
     # The service query carries the IDENTICAL literal text.
     assert f"event_type IN ({match['types']})" in history.DECISION_HISTORY_SQL
-    assert "'2026_10_02_borrower_decision_history_index'" in SCHEMA_SQL
+    assert "'2026_10_07_borrower_decision_history_index'" in SCHEMA_SQL
 
 
 def test_the_type_list_is_a_literal_never_a_bound_parameter() -> None:

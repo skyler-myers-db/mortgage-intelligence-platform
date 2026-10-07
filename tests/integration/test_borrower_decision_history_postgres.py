@@ -38,7 +38,7 @@ _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
 _MARKER = "-- Borrower decision history index ---"
 # The integrator re-dates this placeholder after 2026_10_01_genie_job_sections (C6).
-_VERSION = "2026_10_02_borrower_decision_history_index"
+_VERSION = "2026_10_07_borrower_decision_history_index"
 
 
 @pytest.fixture
