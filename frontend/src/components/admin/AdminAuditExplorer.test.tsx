@@ -183,10 +183,13 @@ describe('AdminAuditExplorer', () => {
     mocks.rollupsError = null;
   });
 
-  // The error vocabulary is its own chunk (loaded with the first failure).
+  // The error vocabulary is its own chunk (loaded with the first failure),
+  // and the page CSV's builder loads on click: transform both up front so a
+  // loaded runner does not race the click against an on-demand transform.
   beforeAll(async () => {
     await preloadDescribedError();
-  });
+    await import('./AdminAuditExplorer.export');
+  }, 60_000);
 
   // css-hygiene: the events table has no row-click action (rows expand from
   // their own button), so it opts out of the row pointer and hover.

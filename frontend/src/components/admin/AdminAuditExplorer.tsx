@@ -29,7 +29,7 @@ import { PrintProvenance } from '../print/PrintProvenance';
 import { toastReceiptFailure } from '../print/receiptFailureToast';
 import { usePrintReceipt } from '../print/usePrintReceipt';
 import type { PrintReceiptRequest } from '../../lib/apiClients/printReceipt';
-import { api, type AuditEventPage } from '../../lib/api';
+import { api, type AuditEventPage, type AuditEventRow } from '../../lib/api';
 import {
   auditEventPage,
   auditQueryFilters,
@@ -96,6 +96,29 @@ interface AuditCopyState {
 }
 
 const AUDIT_PAGE_SIZE = 25;
+
+/**
+ * The audited page CSV (administrators only): the file and its hashes are
+ * built in a click-time chunk; the download waits for the AUDIT_EXPORT row.
+ * Module scope on purpose: an import() inside the component body is a React
+ * Compiler bailout (BuildHIR cannot lower Import expressions).
+ */
+async function exportAuditPageCsv(
+  events: readonly AuditEventRow[],
+  page: number,
+  filters: Record<string, string>,
+  retry: () => void,
+): Promise<void> {
+  try {
+    const csvModule = await import('./AdminAuditExplorer.export');
+    const prepared = await csvModule.prepareAuditPageCsv(events, page, filters);
+    const receipt = await createAuditExportReceipt(prepared.declaration);
+    csvModule.downloadPreparedCsv(prepared);
+    toast.success('Audit page exported', { auditEventId: receipt.audit_event_id });
+  } catch (error: unknown) {
+    toastReceiptFailure('Audit page not exported', error, 'the audit export receipt', retry);
+  }
+}
 
 export function AdminAuditExplorer() {
   const location = useLocation();
@@ -187,21 +210,10 @@ export function AdminAuditExplorer() {
     filters: receiptFilters,
     row_count: events?.length ?? 0,
   };
-  // The audited page CSV (administrators only): the file and its hashes are
-  // built in a click-time chunk; the download waits for the AUDIT_EXPORT row.
   const exportCsv = () => {
     if (!events?.length) return;
     setCsvPending(true);
-    const exported = { events, page, filters: receiptFilters };
-    import('./AdminAuditExplorer.export')
-      .then(async (csvModule) => {
-        const prepared = await csvModule.prepareAuditPageCsv(exported.events, exported.page, exported.filters);
-        const receipt = await createAuditExportReceipt(prepared.declaration);
-        csvModule.downloadPreparedCsv(prepared);
-        toast.success('Audit page exported', { auditEventId: receipt.audit_event_id });
-      })
-      .catch((error: unknown) => toastReceiptFailure('Audit page not exported', error, 'the audit export receipt', exportCsv))
-      .finally(() => setCsvPending(false));
+    void exportAuditPageCsv(events, page, receiptFilters, exportCsv).finally(() => setCsvPending(false));
   };
 
   const goToPage = (cursors: Array<string | null>) => {
