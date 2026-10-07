@@ -110,11 +110,14 @@ describe('SignalStack', () => {
     expect(document.querySelector('.signal-stack h2')?.textContent).toBe('Signal stack');
   });
 
-  it('reserves the loaded height only while the read is in flight (aria-busy), never in a settled state', () => {
+  it('reserves the loaded height only while busy or loaded with rows, never in a one-line settled state', () => {
     const css = signalStackCss.replace(/\/\*[\s\S]*?\*\//g, '');
     const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selector, body]) => ({ selector: selector.trim(), body }));
     const reserving = rules.filter((rule) => /min-block-size/.test(rule.body));
-    expect(reserving.map((rule) => rule.selector)).toEqual([".signal-stack[aria-busy='true'] > .signal-stack__body"]);
+    expect(reserving.map((rule) => rule.selector.split(/,\s*/))).toEqual([[
+      ".signal-stack[aria-busy='true'] > .signal-stack__body",
+      '.signal-stack__body:has(> .signal-stack__actions)',
+    ]]);
     expect(rules.find((rule) => rule.selector === '.signal-stack__body')?.body).not.toMatch(/min-block-size|min-height|block-size/);
   });
 
