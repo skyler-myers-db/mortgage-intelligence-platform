@@ -255,9 +255,13 @@ route template x closed facet x rating, with up to eight contributing build
 ids. There are no event rows, no per-event log lines and no sub-day
 timestamp column.
 
-**Retention.** Stored measurements older than 90 days are zeroed in place
-(an `UPDATE`); the App role holds `SELECT`, `INSERT` and `UPDATE` on the
-table and no `DELETE`.
+**Retention.** The App's first write of each UTC day zeroes the stored
+measurements older than 90 days in place (an `UPDATE`), and a new day that
+lands in a ring slot resets that slot's row. Zeroing rides on a write: a
+deployment that receives no browser telemetry writes nothing, so its last
+rows stay as they are until the next measurement arrives. The panel never
+reads past 28 days. The App role holds `SELECT`, `INSERT` and `UPDATE` on
+the table and no `DELETE`.
 
 **Access.** Administrators only: `GET /api/v1/admin/field-performance`
 (`AdminDep`; an auditor or an approver gets 403) behind the Field performance
