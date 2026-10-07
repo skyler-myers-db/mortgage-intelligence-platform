@@ -60,7 +60,7 @@ function ZipAreasStage({ onView, usps, nationalViewBox, ...tiles }: ZipStageProp
       </>
     );
   }
-  const loading = <ZipAreasLoading stateName={tiles.drillStateName} autoFocus={tiles.autoFocus ?? false} />;
+  const loading = <ZipAreasLoading stateName={tiles.drillStateName} holdDrillFocus={tiles.autoFocus ?? false} />;
   const Rung = chunk.module?.USChoroplethMapZctaLevel ?? null;
   if (!Rung) return loading;
   return (
@@ -82,11 +82,11 @@ function ZipAreasStage({ onView, usps, nationalViewBox, ...tiles }: ZipStageProp
  * keeps its request open: each next stage replaces this one, so the first
  * ZIP area, or the fallback tiles, take focus once they mount.
  */
-function ZipAreasLoading({ stateName, autoFocus }: { stateName: string; autoFocus: boolean }) {
+function ZipAreasLoading({ stateName, holdDrillFocus }: { stateName: string; holdDrillFocus: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (autoFocus) claimDrillFocus(ref.current);
-  }, [autoFocus]);
+    if (holdDrillFocus) claimDrillFocus(ref.current);
+  }, [holdDrillFocus]);
   return (
     <div
       ref={ref}
