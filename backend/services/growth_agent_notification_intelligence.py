@@ -134,6 +134,11 @@ _WORKFLOW_FALLBACKS: dict[str, tuple[str, str, str]] = {
         "The configured segment watchlist is ready for evidence and ownership review",
         "Review the selected segment evidence and confirm the next operating step",
     ),
+    "rate_trigger_watch": (
+        "The watched rate level was reached in the latest weekly print",
+        "The rate watch reached its level in the latest weekly print; review the rate scenario before any outreach",
+        "Review the rate scenario and decide on the next operating step; nothing is sent",
+    ),
 }
 
 _DEFAULT_FALLBACK = (

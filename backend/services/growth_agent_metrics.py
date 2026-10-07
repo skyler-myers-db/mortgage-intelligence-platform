@@ -10,6 +10,7 @@ from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlEr
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.growth_agent_rate_trigger import load_rate_trigger_metrics
 from backend.services.growth_agent_workflows import (
     BORROWER_360,
     BORROWER_DOSSIER,
@@ -30,6 +31,9 @@ def load_growth_agent_metrics(
     workflow: GrowthAgentWorkflowDef,
     states: list[str],
 ) -> dict[str, Any]:
+    if workflow.rate_trigger is not None:
+        # wow-ai-2: gold rate tables through their cached repositories only.
+        return load_rate_trigger_metrics(workflow.rate_trigger)
     if workflow.id == "source_freshness_sentinel":
         return _load_source_freshness_metrics(sql_client)
     if workflow.id == "borrower_dossier_review":

@@ -87,6 +87,16 @@ describe('apiCallRoute', () => {
     expect(apiCallRoute(`${ORIGIN}/api/v1/admin/settings`, ORIGIN)).toBe('/api/admin/settings');
   });
 
+  it('reports the rate watch save and never the composed-plan progress poll (W5d)', () => {
+    expect(apiCallRoute(`${ORIGIN}/api/v1/growth-agent/rate-watch`, ORIGIN)).toBe('/api/growth-agent/rate-watch');
+    expect(apiCallRoute(`${ORIGIN}/api/v1/growth-agent/agent/plan/progress?request_id=r-1`, ORIGIN)).toBeNull();
+    expect(apiCallRoute(`${ORIGIN}/api/growth-agent/agent/plan/progress`, ORIGIN)).toBeNull();
+    // Its sibling, the audited execute, still reports.
+    expect(apiCallRoute(`${ORIGIN}/api/v1/growth-agent/agent/plan/execute`, ORIGIN)).toBe(
+      '/api/growth-agent/agent/plan/execute',
+    );
+  });
+
   it('skips a template over the server\'s 160-character api_route limit instead of costing the batch a 422', () => {
     // '/api' + six '/campaign-recommendation' (24 each) = 148 characters.
     const long = Array.from({ length: 6 }, () => 'campaign-recommendation').join('/');

@@ -15,10 +15,13 @@ from backend.schemas.growth_agent import (
 )
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.growth_agent_ledger_sql import MONITOR_LIST_SQL
+from backend.services.growth_agent_rate_trigger import rate_trigger_from_criteria
 from backend.services.growth_agent_workflows import (
+    RATE_TRIGGER_WORKFLOW_ID,
     WORKFLOWS,
     GrowthAgentWorkflowDef,
     custom_workflow,
+    rate_trigger_workflow,
 )
 from backend.services.lakebase import LakebaseClient, LakebaseError
 
@@ -43,6 +46,8 @@ def workflow_from_monitor(row: dict[str, Any]) -> GrowthAgentWorkflowDef:
             raise HTTPException(status_code=409, detail="saved monitor has malformed segment criteria")
         segment_mode = str(lead_filters.get("segment_mode") or "any")
         return custom_workflow([str(code) for code in segment_codes], segment_mode)
+    if workflow_id == RATE_TRIGGER_WORKFLOW_ID:
+        return rate_trigger_workflow(rate_trigger_from_criteria(json_object(row.get("criteria"))))
     workflow = WORKFLOWS.get(cast(GrowthAgentWorkflowId, workflow_id))
     if workflow is None:
         raise HTTPException(status_code=409, detail="saved monitor references an unknown workflow")
@@ -105,6 +110,8 @@ def _monitor_fallback_name(row: dict[str, Any]) -> str:
         return workflow.title
     if workflow_id == "custom_segment_watch":
         return "Custom Segment Workflow"
+    if workflow_id == RATE_TRIGGER_WORKFLOW_ID:
+        return "Rate watch"
     return "Reviewed Growth Watchlist"
 
 

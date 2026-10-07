@@ -13,6 +13,7 @@ from backend.schemas.growth_agent import (
     GrowthAgentToolStep,
 )
 from backend.services.agent_tools import assert_tool_allowed_for_specialist
+from backend.services.growth_agent_rate_trigger import rate_trigger_check, rate_trigger_tool_steps
 from backend.services.growth_agent_workflows import (
     CUSTOM_WORKFLOW_ID,
     SOURCE_READINESS,
@@ -32,6 +33,14 @@ def default_copilot_evidence(workflow: GrowthAgentWorkflowDef) -> GrowthAgentCop
 
 
 def criteria_for(workflow: GrowthAgentWorkflowDef, states: list[str]) -> dict[str, object]:
+    if workflow.rate_trigger is not None:
+        # wow-ai-2: the stored trigger is rewritten byte-identical on every run.
+        return {
+            "states": [],
+            "rate_trigger": workflow.rate_trigger.criteria(),
+            "marketing_eligibility": "Eligible only",
+            "workflow_id": workflow.id,
+        }
     lead_queue_filters: dict[str, object] = {
         "source": "trusted_sql",
     }
@@ -89,6 +98,13 @@ def tool_steps(
         tool_name=None,
         result_hash=tool_result_hash,
     )
+    if workflow.rate_trigger is not None:
+        return [
+            planner_step,
+            *rate_trigger_tool_steps(
+                workflow.rate_trigger, metrics, tool_detail=workflow.tool_detail, result_hash=tool_result_hash
+            ),
+        ]
     if workflow.id == "source_freshness_sentinel":
         warning_total = int(metrics.get("warning_total") or 0)
         stale_total = int(metrics.get("stale_total") or 0)
@@ -239,7 +255,11 @@ def policy_checks(
         GrowthAgentPolicyCheck(
             label="Approval gate required",
             status="passed",
-            detail="The agent opens a reviewed Lead Queue subset; activation requires an operator decision.",
+            detail=(
+                "The watch opens the rate scenario for review; any outreach requires an operator decision."
+                if workflow.rate_trigger is not None
+                else "The agent opens a reviewed Lead Queue subset; activation requires an operator decision."
+            ),
         ),
         GrowthAgentPolicyCheck(
             label="Broad vs actionable reconciliation",
@@ -281,6 +301,8 @@ def policy_checks(
                 ),
             )
         )
+    if workflow.rate_trigger is not None:
+        checks.append(rate_trigger_check(metrics))
     if workflow.id == "branch_capacity_review":
         checks.append(
             GrowthAgentPolicyCheck(

@@ -59,6 +59,7 @@ GrowthAgentWorkflowId = Literal[
     "branch_capacity_review",
     "source_freshness_sentinel",
     "custom_segment_watch",
+    "rate_trigger_watch",  # wow-ai-2: saved from the Rate Lever only; never a workflow card or planner choice
     # Read-only live Genie analysis: the outcome fallback when no reviewed
     # workflow matches the objective. Never writes state.
     "live_analysis",

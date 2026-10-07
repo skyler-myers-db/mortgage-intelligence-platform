@@ -36,6 +36,7 @@ export const API_ROUTE_SEGMENTS = [
   'outbox', 'outcome', 'outcomes', 'outreach', 'page', 'points', 'portfolio',
   'plan',
   'preview', 'progress', 'proof', 'property-loan', 'rate-sensitivity', 'rate-window',
+  'rate-watch',
   'queue-version',
   'question', 'receipt',
   'recommend', 'refusal-report', 'refusal-reports', 'reject', 'rollups', 'rules', 'rum', 'run',
@@ -69,6 +70,9 @@ const EXCLUDED_TEMPLATES: ReadonlySet<string> = new Set([
   // The Lead Queue's change-signal poll (audit states-09): once a minute
   // while the queue is open; a poll, not a read a person made.
   '/api/workspace/queue-version',
+  // A composed plan's per-step progress (genie-09 part 4): a 1 s poll only
+  // while the caller's own execute is pending.
+  '/api/growth-agent/agent/plan/progress',
 ]);
 const EXCLUDED_PREFIX = '/api/telemetry/';
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urlencode
 
 from fastapi import HTTPException
@@ -21,6 +22,33 @@ from backend.schemas.growth_agent_objective_intent import (
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
+
+RateTriggerDirection = Literal["at_or_below", "at_or_above"]
+
+
+@dataclass(frozen=True)
+class RateTrigger:
+    """A watched 30-year par level (audit wow-ai-2), saved from one Rate Lever step.
+
+    ``level_pct`` is the server's scenario par at ``step_bps`` (2 dp) and the
+    direction follows the step's sign. It is compared with the weekly print; it
+    never forecasts a rate and never changes a stored score.
+    """
+
+    step_bps: int
+    level_pct: float
+    direction: RateTriggerDirection
+    base_market_rate_pct: float
+    series_id: str = "MORTGAGE30US"
+
+    def criteria(self) -> dict[str, object]:
+        return {
+            "series_id": self.series_id,
+            "step_bps": self.step_bps,
+            "level_pct": self.level_pct,
+            "direction": self.direction,
+            "base_market_rate_pct": self.base_market_rate_pct,
+        }
 
 
 @dataclass(frozen=True)
@@ -40,6 +68,7 @@ class GrowthAgentWorkflowDef:
     broad_label: str = "Broad opportunity"
     actionable_label: str = "Eligible subset"
     route_path: str = "/lead-queue"
+    rate_trigger: RateTrigger | None = None
 
     def schema(self) -> GrowthAgentWorkflow:
         return GrowthAgentWorkflow(
@@ -72,6 +101,10 @@ SEGMENT_LABELS: dict[str, str] = {
 
 CUSTOM_WORKFLOW_ID: GrowthAgentWorkflowId = "custom_segment_watch"
 CUSTOM_WORKFLOW_TITLE = "Custom Segment Workflow"
+RATE_TRIGGER_WORKFLOW_ID: GrowthAgentWorkflowId = "rate_trigger_watch"
+RATE_TRIGGER_WORKFLOW_TITLE = "Rate Trigger Watch"
+RATE_WINDOW_WEEKLY = qualify("gold", "rate_window_weekly")
+RATE_SENSITIVITY_ROLLUP = qualify("gold", "rate_sensitivity_rollup")
 
 WORKFLOWS: dict[GrowthAgentWorkflowId, GrowthAgentWorkflowDef] = {
     "daily_refi_brief": GrowthAgentWorkflowDef(
@@ -277,6 +310,43 @@ def custom_workflow(segment_codes: Sequence[str], segment_mode: str) -> GrowthAg
             "the result is de-duplicated at borrower grain before human review."
         ),
         specialist_agent="campaign_agent",
+    )
+
+
+def rate_trigger_workflow(trigger: RateTrigger) -> GrowthAgentWorkflowDef:
+    """The reviewed rate watch built from stored criteria (audit wow-ai-2).
+
+    Never in ``WORKFLOWS``: it is no workflow card, the planner and composer
+    cannot select it, and ``POST /workflows/rate_trigger_watch/run`` stays a
+    404. Its predicates are never executed: the counts come from the gold rate
+    tables (``growth_agent_rate_trigger.load_rate_trigger_metrics``).
+    """
+
+    direction = trigger.direction.replace("_", " ")
+    return GrowthAgentWorkflowDef(
+        id=RATE_TRIGGER_WORKFLOW_ID,
+        title=RATE_TRIGGER_WORKFLOW_TITLE,
+        objective=f"Check the weekly 30-year print against a watched {trigger.level_pct:.2f}% par level.",
+        trigger_label=f"Weekly 30-year print {direction} {trigger.level_pct:.2f}%",
+        action_label="Open the rate scenario",
+        source_assets=(RATE_WINDOW_WEEKLY, RATE_SENSITIVITY_ROLLUP),
+        proof_points=(
+            "The watched level is the scenario par at a saved rate lever step: a scenario, not a forecast.",
+            "The weekly print is read from gold.rate_window_weekly; counts from gold.rate_sensitivity_rollup.",
+            "When the print reaches the level, a review note is drafted only. Nothing is sent.",
+        ),
+        broad_predicate="FALSE",
+        actionable_predicate="FALSE",
+        route_filters={"map_mode": "rate", "rate_step": str(trigger.step_bps)},
+        tool_detail=(
+            "Opens the rate scenario at the saved step for human review; no outreach, score or "
+            "assignment is changed."
+        ),
+        specialist_agent="structured_data_agent",
+        broad_label="In the money at the scenario",
+        actionable_label="Contactable at the scenario",
+        route_path="/",
+        rate_trigger=trigger,
     )
 
 

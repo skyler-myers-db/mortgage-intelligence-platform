@@ -154,6 +154,7 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "outbox", "outcome", "outcomes", "outreach", "page", "points", "portfolio",
     "plan",
     "preview", "progress", "proof", "property-loan", "rate-sensitivity", "rate-window",
+    "rate-watch",
     "queue-version",
     "question", "receipt",
     "recommend", "refusal-report", "refusal-reports", "reject", "rollups", "rules", "rum", "run",

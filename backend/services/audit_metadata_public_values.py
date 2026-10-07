@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from backend.schemas.common import (
@@ -128,6 +129,40 @@ def _assert_approval_request_values(metadata: dict[str, Any]) -> None:
                     raise AuditMetadataValueViolation(
                         field, "must contain only app-scoped public borrower ids"
                     ) from exc
+
+
+# Rate watch (audit wow-ai-2): the Rate Lever's step grid and directions.
+_RATE_WATCH_DIRECTIONS: frozenset[str] = frozenset({"at_or_below", "at_or_above"})
+
+
+def _is_two_decimal_percent(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    try:
+        exact = Decimal(str(value))
+    except InvalidOperation:
+        return False
+    return exact.is_finite() and Decimal(0) < exact < Decimal(25) and exact == exact.quantize(Decimal("0.01"))
+
+
+def _assert_rate_watch_values(metadata: dict[str, Any]) -> None:
+    """A saved rate watch: a lever step, a 2 dp par level and a closed direction."""
+
+    for field, value in _metadata_values_for(metadata, {"rate_step_bps"}):
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not -100 <= value <= 100
+            or value == 0
+            or value % 25 != 0
+        ):
+            raise AuditMetadataValueViolation(field, "must be a non-zero Rate Lever step")
+    for field, value in _metadata_values_for(metadata, {"watch_level_pct"}):
+        if value is not None and not _is_two_decimal_percent(value):
+            raise AuditMetadataValueViolation(field, "must be a 2-decimal percent inside 0..25")
+    for field, value in _metadata_values_for(metadata, {"watch_direction"}):
+        if value is not None and str(value) not in _RATE_WATCH_DIRECTIONS:
+            raise AuditMetadataValueViolation(field, "must be a governed watch direction")
 
 
 def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
@@ -557,6 +592,7 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             raise AuditMetadataValueViolation(
                 field, "must be a governed growth-agent workflow title"
             )
+    _assert_rate_watch_values(metadata)
     for field, value in _metadata_values_for(metadata, {"run_status"}):
         if value is not None and str(value) not in _GROWTH_AGENT_RUN_STATUSES:
             raise AuditMetadataValueViolation(field, "must be a governed growth-agent run status")

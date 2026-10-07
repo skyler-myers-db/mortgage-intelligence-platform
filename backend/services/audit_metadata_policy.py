@@ -350,6 +350,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "tool_steps",
         "policy_checks",
         "governance_chips",
+        # Rate watch saved from the Rate Lever (audit wow-ai-2): the saved
+        # step, the server's watched par level and its direction only.
+        "rate_step_bps",
+        "watch_level_pct",
+        "watch_direction",
         # Offers
         "thresholds_applied",
         "decision_inputs",
@@ -672,6 +677,7 @@ _GROWTH_AGENT_WORKFLOWS: frozenset[str] = frozenset(
         "branch_capacity_review",
         "source_freshness_sentinel",
         "custom_segment_watch",
+        "rate_trigger_watch",
     }
 )
 _GROWTH_AGENT_TITLES: frozenset[str] = frozenset(
@@ -684,6 +690,7 @@ _GROWTH_AGENT_TITLES: frozenset[str] = frozenset(
         "Branch Manager Capacity Review",
         "Source/Freshness Sentinel",
         "Custom Segment Workflow",
+        "Rate Trigger Watch",
     }
 )
 _GROWTH_AGENT_RUN_STATUSES: frozenset[str] = frozenset({"completed"})

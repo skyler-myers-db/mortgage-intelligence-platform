@@ -2388,7 +2388,8 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
                        'high_equity_heloc_watch',
                        'branch_capacity_review',
                        'source_freshness_sentinel',
-                       'custom_segment_watch'
+                       'custom_segment_watch',
+                       'rate_trigger_watch'
                      )),
     workflow_title   TEXT NOT NULL,
     status           TEXT NOT NULL DEFAULT 'completed'
@@ -2460,7 +2461,8 @@ BEGIN
           'high_equity_heloc_watch',
           'branch_capacity_review',
           'source_freshness_sentinel',
-          'custom_segment_watch'
+          'custom_segment_watch',
+          'rate_trigger_watch'
         ));
 END $$;
 
@@ -2480,7 +2482,8 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_monitors (
                       'high_equity_heloc_watch',
                       'branch_capacity_review',
                       'source_freshness_sentinel',
-                      'custom_segment_watch'
+                      'custom_segment_watch',
+                      'rate_trigger_watch'
                      )),
     name             TEXT NOT NULL,
     cadence          TEXT NOT NULL CHECK (cadence IN ('daily','weekly')),
@@ -2516,7 +2519,8 @@ BEGIN
           'high_equity_heloc_watch',
           'branch_capacity_review',
           'source_freshness_sentinel',
-          'custom_segment_watch'
+          'custom_segment_watch',
+          'rate_trigger_watch'
         ));
 END $$;
 

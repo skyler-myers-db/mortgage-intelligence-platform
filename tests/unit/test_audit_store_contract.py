@@ -213,6 +213,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "create_growth_agent_monitor_notification_drafts": ("create_notification_drafts(",),
     # genie-09 part 1: one GROWTH_AGENT_MONITOR_SAVE row in the save transaction.
     "save_growth_agent_run_watchlist": ("save_run_as_watchlist(",),
+    "save_growth_agent_rate_watch": ("save_rate_watch(",),
     "log_event": ("store.write(",),
     # LEAD_EXPORT receipt: the whole route body is the audited write.
     "create_lead_export_receipt": ("write_lead_export_receipt(",),
