@@ -28,6 +28,7 @@ import {
   EXPORT_RECEIPT_ID,
   filteringAuditPage,
   leadExportReceiptFor,
+  RECORDED_AT,
 } from './data/exportAudit';
 import { json } from './mockApi';
 import { expect, test } from './test';
@@ -47,7 +48,8 @@ function installExportOrderProbe(): void {
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    const isReceipt = url.includes('/leads/export-receipt');
+    // The lead export's and the audit explorer's (W5d) receipts.
+    const isReceipt = url.includes('/export-receipt');
     if (isReceipt) order.push('receipt-request');
     const response = await originalFetch(input, init);
     if (isReceipt) order.push('receipt-response');
@@ -435,17 +437,47 @@ test.describe('audit explorer', () => {
     }
   });
 
-  test('the current page downloads as CSV with its header row', async ({ app, page, mockApi }) => {
+  test('the current page downloads as CSV with its header row, only after its AUDIT_EXPORT receipt', async ({ app, page, mockApi }) => {
     mockApi.register('GET', '/api/audit/events/page', filteringAuditPage([]));
+    // W5d (tables-10): the page CSV waits for POST /audit/export-receipt.
+    const declarations: Array<{ row_count: number; csv_sha256: string; event_ids: string[] }> = [];
+    let releaseReceipt: () => void = () => undefined;
+    const receiptHeld = new Promise<void>((resolve) => {
+      releaseReceipt = resolve;
+    });
+    mockApi.register('POST', '/api/audit/export-receipt', async ({ body }) => {
+      declarations.push(body as { row_count: number; csv_sha256: string; event_ids: string[] });
+      await receiptHeld;
+      return json({
+        audit_event_id: '3b7c9f2e-5a41-4d8e-9c06-2f1a8b7d4e90',
+        event_type: 'AUDIT_EXPORT',
+        actor: EXPORT_ACTOR,
+        row_count: EXPLORER_ROWS.length,
+        csv_sha256: 'c'.repeat(64),
+        event_ids_sha256: 'e'.repeat(64),
+        filter_fingerprint: 'f'.repeat(64),
+        recorded_at: RECORDED_AT,
+      });
+    });
+    await page.addInitScript(installExportOrderProbe);
     await app.gotoRoute('/audit-ledger#audit');
     await expect(page.locator('#audit table[aria-label="Audit events"] tbody tr[data-audit-event-id]'))
       .toHaveCount(EXPLORER_ROWS.length);
 
     const downloadEvent = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Download page 1 of the audit explorer as CSV' }).click();
+    await expect.poll(() => declarations.length).toBe(1);
+    // The receipt is held: the AUDIT_EXPORT row does not exist yet, so nothing may download.
+    expect(await exportOrder(page)).toEqual(['receipt-request']);
+    releaseReceipt();
     const download = await downloadEvent;
+    expect(await exportOrder(page)).toEqual(['receipt-request', 'receipt-response', 'download']);
+    expect(declarations[0].row_count).toBe(EXPLORER_ROWS.length);
+    expect(declarations[0].event_ids).toEqual(EXPLORER_ROWS.map((row) => row.event_id));
+    const csv = await readFile(await download.path(), 'utf8');
+    expect(createHash('sha256').update(csv, 'utf8').digest('hex')).toBe(declarations[0].csv_sha256);
     expect(download.suggestedFilename()).toBe('mip-audit-page-1-2026-07-14.csv');
-    const lines = (await readFile(await download.path(), 'utf8')).trimEnd().split('\n');
+    const lines = csv.trimEnd().split('\n');
     expect(lines[0]).toBe(
       'event_id,created_at,event,event_code,action,actor,entity_type,entity_id,correlation_id,request_id,evidence_ids',
     );

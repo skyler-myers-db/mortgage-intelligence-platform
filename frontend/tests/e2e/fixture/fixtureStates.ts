@@ -45,7 +45,9 @@ export type FixtureState =
   | 'stale-note'
   | 'delta-explainer'
   | 'evidence-how-we-got'
-  | 'evidence-under-the-hood';
+  | 'evidence-under-the-hood'
+  | 'identity-menu'
+  | 'glossary-search';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -176,6 +178,21 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
         await drawer.getByRole('tab', { name: 'Under the hood' }).click();
         await expect(drawer.locator('[data-testid="evidence-kpi-proof"] .proof-sql-card__sql')).toBeVisible();
       }
+      break;
+    }
+    case 'identity-menu': {
+      // W5d: the account menu open on its first item (reads nothing).
+      await page.getByTestId('identity-menu-trigger').click();
+      const menu = page.getByRole('menu', { name: 'Account' });
+      await expect(menu).toBeVisible();
+      await expect(menu.getByRole('menuitemradio').first()).toBeFocused();
+      break;
+    }
+    case 'glossary-search': {
+      // W5d critic-07: the glossary filtered by ?q= (matching reads nothing).
+      await page.getByLabel('Search the glossary').fill('equity');
+      await expect(page).toHaveURL(/[?&]q=equity(&|#|$)/);
+      await expect(page.locator('.glossary-search__status')).toHaveText(/^\d+ terms? match/);
       break;
     }
   }

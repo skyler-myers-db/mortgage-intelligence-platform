@@ -22,8 +22,10 @@
  *  L. W5c w5-lead-queue-paging: the Lead Queue paged footer            2
  *  M. W5c w5-zcta-watchlist: the Segments map drilled to Illinois'
  *     ZIP areas                                                        2
+ *  R. W5d w5-print-glossary-sales-manager: Home's account menu open,
+ *     the glossary filtered by a search                                4
  *                                                                     --
- *                                                                    122
+ *                                                                    126
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -154,6 +156,9 @@ for (const theme of FIXTURE_THEMES) {
       // J (W5c w5-evidence-drawer): How we got and Under the hood.
       { route: 'home', state: 'evidence-how-we-got' },
       { route: 'home', state: 'evidence-under-the-hood' },
+      // R (W5d w5-print-glossary-sales-manager): the account menu and glossary search.
+      { route: 'home', state: 'identity-menu' },
+      { route: 'glossary', state: 'glossary-search' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {
