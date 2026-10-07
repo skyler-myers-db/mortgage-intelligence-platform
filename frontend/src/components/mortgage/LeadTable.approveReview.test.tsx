@@ -259,7 +259,8 @@ describe('LeadTable approve review', () => {
       draft_response_hash: `hash-${IDS[0]}`,
     }), undefined);
     // In flight: the review says so, nothing claims "approved" yet: no toast.
-    expect(confirm().textContent).toBe('Approving…');
+    // The label is kept under the spinner (motion-08 slice 2): busy, not renamed.
+    expect(confirm().textContent).toBe('Confirm approval');
     expect(confirm().getAttribute('aria-disabled')).toBe('true');
     // motion-08 slice 2: the spinner over the kept label, focus kept (aria-busy, no native disabled).
     expect(confirm().classList.contains('btn--loading')).toBe(true);

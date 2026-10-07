@@ -232,8 +232,9 @@ export function LeadApproveReview({
           type="submit"
           variant="primary"
           size="sm"
-          icon={phase === 'submitting' ? undefined : 'check'}
-          // motion-08 slice 2: the spinner over the kept label while the approve is on the wire.
+          icon="check"
+          // motion-08 slice 2: while the approve is on the wire the spinner
+          // sits over the kept label (the same box, the same name, aria-busy).
           loading={phase === 'submitting'}
           // aria-disabled, never native `disabled`: a focused Confirm that
           // turned disabled would drop keyboard focus to <body> mid-approval.
@@ -249,7 +250,7 @@ export function LeadApproveReview({
           }}
           data-testid="lead-approve-review-confirm"
         >
-          {phase === 'submitting' ? 'Approving…' : 'Confirm approval'}
+          Confirm approval
         </Button>
       </div>
     </form>
