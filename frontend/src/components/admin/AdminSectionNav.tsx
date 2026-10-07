@@ -41,6 +41,7 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
   { id: 'buyer-readiness', label: 'Deployment readiness' },
   { id: 'capability-readiness', label: 'Agentic capabilities' },
   { id: 'activation', label: 'Activation' },
+  { id: 'field-performance', label: 'Field performance' },
   { id: 'appearance', label: 'Appearance' },
 ];
 
