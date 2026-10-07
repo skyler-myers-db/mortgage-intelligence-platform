@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { useExitPresence } from '../../hooks/useExitRetained';
 import { pushEscapeLayer } from '../../lib/escapeStack';
 import { Icon } from '../Icon';
 import { STATUS_SORT_OPTIONS } from './LeadTable.columns';
@@ -21,6 +22,12 @@ import type { SortDir, SortKey } from './LeadTable.types';
  * the table's scrollport (`.tbl-wrap`, overflow: auto) a short queue, such
  * as a one-borrower deep link, clipped it to its first item. Being fixed, it
  * follows the header when anything scrolls or resizes.
+ *
+ * Exit (motion-01 item 2e, deviation:menu-exit-motion): a closed menu stays
+ * portalled, `is-closing`, aria-hidden and inert, until its fade ends
+ * (useExitPresence), so it never holds the A / R keys off while it fades.
+ * The `role="menu"` container takes `tabIndex={-1}` (a11y-05): it owns the
+ * arrow keys, and only its items sit in the roving tab order.
  */
 
 interface MenuAnchor {
@@ -53,6 +60,7 @@ export function LeadTableStatusSortMenu({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const active = STATUS_SORT_OPTIONS.find((option) => option.key === sortKey) ?? null;
+  const { present, closing } = useExitPresence(open, menuRef);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -150,13 +158,16 @@ export function LeadTableStatusSortMenu({
           ? <Icon name={sortDir === 'desc' ? 'down' : 'up'} size={10} />
           : <Icon name="chevdown" size={10} />}
       </button>
-      {open && anchor && createPortal(
+      {present && anchor && createPortal(
         <div
           ref={menuRef}
-          id={menuId}
-          className="filter-menu lead-table__status-menu"
+          id={open ? menuId : undefined}
+          className={`filter-menu lead-table__status-menu${closing ? ' is-closing' : ''}`}
           role="menu"
           aria-label="Sort the Status column by"
+          aria-hidden={closing || undefined}
+          inert={closing}
+          tabIndex={-1}
           style={{ top: anchor.top, right: anchor.right }}
           onKeyDown={onMenuKeyDown}
         >

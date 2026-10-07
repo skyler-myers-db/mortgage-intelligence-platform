@@ -4,8 +4,9 @@
 // RouteFallback.tsx).
 'use no memo';
 
-import { useCallback, useRef, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useQueryClient, type QueryKey } from '@tanstack/react-query';
+import { useExitPresence } from '../../hooks/useExitRetained';
 import { useModalDialog } from '../../hooks/useModalDialog';
 import { queryKeys } from '../../lib/queryKeys';
 import { useApp } from '../AppContext';
@@ -92,7 +93,6 @@ function ConsoleFrame({ children }: BoundaryProps) {
     <aside
       id="workspace-console"
       className={`tweaks ${consoleOpen ? 'is-open' : ''}`}
-      role="complementary"
       aria-label="Workspace console"
       aria-hidden={!consoleOpen}
       inert={!consoleOpen}
@@ -123,9 +123,23 @@ function ConsoleFrame({ children }: BoundaryProps) {
  * error: the surface offers Reload only). Try again first re-runs the body
  * preload; a chunk that is still missing shows this frame again (the dead
  * import is cached, so it never loops).
+ *
+ * The recovery frame exits like the drawer (motion-01 item 2e,
+ * deviation:menu-exit-motion): the boundary holds the frame's <dialog> and
+ * resets only once its slide-out ends (useExitPresence), so a close never
+ * swaps the frame out mid-slide. Each closed-to-open drawer transition is a
+ * new generation, so a reopen during that exit resets the boundary at once.
+ * useModalDialog already closes the dialog and returns focus at exit start.
  */
 export function DrawerBoundary({ children }: BoundaryProps) {
   const { drawer } = useApp();
+  const open = drawer !== null;
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const { present } = useExitPresence(open, dialogRef);
+  // The generation, adjusted during render (React's "previous render" state
+  // pattern) so the reopen commit itself carries the new reset key.
+  const [opening, setOpening] = useState({ open, generation: 0 });
+  if (opening.open !== open) setOpening({ open, generation: opening.generation + (open ? 1 : 0) });
   const resetDrawerQueries = useScopedQueryReset(DRAWER_RESET_SCOPES);
   const retry = useCallback(() => {
     preloadEvidenceDrawerBody();
@@ -137,18 +151,22 @@ export function DrawerBoundary({ children }: BoundaryProps) {
       variant="panel"
       routeLabel="The evidence drawer"
       onRetry={retry}
-      resetKey={drawer ? 'open' : 'closed'}
-      frame={(surface) => <DrawerFrame>{surface}</DrawerFrame>}
+      resetKey={present ? `open:${opening.generation}` : 'closed'}
+      frame={(surface) => <DrawerFrame dialogRef={dialogRef}>{surface}</DrawerFrame>}
     >
       {children}
     </ErrorBoundary>
   );
 }
 
-function DrawerFrame({ children }: BoundaryProps) {
+interface DrawerFrameProps extends BoundaryProps {
+  /** Owned by DrawerBoundary, which waits for this dialog's exit. */
+  dialogRef: RefObject<HTMLDialogElement | null>;
+}
+
+function DrawerFrame({ dialogRef: drawerRef, children }: DrawerFrameProps) {
   const { drawer, setDrawer } = useApp();
   const open = drawer !== null;
-  const drawerRef = useRef<HTMLDialogElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const resetDrawerQueries = useScopedQueryReset(DRAWER_RESET_SCOPES);
   // This frame renders only in the error state, so every close (Close,

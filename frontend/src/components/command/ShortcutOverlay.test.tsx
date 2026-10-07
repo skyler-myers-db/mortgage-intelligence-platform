@@ -11,6 +11,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
+import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { OPEN_SHORTCUTS_EVENT, openShortcutOverlay, registerKeyBinding } from '../../lib/keymap';
 import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { ShortcutOverlayHost } from './ShortcutOverlayHost';
@@ -168,6 +169,44 @@ describe('ShortcutOverlay', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     });
     expect(sheet()).toBeNull();
+  });
+
+  /**
+   * The exit (motion-01 item 2e): the Host keeps the loaded sheet mounted
+   * while its dialog fades, and the sheet hands `open` to useModalDialog, so
+   * the dialog is closed (no [open]), aria-hidden and inert at exit start; a
+   * `?` during the fade reopens the same dialog.
+   */
+  it('keeps the closing sheet mounted, closed, aria-hidden and inert until the dialog exit ends', async () => {
+    const uninstall = installFakeCssTransition();
+    try {
+      act(() => openShortcutOverlay());
+      await waitForSheet();
+      const dialog = document.querySelector<HTMLDialogElement>('dialog.cmdk');
+      expect(dialog?.hasAttribute('open')).toBe(true);
+      const exit = runExitOn(dialog!);
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      });
+      expect(sheet(), 'the sheet plays its exit').not.toBeNull();
+      expect(dialog?.hasAttribute('open')).toBe(false);
+      expect(dialog?.getAttribute('aria-hidden')).toBe('true');
+      expect(dialog?.hasAttribute('inert')).toBe(true);
+
+      act(() => openShortcutOverlay());
+      await vi.waitFor(() => expect(dialog?.hasAttribute('open')).toBe(true));
+      expect(document.querySelectorAll('dialog.cmdk')).toHaveLength(1);
+      expect(dialog?.hasAttribute('aria-hidden')).toBe(false);
+
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      });
+      expect(sheet()).not.toBeNull();
+      exit.finish();
+      expect(sheet()).toBeNull();
+    } finally {
+      uninstall();
+    }
   });
 
   it('marks single-key shortcuts Off (and says why) while the Console switch is off', async () => {

@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { rootErrorOptions } from '../../lib/clientErrorLog';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { useApp } from '../AppContext';
@@ -205,7 +206,9 @@ describe('AppShell panel boundaries', () => {
     await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
     const [surface] = surfaces();
     const landmark = container.querySelector('aside#workspace-console');
-    expect(landmark?.getAttribute('role')).toBe('complementary');
+    // A named <aside> is the complementary landmark; the explicit role was
+    // redundant (a11y-05, jsx-a11y/no-redundant-roles).
+    expect(landmark?.hasAttribute('role')).toBe(false);
     expect(landmark?.getAttribute('aria-label')).toBe('Workspace console');
     expect(landmark?.classList.contains('is-open')).toBe(true);
     expect(landmark?.querySelector('.tweaks__body')?.contains(surface)).toBe(true);
@@ -267,6 +270,64 @@ describe('AppShell panel boundaries', () => {
     await update(() => app.setDrawer({ title: 'Lineage manifest', lineageFamily: 'lead_scoring' }));
     expect(surfaces()).toHaveLength(0);
     expect(container.querySelector('[data-testid="drawer-probe"]')?.classList.contains('is-open')).toBe(true);
+  });
+
+  /**
+   * The recovery frame's exit (motion-01 item 2e): a close keeps the crashed
+   * drawer's frame mounted through its own slide-out and resets the boundary
+   * only once it ends; a reopen mid-exit is a new generation and resets it
+   * at once. Mutation check: keying the reset on `drawer` again (resetKey
+   * 'open' / 'closed') fails the first case (the frame vanishes mid-slide).
+   */
+  describe('the recovery frame exit', () => {
+    let uninstall: () => void = () => undefined;
+    beforeEach(() => {
+      uninstall = installFakeCssTransition();
+    });
+    afterEach(() => uninstall());
+
+    async function crashOpenDrawer(): Promise<HTMLDialogElement> {
+      await mount();
+      probes.drawerThrows = true;
+      await update(() => app.setDrawer({ title: 'Lineage manifest', lineageFamily: 'lead_scoring' }));
+      await vi.waitFor(() => expect(surfaces()).toHaveLength(1));
+      const frame = container.querySelector<HTMLDialogElement>('dialog.drawer.is-open');
+      expect(frame).not.toBeNull();
+      return frame!;
+    }
+
+    it('keeps the frame mounted through its slide-out, then resets the boundary', async () => {
+      const frame = await crashOpenDrawer();
+      const exit = runExitOn(frame);
+      await update(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      });
+      expect(app.drawer).toBeNull();
+      expect(surfaces(), 'the frame plays its exit').toHaveLength(1);
+      expect(frame.isConnected).toBe(true);
+      expect(frame.classList.contains('is-open')).toBe(false);
+      expect(frame.getAttribute('aria-hidden')).toBe('true');
+      expect(container.querySelector('[data-testid="drawer-probe"]')).toBeNull();
+
+      await act(async () => exit.finish());
+      await settle();
+      expect(surfaces()).toHaveLength(0);
+      expect(frame.isConnected).toBe(false);
+      expect(container.querySelector('[data-testid="drawer-probe"]')).not.toBeNull();
+    });
+
+    it('a reopen during the exit resets the boundary at once', async () => {
+      const frame = await crashOpenDrawer();
+      runExitOn(frame);
+      await update(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      });
+      expect(surfaces()).toHaveLength(1);
+      probes.drawerThrows = false;
+      await update(() => app.setDrawer({ title: 'Lineage manifest', lineageFamily: 'lead_scoring' }));
+      expect(surfaces()).toHaveLength(0);
+      expect(container.querySelector('[data-testid="drawer-probe"]')?.classList.contains('is-open')).toBe(true);
+    });
   });
 
   const LINEAGE_SOURCE = { title: 'Lineage manifest', lineageFamily: 'lead_scoring' } as const;

@@ -60,7 +60,9 @@
   text-transform: uppercase;
 }
 .identity-menu__sep {
+  /* A native <hr> (a11y-05): reset its user-agent box to the old rule's. */
+  border: 0;
   border-top: 1px solid var(--line-1);
-  margin-block: var(--sp-1);
+  margin: var(--sp-1) 0;
 }
 .identity-menu .filter-menu__item { text-decoration: none; }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 import { Link } from 'react-router';
 import type { ThemePreference } from '../AppContext';
 import { Icon } from '../Icon';
@@ -13,7 +13,12 @@ import { ROUTES } from '../../lib/routeMeta';
  * `role="menu"` owns: an Appearance group of `menuitemradio` theme choices,
  * a separator, then `menuitem`s for Keyboard shortcuts and the Glossary. The
  * identity header sits outside the menu (a menu may own only items, groups
- * and separators) and describes it.
+ * and separators) and describes it. The menu container takes
+ * `tabIndex={-1}` (it owns the arrow keys; only the items rove) and the
+ * separator is a native `<hr>` (a11y-05).
+ *
+ * While `closing` (deviation:menu-exit-motion) the root is `is-closing`,
+ * aria-hidden and inert; IdentityMenu unmounts it when its fade ends.
  */
 
 const THEME_ITEMS: ReadonlyArray<{ value: ThemePreference; label: string }> = [
@@ -41,6 +46,10 @@ export interface IdentityView {
 }
 
 export interface IdentityMenuPanelProps {
+  /** The panel root, whose own exit transition IdentityMenu waits for. */
+  panelRef: RefObject<HTMLDivElement | null>;
+  /** The menu has closed and the panel is playing its exit. */
+  closing: boolean;
   menuId: string;
   view: IdentityView;
   /** Item that takes focus when the menu opens (0 = first, -1 = last). */
@@ -53,6 +62,8 @@ export interface IdentityMenuPanelProps {
 }
 
 export default function IdentityMenuPanel({
+  panelRef,
+  closing,
   menuId,
   view,
   initialIndex,
@@ -94,7 +105,12 @@ export default function IdentityMenuPanel({
   });
 
   return (
-    <div className="filter-menu identity-menu__panel">
+    <div
+      ref={panelRef}
+      className={`filter-menu identity-menu__panel${closing ? ' is-closing' : ''}`}
+      aria-hidden={closing || undefined}
+      inert={closing}
+    >
       <div className="identity-menu__who" id={headingId}>
         <span className="identity-menu__name">{view.name}</span>
         {view.email && <span className="identity-menu__email">{view.email}</span>}
@@ -112,6 +128,7 @@ export default function IdentityMenuPanel({
         aria-label="Account"
         aria-describedby={headingId}
         className="identity-menu__list"
+        tabIndex={-1}
         onKeyDown={onMenuKeyDown}
       >
         <div role="group" aria-label="Appearance" className="identity-menu__group">
@@ -134,7 +151,7 @@ export default function IdentityMenuPanel({
             );
           })}
         </div>
-        <div role="separator" className="identity-menu__sep" />
+        <hr className="identity-menu__sep" />
         {MENU_ITEMS.map((item, index) => {
           if (item.kind === 'theme') return null;
           if (item.kind === 'glossary') {

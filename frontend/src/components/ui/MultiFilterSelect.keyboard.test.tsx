@@ -15,6 +15,8 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { escapeLayerCount, pushEscapeLayer } from '../../lib/escapeStack';
+import { hasOpenOverlay } from '../../lib/keymap';
+import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { MultiFilterSelect } from './MultiFilterSelect';
 import { TYPEAHEAD_RESET_MS } from './useListboxNavigation';
 
@@ -131,5 +133,52 @@ describe('MultiFilterSelect — Escape is on the shared layer stack', () => {
     expect(document.activeElement).toBe(trigger());
     expect(genieLayer).not.toHaveBeenCalled();
     expect(escapeLayerCount()).toBe(1);
+  });
+});
+
+/**
+ * The exit (motion-01 item 2e): the closed listbox stays for its fade,
+ * aria-hidden and inert, while focus is already back on the trigger and the
+ * trigger already reads closed. Option clicks are delegated to the listbox.
+ */
+describe('MultiFilterSelect — presence exit and delegated options', () => {
+  let uninstall: () => void = () => undefined;
+  beforeEach(() => {
+    uninstall = installFakeCssTransition();
+  });
+  afterEach(() => uninstall());
+
+  it('keeps a closing listbox mounted, aria-hidden and inert until its own transitionend', () => {
+    press('ArrowDown');
+    const menu = listbox();
+    expect(menu).not.toBeNull();
+    const exit = runExitOn(menu!);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(container.querySelector('.filter-menu')).toBe(menu);
+    expect(menu?.classList.contains('is-closing')).toBe(true);
+    expect(menu?.getAttribute('aria-hidden')).toBe('true');
+    expect(menu?.hasAttribute('inert')).toBe(true);
+    expect(menu?.hasAttribute('id')).toBe(false);
+    expect(menu?.hasAttribute('aria-activedescendant')).toBe(false);
+    expect(trigger().getAttribute('aria-expanded')).toBe('false');
+    expect(trigger().hasAttribute('aria-controls')).toBe(false);
+    expect(document.activeElement).toBe(trigger());
+    expect(hasOpenOverlay(document)).toBe(false);
+    exit.finish();
+    expect(container.querySelector('.filter-menu')).toBeNull();
+  });
+
+  it('a click on an option toggles it through the listbox and keeps the menu open', () => {
+    press('ArrowDown');
+    const texas = [...container.querySelectorAll<HTMLElement>('[role="option"]')]
+      .find((option) => option.textContent === 'Texas');
+    act(() => {
+      texas!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(changes).toHaveBeenLastCalledWith(['TX']);
+    expect(activeOption()?.textContent).toBe('Texas');
+    expect(listbox()).not.toBeNull();
   });
 });
