@@ -1,5 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from 'react';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import type { IconName } from '../components/Icon';
 import { Chip, SurfaceTitle } from '../components/Primitives';
 import { AsyncState, type AsyncQuery } from '../components/ui/AsyncState';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -47,6 +48,16 @@ const RATING_LABEL: Readonly<Record<Rating, string>> = {
   needs_improvement: 'needs improvement',
   poor: 'poor',
 };
+/**
+ * A glyph per band, so the band never rests on colour alone (WCAG 1.4.1),
+ * from the app's success / warning / danger chips (PropertyLookupPanel,
+ * DecisionReceipt).
+ */
+const RATING_ICON: Readonly<Record<Rating, IconName>> = {
+  good: 'check',
+  needs_improvement: 'info',
+  poor: 'cross',
+};
 
 type Formatter = (value: number) => string;
 const seconds: Formatter = (ms) => `${formatFixed(ms / 1000, 2)} s`;
@@ -83,7 +94,7 @@ function P75({ cell, format }: { cell: FieldPerformanceCell; format: Formatter }
   }
   return (
     <span className="field-perf__cell">
-      <Chip variant={CHIP_VARIANT[cell.rating]}>{format(cell.p75)}</Chip>
+      <Chip variant={CHIP_VARIANT[cell.rating]} icon={RATING_ICON[cell.rating]}>{format(cell.p75)}</Chip>
       <span className="sr-only">{`, ${RATING_LABEL[cell.rating]}, `}</span>
       <span className="field-perf__samples">{formatCount(cell.samples)}</span>
     </span>
@@ -92,7 +103,7 @@ function P75({ cell, format }: { cell: FieldPerformanceCell; format: Formatter }
 
 function Section({ title, children }: { title: string; children: ReactNode }): ReactElement {
   return (
-    <section className="field-perf__section" aria-label={title}>
+    <section className="field-perf__section">
       <SurfaceTitle level={3}>{title}</SurfaceTitle>
       {children}
     </section>

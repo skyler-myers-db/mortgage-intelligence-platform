@@ -137,6 +137,21 @@ describe('FieldPerformancePanel', () => {
     expect(container.textContent).toContain('TypeError');
   });
 
+  it('marks each band with its own glyph, and adds no region landmark of its own', async () => {
+    const { container } = await render();
+    await settle();
+
+    const leadQueue = [...container.querySelectorAll('tbody tr')].find((row) => row.textContent?.startsWith('/lead-queue'));
+    const glyphs = [...(leadQueue?.querySelectorAll('.chip') ?? [])].map((chip) => chip.querySelector('svg')?.innerHTML ?? '');
+    expect(glyphs).toHaveLength(3);
+    expect(glyphs.every((glyph) => glyph.length > 0)).toBe(true);
+    // good / needs improvement / poor: three different shapes, not only three colours.
+    expect(new Set(glyphs).size).toBe(3);
+
+    expect(container.querySelectorAll('h3')).toHaveLength(3);
+    expect(container.querySelectorAll('section[aria-label], section[aria-labelledby], [role="region"]')).toHaveLength(0);
+  });
+
   it('says telemetry is off, offers how to turn it on, and reads nothing', async () => {
     mocks.config.data = { rum_enabled: false };
     const { container } = await render();
