@@ -1,5 +1,6 @@
+import type { ClientErrorKind } from './chunkLoadError';
 import { ROUTES } from './routeMeta';
-import { CLIENT_ERROR_BOUNDARIES, CLIENT_ERROR_NAMES, CLIENT_ERROR_SOURCES } from './rumBridge';
+import type { ClientErrorBoundary, ClientErrorName, ClientErrorSource } from './rumBridge';
 
 /**
  * rumVocabulary — the closed RUM vocabularies and the event validator
@@ -68,20 +69,44 @@ const DETAIL_KEYS_BY_METRIC: Readonly<Record<RumMetric, ReadonlySet<RumDetailKey
   client_error: new Set(['error_name', 'error_kind', 'error_source', 'boundary']),
 };
 
-const NUMERIC_KEYS: ReadonlySet<string> = new Set([
-  'dom_content_loaded_ms', 'ttfb_ms', 'transfer_size', 'warehouse_ms', 'lakebase_ms', 'total_ms',
-  'input_delay_ms', 'processing_ms', 'presentation_ms',
-]);
+/** Every numeric key a metric above may carry: the *_ms timings and transfer_size. */
+const isNumericKey = (key: string): boolean => key.endsWith('_ms') || key === 'transfer_size';
 const MAX_RUM_NUMBER = 600_000;
 const MAX_DETAIL_KEYS = 8;
 
 const TARGETS: ReadonlySet<string> = new Set(RUM_INTERACTION_TARGETS);
 const LCP_ELEMENTS: ReadonlySet<string> = new Set(RUM_LCP_ELEMENTS);
-const METRICS: ReadonlySet<string> = new Set(RUM_METRICS);
 const RATINGS: ReadonlySet<string> = new Set(RUM_RATINGS);
 const NAVIGATION_TYPES: ReadonlySet<string> = new Set(RUM_NAVIGATION_TYPES);
 /** Every route registry pattern plus the not-found fallback. */
 export const RUM_ROUTE_TEMPLATES: ReadonlySet<string> = new Set([...Object.values(ROUTES).map((route) => route.pattern), '/*']);
+
+/**
+ * The client-error vocabularies, spelled here rather than imported: an import
+ * keeps lib/rumBridge's arrays exported from the initial chunk for this lazy
+ * module (measured +0.10 KiB br initial JS). `satisfies` plus the
+ * exhaustiveness check fail tsc when a union of lib/rumBridge (pinned to the
+ * server) or lib/chunkLoadError gains or loses a member.
+ */
+const ERROR_NAMES = [
+  'Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'EvalError', 'URIError', 'AggregateError',
+  'ChunkLoadError', 'ApiError', 'GenieLiveError', 'NotFoundError', 'InvalidStateError', 'QuotaExceededError',
+  'SecurityError', 'Other',
+] as const satisfies readonly ClientErrorName[];
+const ERROR_SOURCES = [
+  'uncaught', 'caught', 'recoverable', 'preload', 'window', 'rejection',
+] as const satisfies readonly ClientErrorSource[];
+const ERROR_BOUNDARIES = ['root', 'route', 'console', 'genie', 'drawer'] as const satisfies readonly ClientErrorBoundary[];
+const ERROR_KINDS = ['chunk', 'render'] as const satisfies readonly ClientErrorKind[];
+type Exhaustive<Union, Listed> = [Exclude<Union, Listed>] extends [never] ? true : never;
+export type ClientErrorVocabulariesComplete = [
+  Exhaustive<ClientErrorName, (typeof ERROR_NAMES)[number]>,
+  Exhaustive<ClientErrorSource, (typeof ERROR_SOURCES)[number]>,
+  Exhaustive<ClientErrorBoundary, (typeof ERROR_BOUNDARIES)[number]>,
+  Exhaustive<ClientErrorKind, (typeof ERROR_KINDS)[number]>,
+] extends [true, true, true, true] ? true : never;
+/** Compiles only while the four lists above match lib/rumBridge and lib/chunkLoadError exactly. */
+export const CLIENT_ERROR_VOCABULARIES_COMPLETE: ClientErrorVocabulariesComplete = true;
 
 /** The closed values of the string keys (the api_route template is checked by lib/rumApiRoute). */
 const VALUE_SETS: Readonly<Partial<Record<RumDetailKey, ReadonlySet<string>>>> = {
@@ -89,10 +114,10 @@ const VALUE_SETS: Readonly<Partial<Record<RumDetailKey, ReadonlySet<string>>>> =
   interaction_target: TARGETS,
   lcp_element: LCP_ELEMENTS,
   cache: new Set(['hit', 'miss', 'stale']),
-  error_name: new Set(CLIENT_ERROR_NAMES),
-  error_kind: new Set(['chunk', 'render']),
-  error_source: new Set(CLIENT_ERROR_SOURCES),
-  boundary: new Set(CLIENT_ERROR_BOUNDARIES),
+  error_name: new Set(ERROR_NAMES),
+  error_kind: new Set(ERROR_KINDS),
+  error_source: new Set(ERROR_SOURCES),
+  boundary: new Set(ERROR_BOUNDARIES),
 };
 
 function isElement(node: Node | null | undefined): node is Element {
@@ -127,7 +152,7 @@ function isRumNumber(value: unknown): value is number {
 }
 
 function isValidDetail(key: RumDetailKey, value: unknown): boolean {
-  if (NUMERIC_KEYS.has(key)) return isRumNumber(value);
+  if (isNumericKey(key)) return isRumNumber(value);
   if (key === 'api_route') return typeof value === 'string' && value.length <= 160 && value.startsWith('/api/');
   const allowed = VALUE_SETS[key];
   return allowed !== undefined && typeof value === 'string' && allowed.has(value);
@@ -144,13 +169,15 @@ export interface RumEventShape {
 }
 
 export function isValidRumEvent(event: RumEventShape): boolean {
-  if (!METRICS.has(event.metric) || !isRumNumber(event.value) || !RATINGS.has(event.rating)) return false;
+  const allowed: ReadonlySet<RumDetailKey> | undefined = Object.prototype.hasOwnProperty.call(DETAIL_KEYS_BY_METRIC, event.metric)
+    ? DETAIL_KEYS_BY_METRIC[event.metric as RumMetric]
+    : undefined;
+  if (!allowed || !isRumNumber(event.value) || !RATINGS.has(event.rating)) return false;
   if (!RUM_ROUTE_TEMPLATES.has(event.route)) return false;
   const navigation = event.navigation_type;
   if (navigation !== undefined && navigation !== null && !NAVIGATION_TYPES.has(navigation)) return false;
   const details = event.details ?? {};
   const keys = Object.keys(details);
   if (keys.length > MAX_DETAIL_KEYS) return false;
-  const allowed = DETAIL_KEYS_BY_METRIC[event.metric as RumMetric];
   return keys.every((key) => allowed.has(key as RumDetailKey) && isValidDetail(key as RumDetailKey, details[key]));
 }

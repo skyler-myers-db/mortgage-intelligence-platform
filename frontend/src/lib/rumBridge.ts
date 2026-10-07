@@ -103,17 +103,13 @@ export type RumRouteListener = (pathname: string) => void;
 export type RumRouteSource = (listener: RumRouteListener) => () => void;
 
 let routeSource: RumRouteSource | null = null;
-let committedTemplate: string | null = null;
-/** (performance.now(), registry template) per committed change; templates only, never pathnames. */
-const timeline: Array<[number, string]> = [];
-
-function commitTemplate(pathname: string, at: number): void {
-  const template = resolveRouteMeta(pathname).pattern;
-  if (template === committedTemplate) return;
-  committedTemplate = template;
-  timeline.push([at, template]);
-  if (timeline.length > 64) timeline.shift();
-}
+/**
+ * (performance.now(), registry template) per committed change, oldest first,
+ * at most 64; the last entry is the committed template. Templates only, never
+ * pathnames. Initial-chunk code, so it stays this small (a +0.1 KiB br cap):
+ * the lookup by time, routeTemplateAt, lives in the lazy lib/rum.
+ */
+export const rumRouteTimeline: Array<[number, string]> = [];
 
 /**
  * main.tsx registers the data router here, synchronously right after
@@ -125,21 +121,18 @@ function commitTemplate(pathname: string, at: number): void {
  */
 export function setRumRouteSource(source: RumRouteSource): void {
   routeSource = source;
-  commitTemplate(window.location.pathname, 0);
-  source((pathname) => commitTemplate(pathname, performance.now()));
+  const commit = (pathname: string, at: number): void => {
+    const template = resolveRouteMeta(pathname).pattern;
+    if (template !== getCommittedRouteTemplate() && rumRouteTimeline.push([at, template]) > 64) rumRouteTimeline.shift();
+  };
+  commit(window.location.pathname, 0);
+  source((pathname) => commit(pathname, performance.now()));
 }
 
 /** The router's committed route template, or null before main.tsx registers the router. */
 export function getCommittedRouteTemplate(): string | null {
-  return committedTemplate;
-}
-
-/** The template in effect at `t` (performance.now()), or null when `t` predates the kept timeline. */
-export function routeTemplateAt(t: number): string | null {
-  for (let index = timeline.length - 1; index >= 0; index -= 1) {
-    if (timeline[index][0] <= t) return timeline[index][1];
-  }
-  return null;
+  const last = rumRouteTimeline[rumRouteTimeline.length - 1];
+  return last ? last[1] : null;
 }
 
 export function getRumRouteSource(): RumRouteSource | null {

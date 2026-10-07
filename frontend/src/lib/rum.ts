@@ -2,13 +2,7 @@ import type { CLSMetricWithAttribution, INPMetricWithAttribution, LCPMetricWithA
 import { apiPath } from './apiPaths';
 import { resolveRouteMeta } from './routeMeta';
 import { apiCallRoute, isApiCallSampled, serverTimingDetails } from './rumApiRoute';
-import {
-  attachClientErrorSink,
-  getCommittedRouteTemplate,
-  getRumRouteSource,
-  routeTemplateAt,
-  type QueuedClientError,
-} from './rumBridge';
+import { attachClientErrorSink, getRumRouteSource, rumRouteTimeline, type QueuedClientError } from './rumBridge';
 import {
   closedInteractionTarget,
   closedLcpElement,
@@ -62,9 +56,22 @@ const IDLE_TIMEOUT_MS = 3000;
 let queue: RumEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** The template at `t` (performance.now()); the committed one before the timeline, the URL only before the router. */
+/** The router's committed route template (lib/rumBridge's timeline), or null before main.tsx registers it. */
+function committedTemplate(): string | null {
+  const last = rumRouteTimeline[rumRouteTimeline.length - 1];
+  return last ? last[1] : null;
+}
+
+/** The template in effect at `t` (performance.now()), or null when `t` predates the kept timeline. */
+export function routeTemplateAt(t: number): string | null {
+  let template: string | null = null;
+  for (const [at, entry] of rumRouteTimeline) if (at <= t) template = entry;
+  return template;
+}
+
+/** The template at `t`; the committed one before the timeline, the URL only before the router. */
 function templateAt(t: number): string {
-  return routeTemplateAt(t) ?? getCommittedRouteTemplate() ?? resolveRouteMeta(window.location.pathname).pattern;
+  return routeTemplateAt(t) ?? committedTemplate() ?? resolveRouteMeta(window.location.pathname).pattern;
 }
 
 /** navigation_load and route_change bands (the server derives the stored rating itself). */
@@ -161,7 +168,7 @@ function vitalRoute(attributionTime: number | undefined, navigationURL: string |
       // A malformed URL: fall through to the committed template.
     }
   }
-  return getCommittedRouteTemplate();
+  return committedTemplate();
 }
 
 /** Metric ids already reported: one report per metric instance (page lifecycle or soft navigation). */
