@@ -47,6 +47,14 @@ SAFE_RUNTIME_DEFAULTS = {
     # the default must be explicit), otherwise the runtime falls back to code.
     "MIP_LEADS_WARM_INTERVAL_S": "0",
     "MIP_WAREHOUSE_KEEP_WARM": "off",
+    # Consented Genie refusal-text capture (D-audit-reads-d): the deploy script
+    # ships it on; the runtime default is off, so a bare UI deploy that drops
+    # this payload turns capture off and never overrides a lender's opt-out.
+    "MIP_GENIE_REFUSAL_TEXT_CAPTURE": "enabled",
+    # Browser RUM is on by default for every deploy.sh deploy (D-platform-
+    # process-d1); the code default stays off, and an explicit '0' in
+    # .env.local is forwarded verbatim (the opt-out).
+    "MIP_RUM_ENABLED": "1",
 }
 
 NON_SECRET_OPERATOR_VARS = (
@@ -68,6 +76,7 @@ NON_SECRET_OPERATOR_VARS = (
     "MIP_DEFAULT_ACTOR",
     "MIP_TRUST_FORWARDED_HEADERS",
     "MIP_RUM_ENABLED",
+    "MIP_GENIE_REFUSAL_TEXT_CAPTURE",
     "MIP_EXPOSE_OPENAPI",
     "MIP_CACHE_TTL_S",
     "MIP_LEADS_WARM_INTERVAL_S",
@@ -250,6 +259,23 @@ def _validated_keep_warm(dotenv: dict[str, str]) -> None:
         )
 
 
+# The runtime's Literal (backend.config.settings.mip_genie_refusal_text_capture).
+REFUSAL_TEXT_CAPTURE_VALUES = ("enabled", "disabled")
+
+
+def _validated_refusal_text_capture(dotenv: dict[str, str]) -> None:
+    """Refuse a typo in MIP_GENIE_REFUSAL_TEXT_CAPTURE at deploy, not App boot.
+
+    Empty takes the explicit safe default (``enabled``); anything other than
+    ``enabled`` or ``disabled`` would fail the settings Literal when the App
+    starts.
+    """
+
+    raw = _env_value("MIP_GENIE_REFUSAL_TEXT_CAPTURE", dotenv)
+    if raw and raw not in REFUSAL_TEXT_CAPTURE_VALUES:
+        raise ValueError("MIP_GENIE_REFUSAL_TEXT_CAPTURE must be enabled or disabled")
+
+
 _PRESENTER_MODE_ON = frozenset({"1", "true", "yes", "on"})
 _PRESENTER_MODE_OFF = frozenset({"", "0", "false", "no", "off"})
 PRESENTER_MODE_NOTICE = (
@@ -306,6 +332,7 @@ def build_payload(
     previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
     _validated_keep_warm(dotenv)
     presenter_mode = _validated_presenter_mode(dotenv, target)
+    _validated_refusal_text_capture(dotenv)
     if bool(otel_endpoint.strip()) != bool(otel_header_resource.strip()):
         raise ValueError(
             "MIP_OTEL_ENDPOINT and its App secret resource must be configured together"

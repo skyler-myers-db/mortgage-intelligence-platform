@@ -155,26 +155,20 @@ def test_campaign_text_still_refuses_pii(text: str) -> None:
         assert_public_campaign_text(text, field_name="campaign body", max_length=1000)
 
 
-def test_disposition_notes_accept_product_and_geography() -> None:
-    request = DispositionRequest(
-        lo_email="lo@entrada.ai",
-        outcome="connected",
-        notes="Discussed Home Equity options for the El Paso property.",
-    )
-    assert request.notes is not None
-
-
 @pytest.mark.parametrize(
     "note",
     [
-        # THE audit false negative: lowercase names reached the ledger.
+        # Retired (D-shell-deviations-g2): every non-blank note is refused,
+        # governed product/geography text and names alike, and nothing is
+        # persisted; the audit false negative (lowercase names) is moot.
+        "Discussed Home Equity options for the El Paso property.",
         "spoke with john smith about cash-out",
         "maria garcia is the top borrower",
         "Left voicemail for John Smith.",
     ],
 )
-def test_disposition_notes_refuse_names_any_case(note: str) -> None:
-    with pytest.raises(ValueError):
+def test_disposition_notes_are_retired_and_refused(note: str) -> None:
+    with pytest.raises(ValueError, match="Free-text disposition notes are retired"):
         DispositionRequest(lo_email="lo@entrada.ai", outcome="connected", notes=note)
 
 

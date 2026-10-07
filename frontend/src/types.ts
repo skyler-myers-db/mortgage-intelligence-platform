@@ -1,5 +1,5 @@
 import type { AssignmentLifecycleStatus } from './types/loanOfficer';
-import type { SourceLabel } from './types/borrower';
+import type { LeadScorePoints, SourceLabel } from './types/borrower';
 
 export type { CampaignRecommendationResponse } from './types/campaign';
 export type { ProofMargin, ProofMarginDirection, ProofMarginKey } from './types/proofMargins';
@@ -81,6 +81,8 @@ export interface LeadSummary {
   rate_spread_bps: number;
   opportunity_score: number;
   confidence: number;
+  /** Score anatomy (audit wow-stage-2); null or absent renders as absent, never 0. */
+  score_points?: LeadScorePoints | null;
   /** Canonical lowercase code emitted by fn_next_best_offer. */
   recommended_offer_code?: string;
   recommended_offer: string;

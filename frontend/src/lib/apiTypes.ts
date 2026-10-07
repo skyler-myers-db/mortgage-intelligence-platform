@@ -162,12 +162,14 @@ export interface GenieFeedbackResult {
   audit_event_id?: string | null;
 }
 
-/** `/api/genie/refusal-report` body: hash-only "this was legitimate". */
+/** `/api/genie/refusal-report` body: the "this was legitimate" report. */
 export interface GenieRefusalReportResult {
   accepted: boolean;
   duplicate: boolean;
   report_id?: string | null;
   audit_event_id?: string | null;
+  /** True when the reporter's question is held for review (D-audit-reads-d). */
+  question_captured?: boolean;
 }
 
 /** Async Genie lifecycle (2026-07): `/api/genie/message/submit` body. */
@@ -195,10 +197,6 @@ export interface GenieLiveProgress {
   reasoning_trace: Array<{ kind: string; content: string }>;
   sql_preview?: string | null;
   error_hint?: string | null;
-  /** NOT on the progress wire: `askGenieLive` stamps the submit response's
-   *  `deep` flag onto every progress update so the rail can label the long
-   *  completion wait honestly on both Genie surfaces. */
-  deep?: boolean;
 }
 
 export interface AuditEventRow {
@@ -393,4 +391,51 @@ export interface GeoAssignmentOverlayResponse {
   total_unattended: number;
   /** Honest copy for the legend — cite verbatim. */
   lead_definition: string;
+}
+
+/**
+ * GET /api/v1/assets/{asset_key}/freshness (audit 2026-09-21 critic-03,
+ * D-audit-reads-c1): one registered asset's freshness for every
+ * authenticated user, read from its reviewed source-readiness row. Mirrors
+ * backend/schemas/assets.py AssetFreshnessResponse.
+ */
+export interface AssetFreshnessResponse {
+  asset_key: string;
+  title: string;
+  freshness: import('../types').AssetFreshness;
+  last_updated: string | null;
+  checked_at: string | null;
+  status: import('../types').DataEstateStatus | 'unknown';
+  /** The source-readiness row that answered (its own or its primary input's). */
+  basis: string | null;
+  source: 'source_readiness' | 'unavailable' | 'not_tracked';
+}
+
+/** The closed set of KPIs with server-emitted reproduce SQL (audit flow-06). */
+export type KpiProofKey =
+  | 'home.addressable_population'
+  | 'home.in_the_money'
+  | 'home.high_opportunity'
+  | 'home.primary_offer_paths'
+  | 'funnel.population'
+  | 'funnel.high_opportunity';
+
+export interface KpiProofParam {
+  name: string;
+  value: string;
+}
+
+/** GET /api/v1/kpi-proof?kpi=: the governed statement behind one KPI card. */
+export interface KpiProofResponse {
+  kpi: KpiProofKey;
+  /** The result column whose value is the number on the card. */
+  measure_column: string;
+  /** The measure's own predicate, then each bound filter; empty for the whole book. */
+  predicates: string[];
+  sql: string;
+  sql_hash: string;
+  params: KpiProofParam[];
+  relations: string[];
+  note: string;
+  databricks_sql_url: string | null;
 }

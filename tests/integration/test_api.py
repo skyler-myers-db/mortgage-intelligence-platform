@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from tests.fixtures.reviewed_approval import reviewed_approval
 
 client = TestClient(app)
 
@@ -16,14 +17,7 @@ def test_segments():
 
 
 def test_approve_writes_audit():
-    res = client.post(
-        "/api/outreach/approve",
-        json={
-            "borrower_id": "B-48291",
-            "actor": "test",
-            "draft_subject": "Your mortgage review",
-            "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
-        },
-    )
+    # W5c: a reviewed approval certifies a real draft (review_mode required).
+    res = client.post("/api/outreach/approve", json=reviewed_approval(client, "B-48291", actor="test"))
     assert res.status_code == 200
     assert res.json()["approved"] is True

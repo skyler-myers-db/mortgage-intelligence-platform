@@ -141,6 +141,17 @@ describe('LeadBulkRejectGate', () => {
     expect(q('[data-testid="lead-bulk-reject-confirm"]')?.textContent).toBe('Reject 3 eligible');
   });
 
+  // W5c integrator C4: the opener's requestAnimationFrame focus raced the
+  // lazy gate's first paint (approval-core case 4, "Received: inactive").
+  it('takes focus on Reason the moment it mounts, with no frame to wait for', () => {
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    outside.focus();
+    act(() => root.render(<LeadBulkRejectGate leads={LEADS} onReject={vi.fn()} running={false} />));
+    expect(document.activeElement).toBe(q('[data-testid="lead-bulk-reject-reason"]'));
+    outside.remove();
+  });
+
   it('keeps Confirm aria-disabled until a reason and a note; each activation focuses what is missing', () => {
     const onReject = vi.fn(() => Promise.resolve(true));
     act(() => root.render(<LeadBulkRejectGate leads={LEADS} onReject={onReject} running={false} />));
@@ -152,6 +163,7 @@ describe('LeadBulkRejectGate', () => {
     expect(confirm.disabled).toBe(false);
     expect(document.getElementById(confirm.getAttribute('aria-describedby')!)?.textContent)
       .toBe('Choose a reason and write a shared note before rejecting.');
+    act(() => confirm.focus());
     act(() => confirm.click());
     expect(document.activeElement).toBe(reason);
 

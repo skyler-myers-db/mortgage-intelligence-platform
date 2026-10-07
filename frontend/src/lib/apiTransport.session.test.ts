@@ -75,7 +75,7 @@ describe('every request', () => {
   it('goes out with redirect: manual, so a sign-in redirect is seen, not followed cross-origin', async () => {
     const calls = stubFetch(() => json(200, []));
     await api.campaigns();
-    await api.approve('B-0000000000001', { offer_code: 'refi' }).catch(() => undefined);
+    await api.approve('B-0000000000001', { offer_code: 'refi', review_mode: 'individual' }).catch(() => undefined);
     expect(calls.length).toBeGreaterThanOrEqual(2);
     for (const call of calls) expect(call.init?.redirect).toBe('manual');
   });
@@ -102,7 +102,7 @@ describe('401 on /api', () => {
 
   it('records an approval that failed on expiry as not recorded', async () => {
     stubFetch(() => json(401, {}));
-    await failure(api.approve('B-0000000000001', { offer_code: 'refi' }));
+    await failure(api.approve('B-0000000000001', { offer_code: 'refi', review_mode: 'individual' }));
     expect(getSessionStatus()).toEqual({ expired: true, unrecorded: 'approval' });
   });
 
@@ -110,7 +110,7 @@ describe('401 on /api', () => {
     stubFetch(() => json(401, {}));
     await failure(api.reject('B-0000000000001', { rationale_code: 'low_intent' }));
     expect(getSessionStatus().unrecorded).toBe('rejection');
-    await failure(api.approve('B-0000000000001', { offer_code: 'refi' }));
+    await failure(api.approve('B-0000000000001', { offer_code: 'refi', review_mode: 'individual' }));
     expect(getSessionStatus().unrecorded).toBe('approval');
   });
 
@@ -141,7 +141,7 @@ describe('401 on /api', () => {
       const err = await failure(api.campaigns());
       expect(err.reason).toBe('session_expired');
     }
-    await failure(api.approve('B-0000000000001', { offer_code: 'refi' }));
+    await failure(api.approve('B-0000000000001', { offer_code: 'refi', review_mode: 'individual' }));
     expect(calls, 'nothing after the first 401 reaches the network').toHaveLength(1);
     expect(getSessionStatus().unrecorded, 'a write attempted after expiry is still reported').toBe('approval');
   });

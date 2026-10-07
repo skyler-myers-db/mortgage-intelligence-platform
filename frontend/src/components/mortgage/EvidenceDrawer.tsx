@@ -19,20 +19,21 @@ import {
  * `bundle-04` items 1-2). What a chip click needs at once stays here, in the
  * initial closure: the native modal <dialog> (useModalDialog), the exit
  * (useExitRetained keeps the closing source rendered while it slides out),
- * the header, the Overview / Lineage tablist, and everything derived from
- * the source alone (its destination, the asset detail link, the event date
- * label). Those are real uses that keep lib/drawerSources, the source
- * registry, lib/time and useTabs in the initial closure, so the routes that
- * share them do not each re-bundle them.
+ * the header, the Overview / Lineage / Under the hood tablist, and
+ * everything derived from the source alone (its destination, the asset
+ * detail link, the event date label). Those are real uses that keep
+ * lib/drawerSources, the slim source registry index, lib/time and useTabs in
+ * the initial closure, so the routes that share them do not each re-bundle
+ * them.
  *
- * The panels and the two governed reads live in EvidenceDrawerBody's own
+ * The panels, the registry prose and the governed reads live in EvidenceDrawerBody's own
  * chunk, preloaded on idle from this frame and on hover / focus of an
  * evidence chip (evidenceDrawerBodyLoader). Until it arrives the body shows
  * a loading status; a chunk that fails to load throws into the drawer's
  * panel boundary, which renders its recovery frame.
  */
 
-const DRAWER_TABS: readonly DrawerTab[] = ['overview', 'lineage'];
+const DRAWER_TABS: readonly DrawerTab[] = ['overview', 'lineage', 'under-the-hood'];
 
 function BodyLoading() {
   return (
@@ -113,6 +114,9 @@ export function EvidenceDrawer() {
       // The closing source stays rendered while the panel slides out; inert
       // keeps that retained copy out of the tab order and the pointer path.
       inert={!open}
+      // Field interaction attribution (D-platform-process-d2): a static
+      // member of the closed data-rum-target vocabulary.
+      data-rum-target="drawer"
     >
       <div className="drawer__hdr">
         <div className="drawer__source-icon">
@@ -133,6 +137,13 @@ export function EvidenceDrawer() {
           </button>
           <button {...tabs.tabProps('lineage')} className={`drawer__tab ${tab === 'lineage' ? 'is-active' : ''}`}>
             Lineage
+          </button>
+          {/* deviation:evidence-under-the-hood (design_files/index.html:665-681) */}
+          <button
+            {...tabs.tabProps('under-the-hood')}
+            className={`drawer__tab ${tab === 'under-the-hood' ? 'is-active' : ''}`}
+          >
+            Under the hood
           </button>
         </div>
       )}

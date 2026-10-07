@@ -4,7 +4,7 @@
  * counts and the saved-views panel read exactly the request and the share
  * grammar the queue itself uses. Parity with the route is pinned in
  * lead-queue.filterBar.test.tsx (the leads query key and the Copy-link URL
- * for a battery of URLs). W5c moves lead-queue.tsx onto these.
+ * for a battery of URLs). lead-queue.tsx reads these (W5c).
  */
 import type { LeadsRequest } from '../lib/leadsQuery';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
@@ -20,6 +20,13 @@ import {
 } from './lead-queue.filters';
 
 type ApprovalFilter = 'pending' | 'approved' | 'rejected' | 'hold' | 'any';
+
+/** The filter input as parsed from a URL: every list and the mode are always present. */
+export type LeadQueueFilterInput = LeadQueueExportFiltersInput & Required<Pick<
+  LeadQueueExportFiltersInput,
+  'segmentCodes' | 'segmentMode' | 'stateFilters' | 'zipFilters' | 'cityFilters' | 'borrowerIdFilters'
+  | 'countyFilters' | 'agedDays'
+>>;
 type OutreachFilter = 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied' | 'any';
 
 /** The TARGET LIEN HOLDER options: the configured refs, or `['All']` while none are known. */
@@ -35,7 +42,7 @@ export function leadQueueLenderRefs(configured: readonly string[] | null | undef
 export function leadQueueFilterInputFromSearchParams(
   sp: URLSearchParams,
   allowedLenderRefs: readonly string[],
-): LeadQueueExportFiltersInput {
+): LeadQueueFilterInput {
   const approvalStatus = (sp.get('approval_status') ?? 'any').toLowerCase();
   const outreachStatus = (sp.get('outreach_status') ?? 'any').toLowerCase();
   return {

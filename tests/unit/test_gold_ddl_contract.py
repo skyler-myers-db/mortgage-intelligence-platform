@@ -136,7 +136,7 @@ def _declared_column_names_in_block(block: str) -> set[str]:
             continue
         m = re.match(
             r"`?([A-Za-z_][A-Za-z0-9_]*)`?\s+"
-            r"(?:STRING|BIGINT|INT|DOUBLE|BOOLEAN|TIMESTAMP|DATE|ARRAY<[^>]+>)",
+            r"(?:STRING|BIGINT|INT|DOUBLE|BOOLEAN|TIMESTAMP|DATE|DECIMAL\(\d+,\s*\d+\)|ARRAY<[^>]+>)",
             line,
         )
         if m:

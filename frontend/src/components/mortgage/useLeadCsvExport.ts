@@ -56,6 +56,8 @@ export interface LeadCsvExportRequest {
   loadedCount?: number;
   /** The current filters' campaign handoff (Lead Queue), held with the strip. */
   campaignHref?: string | null;
+  /** The paged Lead Queue view the rows came from (D-audit-reads-a), declared on the receipt. */
+  view?: { viewId: string; pagesLoaded: number } | null;
 }
 
 const EXPORT_NOT_DOWNLOADED = 'Nothing was downloaded.';
@@ -135,7 +137,7 @@ export function useLeadCsvExport() {
   }, [state]);
 
   async function exportCsv({
-    plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount, campaignHref = null,
+    plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount, campaignHref = null, view = null,
   }: LeadCsvExportRequest): Promise<void> {
     if (inflight.current || plan.rows.length === 0) return;
     // Placeholder rows belong to the previous filters: never declare them
@@ -158,7 +160,9 @@ export function useLeadCsvExport() {
         matchingRows: matching,
       });
       const declaration = await buildLeadExportDeclaration(csv, plan, exportContext?.filters, matching);
-      const receipt = await api.leadExportReceipt(declaration);
+      const receipt = await api.leadExportReceipt(
+        view ? { ...declaration, lead_view_id: view.viewId, pages_loaded: view.pagesLoaded } : declaration,
+      );
       downloadLeadCsv(csv);
       setState({
         status: 'done',

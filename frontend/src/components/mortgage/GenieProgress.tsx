@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 
-import { useGenieVerifiedReveal } from '../../lib/genieVerifiedReveal';
 import { GenieVerifiedReveal } from './GenieVerifiedReveal';
 import type { GenieTurnProgress } from '../../types/genieJobs';
 import { Icon } from '../Icon';
@@ -175,7 +174,8 @@ export function GenieProgress({
   }, [askKey, reportedIdx]);
   const trace = dedupeTrace(progress?.reasoning_trace ?? []);
   const sql = progress?.sql_preview?.trim() || null;
-  const reveal = useGenieVerifiedReveal();
+  // Keyed to its job by the in-flight store (lib/genieJobReveal).
+  const reveal = progress?.job?.reveal ?? null;
 
   return (
     // No role="status" on the card: status regions are implicitly atomic, so

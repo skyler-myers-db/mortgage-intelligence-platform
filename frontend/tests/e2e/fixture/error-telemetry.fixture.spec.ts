@@ -139,9 +139,10 @@ test.describe('A. evidence drawer render throw', () => {
       await expect(page.locator('#main-content h1')).toHaveText(GLOSSARY_H1);
 
       // Non-vacuity and the audit posture: the unaudited manifest read did
-      // happen; no proof drawer, no draft, no write.
+      // happen; no proof drawer, no draft, no write. (The KPI drawer's
+      // reproduce SQL, /api/kpi-proof, is audit-free fixed text: W5c flow-06.)
       expect(mockApi.calls.some((call) => call.path === '/api/lineage/manifest')).toBe(true);
-      expect(mockApi.calls.filter((call) => /proof|draft|outreach|approve/.test(call.path))).toEqual([]);
+      expect(mockApi.calls.filter((call) => /(?<!kpi-)proof|draft|outreach|approve/.test(call.path))).toEqual([]);
     });
   }
 });

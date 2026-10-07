@@ -27,6 +27,8 @@ const apiMocks = vi.hoisted(() => ({
   borrowerProof: vi.fn(),
 }));
 
+// The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
+vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
 vi.mock('../lib/api', () => {
   class ApiError extends Error {
     status: number | null = null;

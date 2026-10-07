@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router';
@@ -24,6 +24,11 @@ import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import type { DataEstateResponse } from '../types';
 import { formatCount, formatFixed, formatUsd } from '../lib/formatters';
+import './admin-config.field-performance.css';
+
+// Field performance (D-platform-process-d2): lazy, so Administration's own
+// chunk never carries the panel. deviation:field-performance-panel
+const FieldPerformancePanel = lazy(() => import('./admin-config.field-performance'));
 
 /**
  * Administration — operator-facing configuration for Module 0.
@@ -49,6 +54,20 @@ import { formatCount, formatFixed, formatUsd } from '../lib/formatters';
  */
 
 const ACCENT_SWATCHES: Accent[] = ['bright', 'teal', 'navy', 'red'];
+
+/** The Field performance panel's place while its chunk loads: same header and body block size. */
+function FieldPerformanceReserve(): ReactElement {
+  return (
+    <>
+      <div className="surface__hdr field-perf__hdr">
+        <SurfaceTitle id="admin-field-performance-title">Field performance</SurfaceTitle>
+      </div>
+      <div className="surface__body field-perf__body" aria-busy="true">
+        <div className="skeleton field-perf__skeleton" aria-hidden="true" />
+      </div>
+    </>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // API shapes
@@ -446,6 +465,14 @@ export default function AdminConfig() {
 
       <div id="activation" tabIndex={-1}>
         <ActivationOperationsPanel />
+      </div>
+
+      {/* Field performance: the fallback keeps the panel's block size, so
+          the sections below never move while its chunk loads. */}
+      <div className="surface field-perf" id="field-performance" tabIndex={-1} aria-labelledby="admin-field-performance-title">
+        <Suspense fallback={<FieldPerformanceReserve />}>
+          <FieldPerformancePanel />
+        </Suspense>
       </div>
 
       {/* Second row — disclosure for per-user appearance controls */}

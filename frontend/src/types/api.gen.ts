@@ -75,6 +75,8 @@ export interface ResponseSchemas {
     auditor_role_overlap: number;
     boundary_warning: ResponseSchemas['BoundaryWarning'] | null;
     breaker_state_changes_last_hour: number;
+    /** The effective browser RUM setting of this App process (D-platform-process-d1). */
+    browser_telemetry: "on" | "off";
     campaign_treatment_runtime: string | null;
     circuit_breakers: { [key: string]: string };
     counters_persistence: string;
@@ -265,6 +267,24 @@ export interface ResponseSchemas {
     ordinal_position: number | null;
     redacted: boolean;
   };
+  /**
+   * Freshness of one registered asset, readable by every authenticated user.
+   *
+   * Read from the reviewed source-readiness row behind the asset (its own row
+   * or its primary input's): the band, the business refresh, when the row was
+   * checked, its status and which row answered. Schema internals stay on the
+   * administrator metadata read.
+   */
+  AssetFreshnessResponse: {
+    asset_key: string;
+    basis: string | null;
+    checked_at: string | null;
+    freshness: "fresh" | "aging" | "stale" | "unavailable";
+    last_updated: string | null;
+    source: "source_readiness" | "unavailable" | "not_tracked";
+    status: "live" | "demo_synthetic" | "configured_empty" | "not_configured" | "roadmap" | "permission_denied" | "error" | "unavailable" | "unknown";
+    title: string;
+  };
   AssetLineageNode: {
     asset_path: string;
     catalog_explorer_url: string | null;
@@ -424,11 +444,17 @@ export interface ResponseSchemas {
     equity_estimate: number;
     evidence_events: ResponseSchemas['EvidenceEvent'][];
     evidence_ids: string[];
+    /** Week (YYYY-MM-DD, a Monday) the current in-the-money run began, with today's rule applied to past weekly rates; null when not in the money. */
+    first_itm_week: string | null;
     first_party_recent_application: boolean;
     first_party_recent_interactions: number;
     first_party_relationship_depth: number;
     first_party_synthetic_demo: boolean;
+    /** First-lien origination date (YYYY-MM-DD); null when unknown. */
+    first_pos_date: string | null;
     first_pos_loan_type: string | null;
+    /** First-lien rate type: FIX or ARM; null when unknown. */
+    first_pos_rate_type: "FIX" | "ARM" | null;
     has_first_party_relationship: boolean;
     has_heloc_propensity_trigger: boolean;
     has_permit: boolean;
@@ -472,6 +498,8 @@ export interface ResponseSchemas {
     refi_propensity_run_date: string | null;
     refi_propensity_score: number | null;
     related_property_count: number;
+    /** The five weighted sub-scores that sum to opportunity_score; null when unavailable. */
+    score_points: ResponseSchemas['LeadScorePoints'] | null;
     second_pos_amount: number;
     segment_codes: ("itm" | "listed" | "permit" | "investor" | "equity" | "retention" | "second_lien_itm" | "heloc_draw_to_payback" | "home_equity_history" | "refi_propensity" | "itm_on_related_property" | "payoff_loss_leads" | "permit_activity")[];
     situs_cbsa_code: string | null;
@@ -483,6 +511,34 @@ export interface ResponseSchemas {
     why_now: string;
     why_panel: ResponseSchemas['WhyPanel'];
     zip: string;
+  };
+  /** One governed decision on the borrower, projected through closed vocabularies. */
+  BorrowerDecisionEvent: {
+    activation_status: "dry_run" | "staged" | "delivered" | "failed" | "cancelled" | null;
+    actor_display: string;
+    actor_kind: "staff" | "automation" | "unverified";
+    assigned_to_display: string | null;
+    audit_event_id: string;
+    bulk: boolean;
+    channel: "email" | "sms" | "direct_mail" | null;
+    contact_block_label: "No marketing consent" | "Contacted within 30 days" | "Suppressed" | "Eligibility not proven" | null;
+    disposition_outcome: "called_no_answer" | "called_left_voicemail" | "connected" | "callback_scheduled" | "application_started" | "not_interested" | "not_now" | "dead" | null;
+    event_type: "ACTIVATION_STAGE" | "APPROVAL_REQUESTED" | "APPROVE" | "CALL_DISPOSITION" | "LEAD_ASSIGN" | "LEAD_ASSIGNMENT_STATUS" | "LEAD_DISTRIBUTE" | "LEAD_OUTCOME" | "LEAD_OUTCOME_RECORDED" | "LEAD_UNASSIGN" | "OUTREACH_REJECT" | "OUTREACH_REVOKE" | "SUPPRESS_CONTACT";
+    from_status: "assigned" | "contact_drafted" | "approved" | "actioned" | "outcome_recorded" | null;
+    is_own: boolean;
+    lead_outcome_type: "application_submitted" | "closed_funded" | "lost_to_competitor" | "withdrawn" | "not_qualified" | null;
+    occurred_at: string;
+    offer_code: "refi" | "heloc" | "cash_out" | "purchase" | "retention" | "recapture" | "refi_plus_heloc" | "investor" | "nurture" | null;
+    outcome: "approved" | "rejected" | "revoked" | "requested" | "assigned" | "unassigned" | "distributed" | "status_changed" | "disposition" | "outcome" | "activation" | "contact_blocked";
+    rationale_label: "Out of footprint" | "Contact preference" | "Compliance review" | "Low intent" | "Data quality" | "Other" | null;
+    receipt_available: boolean;
+    to_status: "assigned" | "contact_drafted" | "approved" | "actioned" | "outcome_recorded" | null;
+  };
+  /** The latest 50 decisions on one borrower; truncated when older ones exist. */
+  BorrowerDecisionHistoryResponse: {
+    borrower_id: string;
+    items: ResponseSchemas['BorrowerDecisionEvent'][];
+    truncated: boolean;
   };
   BorrowerLifecycleResponse: {
     approval_id: string | null;
@@ -534,7 +590,6 @@ export interface ResponseSchemas {
     callback_at: string | null;
     disposition_id: string;
     lo_email: string;
-    notes: string | null;
     occurred_at: string;
     outcome: "called_no_answer" | "called_left_voicemail" | "connected" | "callback_scheduled" | "application_started" | "not_interested" | "not_now" | "dead";
   };
@@ -864,6 +919,53 @@ export interface ResponseSchemas {
     snapshot_date: string | null;
     workflow_source: string;
   };
+  FieldPerformanceCell: {
+    /** True when the cell has too few samples to show a p75. */
+    floor_applied: boolean;
+    /** 75th percentile; null below the sample floor. */
+    p75: number | null;
+    /** Core Web Vitals band of the p75; null below the sample floor. */
+    rating: "good" | "needs_improvement" | "poor" | null;
+    samples: number;
+  };
+  FieldPerformanceClientErrorRow: {
+    boundary: string | null;
+    count: number;
+    error_kind: string;
+    error_name: string;
+    /** Route registry template. */
+    route: string;
+  };
+  FieldPerformanceInteractionRow: {
+    inp: ResponseSchemas['FieldPerformanceCell'];
+    input_delay: ResponseSchemas['FieldPerformanceCell'];
+    /** Closed data-rum-target value. */
+    interaction_target: string;
+    presentation: ResponseSchemas['FieldPerformanceCell'];
+    processing: ResponseSchemas['FieldPerformanceCell'];
+    /** Route registry template. */
+    route: string;
+    samples: number;
+  };
+  FieldPerformanceResponse: {
+    /** The effective RUM setting of this App process. */
+    browser_telemetry: "on" | "off";
+    /** Contributing build ids, sorted. */
+    builds: string[];
+    client_errors: ResponseSchemas['FieldPerformanceClientErrorRow'][];
+    days: 7 | 28;
+    interactions: ResponseSchemas['FieldPerformanceInteractionRow'][];
+    /** First UTC day included. */
+    since: string;
+    vitals: ResponseSchemas['FieldPerformanceVitalsRow'][];
+  };
+  FieldPerformanceVitalsRow: {
+    cls: ResponseSchemas['FieldPerformanceCell'];
+    inp: ResponseSchemas['FieldPerformanceCell'];
+    lcp: ResponseSchemas['FieldPerformanceCell'];
+    /** Route registry template. */
+    route: string;
+  };
   FootprintState: {
     display_order: number;
     is_default_state: boolean;
@@ -956,15 +1058,20 @@ export interface ResponseSchemas {
    * recorded for the turn (no ``genie.run_query`` audit row, no action
    * tokens, no session row; the submit's ``genie.message_submitted`` row
    * stays). It never means that Genie's own message was cancelled: Genie may
-   * keep the question as context. ``recorded``: the answer was already
-   * verified and recorded before the Stop, so nothing changed. ``ended``: the
-   * job had already failed or expired. ``status`` is the job's status after
-   * the request.
+   * keep the question as context. ``recorded``: the Stop came too late and
+   * the turn's History row exists, whatever the job's status. ``recording``:
+   * the Stop came too late, but no History row was found yet; ``status``
+   * tells whether the record is still being written (``running``), whether
+   * the answer is one History never keeps (``succeeded``) or whether
+   * recording did not finish (``failed`` or ``expired``). ``ended``: the job
+   * had already failed or expired with nothing recorded. Only an ACCEPTED
+   * cancel says anything about the RUN_GENIE audit row: it guarantees none
+   * is written. ``status`` is the job's status after the request.
    */
   GenieCancelResponse: {
     job_id: string;
     kind: "genie_completion_cancel";
-    outcome: "cancelled" | "recorded" | "ended";
+    outcome: "cancelled" | "recorded" | "recording" | "ended";
     status: ResponseSchemas['GenieJobStatus'];
   };
   /** How many of the shipped prose's figures were verified, and which. */
@@ -1109,6 +1216,8 @@ export interface ResponseSchemas {
     accepted: boolean;
     audit_event_id: string | null;
     duplicate: boolean;
+    /** True when the reporter's question is held for review (stored now, or already held for this report). False for a report without the question or one kept hash-only. */
+    question_captured: boolean;
     report_id: string | null;
   };
   GenieSessionDetailResponse: {
@@ -1429,7 +1538,7 @@ export interface ResponseSchemas {
     current_snapshot_date: string | null;
     current_total: number | null;
     label: string;
-    measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+    measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale" | "competitor_lien";
     nearest_snapshot: boolean;
     note: string;
     offer_rules_changed_since_baseline: boolean | null;
@@ -1437,6 +1546,7 @@ export interface ResponseSchemas {
     population: "addressable";
     rate: ResponseSchemas['HomeAttributionRate'];
     requested_baseline_date: string;
+    snapshotted: boolean;
     sources: string[];
     states: ResponseSchemas['HomeAttributionState'][];
     total_change: number | null;
@@ -1503,6 +1613,23 @@ export interface ResponseSchemas {
     offers_available: number;
     offers_recommended: number;
     refi_economics_screen: number;
+  };
+  /** One named bind the statement uses, as the KPI's read binds it. */
+  KpiProofParam: {
+    name: string;
+    value: string;
+  };
+  /** The statement behind one KPI card and how to read its number. */
+  KpiProofResponse: {
+    databricks_sql_url: string | null;
+    kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity";
+    measure_column: string;
+    note: string;
+    params: ResponseSchemas['KpiProofParam'][];
+    predicates: string[];
+    relations: string[];
+    sql: string;
+    sql_hash: string;
   };
   /**
    * A single KPI's 7-day history + delta.
@@ -1582,6 +1709,20 @@ export interface ResponseSchemas {
     audit_event_id: string | null;
     outcome: ResponseSchemas['LeadOutcome'];
   };
+  /**
+   * The five weighted sub-scores behind one row's opportunity_score.
+   *
+   * Keyed by the score-anatomy component vocabulary. Each value is the
+   * fn_lead_score weight times its 0..100 sub-score; the five sum, rounded half
+   * to even and clipped to 0..100, to the row's opportunity_score.
+   */
+  LeadScorePoints: {
+    economic_incentive: number;
+    evidence: number;
+    fit: number;
+    intent_trigger: number;
+    relationship: number;
+  };
   LeadSummary: {
     aging_days: number | null;
     approval_status: "pending" | "approved" | "rejected" | "hold";
@@ -1642,6 +1783,8 @@ export interface ResponseSchemas {
     refi_propensity_run_date: string | null;
     refi_propensity_score: number | null;
     related_property_count: number;
+    /** The five weighted sub-scores that sum to opportunity_score; null when unavailable. */
+    score_points: ResponseSchemas['LeadScorePoints'] | null;
     second_pos_amount: number;
     segment_codes: ("itm" | "listed" | "permit" | "investor" | "equity" | "retention" | "second_lien_itm" | "heloc_draw_to_payback" | "home_equity_history" | "refi_propensity" | "itm_on_related_property" | "payoff_loss_leads" | "permit_activity")[];
     state: string;
@@ -2034,6 +2177,36 @@ export interface ResponseSchemas {
     /** Week-starting Monday, ISO date (YYYY-MM-DD). */
     week: string;
   };
+  RefusalReportFamilyCount: {
+    count: number;
+    refusal_reason: "protected_class" | "unreviewed_criterion" | "pii_request" | "instruction_override" | "outreach_instruction" | "scope_bypass" | "out_of_scope" | "output_policy" | "unknown";
+  };
+  RefusalReportItem: {
+    audit_event_id: string | null;
+    conversation_id: string | null;
+    /** A consented question text is held (unpurged and unexpired). */
+    has_text: boolean;
+    message_id: string | null;
+    refusal_reason: "protected_class" | "unreviewed_criterion" | "pii_request" | "instruction_override" | "outreach_instruction" | "scope_bypass" | "out_of_scope" | "output_policy" | "unknown";
+    report_id: string;
+    reported_at: string;
+    /** The reporting staff member's identity (actor_email). */
+    reporter: string;
+    text_expires_at: string | null;
+  };
+  RefusalReportListResponse: {
+    /** Reports per refusal family for the whole window (every family filter). */
+    family_counts: ResponseSchemas['RefusalReportFamilyCount'][];
+    items: ResponseSchemas['RefusalReportItem'][];
+    next_cursor: string | null;
+  };
+  RefusalReportQuestionResponse: {
+    captured_at: string;
+    expires_at: string;
+    question_text: string;
+    /** Contact details were masked before the question was kept. */
+    redacted: boolean;
+  };
   RumAcceptedResponse: {
     accepted: number;
     enabled: boolean;
@@ -2226,6 +2399,8 @@ export interface ResponseSchemas {
     lender_name: string | null;
     /** Demo-only: gates demo affordances in product surfaces. Never an authorization input. */
     presenter_mode: boolean;
+    /** Whether a refused Genie question may be attached to a 'This was legitimate' report (settings.mip_genie_refusal_text_capture): the effective tenant switch. False offers only the report without the question. Never an authorization input. */
+    refusal_text_capture_enabled: boolean;
     /** Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), 'Auditor' (a configured auditor, read-only), else 'Workspace user' for a forwarded identity that holds no tier. Empty only when the session holds no tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract. */
     role_labels: string[];
     /** Whether the browser may install the opt-in RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). */
@@ -2524,6 +2699,7 @@ export interface RequestSchemas {
   DispositionRequest: {
     callback_at?: string | null;
     lo_email: string;
+    /** Retired 2026-10: must be absent, null or blank; free-text disposition notes are no longer accepted */
     notes?: string | null;
     occurred_at?: string | null;
     outcome: "called_no_answer" | "called_left_voicemail" | "connected" | "callback_scheduled" | "application_started" | "not_interested" | "not_now" | "dead";
@@ -2589,10 +2765,13 @@ export interface RequestSchemas {
   /**
    * ``/message/cancel`` body. There is no ``question`` field: a body that
    * carries one is refused (422), so the prompt never travels on a Stop.
+   * ``job_id`` is the job the complete's 202 named; absent or null means the
+   * Stop came before that 202, and the turn's job is found (or pre-cancelled)
+   * by the turn's own ids.
    */
   GenieCancelRequest: {
     conversation_id: string;
-    job_id: string;
+    job_id?: string | null;
     message_id: string;
     progress_token: string;
     question_hash: string;
@@ -2647,11 +2826,19 @@ export interface RequestSchemas {
     message_id: string;
     progress_token: string;
   };
-  /** Hash-only report body. There is deliberately no field for prompt text. */
+  /**
+   * Report body. The question text is optional and consented.
+   *
+   * ``question_text`` is sent only when the reporter chose "Report with my
+   * question"; it is checked against ``question_hash`` and stored, if at all,
+   * only in ``genie_refusal_report_texts`` (never on the report row).
+   */
   GenieRefusalReportRequest: {
     conversation_id?: string | null;
     message_id?: string | null;
     question_hash: string;
+    /** Only when the reporter opts in: the refused question exactly as it was asked. It must hash to question_hash; it is kept, scrubbed and for 90 days, only when capture is enabled, it names no person or borrower, and the reporter's own ledger holds the refusal. */
+    question_text?: string | null;
     refusal_reason: "protected_class" | "unreviewed_criterion" | "pii_request" | "instruction_override" | "outreach_instruction" | "scope_bypass" | "out_of_scope" | "output_policy" | "unknown";
   };
   GrowthAgentCustomRunRequest: {
@@ -2711,8 +2898,12 @@ export interface RequestSchemas {
     csv_sha256: string;
     /** The Lead Queue query parameters the exported rows were read with (the same string the CSV's `# filters=` metadata line carries). Only their fingerprint is written to the ledger. */
     filters?: { [key: string]: string };
+    /** The Lead Queue view the file was built from, as the client declares it. */
+    lead_view_id?: string | null;
     /** How many borrowers matched the filters when the file was built (the CSV's `# matching_rows=` line). Absent when unknown; never below row_count. */
     matching_row_count?: number | null;
+    /** How many pages of that view were loaded when the file was built. */
+    pages_loaded?: number | null;
     row_count: number;
     scope: "selected" | "loaded";
   };
@@ -2748,9 +2939,12 @@ export interface RequestSchemas {
     draft_subject?: string | null;
     evidence_ids?: string[];
     follow_up_in_days?: number | null;
+    /** The Lead Queue view the decision was taken from, as the client declares it. */
+    lead_view_id?: string | null;
     offer_code?: "refi" | "heloc" | "cash_out" | "purchase" | "retention" | "recapture" | "refi_plus_heloc" | "investor" | "nurture" | null;
     rationale?: string | null;
     request_id?: string | null;
+    /** Required: how the approver saw the copy. A request without it is refused with 422. */
     review_mode?: "individual" | "triage" | "bulk_sample" | "bulk_cohort" | null;
     variant_name?: string | null;
   };
@@ -2778,6 +2972,8 @@ export interface RequestSchemas {
     campaign_id?: string | null;
     channel?: "email" | "sms" | "direct_mail";
     evidence_ids?: string[];
+    /** The Lead Queue view the decision was taken from, as the client declares it. */
+    lead_view_id?: string | null;
     offer_code?: "refi" | "heloc" | "cash_out" | "purchase" | "retention" | "recapture" | "refi_plus_heloc" | "investor" | "nurture" | null;
     rationale?: string | null;
     rationale_code: "out_of_footprint" | "do_not_call" | "opt_out" | "fair_lending_review" | "low_intent" | "data_quality" | "other_with_text";
@@ -2866,9 +3062,9 @@ export interface RequestSchemas {
     events: RequestSchemas['RumEvent'][];
   };
   RumEvent: {
-    details?: { [K in "dom_content_loaded_ms" | "ttfb_ms" | "transfer_size" | "from_route" | "duration_ms" | "attempt" | "retryable" | "dependency" | "error_name" | "error_kind" | "error_source" | "boundary" | "api_route" | "cache" | "warehouse_ms" | "lakebase_ms" | "total_ms"]?: string | number | boolean | null };
+    details?: { [K in "dom_content_loaded_ms" | "ttfb_ms" | "transfer_size" | "from_route" | "duration_ms" | "attempt" | "retryable" | "dependency" | "error_name" | "error_kind" | "error_source" | "boundary" | "api_route" | "cache" | "warehouse_ms" | "lakebase_ms" | "total_ms" | "interaction_target" | "lcp_element" | "input_delay_ms" | "processing_ms" | "presentation_ms"]?: string | number | boolean | null };
     metric: "navigation_load" | "route_change" | "lcp" | "cls" | "inp" | "long_task" | "api_call" | "client_error";
-    navigation_type?: "navigate" | "reload" | "back_forward" | "prerender" | null;
+    navigation_type?: "navigate" | "reload" | "back_forward" | "prerender" | "soft_navigation" | null;
     rating?: "good" | "needs_improvement" | "poor" | "info";
     route: string;
     value: number;
@@ -2976,6 +3172,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['AdminCapabilitiesResponse'];
+  };
+  "GET /api/v1/admin/field-performance": {
+    pathParams: Record<string, never>;
+    query: {
+      days?: 7 | 28;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['FieldPerformanceResponse'];
   };
   "GET /api/v1/admin/health": {
     pathParams: Record<string, never>;
@@ -3199,6 +3404,15 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['SignalAnalyticsResponse'];
   };
+  "GET /api/v1/assets/{asset_key}/freshness": {
+    pathParams: {
+      asset_key: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['AssetFreshnessResponse'];
+  };
   "GET /api/v1/audit/count": {
     pathParams: Record<string, never>;
     query: {
@@ -3285,6 +3499,27 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['DecisionReceipt'];
   };
+  "GET /api/v1/audit/refusal-reports": {
+    pathParams: Record<string, never>;
+    query: {
+      since?: string | null;
+      family?: "protected_class" | "unreviewed_criterion" | "pii_request" | "instruction_override" | "outreach_instruction" | "scope_bypass" | "out_of_scope" | "output_policy" | "unknown" | null;
+      limit?: number;
+      cursor?: string | null;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['RefusalReportListResponse'];
+  };
+  "GET /api/v1/audit/refusal-reports/{report_id}/question": {
+    pathParams: {
+      report_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['RefusalReportQuestionResponse'];
+  };
   "GET /api/v1/audit/rollups": {
     pathParams: Record<string, never>;
     query: {
@@ -3319,6 +3554,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['Borrower360'];
+  };
+  "GET /api/v1/borrowers/{borrower_id}/decisions": {
+    pathParams: {
+      borrower_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['BorrowerDecisionHistoryResponse'];
   };
   "GET /api/v1/borrowers/{borrower_id}/evidence": {
     pathParams: {
@@ -3551,12 +3795,21 @@ export interface ApiOperations {
   "GET /api/v1/home/summary/attribution": {
     pathParams: Record<string, never>;
     query: {
-      measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+      measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale" | "competitor_lien";
       baseline: string;
     };
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['HomeSummaryAttributionResponse'];
+  };
+  "GET /api/v1/kpi-proof": {
+    pathParams: Record<string, never>;
+    query: {
+      kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity";
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['KpiProofResponse'];
   };
   "GET /api/v1/leads": {
     pathParams: Record<string, never>;
@@ -3641,6 +3894,12 @@ export interface ApiOperations {
       approval_request_batch?: string | null;
       /** Maximum leads to return. Defaults to 500; max 5000. When the resultset hits this cap the response sets `X-Truncated-At` so the UI can render 'Showing N — refine filters'. */
       limit?: number;
+      /** Opaque, signed next-page token from a previous page's X-Next-Cursor header. Sent with the identical filters and sort; never with limit. */
+      cursor?: string | null;
+      /** Server sort over warehouse columns: rank (the default ranked order), score, equity, rate (spread) or confidence. */
+      sort?: "rank" | "score" | "equity" | "rate" | "confidence";
+      /** Direction of a server sort. Ignored for rank. */
+      sort_dir?: "asc" | "desc";
     };
     headers: Record<string, never>;
     body: never;

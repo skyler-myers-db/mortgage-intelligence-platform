@@ -126,6 +126,7 @@ export function LeadTableStatusSortMenu({
         ref={triggerRef}
         type="button"
         className="tbl__sort"
+        data-rum-target="sort"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}

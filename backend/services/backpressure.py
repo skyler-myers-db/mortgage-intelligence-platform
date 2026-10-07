@@ -110,6 +110,7 @@ class BackpressureController:
     """Token-bucket rate limiter + non-blocking dependency semaphores."""
 
     _BORROWER_ID_RE = re.compile(r"/api/borrowers/[^/]+$")
+    _BORROWER_DECISIONS_RE = re.compile(r"^/api/borrowers/[^/]+/decisions$")
     # POSTs that only READ the warehouse (audit delivery-09): budgeted as
     # warehouse reads, not as Lakebase mutations. Verified per route: the
     # preview handler calls repo.preview only (no audit row, no Lakebase
@@ -201,6 +202,13 @@ class BackpressureController:
             # the 30/min "genie" budget a reload of a shared link would spend
             # the bucket that gates asks and hold a Genie slot per read.
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "POST" and path == "/api/genie/start":
+            # The Genie surface's open (audit delivery-09): genie_start reads
+            # the caller's latest Lakebase session row, the static trusted
+            # assets and the committed sample-question file. It makes no
+            # Genie call and writes no audit row, so it takes the default
+            # read bucket and a Lakebase slot, never a Genie slot.
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if path.startswith("/api/genie"):
             return RouteBudget("genie", settings.mip_rate_limit_genie_per_minute, "genie")
         if method.upper() == "POST" and path in self._READ_ONLY_POSTS:
@@ -212,8 +220,18 @@ class BackpressureController:
             return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, dependency)
         if path.startswith("/api/audit") or path.startswith("/api/workspace"):
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "GET" and self._BORROWER_DECISIONS_RE.match(path):
+            # The borrower decision history (audit flow-04 phase 2): one
+            # Lakebase ledger read, never a warehouse call, so it must not
+            # spend the expensive warehouse budget '/api/borrowers' gets below.
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if self._BORROWER_ID_RE.match(path):
             return RouteBudget("borrower-dossier", settings.mip_rate_limit_expensive_per_minute, "warehouse")
+        if method.upper() == "GET" and path.startswith("/api/assets/"):
+            # Asset freshness for every authenticated user (audit critic-03):
+            # one source-readiness SELECT on the warehouse per drawer open.
+            # The admin metadata read stays under the "/api/admin" prefix.
+            return RouteBudget("warehouse-read", settings.mip_rate_limit_expensive_per_minute, "warehouse")
         # NOTE: lead assign/disposition calls are POSTs, so they are already
         # classified by the mutation branch above -- a dedicated pattern here
         # would be unreachable dead code (removed 2026-06-10 audit).

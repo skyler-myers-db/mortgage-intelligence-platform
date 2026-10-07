@@ -4,9 +4,11 @@ Every successful cross-actor read of ``mip_app.action_audit`` -- the explorer
 pages, the rollups, the facet and count reads, another actor's decision
 receipt -- writes exactly ONE server-owned ``VIEW_AUDIT_LEDGER`` row, so the
 ledger records who read it. The row says which surface was read, whether it
-was a later page, how many rows came back, the SHA-256 of the filters and,
-for a receipt, which row; it never carries ledger row contents, an actor
-filter in clear, or an email.
+was a later page, how many rows came back, a KEYED fingerprint of the
+filters (``audit_fingerprint``: an HMAC of their SHA-256, so a stored value
+can never be reproduced from a dictionary of candidate filters) and, for a
+receipt, which row; it never carries ledger row contents, an actor filter in
+clear, or an email.
 
 The write is scheduled as a background task and is fail-open (the
 ``leads.py`` ``_safe_audit_write`` pattern): a Lakebase outage must not turn
@@ -22,6 +24,10 @@ from typing import Any
 
 from fastapi import BackgroundTasks
 
+from backend.services.audit_fingerprint import (
+    AUDIT_LEDGER_FINGERPRINT_DOMAIN,
+    keyed_filter_fingerprint,
+)
 from backend.services.audit_metadata_policy import LEDGER_SURFACES
 from backend.services.audit_store import AuditStore
 from backend.services.observability import emit
@@ -69,8 +75,15 @@ def record_ledger_read(
         "has_cursor": has_cursor,
         "returned_row_count": returned_row_count,
     }
-    if filter_fingerprint is not None:
-        payload["filter_fingerprint"] = filter_fingerprint
+    # The stored copy is keyed (W5c, 12.3); with no key it is omitted, never
+    # stored plain. The caller passes the plain digest it computed.
+    keyed = (
+        keyed_filter_fingerprint(filter_fingerprint, domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN)
+        if filter_fingerprint is not None
+        else None
+    )
+    if keyed is not None:
+        payload["filter_fingerprint"] = keyed
     if read_audit_event_id is not None:
         payload["read_audit_event_id"] = read_audit_event_id
     background.add_task(

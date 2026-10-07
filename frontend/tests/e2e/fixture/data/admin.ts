@@ -11,8 +11,11 @@
 import type { ActivationDestination, ActivationOutboxItem, ActivationSummary, DataEstateStatus } from '../../../../src/types';
 import type { GrowthAgentCapabilityRow } from '../../../../src/types/growthAgent';
 import type { AuditEventPage, AuditEventRow } from '../../../../src/lib/apiTypes';
+import type { RefusalReportListResponse } from '../../../../src/lib/apiClients/refusalReports';
+import type { FieldPerformanceResponse } from '../../../../src/lib/apiClients/fieldPerformance';
 import { fixture, json, type FixtureEntry } from '../mockApi';
 import { LEADS } from './borrowers';
+import { fieldPerformanceFixture } from './fieldPerformance';
 import { SNAPSHOT_AT, TOTALS } from './reference';
 
 /** Mirror of `RulesResponse` in src/routes/admin-config.tsx. */
@@ -182,6 +185,45 @@ const CAPABILITIES: GrowthAgentCapabilityRow[] = [
   { key: 'mlflow_tracing', label: 'MLflow traces / evals', ga: true, status: 'preview_mirror', claimable: false, detail: 'Production extension.' },
 ];
 
+/**
+ * The refusal-reports page (D-audit-reads-d): every server key, two reports
+ * (one holding a consented question), synthetic `.example` reporters, UUID
+ * report and audit ids and 32-hex Genie ids. Report metadata only: the
+ * question is a separate, audited read the specs register themselves.
+ */
+export const REFUSAL_REPORT_WITH_TEXT_ID = '3c1d9e7a-5b2f-4c8d-9e6a-1f0b2c3d4e5f';
+export const REFUSAL_REPORTS: RefusalReportListResponse = {
+  items: [
+    {
+      report_id: REFUSAL_REPORT_WITH_TEXT_ID,
+      reported_at: '2026-07-14T15:20:00Z',
+      refusal_reason: 'unreviewed_criterion',
+      reporter: 'lo.alpha@summit-mortgage.example',
+      conversation_id: '01f13d4968af1b249dc388fd5b18b195',
+      message_id: null,
+      has_text: true,
+      text_expires_at: '2026-10-12T15:20:00Z',
+      audit_event_id: '8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d',
+    },
+    {
+      report_id: '9f8e7d6c-5b4a-4321-8fed-cba987654321',
+      reported_at: '2026-07-13T10:05:00Z',
+      refusal_reason: 'protected_class',
+      reporter: 'lo.bravo@summit-mortgage.example',
+      conversation_id: '01f13d4a0b7c1e5f8a2b3c4d5e6f7a8b',
+      message_id: '01f13d4b1c2d3e4f5a6b7c8d9e0f1a2b',
+      has_text: false,
+      text_expires_at: null,
+      audit_event_id: '1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e',
+    },
+  ],
+  family_counts: [
+    { refusal_reason: 'protected_class', count: 1 },
+    { refusal_reason: 'unreviewed_criterion', count: 1 },
+  ],
+  next_cursor: null,
+};
+
 export const adminFixtures: FixtureEntry[] = [
   fixture('GET', '/api/admin/rules', () =>
     json<RulesResponse>({
@@ -232,6 +274,10 @@ export const adminFixtures: FixtureEntry[] = [
     }),
   ),
   fixture('GET', '/api/admin/capabilities', () => json<{ capabilities: GrowthAgentCapabilityRow[] }>({ capabilities: CAPABILITIES })),
+  // Field performance (D-platform-process-d2): data/fieldPerformance.ts holds the bodies and variants.
+  fixture('GET', '/api/admin/field-performance', ({ query }) =>
+    json<FieldPerformanceResponse>(fieldPerformanceFixture(query.get('days') === '28' ? 28 : 7)),
+  ),
   fixture('GET', '/api/activation/summary', () => json<ActivationSummary>({ destinations: DESTINATIONS, recent_outbox: [] })),
   fixture('GET', '/api/activation/destinations', () => json<ActivationDestination[]>(DESTINATIONS)),
   fixture('GET', '/api/activation/outbox', () => json<ActivationOutboxItem[]>([])),
@@ -244,6 +290,8 @@ export const adminFixtures: FixtureEntry[] = [
   // AUDIT_EXPORT receipt an explorer CSV download waits for.
   fixture('GET', '/api/audit/facets', () => json<AuditFacetsFixture>(AUDIT_FACETS)),
   fixture('GET', '/api/audit/count', () => json<AuditCountFixture>({ count: AUDIT_EVENTS.length, capped: false, cap: 50000 })),
+  // Read only on an explicit "Show refusal reports" (D-audit-reads-d).
+  fixture('GET', '/api/audit/refusal-reports', () => json<RefusalReportListResponse>(REFUSAL_REPORTS)),
   fixture('POST', '/api/audit/export-receipt', ({ body }) => json<AuditExportReceiptFixture>(auditExportReceipt(body))),
   // The default `group_by=event_type` rollup: the backend echoes the group in
   // group_by / group_key and fills event_type from it (backend/api/audit.py).

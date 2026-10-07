@@ -22,6 +22,7 @@ import { SUCCESS_TOAST_MS, TOAST_REGION_SHORTCUT, Toaster } from './Toaster';
 
 const session = { canAccessAdmin: true };
 vi.mock('../AppContext', () => ({ useApp: () => session }));
+vi.mock('../../lib/sessionQuery', () => ({ useAuditLedgerAccess: () => false }));
 
 const INFO_GLYPH = 'M12 8v.01M11 12h1v5h1';
 

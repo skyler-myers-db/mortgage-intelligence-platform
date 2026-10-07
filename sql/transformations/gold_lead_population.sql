@@ -59,6 +59,12 @@ WITH ranked AS (
     b.rate_spread_bps,
     b.opportunity_score,
     b.confidence,
+    -- Score anatomy (wow-stage-2): carried from borrower_360's own subscores.
+    b.economic_incentive_points,
+    b.intent_trigger_points,
+    b.fit_points,
+    b.relationship_points,
+    b.evidence_points,
     b.recommended_offer_code,
     b.recommended_offer,
     b.why_now,
@@ -131,6 +137,11 @@ SELECT
   rate_spread_bps,
   opportunity_score,
   confidence,
+  economic_incentive_points,
+  intent_trigger_points,
+  fit_points,
+  relationship_points,
+  evidence_points,
   recommended_offer_code,
   recommended_offer,
   why_now,
@@ -203,6 +214,11 @@ COMMENT ON COLUMN mip.gold.lead_population.equity_pct IS 'From gold.borrower_360
 COMMENT ON COLUMN mip.gold.lead_population.rate_spread_bps IS 'From gold.borrower_360.';
 COMMENT ON COLUMN mip.gold.lead_population.opportunity_score IS 'fn_lead_score output 0..100.';
 COMMENT ON COLUMN mip.gold.lead_population.confidence IS 'Mean of 5 sub-scores 0..100.';
+COMMENT ON COLUMN mip.gold.lead_population.economic_incentive_points IS 'Weighted economic_incentive sub-score: 0.35 * economic_incentive (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.lead_population.intent_trigger_points IS 'Weighted intent_trigger sub-score: 0.30 * intent_trigger (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.lead_population.fit_points IS 'Weighted fit sub-score: 0.15 * fit (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.lead_population.relationship_points IS 'Weighted relationship sub-score: 0.10 * relationship (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.lead_population.evidence_points IS 'Weighted evidence sub-score: 0.10 * evidence (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
 COMMENT ON COLUMN mip.gold.lead_population.recommended_offer_code IS 'fn_next_best_offer output code; canonical offer enum for operational filters and audit grouping.';
 COMMENT ON COLUMN mip.gold.lead_population.recommended_offer IS 'Human label (resolved in gold via product_labels map).';
 COMMENT ON COLUMN mip.gold.lead_population.why_now IS 'Deterministic template per offer code.';

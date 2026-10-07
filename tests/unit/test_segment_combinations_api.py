@@ -12,6 +12,10 @@ serves the exact core-segment combinations from
 * a row whose key is empty or names a non-core code is dropped with an event;
 * only THIS table missing is ``built=False``; another missing table, or a
   missing schema, keeps its 503;
+* rows that ALL fail the contract are a ``SegmentCombinationContractError``
+  (counts only, an ERROR event) and the route's non-retryable 503
+  ``contract_failure`` with no dependency; stale-if-error still serves the
+  last good projection through it;
 * one statement, single-flight and stale-if-error; a cold failure propagates.
 """
 
@@ -35,6 +39,7 @@ from backend.services.repositories import get_segment_combination_repository
 from backend.services.repositories.databricks_segment_combinations import (
     SEGMENT_COMBINATIONS_SQL,
     DatabricksSegmentCombinationRepository,
+    SegmentCombinationContractError,
     project_combinations,
 )
 from backend.services.resilience import DependencyDownError, TTLCache
@@ -213,6 +218,72 @@ def test_a_row_that_is_not_a_core_set_is_dropped_with_an_event(caplog: pytest.Lo
     events = [record for record in caplog.records if getattr(record, "mip_event", None) == "segment_combination_row_dropped"]
     assert [event.mip_extras["reason"] for event in events] == ["empty_key", "unknown_code", "unknown_code"]  # type: ignore[attr-defined]
     assert all(event.mip_outcome == "dropped" for event in events)  # type: ignore[attr-defined]
+
+
+ALL_DROPPED = [_row("", 5), _row("itm+payoff_loss_leads", 3), _row("itm+itm", 2)]
+
+
+def test_rows_that_all_fail_the_contract_raise_with_counts_only(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING), pytest.raises(SegmentCombinationContractError) as raised:
+        project_combinations(ALL_DROPPED)
+    assert (raised.value.row_count, raised.value.dropped) == (3, {"empty_key": 1, "unknown_code": 2})
+    failures = [
+        record for record in caplog.records if getattr(record, "mip_event", None) == "segment_combination_contract_failure"
+    ]
+    assert len(failures) == 1
+    failure = failures[0]
+    assert failure.levelno == logging.ERROR
+    assert failure.mip_outcome == "contract_failure"  # type: ignore[attr-defined]
+    assert failure.mip_extras == {  # type: ignore[attr-defined]
+        "row_count": 3,
+        "dropped_empty_key": 1,
+        "dropped_unknown_code": 2,
+    }
+    # Counts only: no combination key reaches the event or the error.
+    assert "payoff_loss_leads" not in repr(failure.__dict__)
+    assert "payoff_loss_leads" not in str(raised.value)
+
+
+def test_the_route_answers_a_non_retryable_contract_failure_503_without_a_dependency() -> None:
+    repo = _StubRepo(error=SegmentCombinationContractError(3, {"unknown_code": 3}))
+    prior = app.dependency_overrides.get(get_segment_combination_repository)
+    app.dependency_overrides[get_segment_combination_repository] = lambda: repo
+    try:
+        response = TestClient(app).get(PATH)
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_segment_combination_repository, None)
+        else:
+            app.dependency_overrides[get_segment_combination_repository] = prior
+    assert response.status_code == 503
+    body = response.json()
+    assert set(body) == {"detail", "retryable", "reason", "correlation_id"}
+    assert body["detail"] == "The signal stack failed its data contract."
+    assert body["retryable"] is False
+    assert body["reason"] == "contract_failure"
+    assert body["correlation_id"]
+    assert "dependency" not in body and "built" not in body
+
+
+def test_a_contract_failure_without_a_last_good_projection_propagates() -> None:
+    client = _FakeSqlClient()
+    client.rows = list(ALL_DROPPED)
+    with pytest.raises(SegmentCombinationContractError):
+        DatabricksSegmentCombinationRepository(client, cache=GoldAggregateCache()).combinations()
+
+
+def test_stale_if_error_keeps_the_last_good_projection_through_a_contract_failure() -> None:
+    now = [0.0]
+    client = _FakeSqlClient()
+    cache = GoldAggregateCache(now=lambda: now[0], executor=_InlineExecutor())
+    repo = DatabricksSegmentCombinationRepository(client, cache=cache, cache_ttl_s=60.0)
+    first = repo.combinations()
+    assert first.built is True
+    client.rows = list(ALL_DROPPED)
+    now[0] = 120.0
+    assert repo.combinations().combinations == first.combinations
+    now[0] = 125.0
+    assert repo.combinations().combinations == first.combinations
 
 
 def test_an_empty_table_is_not_built() -> None:

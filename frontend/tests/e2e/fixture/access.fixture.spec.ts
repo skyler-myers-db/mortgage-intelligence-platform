@@ -39,6 +39,12 @@ test.describe('a non-admin session', () => {
     await expect(assets.first()).toBeVisible();
     await expect(drawer.getByText('Governed assets')).toBeVisible();
     await expect(drawer.getByRole('link', { name: 'View asset details' })).toHaveCount(0);
+    // Freshness for every user (W5c critic-03): the chip and one refresh line,
+    // from the every-user read, never the admin-only state.
+    await expect(drawer.locator('.source-freshness')).toHaveText('Fresh');
+    await expect(drawer.getByTestId('evidence-freshness-foot')).toHaveText(/^Last refresh .+ · via .+$/);
+    await expect(drawer).not.toContainText('Admin-only freshness');
+    expect(mockApi.calls.filter((call) => /^\/api\/assets\/[^/]+\/freshness$/.test(call.path))).toHaveLength(1);
     // The admin-only metadata read is never issued for this session.
     expect(mockApi.calls.filter((call) => /^\/api\/admin\/assets\//.test(call.path))).toEqual([]);
     await drawer.getByRole('button', { name: 'Close drawer' }).click();

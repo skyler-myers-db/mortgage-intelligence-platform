@@ -192,6 +192,37 @@ else
   echo "[deploy] lender mark: none"
 fi
 export MIP_LENDER_MARK_FILE MIP_DEFAULT_THEME MIP_DEFAULT_ACCENT MIP_LENDER_MARK_SHA256
+# Demo-only presenter mode (D-shell-deviations-e1; W5b NB-3) and the consented
+# Genie refusal-text capture switch (D-audit-reads-d) are parsed here, before
+# any workspace mutation: a truthy presenter value for prod, or a typo in
+# either, stops at step 0 instead of at App promotion. The presenter
+# vocabulary is the payload's _PRESENTER_MODE_ON/_OFF (the two are pinned
+# equal); tr, not ${var,,}, so bash 3.2 parses it. The payload keeps its own
+# checks as defence in depth.
+_MIP_PRESENTER_MODE="$(deployment_control_value MIP_PRESENTER_MODE \
+  | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+case "$_MIP_PRESENTER_MODE" in
+  ''|0|false|no|off) ;;
+  1|true|yes|on)
+    if [[ "$TARGET" == "prod" ]]; then
+      echo "${RED}[deploy] MIP_PRESENTER_MODE is demo-only and refused for target prod.${RST}" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "${RED}[deploy] MIP_PRESENTER_MODE must be one of 0/1/true/false/yes/no/on/off.${RST}" >&2
+    exit 2
+    ;;
+esac
+_MIP_GENIE_REFUSAL_TEXT_CAPTURE="$(deployment_control_value MIP_GENIE_REFUSAL_TEXT_CAPTURE \
+  | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+case "$_MIP_GENIE_REFUSAL_TEXT_CAPTURE" in
+  ''|enabled|disabled) ;;
+  *)
+    echo "${RED}[deploy] MIP_GENIE_REFUSAL_TEXT_CAPTURE must be enabled or disabled.${RST}" >&2
+    exit 2
+    ;;
+esac
 _LAKEBASE_INSTANCE_NAME="$(deployment_control_value LAKEBASE_INSTANCE_NAME)"
 _MIP_LAKEBASE_INSTANCE="$(deployment_control_value MIP_LAKEBASE_INSTANCE)"
 if [[ -n "$_LAKEBASE_INSTANCE_NAME" && -n "$_MIP_LAKEBASE_INSTANCE" && \

@@ -308,6 +308,53 @@ def test_receipt_without_a_matching_count_writes_no_key(
     assert "matching_row_count" not in audit_store.list(limit=10)[0].payload_json
 
 
+def test_receipt_records_the_declared_lead_view_and_pages_loaded(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    """D-audit-reads-a: the export joins the VIEW_LEADS rows of the view it
+    was built from, as the client declares it."""
+
+    view_id = "0123456789abcdef0123456789abcdef"
+    response = client.post(
+        "/api/v1/leads/export-receipt",
+        json=_declaration(scope="loaded", lead_view_id=view_id, pages_loaded=3),
+        headers=ACTOR_HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    (row,) = audit_store.list(limit=10)
+    assert row.payload_json["declared_lead_view_id"] == view_id
+    assert row.payload_json["pages_loaded"] == 3
+
+
+def test_receipt_without_a_view_writes_no_view_keys(audit_store: InMemoryAuditStore) -> None:
+    response = client.post("/api/v1/leads/export-receipt", json=_declaration(), headers=ACTOR_HEADERS)
+
+    assert response.status_code == 200, response.text
+    payload = audit_store.list(limit=10)[0].payload_json
+    assert "declared_lead_view_id" not in payload and "pages_loaded" not in payload
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"lead_view_id": "0123456789ABCDEF0123456789ABCDEF"},
+        {"lead_view_id": "B-0123456789ABC"},
+        {"pages_loaded": 0},
+        {"pages_loaded": 11},
+    ],
+)
+def test_a_malformed_view_or_page_count_is_refused_with_nothing_written(
+    audit_store: InMemoryAuditStore, overrides: dict[str, object]
+) -> None:
+    response = client.post(
+        "/api/v1/leads/export-receipt", json=_declaration(**overrides), headers=ACTOR_HEADERS
+    )
+
+    assert response.status_code == 422
+    assert audit_store.list(limit=10) == []
+
+
 def test_matching_count_equal_to_the_file_is_accepted(audit_store: InMemoryAuditStore) -> None:
     response = client.post(
         "/api/v1/leads/export-receipt",

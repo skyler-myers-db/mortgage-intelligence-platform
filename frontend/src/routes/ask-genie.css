@@ -16,9 +16,11 @@
   margin-block-start: var(--sp-4);
 }
 /* The slot scrolls itself into view when a run starts from a card below;
-   clear the sticky route nav, as glossary.css does for deep links. */
+   clear the route nav while it is docked (--nav-clear, the measured nav plus
+   the ring, 38-focus-clearance.css; 0 while it scrolls away), as glossary.css
+   does for deep links. */
 .growth-agent-run {
-  scroll-margin-block: var(--sp-16) var(--sp-4);
+  scroll-margin-block: var(--nav-clear) var(--sp-4);
 }
 .growth-agent-run--pending .growth-agent-run__head {
   align-items: flex-start;
@@ -59,19 +61,21 @@
    it; a table row above it on Shift+Tab) would be scrolled only to the
    scroller's edge, entirely behind a bar. `.main` keeps each bar's block
    size, plus room for the focus ring, as scroll-padding at that end, so
-   focus scrolling stops between the bars. Sizes are measured by
-   useComposerScrollClearance (ask-genie.composer-clearance.ts); the
-   fallbacks cover the nav and a two-line composer before the first
-   measurement. */
+   focus scrolling stops between the bars. The composer is measured by
+   useComposerScrollClearance (ask-genie.composer-clearance.ts; the fallback
+   covers a two-line composer before the first measurement). The nav is
+   measured by the shell (useRouteNavDock, --route-nav-block on `.main`) and
+   cleared only while it is docked: a nav in flow scrolls away, so the start
+   keeps room for the ring alone. */
 .main:has(section[role="tabpanel"]:not([hidden]) .genie-composer) {
-  scroll-padding-block-start: calc(
-    var(--genie-route-nav-block-size, var(--sp-16))
-    + var(--focus-ring-width) + var(--focus-ring-offset)
-  );
+  scroll-padding-block-start: calc(var(--focus-ring-width) + var(--focus-ring-offset));
   scroll-padding-block-end: calc(
     var(--genie-composer-block-size, calc(var(--sp-16) * 2 + var(--sp-8)))
     + var(--focus-ring-width) + var(--focus-ring-offset)
   );
+}
+.main:has(> .route-nav[data-docked]):has(section[role="tabpanel"]:not([hidden]) .genie-composer) {
+  scroll-padding-block-start: calc(var(--route-nav-block) + var(--focus-ring-width) + var(--focus-ring-offset));
 }
 /* Grows with the question (field-sizing is Baseline since June 2026) from
    two lines to eight, then scrolls; `rows={2}` is the fallback size where

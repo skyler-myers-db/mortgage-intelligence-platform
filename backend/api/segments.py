@@ -3,11 +3,14 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from backend.schemas.lead import SEGMENT_CODE_VALUES, SegmentSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.schemas.segment_combinations import SegmentCombinationResponse
+from backend.services.observability import get_correlation_id
 from backend.services.repositories import (
+    SegmentCombinationContractError,
     SegmentCombinationRepository,
     SegmentRepository,
     get_segment_combination_repository,
@@ -152,7 +155,7 @@ def list_segments(
 
 
 @router.get("/segments/combinations", response_model=SegmentCombinationResponse)
-def segment_combinations(repo: CombinationRepoDep) -> SegmentCombinationResponse:
+def segment_combinations(repo: CombinationRepoDep) -> SegmentCombinationResponse | JSONResponse:
     """Where several Cotality signals fire on the same borrower (audit wow-stage-5).
 
     One row per non-empty exact set of the six core segment codes, whole book
@@ -160,6 +163,21 @@ def segment_combinations(repo: CombinationRepoDep) -> SegmentCombinationResponse
     ``mip.gold.segment_combination_rollup`` and a live contactable subset.
     ``built`` is False until the gold refresh job has built the table. A cold
     warehouse surfaces as the resilience layer's 503 ``warming_up``; there is
-    no fallback, and the route writes no audit row.
+    no fallback, and the route writes no audit row. A built table whose every
+    row fails the projection contract answers a non-retryable 503 with reason
+    ``contract_failure`` and no dependency, unless a last good projection is
+    still cached.
     """
-    return repo.combinations()
+    try:
+        return repo.combinations()
+    except SegmentCombinationContractError:
+        # No ``dependency``: the warehouse answered; the data broke its contract.
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "The signal stack failed its data contract.",
+                "retryable": False,
+                "reason": "contract_failure",
+                "correlation_id": get_correlation_id(),
+            },
+        )

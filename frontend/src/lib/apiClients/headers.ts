@@ -24,8 +24,8 @@ const DATA_REFRESHED_AT_RE = /^[0-9TZ:.+-]+$/;
 
 /**
  * `X-Data-Refreshed-At` (the gold refresh instant on GET /leads), loosely
- * shaped. A copy of apiClients/leads.ts's validator, which keeps its own
- * until the Lead Queue's client adopts this module.
+ * shaped. The one validator: apiClients/leads.ts and the paged Lead Queue
+ * read (apiClients/leadsPaged.ts) both import it (W5c).
  */
 export function dataRefreshedAtHeader(value: string | null): string | null {
   return value && DATA_REFRESHED_AT_RE.test(value) ? value : null;

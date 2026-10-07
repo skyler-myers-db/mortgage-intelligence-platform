@@ -25,7 +25,13 @@ Projection rules (the endpoint's honesty contract):
 * only THIS table missing (``TABLE_OR_VIEW_NOT_FOUND`` naming it) is
   ``built=False`` -- the deploy that introduces it promotes the App before the
   refresh builds it. Any other missing object (``borrower_360``, a schema)
-  is a real failure and keeps its 503. An empty table is not built either.
+  is a real failure and keeps its 503. An empty table is not built either;
+* a table that HAS rows, every one of which was dropped, is a broken data
+  contract, not "not built": ``SegmentCombinationContractError`` (with the
+  per-reason counts, never a key) raised out of the cache factory, so
+  stale-if-error keeps serving the last good projection and, without one,
+  the route answers a non-retryable 503 (audit wow-stage-5 fold; a
+  ``built=True`` empty body would claim nobody fires three signals).
 
 Cache posture matches the geography rollups: ``GoldAggregateCache`` with a 60 s
 soft TTL, single-flight and stale-if-error. A cold failure propagates so the
@@ -154,7 +160,21 @@ def not_built_response() -> SegmentCombinationResponse:
     )
 
 
-def _drop(reason: str, key: str) -> None:
+class SegmentCombinationContractError(RuntimeError):
+    """The gold table has rows and the projection dropped every one of them.
+
+    Carries only counts: ``row_count`` and ``dropped`` (rows per drop
+    reason). A combination key never leaves the repository.
+    """
+
+    def __init__(self, row_count: int, dropped: dict[str, int]) -> None:
+        self.row_count = row_count
+        self.dropped = dict(dropped)
+        super().__init__(f"segment combination contract failure: all {row_count} rows dropped")
+
+
+def _drop(reason: str, key: str, dropped: dict[str, int]) -> None:
+    dropped[reason] = dropped.get(reason, 0) + 1
     emit(
         log,
         "segment_combination_row_dropped",
@@ -166,17 +186,21 @@ def _drop(reason: str, key: str) -> None:
 
 
 def project_combinations(rows: list[dict[str, Any]]) -> SegmentCombinationResponse:
-    """Validate and order the exact rows; drop (with an event) any row that is not a core set."""
+    """Validate and order the exact rows; drop (with an event) any row that is not a core set.
+
+    Raises ``SegmentCombinationContractError`` when rows exist but none survives.
+    """
     keyed: list[tuple[str, SegmentCombination]] = []
     refreshed_at: str | None = None
+    dropped: dict[str, int] = {}
     for row in rows:
         key = str(row.get("combination_key") or "").strip()
         codes = key.split("+") if key else []
         if not codes:
-            _drop("empty_key", key)
+            _drop("empty_key", key, dropped)
             continue
         if any(code not in CORE_SEGMENT_CODES for code in codes) or len(set(codes)) != len(codes):
-            _drop("unknown_code", key)
+            _drop("unknown_code", key, dropped)
             continue
         ordered = [code for code in CORE_SEGMENT_CODES if code in codes]
         addressable = max(0, _int_or_none(row.get("addressable_borrowers")) or 0)
@@ -194,8 +218,19 @@ def project_combinations(rows: list[dict[str, Any]]) -> SegmentCombinationRespon
             )
         )
         refreshed_at = refreshed_at or _timestamp_text(row.get("refreshed_at"))
-    if not keyed:
+    if not rows:
         return not_built_response()
+    if not keyed:
+        emit(
+            log,
+            "segment_combination_contract_failure",
+            level=logging.ERROR,
+            row_count=len(rows),
+            dropped_empty_key=dropped.get("empty_key", 0),
+            dropped_unknown_code=dropped.get("unknown_code", 0),
+            outcome="contract_failure",
+        )
+        raise SegmentCombinationContractError(len(rows), dropped)
     keyed.sort(key=lambda item: (-item[1].addressable, item[0]))
     return SegmentCombinationResponse(
         built=True,

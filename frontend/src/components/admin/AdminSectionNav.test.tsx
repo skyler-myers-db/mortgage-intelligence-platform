@@ -143,6 +143,7 @@ describe('AdminSectionNav', () => {
       'Deployment readiness',
       'Agentic capabilities',
       'Activation',
+      'Field performance',
       'Appearance',
     ]);
     expect(links().map((link) => link.getAttribute('href'))).toEqual(

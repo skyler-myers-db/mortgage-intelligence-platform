@@ -665,7 +665,8 @@ jobs:
     #      at medium+ severity. `.bandit` silences test-only noise.
     #   3. pip-audit -- Python dependency CVE scan from requirements.txt.
     #   4. npm audit -- frontend dependency CVE scan at high+ severity,
-    #      including dev/build tooling because it runs in CI and build hosts.
+    #      including dev/build tooling because it runs in CI and build hosts,
+    #      and the operator-only tools/geo lock at the same level.
     # Each step has a single responsibility and runs independently so
     # CI output points directly at the failing rail.
     name: security (gitleaks + bandit + npm audit)
@@ -811,4 +812,11 @@ jobs:
         # devDependencies because Vite, Vitest, Playwright, and build
         # plugins execute in CI / bundle-production contexts.
         run: npm --prefix frontend audit --audit-level=high
+        continue-on-error: false
+
+      - name: npm audit (tools/geo, operator-only geometry build)
+        # The ZCTA geometry tool's own lock (W5c, audit dataviz-01). It never
+        # runs in CI or deploy, but an operator runs it, so its tree is
+        # audited at the same bar. A high finding fails; no silent ignore.
+        run: npm --prefix tools/geo audit --audit-level=high
         continue-on-error: false

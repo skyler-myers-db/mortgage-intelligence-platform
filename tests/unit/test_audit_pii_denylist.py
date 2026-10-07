@@ -706,3 +706,38 @@ def test_saved_view_metadata_is_an_id_and_a_fingerprint_only() -> None:
     for key in ("saved_view_name", "view_name", "params"):
         with pytest.raises(AuditMetadataViolation):
             _assert_allowlisted({key: "x"})
+
+
+def test_lead_view_paging_metadata_is_closed_values_only() -> None:
+    """W5c D-audit-reads-a: VIEW_LEADS view keys, and the declared view on decisions."""
+    good = {
+        "view_id": "0123456789abcdef0123456789abcdef",
+        "page_index": 3,
+        "sort": "equity",
+        "sort_dir": "asc",
+        "total_matching": 12_345,
+        "declared_lead_view_id": "fedcba9876543210fedcba9876543210",
+        "pages_loaded": 4,
+        "filter_fingerprint": "a" * 64,
+        "source_refreshed_at": "2026-09-29T06:00:00Z",
+    }
+    _assert_allowlisted(good)
+    _assert_public_safe_values(good)
+    for bad in (
+        {"view_id": "0123456789ABCDEF0123456789ABCDEF"},
+        {"view_id": "jane@example.com"},
+        {"declared_lead_view_id": "B-0123456789ABC"},
+        {"page_index": 10},
+        {"page_index": -1},
+        {"page_index": "1"},
+        {"pages_loaded": 0},
+        {"pages_loaded": 11},
+        {"sort": "relationship"},
+        {"sort_dir": "sideways"},
+        {"total_matching": -1},
+        {"total_matching": True},
+    ):
+        with pytest.raises(AuditMetadataValueViolation):
+            _assert_public_safe_values(bad)
+    with pytest.raises(AuditMetadataViolation):
+        _assert_allowlisted({"cursor": "x"})

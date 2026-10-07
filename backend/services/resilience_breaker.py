@@ -134,6 +134,9 @@ class CircuitBreaker:
         self._failure_count = 0
         self._opened_at: float | None = None
         self._probes_in_flight = 0
+        # Bumped on every OPEN -> HALF_OPEN, so a probe ticket from an
+        # earlier half-open period never returns a newer period's slot.
+        self._half_open_epoch = 0
         self._lock = Lock()
 
     @property
@@ -158,6 +161,7 @@ class CircuitBreaker:
         if (self._now() - self._opened_at) >= self._cooldown_s:
             self._state = self.HALF_OPEN
             self._probes_in_flight = 0
+            self._half_open_epoch += 1
             # Slice-13: structured event for ops dashboards / grep.
             emit(
                 log,
@@ -181,17 +185,38 @@ class CircuitBreaker:
         probe. We cap concurrent probes at ``half_open_probes`` so a
         thundering herd can't pile onto a still-broken dependency.
         """
+        return self.admit() is not None
+
+    def admit(self) -> int | None:
+        """``allow()`` that says what it handed out: None when refused, 0
+        for a CLOSED call (no probe slot), else the half-open epoch whose
+        probe slot this call now holds (the ticket for ``release_probe``)."""
         with self._lock:
             self._maybe_half_open_locked()
             if self._state == self.CLOSED:
-                return True
+                return 0
             if self._state == self.HALF_OPEN:
                 if self._probes_in_flight < self._half_open_probes:
                     self._probes_in_flight += 1
-                    return True
-                return False
+                    return self._half_open_epoch
+                return None
             # OPEN
-            return False
+            return None
+
+    def release_probe(self, epoch: int) -> None:
+        """Return the half-open probe slot ``admit()`` handed out under
+        ``epoch``, whose call ended with no answer either way (the owner's
+        cooperative cancel, genie-03); no transition. A call admitted
+        CLOSED (epoch 0) or in an earlier half-open period holds no slot of
+        this period, so it gives none back."""
+        with self._lock:
+            if (
+                epoch
+                and epoch == self._half_open_epoch
+                and self._state == self.HALF_OPEN
+                and self._probes_in_flight > 0
+            ):
+                self._probes_in_flight -= 1
 
     def record_success(self) -> None:
         with self._lock:

@@ -17,6 +17,11 @@
  * both themes (WCAG 1.4.3, computed against the composited background), the
  * visible focus ring on the report confirmation after a keyboard report
  * (WCAG 2.4.7), and the deep-dive route's own "Edit question" wiring.
+ *
+ * These one-click cases run with the tenant's capture switch off
+ * (D-audit-reads-d); with it on, "This was legitimate" reveals the consented
+ * step, whose contrast is measured here and whose posts are pinned in
+ * refusal-capture-sales.fixture.spec.ts.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,6 +36,8 @@ import {
   refusalReportHash,
   refusedSubmit,
 } from './data/genieRefusal';
+import type { SessionResponse } from '../../../src/types';
+import { SESSION } from './data/shell';
 import { json } from './mockApi';
 import { expect, test } from './test';
 
@@ -124,6 +131,35 @@ async function askInPanel(page: Page, app: AppDriver, question: string): Promise
 }
 
 test.describe('Genie refusal card', () => {
+  test.beforeEach(({ mockApi }) => {
+    // The one-click hash-only report: capture off for this tenant.
+    mockApi.register<SessionResponse>('GET', '/api/session', () => json({ ...SESSION, refusal_text_capture_enabled: false }));
+  });
+
+  for (const theme of ['light', 'dark'] as const satisfies readonly FixtureTheme[]) {
+    test(`${theme} theme: the consented step's question and disclosure clear WCAG AA contrast`, async ({ app, page, mockApi }) => {
+      mockApi.register<SessionResponse>('GET', '/api/session', () => json(SESSION));
+      const reason: GenieRefusalReason = 'unreviewed_criterion';
+      const question = REFUSED_QUESTIONS[reason];
+      mockApi.register('POST', SUBMIT_PATH, () => json<GenieSubmitResult>(refusedSubmit(reason, question)));
+
+      await app.setTheme(theme);
+      await app.gotoRoute('/glossary');
+      const card = await askInPanel(page, app, question);
+      await card.getByRole('button', { name: REPORT_BUTTON_NAME }).click();
+      const step = card.getByTestId('genie-refusal-confirm');
+      await expect(step).toBeVisible();
+      await expect(step.getByRole('button', { name: 'Report with my question' })).toBeFocused();
+      expect(mockApi.calls.filter((call) => call.path === REPORT_PATH), 'the step files nothing').toHaveLength(0);
+      for (const selector of ['.genie-answer__refusal-question', '.genie-answer__refusal-disclosure']) {
+        const sample = await textContrast(step.locator(selector));
+        const measured = `${selector} in ${theme}: ${sample.text} on ${sample.background} = ${sample.ratio.toFixed(2)}:1`;
+        test.info().annotations.push({ type: 'contrast', description: measured });
+        expect.soft(sample.ratio, measured).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+      }
+    });
+  }
+
   for (const reason of REFUSAL_FAMILIES) {
     test(`${reason}: sentence, validated chips, Edit question and a hash-only report`, async ({ app, page, mockApi }, testInfo) => {
       const question = REFUSED_QUESTIONS[reason];

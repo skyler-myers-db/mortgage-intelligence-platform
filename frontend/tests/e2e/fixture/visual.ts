@@ -302,6 +302,11 @@ export const AUDITED_READS: ReadonlyArray<{ method: string; path: RegExp; event:
   { method: 'POST', path: /^\/api\/outreach\/draft$/, event: 'DRAFT_OUTREACH' },
   { method: 'POST', path: /^\/api\/offers\/recommend$/, event: 'RECOMMEND_OFFER' },
   { method: 'POST', path: /^\/api\/lookup\/property-loan$/, event: 'PROPERTY_LOOKUP' },
+  // D-audit-reads-d: the refusal-reports page is read only on an explicit
+  // "Show refusal reports" (never on /audit-ledger's natural load), and each
+  // question only on its own "Show question" click.
+  { method: 'GET', path: /^\/api\/audit\/refusal-reports$/, event: 'VIEW_AUDIT_LEDGER' },
+  { method: 'GET', path: /^\/api\/audit\/refusal-reports\/[^/]+\/question$/, event: 'VIEW_REFUSAL_REPORT_TEXT' },
 ];
 
 /** The audit event a call would write, or null. */

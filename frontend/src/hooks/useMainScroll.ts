@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import { useLocation, useNavigationType } from 'react-router';
+import { ROUTE_NAV_DOCKED_ATTRIBUTE } from '../lib/routeNavDock';
 import { retryUntil } from './retryUntil';
 import { readOffsets, rememberOffsetCapped, scrollStorageKey, writeOffsets } from './scrollOffsetStore';
 
@@ -21,7 +22,8 @@ export { scrollStorageKey };
  * Rules, keyed on the history entry (`location.key`):
  *   - POP (Back / Forward / reload) restores the offset saved for that entry,
  *     waiting (bounded) until the content is tall enough to reach it.
- *   - A `#hash` scrolls its target under the sticky route nav, honouring the
+ *   - A `#hash` scrolls its target under the route nav while it is docked
+ *     (sticky; at the scroller's top while it is in flow), honouring the
  *     target's CSS `scroll-margin-top`.
  *   - PUSH / REPLACE to a DIFFERENT pathname resets to the top.
  *   - PUSH / REPLACE on the SAME pathname keeps the offset: Analytics, Segment
@@ -101,8 +103,9 @@ function scrollHashTargetIntoView(main: HTMLElement, hash: string): boolean {
   const target = document.getElementById(id);
   if (!target) return false;
   if (target === main || !main.contains(target)) return true;
+  // Only a docked (sticky) nav covers the target; a nav in flow scrolls away.
   const nav = main.querySelector(STICKY_NAV_SELECTOR);
-  const navHeight = nav ? nav.getBoundingClientRect().height : 0;
+  const navHeight = nav?.hasAttribute(ROUTE_NAV_DOCKED_ATTRIBUTE) ? nav.getBoundingClientRect().height : 0;
   const margin = Math.max(cssScrollMarginTop(target), navHeight);
   const offset =
     offsetTopWithin(main, target) ??

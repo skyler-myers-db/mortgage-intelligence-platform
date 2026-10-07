@@ -644,6 +644,25 @@ def test_admin_health_carries_the_presenter_flag_and_auditor_overlap_count(
     assert admin["auditor_role_overlap"] == 0
 
 
+def test_admin_health_browser_telemetry_follows_the_effective_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-platform-process-d1: the admin body says whether browser RUM is on in
+    THIS process (the deploy payload's default, or an operator's opt-out);
+    the workspace and anonymous bodies never carry it."""
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+
+    monkeypatch.setattr(health_mod.settings, "mip_rum_enabled", True)
+    assert client.get("/api/admin/health", headers=ADMIN_HEADERS).json()["browser_telemetry"] == "on"
+    workspace = client.get("/api/health", headers={"X-Forwarded-Email": "lo@example.com"}).json()
+    assert "browser_telemetry" not in workspace
+
+    monkeypatch.setattr(health_mod.settings, "mip_rum_enabled", False)
+    assert client.get("/api/admin/health", headers=ADMIN_HEADERS).json()["browser_telemetry"] == "off"
+
+
 def test_health_admin_endpoint_surfaces_trust_boundary_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

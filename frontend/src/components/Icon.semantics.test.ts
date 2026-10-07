@@ -25,7 +25,6 @@ const GENIE_SURFACE_FILES = [
   'components/Icon.tsx', // the IconName union that defines the glyph
   'components/command/CommandPaletteDialog.tsx', // Ask Genie rows
   'components/command/commandActions.ts', // cmd-genie
-  'components/layout/Console.tsx', // GENIE activity events
   'components/layout/GenieDock.tsx',
   'components/layout/ShellPanelBoundaries.tsx', // the Genie FAB fallback
   'components/layout/Topbar.tsx', // the Genie toggle
@@ -35,6 +34,7 @@ const GENIE_SURFACE_FILES = [
   'components/mortgage/GenieChatBody.tsx',
   'components/mortgage/GenieConversationLinkState.tsx',
   'components/mortgage/GenieProgress.tsx',
+  'lib/auditEventPresentation.ts', // GENIE activity events (moved from components/layout/Console.tsx)
   'lib/routeMeta.ts', // askGenie
   'routes/analytics.tsx', // the Ask Genie link
   'routes/ask-genie.answer-panel.tsx',

@@ -300,7 +300,7 @@ class _SalesStateCore:
             self._client.fetchone(
                 """
                 SELECT disposition_id, borrower_id, lo_email, outcome, attempt_number,
-                       occurred_at, callback_at, notes, audit_event_id
+                       occurred_at, callback_at, audit_event_id
                 FROM mip_app.call_dispositions
                 WHERE borrower_id = %(borrower_id)s
                 ORDER BY occurred_at DESC, created_at DESC, disposition_id::text DESC
@@ -376,7 +376,7 @@ class _SalesStateCore:
             self._client.fetchone(
                 """
                 SELECT disposition_id, borrower_id, lo_email, outcome, attempt_number,
-                       occurred_at, callback_at, notes, audit_event_id
+                       occurred_at, callback_at, audit_event_id
                 FROM mip_app.call_dispositions
                 WHERE request_id = %(request_id)s
                 LIMIT 1
@@ -503,7 +503,7 @@ class _SalesStateCore:
             """
             SELECT DISTINCT ON (borrower_id)
                    disposition_id, borrower_id, lo_email, outcome, attempt_number,
-                   occurred_at, callback_at, notes, audit_event_id
+                   occurred_at, callback_at, audit_event_id
             FROM mip_app.call_dispositions
             WHERE borrower_id = ANY(%(borrower_ids)s)
             ORDER BY borrower_id, occurred_at DESC, created_at DESC,

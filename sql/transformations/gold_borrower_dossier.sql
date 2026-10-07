@@ -141,6 +141,125 @@ evidence_top3 AS (
   ) ranked
   WHERE rn <= 3
   GROUP BY clip
+),
+-- Crossed the line (audit wow-stage-4): the week the borrower's CURRENT
+-- unbroken in-the-money run began in the weekly MORTGAGE30US series, with
+-- today's rule and today's equity applied to past weekly rates (history, not
+-- a forecast). The rule is REUSED, never forked: fn_in_the_money(
+-- fn_rate_spread(note_rate, week_rate), equity_pct, thresholds), so the
+-- per-week verdict carries fn_rate_spread's BROUND by construction.
+-- Eligibility is gold_rate_window_weekly.sql's book_raw / book: an ACTIVE
+-- first lien (current_rate > 0), rate type FIX, and a bounded note rate
+-- strictly inside the 1% / 15% clamp. The run is computed per lossless
+-- (note_rate, equity_pct, thresholds) cell, exactly like rate_window_weekly's
+-- book_cells, and joined back: weeks x cells, never weeks x book rows. The
+-- gold job may read silver; the App reads only this gold column.
+crossing_book AS (
+  SELECT
+    b.clip,
+    mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate) AS note_rate_fraction,
+    b.equity_pct,
+    b.min_spread_bps_applied,
+    b.min_equity_pct_applied,
+    CAST(DATE_TRUNC('WEEK', lc.first_pos_date) AS DATE)  AS origination_week
+  FROM mip.gold.borrower_360 AS b
+  JOIN mip.silver.lien_current AS lc
+    ON lc.clip = b.clip
+  WHERE b.current_rate > 0
+    AND UPPER(TRIM(lc.first_pos_rate_type)) = 'FIX'
+),
+crossing_eligible AS (
+  SELECT
+    clip,
+    note_rate_fraction,
+    equity_pct,
+    min_spread_bps_applied,
+    min_equity_pct_applied,
+    origination_week
+  FROM crossing_book
+  WHERE note_rate_fraction IS NOT NULL
+    AND note_rate_fraction > 0.01
+    AND note_rate_fraction < 0.15
+),
+crossing_weeks AS (
+  -- rate_window_weekly's `weeks`: a week without a print is dropped.
+  SELECT
+    observation_week,
+    rate_fraction,
+    is_latest
+  FROM mip.silver.market_rates_weekly
+  WHERE series_id = 'MORTGAGE30US'
+    AND rate_pct IS NOT NULL
+    AND rate_fraction IS NOT NULL
+),
+crossing_cells AS (
+  SELECT DISTINCT
+    note_rate_fraction,
+    equity_pct,
+    min_spread_bps_applied,
+    min_equity_pct_applied
+  FROM crossing_eligible
+),
+crossing_cell_weeks AS (
+  SELECT
+    k.note_rate_fraction,
+    k.equity_pct,
+    k.min_spread_bps_applied,
+    k.min_equity_pct_applied,
+    w.observation_week,
+    w.is_latest,
+    mip.gold.fn_in_the_money(
+      mip.gold.fn_rate_spread(k.note_rate_fraction, w.rate_fraction),
+      k.equity_pct,
+      k.min_spread_bps_applied,
+      k.min_equity_pct_applied
+    ) AS itm
+  FROM crossing_cells AS k
+  CROSS JOIN crossing_weeks AS w
+),
+crossing_marked AS (
+  -- Per cell: is it in the money at the latest week, and the last week it
+  -- was NOT (NULL when every week in the series is in the money).
+  SELECT
+    note_rate_fraction,
+    equity_pct,
+    min_spread_bps_applied,
+    min_equity_pct_applied,
+    observation_week,
+    MAX(CASE WHEN is_latest AND itm THEN 1 ELSE 0 END) OVER (
+      PARTITION BY note_rate_fraction, equity_pct, min_spread_bps_applied, min_equity_pct_applied
+    ) AS itm_at_latest,
+    MAX(CASE WHEN NOT itm THEN observation_week END) OVER (
+      PARTITION BY note_rate_fraction, equity_pct, min_spread_bps_applied, min_equity_pct_applied
+    ) AS last_out_week
+  FROM crossing_cell_weeks
+),
+crossing_runs AS (
+  -- The first week after the last out-of-the-money week; the series' first
+  -- week when the run reaches it (left-censored).
+  SELECT
+    note_rate_fraction,
+    equity_pct,
+    min_spread_bps_applied,
+    min_equity_pct_applied,
+    MIN(observation_week) AS run_start_week
+  FROM crossing_marked
+  WHERE itm_at_latest = 1
+    AND (last_out_week IS NULL OR observation_week > last_out_week)
+  GROUP BY note_rate_fraction, equity_pct, min_spread_bps_applied, min_equity_pct_applied
+),
+crossing AS (
+  -- Lower bound: the origination week. A loan cannot have been in the money
+  -- before it existed.
+  SELECT
+    e.clip,
+    GREATEST(r.run_start_week, COALESCE(e.origination_week, r.run_start_week)) AS first_itm_week
+  FROM crossing_eligible AS e
+  JOIN crossing_runs AS r
+    ON  r.note_rate_fraction     <=> e.note_rate_fraction
+    AND r.equity_pct             <=> e.equity_pct
+    AND r.min_spread_bps_applied <=> e.min_spread_bps_applied
+    AND r.min_equity_pct_applied <=> e.min_equity_pct_applied
 )
 SELECT
   -- Every column from gold.borrower_360, 1:1 — the dossier is a
@@ -161,6 +280,12 @@ SELECT
   b.market_rate_fraction,
   b.opportunity_score,
   b.confidence,
+  -- Score anatomy (wow-stage-2): borrower_360's own weighted sub-scores.
+  b.economic_incentive_points,
+  b.intent_trigger_points,
+  b.fit_points,
+  b.relationship_points,
+  b.evidence_points,
   b.recommended_offer_code,
   b.recommended_offer,
   b.why_now,
@@ -230,11 +355,21 @@ SELECT
   -- New dossier-only columns: pre-joined evidence payload.
   COALESCE(ef.evidence_events, ARRAY()) AS evidence_events,
   COALESCE(et.trigger_timeline, ARRAY()) AS trigger_timeline,
+  -- Crossed the line (wow-stage-4). first_pos_rate_type is a closed
+  -- vocabulary: anything but FIX / ARM at the source becomes NULL.
+  lc.first_pos_date,
+  CASE UPPER(TRIM(lc.first_pos_rate_type))
+    WHEN 'FIX' THEN 'FIX'
+    WHEN 'ARM' THEN 'ARM'
+  END AS first_pos_rate_type,
+  cx.first_itm_week,
   -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
   (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM mip.gold.borrower_360 AS b
 LEFT JOIN evidence_full AS ef ON ef.clip = b.clip
-LEFT JOIN evidence_top3 AS et ON et.clip = b.clip;
+LEFT JOIN evidence_top3 AS et ON et.clip = b.clip
+LEFT JOIN mip.silver.lien_current AS lc ON lc.clip = b.clip
+LEFT JOIN crossing AS cx ON cx.clip = b.clip;
 
 -- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
 -- CREATE OR REPLACE drops DDL column comments on every refresh, and the
@@ -256,6 +391,11 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.rate_spread_bps IS 'fn_rate_spread o
 COMMENT ON COLUMN mip.gold.borrower_dossier.market_rate_fraction IS 'Fractional market rate.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.opportunity_score IS 'fn_lead_score output 0..100.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.confidence IS 'Mean of 5 sub-scores.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.economic_incentive_points IS 'Weighted economic_incentive sub-score: 0.35 * economic_incentive (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.intent_trigger_points IS 'Weighted intent_trigger sub-score: 0.30 * intent_trigger (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.fit_points IS 'Weighted fit sub-score: 0.15 * fit (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.relationship_points IS 'Weighted relationship sub-score: 0.10 * relationship (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.evidence_points IS 'Weighted evidence sub-score: 0.10 * evidence (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.recommended_offer_code IS 'fn_next_best_offer code.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.recommended_offer IS 'Human label.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.why_now IS 'Deterministic template per offer code.';
@@ -324,4 +464,7 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.in_the_money IS 'fn_in_the_money out
 COMMENT ON COLUMN mip.gold.borrower_dossier.trigger_timeline_json IS 'JSON-encoded top-3 evidence rows (carried from borrower_360 for parity).';
 COMMENT ON COLUMN mip.gold.borrower_dossier.evidence_events IS 'Full evidence array (capped at 20 per CLIP) sorted by signal_rank.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.trigger_timeline IS 'Top-3 slice of evidence_events for the trigger timeline.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.first_pos_date IS '1st-lien origination date from silver.lien_current (gold refresh only; the App reads this column, never silver). NULL when the source has no origination date.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.first_pos_rate_type IS '1st-lien rate type, a closed upper-case code: FIX or ARM. Any other source value is NULL. Crossed the line is drawn for FIX only.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.first_itm_week IS 'Week-starting Monday on which the current unbroken in-the-money run began in the weekly MORTGAGE30US series: fn_in_the_money(fn_rate_spread(note rate, week rate), equity_pct, thresholds) with today''s rule and today''s equity applied to past weekly rates; not a forecast. Never before the origination week; equals the series start when the run reaches it. NULL unless an active FIX first lien with an in-bounds rate is in the money at the latest week.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.refreshed_at IS 'Refresh timestamp.';

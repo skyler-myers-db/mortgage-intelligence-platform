@@ -2,11 +2,12 @@ import type { DrawerSource } from '../components/AppContext';
 import type { HomeAttributionMeasure } from '../types/homeAttribution';
 
 /**
- * The Delta Explainer's drawer source (audit 2026-09-21 `wow-ai-3`): a
- * "since your last login" number whose drawer can explain where the measure
- * moved. DrawerSource itself lives in AppContext.tsx (another lane's file
- * this wave), so the extension is declared here with a type guard; the
- * W5c evidence-drawer rewrite folds it into DrawerSource and keeps the slot.
+ * The Delta Explainer's input (audit 2026-09-21 `wow-ai-3`): a "since your
+ * last login" number whose drawer can explain where the measure moved. The
+ * W5c evidence-drawer lane folded it into DrawerSource itself
+ * (`DrawerSource.deltaExplainer = { measure, baselineDate }`); the live
+ * figure the reconcile line quotes is the source's own `value`, the number
+ * the user clicked.
  */
 export interface DeltaExplainer {
   measure: HomeAttributionMeasure;
@@ -16,16 +17,18 @@ export interface DeltaExplainer {
   liveDisplay: string;
 }
 
-export interface DeltaExplainerDrawerSource extends DrawerSource {
-  deltaExplainer: DeltaExplainer;
-}
-
-/** The measures gold.funnel_snapshot_daily can attribute per state. */
+/**
+ * The "since your last login" measures the explainer opens for. Whether the
+ * funnel snapshot attributes one per state is the ROUTE's answer
+ * (`snapshotted`), never decided here: competitor liens open the explainer,
+ * which says the measure is not snapshotted until the gold column lands.
+ */
 export const DELTA_EXPLAINER_MEASURES: ReadonlySet<HomeAttributionMeasure> = new Set([
   'refi_economics_screen',
   'high_opportunity',
   'offers_recommended',
   'listed_for_sale',
+  'competitor_lien',
 ]);
 
 export function isDeltaExplainerMeasure(measure: string): measure is HomeAttributionMeasure {
@@ -34,10 +37,11 @@ export function isDeltaExplainerMeasure(measure: string): measure is HomeAttribu
 
 /** The explainer a drawer source carries, or null for every other source. */
 export function deltaExplainerOf(source: DrawerSource | null | undefined): DeltaExplainer | null {
-  const explainer = (source as Partial<DeltaExplainerDrawerSource> | null | undefined)?.deltaExplainer;
+  const explainer = source?.deltaExplainer;
   if (!explainer || typeof explainer !== 'object') return null;
-  const { measure, baselineDate, liveDisplay } = explainer;
+  const { measure, baselineDate } = explainer;
   if (typeof measure !== 'string' || !isDeltaExplainerMeasure(measure)) return null;
   if (typeof baselineDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(baselineDate)) return null;
+  const liveDisplay = source?.value;
   return { measure, baselineDate, liveDisplay: typeof liveDisplay === 'string' ? liveDisplay : '' };
 }

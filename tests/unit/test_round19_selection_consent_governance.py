@@ -27,6 +27,7 @@ from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_message_policy import protected_prompt_match
 from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.reviewed_approval import skip_draft_verification, synthetic_review_proof
 from tests.unit.growth_refusal_contract import (
     assert_only_refusal_audit_writes,
     assert_refused_with_audit,
@@ -201,12 +202,16 @@ def test_final_approval_rejects_governance_bypasses_before_lakebase_or_audit_wri
         "ensure_approval_followup_columns",
         lambda lakebase: None,
     )
+    # The copy screens run after the draft verification (W5c: review_mode and
+    # its proof are required), so the custom copy reaches them unverified.
+    skip_draft_verification(monkeypatch)
     response = TestClient(app).post(
         "/api/outreach/approve",
         json={
             "borrower_id": "B-48291",
             "draft_subject": "Mortgage options review",
             "draft_body": f"{unsafe_copy} {_DISCLOSURE.body}",
+            **synthetic_review_proof(),
         },
     )
 

@@ -211,7 +211,7 @@ describe('the method policy (unkeyed writes are rejected-only)', () => {
       bodies.push(String(init.body));
       return responses.shift() as Response;
     });
-    await api.approve('B-0123456789ABC', { request_id: 'req-approve-1' });
+    await api.approve('B-0123456789ABC', { request_id: 'req-approve-1', review_mode: 'individual' });
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toBe(bodies[0]);
     expect(JSON.parse(bodies[0]).request_id).toBe('req-approve-1');

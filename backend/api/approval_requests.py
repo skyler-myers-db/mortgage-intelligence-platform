@@ -40,7 +40,7 @@ from backend.services.approval_requests import (
     list_approval_requests,
     withdraw_approval_request,
 )
-from backend.services.audit_store import AuditMetadataValueViolation
+from backend.services.audit_store import AuditMetadataValueViolation, AuditPIIError
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
@@ -67,6 +67,11 @@ REQUEST_NOT_YOURS = "Only the requester can withdraw this approval request."
 RATIONALE_TOO_LONG_REDACTED = (
     "rationale is too long once personal details are redacted; shorten it and leave them out"
 )
+# NB-1: an audit payload the ledger's PII scan refuses. A fixed detail, never
+# str(exc) (it lists metadata paths), and never text_policy_refusal, which O1
+# reserves for governed-text refusals; nothing is written (the transaction
+# rolled back) and no audit row records it.
+REQUEST_NOT_RECORDED = "The request could not be recorded."
 
 
 def _lakebase_503(exc: LakebaseError) -> HTTPException:
@@ -117,6 +122,8 @@ def request_outreach_approval(
         ) from exc
     except AuditMetadataValueViolation as exc:
         raise text_policy_refusal(exc) from exc
+    except AuditPIIError as exc:
+        raise HTTPException(status_code=422, detail=REQUEST_NOT_RECORDED) from exc
     except LakebaseError as exc:
         raise _lakebase_503(exc) from exc
 
@@ -160,5 +167,7 @@ def withdraw_outreach_approval_request(
         raise HTTPException(status_code=403, detail=REQUEST_NOT_YOURS) from exc
     except AuditMetadataValueViolation as exc:
         raise text_policy_refusal(exc) from exc
+    except AuditPIIError as exc:
+        raise HTTPException(status_code=422, detail=REQUEST_NOT_RECORDED) from exc
     except LakebaseError as exc:
         raise _lakebase_503(exc) from exc

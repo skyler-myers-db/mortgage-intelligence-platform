@@ -7,6 +7,7 @@ import {
 } from './queryClient';
 import { invalidateOperationalQueries, queryKeys } from './queryKeys';
 import { ApiError } from './api';
+import { LEADS_PAGED_SCOPE, leadsPagedQueryKey } from './leadsQuery';
 
 describe('createMipQueryClient', () => {
   it('uses bounded freshness defaults and disables automatic focus refetch', () => {
@@ -17,6 +18,17 @@ describe('createMipQueryClient', () => {
     expect(queries?.gcTime).toBe(DEFAULT_QUERY_GC_MS);
     expect(queries?.refetchOnWindowFocus).toBe(false);
     expect(client.getDefaultOptions().mutations?.retry).toBe(false);
+  });
+
+  it('never re-reads the Lead Queue paged view on its own, and nothing else changes (W5c)', () => {
+    const client = createMipQueryClient();
+    const paged = { refetchOnMount: false, refetchOnWindowFocus: false, refetchOnReconnect: false, staleTime: Infinity };
+    // The literal in queryClient.ts is the scope leadsQuery exports.
+    expect(client.getQueryDefaults(leadsPagedQueryKey({}, { sort: 'rank', dir: 'desc' }))).toEqual(paged);
+    expect(client.getQueryDefaults(queryKeys.leads([LEADS_PAGED_SCOPE]))).toEqual(paged);
+    // The plain leads reads (Segment Intelligence, Top leads) keep the app defaults.
+    expect(client.getQueryDefaults(queryKeys.leads(['segment-intelligence', {}]))).toEqual({});
+    expect(client.getQueryDefaults(queryKeys.leads(['top-quick-pick', '5']))).toEqual({});
   });
 
   it('retries warming-up and breaker-open dependency states, but not exhausted retries', () => {

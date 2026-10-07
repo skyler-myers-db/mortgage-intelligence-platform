@@ -47,7 +47,7 @@ describe('buyerReadinessItems', () => {
       value: 'Off',
       status: 'customer mode',
       tone: 'success',
-      detail: 'The PROTOTYPE borrower view is hidden.',
+      detail: 'Demo-only affordances are hidden.',
     });
 
     const on = itemByLabel(buyerReadinessItems(null, [], false, false, false, false, true), 'Presenter mode');

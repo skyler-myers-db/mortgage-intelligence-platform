@@ -39,6 +39,7 @@ from backend.schemas.common import (
 from backend.services.audit_event_types import is_server_owned_audit_event_type
 from backend.services.audit_export_receipt import (
     AuditExportDeclarationMismatch,
+    AuditExportFingerprintUnavailable,
     AuditExportInvalidEventIds,
     write_audit_export_receipt,
 )
@@ -452,7 +453,7 @@ def audit_facets(
     """Distinct event types, actions and actors for the explorer's pickers (a recorded read).
 
     Reads the ledger itself, so every event type that occurred in the window
-    is offered, not only the seven workflow types /rollups groups.
+    is offered, not only the ten workflow types /rollups groups.
     """
 
     window_start = since if since is not None else datetime.now(UTC) - DEFAULT_FACET_WINDOW
@@ -496,6 +497,9 @@ def create_audit_export_receipt(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    except AuditExportFingerprintUnavailable as exc:
+        # No key to store a keyed fingerprint under: no row, fail closed (W5c).
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("audit")) from exc
 
 
 @router.get("/rollups", response_model=list[AuditRollupResponse])
@@ -522,7 +526,8 @@ def audit_rollups(
         "event_type IN ("
         "'APPROVE', 'OUTREACH_APPROVE', 'OUTREACH_REJECT', "
         "'CALL_DISPOSITION', 'LEAD_ASSIGN', 'LEAD_DISTRIBUTE', "
-        "'LEAD_OUTCOME'"
+        "'LEAD_OUTCOME', "
+        "'OUTREACH_REVOKE', 'APPROVAL_REQUESTED', 'LEAD_UNASSIGN'"
         ")"
     ]
     params: dict[str, object] = {"period": period}

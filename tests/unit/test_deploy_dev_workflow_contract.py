@@ -2140,6 +2140,23 @@ def test_deploy_dev_carries_the_read_only_auditor_allowlist_like_the_admin_one()
     assert "secrets.MIP_AUDITOR_EMAILS" not in text
 
 
+def test_deploy_dev_carries_the_refusal_capture_switch_like_the_admin_allowlist() -> None:
+    """D-audit-reads-d: a lender's MIP_GENIE_REFUSAL_TEXT_CAPTURE reaches
+    .env.local exactly like MIP_ADMIN_EMAILS (a repository variable, kept out
+    of child processes, written only when non-empty); unset, the payload's
+    explicit 'enabled' default applies."""
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+
+    assert "MIP_GENIE_REFUSAL_TEXT_CAPTURE: ${{ vars.MIP_GENIE_REFUSAL_TEXT_CAPTURE }}" in text
+    assert re.search(r"export -n [^\n]*\bMIP_GENIE_REFUSAL_TEXT_CAPTURE\b", text)
+    assert (
+        'if [ -n "${MIP_GENIE_REFUSAL_TEXT_CAPTURE:-}" ]; then\n'
+        '              echo "MIP_GENIE_REFUSAL_TEXT_CAPTURE=${MIP_GENIE_REFUSAL_TEXT_CAPTURE}"\n'
+        "            fi" in text
+    )
+    assert "secrets.MIP_GENIE_REFUSAL_TEXT_CAPTURE" not in text
+
+
 def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
     script = _deploy_entrypoint_text()

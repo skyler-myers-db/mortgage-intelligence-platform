@@ -115,6 +115,17 @@ Two things to know before you do this:
    read `MIP_BEARER_TOKEN` and attach it as an `Authorization: Bearer`
    header. Mint one with `databricks auth token --host "$DATABRICKS_HOST"`.
 
+Cold-cache profile (delivery-09). `locust_cold_cache.py` is a separate,
+audit-free profile for the question the warm baseline cannot answer: does a
+COLD App process (or a warm one right after a gold refresh) saturate its
+dependency slots? Run it with `-u 30 -r 30` against a deployed App as a
+dedicated load identity; `/leads` is opt-in through
+`MIP_COLD_CACHE_INCLUDE_AUDITED=1` because each page writes a VIEW_LEADS audit
+row, and it never calls `/borrowers/{id}`. On quit it writes
+`results/<UTC>-cold-cache.json` and prints a `reproduced` / `not_reproduced`
+verdict from `cold_cache_analysis.py`; the scenarios, the verdict rule and the
+decision it drives are in `docs/load-baseline.md` ("Cold-cache profile").
+
 ## k6 alternative
 
 If you have k6 installed and don't want to deal with Locust:

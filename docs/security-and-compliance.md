@@ -56,6 +56,46 @@ derived from trusted answer rows or source filters and the user confirms the
 action. The destination route must preserve those filters, and the action must
 be audited.
 
+## Consented Genie refusal questions
+
+A lender who files "This was legitimate" on a governed Genie refusal may
+choose "Report with my question" (D-audit-reads-d). The stored text is a
+**consented refusal question (governed, hash-bound, 90-day, purge-only),
+never a borrower note; it is never rendered on a borrower, Lead Queue or
+Genie surface.** Its posture:
+
+- **Consented and hash-bound.** It is sent only on that explicit choice. The
+  server normalizes it with the Genie question validator and refuses it
+  (a fixed 422, nothing stored) unless it hashes to the report's
+  `question_hash`; it is kept only when the reporter's own ledger holds a
+  RUN_GENIE refusal of that family for the same question within 30 days.
+- **Tenant switch.** `MIP_GENIE_REFUSAL_TEXT_CAPTURE` (`enabled` |
+  `disabled`). The runtime default is `disabled` (fail-closed); the deploy
+  payload ships `enabled` unless the lender sets `disabled`. Off, every report
+  is hash-only. Switching capture off does not purge questions already kept;
+  they remain readable to administrators and auditors until their 90-day
+  expiry.
+- **PII gate.** A refused PII request never keeps its text, and neither does
+  a question that names a person or a borrower (the prompt guards' PII and
+  identity matches, the human-name shape, the borrower-copy contextual name,
+  the identity directive, raw identifier patterns and masked borrower ids).
+  Phone numbers, emails, SSNs and street addresses are masked
+  (`scrub_free_text`) before storage and the row says whether anything was.
+- **Storage.** Only `mip_app.genie_refusal_report_texts`, one row per report,
+  written once in the report's transaction with one `GENIE_REFUSAL_REPORT`
+  audit row per text row (`question_text_captured`, or the closed
+  `question_text_declined` reason). The report row, the audit metadata, logs,
+  URLs, browser storage, RUM, Genie, any prompt or LLM and `genie_messages`
+  never carry it.
+- **Retention.** 90 days, then the text is nulled (an UPDATE, never a
+  DELETE; a trigger admits only that purge and the App role has no DELETE) by
+  a bounded sweep on every report and auditor read and an hourly App loop.
+  Purged text persists in Lakebase backups and point-in-time recovery for the
+  backup window.
+- **Access.** Administrators and configured auditors only, on `/audit-ledger`:
+  the list writes `VIEW_AUDIT_LEDGER` and each question read writes a
+  fail-closed `VIEW_REFUSAL_REPORT_TEXT` before the text leaves.
+
 ## Roles and access
 
 Four tiers are decided server-side by `backend/services/rbac.py` and
@@ -101,10 +141,13 @@ tier; neither implies the other.
 | Lead assign, disposition, outcome | only if also on the sales roster | by roster role and scope: assign and outcome a `sales_manager` (own loan officers) or roster `admin`; disposition the loan officer, their manager or a roster `admin` | only if also on the sales roster | only if also on the sales roster | only if also on the sales roster |
 | Own activity (`/audit/my-events`) and own decision receipts | yes | yes | yes | yes | yes |
 | Another actor's decision receipt | no | no | no | yes | yes |
+| Borrower decision history (GET /borrowers/{id}/decisions) | no | yes (active roster member) | yes | yes | yes |
 | Full audit ledger (`/audit/events`, `/events/page`, `/rollups`, `/facets`, `/count`) | no | no | no | yes | yes |
 | Ledger CSV receipt (`POST /audit/export-receipt`) | no | no | no | no | yes |
-| Refusal reports list and question (from W5c) | no | no | no | yes | yes |
+| Refusal reports list and question (`/audit/refusal-reports`, `/audit/refusal-reports/{id}/question`) | no | no | no | yes | yes |
 | `POST /audit/event` | no | no | no | no | yes |
+| Asset freshness (band, last refresh, basis; `GET /assets/{key}/freshness`) | yes | yes | yes | yes | yes |
+| KPI reproduce SQL (`GET /kpi-proof`) | yes | yes | yes | yes | yes |
 | `/admin/*` (rules 410, operations run, force-degraded, settings, asset metadata) | no | no | no | no | yes |
 | Lead Queue marketing override and `include_suppressed_for_analytics` | no | no | no | no | yes |
 
@@ -133,36 +176,43 @@ the pull request that ships the behaviour, never earlier.
 
 | Surface | Event | When | Write mode |
 | --- | --- | --- | --- |
-| Lead Queue list (`leads.list_leads`) | `VIEW_LEADS` | once per served `GET /leads`; carries `approval_request_batch_id` when the list is scoped to an approval request (a request with no open borrower answers an empty list and writes none) | background, fail-open (`audit.dropped`) |
+| Lead Queue list (`leads.list_leads`) | `VIEW_LEADS` | once per served page of a view (D-audit-reads-a, W5c): page 0 mints a server `view_id` and each explicit Load next serves the next 500 behind a signed cursor; every row carries `view_id`, `page_index`, `sort` (and `sort_dir`), `total_matching`, the keyed `filter_fingerprint`, `source_refreshed_at` and that page's `rendered_borrower_ids` (returned in this response); a later page echoes page 0's Growth Agent provenance. An empty answer is a served page too: the assignee and approval-request early returns write one row each (no ids, a new view, page 0, total 0; the request one carries `approval_request_batch_id`; before W5c they wrote none). A refused cursor (422), a refreshed view (409, also when a later page's assignee or approval-request population emptied since page 0, so the client restarts at page 0) and a missing cursor key (503) write nothing. Never on prefetch, scroll, poll, focus, reconnect or remount | background, fail-open (`audit.dropped`) |
 | Borrower 360 open (`borrowers.get_borrower`) | `VIEW_BORROWER` | once per served `GET /borrowers/{id}` | background, fail-open |
 | Proof drawer (`borrowers.get_borrower_proof`) | `VIEW_BORROWER_PROOF` | once per served `GET /borrowers/{id}/proof` | background, fail-open |
+| Proof drawer Math tab: margins and "Crossed the line" (W5c) | none | the margins render from the proof already loaded; the chart reads the Borrower360 from the client cache only (never `GET /borrowers/{id}`, so no extra `VIEW_BORROWER`) and the audit-free `GET /analytics/rate-window` only while the drawer is open for a fixed-rate borrower; nothing is prefetched or read on hover | audit-free |
 | Offer open (the approval surface) | `VIEW_BORROWER` | its own `GET /borrowers/{id}` (the Offer never reuses the Borrower 360 cache entry) | background, fail-open |
 | Offer open (the approval surface) | `RECOMMEND_OFFER` | once per `POST /offers/recommend` (`offers.recommend_offer`): the approval-surface open record, carrying offer code, confidence, thresholds, `decision_inputs`, source freshness, evidence ids and subject CLIP | synchronous, fail-closed (503) |
 | Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`) | committed in the same transaction as the draft row, fail-closed |
-| Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, and `approval_request_batch_id` when the decision answers an approval request |
+| Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision; an approve without `review_mode` is refused with 422 `Reload the app to approve` before any read or write (required since W5c) | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, `approval_request_batch_id` when the decision answers an approval request, and the client-declared `declared_lead_view_id` when taken from the paged Lead Queue |
 | Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
 | Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
+| Borrower decision history (`borrower_decisions.list_borrower_decisions`) | none | on a Borrower 360 or Offer mount; never polled or prefetched | audit-free |
 | Audit ledger (`audit.list_events`, `list_event_page`, `audit_rollups`, `audit_facets`, `count_events`) | `VIEW_AUDIT_LEDGER` (`ledger_surface` events / events_page / rollups / facets / count) | once per served read by an admin or auditor | background, fail-open (`audit.dropped`) |
 | Another actor's decision receipt (`audit_receipt.read_decision_receipt`) | `VIEW_AUDIT_LEDGER` (`receipt`, `read_audit_event_id`) | once per served cross-actor read | background, fail-open |
+| Refusal reports list (`refusal_reports_admin.list_refusal_reports`) | `VIEW_AUDIT_LEDGER` (`refusal_reports`) | once per served page by an admin or auditor, only on an explicit "Show refusal reports", a family filter, Load more or Retry; report metadata only, never question text | background, fail-open (`audit.dropped`) |
+| Refusal question read (`refusal_reports_admin.read_refusal_report_question`) | `VIEW_REFUSAL_REPORT_TEXT` (the report's 16-hex `question_hash` label and, when governed, its `refusal_reason` code) | once per served "Show question" click; never on hover, focus, prefetch or poll | synchronous, fail-closed: written before the text is returned, and a failed write answers 503 with no text |
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` or `approval_request_batch` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
 | Approval request list (`approval_requests.list_outreach_approval_requests`) | none | when a request panel opens | audit-free (Lakebase workflow state, no borrower attribute) |
 | Approval request create / withdraw (`/outreach/approval-requests`) | `APPROVAL_REQUESTED` / `APPROVAL_REQUEST_REFUSED` / `APPROVAL_REQUEST_WITHDRAWN` | every create attempt that reaches classification (a zero-eligible one writes `APPROVAL_REQUEST_REFUSED` with each id's reason and answers counts only); a withdraw that closed at least one borrower | same Lakebase transaction as the batch (or its own, for a refusal), fail-closed |
 | Triage deck (`/lead-queue?mode=triage`) | none on entry, card show, J / K / Skip, Back or Esc (the cards are the loaded rows); `DRAFT_OUTREACH` only on A; `APPROVE` with `review_mode` `triage` per Confirm; `OUTREACH_REJECT` per card rejected | per explicit action | as the draft / approve / reject rows above |
-| Lead Queue CSV export (`leads_export.create_lead_export_receipt`) | `LEAD_EXPORT` | once per download, before it starts; carries `exported_row_count` and, when the client knew it, `matching_row_count` (how many borrowers matched: a loaded-rows export states it is partial; a count below the file's row count is refused with 422 and nothing written) | synchronous, fail-closed (no download without the row) |
+| Lead Queue CSV export (`leads_export.create_lead_export_receipt`) | `LEAD_EXPORT` | once per download, before it starts; carries `exported_row_count` and, when the client knew it, `matching_row_count` (how many borrowers matched: a loaded-rows export states it is partial; a count below the file's row count is refused with 422 and nothing written), and from the paged Lead Queue the client-declared `declared_lead_view_id` and `pages_loaded` (1-10) | synchronous, fail-closed (no download without the row) |
 | Home Delta Explainer (`home.home_summary_attribution`) | none | only while an evidence drawer for a supported "since your last login" measure is open on Overview; never on hover, prefetch or poll | audit-free (gold and ref aggregates) |
 | Home watchlist briefings (`growth_agent_compose_routes.growth_agent_watchlist_summary`) | none | once per Home load (the card never POSTs, so it starts no run) | audit-free |
 | Home WHY NOW rate move (`analytics_rate_window.rate_window`) | none | on Home only when the summary is a delta with a previous visit (and on Analytics as before) | audit-free |
 | Genie completion-job status poll (`genie.genie_message_status`) | none | every ~1.5 s poll of the caller's own job; while a deep job runs it may carry verified sections as Partial research | audit-free; `genie.run_query` RUN_GENIE stays at the job's single `recorded_at` commit point and no action token is issued for a revealed section |
 | Genie verified section revealed (the job's sections writer, `genie_completion_sections`) | `GENIE_SECTION_REVEALED` | once per section, before it can be served (ruling R1): job and turn ids, plan index, row count, SQL hash, verification verdict; never question text or a row value | same Lakebase transaction as the `sections_json` write, fail-closed: a failed audit write withholds the section until the final answer; a turn that later fails, stops or expires keeps the rows |
 | Admin SSE ingress probe (`admin_sse_probe.sse_probe`, `admin_sse_probe.sse_probe_outcome`) | none | admin-only transport diagnostic (delivery-04) | audit-free; reads no UC or Lakebase data |
+| KPI proof (`kpi_proof.get_kpi_proof`) | none | when a KPI's evidence drawer opens; reads nothing | audit-free (fixed governed SQL text, gold and semantics relations only) |
+| Evidence drawer freshness (`asset_freshness.get_asset_freshness`) | none | when an evidence drawer opens on a mapped asset; never on hover, prefetch or poll | audit-free (one `gold.source_readiness` row; schema internals stay on the admin metadata read) |
+| Admin Field performance (`admin_field_performance.field_performance`) | none | when Administration opens, and on an explicit Refresh or 7/28-day change; never polled or refetched on focus | audit-free (admin-only; day-grain browser RUM aggregates, no borrower data) |
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the
-SHA-256 `filter_fingerprint` and, for a receipt, `read_audit_event_id`: never
+keyed `filter_fingerprint` (below) and, for a receipt, `read_audit_event_id`: never
 ledger row contents, an actor filter in clear, or an email. Opening
 Administration reads nothing from the ledger (its old "last event" probe
 went with the explorer, which now lives on `/audit-ledger`), and no ledger
@@ -170,14 +220,23 @@ read is polled, prefetched or refetched on window focus. `tools/verify_live.py`'
 ledger probes now write attributable `VIEW_AUDIT_LEDGER` rows; that is
 expected.
 
-Residuals (recorded 2026-10-01, owners in the 2026-09-21 UI/UX audit report,
-12.3). The `filter_fingerprint` is an unkeyed SHA-256 of the filter set
-(`audit_pagination.audit_filter_fingerprint`, also the cursor binding), so an
-actor-only filter can be recovered by hashing candidate emails. Only ledger
-readers can see these rows, and they already see actor emails, so the added
-exposure is small. Keying the stored copy with an HMAC (the cursor already
-derives one from the action secret) goes to W5c `w5-lead-queue-paging`
-before `VIEW_LEADS` adds a fingerprint of the same shape. The explorer's
+Keyed fingerprints (W5c `w5-lead-queue-paging`, closing the 2026-10-01
+residual in 12.3). Every STORED `filter_fingerprint` -- the
+`VIEW_AUDIT_LEDGER` row (written centrally by
+`audit_ledger_reads.record_ledger_read`), the `AUDIT_EXPORT` row and its
+response, and the `VIEW_LEADS` row -- is an HMAC-SHA256 of the plain filter
+digest under a key derived from `MIP_GENIE_ACTION_SECRET_CURRENT` (then the
+legacy secret), one domain per surface (`backend/services/audit_fingerprint.py`).
+A dictionary of candidate emails hashed without the key never reproduces a
+stored value (`tests/unit/test_audit_fingerprint.py`). With no key outside
+local/test the ledger row omits the value, the export receipt is refused
+with 503 and writes no row, and the Lead Queue serves page 0 unpaged with no
+fingerprint; a plain value is never stored. Two digests stay unkeyed on
+purpose: `audit_pagination.audit_filter_fingerprint` inside the
+HMAC-authenticated ledger cursor (only ledger readers receive it), and
+`LEAD_EXPORT`'s fingerprint, which an auditor recomputes from the CSV's
+`# filters=` line. Residual (recorded 2026-10-01, owner in the 2026-09-21
+UI/UX audit report, 12.3): the explorer's
 'Page CSV' downloads the loaded page without `POST /audit/export-receipt`, so
 no `AUDIT_EXPORT` row precedes it (the read that loaded that page wrote its
 own `VIEW_AUDIT_LEDGER` row); W5d `w5-print-glossary-sales-manager` wires the receipt and
@@ -194,3 +253,79 @@ user action two ledger shapes. Pins: `tests/unit/test_audit_event_label_parity.p
 `tests/unit/test_offers_router.py` (a single `RECOMMEND_OFFER` emitter) and
 `frontend/src/routes/offer-orchestrator.recommendCaller.test.ts` (a single
 `recommendOffer` caller).
+
+## Browser telemetry (RUM)
+
+Decisions D-platform-process-d1 (the envelope and the default) and d2 (the
+sink). Browser RUM measures how fast the product is for the people using it:
+Core Web Vitals and a few timings per route, plus client-error class counts.
+It is operational telemetry, never an audit record: it is never written to
+`mip_app.action_audit`, never counted as a `VIEW_*` read, and a telemetry
+POST creates no audit row.
+
+**Default and opt-out.** RUM is on for every deployment made through
+`./scripts/deploy.sh`: the deploy payload sets `MIP_RUM_ENABLED=1`
+(`tools/databricks/app_deploy_payload.py` `SAFE_RUNTIME_DEFAULTS`). To turn
+it off, put `MIP_RUM_ENABLED=0` in `.env.local` and redeploy; that value is
+forwarded as-is, the browser then installs nothing and the server stores
+nothing. The code default (`backend/config/settings.py`) stays off, so a
+deploy that drops the operator environment (the Databricks Apps UI Deploy
+button, a bare `app.yaml` deploy) turns RUM off rather than overriding an
+opt-out. `app.yaml` never sets it. The effective state of a running App is
+`browser_telemetry` (`on` / `off`) in `GET /api/v1/admin/health` and the
+header of Administration's Field performance panel.
+
+**What is collected (the closed envelope).** Only these fields, each checked
+against a closed set by `backend/schemas/telemetry.py` (`extra="forbid"`):
+
+1. the metric: `navigation_load`, `route_change`, `lcp`, `cls`, `inp`,
+   `api_call` or `client_error` (`long_task` is still accepted from an old
+   bundle and ignored);
+2. a numeric value and a coarse rating;
+3. the route TEMPLATE, a member of `RUM_ROUTE_TEMPLATES` (the
+   `frontend/src/lib/routeMeta.ts` patterns plus `/*`), never a concrete
+   path: `/borrower-360/:id`, never a borrower id;
+4. the navigation type (`navigate`, `reload`, `back_forward`, `prerender`,
+   `soft_navigation`);
+5. closed-vocabulary details, at most eight per event: the timings
+   `dom_content_loaded_ms`, `ttfb_ms`, `transfer_size`, `duration_ms`,
+   `warehouse_ms`, `lakebase_ms`, `total_ms`; `from_route` (a template);
+   `attempt`, `retryable`, `dependency`; a templated `api_route` and its
+   `cache` state; the client-error `error_name`, `error_kind`,
+   `error_source` and `boundary`; the INP phases `input_delay_ms`,
+   `processing_ms`, `presentation_ms`; the `interaction_target` (the nearest
+   `data-rum-target` value from a closed list, never a CSS selector); and the
+   `lcp_element` (a tag bucket from a closed list).
+
+**What is never collected.** No user, actor, email, IP address, user agent,
+session or device identifier; no borrower, CLIP or conversation id; no free
+text, error message, stack, query string, DOM text, CSS selector, cookie or
+storage value. The schema's rejection regexes refuse id-, email-, phone-,
+SSN-, address- and name-shaped values before anything else runs.
+
+**Destination.** The App's own origin only (`POST /api/v1/telemetry/rum`;
+CSP `connect-src 'self'`). Nothing is sent to Entrada, to Databricks product
+telemetry or to any third party; the data stays in the customer's workspace.
+
+**At rest.** Day-grain aggregates only, in Lakebase `mip_app.rum_daily`:
+sample counts, sums, min / max and 24 histogram buckets per day x metric x
+route template x closed facet x rating, with up to eight contributing build
+ids. There are no event rows, no per-event log lines and no sub-day
+timestamp column.
+
+**Retention.** The App's first write of each UTC day zeroes the stored
+measurements older than 90 days in place (an `UPDATE`), and a new day that
+lands in a ring slot resets that slot's row. Zeroing rides on a write: a
+deployment that receives no browser telemetry writes nothing, so its last
+rows stay as they are until the next measurement arrives. The panel never
+reads past 28 days. The App role holds `SELECT`, `INSERT` and `UPDATE` on
+the table and no `DELETE`.
+
+**Access.** Administrators only: `GET /api/v1/admin/field-performance`
+(`AdminDep`; an auditor or an approver gets 403) behind the Field performance
+panel, which shows a p75 only for a cell with at least 20 samples.
+
+**Facts for the lender.** First-party only, no cookies, no identifiers
+stored, day-grain aggregates, admin-only access and a one-line opt-out. The
+lender decides its own employee-notice obligations. The per-actor record of
+product use is `mip_app.action_audit`, which RUM never joins or references.

@@ -139,7 +139,8 @@ export default function Home() {
   const isDayZero = preview?.day_zero === true;
   // One audit-free GET /growth-agent/monitors/summary inside the card; it
   // never POSTs, so loading Home never starts a run.
-  const WatchlistBriefings = useLazyModule(WATCHLIST_BRIEFINGS, true).module?.default ?? null;
+  const watchlistBriefings = useLazyModule(WATCHLIST_BRIEFINGS, true);
+  const WatchlistBriefings = watchlistBriefings.module?.default ?? null;
 
   return (
     <PageShell
@@ -222,6 +223,7 @@ export default function Home() {
               trendNote={preview?.trends?.marketable_population?.note}
               loading={kpiRowLoading}
               source={DRAWER_SOURCES.population}
+              evidence={{ asOf: preview?.data_refreshed_at ?? null, proofKey: 'home.addressable_population' }}
             />
             <KpiCard
               label="Refi economics screen"
@@ -232,6 +234,7 @@ export default function Home() {
               trendNote={preview?.trends?.high_intent_leads?.note}
               loading={kpiRowLoading}
               source={DRAWER_SOURCES.itm}
+              evidence={{ asOf: preview?.data_refreshed_at ?? null, proofKey: 'home.in_the_money' }}
             />
             <KpiCard
               label={HIGH_OPPORTUNITY_KPI_LABEL}
@@ -242,6 +245,7 @@ export default function Home() {
               trendNote={preview?.trends?.top_tier_opportunities?.note}
               loading={kpiRowLoading}
               source={DRAWER_SOURCES.leadScore}
+              evidence={{ asOf: preview?.data_refreshed_at ?? null, proofKey: 'home.high_opportunity' }}
             />
             <KpiCard
               label="Primary offer paths"
@@ -252,6 +256,7 @@ export default function Home() {
               trendNote={preview?.trends?.offers_recommended?.note}
               loading={kpiRowLoading}
               source={DRAWER_SOURCES.nbo}
+              evidence={{ asOf: preview?.data_refreshed_at ?? null, proofKey: 'home.primary_offer_paths' }}
             />
           </div>
         )}
@@ -299,7 +304,21 @@ export default function Home() {
               approvedCount={preview?.approved_count ?? 0}
               inOutreachCount={preview?.in_outreach_count ?? 0}
             />
-            {WatchlistBriefings && <WatchlistBriefings />}
+            {WatchlistBriefings ? (
+              <WatchlistBriefings />
+            ) : watchlistBriefings.failed ? null : (
+              // W5c C6: the card's own loading block (its header and one
+              // skeleton row) held while its chunk loads, so nothing below
+              // moves when the card arrives. Decorative; the card is the content.
+              <div className="surface home-side__slot" aria-hidden="true">
+                <div className="surface__hdr">
+                  <span className="h-4">Watchlist briefings</span>
+                </div>
+                <div className="surface__body">
+                  <div className="skeleton home-side__slot-skeleton" />
+                </div>
+              </div>
+            )}
             {/* Pinned insights (Buyer-Wow #9): operator's pinned Genie
                 answers — renders nothing when empty. */}
             <PinnedInsights />

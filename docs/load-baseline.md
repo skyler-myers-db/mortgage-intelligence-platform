@@ -177,3 +177,66 @@ not asserted in CI.
 | idle, keep-alive 15 s | pending integrator run | |
 | disconnect | pending integrator run | |
 | Decision | pending integrator run | build / keep_polling |
+
+2026-10-06 (W5c w5-genie-stop-context): delivery-04 not built: the Decision
+row above is still 'pending integrator run' (W5b was not yet deployed when
+W5c started), so the job-events stream is deferred to W5d
+w5-genie-provenance-tiles, not cut; the 1.5 s status poll stays. When it is
+built, the job-events route (`POST /api/v1/genie/message/events`) joins
+rumApiRoute.ts EXCLUDED_TEMPLATES beside the status poll's template.
+
+## Cold-cache profile (delivery-09)
+
+The baselines above are WARM. delivery-09 asks the cold question: on a cold
+cache, do simultaneous users fill the dependency semaphores with blocked
+single-flight followers until the worker threads run out (a 429
+`dependency_saturated`) or the shell stalls (`/health`, `/session`)? The
+profile is `tools/load_test/locust_cold_cache.py`; its pure analysis is
+`tools/load_test/cold_cache_analysis.py` (no Locust import, unit-tested).
+
+Profile. 30 users at spawn rate 30. Each user fires the first-load sequence
+once, back to back (health, session, config/options, home/summary,
+POST portfolio/preview, geo/state-rollups, geo/rate-sensitivity, segments,
+analytics/rate-window, POST genie/start), then weighted tasks at
+between(1, 3) s. The default profile is audit-free reads only: the two POSTs
+are read-only, `/leads` is opt-in (`MIP_COLD_CACHE_INCLUDE_AUDITED=1`, because
+every page writes a VIEW_LEADS row) and `/borrowers/{id}` is never called.
+Requests are named by route template; the bearer is never printed.
+
+    MIP_BEARER_TOKEN=<dedicated load identity token> \
+      locust -f tools/load_test/locust_cold_cache.py --headless \
+      -u 30 -r 30 --run-time 5m --host https://<mip-app>.databricksapps.com
+
+Scenarios.
+
+- A, cold process: start within 60 s of green activation, or right after an
+  `apps stop` / `apps start` in the piecewise recipe.
+- B, warm process right after a gold refresh: the coordinated generation
+  miss. Every hot key misses once when `gold_snapshot_advanced` is logged
+  (the learned gold snapshot, docs/observability.md section 8); watch for that
+  line in the App log during the run.
+
+Metrics. Per templated route: p50 / p95 / p99 / max for the first 60 s (the
+cold window) and for the whole run; 429s by class (`dependency_saturated:<dependency>`,
+`rate_limited:<scope>`, other); 503s by reason; `/health` and `/session` p95 in
+the cold window. Results land in `tools/load_test/results/<UTC>-cold-cache.json`
+(git-ignored) and the summary and verdict print on quit.
+
+Verdict rule. `reproduced` iff the cold window holds any
+`dependency_saturated` 429, or the `/health` or `/session` p95 in the cold
+window exceeds 3000 ms; otherwise `not_reproduced`.
+
+Caveats. One bearer is one actor: the per-actor buckets (360/min expensive,
+600/min default) belong to the harness, so `rate_limited` 429s are reported
+but never counted. `/home/summary` updates the identity's last visit, so run
+as a dedicated load identity, never a person's.
+
+Decision. W5d `w5-genie-provenance-tiles` builds the single-flight slot
+release only if A or B is `reproduced`; otherwise it records notBuilt with the
+measured numbers.
+
+| Scenario | Verdict | Cold p95 /health | Cold p95 /session | Cold 429 dependency_saturated | Notes |
+| --- | --- | --- | --- | --- | --- |
+| A, cold process | pending integrator run | | | | |
+| B, post-refresh generation advance | pending integrator run | | | | |
+| Decision | pending integrator run | | | | build / notBuilt |

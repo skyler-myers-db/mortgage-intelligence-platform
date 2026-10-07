@@ -3,14 +3,16 @@
    glossary's lazy CSS chunk, not the initial stylesheet (same pattern as
    analytics.scatter.css).
 
-   `scroll-margin-top` clears the sticky .route-nav for native fragment jumps;
-   useMainScroll reads the same value for client-side navigation. `:target`
+   `scroll-margin-top` clears the route nav while it is docked (--nav-clear:
+   the measured nav plus the ring, 38-focus-clearance.css; 0 while the nav is
+   in flow and scrolls away) for native fragment jumps; useMainScroll reads
+   the same value for client-side navigation. `:target`
    only matches a native fragment navigation (history.pushState never updates
    it), so the route also sets `.is-target` from the router's hash. The spread
    shadow widens the tint into the grid gap without moving any layout. */
 .glossary-section,
 .glossary-entry {
-  scroll-margin-top: var(--sp-16);
+  scroll-margin-top: var(--nav-clear);
 }
 .glossary-entry:target,
 .glossary-entry.is-target {

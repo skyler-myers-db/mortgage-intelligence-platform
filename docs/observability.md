@@ -511,7 +511,11 @@ this cache too since 2026-09-30 (decision record e1): 300 s soft TTL, the
 never MASKS a refresh failure: a cold failure propagates as the 503, and a
 list retained after a failed refresh (or built from retained readiness gates)
 is served with `X-Data-Last-Good-At` (§6), which clears after one successful
-refresh. The source-readiness gates fail closed: a cold failure of the
+refresh. A list built from retained readiness gates stays marked degraded
+(`X-Data-Last-Good-At`) until its OWN next refresh, up to the 300 s soft TTL,
+even after the gate cache recovers: the list entry recorded its retained input
+when it was built, and only the list's own successful refresh replaces it.
+The source-readiness gates fail closed: a cold failure of the
 readiness read logs WARNING `segment_source_readiness_unavailable` and
 RE-RAISES (the list answers 503; nothing is cached as good), and an EMPTY
 readiness snapshot gates every mapped segment `not_connected` instead of
@@ -560,13 +564,23 @@ and logs INFO `lifecycle_sync_completed` with `mode` job, `job_id`, `run_id`,
 expires without a bump (WARNING `lifecycle_job_watch_expired`); a failed
 `get_run` keeps the run pending (WARNING `lifecycle_job_watch_error`,
 exception type only); a submit that returned no run id logs WARNING
-`lifecycle_job_unobservable`. Only the App process that submitted a run
-observes it: other App processes trail the mirror by at most one soft TTL
-(default 120 s preview, 300 s analytics) plus one stale serve, as they do for
-the approval-write bump, which is process-local too. Runs the App did not
-submit are NOT observed and trail the same way: the job's 04:00 schedule ships
-PAUSED, so a scheduled run happens only if an operator unpauses it, and a run
-started from the Jobs UI is not the App's either.
+`lifecycle_job_unobservable`. The process that submitted a run observes it
+through `get_run`. Runs this process did NOT submit (another App process's
+submit, the job's 04:00 schedule, which ships PAUSED, if an operator
+unpauses it, or a run started from the Jobs UI) are observed by the foreign
+arm (W5c): at startup the App enables it when `MIP_LIFECYCLE_SYNC_JOB_ID` is
+bound (INFO `lifecycle_foreign_watch_unbound` and no observer otherwise; no
+name lookup on this path). While workflow counts are read, at most once a
+minute per process and never two at once, it reads ONE
+`jobs.list_runs(job_id=..., completed_only=True, limit=5)` page on the same
+executor; a run that ended after its baseline (the wall clock at startup, then
+the newest end time it counted) and is not one this process submitted bumps
+the generation once and logs `lifecycle_sync_completed` with
+`mode="job_foreign"`, `job_id`, `run_id` and `result_state`. A failed list
+logs WARNING `lifecycle_job_watch_error` (exception type only) and keeps the
+baseline. With nobody reading workflow counts it makes zero Jobs calls; the
+App's CAN_MANAGE_RUN covers the read. The approval-write bump stays
+process-local, so another process still trails that one by one soft TTL.
 
 ### Client half: the retained-value marker on screen (W5b)
 
@@ -636,6 +650,98 @@ under the same `retries_exhausted` reason; only the error classes match
 (SQLSTATE 42704 / 42883 are shared with other classes), and a missing
 `mip.gold` schema stays a 503 on the Rate Lever too.
 
+### Gold snapshot generation (delivery-06 remainder, W5c)
+
+The soft and hard TTLs alone let a process serve the previous gold snapshot's
+hot aggregates until each key's own soft TTL (and a stale serve) after a gold
+refresh. `backend/services/gold_snapshot.py` learns the current snapshot and
+moves a process-wide GENERATION when it advances.
+
+- Source. `SELECT CAST(MAX(checked_at) AS STRING) FROM gold.source_readiness`.
+  `checked_at` is the refresh run's anchor, stamped by `ctas_source_readiness`,
+  which depends on lead_scores, lead_population, segment_population and
+  borrower_dossier: the id moves only after the hot lead tables are rebuilt.
+  `ref.refresh_run_state.refresh_at` is written at the TOP of the DAG and would
+  advance mid-refresh, so it is not used. source_readiness is a ~20-row gold
+  table, so App SQL stays gold-only.
+- Trigger. The probe runs only on the `mip-gold-swr` executor and only when a
+  `GoldAggregateCache` read already goes to the warehouse: an inline miss
+  schedules it, a background refresh runs it before its factory. At most one
+  probe per `MIP_CACHE_TTL_S`. There is no timer, so an idle warehouse still
+  auto-stops. The first learn sets the id without a bump; a different id bumps
+  the generation and logs INFO `gold_snapshot_advanced` (`generation`,
+  `previous`, `current`: snapshot timestamps only). A failed probe keeps the
+  generation, logs WARNING `gold_snapshot_probe_failed` with the exception
+  type only, and retries after the next soft TTL. The watch is off when
+  `MIP_CACHE_TTL_S <= 0`.
+- The generation, not a key suffix. Every `GoldAggregateCache` entry carries
+  the generation its value was read under and a lookup compares it: an
+  older-generation entry is a MISS, computed inline with single-flight (DEBUG
+  `gold_cache_miss`, `reason=snapshot_advanced`), never a hit or a plain stale
+  serve. The entry stays in place, so a recompute that fails under
+  `stale_if_error` still serves it WITH `X-Data-Last-Good-At`. A per-key
+  suffix was rejected: it lengthens every key, breaks `workflow_key`'s
+  `family:generation` parsing in `drop_workflow_generations`, and orphans the
+  last-good value `stale_if_error` needs across a refresh. The hard-expiry
+  `TTLCache` applies the same rule to the closed prefixes
+  `GOLD_VERSIONED_TTL_PREFIXES` (`borrower_dossier:`, `lead_list:`,
+  `lead_count:`, `lead_facets:`); `get_stale` still serves an older entry and
+  every other key is unaffected.
+- Cost. One advance is a coordinated miss: each hot key a reader touches pays
+  one inline warehouse read once. The cold-cache Locust profile's scenario B
+  (docs/load-baseline.md, "Cold-cache profile") measures it. The inline miss
+  that carries the advancing probe pays one more: the probe runs
+  asynchronously, so the generation can move while that key's own read is in
+  flight, and the read stores under the generation it BEGAN in (it may have
+  read the previous snapshot), so its next read misses once more. One extra
+  warehouse round trip per advance per process, never an old read served as
+  the new generation. A single-flight follower of that read still takes its
+  value with no `X-Data-Last-Good-At`: only a FAILED leader yields a marked
+  serve (`tests/unit/test_gold_cache_snapshot_keys.py`, the `_Deferred`
+  executor cases).
+- The get/set window. The versioned `TTLCache` callers (the dossier, lead
+  list, lead count and lead facets repositories) read with `get`, query the
+  warehouse, then `set`; `set` stamps the generation current when it stores.
+  A query that began before an advance and finished after it is therefore
+  stored under the newer generation and can be served for up to one soft TTL,
+  the same bound as before the generation existed. `get_or_set` callers
+  capture the generation before the read and have no such window.
+- Per process. Each App process learns on its own next warehouse-bound read,
+  so two processes can disagree for up to one soft TTL.
+- The funnel lag. `gold.funnel_snapshot_daily` is recorded at deploy step 9
+  (and by the lifecycle job), AFTER the step-8 refresh that moves the
+  generation, so a Delta Explainer attribution read cached between the two can
+  trail the new snapshot by one soft TTL.
+
+### Optional gold columns (fail-soft projection, W5c)
+
+A roll-forward can promote the App ahead of the gold refresh that adds a
+column (a first install deploys the App before any gold exists; the local
+piecewise recipe can ship it before `mip_refresh_scores`). `UNRESOLVED_COLUMN`
+/ SQLSTATE `42703` is classified as `DatabricksSqlColumnMissingError`, a
+SIBLING of `DatabricksSqlObjectMissingError` (a route that maps a missing lane
+table to "not built" never swallows a missing column): it fails fast like a
+missing table (one statement, a breaker success, the unchanged 503
+`retries_exhausted`). Before W5c it was retried three times and counted as a
+breaker failure.
+
+`backend/services/optional_gold_columns.py` is a CLOSED registry of column
+families: `score_points` (the five `*_points` in the lead_population and
+borrower_360 projections the Lead Queue and its geo drill-down read) and
+`spread_history` (the dossier's `first_pos_date`, `first_pos_rate_type`,
+`first_itm_week`). Each family maps the exact projection fragments to NULL
+twins that alias every column. On a missing registered column whose fragment
+is in the statement, the resilient client latches the family for one
+`MIP_CACHE_TTL_S`, re-runs the statement ONCE on the twins, rewrites every
+statement while the latch holds, and logs one WARNING
+`optional_gold_columns_unavailable` per latch (family and error class only; no
+SQL, no ids). Anything else re-raises unchanged. The rows stay real; only the
+optional fields come back null, never a fabricated value, and every client
+treats a null `score_points` or crossing field as absent. The funnel snapshot's
+`competitor_lien_borrowers` is not in the registry (its read filters on it):
+the attribution read answers the no-snapshot shape on that column's
+`DatabricksSqlColumnMissingError` instead.
+
 ## 9. Genie completion jobs
 
 A live Genie turn's governed completion (verification, the output policy,
@@ -661,7 +767,7 @@ answer, SQL, or exception text; ids are the job UUID only:
 | `genie_jobs_table_absent` | WARNING, once per absence | — | The App runs ahead of the Lakebase migration: submit advertises no jobs and an older tab's completion stays inline (no job) until `mip_lakebase_migrate` has run; the probe re-checks every 60 s. |
 | `genie_complete_async_refused` (logger `mip-genie`) | WARNING | `outcome` refused | An async complete arrived while the turn could not get a job (the probe failed or found no table). It got a non-retryable 503 before any Genie work or audit row: the browser re-sends an async complete, and a job-less run could not be joined, so the re-send would complete the turn twice. |
 | `genie_job_enqueued`, outcome `adopted` | INFO | `outcome` adopted, `job_id` | Audit `genie-01` risk 4: a retried complete joined a queued job this process created but never ran (its creating request failed before enqueueing it) and ran it. A second adopter only loses the compare-and-set claim (`genie_job_claim_lost`), so the turn still completes once. |
-| `genie_job_cancel_requested` | INFO; WARNING when `unavailable` | `outcome` accepted / duplicate / recorded / ended / unavailable, `status` (the job's status before the request), `job_id`, `error_type` (unavailable only) | Audit `genie-03`: the owner pressed Stop on a job turn (`POST /api/v1/genie/message/cancel`). `accepted` set `cancel_requested_at` and wrote the one `GENIE_TURN_CANCELLED` audit row in the same Lakebase transaction; `duplicate`, `recorded` (the answer was already recorded) and `ended` (failed or expired) wrote nothing. `unavailable` rolled the flag back with its audit row (a 503; a retry is safe). |
+| `genie_job_cancel_requested` | INFO; WARNING when `unavailable` | `outcome` accepted / pre_cancelled / duplicate / recorded / recording / ended / unavailable, `status` (the job's status before the request, `pre_job` for a pre-cancel), `job_id`, `error_type` (unavailable only) | Audit `genie-03`: the owner pressed Stop on a job turn (`POST /api/v1/genie/message/cancel`). `accepted` set `cancel_requested_at` and `pre_cancelled` inserted the turn's job row already cancelled; each wrote the one `GENIE_TURN_CANCELLED` audit row in the same Lakebase transaction. `duplicate`, `recorded`, `recording` and `ended` wrote nothing (see "Stop outcomes" below). `unavailable` rolled the flag (or the pre-cancelled row) back with its audit row, or the History settle's first read failed (a 503; a retry is safe). |
 | `genie_job_finished` (logger `mip-genie`), status `cancelled` | INFO | `status` cancelled, `duration_ms`, `job_id`, no `failure_kind` | The runner stopped a job whose cancel came before its governed record (at a stage boundary, or refused by the `recorded_at` commit point): no `genie.run_query` RUN_GENIE row, no action tokens, no session row. The submit's own `genie.message_submitted` RUN_GENIE row stays, so a cancelled turn has exactly one RUN_GENIE row: count `metadata->>'action' = 'genie.run_query'`, not `event_type`. Not a failure. |
 | `genie_job_cancel_end_failed` (logger `mip-genie`) | WARNING | `error_type`, `job_id` | The runner could not mark a stopped job `cancelled`. Nothing was recorded; the lease lapses and the next read expires the job. |
 | `genie_jobs_table_absent`, 2026_09_25 columns | WARNING, once per absence | — | Also logged when the table exists without `cancel_requested_at`, `recorded_at` and `deep` (the App promoted ahead of the 2026_09_25 migration): the App completes inline exactly as without the table. |
@@ -699,6 +805,69 @@ gets a `GENIE_SECTION_REVEALED` audit row in the same transaction (ruling R1);
 the status poll serves the sections from the three-section floor, only for a
 revision the poller does not hold, and never on a terminal or
 cancel-requested job. Every terminal statement NULLs the column.
+
+### Stop outcomes, the History settle and the pre-cancel (genie-03, W5c)
+
+What a Stop answers (`GenieCancelResponse.outcome`, with `status` the job's
+status after the request):
+
+| Outcome | When | Writes |
+| --- | --- | --- |
+| `cancelled` | The cancel was accepted (`cancel_requested_at` set; a queued job ends `cancelled` at once), a pre-cancel inserted the turn's job (below), or a cancel was already requested. This app will not verify or record the answer; Genie's own message is NOT cancelled and Genie may keep the question as context. | An accepted cancel or pre-cancel: one `GENIE_TURN_CANCELLED` row in the same transaction. A repeat: nothing. |
+| `recorded` | Too late: the governed record's commit point passed (`recorded_at` set) or the job succeeded, AND the turn's History row (`mip_app.genie_messages`) exists, whatever the job's status. | Nothing. |
+| `recording` | Too late, but no History row was found. `status` running: it is still being written; succeeded: an answer History never keeps (a `policy_blocked` success); failed or expired: recording did not finish. | Nothing. |
+| `ended` | The job had already failed or expired with nothing recorded. | Nothing. |
+
+Only an ACCEPTED cancel (a pre-cancel included) says anything about the
+RUN_GENIE row: it guarantees none is written for the turn. The History
+settle runs after the cancel transaction: one read (`_HISTORY_SETTLE_SQL`:
+the job's status and whether a History row exists for the turn's message id,
+or for its 16-hex label on a row written at or after the job), re-read up to
+four times 250 ms apart while the job still runs with no row. It reads only.
+If its FIRST read fails the Stop answers 503 (nothing was written; a retry
+is safe); a later read error keeps the last values. It does not use
+`GENIE_MESSAGE_OWNERSHIP_SQL`, which keeps only `source = 'genie'` sessions
+and would deny rows History shows.
+
+The pre-cancel marker. A Stop before the complete's 202 named the job (Genie
+still answering, or the complete not yet answered) carries no `job_id`. The
+route locks the turn by its key (actor, conversation, message); with no row
+it INSERTs the turn's job row already `cancelled` (`precancelled_at`,
+migration `2026_10_07_genie_job_precancel`, CHECK
+`genie_completion_jobs_precancel_shape_chk`) with `ON CONFLICT DO NOTHING`
+on the turn UNIQUE, and audits it (`status` `pre_job`). A complete that
+arrives later joins that terminal row and runs nothing: a 202 with the
+cancelled status, or the legacy path's immediate 503; no RUN_GENIE row. A
+complete that committed its row first makes the insert wait and insert
+nothing; the Stop is then decided on that row as usual. The status probe
+requires `precancelled_at`, so an App promoted ahead of the migration
+completes inline and its cancel answers 404.
+
+Cooperative cancel. A Stop now reaches a running deep sweep's sub-turns:
+each runs under the runner's cancel predicate (a context-local scope reset
+after every task), and the Genie client's poll loop checks it before every
+sleep, so a running sub-turn stops within one poll interval and one that has
+not started never starts. The owner waits for sub-turns in 1 s slices, so it
+ends a stopped sweep within about a second even while every sub-turn blocks,
+and shuts the pool down without waiting. A stop is never a dependency
+failure:
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `dependency_call_end`, outcome `cancelled` (logger `mip.dependency`) | INFO | `dependency`, `operation`, `duration_ms` | A Genie (or other) call ended because its owner stopped the turn. Not counted in the `/api/v1/health` error counter; the circuit breaker records neither a failure nor a success (a half-open probe slot that call held is returned; a call admitted CLOSED, or in an earlier half-open period, returns none). |
+| `genie_query_end`, outcome `cancelled` (logger `backend.services.genie_client`) | INFO | `operation` ask / resume, `duration_ms`, `statement_hash` (or the resume id), never question text | A Genie ask or resume stopped by its owner; replaces `genie_query_error` for a stop. |
+| `genie_sweep_cancelled` (logger `mip-genie-sweep`) | INFO | `outcome` cancelled, `duration_ms`, `planned`, `unfinished` | A Stop ended a deep sweep: counts and duration only. |
+
+Genie Conversation cancel: not available. The pinned `databricks-sdk`
+0.103.0 `GenieAPI` has no operation that cancels a chat-mode conversation
+message, and the REST reference (re-checked 2026-10-06) lists only
+"Agent mode: Cancel a response", for the agent-mode responses API this app
+does not use. `delete_conversation_message` removes the message from the
+user's Genie thread irreversibly and its effect on an in-flight message is
+undocumented, so it is not used as a cancel. The Stop therefore stops this
+app's work and record only, and the copy keeps "Genie may keep the question
+as context". `tests/unit/test_genie_cancel.py` fails on an SDK that adds a
+cancel method, which forces the decision then.
 
 ### Admin SSE ingress probe (delivery-04)
 
@@ -738,7 +907,7 @@ exactly these tokens:
 | `triage` | The same, from the Triage deck. |
 | `bulk_sample` | A bulk run's row whose copy the approver previewed in the gate's samples: what was shown is what the row certifies. |
 | `bulk_cohort` | A bulk run's row drafted during the run and approved under the shared rationale: its copy was not individually shown, and its offer was one the samples showed (the in-run check). |
-| `undeclared` | Written by the server when a request carried no `review_mode` (an older client). |
+| `undeclared` | Historic rows only: written before W5c for a request that carried no `review_mode` (an older client). Since W5c the value is never written; the receipt still reads it. |
 
 `draft_age_seconds` (APPROVE rows). Whole seconds from the generated
 draft's `created_at` to the approval, on the Postgres clock (`now()`),
@@ -766,7 +935,7 @@ ORDER BY 1;
 
 A `bulk_cohort` share that grows while `bulk_sample` dwell shrinks toward
 zero is the signal to look at: runs approved with little time on the
-samples. `undeclared` rows should fall to zero within a release.
+samples. No new `undeclared` row is written since W5c.
 
 OUTREACH_REJECT rows now carry `decision_inputs` (the same governed
 decision inputs an APPROVE row carries) on every rejection, and `bulk_id`
@@ -783,11 +952,40 @@ before the replay lookup and again at commit: a refusal is a 422
 `"<field> failed the governed text policy"` and writes no approval or
 audit row (it was a 503 before).
 
-Follow-up, dated 2026-09-30 (tracked in the audit report's §12.3): one
-release after this SPA ships, make `review_mode` required on
-`POST /api/v1/outreach/approve`. A request without it then gets a 422 whose
-detail tells the reader to reload the app to approve, and the server stops
-writing `undeclared`.
+Done (W5c, `w5-lead-queue-paging`): `review_mode` is required on
+`POST /api/v1/outreach/approve`. A request without it gets a 422 `Reload the
+app to approve` right after the approver check, before the text policy, the
+replay lookup and any Lakebase or warehouse read, so nothing is written; the
+write-side value policy no longer admits `undeclared`.
+
+APPROVE and OUTREACH_REJECT rows from the paged Lead Queue also carry
+`declared_lead_view_id`: the `view_id` of the Lead Queue view the decision
+was taken from, AS THE CLIENT DECLARES IT (D-audit-reads-a). It is never part
+of the decision intent; Offer-originated decisions omit it.
+
+## 10a. Lead Queue view paging
+
+<!-- w5-lead-queue-paging, W5c. Appended beside section 10; the integrator renumbers. -->
+
+`GET /api/v1/leads` serves a VIEW (D-audit-reads-a): page 0 mints a server
+`view_id` (`X-Lead-View-Id`, `X-Page-Index: 0`) and, when its rows continue,
+a signed `X-Next-Cursor` the client sends back on an explicit Load next. Three
+structured events, each carrying no cursor, filter or borrower value:
+
+| Event | When | Fields |
+| --- | --- | --- |
+| `lead_cursor_rejected` | a cursor failed verification; the answer is 422 `lead_view_cursor_invalid` and nothing is written | `reason`: `signature`, `filters`, `expired`, `page_cap` or `malformed` |
+| `lead_cursor_unavailable` | no cursor key (no `MIP_GENIE_ACTION_SECRET_CURRENT` outside local/test): page 0 is served with `X-Lead-Paging: unavailable`, a cursor gets 503 | `outcome` |
+| `lead_page_cache_superseded` | a cached ranked page carries an older gold refresh than a read in this process already saw: the entry is dropped and the page is read again | `outcome` (`miss`) |
+
+A refreshed gold snapshot between pages answers 409 (`The queue refreshed
+since this view loaded`) and the client restarts the view at page 0. The
+page cache (`MIP_CACHE_TTL_S`) records the newest refresh any uncached read
+saw and never serves a page of an older one after it, so the restart reads
+the new refresh: at most one 409 per view per refresh, never a loop. An
+access line never carries a cursor: the structured formatter redacts
+`?cursor=` and `&cursor=` values. A `page_index` gap within one `view_id`
+in `mip_app.action_audit` means a dropped background write (`audit.dropped`).
 
 ## 11. Approval requests, revoke and the queue version
 
@@ -887,4 +1085,66 @@ FROM mip_app.action_audit
 WHERE event_type = 'OUTREACH_REVOKE'
   AND event_at >= now() - interval '30 days'
 ORDER BY event_at DESC;
+```
+
+## 12. Browser RUM day aggregates and the Field performance panel
+
+<!-- w5-field-vitals, W5c. Appended as section 12; the integrator renumbers. -->
+
+Decisions D-platform-process-d1 / d2 (audit runtime-09, stack-08,
+quality-07, quality-01). The privacy envelope, the default and the opt-out
+are in
+[security-and-compliance.md](security-and-compliance.md#browser-telemetry-rum).
+
+**Client.** `frontend/src/lib/rum.ts` loads lazily once the session says RUM
+is on, then registers the web-vitals 6.2.2 attribution build: one LCP, one
+CLS and one INP report per page lifecycle (plus one per soft navigation
+where Chromium supports it), each attributed to the route TEMPLATE in effect
+at the interaction or render time, read from the router's committed
+location (`lib/rumBridge.ts`), never from `window.location` at report time.
+INP carries its three phases and the nearest closed `data-rum-target`
+value; LCP carries a tag bucket. `navigation_load`, `route_change` and the
+sampled `api_call` stay; the old `long_task` observer is gone. Client
+errors report the same registry template. Every event is re-validated
+against the closed sets before it is queued; an invalid one is dropped
+alone, never the batch.
+
+**Sink.** `POST /api/v1/telemetry/rum` folds each accepted event into an
+in-process accumulator (`backend/services/rum_rollup.py`); nothing is
+logged per event, and the per-event `rum_metric` log line no longer exists.
+Once a minute, and at shutdown, the accumulator writes ONE multi-row upsert
+into Lakebase `mip_app.rum_daily`, a 90-slot day ring keyed `(slot, metric,
+route, facet, rating)`: a same-day row is incremented, a new day in the
+same slot resets the row, a straggler for an older day is refused. The
+first writing flush of each UTC day zeroes rows older than 90 days in
+place. No warehouse statement and no UC write: the serverless warehouse is
+never woken by telemetry.
+
+Log lines (counts only, never a value, route or identifier):
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `rum_rollup_flushed` | INFO | `rows`, `events`, `dropped`, `duration_ms` | one flush wrote `rows` aggregate rows from `events` browser events; `dropped` events found the 1000-key cap full |
+| `rum_rollup_flush_failed` | WARNING | `rows`, `events`, `dropped` | the upsert failed; that batch is dropped, never retried |
+| `field_performance_read_capped` | WARNING | `rows`, `limit`, `days` | a panel read reached the 100,000-row read cap, so that window's summary is partial; day-grain keys stay far below it, so this points at a vocabulary or ring defect |
+
+An open Lakebase breaker skips the flush silently and keeps the aggregates
+(bounded at 1000 keys) for the next minute.
+
+**Panel.** Administration -> Field performance
+(`GET /api/v1/admin/field-performance?days=7|28`, admin-only, audit-free)
+shows p75 LCP / INP / CLS per route with the CWV rating chip, INP by
+interaction target with its phases, and client-error counts by route,
+name, kind and boundary. A cell with fewer than 20 samples shows
+`<20 samples` instead of a p75. Reads happen on open and on an explicit
+Refresh or window change only.
+
+Daily volume by metric for the last week (run as the Lakebase admin):
+
+```sql
+SELECT day, metric, sum(sample_count) AS samples
+FROM mip_app.rum_daily
+WHERE day >= current_date - 6 AND sample_count > 0
+GROUP BY day, metric
+ORDER BY day DESC, metric;
 ```

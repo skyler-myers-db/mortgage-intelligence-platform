@@ -209,6 +209,10 @@ class Settings(BaseSettings):
             return value
         return isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on"}
 
+    # Consented Genie refusal-text capture (D-audit-reads-d). Fail-closed: a deploy
+    # that drops the payload env (a bare UI deploy) turns capture off, never on.
+    mip_genie_refusal_text_capture: Literal["enabled", "disabled"] = "disabled"
+
     # Default Databricks-hosted model for the orchestrator/specialists.
     mip_agent_model: str = Field(
         default="databricks-claude-sonnet-4-5",
@@ -524,6 +528,10 @@ class Settings(BaseSettings):
     # Browser Real User Monitoring. The client sends only sanitized route
     # patterns and aggregate performance metrics; no query strings,
     # borrower IDs, UUIDs, email addresses, or free-form text are accepted.
+    # Fail-closed split (docs/security-and-compliance.md#browser-telemetry-rum):
+    # deploy.sh turns RUM on through the payload's SAFE_RUNTIME_DEFAULTS, so a
+    # deploy that drops the operator env (UI Deploy) turns it OFF and never
+    # overrides an opt-out. Keep this default False.
     mip_rum_enabled: bool = False
     # Slice-13 performance follow-up: portfolio preview is an expensive
     # aggregate over 5.16M rows; its cache-miss cost shows up as a

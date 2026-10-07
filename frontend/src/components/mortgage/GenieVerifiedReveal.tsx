@@ -14,7 +14,7 @@
  * mode: no row actions, no CSV, no cell or chart links, and a note when the
  * rows were trimmed. Never announced and never inside a live region.
  */
-import { genieRevealCountLine, type GenieVerifiedRevealState } from '../../lib/genieVerifiedReveal';
+import { genieRevealCountLine, type GenieVerifiedRevealState } from '../../lib/genieJobReveal';
 import { GenieAnswerSections } from './GenieAnswer.sections';
 import './GenieVerifiedReveal.css';
 

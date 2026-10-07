@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.services import job_trigger
+from tests.fixtures.reviewed_approval import reviewed_approval
 
 
 def _install_fake_sdk(monkeypatch: pytest.MonkeyPatch, ws: Any) -> None:
@@ -280,16 +281,7 @@ def test_approval_endpoint_schedules_trigger(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(outreach_mod, "enqueue_lifecycle_trigger", _spy)
 
     client = TestClient(app)
-    resp = client.post(
-        "/api/outreach/approve",
-        json={
-            "borrower_id": "B-48291",
-            "offer_code": "heloc",
-            "actor": "anonymous",
-            "draft_subject": "Your mortgage review",
-            "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
-        },
-    )
+    resp = client.post("/api/outreach/approve", json=reviewed_approval(client, "B-48291"))
     assert resp.status_code == 200, resp.text
     assert len(calls) == 1
     assert calls[0]["reason"] == "approval"
@@ -356,3 +348,42 @@ def test_run_now_404_invalidates_job_id_cache(monkeypatch: pytest.MonkeyPatch) -
     # list calls because the cache was invalidated by the 404.
     assert ws.jobs.run_now.call_count == 2
     assert ws.jobs.list.call_count == 2
+
+
+def test_a_triggered_run_is_the_pending_arms_and_the_reset_forgets_the_foreign_arm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """delivery-06 remainder (W5c): the foreign arm reads the bound job id,
+    never re-counts a run this process submitted, and job_trigger's test reset
+    forgets it too."""
+    from concurrent.futures import Future
+
+    from databricks.sdk.service.jobs import BaseRun, RunLifeCycleState, RunState
+
+    from backend.services import lifecycle_run_watch
+    from backend.services.gold_cache import workflow_generation
+
+    class _Inline:
+        def submit(self, fn: Any, /, *args: Any) -> Future[Any]:
+            future: Future[Any] = Future()
+            future.set_result(fn(*args))
+            return future
+
+    baseline = 1_760_000_000_000
+    ws = _stub_workspace(run_id=12345, job_id=42)
+    ws.jobs.get_run.return_value = MagicMock(state=RunState(life_cycle_state=RunLifeCycleState.RUNNING))
+    ws.jobs.list_runs.return_value = iter([BaseRun(run_id=12345, end_time=baseline + 10)])
+    _install_fake_sdk(monkeypatch, ws)
+    monkeypatch.setenv("MIP_LIFECYCLE_SYNC_JOB_ID", "42")
+    lifecycle_run_watch.enable_foreign_run_watch(now_ms=baseline)
+    generation = workflow_generation()
+
+    job_trigger.trigger_lifecycle_sync(reason="approval")
+    lifecycle_run_watch.observe(now=None, executor=_Inline())  # type: ignore[arg-type]
+
+    ws.jobs.list_runs.assert_called_once_with(job_id=42, completed_only=True, limit=5)
+    assert workflow_generation() == generation, "an own run is never counted by the foreign arm"
+
+    job_trigger._reset_for_tests()
+    lifecycle_run_watch.observe(now=None, executor=_Inline())  # type: ignore[arg-type]
+    assert ws.jobs.list_runs.call_count == 1, "the reset forgot the foreign arm"

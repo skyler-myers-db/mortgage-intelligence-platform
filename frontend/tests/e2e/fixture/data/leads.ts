@@ -14,6 +14,7 @@ import type {
   LeadSummary,
   SegmentCode,
 } from '../../../../src/types';
+import type { BorrowerDecisionHistoryResponse } from '../../../../src/lib/apiClients/borrowerDecisions';
 import type { QueueVersionBody } from '../../../../src/lib/queueVersion';
 import type {
   LeadCountResponse,
@@ -23,7 +24,7 @@ import type {
 } from '../../../../src/types/leadFilters';
 import type { ContractSample } from '../contractSamples';
 import { fixture, json, type FixtureEntry, type FixtureReply, type FixtureRequest } from '../mockApi';
-import { LEADS, borrowerById } from './borrowers';
+import { LEADS, PRIMARY_BORROWER, borrowerById } from './borrowers';
 import { SNAPSHOT_AT, TOTALS, stateByCode } from './reference';
 import { SEGMENTS } from './segments';
 
@@ -195,6 +196,53 @@ export function contractSamples(): ContractSample[] {
   }));
 }
 
+/** The own APPROVE row of the primary borrower's decision history (it offers a receipt). */
+export const OWN_DECISION_AUDIT_ID = '5d2c1b0a-9f8e-4d7c-8b6a-5f4e3d2c1b0a';
+
+/**
+ * GET /api/borrowers/:id/decisions (D-audit-reads-c2): the primary borrower
+ * has a typed history (an own approval with its receipt, a colleague's
+ * rejection under the coarse 'Compliance review' label with none, an
+ * assignment and a blocked contact); every other borrower has none.
+ * Audit-free, like the real endpoint.
+ */
+export function decisionHistoryFor(borrowerId: string): BorrowerDecisionHistoryResponse {
+  if (borrowerId !== PRIMARY_BORROWER.borrower_id) return { borrower_id: borrowerId, items: [], truncated: false };
+  const row = {
+    actor_kind: 'staff', is_own: false, offer_code: null, channel: null, rationale_label: null,
+    contact_block_label: null, assigned_to_display: null, from_status: null, to_status: null,
+    disposition_outcome: null, lead_outcome_type: null, activation_status: null, bulk: false,
+    receipt_available: false,
+  } as const;
+  return {
+    borrower_id: borrowerId,
+    truncated: false,
+    items: [
+      {
+        ...row, audit_event_id: OWN_DECISION_AUDIT_ID, event_type: 'APPROVE', outcome: 'approved',
+        occurred_at: '2026-09-03T15:20:00Z', actor_display: 'Summit LO 01 (Loan officer)', is_own: true,
+        offer_code: 'refi', channel: 'email',
+        receipt_available: true,
+      },
+      {
+        ...row, audit_event_id: '4c3b2a19-8e7d-4c6b-9a5f-4e3d2c1b0a9f', event_type: 'OUTREACH_REJECT', outcome: 'rejected',
+        occurred_at: '2026-09-02T14:05:00Z', actor_display: 'Summit LO 02 (Loan officer)', offer_code: 'heloc',
+        channel: 'sms', rationale_label: 'Compliance review',
+      },
+      {
+        ...row, audit_event_id: '3b2a1908-7d6c-4b5a-8f4e-3d2c1b0a9f8e', event_type: 'LEAD_ASSIGN', outcome: 'assigned',
+        occurred_at: '2026-09-01T10:00:00Z', actor_display: 'Summit Sales Manager (Sales manager)',
+        assigned_to_display: 'Summit LO 01 (Loan officer)',
+      },
+      {
+        ...row, audit_event_id: '2a190807-6c5b-4a49-9e3d-2c1b0a9f8e7d', event_type: 'SUPPRESS_CONTACT', outcome: 'contact_blocked',
+        occurred_at: '2026-08-30T09:30:00Z', actor_display: 'Summit LO 02 (Loan officer)',
+        contact_block_label: 'No marketing consent',
+      },
+    ],
+  };
+}
+
 export const leadFixtures: FixtureEntry[] = [
   fixture('GET', '/api/leads', leadsPage),
   fixture('GET', '/api/workspace/queue-version', () => json<QueueVersionBody>(QUEUE_VERSION)),
@@ -213,6 +261,8 @@ export const leadFixtures: FixtureEntry[] = [
   }),
   fixture('GET', '/api/borrowers/:id', ({ params }) => borrowerOr404<Borrower360>(params.id, (borrower) => borrower)),
   fixture('GET', '/api/borrowers/:id/proof', ({ params }) => borrowerOr404<BorrowerProof>(params.id, proofFor)),
+  fixture('GET', '/api/borrowers/:id/decisions', ({ params }) =>
+    borrowerOr404<BorrowerDecisionHistoryResponse>(params.id, (borrower) => decisionHistoryFor(borrower.borrower_id))),
   fixture('GET', '/api/borrowers/:id/lifecycle', ({ params }) =>
     borrowerOr404<BorrowerLifecycle>(params.id, (borrower) => ({
       borrower_id: borrower.borrower_id,

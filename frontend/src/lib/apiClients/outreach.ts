@@ -23,12 +23,15 @@ export interface OutreachApproveRequest {
   rationale?: string | null;
   bulk_id?: string | null;
   bulk_rationale?: string | null;
-  review_mode?: ReviewMode | null;
+  /** Required since W5c: the server answers 422 "Reload the app to approve" without it. */
+  review_mode: ReviewMode;
   channel?: 'email' | 'sms' | 'direct_mail';
   campaign_id?: string | null;
   variant_name?: string | null;
   assigned_to_email?: string | null;
   follow_up_in_days?: number | null;
+  /** The Lead Queue view the decision was taken from, as this client declares it. */
+  lead_view_id?: string | null;
   request_id: string;
 }
 
@@ -44,6 +47,7 @@ export interface OutreachRejectRequest {
   campaign_id?: string | null;
   variant_name?: string | null;
   bulk_id?: string | null;
+  lead_view_id?: string | null;
   request_id: string;
 }
 
@@ -72,9 +76,9 @@ export const outreachApi = {
       bulk_rationale?: string | null;
       /**
        * How the approver saw this copy (the APPROVE row's review ledger).
-       * Omitted, the server records 'undeclared'.
+       * Required since W5c (D-approval-flow-a1).
        */
-      review_mode?: ReviewMode | null;
+      review_mode: ReviewMode;
       channel?: 'email' | 'sms' | 'direct_mail';
       campaign_id?: string | null;
       variant_name?: string | null;
@@ -82,8 +86,10 @@ export const outreachApi = {
       assigned_to_email?: string | null;
       /** Optional follow-up reminder window (1..30 days) persisted as follow_up_at. */
       follow_up_in_days?: number | null;
+      /** The paged Lead Queue's view (D-audit-reads-a); null elsewhere. */
+      lead_view_id?: string | null;
       request_id?: string;
-    } = {},
+    },
     signal?: AbortSignal,
   ) =>
     postJson<ApproveResult, OutreachApproveRequest>(
@@ -101,12 +107,13 @@ export const outreachApi = {
         rationale: opts.rationale ?? null,
         bulk_id: opts.bulk_id ?? null,
         bulk_rationale: opts.bulk_rationale ?? null,
-        review_mode: opts.review_mode ?? null,
+        review_mode: opts.review_mode,
         channel: opts.channel ?? 'email',
         campaign_id: opts.campaign_id ?? null,
         variant_name: opts.variant_name ?? null,
         assigned_to_email: opts.assigned_to_email ?? null,
         follow_up_in_days: opts.follow_up_in_days ?? null,
+        lead_view_id: opts.lead_view_id ?? null,
         // R5-01 idempotency: generate one UUID per user action and reuse
         // across any transparent retries inside _fetchWithRetry. The
         // backend has a unique index on mip_app.approvals(request_id)
@@ -139,6 +146,7 @@ export const outreachApi = {
       variant_name?: string | null;
       /** One bulk rejection run: every row carries the same id and shared note. */
       bulk_id?: string | null;
+      lead_view_id?: string | null;
       request_id?: string;
     },
     signal?: AbortSignal,
@@ -156,6 +164,7 @@ export const outreachApi = {
         campaign_id: opts.campaign_id ?? null,
         variant_name: opts.variant_name ?? null,
         bulk_id: opts.bulk_id ?? null,
+        lead_view_id: opts.lead_view_id ?? null,
         request_id: opts.request_id ?? _newRequestId(),
       },
       signal,

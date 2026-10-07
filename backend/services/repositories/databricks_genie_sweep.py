@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING, Any, Literal
 
 from backend.services.genie_answers import (
@@ -30,6 +30,10 @@ from backend.services.genie_answers import (
 )
 from backend.services.genie_completion_stages import (
     GenieJobStage,
+    GenieTurnCancelled,
+    cancel_probe,
+    cancel_scope,
+    cooperative_cancel_point,
     report_sections,
     report_stage,
 )
@@ -171,6 +175,9 @@ _SWEEP_POLL_TIMEOUT_S = 180
 # whatever sections completed within the budget and disclose the rest as
 # gaps — the floor still decides whether the sweep is worth shipping.
 _SWEEP_WALL_BUDGET_S = 200.0
+# The owner re-checks its stop at least this often while every sub-turn is
+# still running (W5c genie-03), so a Stop ends a blocked sweep in ~1 s.
+_SWEEP_CANCEL_SLICE_S = 1.0
 
 
 def _synthesis_prompt(
@@ -468,8 +475,14 @@ def run_planned_sweep(
         return None
     report_stage(GenieJobStage.RESEARCHING, 0, len(planned))
 
+    # The owner's stop reaches every sub-turn (W5c genie-03): each runs under
+    # the runner's cancel predicate, so its Genie polls and stage boundaries
+    # are cancel points too, and one that has not started never starts.
+    probe = cancel_probe()
+
     def _one(sub_question: str) -> GenieMessageResponse | None:
         turn_started = time.monotonic()
+        cooperative_cancel_point()
         try:
             response = repo.respond(
                 sub_question,
@@ -500,41 +513,67 @@ def run_planned_sweep(
         )
         return response
 
+    def _scoped(sub_question: str) -> GenieMessageResponse | None:
+        with cancel_scope(probe):
+            return _one(sub_question)
+
     results: list[GenieMessageResponse | None] = [None] * len(planned)
     # Judged as each result is collected, so a section is revealed once it
     # has passed its own checks; the post-loop reads these verdicts.
     verdicts: list[_SectionVerdict] = ["no_content"] * len(planned)
-    with ThreadPoolExecutor(max_workers=_SWEEP_MAX_WORKERS) as pool:
-        futures = {
-            pool.submit(_one, sub_question): index
-            for index, sub_question in enumerate(planned)
-        }
+    pool = ThreadPoolExecutor(max_workers=_SWEEP_MAX_WORKERS)
+    pending: set[Future[GenieMessageResponse | None]] = set()
+    stopped = False
+    try:
+        futures = {pool.submit(_scoped, sub_question): index for index, sub_question in enumerate(planned)}
         pending = set(futures)
         budget_end = started + _SWEEP_WALL_BUDGET_S
-        try:
-            while pending:
-                remaining = budget_end - time.monotonic()
-                if remaining <= 0:
-                    break
-                done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
-                collected = [futures[future] for future in done]
-                for future in done:
-                    try:
-                        results[futures[future]] = future.result()
-                    except Exception:  # noqa: BLE001 - becomes a disclosed gap
-                        results[futures[future]] = None
-                # The stage report (a cancel point) still comes first, so a
-                # stopped sweep is never delayed by judging what it collected.
-                report_stage(GenieJobStage.RESEARCHING, len(planned) - len(pending), len(planned))
-                for index in collected:
-                    verdicts[index] = _section_verdict(titles.get(planned[index]), results[index])
-                if any(verdicts[index] == "ship" for index in collected):
-                    _report_verified_sections(planned, titles, results, verdicts)
-        finally:
-            # Also when a stage report raises the owner's cancel: sub-turns
-            # that have not started never start.
-            for future in pending:
-                future.cancel()
+        while pending:
+            remaining = budget_end - time.monotonic()
+            if remaining <= 0:
+                break
+            # Waited in slices, so the owner sees its stop within one slice
+            # even while every sub-turn is blocked; the last slice of the
+            # budget falls through exactly as the single wait did.
+            slice_s = min(remaining, _SWEEP_CANCEL_SLICE_S)
+            done, pending = wait(pending, timeout=slice_s, return_when=FIRST_COMPLETED)
+            if not done and slice_s < remaining:
+                cooperative_cancel_point()
+                continue
+            collected = [futures[future] for future in done]
+            for future in done:
+                try:
+                    # A sub-turn's GenieTurnCancelled is a BaseException: it
+                    # reaches the owner here, never as a disclosed gap.
+                    results[futures[future]] = future.result()
+                except Exception:  # noqa: BLE001 - becomes a disclosed gap
+                    results[futures[future]] = None
+            # The stage report (a cancel point) still comes first, so a
+            # stopped sweep is never delayed by judging what it collected.
+            report_stage(GenieJobStage.RESEARCHING, len(planned) - len(pending), len(planned))
+            for index in collected:
+                verdicts[index] = _section_verdict(titles.get(planned[index]), results[index])
+            if any(verdicts[index] == "ship" for index in collected):
+                _report_verified_sections(planned, titles, results, verdicts)
+    except GenieTurnCancelled:
+        stopped = True
+        emit(
+            log,
+            "genie_sweep_cancelled",
+            dependency="genie",
+            outcome="cancelled",
+            duration_ms=round((time.monotonic() - started) * 1000, 1),
+            planned=len(planned),
+            unfinished=len(pending),
+        )
+        raise
+    finally:
+        # Sub-turns that have not started never start. A stopped sweep does
+        # not wait for the running ones (each stops at its next cancel
+        # point); every other path waits, as the pool's with-exit did.
+        for future in pending:
+            future.cancel()
+        pool.shutdown(wait=not stopped, cancel_futures=stopped)
 
     sections: list[tuple[str, GenieMessageResponse]] = []
     gaps: list[str] = list(dropped)

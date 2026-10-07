@@ -28,14 +28,15 @@ import type { Browser, Page } from '@playwright/test';
 import { registerVirtualQueue } from './data/queueKeyboard';
 import { expect, test } from './test';
 
-/** The first shape of the rule: a :has() in a universal rule's ancestor compound. */
-const ANCESTOR_HAS_RULE = '@media (min-height: 40rem) {'
-  + ' :where(.main:has(.route-nav):not(:has(.genie-composer:not([hidden] *))) :not(.route-nav *, .tbl-wrap *))'
-  + ' { scroll-margin-block-start: 61px; } }';
+/** The first shape of the rule: a :has() in a universal rule's ancestor compound (today's selector, no media wrapper). */
+const ANCESTOR_HAS_RULE = ':where(.main:has(> .route-nav[data-docked]):not(:has(.genie-composer:not([hidden] *)))'
+  + ' :not(.route-nav *, .tbl-wrap *)) { scroll-margin-block-start: 61px; }';
 
 /**
  * The shipped clearance's rules carry this custom property (38's two, and
- * LeadTable.css's table rule that reads it); nothing else does.
+ * LeadTable.css's table rule that reads it); nothing else does. Its
+ * `@property` registration (01-app-shell.css) carries it too, and stays:
+ * only the rules are removed.
  */
 const CLEARANCE_MARKER = '--nav-clear';
 
@@ -63,7 +64,8 @@ async function deleteClearanceRules(page: Page): Promise<number> {
     let deleted = 0;
     for (const sheet of [...document.styleSheets]) {
       for (let index = sheet.cssRules.length - 1; index >= 0; index -= 1) {
-        if (sheet.cssRules[index].cssText.includes(marker)) {
+        const rule = sheet.cssRules[index];
+        if (!(rule instanceof CSSPropertyRule) && rule.cssText.includes(marker)) {
           sheet.deleteRule(index);
           deleted += 1;
         }
@@ -209,4 +211,84 @@ test('the measured thead size re-styles only the scroller, while the clearance i
   console.log(`[focus-clearance-cost] thead write re-styled ${registered}; an inherited property's write ${inherited} (${rows} rows)`);
   expect(inherited, 'non-vacuity: an inherited custom property re-styles the table').toBeGreaterThan(rows * 5);
   expect(registered, 'the measured thead size re-styles the scroller, not the table').toBeLessThanOrEqual(5);
+});
+
+interface DockWrites {
+  styleWrites: number;
+  dockFlips: number;
+  blocks: string[];
+}
+
+/** Record, from now on, every `.main` style write and every nav `data-docked` flip (attribute records). */
+async function recordDockWrites(page: Page): Promise<() => Promise<DockWrites>> {
+  await page.evaluate(() => {
+    const main = document.querySelector<HTMLElement>('.main');
+    const nav = main?.querySelector<HTMLElement>(':scope > .route-nav');
+    if (!main || !nav) throw new Error('no .main or route nav');
+    const log = { styleWrites: 0, dockFlips: 0, blocks: [] as string[] };
+    (window as unknown as { __dockWrites: typeof log }).__dockWrites = log;
+    new MutationObserver((records) => {
+      log.styleWrites += records.length;
+      log.blocks.push(...records.map(() => main.style.getPropertyValue('--route-nav-block')));
+    }).observe(main, { attributes: true, attributeFilter: ['style'] });
+    new MutationObserver((records) => {
+      log.dockFlips += records.length;
+    }).observe(nav, { attributes: true, attributeFilter: ['data-docked'] });
+  });
+  return () => page.evaluate(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    return (window as unknown as { __dockWrites: DockWrites }).__dockWrites;
+  });
+}
+
+const navDocked = (page: Page) => page.locator('.route-nav').evaluate((nav) => nav.hasAttribute('data-docked'));
+
+test.describe('the route-nav dock measurement (report 12.4 #5) writes only what changed', () => {
+  test('a same-value re-measure (a width-only resize) writes nothing; a wrap writes the new block once', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue');
+    const read = await recordDockWrites(page);
+    // Narrower, same height: both observed boxes resize, neither block size changes.
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.waitForTimeout(200);
+    expect(await read(), 'a re-measure that finds the same values writes nothing').toEqual({ styleWrites: 0, dockFlips: 0, blocks: [] });
+    // Non-vacuity: the observer is live; a width that wraps the nav writes its new block.
+    await page.setViewportSize({ width: 820, height: 900 });
+    await expect.poll(async () => (await read()).styleWrites, 'the wrap is written').toBeGreaterThan(0);
+    await page.waitForTimeout(200);
+    const after = await read();
+    expect(after.styleWrites, `one write for one change (${after.blocks.join(', ')})`).toBe(1);
+  });
+
+  test('a --route-nav-block change while undocked re-styles .main alone (registered inherits: false)', async ({ app, browser, page }) => {
+    await page.setViewportSize({ width: 720, height: 450 });
+    await app.gotoRoute('/lead-queue');
+    expect(await navDocked(page), 'precondition: undocked').toBe(false);
+    const elements = await page.locator('.main *').count();
+    const write = (property: string) => restyledElements(browser, page, async () => {
+      await page.locator('.main').evaluate(async (main, name) => {
+        main.style.setProperty(name, '99px');
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      }, property);
+    });
+    const registered = await write('--route-nav-block');
+    const inherited = await write('--route-nav-probe-inherited');
+    console.log(`[focus-clearance-cost] --route-nav-block write re-styled ${registered}; an inherited property's ${inherited} (${elements} elements in .main)`);
+    expect(inherited, 'non-vacuity: an inherited custom property re-styles the subtree').toBeGreaterThan(50);
+    expect(registered, 'the measured nav block re-styles .main, not its subtree').toBeLessThanOrEqual(3);
+  });
+
+  test('a Console toggle flips data-docked once and writes the block at most once', async ({ app, page }) => {
+    await page.setViewportSize({ width: 1366, height: 620 });
+    await app.gotoRoute('/lead-queue');
+    // Off Linux, the labels are widened toward Linux text (LINUX_TEXT_EMULATION), so the open Console wraps the nav here too.
+    if (process.platform !== 'linux') await page.addStyleTag({ content: '.route-nav__label { letter-spacing: 0.5px; }' });
+    expect(await navDocked(page), 'precondition: docked with the Console closed').toBe(true);
+    const read = await recordDockWrites(page);
+    await app.openConsole();
+    await expect.poll(async () => (await read()).dockFlips, 'the wrapped nav undocks').toBeGreaterThan(0);
+    await page.waitForTimeout(200);
+    const opened = await read();
+    expect(opened.dockFlips, 'one data-docked flip').toBe(1);
+    expect(opened.styleWrites, `at most one block write (${opened.blocks.join(', ')})`).toBeLessThanOrEqual(1);
+  });
 });

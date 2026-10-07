@@ -22,7 +22,15 @@ const retryState = vi.hoisted(() => ({
   data: { leads: [{ borrower_id: 'B-0123456789ABC' }], totalMatching: 1, returnedRows: 1, truncatedAt: null },
   warmingUp: null,
   error: null,
+  isFetching: false,
+  isPlaceholderData: false,
+  dataUpdatedAt: null,
+  errorUpdatedAt: null,
   manualRetry: () => undefined,
+  paging: {
+    viewId: null, pagesLoaded: 1, hasMore: false, unavailable: false, capped: false,
+    fetchingNext: false, nextError: false, queueUpdated: false, loadNext: () => undefined, retryNext: () => undefined,
+  },
 }));
 
 const apiMocks = vi.hoisted(() => ({
@@ -35,16 +43,21 @@ vi.mock('../components/AppContext', () => ({
   useApp: () => ({ canAccessAdmin: false }),
 }));
 
-// The leads query keys the route asked for (the request object rides at [3]).
+// The paged-view keys the route asked for (the request object rides at [3]).
 const leadsKeys = vi.hoisted(() => [] as unknown[][]);
 const copied = vi.hoisted(() => [] as string[]);
 
-vi.mock('../lib/useWarmingUpRetry', () => ({
-  useWarmingUpRetry: (_fetcher: unknown, options: { queryKey: unknown[] }) => {
-    leadsKeys.push(options.queryKey);
-    return retryState;
-  },
-}));
+vi.mock('./lead-queue.pages', async (importOriginal) => {
+  const { leadsPagedQueryKey } = await import('../lib/leadsQuery');
+  type Input = Parameters<typeof import('./lead-queue.pages').useLeadQueuePages>[0];
+  return {
+    ...(await importOriginal<typeof import('./lead-queue.pages')>()),
+    useLeadQueuePages: (input: Input) => {
+      leadsKeys.push([...leadsPagedQueryKey(input.request, input.order, input.implicitInputs)]);
+      return retryState;
+    },
+  };
+});
 
 vi.mock('../lib/copyLink', () => ({
   copyLink: (url: string) => {
@@ -336,7 +349,7 @@ describe('Lead Queue request and share parity with lead-queue.request.ts', () =>
     });
     const sp = new URL(url, 'http://queue.test').searchParams;
     const key = leadsKeys[leadsKeys.length - 1];
-    expect(key?.slice(0, 3)).toEqual(['mip', 'leads', 'lead-queue']);
+    expect(key?.slice(0, 3)).toEqual(['mip', 'leads', 'lead-queue-paged']);
     expect(key?.[3]).toEqual(leadsRequestFromSearchParams(sp, REFS, undefined));
 
     await act(async () => byTestId<HTMLButtonElement>('lead-queue-copy-link')!.click());

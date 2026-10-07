@@ -21,6 +21,9 @@ import { SUCCESS_TOAST_MS, Toaster } from './Toaster';
 
 const session = { canAccessAdmin: true };
 vi.mock('../AppContext', () => ({ useApp: () => session }));
+// The ledger reader decision (D-audit-reads-c3): administrators and auditors.
+const ledger = { canRead: true };
+vi.mock('../../lib/sessionQuery', () => ({ useAuditLedgerAccess: () => ledger.canRead }));
 
 describe('Toaster', () => {
   let root: Root;
@@ -29,6 +32,7 @@ describe('Toaster', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     session.canAccessAdmin = true;
+    ledger.canRead = true;
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -85,6 +89,7 @@ describe('Toaster', () => {
 
     act(() => clearToasts());
     session.canAccessAdmin = false;
+    ledger.canRead = false;
     act(() => {
       root.render(
         <MemoryRouter>
@@ -95,6 +100,23 @@ describe('Toaster', () => {
     });
     expect(document.querySelector('a.toast__link')).toBeNull();
     expect(cards()[0].textContent).toContain('Audit event evt-0002');
+  });
+
+  it('links the ledger row for a read-only auditor who cannot open Administration', () => {
+    session.canAccessAdmin = false;
+    ledger.canRead = true;
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <Toaster />
+        </MemoryRouter>,
+      );
+      toast.success('Lead approved', { auditEventId: 'evt-0003' });
+    });
+    const link = document.querySelector<HTMLAnchorElement>('a.toast__link');
+    expect(link?.textContent).toBe('View audit event');
+    expect(link?.getAttribute('href')).toBe('/audit-ledger?audit_event_id=evt-0003#audit');
+    expect(cards()[0].textContent).not.toContain('Audit event evt-0003');
   });
 
   it('dismisses a confirmation after its time on screen, and on the dismiss button', () => {
@@ -366,6 +388,7 @@ describe('Toaster over a modal dialog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     session.canAccessAdmin = true;
+    ledger.canRead = true;
     container = document.createElement('div');
     document.body.appendChild(container);
     modal = document.createElement('dialog');

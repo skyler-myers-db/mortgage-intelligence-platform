@@ -115,4 +115,6 @@ export const REFUSAL_REPORT_ACCEPTED: GenieRefusalReportResult = {
   duplicate: false,
   report_id: 'fixture-refusal-report-0001',
   audit_event_id: 'fixture-audit-0001',
+  // A report without the question (the one-click path) keeps none.
+  question_captured: false,
 };

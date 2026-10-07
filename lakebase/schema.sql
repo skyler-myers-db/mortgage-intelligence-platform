@@ -2272,7 +2272,9 @@ ON CONFLICT (version) DO NOTHING;
 -- enforced by the write path in backend/api/genie.py and
 -- backend/services/genie_history.py:
 --   * refused / policy_blocked / degraded / data_gap / out_of_footprint
---     turns are never recorded, so a guard-tripping prompt is never stored;
+--     turns are never recorded, so a guard-tripping prompt is never stored
+--     here; a consented, scrubbed, 90-day copy of a REPORTED refusal's
+--     question lives only in genie_refusal_report_texts (D-audit-reads-d);
 --   * a stored question already cleared the PII, identity, protected-class,
 --     scope and injection prompt guards;
 --   * a stored answer already cleared genie_response_has_unsafe_visible_text
@@ -3578,7 +3580,7 @@ CREATE TABLE IF NOT EXISTS mip_app.genie_refusal_reports (
 CREATE INDEX IF NOT EXISTS idx_genie_refusal_reports_reason
     ON mip_app.genie_refusal_reports (refusal_reason, reported_at DESC);
 COMMENT ON TABLE mip_app.genie_refusal_reports IS
-    'Hash-only lender reports that a governed Genie refusal was a false positive; the refused question text is never stored.';
+    'Lender reports that a governed Genie refusal was a false positive: the report row holds no question text, only its digest; a consented, scrubbed, 90-day, purge-only copy may live in genie_refusal_report_texts.';
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
@@ -3816,21 +3818,35 @@ ON CONFLICT (version) DO NOTHING;
 -- and the summary omits that measure). The CHECKs use comparisons only; no
 -- table, routine, trigger or privilege is added, and the App role keeps
 -- SELECT. Placed before the watchlist series block, which its own contract
--- test pins as the schema's last block.
+-- test pins as the schema's last block. Each CHECK is added only when
+-- pg_constraint lacks it (static ADD CONSTRAINT text, reviewed by the
+-- executable-hook replay scanner): a re-run never drops and re-validates it
+-- (W5c, R1 NB-8).
 ALTER TABLE mip_app.kpi_snapshots
     ADD COLUMN IF NOT EXISTS listed_for_sale BIGINT;
 ALTER TABLE mip_app.kpi_snapshots
     ADD COLUMN IF NOT EXISTS competitor_lien BIGINT;
-ALTER TABLE mip_app.kpi_snapshots
-    DROP CONSTRAINT IF EXISTS kpi_snapshots_listed_for_sale_chk;
-ALTER TABLE mip_app.kpi_snapshots
-    ADD CONSTRAINT kpi_snapshots_listed_for_sale_chk
-    CHECK (listed_for_sale IS NULL OR listed_for_sale >= 0);
-ALTER TABLE mip_app.kpi_snapshots
-    DROP CONSTRAINT IF EXISTS kpi_snapshots_competitor_lien_chk;
-ALTER TABLE mip_app.kpi_snapshots
-    ADD CONSTRAINT kpi_snapshots_competitor_lien_chk
-    CHECK (competitor_lien IS NULL OR competitor_lien >= 0);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.kpi_snapshots'::regclass
+          AND conname = 'kpi_snapshots_listed_for_sale_chk'
+    ) THEN
+        ALTER TABLE mip_app.kpi_snapshots
+            ADD CONSTRAINT kpi_snapshots_listed_for_sale_chk
+            CHECK (listed_for_sale IS NULL OR listed_for_sale >= 0);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.kpi_snapshots'::regclass
+          AND conname = 'kpi_snapshots_competitor_lien_chk'
+    ) THEN
+        ALTER TABLE mip_app.kpi_snapshots
+            ADD CONSTRAINT kpi_snapshots_competitor_lien_chk
+            CHECK (competitor_lien IS NULL OR competitor_lien >= 0);
+    END IF;
+END $$;
 COMMENT ON COLUMN mip_app.kpi_snapshots.listed_for_sale IS
     'Borrowers whose home is listed for sale (SUM(listed_for_sale) over the headline metric view). NULL on rows written before this column existed; never backfilled with 0.';
 COMMENT ON COLUMN mip_app.kpi_snapshots.competitor_lien IS
@@ -4069,5 +4085,210 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_10_01_genie_job_sections',
     'Genie completion-job verified sections: nullable sections_json with a named 8 MiB pg_column_size CHECK, NULLed at every terminal state'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Genie refusal report texts (consented, 90 days, purge-only) ---
+-- D-audit-reads-d (audit genie-05). A lender who files "This was legitimate"
+-- on a governed refusal may choose "Report with my question". The server
+-- stores that question only when it hash-matches the report AND a RUN_GENIE
+-- refusal the same actor received within 30 days, the tenant switch
+-- (MIP_GENIE_REFUSAL_TEXT_CAPTURE) is on, and the text names no person or
+-- borrower. It is scrubbed (SSN, phone, email, street address), written once,
+-- nulled 90 days later by a bounded sweep (UPDATE, never DELETE), and read by
+-- administrators and auditors only, each read audited fail-closed. The
+-- report row in genie_refusal_reports never gains a text column; refused
+-- turns are still never written to genie_messages. expires_at has no default:
+-- the insert sets now() + 90 days, so no arithmetic default reaches the
+-- catalog the executable-hook preflight reviews.
+CREATE TABLE IF NOT EXISTS mip_app.genie_refusal_report_texts (
+    report_id      UUID PRIMARY KEY REFERENCES mip_app.genie_refusal_reports(report_id),
+    question_text  TEXT CHECK (question_text IS NULL OR length(question_text) BETWEEN 1 AND 16000),
+    redacted       BOOLEAN NOT NULL,
+    captured_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at     TIMESTAMPTZ NOT NULL,
+    purged_at      TIMESTAMPTZ,
+    CONSTRAINT genie_refusal_report_texts_purge_shape_chk
+        CHECK ((question_text IS NULL) = (purged_at IS NOT NULL)),
+    CONSTRAINT genie_refusal_report_texts_expiry_chk
+        CHECK (expires_at > captured_at)
+);
+DROP TRIGGER IF EXISTS trg_genie_refusal_report_texts_purge_only
+    ON mip_app.genie_refusal_report_texts;
+DROP TRIGGER IF EXISTS trg_genie_refusal_report_texts_no_remove
+    ON mip_app.genie_refusal_report_texts;
+CREATE INDEX IF NOT EXISTS idx_genie_refusal_report_texts_expiry
+    ON mip_app.genie_refusal_report_texts (expires_at)
+    WHERE purged_at IS NULL;
+
+-- The only UPDATE a text row ever takes is its purge: question_text from a
+-- value to NULL and purged_at from NULL to a time, every other column equal.
+CREATE OR REPLACE FUNCTION mip_app.prevent_refusal_text_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+BEGIN
+    IF (to_jsonb(NEW) - ARRAY['question_text', 'purged_at'])
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - ARRAY['question_text', 'purged_at'])
+       OR OLD.question_text IS NULL
+       OR NEW.question_text IS NOT NULL
+       OR OLD.purged_at IS NOT NULL
+       OR NEW.purged_at IS NULL THEN
+        RAISE EXCEPTION
+            'mip_app.genie_refusal_report_texts is immutable except for its one-time purge'
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_genie_refusal_report_texts_purge_only
+    BEFORE UPDATE ON mip_app.genie_refusal_report_texts
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.prevent_refusal_text_mutation();
+
+CREATE TRIGGER trg_genie_refusal_report_texts_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.genie_refusal_report_texts
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+COMMENT ON TABLE mip_app.genie_refusal_report_texts IS
+    'Consented question text of a reported Genie refusal (D-audit-reads-d): scrubbed, written once, nulled at 90 days and never deleted; read by administrators and auditors only, and every read is audited.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_07_genie_refusal_report_texts',
+    'Consented Genie refusal report texts: scrubbed question, 90-day expiry set by the insert, purge-only UPDATE trigger and no-remove trigger, no DELETE grant'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Disposition notes retired ---
+-- D-shell-deviations-g2 (flow-08 adjacent, critic-05). The optional free-text
+-- disposition note was written to two append-only ledgers and shown nowhere,
+-- with no erasure path. New dispositions no longer write it; the column stays
+-- for legacy rows. No constraint: a NOT VALID CHECK would still refuse an
+-- UPDATE of a legacy row.
+COMMENT ON COLUMN mip_app.call_dispositions.notes IS
+    'Retired 2026-10: no longer written; legacy rows only (free text in an append-only ledger has no erasure path).';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_07_disposition_notes_retired',
+    'Retired the free-text call disposition note: column kept for legacy rows, no longer written'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Borrower decision history index -----------------------------------------
+-- Audit 2026-09-21 flow-04 phase 2 (D-audit-reads-c2). GET
+-- /borrowers/{id}/decisions reads one borrower's governed decisions by
+-- entity_id (the borrower, or its approval / activation / approval-request
+-- batch ids), newest first. A partial index over plain columns with a LITERAL
+-- IN predicate, the shape of idx_action_audit_admin_request_actor_event: the
+-- service query repeats the identical literal list
+-- (borrower_decision_history._ENTITY_TYPES_SQL_LIST), so the planner proves
+-- the predicate under a generic plan. LEAD_DISTRIBUTE is absent on purpose:
+-- its one shared row per run is read through idx_action_audit_event_type.
+-- LEAD_UNASSIGN is in the predicate before its writer exists, so that writer
+-- needs no second migration. A FUTURE PREDICATE CHANGE NEEDS A NEW INDEX NAME:
+-- IF NOT EXISTS would keep the old predicate. No jsonb expression, no GIN, no
+-- CONCURRENTLY (the migrate job runs in one transaction), and no new table,
+-- grant or trigger.
+CREATE INDEX IF NOT EXISTS idx_action_audit_decision_entity
+    ON mip_app.action_audit (entity_id, audit_sequence DESC)
+    WHERE event_type IN ('ACTIVATION_STAGE', 'APPROVAL_REQUESTED', 'APPROVE', 'CALL_DISPOSITION', 'LEAD_ASSIGN', 'LEAD_ASSIGNMENT_STATUS', 'LEAD_OUTCOME', 'LEAD_OUTCOME_RECORDED', 'LEAD_UNASSIGN', 'OUTREACH_REJECT', 'OUTREACH_REVOKE', 'SUPPRESS_CONTACT');
+
+COMMENT ON INDEX mip_app.idx_action_audit_decision_entity IS
+    'Borrower decision history (GET /borrowers/{id}/decisions): the governed decision types by entity, newest first. The predicate is the service literal list; change it only under a new index name.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_07_borrower_decision_history_index',
+    'Borrower decision history: partial index idx_action_audit_decision_entity on action_audit (entity_id, audit_sequence DESC) over the governed decision types'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Genie completion-job pre-cancel ----------------------------------------
+-- Audit 2026-09-21 genie-03 (W5c). A Stop that arrives before the browser's
+-- complete call named the turn's job (Genie still answering, or the complete
+-- not answered yet) is recorded as the turn's job row itself, created already
+-- cancelled: the table's UNIQUE (actor_email, conversation_id, message_id)
+-- serializes it against the complete's create-or-join, so a later complete
+-- joins a terminal row and runs nothing (no RUN_GENIE row, no action tokens).
+-- precancelled_at marks such a row; it is set only in the same transaction as
+-- the row's GENIE_TURN_CANCELLED audit row. Nullable, no index, no grant,
+-- trigger or routine change: the existing SELECT/INSERT/UPDATE covers it.
+-- Rollback-safe: older App code never reads the column. The CHECK is static
+-- ADD CONSTRAINT text (same-type comparisons only) so the executable-hook
+-- replay scanner reviews it on every re-run. No question text.
+ALTER TABLE mip_app.genie_completion_jobs
+    ADD COLUMN IF NOT EXISTS precancelled_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mip_app.genie_completion_jobs'::regclass
+          AND conname = 'genie_completion_jobs_precancel_shape_chk'
+    ) THEN
+        ALTER TABLE mip_app.genie_completion_jobs
+            ADD CONSTRAINT genie_completion_jobs_precancel_shape_chk
+            CHECK (
+                precancelled_at IS NULL
+                OR (
+                    status = 'cancelled'
+                    AND cancel_requested_at IS NOT NULL
+                    AND recorded_at IS NULL
+                    AND result_json IS NULL
+                )
+            );
+    END IF;
+END $$;
+
+COMMENT ON COLUMN mip_app.genie_completion_jobs.precancelled_at IS
+    'When the owning actor stopped this turn before its completion job existed: the row was created already cancelled, in the same transaction as its GENIE_TURN_CANCELLED audit row, so a later complete joins it and runs nothing. NULL on every job a complete created.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_07_genie_job_precancel',
+    'Genie completion-job pre-cancel: nullable precancelled_at with a named shape CHECK (cancelled, cancel requested, nothing recorded); a Stop before the job exists inserts the turn''s row already cancelled'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Browser RUM day aggregates ---------------------------------------------
+-- D-platform-process-d1 / d2 (audit 2026-09-21 runtime-09, stack-08,
+-- quality-07). The in-process accumulator (backend/services/rum_rollup.py)
+-- flushes once a minute into a 90-slot day ring keyed by closed
+-- vocabularies: the route is a route-registry template, the facet is built
+-- only from closed values, and the rating is server-derived. No event rows,
+-- no identifiers and no sub-day timestamp. Retention is zero-in-place (an
+-- UPDATE of rows older than 90 days), so the App role holds SELECT, INSERT
+-- and UPDATE only. The 24-bucket length is enforced in code; the CHECKs use
+-- only length(), IN and same-type comparisons so the executable-hook
+-- preflight accepts every re-run.
+CREATE TABLE IF NOT EXISTS mip_app.rum_daily (
+    slot         INTEGER NOT NULL CHECK (slot >= 0 AND slot <= 89),
+    day          DATE NOT NULL,
+    metric       TEXT NOT NULL CHECK (metric IN ('navigation_load','route_change','lcp','cls','inp','inp_input_delay','inp_processing','inp_presentation','api_call','client_error')),
+    route        TEXT NOT NULL CHECK (length(route) <= 160),
+    facet        TEXT NOT NULL DEFAULT '' CHECK (length(facet) <= 200),
+    rating       TEXT NOT NULL CHECK (rating IN ('good','needs_improvement','poor','info')),
+    builds       TEXT[] NOT NULL DEFAULT '{}'::text[],
+    sample_count BIGINT NOT NULL,
+    value_sum    DOUBLE PRECISION NOT NULL,
+    value_min    DOUBLE PRECISION,
+    value_max    DOUBLE PRECISION,
+    buckets      INTEGER[] NOT NULL,
+    PRIMARY KEY (slot, metric, route, facet, rating)
+);
+
+COMMENT ON TABLE mip_app.rum_daily IS
+    'Browser RUM day aggregates (operational telemetry, never an audit record): sample counts, sums, min/max and 24 histogram buckets per day x metric x route template x closed facet x server-derived rating, with up to 8 contributing builds. First-party, identifier-free, day grain; rows older than 90 days are zeroed in place; no DELETE grant. Read only by the admin Field performance panel.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_07_rum_daily',
+    'Browser RUM day aggregates: mip_app.rum_daily, a 90-slot day ring keyed (slot, metric, route, facet, rating) over closed vocabularies; zero-in-place retention, SELECT/INSERT/UPDATE only'
 )
 ON CONFLICT (version) DO NOTHING;

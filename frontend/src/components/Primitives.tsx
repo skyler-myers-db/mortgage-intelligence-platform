@@ -4,6 +4,7 @@ import { useApp, type DrawerSource } from './AppContext';
 import { useEvidenceHoverCard } from './EvidenceHoverCard';
 import { Tooltip } from './ui/Tooltip';
 import { freshnessBucket, FRESHNESS_LABEL, type FreshnessBucket } from './freshness';
+import { formatRelative } from '../lib/time';
 
 // Re-export so existing importers (Primitives.test.tsx and others) keep
 // working after the extraction to ./freshness (re-audit #4).
@@ -197,7 +198,7 @@ export function EvidenceChip({
           <span
             className={`evidence-chip__dot evidence-chip__dot--${bucket}`}
             role="img"
-            aria-label={`${FRESHNESS_LABEL[bucket]} — refreshed ${source?.updatedAt ?? ''}`}
+            aria-label={`${FRESHNESS_LABEL[bucket]} — refreshed ${formatRelative(source?.updatedAt)}`}
           />
         )}
       </button>

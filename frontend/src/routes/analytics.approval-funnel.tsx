@@ -30,6 +30,7 @@ import type {
   LoanOfficerFunnelDetailResponse,
   LoanOfficerFunnelRow,
 } from '../types';
+import type { KpiProofKey } from '../lib/apiTypes';
 import { formatConversionPct } from './analytics.lib';
 import { DataTable, LoadState } from './analytics.charts';
 import { formatCount } from '../lib/formatters';
@@ -75,7 +76,13 @@ export const APPROVAL_FUNNEL_NESTED_IN: Partial<Record<ApprovalFunnelStageName, 
   outcome_recorded: 'actioned',
 };
 
-function FunnelStages({ stages }: { stages: ApprovalFunnelStage[] }) {
+/** The two UC stages with server-emitted reproduce SQL (flow-06); the Lakebase stages have none. */
+const FUNNEL_PROOF_KEYS: Partial<Record<ApprovalFunnelStageName, KpiProofKey>> = {
+  population: 'funnel.population',
+  high_opportunity: 'funnel.high_opportunity',
+};
+
+function FunnelStages({ stages, generatedAt }: { stages: ApprovalFunnelStage[]; generatedAt: string }) {
   const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order);
   return (
     <div className="kpi-row">
@@ -93,6 +100,7 @@ function FunnelStages({ stages }: { stages: ApprovalFunnelStage[] }) {
             delta={conversion && parent ? `${conversion} of ${stageDisplayLabel(parent).toLowerCase()}` : undefined}
             deltaDir="flat"
             source={approvalFunnelStageDrawer(stage)}
+            evidence={{ asOf: generatedAt, proofKey: FUNNEL_PROOF_KEYS[stage.stage] }}
           />
         );
       })}
@@ -326,7 +334,7 @@ export function ApprovalFunnelSection() {
               <Link className="btn btn--sm" to="/lead-queue">Open queue</Link>
             </div>
             <div className="surface__body">
-              <FunnelStages stages={data.stages} />
+              <FunnelStages stages={data.stages} generatedAt={data.generated_at} />
             </div>
           </section>
           <WhoApprovedWhat data={data} />

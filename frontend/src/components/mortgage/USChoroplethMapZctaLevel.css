@@ -1,0 +1,61 @@
+/* ============================================================
+   ZCTA polygon rung (audit dataviz-01 / visual-09; deviation:zcta-level).
+   Imported by USChoroplethMapZctaLevel.tsx, so it ships with the ZCTA chunk
+   only: never the initial stylesheet (08-map.css is in the initial
+   components.css) and never the map chunk Home loads.
+
+   App-added, none in the prototype (whose ZIP polygons, Module 0
+   Prototype.html:1797-1840, reuse .map-region alone): block .map-zcta (the
+   ZCTA stage), element .map-zcta__outline (the drilled state's 500k outline,
+   drawn above the fills), modifier .map-region--context (a ZCTA with no
+   borrowers in the selection, drawn as muted context) and block .map-zoom
+   (the header's Zoom in / Zoom out / Fit row).
+   ============================================================ */
+
+/* The stage zooms its viewBox, so every stroke keeps its screen width. */
+.map-zcta path { vector-effect: non-scaling-stroke; }
+
+/* Context: drawn, never a target (no hover card, no click, no tab stop). */
+.map-zcta .map-region--context {
+  pointer-events: none;
+  stroke: color-mix(in oklab, var(--line-2) 60%, transparent);
+}
+
+.map-zcta__outline {
+  fill: none;
+  stroke: var(--line-2);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+/* ZIP labels: the rung writes font-size and the halo width on .map-labels,
+   counter-scaled to the --fs-11 token at the committed zoom, so the labels
+   inherit them instead of the state map's user-unit sizes. */
+.map-zcta .map-label {
+  font-size: inherit;
+  stroke-width: inherit;
+}
+
+/* The header's zoom row joins the corner tray (pointer-events: none there). */
+.map-zoom {
+  display: inline-flex;
+  gap: var(--sp-1);
+  pointer-events: auto;
+}
+.map-zoom__btn {
+  min-inline-size: var(--sp-8);
+  justify-content: center;
+  font-family: var(--font-mono);
+}
+.map-zoom__btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* A drag pans the stage once it is zoomed. */
+.map-zcta { cursor: grab; touch-action: none; }
+.map-zcta:active { cursor: grabbing; }
+
+@media (forced-colors: active) {
+  .map-zcta__outline { stroke: CanvasText; }
+}

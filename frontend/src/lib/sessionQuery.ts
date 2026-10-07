@@ -33,4 +33,4 @@ export function useAuditLedgerAccess(): boolean {
   return canReadAuditLedger(session.data);
 }
 
-// usePresenterMode lives in lib/presenterMode.ts: only lazy chunks read it.
+// usePresenterMode lives in lib/presenterMode.ts; the shell rail reads it in the initial chunk too.

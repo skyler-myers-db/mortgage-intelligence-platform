@@ -11,7 +11,10 @@ What the row proves:
 
 * ``actor``              -- the edge-forwarded identity (never a body field).
 * ``filter_fingerprint`` -- ``audit_filter_fingerprint`` of the explorer's
-  query parameters: the canonical form the page cursors are bound to.
+  query parameters (the canonical form the page cursors are bound to), KEYED
+  through ``audit_fingerprint`` before it is stored or answered (W5c, 12.3):
+  a dictionary of candidate filters never reproduces it. With no key the
+  receipt is refused and no row is written (fail closed).
 * ``exported_row_count`` -- what the file holds.
 * ``csv_sha256``         -- the file bytes, hashed in the browser. The server
   never sees the bytes, so this is RECORDED, not verified.
@@ -29,6 +32,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from backend.schemas.audit import AuditEvent, AuditExportReceipt, AuditExportReceiptRequest
+from backend.services.audit_fingerprint import (
+    AUDIT_LEDGER_FINGERPRINT_DOMAIN,
+    keyed_filter_fingerprint,
+)
 from backend.services.audit_pagination import audit_filter_fingerprint
 from backend.services.audit_store import AuditStore
 from backend.services.audit_store_receipt import is_valid_audit_event_id
@@ -44,6 +51,10 @@ class AuditExportDeclarationMismatch(ValueError):
 
 class AuditExportInvalidEventIds(ValueError):
     """An id in the declaration is not an audit event id."""
+
+
+class AuditExportFingerprintUnavailable(RuntimeError):
+    """No fingerprint key is configured: the receipt cannot be written keyed."""
 
 
 def event_ids_digest(event_ids: Sequence[str]) -> str:
@@ -73,7 +84,12 @@ def write_audit_export_receipt(
     """Verify the declaration and write exactly one ``AUDIT_EXPORT`` row."""
 
     verify_audit_export_declaration(payload)
-    fingerprint = audit_filter_fingerprint(dict(payload.filters))
+    fingerprint = keyed_filter_fingerprint(
+        audit_filter_fingerprint(dict(payload.filters)),
+        domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN,
+    )
+    if fingerprint is None:
+        raise AuditExportFingerprintUnavailable("audit export fingerprint key is not configured")
     event: AuditEvent = store.write(
         actor=actor,
         action=AUDIT_EXPORT_ACTION,

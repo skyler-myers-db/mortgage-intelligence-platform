@@ -15,7 +15,10 @@ import type { FootprintPayload } from '../components/FootprintProvider';
 import type { HealthPayload as BannerHealthPayload } from '../components/mortgage/DegradedBanner';
 import type { adminApi } from '../lib/apiClients/admin';
 import type { AuditRollupResponse } from '../lib/apiClients/audit';
+import type { RefusalReportFamilyCount, RefusalReportItem, RefusalReportListResponse, RefusalReportQuestionResponse } from '../lib/apiClients/refusalReports';
+import type { FieldPerformanceCell, FieldPerformanceResponse } from '../lib/apiClients/fieldPerformance';
 import type { ActorAuditEventPage, ActorAuditEventSummary, AuditEventPage, AuditEventRow, DecisionReceipt, HealthPayload as LibHealthPayload } from '../lib/apiTypes';
+import type { AssetFreshnessResponse, KpiProofParam, KpiProofResponse } from '../lib/apiTypes';
 import type { AssetColumn, AssetLineageNode, AssetMetadataResponse, AssetProperty, AssetTag, DataEstateAsset, DataEstateLane, DataEstateResponse } from '../types';
 import type { ConfigOptions } from './geo';
 import type { LineageManifestResponse } from './lineage';
@@ -33,6 +36,14 @@ export type WireContractAdmin = [
   Expect<NoPhantomKeys<AuditEventPage, ApiResponse<'AuditEventPage'>>>,
   Expect<WireFits<ApiResponse<'DecisionReceipt'>, DecisionReceipt>>,
   Expect<NoPhantomKeys<DecisionReceipt, ApiResponse<'DecisionReceipt'>>>,
+  Expect<WireFits<ApiResponse<'RefusalReportFamilyCount'>, RefusalReportFamilyCount>>,
+  Expect<NoPhantomKeys<RefusalReportFamilyCount, ApiResponse<'RefusalReportFamilyCount'>>>,
+  Expect<WireFits<ApiResponse<'RefusalReportItem'>, RefusalReportItem>>,
+  Expect<NoPhantomKeys<RefusalReportItem, ApiResponse<'RefusalReportItem'>>>,
+  Expect<WireFits<ApiResponse<'RefusalReportListResponse'>, RefusalReportListResponse>>,
+  Expect<NoPhantomKeys<RefusalReportListResponse, ApiResponse<'RefusalReportListResponse'>>>,
+  Expect<WireFits<ApiResponse<'RefusalReportQuestionResponse'>, RefusalReportQuestionResponse>>,
+  Expect<NoPhantomKeys<RefusalReportQuestionResponse, ApiResponse<'RefusalReportQuestionResponse'>>>,
   Expect<WireFits<ApiResponse<'AssetColumn'>, AssetColumn>>,
   Expect<NoPhantomKeys<AssetColumn, ApiResponse<'AssetColumn'>>>,
   Expect<WireFits<ApiResponse<'AssetLineageNode'>, AssetLineageNode>>,
@@ -51,6 +62,16 @@ export type WireContractAdmin = [
   Expect<NoPhantomKeys<DataEstateResponse, ApiResponse<'DataEstateResponse'>>>,
   Expect<WireFits<ApiResponse<'LineageManifestResponse'>, LineageManifestResponse>>,
   Expect<NoPhantomKeys<LineageManifestResponse, ApiResponse<'LineageManifestResponse'>>>,
+  Expect<WireFits<ApiResponse<'AssetFreshnessResponse'>, AssetFreshnessResponse>>,
+  Expect<NoPhantomKeys<AssetFreshnessResponse, ApiResponse<'AssetFreshnessResponse'>>>,
+  Expect<WireFits<ApiResponse<'KpiProofResponse'>, KpiProofResponse>>,
+  Expect<NoPhantomKeys<KpiProofResponse, ApiResponse<'KpiProofResponse'>>>,
+  Expect<WireFits<ApiResponse<'KpiProofParam'>, KpiProofParam>>,
+  Expect<NoPhantomKeys<KpiProofParam, ApiResponse<'KpiProofParam'>>>,
+  Expect<WireFits<ApiResponse<'FieldPerformanceResponse'>, FieldPerformanceResponse>>,
+  Expect<NoPhantomKeys<FieldPerformanceResponse, ApiResponse<'FieldPerformanceResponse'>>>,
+  Expect<WireFits<ApiResponse<'FieldPerformanceCell'>, FieldPerformanceCell>>,
+  Expect<NoPhantomKeys<FieldPerformanceCell, ApiResponse<'FieldPerformanceCell'>>>,
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'GET /api/v1/config/options'>, ConfigOptions>>,
   Expect<NoPhantomKeys<ConfigOptions, ApiOk<'GET /api/v1/config/options'>>>,

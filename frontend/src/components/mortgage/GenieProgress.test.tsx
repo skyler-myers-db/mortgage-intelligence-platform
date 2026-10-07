@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieLiveProgress } from '../../lib/api';
 import { MemoryRouter } from 'react-router';
-import { beginGenieReveal, endGenieReveal, publishGenieReveal } from '../../lib/genieVerifiedReveal';
+import { nextJobReveal, type GenieVerifiedRevealState } from '../../lib/genieJobReveal';
 import type { GenieCompletionJobStatus, GenieTurnProgress } from '../../types/genieJobs';
 import {
   GENIE_DEEP_WAIT_LABEL,
@@ -384,12 +384,10 @@ describe('GenieProgress: verified sections as partial research (genie-01 phase 1
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    beginGenieReveal(JOB);
   });
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
-    endGenieReveal(JOB, 'ended');
   });
   // Warm the answer stack once: its first transform is slow on a loaded host.
   beforeAll(async () => {
@@ -436,16 +434,25 @@ describe('GenieProgress: verified sections as partial research (genie-01 phase 1
     });
   }
 
+  /** The in-flight store's fold: the job's progress carrying its reveal. */
+  function researching(reveal: GenieVerifiedRevealState): GenieTurnProgress {
+    return { ...RESEARCHING, job: { ...RESEARCHING.job!, reveal } };
+  }
+
   it('shows nothing without a running job', async () => {
-    publishGenieReveal(status({ verified_sections: 3, sections_rev: 2, revealed_sections: [0, 1, 2].map(section) }));
     await renderLoaded({ ...LIVE_TERMINAL });
 
     expect(container.querySelector('.genie-reveal, .genie-reveal__count')).toBeNull();
   });
 
-  it('shows one count line and no content before the floor', async () => {
-    publishGenieReveal(status({ verified_sections: 1, sections_rev: 1 }));
+  it('shows nothing for a running job with no reveal yet', async () => {
     await renderLoaded(RESEARCHING);
+
+    expect(container.querySelector('.genie-reveal, .genie-reveal__count')).toBeNull();
+  });
+
+  it('shows one count line and no content before the floor', async () => {
+    await renderLoaded(researching(nextJobReveal(null, status({ verified_sections: 1, sections_rev: 1 }))));
 
     expect(container.querySelector('.genie-reveal__count')?.textContent).toBe(
       'Partial research · 1 of 7 sub-analyses verified so far',
@@ -455,8 +462,11 @@ describe('GenieProgress: verified sections as partial research (genie-01 phase 1
   });
 
   it('shows the verified sections from the floor, previewed and never announced', async () => {
-    publishGenieReveal(status({ verified_sections: 3, sections_rev: 2, revealed_sections: [0, 1, 2].map(section) }));
-    await renderLoaded(RESEARCHING);
+    const reveal = nextJobReveal(
+      null,
+      status({ verified_sections: 3, sections_rev: 2, revealed_sections: [0, 1, 2].map(section) }),
+    );
+    await renderLoaded(researching(reveal));
 
     const group = container.querySelector('[role="group"][aria-label="Partial research"]');
     expect(group).not.toBeNull();
