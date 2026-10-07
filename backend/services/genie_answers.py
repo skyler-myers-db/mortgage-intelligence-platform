@@ -44,17 +44,37 @@ class GenieNativeVisualization(BaseModel):
 
 class GenieVerifiedClaim(BaseModel):
     """One figure in the shipped prose that the claims verifier proved against
-    the returned rows (audit genie-10 phase 1). ``derivation`` says how: a
-    value a reader can find in one returned cell, a figure derived from the
-    rows (a total, average, share or change), or a stated threshold the
-    returned values satisfy. ``section`` names the deep-research section the
-    figure belongs to; None is the summary or a single-turn answer. An
-    unsupported figure is never listed: its prose is withheld instead."""
+    the returned rows (audit genie-10). ``derivation`` says how: a value a
+    reader can find in one returned cell, a figure derived from the rows (a
+    total, average, share or change), or a stated threshold the returned
+    values satisfy. ``section`` names the deep-research section the figure
+    belongs to; None is the summary or a single-turn answer. An unsupported
+    figure is never listed: its prose is withheld instead.
+
+    Phase 2 provenance: ``support`` is the best support under a fixed
+    priority (one returned cell, the row count, a column total, a share of a
+    column total, another derivation, or a stated threshold); ``column``
+    names the returned column of a cell, total or share support when exactly
+    one column produces it; ``occurrences`` is how many times the figure's
+    token appears in the checked prose, set only for a cell figure the
+    client can locate by its token. All three are None on an answer recorded
+    before they existed."""
 
     token: str = Field(max_length=32)
     kind: Literal["currency", "percent", "bps", "number"]
     derivation: Literal["returned_value", "derived_from_rows", "bound"]
     section: str | None = Field(default=None, max_length=200)
+    support: Literal["cell", "row_count", "sum", "share", "derived", "bound"] | None = None
+    column: str | None = Field(default=None, max_length=128)
+    occurrences: int | None = Field(default=None, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def _provenance_is_consistent(self) -> GenieVerifiedClaim:
+        if self.occurrences is not None and self.support != "cell":
+            raise ValueError("occurrences belong to a returned-cell figure only")
+        if self.column is not None and self.support not in ("cell", "sum", "share"):
+            raise ValueError("a column belongs to a cell, total or share figure only")
+        return self
 
 
 class GenieClaimsSummary(BaseModel):

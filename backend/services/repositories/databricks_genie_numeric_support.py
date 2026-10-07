@@ -1,16 +1,24 @@
 """Numeric support builders for the Genie claims verifier.
 
-Moved verbatim out of ``databricks_genie_numeric`` (audit 2026-09-21
-``genie-10`` phase 2, the 900-line gate): the values the returned rows can
-support for one claim, and the helpers that read a column's kind, unit and
-numeric cells. The verdict lives in ``databricks_genie_numeric``; nothing
-here decides whether a claim is supported.
+Moved out of ``databricks_genie_numeric`` (audit 2026-09-21 ``genie-10``
+phase 2, the 900-line gate): the values the returned rows can support for one
+claim, and the helpers that read a column's kind, unit and numeric cells. The
+verdict lives in ``databricks_genie_numeric``; nothing here decides whether a
+claim is supported.
+
+Phase 2 labels every support value with its provenance (``_Support``): the
+KEY SET of ``_numeric_support_from_rows`` is exactly the support set the
+verdict has always read, and each key also records how the rows produce it
+(a returned cell, the row count, a column sum, a share of a column total, or
+another derivation). The fixed priority that resolves a key with several
+supports is documented in ``databricks_genie_numeric``.
 """
 from __future__ import annotations
 
 import math
 import re
-from typing import TYPE_CHECKING, Any, Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from backend.services.repositories.databricks_genie_visualization import (
     _is_genie_identifier_column,
@@ -21,25 +29,101 @@ if TYPE_CHECKING:
     from backend.services.repositories.databricks_genie_numeric import _NumericClaim
 
 
+SupportKind = Literal["cell", "row_count", "sum", "share", "derived"]
+#: Highest first: cell > row_count > sum > share > derived.
+SUPPORT_PRIORITY: dict[SupportKind, int] = {
+    "cell": 4,
+    "row_count": 3,
+    "sum": 2,
+    "share": 1,
+    "derived": 0,
+}
+
+
+@dataclass(frozen=True)
+class _Support:
+    """How the returned rows produce one support value. ``column`` names the
+    returned column for cell, sum and share supports; None when two columns
+    tie at the winning priority (or for a column-less kind)."""
+
+    kind: SupportKind
+    column: str | None = None
+
+
+_ROW_COUNT = _Support("row_count")
+_DERIVED = _Support("derived")
+
+
+class _ValueSink(Protocol):
+    def add(self, value: float, /) -> None: ...
+
+
+class _LabeledSink:
+    """A set-like sink: every key added to ``target`` merges in ``support``.
+
+    The merge keeps the highest priority; two different columns at the
+    winning priority leave the column None. It is commutative and
+    associative, so the label never depends on insertion order."""
+
+    __slots__ = ("_bare", "_rank", "_support", "_target")
+
+    def __init__(self, target: dict[float, _Support], support: _Support) -> None:
+        self._target = target
+        self._support = support
+        self._rank = SUPPORT_PRIORITY[support.kind]
+        self._bare = _Support(support.kind)
+
+    def add(self, value: float, /) -> None:
+        current = self._target.get(value)
+        if current is None or SUPPORT_PRIORITY[current.kind] < self._rank:
+            self._target[value] = self._support
+        elif (
+            SUPPORT_PRIORITY[current.kind] == self._rank
+            and current.column is not None
+            and current.column != self._support.column
+        ):
+            self._target[value] = self._bare
+
+
+#: An ISO date or timestamp cell ("2026-09", "2026-09-30T12:00:00Z"): its
+#: year is not a figure a reader would call a returned value.
+_ISO_DATE_CELL_RE = re.compile(r"\d{4}-\d{2}(?:-\d{2})?(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
+
+
 _NUMERIC_CELL_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$")
 
 
-def _numeric_support_values_from_rows(
+def _numeric_support_from_rows(
     rows: list[dict[str, Any]] | None,
     *,
     claim: _NumericClaim,
-) -> set[float]:
-    values: set[float] = set()
+) -> dict[float, _Support]:
+    """The support values for ``claim`` keyed to their provenance.
+
+    The key set is the verifier's support set, unchanged; only the labels
+    are new. ``cell`` is exactly what a reader can find in ONE returned cell:
+    a numeric token of a string cell in a non-identifier, non-date column
+    (not an ISO date cell), and a kind-compatible numeric cell of a
+    non-identifier, non-date column with its unit-multiplier variant.
+    Identifier and date string tokens and ISO date cells are ``derived``."""
+
+    support: dict[float, _Support] = {}
     if rows is None:
-        return values
+        return support
     if claim.kind == "number":
-        values.add(float(len(rows)))
+        _LabeledSink(support, _ROW_COUNT).add(float(len(rows)))
     for row in rows:
-        for cell in row.values():
+        for col, cell in row.items():
             if isinstance(cell, str):
+                direct = (
+                    not _is_genie_identifier_column(col)
+                    and not _column_looks_dateish(col)
+                    and not _ISO_DATE_CELL_RE.fullmatch(cell.strip())
+                )
+                sink = _LabeledSink(support, _Support("cell", col) if direct else _DERIVED)
                 for token in re.findall(r"-?\d[\d,]*\.?\d*", cell):
                     try:
-                        _add_supported_variants(values, float(token.replace(",", "")))
+                        _add_supported_variants(sink, float(token.replace(",", "")))
                     except ValueError:
                         continue
     columns = [
@@ -49,7 +133,7 @@ def _numeric_support_values_from_rows(
         and not _column_looks_dateish(col)
         and _column_supports_claim_kind(col, claim.kind)
     ]
-    by_column: list[list[float]] = []
+    by_column: list[tuple[str, list[float]]] = []
     for col in columns:
         col_values: list[float] = []
         for row in rows:
@@ -58,23 +142,30 @@ def _numeric_support_values_from_rows(
             if numeric_value is not None:
                 col_values.append(numeric_value)
         if col_values:
-            by_column.append(col_values)
+            by_column.append((col, col_values))
+            cell_sink = _LabeledSink(support, _Support("cell", col))
             for value in col_values:
-                _add_supported_variants(values, value)
+                _add_supported_variants(cell_sink, value)
                 if multiplier := _column_unit_multiplier(col):
-                    _add_supported_variants(values, value * multiplier)
-    for col_values in by_column:
-        _add_supported_variants(values, sum(col_values))
-        _add_supported_variants(values, min(col_values))
-        _add_supported_variants(values, max(col_values))
-        _add_supported_variants(values, sum(col_values) / len(col_values))
+                    _add_supported_variants(cell_sink, value * multiplier)
+    derived = _LabeledSink(support, _DERIVED)
+    for col, col_values in by_column:
+        _add_supported_variants(_LabeledSink(support, _Support("sum", col)), sum(col_values))
+        _add_supported_variants(derived, min(col_values))
+        _add_supported_variants(derived, max(col_values))
+        _add_supported_variants(derived, sum(col_values) / len(col_values))
         # Deltas an honest trend narrative derives from the returned rows:
         # consecutive-row changes, the endpoint change, and the max-min range.
         for earlier, later in zip(col_values, col_values[1:], strict=False):
-            _add_supported_variants(values, abs(later - earlier))
-        _add_supported_variants(values, abs(col_values[-1] - col_values[0]))
-        _add_supported_variants(values, max(col_values) - min(col_values))
-        _add_distribution_shape_support(values, col_values, kind=claim.kind)
+            _add_supported_variants(derived, abs(later - earlier))
+        _add_supported_variants(derived, abs(col_values[-1] - col_values[0]))
+        _add_supported_variants(derived, max(col_values) - min(col_values))
+        _add_distribution_shape_support(
+            derived,
+            col_values,
+            kind=claim.kind,
+            shares=_LabeledSink(support, _Support("share", col)),
+        )
     # A PERCENT claim is legitimately derived from a COUNT column (a bucket's
     # share of the column total), which the claim-kind filter above excludes.
     # Only SHARE ratios are contributed here — never raw values, quantiles, or
@@ -89,11 +180,11 @@ def _numeric_support_values_from_rows(
                 for row in rows
                 if (numeric := _numeric_cell_value(row.get(col))) is not None
             ]
-            _add_share_support(values, share_values)
-    return values
+            _add_share_support(_LabeledSink(support, _Support("share", col)), share_values)
+    return support
 
 
-def _add_share_support(values: set[float], col_values: list[float]) -> None:
+def _add_share_support(values: _ValueSink, col_values: list[float]) -> None:
     """Bucket shares and cumulative shares of a column total (percent only)."""
 
     if not col_values or len(col_values) > _MAX_DISTRIBUTION_ROWS:
@@ -123,10 +214,11 @@ _MAX_DISTRIBUTION_ROWS = 2_000
 
 
 def _add_distribution_shape_support(
-    values: set[float],
+    values: _ValueSink,
     col_values: list[float],
     *,
     kind: str,
+    shares: _ValueSink,
 ) -> None:
     if not col_values or len(col_values) > _MAX_DISTRIBUTION_ROWS:
         return
@@ -160,7 +252,7 @@ def _add_distribution_shape_support(
     # rounded cumulative share stand in for a fabricated borrower count — the
     # canonical-ranking regression test caught exactly that false accept.
     if kind == "percent":
-        _add_share_support(values, col_values)
+        _add_share_support(shares, col_values)
 
 
 def _column_supports_claim_kind(
@@ -222,7 +314,7 @@ def _column_unit_multiplier(column: str) -> float | None:
     return None
 
 
-def _add_supported_variants(values: set[float], value: float) -> None:
+def _add_supported_variants(values: _ValueSink, value: float) -> None:
     if not math.isfinite(value):
         return
     values.add(value)
@@ -249,7 +341,7 @@ def _add_supported_variants(values: set[float], value: float) -> None:
         values.add(round(value / 1_000_000_000, 3))
 
 
-def _add_scaled_display_variants(values: set[float], value: float, scale: float) -> None:
+def _add_scaled_display_variants(values: _ValueSink, value: float, scale: float) -> None:
     scaled = value / scale
     for digits in (0, 1, 2, 3):
         values.add(round(scaled, digits) * scale)
