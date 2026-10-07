@@ -25,6 +25,7 @@ import {
   type SessionProbeVerdict,
 } from './apiFailure';
 import { isSessionExpired, markSessionExpired } from './sessionStatus';
+import { actorRefusalReason, withActorKey } from './apiActorBinding';
 
 export function appendPortfolioCriteria(params: URLSearchParams, criteria?: GeoQueryCriteria | null) {
   if (!criteria) return;
@@ -84,7 +85,9 @@ export function analyticsPath(
  * The client adds its own reasons (`ClientFailureReason`, see apiFailure.ts):
  * "session_expired", "offline", "unreachable" and "unreadable_response", plus
  * "cohort_proof" for a Growth Agent handoff whose cohort proof failed to
- * verify (a client-side 409). None of them is ever retried.
+ * verify (a client-side 409). None of them is ever retried. A server 409
+ * "actor_changed" (lib/apiActorBinding) means the signed-in user changed under
+ * this document: nothing ran; the health recheck resets the tab.
  */
 export type ApiErrorReason =
   | 'warming_up'
@@ -94,6 +97,7 @@ export type ApiErrorReason =
   | 'dependency_saturated'
   | 'permission_denied'
   | 'cohort_proof'
+  | 'actor_changed'
   | ClientFailureReason;
 
 export interface ApiValidationIssue {
@@ -690,7 +694,7 @@ async function _throwFromResponse(res: Response, path: string, method: string): 
     // The correlation middleware (main.py) sets the header on every
     // response; the 503/429 bodies repeat it.
     correlationId: _correlationId(parsed.correlationId, res.headers.get('X-Correlation-ID')),
-    reason: parsed.reason,
+    reason: parsed.reason ?? (await actorRefusalReason(res)),
     validationIssues: parsedBody.validationIssues,
     retryAfterMs: parsed.retryAfterMs,
   });
@@ -754,9 +758,11 @@ async function _requestJson<T>(
   // After the session ended every request would 401 again: fail fast, and
   // let a write attempted anyway reach the dialog's "not recorded" line.
   if (isSessionExpired()) throw _sessionExpiredError(requestPath, method);
+  // The owner key is captured ONCE: every retry and the redirect re-issue send it.
+  const bound = withActorKey(_routePath(requestPath), init);
   let res: Response;
   try {
-    res = await _fetchWithRetry(requestPath, init, 3, signal, retry);
+    res = await _fetchWithRetry(requestPath, bound, 3, signal, retry);
   } catch (err) {
     throw _wrapFetchError(err, requestPath);
   }

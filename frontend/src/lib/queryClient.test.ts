@@ -72,6 +72,19 @@ describe('createMipQueryClient', () => {
     expect((retry as (count: number, error: Error) => boolean)(0, exhausted)).toBe(false);
     expect((retry as (count: number, error: Error) => boolean)(0, rateLimited)).toBe(false);
   });
+
+  it('never retries a 409 actor_changed: nothing ran, and the health recheck resets the tab (a4)', () => {
+    const retry = createMipQueryClient().getDefaultOptions().queries?.retry as (count: number, error: Error) => boolean;
+    // retryable: true would not change it; the binding refusal is never a warming state.
+    const refused = new ApiError('The signed-in user changed in this browser. Nothing was recorded.', {
+      path: '/api/v1/leads',
+      status: 409,
+      retryable: true,
+      reason: 'actor_changed',
+    });
+
+    expect(retry(0, refused)).toBe(false);
+  });
 });
 
 describe('invalidateOperationalQueries', () => {
