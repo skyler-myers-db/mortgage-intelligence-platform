@@ -92,7 +92,8 @@ for (const theme of FIXTURE_THEMES) {
       // Idle: ten minutes of timers, a focus and a visibility round trip read nothing.
       await page.evaluate(() => {
         window.dispatchEvent(new Event('focus'));
-        document.dispatchEvent(new Event('visibilitychange'));
+        // TanStack's focus manager listens on window; the document event bubbles there.
+        document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
       });
       await page.clock.runFor(10 * 60_000);
       await app.settle();

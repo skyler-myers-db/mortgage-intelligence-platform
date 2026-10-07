@@ -172,9 +172,14 @@ describe('FieldPerformancePanel', () => {
     expect(mocks.fetchFieldPerformance.mock.calls.map((call) => call[0])).toEqual([7, 28]);
     expect(buttonNamed(container, /^28 days$/).getAttribute('aria-pressed')).toBe('true');
 
+    // TanStack's focus manager listens for visibilitychange on window; a
+    // hidden-then-visible round trip is a window refocus.
     await act(async () => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      window.dispatchEvent(new Event('visibilitychange'));
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      window.dispatchEvent(new Event('visibilitychange'));
       window.dispatchEvent(new Event('focus'));
-      document.dispatchEvent(new Event('visibilitychange'));
     });
     await settle();
     expect(mocks.fetchFieldPerformance).toHaveBeenCalledTimes(2);
