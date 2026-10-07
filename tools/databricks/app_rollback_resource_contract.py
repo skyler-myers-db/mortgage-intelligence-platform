@@ -24,6 +24,18 @@ RESOURCE_BINDING_PERMISSIONS = {
     "secret": "READ",
     "sql_warehouse": "CAN_USE",
 }
+# Exact (kind, binding name) exceptions to the per-kind permission above. The
+# saved-watchlist scheduler is bound read-only (flow-08 slice 2): the App reads
+# its schedule state and never runs it, so CAN_VIEW is required and the
+# broader CAN_MANAGE_RUN is refused. Every other job binding keeps
+# CAN_MANAGE_RUN.
+RESOURCE_BINDING_PERMISSION_OVERRIDES: dict[tuple[str, str], str] = {
+    ("job", "growth_agent_scheduler_job"): "CAN_VIEW",
+}
+
+
+def _required_permission(kind: str, name: str) -> str:
+    return RESOURCE_BINDING_PERMISSION_OVERRIDES.get((kind, name), RESOURCE_BINDING_PERMISSIONS[kind])
 _RESOURCE_REFERENCE = re.compile(
     r"^\$\{resources\.(?P<kind>[a-z_]+)\.(?P<key>[A-Za-z0-9_-]+)\."
     r"(?P<field>[A-Za-z0-9_-]+)\}$"
@@ -71,7 +83,7 @@ def validated_app_resource_contract(value: object) -> list[dict[str, object]]:
             if not isinstance(raw, str) or not raw.strip():
                 raise RuntimeError("App rollback resource target is invalid")
             normalized_binding[str(key)] = raw.strip()
-        if normalized_binding["permission"] != RESOURCE_BINDING_PERMISSIONS[kind]:
+        if normalized_binding["permission"] != _required_permission(kind, name):
             raise RuntimeError("App rollback resource permission is invalid")
         names.add(name)
         normalized.append({"name": name, kind: normalized_binding})

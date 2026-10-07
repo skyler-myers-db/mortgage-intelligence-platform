@@ -1031,6 +1031,15 @@ cadence and confirms the target writes to an isolated catalog; otherwise
 multiple bundle targets can contend on the same Unity Catalog tables and burn
 avoidable compute.
 
+The App binds the Growth Agent scheduler job read-only (App resource
+`growth_agent_scheduler_job`, permission `CAN_VIEW`, env
+`MIP_GROWTH_AGENT_SCHEDULER_JOB_ID`), so Home and Saved monitors say whether
+scheduled runs are on. The App only reads the job's schedule state (cached,
+served stale while one background refresh runs); it never runs the job, and
+the schedule stays `PAUSED` until an operator unpauses it. The signed
+rollback contract admits exactly this one `CAN_VIEW` job binding; every other
+job binding keeps `CAN_MANAGE_RUN`.
+
 Adding OTLP to an existing App uses the same target that already owns its
 Lakebase and warehouse resources. Re-run `scripts/deploy.sh -t prod`; its
 source-free resource reconciliation preserves the active signed deployment,

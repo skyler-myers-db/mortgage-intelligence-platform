@@ -127,6 +127,7 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert env["MIP_FRED_RATES_JOB_ID"]["value_from"] == "fred_rates_job"
     assert env["MIP_SILVER_REFRESH_JOB_ID"]["value_from"] == "silver_refresh_job"
     assert env["MIP_GOLD_REFRESH_JOB_ID"]["value_from"] == "gold_refresh_job"
+    assert env["MIP_GROWTH_AGENT_SCHEDULER_JOB_ID"]["value_from"] == "growth_agent_scheduler_job"
     assert env["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"] == "genie_action_current_secret"
     assert "MIP_GENIE_ACTION_SECRET_PREVIOUS" not in env
     assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID" not in env

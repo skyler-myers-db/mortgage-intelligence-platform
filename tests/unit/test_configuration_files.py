@@ -17,6 +17,7 @@ def test_app_yaml_contains_required_runtime_bindings():
         "MIP_FRED_RATES_JOB_ID",
         "MIP_SILVER_REFRESH_JOB_ID",
         "MIP_GOLD_REFRESH_JOB_ID",
+        "MIP_GROWTH_AGENT_SCHEDULER_JOB_ID",
         "MIP_LIFECYCLE_SYNC_JOB_ID",
         "APP_ENV",
     ]:
@@ -70,6 +71,7 @@ def test_databricks_yml_contains_required_resource_names():
         "fred_rates_job",
         "silver_refresh_job",
         "gold_refresh_job",
+        "growth_agent_scheduler_job",
         "lifecycle_sync_job",
         "mip_feature_pipeline",
         "mip_executive_dashboard",

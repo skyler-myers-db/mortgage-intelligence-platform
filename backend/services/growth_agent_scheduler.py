@@ -13,9 +13,20 @@ module reads the real state, read-only, through the Jobs API:
 - ``unavailable`` / ``lookup_failed``: anything went wrong, including a
   binding that names a different job. Logged with the exception type only.
 
-The job is never listed or run from here (it is not a managed job), and the
-answer is cached per process: 300 s for a resolved state, 60 s for a failed
-lookup, with one lookup in flight at a time.
+The job is never listed or run from here (it is not a managed job; the App
+binds it CAN_VIEW). The answer is cached per process, 300 s for a resolved
+state and 60 s for a failed lookup, and served stale-while-refresh so a slow
+Jobs API never holds a page (W5d):
+
+- fresh cache: returned as is;
+- stale cache: the stale value is returned at once and at most ONE background
+  refresh starts (an in-flight flag under ``_lock``);
+- cold cache (the first read after process start): one bounded synchronous
+  lookup, single-flight: concurrent cold callers wait on that lookup and
+  never issue a second ``jobs.get``.
+
+``_lock`` only guards the cache and the in-flight state; it is never held
+during a Jobs API call.
 """
 
 from __future__ import annotations
@@ -45,10 +56,21 @@ LOOKUP_FAILED_TTL_S = 60.0
 HTTP_TIMEOUT_S = 3
 RETRY_TIMEOUT_S = 5
 
+# A cold caller that follows another cold caller's lookup waits at most this
+# long (the lookup itself is bounded by the client timeouts above).
+COLD_WAIT_S = 15.0
+
 WorkspaceFactory = Callable[[], Any]
+# Starts a background refresh; injectable so tests can hold or inline it.
+RefreshRunner = Callable[[Callable[[], None]], None]
 
 _lock = threading.Lock()
 _cached: tuple[float, GrowthAgentSchedulerStatus] | None = None
+_refreshing = False
+_cold_lookup: threading.Event | None = None
+# Bumped by reset: a lookup started before a reset never stores its answer.
+_generation = 0
+_LOOKUP_FAILED = GrowthAgentSchedulerStatus(state="unavailable", reason="lookup_failed")
 
 
 def _bounded_workspace_client() -> Any:
@@ -98,31 +120,90 @@ def _lookup(workspace_factory: WorkspaceFactory) -> GrowthAgentSchedulerStatus:
     return GrowthAgentSchedulerStatus(state="paused", reason="no_schedule")
 
 
-def growth_agent_scheduler_status(
-    *, workspace_factory: WorkspaceFactory | None = None
-) -> GrowthAgentSchedulerStatus:
-    """The scheduler's state, from the process cache when it is still fresh."""
+def _thread_runner(refresh: Callable[[], None]) -> None:
+    threading.Thread(target=refresh, name="growth-agent-scheduler-refresh", daemon=True).start()
+
+
+def _store(status: GrowthAgentSchedulerStatus) -> None:
+    """Cache ``status`` with its TTL; the caller holds ``_lock``."""
 
     global _cached
+    ttl = LOOKUP_FAILED_TTL_S if status.reason == "lookup_failed" else RESOLVED_TTL_S
+    _cached = (time.monotonic() + ttl, status)
+
+
+def _refresh(workspace_factory: WorkspaceFactory, generation: int) -> None:
+    """The one background refresh of a stale answer."""
+
+    global _refreshing
+    status = _LOOKUP_FAILED
+    try:
+        status = _lookup(workspace_factory)
+    finally:
+        with _lock:
+            if generation == _generation:
+                _store(status)
+                _refreshing = False
+
+
+def growth_agent_scheduler_status(
+    *,
+    workspace_factory: WorkspaceFactory | None = None,
+    refresh_runner: RefreshRunner | None = None,
+) -> GrowthAgentSchedulerStatus:
+    """The scheduler's state: fresh from cache, stale while one refresh runs, or one cold lookup."""
+
+    global _refreshing, _cold_lookup
+    factory = workspace_factory or _bounded_workspace_client
+    start_refresh = False
+    follow: threading.Event | None = None
     with _lock:
-        now = time.monotonic()
-        if _cached is not None and now < _cached[0]:
-            return _cached[1]
-        status = _lookup(workspace_factory or _bounded_workspace_client)
-        ttl = LOOKUP_FAILED_TTL_S if status.reason == "lookup_failed" else RESOLVED_TTL_S
-        _cached = (time.monotonic() + ttl, status)
-        return status
+        generation = _generation
+        cached = _cached
+        if cached is not None:
+            if time.monotonic() < cached[0]:
+                return cached[1]
+            start_refresh = not _refreshing
+            _refreshing = True
+        else:
+            follow = _cold_lookup
+            if follow is None:
+                _cold_lookup = lead = threading.Event()
+    if cached is not None:
+        if start_refresh:
+            (refresh_runner or _thread_runner)(lambda: _refresh(factory, generation))
+        return cached[1]
+    if follow is not None:
+        follow.wait(COLD_WAIT_S)
+        with _lock:
+            return _cached[1] if _cached is not None else _LOOKUP_FAILED
+    status = _LOOKUP_FAILED
+    try:
+        status = _lookup(factory)
+    finally:
+        with _lock:
+            if generation == _generation:
+                _store(status)
+                _cold_lookup = None
+        lead.set()
+    return status
 
 
 def reset_growth_agent_scheduler_cache() -> None:
-    """Forget the cached state (tests)."""
+    """Forget the cached state and any lookup in flight (tests)."""
 
-    global _cached
+    global _cached, _refreshing, _cold_lookup, _generation
     with _lock:
         _cached = None
+        _refreshing = False
+        if _cold_lookup is not None:
+            _cold_lookup.set()
+        _cold_lookup = None
+        _generation += 1
 
 
 __all__ = [
+    "COLD_WAIT_S",
     "HTTP_TIMEOUT_S",
     "LOOKUP_FAILED_TTL_S",
     "RESOLVED_TTL_S",

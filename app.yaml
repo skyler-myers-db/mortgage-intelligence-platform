@@ -84,6 +84,10 @@ env:
     valueFrom: silver_refresh_job
   - name: MIP_GOLD_REFRESH_JOB_ID
     valueFrom: gold_refresh_job
+  # The saved-watchlist scheduler job, bound read-only (CAN_VIEW): the App
+  # reads its schedule state for Home and Saved monitors and never runs it.
+  - name: MIP_GROWTH_AGENT_SCHEDULER_JOB_ID
+    valueFrom: growth_agent_scheduler_job
 
   # Product overrides. Pin the canonical catalog + schema so the
   # runtime does not inherit a stale name from an older workspace env.
