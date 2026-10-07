@@ -103,9 +103,12 @@ export default function OfferOrchestrator() {
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
   const [borrowerPreviewOpen, setBorrowerPreviewOpen] = useState(false);
+  // Once opened the mock stays mounted, so its close plays the exit (motion-01);
+  // a customer session never opens it, so never imports the chunk.
+  const [previewEverOpened, setPreviewEverOpened] = useState(false);
   const presenterMode = usePresenterMode();
-  const previewChunk = useLazyModule(PREVIEW_MOCK_CHUNK, presenterMode && borrowerPreviewOpen);
-  const BorrowerOfferPreviewMock = presenterMode && borrowerPreviewOpen ? previewChunk.module?.BorrowerOfferPreviewMock : undefined;
+  const previewChunk = useLazyModule(PREVIEW_MOCK_CHUNK, presenterMode && previewEverOpened);
+  const BorrowerOfferPreviewMock = presenterMode && previewEverOpened ? previewChunk.module?.BorrowerOfferPreviewMock : undefined;
   const allowedDraftChannels = campaignBinding
     ? SAVED_CAMPAIGN_OUTREACH_CHANNELS
     : undefined;
@@ -444,7 +447,10 @@ export default function OfferOrchestrator() {
                 variant="ghost"
                 size="sm"
                 icon="user"
-                onClick={() => setBorrowerPreviewOpen(true)}
+                onClick={() => {
+                  setPreviewEverOpened(true);
+                  setBorrowerPreviewOpen(true);
+                }}
                 data-testid="preview-borrower-offer"
               >
                 Preview borrower view
@@ -484,7 +490,7 @@ export default function OfferOrchestrator() {
         </div>
       )}
       {BorrowerOfferPreviewMock && b && (
-        <BorrowerOfferPreviewMock borrower={b} onClose={() => setBorrowerPreviewOpen(false)} />
+        <BorrowerOfferPreviewMock borrower={b} open={borrowerPreviewOpen} onClose={() => setBorrowerPreviewOpen(false)} />
       )}
       <OfferReviewGrid
         borrower={b}
