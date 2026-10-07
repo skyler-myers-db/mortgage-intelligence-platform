@@ -118,7 +118,7 @@ mid-run is never a FAIL. Verdicts:
   one Genie-budget call.
 
 Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE (auth or network, or nothing
-measurable).
+measurable), 64 a usage error (argparse's own 2 would read as INCONCLUSIVE).
 
 | Criterion | Live verdict |
 | --- | --- |

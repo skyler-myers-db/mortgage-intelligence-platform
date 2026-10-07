@@ -76,11 +76,15 @@ def test_the_tool_is_read_only_over_the_guards_and_imported_by_nothing() -> None
                 assert "genie_tiles_spike" not in text and "genie_tiles_live" not in text, path
 
 
-def test_a_mode_is_required() -> None:
-    with pytest.raises(SystemExit):
-        spike.main([])
-    with pytest.raises(SystemExit):
-        spike.main(["--live", "--space-id", "space-1"])  # no profile
+@pytest.mark.parametrize(
+    "argv",
+    [[], ["--live", "--space-id", "space-1"], ["--live", "--profile", "me"], ["--offline", "--max-executions", "x"]],
+    ids=["no mode", "no profile", "no space", "bad int"],
+)
+def test_a_usage_error_exits_64_never_the_inconclusive_2(argv: list[str]) -> None:
+    with pytest.raises(SystemExit) as exited:
+        spike.main(argv)
+    assert exited.value.code == spike.USAGE_EXIT == 64
 
 
 # ------------------------------------------------- --live (W5c), a fake client
