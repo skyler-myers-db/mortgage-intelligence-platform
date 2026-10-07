@@ -11,6 +11,8 @@
  *  (b) RUM off: the explicit empty state, and no field-performance read;
  *      axe-clean;
  *  (c) a 503: the describeApiError callout with Retry;
+ *  (c2) a Refresh that fails after a good read: the same callout and Retry,
+ *      above the last good tables (never swallowed under them);
  *  (d) the section below never moves while the panel's chunk and its read
  *      load (the Suspense fallback reserves the panel's block size);
  *  (e) Chromium, RUM installed: a real LCP from web-vitals on /lead-queue
@@ -131,6 +133,34 @@ test('(c) a 503 shows the describeApiError callout with Retry', async ({ app, hy
   await expect(alert.getByRole('button', { name: 'Retry loading field performance' })).toBeVisible();
 });
 
+test('(c2) a failed Refresh after a good read keeps the callout and Retry above the last good tables', async ({ app, hygiene, mockApi, page }) => {
+  hygiene.allow('console.error', /status of 503/);
+  rumConfigOnly(mockApi);
+  await app.gotoRoute('/admin-config');
+  await openPanel(page);
+  const panel = page.locator(PANEL);
+  await expect(panel.getByRole('heading', { name: 'p75 by route' })).toBeVisible();
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+
+  mockApi.register<{ detail: string }>('GET', '/api/admin/field-performance', () =>
+    json({ detail: 'lakebase is temporarily unavailable' }, { status: 503 }),
+  );
+  await panel.getByRole('button', { name: 'Refresh field performance' }).click();
+  await expect.poll(() => fieldReads(mockApi)).toEqual(['days=7', 'days=7']);
+
+  const alert = panel.getByRole('alert');
+  await expect(alert).toContainText("Couldn't load field performance");
+  await expect(alert.getByRole('button', { name: 'Retry loading field performance' })).toBeVisible();
+  await expect(panel.getByRole('heading', { name: 'p75 by route' })).toBeVisible();
+  await expect(panel.locator('.chip--success').first()).toBeVisible();
+  const calloutAboveTables = await panel.evaluate((root) => {
+    const callout = root.querySelector('[role="alert"]');
+    const table = root.querySelector('table');
+    return Boolean(callout && table && callout.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  expect(calloutAboveTables, 'the callout sits above the stale tables').toBe(true);
+});
+
 test('(d) the section below never moves while the panel loads', async ({ app, mockApi, page }) => {
   rumConfigOnly(mockApi);
   const releaseChunk = await holdChunk(page, 'admin-config.field-performance');
@@ -215,7 +245,6 @@ test('(f) the section nav gains Field performance and stays one row; its width i
     { type: 'section-nav console closed', description: JSON.stringify(closed) },
     { type: 'section-nav console open', description: JSON.stringify(open) },
   );
-  console.log(`section-nav 1440x900 console closed ${JSON.stringify(closed)} / open ${JSON.stringify(open)}`);
   expect(closed.rows).toBe(1);
   expect(open.rows).toBe(1);
 });
