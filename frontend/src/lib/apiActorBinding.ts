@@ -26,20 +26,18 @@ export const ACTOR_KEY_HEADER = 'X-MIP-Actor-Key';
 export const ACTOR_CHANGED_REASON = 'actor_changed';
 
 /** Route paths (apiTransport's `_routePath` form) that never carry the key. */
-const UNBOUND_ROUTES: ReadonlySet<string> = new Set(['/api/health', '/api/session']);
+const UNBOUND_ROUTES: readonly string[] = ['/api/health', '/api/session'];
 
-function plainHeaders(headers: HeadersInit | undefined): Record<string, string> {
-  if (!headers) return {};
-  if (headers instanceof Headers) return Object.fromEntries(headers.entries());
-  if (Array.isArray(headers)) return Object.fromEntries(headers);
-  return { ...headers };
-}
-
-/** `init` with the owner key merged into a plain-record headers object, or `init` unchanged. */
+/**
+ * `init` with the owner key merged into its headers, or `init` unchanged.
+ * The transport only ever builds plain-record headers (apiTransport
+ * _jsonBody: Content-Type, Idempotency-Key and extra headers), so a record
+ * spread keeps every one of them.
+ */
 export function withActorKey(routePath: string, init: RequestInit | undefined): RequestInit | undefined {
   const key = documentOwnerKey();
-  if (key === null || UNBOUND_ROUTES.has(routePath)) return init;
-  return { ...init, headers: { ...plainHeaders(init?.headers), [ACTOR_KEY_HEADER]: key } };
+  if (key === null || UNBOUND_ROUTES.includes(routePath)) return init;
+  return { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), [ACTOR_KEY_HEADER]: key } };
 }
 
 /**
@@ -49,13 +47,10 @@ export function withActorKey(routePath: string, init: RequestInit | undefined): 
  */
 export async function actorRefusalReason(res: Response): Promise<string | null> {
   if (res.status !== 409) return null;
-  let reason: unknown = null;
-  try {
-    const body: unknown = await res.clone().json();
-    reason = body && typeof body === 'object' ? (body as { reason?: unknown }).reason : null;
-  } catch {
-    return null;
-  }
+  const reason: unknown = await res
+    .clone()
+    .json()
+    .then((body: { reason?: unknown } | null) => body?.reason, () => null);
   if (typeof reason !== 'string') return null;
   if (reason === ACTOR_CHANGED_REASON) requestHealthRecheck();
   return reason;

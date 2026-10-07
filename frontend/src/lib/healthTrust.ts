@@ -64,16 +64,11 @@ export interface ActorIdentity {
   aliases: readonly string[];
 }
 
-const NO_ALIASES: readonly string[] = Object.freeze([]);
+const NO_ALIASES: readonly string[] = [];
 
-/** The same key and the same aliases in the same order. */
+/** The same key and the same aliases in the same order (a key never holds a comma). */
 export function sameActorIdentity(a: ActorIdentity, b: ActorIdentity): boolean {
-  return a.key === b.key && a.aliases.length === b.aliases.length && a.aliases.every((alias, i) => alias === b.aliases[i]);
-}
-
-function healthAliases(key: string | null, value: unknown): readonly string[] {
-  if (key === null || !Array.isArray(value)) return NO_ALIASES;
-  return value.filter(isActorCacheKey);
+  return a.key === b.key && a.aliases.join() === b.aliases.join();
 }
 
 /** Absent, null or a well-formed key: the only values a real body carries. */
@@ -92,7 +87,8 @@ export function healthActorObservation(payload: HealthPayload): HealthActorObser
     isKeyOrNothing(payload.actor_cache_key);
   if (!real) return { trusted: false };
   const key = payload.actor_cache_key ?? null;
-  return { trusted: true, key, aliases: healthAliases(key, payload.actor_cache_key_aliases) };
+  const listed: unknown = payload.actor_cache_key_aliases;
+  return { trusted: true, key, aliases: key !== null && Array.isArray(listed) ? listed.filter(isActorCacheKey) : NO_ALIASES };
 }
 
 /**
