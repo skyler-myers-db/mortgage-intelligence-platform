@@ -89,3 +89,46 @@ def validate_borrower_proof_sql(sql: str) -> str:
     if disallowed:
         raise ValueError("proof SQL references unapproved relations: " + ", ".join(sorted(disallowed)))
     return text
+
+
+def kpi_proof_relations() -> set[str]:
+    """Return the relations a KPI reproduce statement may read (audit flow-06).
+
+    The headline KPIs are aggregates over the semantic headline view joined to
+    gold Borrower 360; nothing silver, first-party, raw or shared.
+    """
+
+    return {
+        qualify("semantics", "portfolio_headline_metric_view"),
+        qualify("gold", "borrower_360"),
+    }
+
+
+def validate_kpi_proof_sql(sql: str) -> str:
+    """Return ``sql`` if it satisfies the KPI reproduce SQL policy.
+
+    The borrower proof screen's constants, used unchanged (read-only, no
+    comments or semicolons, no ``SELECT *``, no PII-adjacent column), over the
+    KPI relation set. A statement that fails is refused, never relaxed.
+    """
+
+    text = str(sql).strip()
+    upper = text.upper()
+    if not (upper.startswith("SELECT ") or upper.startswith("WITH ")):
+        raise ValueError("KPI proof SQL must start with SELECT or WITH")
+    if any(token in text for token in _FORBIDDEN_SQL_TOKENS):
+        raise ValueError("KPI proof SQL must not contain comments or semicolons")
+    if re.search(r"SELECT\s+\*", text, re.IGNORECASE):
+        raise ValueError("KPI proof SQL must not use SELECT *")
+    if _FORBIDDEN_SQL_WORDS.search(text):
+        raise ValueError("KPI proof SQL must be read-only")
+    if _FORBIDDEN_COLUMNS.search(text):
+        raise ValueError("KPI proof SQL references a forbidden PII-adjacent column")
+
+    referenced = {match.group(1) for match in _RELATION_RE.finditer(text)}
+    if not referenced:
+        raise ValueError("KPI proof SQL must reference an approved UC relation")
+    disallowed = referenced - kpi_proof_relations()
+    if disallowed:
+        raise ValueError("KPI proof SQL references unapproved relations: " + ", ".join(sorted(disallowed)))
+    return text

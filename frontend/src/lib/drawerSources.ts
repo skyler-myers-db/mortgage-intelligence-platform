@@ -1,5 +1,5 @@
 import type { DrawerSource } from '../components/AppContext';
-import { DRAWER_SOURCES } from './drawerSourceRegistry';
+import { DRAWER_SOURCES, isDrawerSourceKey, type DrawerSourceKey } from './drawerSourceRegistry';
 
 export { DRAWER_SOURCES } from './drawerSourceRegistry';
 export { segmentEvidenceSource } from './segmentEvidenceSource';
@@ -169,6 +169,8 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   if (key.includes('segment_combination_rollup')) {
     return {
       ...DRAWER_SOURCES.segmentPopulation,
+      // Its own source: the segment family's registry prose does not describe it.
+      registryKey: undefined,
       title: 'Segment combinations',
       short: 'Segment combinations',
       description: undefined,
@@ -306,8 +308,6 @@ export function descriptorForEvidence(event: {
  * it is the product-truth contract for what each clickable source means.
  */
 
-type DrawerSourceKey = keyof typeof DRAWER_SOURCES;
-
 const DESTINATION_BY_SOURCE = {
   population: UNITY_CATALOG_DESTINATION,
   populationMarketable: UNITY_CATALOG_DESTINATION,
@@ -394,6 +394,8 @@ const DESTINATION_BY_SOURCE = {
 
 export function evidenceDestinationFor(source?: DrawerSource | null): EvidenceDestination {
   if (!source) return UNMAPPED_DESTINATION;
+  // A registry entry, or a builder spread from one, names its key (bundle-04).
+  if (isDrawerSourceKey(source.registryKey)) return DESTINATION_BY_SOURCE[source.registryKey];
   if (source.assetKey && source.assetKey in DRAWER_SOURCES) {
     return DESTINATION_BY_SOURCE[source.assetKey as DrawerSourceKey];
   }

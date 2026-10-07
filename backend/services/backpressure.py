@@ -214,6 +214,11 @@ class BackpressureController:
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if self._BORROWER_ID_RE.match(path):
             return RouteBudget("borrower-dossier", settings.mip_rate_limit_expensive_per_minute, "warehouse")
+        if method.upper() == "GET" and path.startswith("/api/assets/"):
+            # Asset freshness for every authenticated user (audit critic-03):
+            # one source-readiness SELECT on the warehouse per drawer open.
+            # The admin metadata read stays under the "/api/admin" prefix.
+            return RouteBudget("warehouse-read", settings.mip_rate_limit_expensive_per_minute, "warehouse")
         # NOTE: lead assign/disposition calls are POSTs, so they are already
         # classified by the mutation branch above -- a dedicated pattern here
         # would be unreachable dead code (removed 2026-06-10 audit).

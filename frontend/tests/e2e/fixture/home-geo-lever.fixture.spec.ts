@@ -78,6 +78,8 @@ test.describe('WHY NOW leads with the par move since the last visit', () => {
 
     const drawer = await app.openEvidenceDrawer(rate.locator('.evidence-chip'));
     await expect(drawer).toContainText('30-year par rate since your last visit');
+    // The two weekly prints are its signals, under the hood (W5c w5-evidence-drawer, flow-10).
+    await drawer.getByRole('tab', { name: 'Under the hood' }).click();
     await expect(drawer).toContainText('Week of 2026-01-12');
     await expect(drawer).toContainText('mip.gold.rate_window_weekly');
     await expect(drawer).toContainText('MORTGAGE30US');

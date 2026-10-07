@@ -5,7 +5,12 @@
  * snapshot count; the rate and rule facts COINCIDED with the change.
  */
 
-export type HomeAttributionMeasure = 'refi_economics_screen' | 'high_opportunity' | 'offers_recommended' | 'listed_for_sale';
+export type HomeAttributionMeasure =
+  | 'refi_economics_screen'
+  | 'high_opportunity'
+  | 'offers_recommended'
+  | 'listed_for_sale'
+  | 'competitor_lien';
 
 export interface HomeAttributionState {
   /** 2-char state code. */
@@ -46,4 +51,9 @@ export interface HomeSummaryAttributionResponse {
   offer_rules_changed_since_baseline: boolean | null;
   sources: string[];
   note: string;
+  /**
+   * False when the daily funnel snapshot has no per-state column for this
+   * measure yet: the route reads nothing and the drawer says so.
+   */
+  snapshotted: boolean;
 }

@@ -31,6 +31,9 @@ import './DeltaExplainer.css';
  * waterfall (aria-hidden) and as a `.tbl` table (its accessible equivalent,
  * each state linking to its Lead Queue cohort), then what COINCIDED with the
  * change: the two weekly 30-year par prints and the last offer-rules change.
+ * A measure the snapshot does not attribute per state yet answers
+ * `snapshotted: false` (the route reads nothing) and the panel says so; the
+ * note keys on that field alone, never on a measure name.
  *
  * deviation:delta-explainer: a declared extension of the drawer body's
  * source card (design_files/index.html:665-681): block `.delta-explainer`;
@@ -57,14 +60,22 @@ export default function DeltaExplainer({ explainer }: { explainer: DeltaExplaine
           query={query}
           subject="The change breakdown"
           loading={<div className="skeleton delta-explainer__skeleton" aria-hidden="true" />}
-          isEmpty={(fresh) => fresh.data.total_change === null}
+          isEmpty={(fresh) => fresh.data.snapshotted !== false && fresh.data.total_change === null}
           empty={(
             <p className="body flush">
               No daily funnel snapshot covers this period yet, so the change cannot be broken down by state.
             </p>
           )}
         >
-          {(fresh) => <Breakdown response={fresh.data} lastGoodAt={fresh.lastGoodAt} liveDisplay={explainer.liveDisplay} />}
+          {(fresh) =>
+            fresh.data.snapshotted === false ? (
+              <p className="body flush" data-testid="delta-explainer-not-snapshotted">
+                Per-state attribution is not snapshotted for this measure yet.
+              </p>
+            ) : (
+              <Breakdown response={fresh.data} lastGoodAt={fresh.lastGoodAt} liveDisplay={explainer.liveDisplay} />
+            )
+          }
         </AsyncState>
       ) : (
         <p className="body flush" data-testid="delta-explainer-too-old">

@@ -116,14 +116,15 @@ describe('Asset detail — denied actor', () => {
     expect(container.textContent).toContain('Home destination');
   });
 
-  it('keeps the generic unavailable state for non-403 failures', async () => {
+  it('keeps the generic failure surface for non-403 failures', async () => {
     vi.spyOn(api, 'assetMetadata').mockRejectedValue(
       new ApiError('not found', { path: '/api/admin/assets/nope/metadata', status: 404 }),
     );
     await renderAt(['/lead-queue', '/data-estate/assets/nope']);
 
     expect(denied()).toBeNull();
-    expect(container.textContent).toContain('Asset unavailable');
+    // The shared AsyncStatus vocabulary (states-04; asset.asyncState.test.tsx).
+    expect(container.querySelector('[data-async-status]')).not.toBeNull();
     expect(container.textContent).not.toContain('Required role');
   });
 });

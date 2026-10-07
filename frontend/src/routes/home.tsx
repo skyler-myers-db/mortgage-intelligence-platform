@@ -222,6 +222,7 @@ export default function Home() {
               trendNote={preview?.trends?.marketable_population?.note}
               loading={kpiRowLoading}
               source={DRAWER_SOURCES.population}
+              evidence={{ asOf: preview?.data_refreshed_at ?? null, proofKey: 'home.addressable_population' }}
             />
             <KpiCard
               label="Refi economics screen"
@@ -232,6 +233,7 @@ export default function Home() {
               trendNote={preview?.trends?.high_intent_leads?.note}
               loading={kpiRowLoading}
               source={DRAWER_SOURCES.itm}
+              evidence={{ asOf: preview?.data_refreshed_at ?? null, proofKey: 'home.in_the_money' }}
             />
             <KpiCard
               label={HIGH_OPPORTUNITY_KPI_LABEL}
@@ -242,6 +244,7 @@ export default function Home() {
               trendNote={preview?.trends?.top_tier_opportunities?.note}
               loading={kpiRowLoading}
               source={DRAWER_SOURCES.leadScore}
+              evidence={{ asOf: preview?.data_refreshed_at ?? null, proofKey: 'home.high_opportunity' }}
             />
             <KpiCard
               label="Primary offer paths"
@@ -252,6 +255,7 @@ export default function Home() {
               trendNote={preview?.trends?.offers_recommended?.note}
               loading={kpiRowLoading}
               source={DRAWER_SOURCES.nbo}
+              evidence={{ asOf: preview?.data_refreshed_at ?? null, proofKey: 'home.primary_offer_paths' }}
             />
           </div>
         )}

@@ -1698,6 +1698,102 @@
         "title": "AssetColumn",
         "type": "object"
       },
+      "AssetFreshnessResponse": {
+        "description": "Freshness of one registered asset, readable by every authenticated user.\n\nRead from the reviewed source-readiness row behind the asset (its own row\nor its primary input's): the band, the business refresh, when the row was\nchecked, its status and which row answered. Schema internals stay on the\nadministrator metadata read.",
+        "properties": {
+          "asset_key": {
+            "title": "Asset Key",
+            "type": "string"
+          },
+          "basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "freshness": {
+            "default": "unavailable",
+            "enum": [
+              "fresh",
+              "aging",
+              "stale",
+              "unavailable"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "last_updated": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Updated"
+          },
+          "source": {
+            "enum": [
+              "source_readiness",
+              "unavailable",
+              "not_tracked"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "live",
+                  "demo_synthetic",
+                  "configured_empty",
+                  "not_configured",
+                  "roadmap",
+                  "permission_denied",
+                  "error",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "unknown",
+                "type": "string"
+              }
+            ],
+            "default": "unknown",
+            "title": "Status"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_key",
+          "title",
+          "source"
+        ],
+        "title": "AssetFreshnessResponse",
+        "type": "object"
+      },
       "AssetLineageNode": {
         "properties": {
           "asset_path": {
@@ -10222,7 +10318,8 @@
               "refi_economics_screen",
               "high_opportunity",
               "offers_recommended",
-              "listed_for_sale"
+              "listed_for_sale",
+              "competitor_lien"
             ],
             "title": "Measure",
             "type": "string"
@@ -10273,6 +10370,11 @@
             "format": "date",
             "title": "Requested Baseline Date",
             "type": "string"
+          },
+          "snapshotted": {
+            "default": true,
+            "title": "Snapshotted",
+            "type": "boolean"
           },
           "sources": {
             "items": {
@@ -10661,6 +10763,102 @@
           "offers_recommended"
         ],
         "title": "KpiDeltas",
+        "type": "object"
+      },
+      "KpiProofParam": {
+        "description": "One named bind the statement uses, as the KPI's read binds it.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "title": "KpiProofParam",
+        "type": "object"
+      },
+      "KpiProofResponse": {
+        "description": "The statement behind one KPI card and how to read its number.",
+        "properties": {
+          "databricks_sql_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Databricks Sql Url"
+          },
+          "kpi": {
+            "enum": [
+              "home.addressable_population",
+              "home.in_the_money",
+              "home.high_opportunity",
+              "home.primary_offer_paths",
+              "funnel.population",
+              "funnel.high_opportunity"
+            ],
+            "title": "Kpi",
+            "type": "string"
+          },
+          "measure_column": {
+            "title": "Measure Column",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "params": {
+            "items": {
+              "$ref": "#/components/schemas/KpiProofParam"
+            },
+            "title": "Params",
+            "type": "array"
+          },
+          "predicates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Predicates",
+            "type": "array"
+          },
+          "relations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Relations",
+            "type": "array"
+          },
+          "sql": {
+            "title": "Sql",
+            "type": "string"
+          },
+          "sql_hash": {
+            "title": "Sql Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kpi",
+          "measure_column",
+          "predicates",
+          "sql",
+          "sql_hash",
+          "params",
+          "relations",
+          "note"
+        ],
+        "title": "KpiProofResponse",
         "type": "object"
       },
       "KpiTrend": {
@@ -18975,6 +19173,50 @@
         ]
       }
     },
+    "/api/assets/{asset_key}/freshness": {
+      "get": {
+        "deprecated": true,
+        "description": "Freshness band, last refresh and readiness basis of a registered asset.\n\nReads one reviewed source-readiness row; an asset outside the fixed\nregistry is a 404 before any SQL runs. A warehouse failure is a 503 and\nis never cached, so the next open asks again.",
+        "operationId": "get_api_assets_asset_key_freshness_get_asset_freshness",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "title": "Asset Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetFreshnessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Asset Freshness",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
     "/api/audit/count": {
       "get": {
         "deprecated": true,
@@ -22932,7 +23174,8 @@
                 "refi_economics_screen",
                 "high_opportunity",
                 "offers_recommended",
-                "listed_for_sale"
+                "listed_for_sale",
+                "competitor_lien"
               ],
               "title": "Measure",
               "type": "string"
@@ -22974,6 +23217,58 @@
         "summary": "Home Summary Attribution",
         "tags": [
           "home"
+        ]
+      }
+    },
+    "/api/kpi-proof": {
+      "get": {
+        "deprecated": true,
+        "description": "The governed statement that produced one KPI card's number.\n\nAUDIT EXEMPT: emits fixed governed SQL text; reads nothing.",
+        "operationId": "get_api_kpi_proof_get_kpi_proof",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kpi",
+            "required": true,
+            "schema": {
+              "enum": [
+                "home.addressable_population",
+                "home.in_the_money",
+                "home.high_opportunity",
+                "home.primary_offer_paths",
+                "funnel.population",
+                "funnel.high_opportunity"
+              ],
+              "title": "Kpi",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KpiProofResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Kpi Proof",
+        "tags": [
+          "evidence"
         ]
       }
     },
@@ -29365,6 +29660,49 @@
         ]
       }
     },
+    "/api/v1/assets/{asset_key}/freshness": {
+      "get": {
+        "description": "Freshness band, last refresh and readiness basis of a registered asset.\n\nReads one reviewed source-readiness row; an asset outside the fixed\nregistry is a 404 before any SQL runs. A warehouse failure is a 503 and\nis never cached, so the next open asks again.",
+        "operationId": "get_api_v1_assets_asset_key_freshness_get_asset_freshness",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_key",
+            "required": true,
+            "schema": {
+              "title": "Asset Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetFreshnessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Asset Freshness",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
     "/api/v1/audit/count": {
       "get": {
         "description": "How many ledger rows match the /events/page filters, up to a cap (a recorded read).",
@@ -33267,7 +33605,8 @@
                 "refi_economics_screen",
                 "high_opportunity",
                 "offers_recommended",
-                "listed_for_sale"
+                "listed_for_sale",
+                "competitor_lien"
               ],
               "title": "Measure",
               "type": "string"
@@ -33309,6 +33648,57 @@
         "summary": "Home Summary Attribution",
         "tags": [
           "home"
+        ]
+      }
+    },
+    "/api/v1/kpi-proof": {
+      "get": {
+        "description": "The governed statement that produced one KPI card's number.\n\nAUDIT EXEMPT: emits fixed governed SQL text; reads nothing.",
+        "operationId": "get_api_v1_kpi_proof_get_kpi_proof",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kpi",
+            "required": true,
+            "schema": {
+              "enum": [
+                "home.addressable_population",
+                "home.in_the_money",
+                "home.high_opportunity",
+                "home.primary_offer_paths",
+                "funnel.population",
+                "funnel.high_opportunity"
+              ],
+              "title": "Kpi",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KpiProofResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Kpi Proof",
+        "tags": [
+          "evidence"
         ]
       }
     },

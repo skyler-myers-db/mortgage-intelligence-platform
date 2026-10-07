@@ -488,3 +488,54 @@ def test_gold_assets_still_read_delta_detail() -> None:
     assert "Delta detail is read for gold and ref assets only" not in " ".join(
         payload.known_data_gaps
     )
+
+
+_ADMIN_ONLY_LOADERS = (
+    "_load_object_info",
+    "_load_detail",
+    "_load_count",
+    "_load_columns",
+    "_load_tags",
+    "_load_properties",
+    "_load_lineage",
+)
+
+
+@pytest.mark.parametrize("asset_key", ["lead_population", "lien_current", "entrada_eval_mls_listing_v1"])
+def test_get_freshness_never_calls_the_admin_metadata_loaders(
+    monkeypatch: pytest.MonkeyPatch,
+    asset_key: str,
+) -> None:
+    """critic-03: the every-user freshness read is ONE readiness SELECT, never
+    the administrator read's object probe, Delta detail, COUNT, columns, tags,
+    properties or lineage (and never the fuzzy ``_load_readiness`` lookup)."""
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("get_freshness must not call an admin metadata loader")
+
+    for name in (*_ADMIN_ONLY_LOADERS, "_load_readiness"):
+        monkeypatch.setattr(AssetMetadataService, name, refuse)
+    fake = _AssetSqlClient()
+
+    payload = AssetMetadataService(fake).get_freshness(asset_key)
+
+    assert payload.source == "source_readiness"
+    assert len(fake.calls) == 1
+    statement, params = fake.calls[0]
+    assert "GOLD.SOURCE_READINESS" in statement.upper()
+    assert params == {"basis": resolve_asset_descriptor(asset_key).freshness_basis}
+
+
+def test_get_freshness_caches_apart_from_the_admin_metadata() -> None:
+    fake = _AssetSqlClient()
+    service = AssetMetadataService(fake)
+
+    freshness = service.get_freshness("lead_population")
+    metadata = service.get_asset("lead_population")
+    again = service.get_freshness("lead_population")
+
+    assert freshness == again
+    assert metadata.asset_path.endswith(".gold.lead_population")
+    readiness_reads = [s for s, _ in fake.calls if "GOLD.SOURCE_READINESS" in s.upper()]
+    # One freshness read (then cached) plus the admin read's own lookup.
+    assert len(readiness_reads) == 2

@@ -39,6 +39,7 @@ vi.mock('../lib/api', async (importOriginal) => ({
 }));
 
 import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { resolveDrawerProse } from '../lib/drawerSourceRegistry.prose';
 import { RateWindowPanel, RateWindowSection } from './analytics.rate-window';
 
 // Twelve Mondays from 2026-01-05; the last print (6.22%) against the 7.10%
@@ -156,7 +157,7 @@ describe('RateWindowPanel', () => {
     act(() => container.querySelector<HTMLButtonElement>('.evidence-chip')?.click());
     expect(setDrawer).toHaveBeenCalledWith(DRAWER_SOURCES.rateWindow);
     expect(DRAWER_SOURCES.rateWindow.assetPath).toBe('mip.gold.rate_window_weekly');
-    const cited = (DRAWER_SOURCES.rateWindow.signals ?? []).map((s) => s.source);
+    const cited = (resolveDrawerProse(DRAWER_SOURCES.rateWindow).signals ?? []).map((s) => s.source);
     expect(cited).toContain('mip.silver.market_rates_weekly');
     expect(cited).toContain('mip.gold.rate_window_weekly');
     // The band is measured from the book tables, and the rule cites the UC

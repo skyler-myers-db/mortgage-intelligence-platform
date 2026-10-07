@@ -265,6 +265,24 @@ export interface ResponseSchemas {
     ordinal_position: number | null;
     redacted: boolean;
   };
+  /**
+   * Freshness of one registered asset, readable by every authenticated user.
+   *
+   * Read from the reviewed source-readiness row behind the asset (its own row
+   * or its primary input's): the band, the business refresh, when the row was
+   * checked, its status and which row answered. Schema internals stay on the
+   * administrator metadata read.
+   */
+  AssetFreshnessResponse: {
+    asset_key: string;
+    basis: string | null;
+    checked_at: string | null;
+    freshness: "fresh" | "aging" | "stale" | "unavailable";
+    last_updated: string | null;
+    source: "source_readiness" | "unavailable" | "not_tracked";
+    status: "live" | "demo_synthetic" | "configured_empty" | "not_configured" | "roadmap" | "permission_denied" | "error" | "unavailable" | "unknown";
+    title: string;
+  };
   AssetLineageNode: {
     asset_path: string;
     catalog_explorer_url: string | null;
@@ -1429,7 +1447,7 @@ export interface ResponseSchemas {
     current_snapshot_date: string | null;
     current_total: number | null;
     label: string;
-    measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+    measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale" | "competitor_lien";
     nearest_snapshot: boolean;
     note: string;
     offer_rules_changed_since_baseline: boolean | null;
@@ -1437,6 +1455,7 @@ export interface ResponseSchemas {
     population: "addressable";
     rate: ResponseSchemas['HomeAttributionRate'];
     requested_baseline_date: string;
+    snapshotted: boolean;
     sources: string[];
     states: ResponseSchemas['HomeAttributionState'][];
     total_change: number | null;
@@ -1503,6 +1522,23 @@ export interface ResponseSchemas {
     offers_available: number;
     offers_recommended: number;
     refi_economics_screen: number;
+  };
+  /** One named bind the statement uses, as the KPI's read binds it. */
+  KpiProofParam: {
+    name: string;
+    value: string;
+  };
+  /** The statement behind one KPI card and how to read its number. */
+  KpiProofResponse: {
+    databricks_sql_url: string | null;
+    kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity";
+    measure_column: string;
+    note: string;
+    params: ResponseSchemas['KpiProofParam'][];
+    predicates: string[];
+    relations: string[];
+    sql: string;
+    sql_hash: string;
   };
   /**
    * A single KPI's 7-day history + delta.
@@ -3199,6 +3235,15 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['SignalAnalyticsResponse'];
   };
+  "GET /api/v1/assets/{asset_key}/freshness": {
+    pathParams: {
+      asset_key: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['AssetFreshnessResponse'];
+  };
   "GET /api/v1/audit/count": {
     pathParams: Record<string, never>;
     query: {
@@ -3551,12 +3596,21 @@ export interface ApiOperations {
   "GET /api/v1/home/summary/attribution": {
     pathParams: Record<string, never>;
     query: {
-      measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale";
+      measure: "refi_economics_screen" | "high_opportunity" | "offers_recommended" | "listed_for_sale" | "competitor_lien";
       baseline: string;
     };
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['HomeSummaryAttributionResponse'];
+  };
+  "GET /api/v1/kpi-proof": {
+    pathParams: Record<string, never>;
+    query: {
+      kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity";
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['KpiProofResponse'];
   };
   "GET /api/v1/leads": {
     pathParams: Record<string, never>;

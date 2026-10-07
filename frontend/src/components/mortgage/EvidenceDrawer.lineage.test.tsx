@@ -30,6 +30,7 @@ const appMocks = vi.hoisted(() => ({
 const apiMocks = vi.hoisted(() => ({
   assetMetadata: vi.fn(),
   lineageManifest: vi.fn(),
+  assetFreshness: vi.fn(),
 }));
 
 vi.mock('../AppContext', () => ({
@@ -46,6 +47,11 @@ vi.mock('../../lib/api', async (importOriginal) => ({
     assetMetadata: apiMocks.assetMetadata,
     lineageManifest: apiMocks.lineageManifest,
   },
+}));
+
+// The every-user freshness read (critic-03) is a lazy-only client, not on `api`.
+vi.mock('../../lib/apiClients/assets', () => ({
+  assetsApi: { assetFreshness: apiMocks.assetFreshness },
 }));
 
 const WORKSPACE = 'https://dbc-vitest.cloud.databricks.com';
@@ -223,6 +229,16 @@ describe('EvidenceDrawer lineage tab', () => {
       catalog_explorer_url: null,
     });
     apiMocks.lineageManifest.mockResolvedValue(MANIFEST);
+    apiMocks.assetFreshness.mockResolvedValue({
+      asset_key: 'borrower_360',
+      title: 'Gold Borrower 360',
+      freshness: 'fresh',
+      last_updated: null,
+      checked_at: null,
+      status: 'live',
+      basis: 'UC Gold Borrower 360',
+      source: 'source_readiness',
+    });
   });
 
   afterEach(() => {
@@ -241,6 +257,13 @@ describe('EvidenceDrawer lineage tab', () => {
           </MemoryRouter>
         </QueryClientProvider>,
       );
+    });
+    await settle();
+  }
+
+  async function openUnderTheHoodTab(): Promise<void> {
+    await act(async () => {
+      (document.getElementById('drawer-tab-under-the-hood') as HTMLButtonElement).click();
     });
     await settle();
   }
@@ -264,11 +287,21 @@ describe('EvidenceDrawer lineage tab', () => {
     expect(overviewTab?.getAttribute('aria-selected')).toBe('true');
     expect(apiMocks.lineageManifest).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).toContain('Governed assets');
-    expect(document.body.textContent).toContain('Compact semantics');
+    expect(document.body.textContent).toContain(
+      'The Unity Catalog objects behind this source. The Lineage tab shows how they connect.',
+    );
+    expect(document.body.textContent).not.toContain('Compact semantics');
     expect(document.body.textContent).not.toContain(
       'One or more Catalog Explorer links are unavailable because the Databricks workspace host or asset mapping is not configured.',
     );
     expect(document.querySelectorAll('.governed-assets__list .lineage-node__chip')).toHaveLength(3);
+
+    // How the list is built and the sanitized signals live under the hood (flow-10).
+    expect(document.querySelectorAll('.lineage-node--signal')).toHaveLength(0);
+    await openUnderTheHoodTab();
+    expect(document.body.textContent).toContain(
+      'Each governed object behind this source is listed once on Overview.',
+    );
     const signalLinks = Array.from(
       document.querySelectorAll<HTMLAnchorElement>('.lineage-node--signal a'),
     );
@@ -430,12 +463,17 @@ describe('EvidenceDrawer lineage tab', () => {
   it('keeps governed explanations visible when metadata and lineage requests fail', async () => {
     apiMocks.assetMetadata.mockRejectedValue(new Error('metadata unavailable'));
     apiMocks.lineageManifest.mockRejectedValue(new Error('manifest unavailable'));
+    apiMocks.assetFreshness.mockRejectedValue(new Error('freshness unavailable'));
     appMocks.drawer = MAPPED_SOURCE;
     await render();
 
-    expect(document.body.textContent).toContain('Metadata not loaded');
-    expect(document.body.textContent).toContain('Governed asset metadata requires admin access');
+    expect(document.body.textContent).toContain('Freshness not loaded');
+    expect(document.body.textContent).not.toContain('Stale');
     expect(document.body.textContent).toContain('Governed assets unavailable; manifest not loaded');
+    expect(document.body.textContent).toContain(MAPPED_SOURCE.description);
+
+    await openUnderTheHoodTab();
+    expect(document.body.textContent).toContain('Governed asset metadata could not be loaded');
 
     await openLineageTab();
     expect(document.body.textContent).toContain('governed lineage manifest could not be loaded');
@@ -501,8 +539,14 @@ describe('EvidenceDrawer lineage tab', () => {
     expect(document.activeElement).toBe(overview);
     expect(overview.getAttribute('aria-selected')).toBe('true');
 
+    const underTheHood = document.getElementById('drawer-tab-under-the-hood') as HTMLButtonElement;
     await act(async () => {
       overview.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    });
+    expect(document.activeElement).toBe(underTheHood);
+    expect(underTheHood.getAttribute('aria-selected')).toBe('true');
+    await act(async () => {
+      underTheHood.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
     });
     expect(document.activeElement).toBe(lineage);
     expect(lineage.getAttribute('aria-selected')).toBe('true');

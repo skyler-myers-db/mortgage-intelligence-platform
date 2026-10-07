@@ -9,7 +9,12 @@ import {
   DRAWER_SOURCES,
   evidenceDestinationFor,
 } from './drawerSources';
+import { resolveDrawerProse } from './drawerSourceRegistry.prose';
+import type { DrawerSource } from '../components/AppContext';
 import lineageManifest from '../../../backend/resources/lineage_manifest.json';
+
+/** A registry entry's signals as the drawer renders them (prose resolved by key, bundle-04). */
+const signalsOf = (source: DrawerSource) => resolveDrawerProse(source).signals ?? [];
 
 /**
  * The drawer renders governed lineage from the manifest family (see
@@ -56,7 +61,7 @@ describe('home headline KPI sources cite the metric view (S1)', () => {
       // lineage link resolve to a real governed table.
       expect(source.assetKey).toBeTruthy();
       expect(
-        (source.signals ?? []).some((signal) =>
+        signalsOf(source).some((signal) =>
           signal.source.includes('portfolio_headline_metric_view'),
         ),
       ).toBe(true);
@@ -65,7 +70,7 @@ describe('home headline KPI sources cite the metric view (S1)', () => {
 
   it('keeps the offers-available measure visible on the offer drawer', () => {
     expect(
-      (DRAWER_SOURCES.nbo.signals ?? []).some(
+      signalsOf(DRAWER_SOURCES.nbo).some(
         (signal) => signal.source === 'portfolio_headline_metric_view.offer_available',
       ),
     ).toBe(true);
@@ -336,7 +341,7 @@ describe('descriptorFor', () => {
 
   it('documents estimated UPB confidence-band lineage and inputs', () => {
     const familyFqns = MANIFEST_FAMILY_FQNS.get(DRAWER_SOURCES.lien.lineageFamily ?? '');
-    const signalSources = DRAWER_SOURCES.lien.signals?.map((signal) => signal.source) ?? [];
+    const signalSources = signalsOf(DRAWER_SOURCES.lien).map((signal) => signal.source);
 
     expect(familyFqns?.has('mip.gold.fn_bounded_mortgage_rate')).toBe(true);
     expect(familyFqns?.has('mip.gold.fn_estimated_upb_confidence_band')).toBe(true);

@@ -21,6 +21,7 @@ const appMocks = vi.hoisted(() => ({
 const apiMocks = vi.hoisted(() => ({
   assetMetadata: vi.fn(),
   lineageManifest: vi.fn(),
+  assetFreshness: vi.fn(),
 }));
 
 vi.mock('../AppContext', () => ({
@@ -38,6 +39,22 @@ vi.mock('../../lib/api', async (importOriginal) => ({
     lineageManifest: apiMocks.lineageManifest,
   },
 }));
+
+// Freshness for every role (critic-03) is a lazy-only client, not on `api`.
+vi.mock('../../lib/apiClients/assets', () => ({
+  assetsApi: { assetFreshness: apiMocks.assetFreshness },
+}));
+
+const FRESHNESS = {
+  asset_key: 'lead_population',
+  title: 'Gold Lead Queue Population',
+  freshness: 'fresh',
+  last_updated: '2026-05-20 12:00:00',
+  checked_at: '2026-05-20 12:15:00',
+  status: 'live',
+  basis: 'UC Gold Lead Population',
+  source: 'source_readiness',
+} as const;
 
 const SOURCE: DrawerSource = {
   title: 'Lead population',
@@ -89,6 +106,7 @@ describe('EvidenceDrawer accessibility', () => {
       last_updated: '2026-05-20',
       catalog_explorer_url: null,
     });
+    apiMocks.assetFreshness.mockResolvedValue(FRESHNESS);
   });
 
   afterEach(() => {
@@ -131,10 +149,6 @@ describe('EvidenceDrawer accessibility', () => {
     );
     expect(document.activeElement).toBe(close);
     expect(assetLink).toBeTruthy();
-    expect(document.body.textContent).toContain('Observed as a table in this workspace.');
-    expect(document.body.textContent).toContain(
-      'Verified through system.information_schema.tables.',
-    );
 
     assetLink?.focus();
     await act(async () => {
@@ -194,9 +208,14 @@ describe('EvidenceDrawer accessibility', () => {
     await render();
 
     expect(apiMocks.assetMetadata).not.toHaveBeenCalled();
-    // Honest state, not a fake data problem: the chip says why.
-    expect(document.body.textContent).toContain('Admin-only freshness');
-    expect(document.body.textContent).not.toContain('Metadata not loaded');
+    // critic-03: the buyer sees the same freshness an administrator does,
+    // from the every-user read, with one refresh fact and its basis.
+    expect(apiMocks.assetFreshness).toHaveBeenCalledWith('lead_population', expect.anything());
+    expect(document.querySelector('.source-freshness')?.textContent).toBe('Fresh');
+    expect(document.querySelector('[data-testid="evidence-freshness-foot"]')?.textContent).toMatch(
+      /^Last refresh .+ · via UC Gold Lead Population$/,
+    );
+    expect(document.body.textContent).not.toContain('Freshness not loaded');
     // The evidence itself is unaffected.
     expect(document.body.textContent).toContain(SOURCE.description);
 
@@ -207,7 +226,16 @@ describe('EvidenceDrawer accessibility', () => {
     await render();
 
     expect(apiMocks.assetMetadata).toHaveBeenCalledWith('lead_population', expect.anything());
-    expect(document.body.textContent).not.toContain('Admin-only freshness');
+    // The administrator's chip comes from the same every-user read.
+    expect(apiMocks.assetFreshness).toHaveBeenCalledWith('lead_population', expect.anything());
+    expect(document.querySelector('.source-freshness')?.textContent).toBe('Fresh');
+    // The catalog detail is under the hood.
+    await act(async () => {
+      (document.getElementById('drawer-tab-under-the-hood') as HTMLButtonElement).click();
+    });
+    await settle();
+    expect(document.body.textContent).toContain('Observed as a table in this workspace.');
+    expect(document.body.textContent).toContain('Verified through system.information_schema.tables.');
   });
 });
 
@@ -243,6 +271,7 @@ describe('EvidenceDrawer admin-only actions', () => {
       lineage: [],
       catalog_explorer_url: null,
     });
+    apiMocks.assetFreshness.mockResolvedValue(FRESHNESS);
   });
 
   afterEach(() => {

@@ -39,6 +39,15 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: apiMocks,
 }));
+// The every-user freshness read (critic-03): a lazy-only client, answered here.
+vi.mock('../../lib/apiClients/assets', () => ({
+  assetsApi: {
+    assetFreshness: vi.fn(async () => ({
+      asset_key: 'borrower_360', title: 'Gold Borrower 360', freshness: 'fresh', last_updated: null,
+      checked_at: null, status: 'live', basis: 'UC Gold Borrower 360', source: 'source_readiness',
+    })),
+  },
+}));
 
 import { EvidenceDrawer } from './EvidenceDrawer';
 import { LazyEvidenceDrawerBody } from './evidenceDrawerBodyLoader';
