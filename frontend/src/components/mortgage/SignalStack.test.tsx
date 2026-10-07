@@ -19,17 +19,12 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import type { SegmentCombinationResponse } from '../../types/segmentCombinations';
 import { preloadAsyncFailure } from '../ui/AsyncState';
 import { SignalStack } from './SignalStack';
-// @ts-expect-error Frontend app types intentionally exclude Node globals; this
-// test reads the stylesheet's source text under Vitest only (a `?raw` import
-// of a .css module resolves to '' under this Vitest config).
-import { readFileSync } from 'node:fs';
-// @ts-expect-error see node:fs note above.
+// @ts-expect-error see node:fs note above (a `?raw` import of a .css module
+// resolves to '' under this Vitest config, so the source is read from disk).
 import { join } from 'node:path';
 
 declare const process: { cwd(): string };
 const signalStackCss = readFileSync(join(process.cwd(), 'src/components/mortgage/SignalStack.css'), 'utf8') as string;
-
-declare const process: { cwd(): string };
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
