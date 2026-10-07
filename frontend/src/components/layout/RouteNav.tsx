@@ -8,7 +8,7 @@ import { saveDataRequested } from '../../lib/prefetch';
 import { prefetchRouteData } from '../../lib/routeDataPrefetch';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import {
-  NAVIGATION_ROUTE_IDS,
+  NAVIGATION_GROUPS,
   ROUTES,
   borrowerPath,
   offerPath,
@@ -22,6 +22,9 @@ import { sessionQueryOptions, useAuditLedgerAccess } from '../../lib/sessionQuer
  * with a rail plus `.segmented` (design_files/index.html:926-935) and has no
  * route nav; our app splits Module 0 across routes for the linear user flow
  * (portfolio → segments → leads → borrower → offer → …).
+ * Two unlabelled clusters (deviation:route-nav-clusters; flow-07, shell-09):
+ * the lead workflow, then the insight and reference tools flush right, each
+ * a list named for assistive technology. No count badges (nav-count-badges).
  *
  * Underline links (`.route-nav__link` / `.route-nav__label`; 2026-09-21
  * audit visual-05, M part): Geist sans 13/500 with a 2px --accent-ink
@@ -76,27 +79,42 @@ export function RouteNav() {
   // auditor, in Admin's place, so the nav stays one 57px line at 1440x900 with
   // the Console open (D-audit-reads-c3). Administrators reach the ledger from
   // the rail, the Admin page and the palette.
-  const items = NAVIGATION_ROUTE_IDS
-    .filter((id) => (id === 'admin' ? canAccessAdmin : id === 'auditLedger' ? canReadLedger && !canAccessAdmin : true))
-    .map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] }));
+  const shown = (id: NavigationRouteId) => (
+    id === 'admin' ? canAccessAdmin : id === 'auditLedger' ? canReadLedger && !canAccessAdmin : true
+  );
+  // One list per cluster: a div with an explicit role (as GenieAnswer's
+  // lists), which keeps the list and its name in WebKit / VoiceOver and is
+  // no redundant <ul role="list">. A cluster with no visible link renders
+  // nothing.
+  const groups = NAVIGATION_GROUPS.map((group) => ({
+    ...group,
+    items: group.routes.filter(shown).map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] })),
+  })).filter((group) => group.items.length > 0);
   return (
     <nav ref={navRef} aria-label="Main navigation" className="route-nav">
-      {items.map((i) => {
-        const end = i.to === '/';
-        return (
-          <NavLink
-            key={i.id}
-            to={i.to}
-            end={end}
-            onMouseEnter={() => onIntent(i.to)}
-            onFocus={() => onIntent(i.to)}
-            className="route-nav__link"
-          >
-            <Icon name={i.route.icon} size={12} />
-            <span className="route-nav__label">{i.route.navLabel}</span>
-          </NavLink>
-        );
-      })}
+      {groups.map((group) => (
+        <div
+          key={group.id}
+          className={`route-nav__group${group.id === 'tools' ? ' route-nav__group--end' : ''}`}
+          role="list"
+          aria-label={group.label}
+        >
+          {group.items.map((i) => (
+            <div key={i.id} className="route-nav__item" role="listitem">
+              <NavLink
+                to={i.to}
+                end={i.to === '/'}
+                onMouseEnter={() => onIntent(i.to)}
+                onFocus={() => onIntent(i.to)}
+                className="route-nav__link"
+              >
+                <Icon name={i.route.icon} size={12} />
+                <span className="route-nav__label">{i.route.navLabel}</span>
+              </NavLink>
+            </div>
+          ))}
+        </div>
+      ))}
     </nav>
   );
 }

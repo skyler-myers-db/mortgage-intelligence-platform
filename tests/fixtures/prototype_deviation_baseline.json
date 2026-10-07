@@ -1,7 +1,6 @@
 {
   "frontend/src/components/ErrorBoundaryFallback.tsx": 1,
   "frontend/src/components/EvidenceHoverCard.css": 1,
-  "frontend/src/components/layout/RouteNav.tsx": 1,
   "frontend/src/components/mortgage/ApprovalBanner.tsx": 1,
   "frontend/src/components/mortgage/LeadApproveReview.css": 1,
   "frontend/src/components/mortgage/LeadApproveReview.tsx": 1,
@@ -12,7 +11,7 @@
   "frontend/src/components/ui/AsyncState.css": 1,
   "frontend/src/components/ui/EmptyState.css": 1,
   "frontend/src/components/ui/EmptyState.tsx": 1,
-  "frontend/src/design-system/components/01-app-shell.css": 2,
+  "frontend/src/design-system/components/01-app-shell.css": 1,
   "frontend/src/design-system/components/04-approval-and-drawer.css": 1,
   "frontend/src/design-system/components/06-genie-chat.css": 2,
   "frontend/src/design-system/components/08-map.css": 1,

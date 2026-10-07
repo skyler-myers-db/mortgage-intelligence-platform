@@ -1,15 +1,23 @@
 /**
  * Rendered-layer proofs for the W5c lane w5-shell-nav-followups (report
- * 12.4 #5, audit a11y-v2, flow-07, shell-09, critic-05):
+ * 12.4 #5, audit a11y-v2, flow-07, shell-09, critic-05), at 1440x900 unless
+ * stated:
  *   - the measured route-nav dock's consumers: a glossary hash and the
  *     Administration section nav, docked (wrapped) and undocked;
  *   - the nested-scroller exclusions: the ZIP tile list is left out of the
  *     route nav's focus margin (measured, with its non-vacuity twin), and a
- *     census of the nested scrollers that hold a focusable element.
+ *     census of the nested scrollers that hold a focusable element;
+ *   - the route nav's two clusters for the admin, auditor and plain
+ *     sessions (geometry and axe), and the item 3e measurement.
  * Every test also proves the interaction opened no audited read (no VIEW_*
  * from a hover, a focus or a rail click).
  */
 import type { Page } from '@playwright/test';
+import type { SessionResponse } from '../../../src/types';
+import { expectAxeClean } from './axe';
+import { AUDITOR_ONLY_SESSION, SESSION, WORKSPACE_USER_SESSION } from './data/shell';
+import { json } from './mockApi';
+import { FIXTURE_THEMES } from './routes';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 import { expect, test } from './test';
 
@@ -212,4 +220,72 @@ test.describe('nested scrollers are left out of the route nav\'s margin (a11y-v2
       expect(Object.values(found).flat().some((scroller) => scroller.selector.includes('zip-tiles')), 'non-vacuity: the census saw the tile list').toBe(true);
     });
   }
+});
+
+const SESSIONS = [
+  ['admin', SESSION, 'Admin'],
+  ['auditor', AUDITOR_ONLY_SESSION, 'Audit'],
+  ['workspace user', WORKSPACE_USER_SESSION, 'Glossary'],
+] as const;
+
+test.describe('the route nav\'s two clusters (flow-07, shell-09)', () => {
+  for (const theme of FIXTURE_THEMES) {
+    for (const [who, session, lastTool] of SESSIONS) {
+      test(`${theme} · ${who}: two named lists, the tools flush right, axe clean`, async ({ app, mockApi, page }) => {
+        mockApi.register('GET', '/api/session', () => json<SessionResponse>(session));
+        await app.setTheme(theme);
+        await app.gotoRoute('/');
+        const naturalLoad = markNaturalLoad(mockApi);
+        const nav = page.getByRole('navigation', { name: 'Main navigation' });
+        await expect(nav.getByRole('list')).toHaveCount(2);
+        await expect(nav.getByRole('list', { name: 'Lead workflow' }).getByRole('link')).toHaveCount(6);
+        const tools = nav.getByRole('list', { name: 'Insight and reference' });
+        await expect(tools.getByRole('link').last()).toHaveText(lastTool);
+        const gap = await page.locator('.route-nav').evaluate((el) => {
+          const style = getComputedStyle(el);
+          const right = el.getBoundingClientRect().right - Number.parseFloat(style.paddingRight) - Number.parseFloat(style.borderRightWidth);
+          return right - (el.querySelector('.route-nav__group--end')?.getBoundingClientRect().right ?? Number.NaN);
+        });
+        expect(Math.abs(gap), 'the tools cluster ends at the nav\'s content edge').toBeLessThanOrEqual(1);
+        expect(await page.locator('.route-nav').evaluate((el) => Math.round(el.getBoundingClientRect().height))).toBe(57);
+        // Intent preloads chunks (Analytics alone prefetches its aggregates): never an audited read.
+        await tools.getByRole('link').first().hover();
+        await nav.getByRole('link', { name: 'Leads' }).focus();
+        await expectAxeClean(page, { key: { route: 'route-nav', state: `clusters-${who.replace(' ', '-')}` }, theme, known: {}, include: '.route-nav' });
+        expectNoAuditedReadSince(mockApi, naturalLoad, `route-nav clusters · ${who}`);
+      });
+    }
+  }
+
+  /**
+   * Report 12.4 #5 / item 3e: whether administrators may also get the Audit
+   * link. They get it only if the nav stays one 57px line at 1440x900 with
+   * the Console open; this clones it in and records the height (W5b
+   * behaviour, no admin Audit link, is kept while it wraps). The integrator
+   * re-measures after w5-field-vitals merges.
+   */
+  test('an eleventh (admin + Audit) link wraps the nav at 1440x900 with the Console open, so admins keep the ledger on the rail', async ({ app, mockApi, page }) => {
+    await app.gotoRoute('/');
+    const naturalLoad = markNaturalLoad(mockApi);
+    if (process.platform !== 'linux') await page.addStyleTag({ content: NAV_TEXT_EMULATION });
+    await app.openConsole();
+    const heights = await page.locator('.route-nav').evaluate(async (nav) => {
+      const frames = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const before = (nav as HTMLElement).offsetHeight;
+      const admin = [...nav.querySelectorAll<HTMLElement>('.route-nav__item')].find((item) => item.textContent?.trim() === 'Admin');
+      if (!admin) throw new Error('no Admin item');
+      const audit = admin.cloneNode(true) as HTMLElement;
+      const label = audit.querySelector('.route-nav__label');
+      if (label) label.textContent = 'Audit';
+      admin.before(audit);
+      await frames();
+      const after = (nav as HTMLElement).offsetHeight;
+      audit.remove();
+      return { before, after };
+    });
+    test.info().annotations.push({ type: 'item-3e', description: `admin nav, Console open: ${heights.before}px; with Audit cloned in: ${heights.after}px` });
+    expect(heights.before, 'precondition: one line').toBe(57);
+    expect(heights.after, 'an eleventh link wraps the one-line nav: admins keep the ledger on the rail and in the palette').toBeGreaterThan(57);
+    expectNoAuditedReadSince(mockApi, naturalLoad, 'item 3e measurement');
+  });
 });

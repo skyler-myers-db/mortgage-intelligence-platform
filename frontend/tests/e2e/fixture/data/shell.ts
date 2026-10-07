@@ -5,6 +5,7 @@
  */
 import type { ConfigOptions, SessionResponse, WorkspaceState } from '../../../../src/types';
 import type { ActorAuditEventPage, HealthPayload } from '../../../../src/lib/apiTypes';
+import type { ContractSample } from '../contractSamples';
 import { fixture, json, type FixtureEntry, type MockApi } from '../mockApi';
 import { LEADS } from './borrowers';
 import { LENDER_NAME, SNAPSHOT_DATE, STATES } from './reference';
@@ -131,3 +132,33 @@ export const shellFixtures: FixtureEntry[] = [
     }),
   ),
 ];
+
+/**
+ * Session variants for the shell-navigation lane (W5c w5-shell-nav-followups):
+ * presenter mode on (the M1-M4 roadmap rail slots show, D-shell-deviations-e2),
+ * a read-only auditor (Audit in the tools cluster) and a plain workspace user
+ * (neither Audit nor Admin). Synthetic identity only.
+ */
+export const PRESENTER_SESSION: SessionResponse = { ...SESSION, presenter_mode: true };
+export const AUDITOR_ONLY_SESSION: SessionResponse = {
+  ...SESSION,
+  can_access_admin: false,
+  can_approve: false,
+  can_read_audit: true,
+  actor_email: 'auditor@summit-mortgage.example',
+};
+export const WORKSPACE_USER_SESSION: SessionResponse = {
+  ...SESSION,
+  can_access_admin: false,
+  can_read_audit: false,
+  actor_email: 'officer@summit-mortgage.example',
+};
+
+export function contractSamples(): ContractSample[] {
+  const sessions: Array<[string, SessionResponse]> = [
+    ['PRESENTER_SESSION', PRESENTER_SESSION],
+    ['AUDITOR_ONLY_SESSION', AUDITOR_ONLY_SESSION],
+    ['WORKSPACE_USER_SESSION', WORKSPACE_USER_SESSION],
+  ];
+  return sessions.map(([name, body]) => ({ source: `data/shell.ts#${name}`, method: 'GET', pattern: '/api/session', body }));
+}

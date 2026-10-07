@@ -377,6 +377,12 @@
   inherits: true;
   initial-value: 0px;
 }
+/* The nav's two clusters (flow-07, shell-09): the lead workflow, then the
+   tools flush right. Each item is a flex box with no line-box strut, so the
+   one-line 57px nav cannot grow (deviation:route-nav-clusters). */
+.route-nav__group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin: 0; padding: 0; }
+.route-nav__item { display: flex; }
+.route-nav__group--end { margin-inline-start: auto; }
 /* Route nav links (2026-09-21 audit visual-05, M part). APP-ADDED ELEMENT:
    the prototype has a rail plus `.segmented` (design_files/index.html:
    926-935) and no route nav, so this is built from its token vocabulary:

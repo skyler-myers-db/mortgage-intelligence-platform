@@ -9,6 +9,7 @@ import type { Locator, Page } from '@playwright/test';
 import { expectAxeClean } from './axe';
 import { expect, test, type FixtureTheme } from './test';
 import { SIGNED_IN_APPROVER, sessionReply } from './data/shellWayfinding';
+import { AUDITOR_ONLY_SESSION, SESSION } from './data/shell';
 
 interface Box {
   left: number;
@@ -535,4 +536,48 @@ test.describe('Console motion under reduced motion (motion-01)', () => {
     }
     expect(exit.afterExit?.display).toBe('none');
   });
+});
+
+/**
+ * The route nav's two clusters (flow-07, shell-09; W5c w5-shell-nav-followups)
+ * at 1440x900: one 57px line, the tools cluster flush right in the nav's
+ * content box, every link keeping its 32px block and 2px indicator, and the
+ * same one line with no horizontal overflow once the Console opens.
+ */
+test.describe('route nav clusters (flow-07)', () => {
+  for (const [who, session] of [['an administrator', SESSION], ['an auditor', AUDITOR_ONLY_SESSION]] as const) {
+    test(`${who}: one 57px line with the tools flush right, Console closed and open`, async ({ app, mockApi, page }) => {
+      mockApi.register('GET', '/api/session', () => sessionReply(session));
+      await app.gotoRoute('/lead-queue');
+      const nav = page.locator('.route-nav');
+      const geometry = () => nav.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const box = el.getBoundingClientRect();
+        const contentRight = box.right - Number.parseFloat(style.paddingRight) - Number.parseFloat(style.borderRightWidth);
+        const tools = el.querySelector('.route-nav__group--end')?.getBoundingClientRect();
+        return {
+          height: Math.round(box.height),
+          toolsRightGap: tools ? contentRight - tools.right : Number.NaN,
+          overflow: el.scrollWidth - el.clientWidth,
+          groups: el.querySelectorAll(':scope > [role="list"]').length,
+        };
+      });
+      const closed = await geometry();
+      expect(closed.groups, 'two clusters').toBe(2);
+      expect(closed.height, 'one line, Console closed').toBe(57);
+      expect(Math.abs(closed.toolsRightGap), 'the tools cluster ends at the content box\'s right edge').toBeLessThanOrEqual(1);
+      for (const link of await nav.locator('.route-nav__link').all()) {
+        const box = await link.evaluate((el) => ({
+          block: el.getBoundingClientRect().height,
+          indicator: getComputedStyle(el).borderBottomWidth,
+        }));
+        expect(box.block, `${await link.textContent()}: the 32px link block`).toBeCloseTo(32, 0);
+        expect(box.indicator).toBe('2px');
+      }
+      await app.openConsole();
+      const open = await geometry();
+      expect(open.height, 'one line, Console open').toBe(57);
+      expect(open.overflow, 'no horizontal overflow, Console open').toBeLessThanOrEqual(0);
+    });
+  }
 });
