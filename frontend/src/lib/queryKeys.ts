@@ -22,7 +22,24 @@ export const queryKeys = {
   leadCount: (criteria: readonly unknown[]) => ['mip', 'lead-count', ...criteria] as const,
   leadFacets: (dimension: string, criteria: readonly unknown[]) => ['mip', 'lead-facets', dimension, ...criteria] as const,
   savedViews: () => ['mip', 'saved-views'] as const,
-  borrower: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? ''] as const,
+  /**
+   * The audit-free borrower / geography search (runtime-06): ONE entry per
+   * term, shared by the topbar and the ⌘K palette (hooks/useBorrowerSearch).
+   * Outside ['mip','borrower'] and the persistence allow-list: never stored.
+   */
+  borrowerSearch: (term: string) => ['mip', 'borrower-search', term] as const,
+  /**
+   * The palette's Recent borrowers (shell-07): the actor's own audit-free
+   * my-events feed, read only while the palette is open, gcTime 0, never
+   * persisted. Not the Console's ['audit','my-events',…] paged feed.
+   */
+  paletteRecentEvents: () => ['mip', 'palette', 'recent-events'] as const,
+  /**
+   * The palette's admin Data assets (shell-07): its OWN key, never the admin
+   * page's ['mip','data-estate'] (whose query function substitutes a fallback).
+   */
+  paletteAssets: () => ['mip', 'palette', 'assets'] as const,
+  borrower:(borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? ''] as const,
   borrowerProof: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? '', 'proof'] as const,
   borrowerLifecycle: (borrowerId: string | null | undefined) =>
     ['mip', 'borrower', borrowerId ?? '', 'lifecycle'] as const,

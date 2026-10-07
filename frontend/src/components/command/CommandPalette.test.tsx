@@ -7,6 +7,7 @@
  * mocked (the palette merges live rows under the local actions).
  */
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { consumeGeniePrefill } from '../../lib/genieOpen';
@@ -54,6 +55,19 @@ vi.mock('../../lib/prefetch', async (importOriginal) => ({
 
 import { CommandPalette, loadCommandPaletteDialog } from './CommandPalette';
 
+/**
+ * Past the shared search's 160 ms debounce (hooks/useBorrowerSearch), then
+ * its answer's render: TanStack Query notifies on a macrotask, so a resolved
+ * search needs one more turn of the (fake) clock.
+ */
+async function advanceSearch(): Promise<void> {
+  for (const ms of [220, 20, 20]) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+}
+
 
 // The palette dialog is a lazy chunk behind the shell host (audit bundle-04):
 // load it once up front, as the idle preload leaves it in the app, so the
@@ -72,7 +86,7 @@ describe('CommandPalette', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    act(() => root.render(<CommandPalette />));
+    act(() => root.render(<QueryClientProvider client={new QueryClient()}><CommandPalette /></QueryClientProvider>));
   });
   afterEach(() => {
     act(() => root.unmount());
@@ -276,9 +290,11 @@ describe('CommandPalette', () => {
     pressMetaK();
     setQuery('zzzznope');
     // The empty state waits for the borrower search to settle (shell-07 item 4).
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 220));
-    });
+    for (const ms of [220, 20, 20]) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, ms));
+      });
+    }
     // Since audit 2026-09-21 `shell-07` the palette never dead-ends: the
     // typed text can always be handed to Genie (a prefill, never a submit).
     const options = container.querySelectorAll('[role="option"]');
@@ -308,7 +324,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    act(() => root.render(<CommandPalette />));
+    act(() => root.render(<QueryClientProvider client={new QueryClient()}><CommandPalette /></QueryClientProvider>));
   });
   afterEach(() => {
     act(() => root.unmount());
@@ -344,9 +360,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     pressMetaK();
     setQuery('60611');
     // Debounced 160ms search; advance + flush the resolved promise.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    await advanceSearch();
     expect(borrowerSearch).toHaveBeenCalled();
     const borrowerGroup = container.querySelector('[aria-label="Borrowers"]');
     expect(borrowerGroup).not.toBeNull();
@@ -378,9 +392,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     expect(consumeGeniePrefill()).toBeNull();
     expect(dialog()).not.toBeNull();
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    await advanceSearch();
     const options = Array.from(container.querySelectorAll('[role="option"]')).map((o) => o.textContent ?? '');
     expect(options[0]).toContain('B-1EEEN00S99GXC');
     expect(options[options.length - 1]).toContain('Ask Genie: B-1EEEN00S99GXC');
@@ -395,9 +407,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     borrowerSearch.mockResolvedValue([]);
     pressMetaK();
     setQuery('zyrplax');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    await advanceSearch();
     keyOnInput('Enter');
     expect(consumeGeniePrefill()).toBe('zyrplax');
     expect(navigate).not.toHaveBeenCalled();
@@ -407,9 +417,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     borrowerSearch.mockResolvedValue([lead('B-1IB0UGBTFYM20')]);
     pressMetaK();
     setQuery('chicago');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    await advanceSearch();
     const row = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="option"]')).find((o) =>
       o.textContent?.includes('B-1IB0UGBTFYM20'),
     )!;
@@ -423,9 +431,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     );
     pressMetaK();
     setQuery('cook');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    await advanceSearch();
     const borrowerOptions = Array.from(container.querySelectorAll('[role="option"]')).filter((o) =>
       o.textContent?.includes('B-CAP'),
     );
@@ -433,9 +439,7 @@ describe('CommandPalette borrower search (networked path)', () => {
 
     borrowerSearch.mockRejectedValue(new Error('warehouse down'));
     setQuery('cooks');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    await advanceSearch();
     expect(container.querySelector('.cmdk__status--error')).not.toBeNull();
   });
 
@@ -450,22 +454,19 @@ describe('CommandPalette borrower search (networked path)', () => {
     const spoken = () => [...container.querySelectorAll('[role="status"]')].map((el) => el.textContent);
     pressMetaK();
     setQuery('zz');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    await advanceSearch();
     expect(borrowerSearch).toHaveBeenCalledTimes(1);
     expect(visible()).toEqual(['Searching borrowers…']);
     expect(spoken()).toEqual(['Searching borrowers…']);
 
     await act(async () => settle([]));
+    await advanceSearch();
     expect(visible()).toEqual(['No pages, actions, or borrowers match “zz”.']);
     expect(spoken()).toEqual(['No pages, actions, or borrowers match “zz”.']);
 
     borrowerSearch.mockRejectedValue(new Error('warehouse down'));
     setQuery('zzq');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    await advanceSearch();
     expect(visible()).toEqual(['Borrower search is temporarily unavailable.']);
     expect(spoken()).toEqual(['Borrower search is temporarily unavailable.']);
     expect(container.querySelector('#cmdk-listbox [role="status"]')).toBeNull();
@@ -486,7 +487,7 @@ describe('CommandPalette active-row chunk preload (bundle-09 item 2)', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    act(() => root.render(<CommandPalette />));
+    act(() => root.render(<QueryClientProvider client={new QueryClient()}><CommandPalette /></QueryClientProvider>));
   });
   afterEach(() => {
     act(() => root.unmount());
@@ -515,9 +516,7 @@ describe('CommandPalette active-row chunk preload (bundle-09 item 2)', () => {
     });
   }
   async function settleSearch() {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    await advanceSearch();
   }
   const preloaded = () => preloadRouteForPath.mock.calls.map(([path]) => path as string);
 

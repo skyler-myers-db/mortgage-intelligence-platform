@@ -10,6 +10,7 @@
  * are its description.
  */
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HealthPayload } from '../../lib/apiTypes';
@@ -53,6 +54,9 @@ vi.mock('../../lib/genieTurnStatus', async (importOriginal) => ({
 
 import { Topbar } from './Topbar';
 
+// Topbar's borrower search reads through TanStack Query (hooks/useBorrowerSearch).
+const queryClient = new QueryClient();
+
 /** The text an `aria-describedby` list resolves to, ids in order. */
 function description(element: Element): string {
   return (element.getAttribute('aria-describedby') ?? '')
@@ -68,7 +72,7 @@ describe('Topbar tooltips', () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     genieTurn.status = 'idle';
-    ({ container } = await mount(<MemoryRouter><Topbar /></MemoryRouter>));
+    ({ container } = await mount(<QueryClientProvider client={queryClient}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>));
     // The footprint chip waits out a 3 s mount grace.
     await act(async () => {
       vi.advanceTimersByTime(3_000);
@@ -123,7 +127,7 @@ describe('Topbar tooltips', () => {
 
   it('merges the Genie launcher status id instead of overwriting it', async () => {
     genieTurn.status = 'running';
-    ({ container } = await mount(<MemoryRouter><Topbar /></MemoryRouter>));
+    ({ container } = await mount(<QueryClientProvider client={queryClient}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>));
 
     const genie = migrated().genie;
     const ids = (genie.getAttribute('aria-describedby') ?? '').split(' ');

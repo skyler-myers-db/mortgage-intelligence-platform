@@ -10,6 +10,7 @@
  * shortcuts switched off.
  */
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
@@ -90,7 +91,7 @@ describe('CommandPalette selection verbs', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    act(() => root.render(<CommandPalette />));
+    act(() => root.render(<QueryClientProvider client={new QueryClient()}><CommandPalette /></QueryClientProvider>));
   });
   afterEach(() => {
     unpublish?.();

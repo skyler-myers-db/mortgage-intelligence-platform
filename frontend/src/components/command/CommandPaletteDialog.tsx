@@ -10,7 +10,7 @@ import {
 import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
-import { api } from '../../lib/api';
+import { useBorrowerSearch } from '../../hooks/useBorrowerSearch';
 import { openGenie } from '../../lib/genieOpen';
 import { saveDataRequested } from '../../lib/prefetch';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
@@ -76,7 +76,6 @@ function routeChunkPath(item: FlatItem | undefined): string | null {
   return null;
 }
 
-const DEBOUNCE_MS = 160;
 const MAX_BORROWERS = 6;
 /** Typed text this long or longer also offers "Ask Genie: <text>". */
 const MIN_GENIE_QUERY = 2;
@@ -95,8 +94,6 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   // fail-closed session decision RouteNav and the Rail use (D-audit-reads-c3).
   const canReadAudit = useAuditLedgerAccess();
   const [query, setQuery] = useState('');
-  const [borrowers, setBorrowers] = useState<LeadSummary[]>([]);
-  const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle');
   const [activeIndex, setActiveIndex] = useState(0);
   // True once the user moves onto the "Ask Genie" fallback (arrows or
   // pointer). Borrower rows land after the debounce ABOVE that row, so the
@@ -115,8 +112,6 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     setOpenLatch(open);
     if (open) {
       setQuery('');
-      setBorrowers([]);
-      setSearchStatus('idle');
       setActiveIndex(0);
     }
   }
@@ -129,37 +124,12 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   // the panel closes; a press inside the panel never does.
   useModalDialog({ open, dialogRef, initialFocusRef: inputRef, onDismiss: close, backdrop: 'self' });
 
-  // Debounced borrower/geography search (mirrors the topbar). Actions are
-  // always available locally; the network only augments with borrower rows.
-  useEffect(() => {
-    if (!open) return;
-    const q = query.trim();
-    if (q.length < 2) {
-      setBorrowers([]);
-      setSearchStatus('idle');
-      return;
-    }
-    const ctrl = new AbortController();
-    setSearchStatus('loading');
-    const t = window.setTimeout(() => {
-      api
-        .borrowerSearch(q, ctrl.signal)
-        .then((rows) => {
-          if (ctrl.signal.aborted) return;
-          setBorrowers(rows.slice(0, MAX_BORROWERS));
-          setSearchStatus(rows.length > 0 ? 'idle' : 'empty');
-        })
-        .catch(() => {
-          if (ctrl.signal.aborted) return;
-          setBorrowers([]);
-          setSearchStatus('error');
-        });
-    }, DEBOUNCE_MS);
-    return () => {
-      window.clearTimeout(t);
-      ctrl.abort();
-    };
-  }, [open, query]);
+  // The one shared borrower / geography search (hooks/useBorrowerSearch,
+  // runtime-06): the topbar's cache entry for the same term answers here
+  // without a request. Actions are local; the network only adds borrowers.
+  const borrowerSearch = useBorrowerSearch(query, { enabled: open });
+  const searchStatus = borrowerSearch.status;
+  const borrowers = useMemo(() => borrowerSearch.rows.slice(0, MAX_BORROWERS), [borrowerSearch.rows]);
 
   const actions = useMemo(
     () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin, undefined, canReadAudit)),
