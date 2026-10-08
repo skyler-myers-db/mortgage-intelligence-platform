@@ -130,7 +130,7 @@ describe('distributionStrategy', () => {
 });
 
 describe('sales mutation keys', () => {
-  it('keys assign, distribute, disposition, lifecycle and outcome under the sales prefix', () => {
+  it('keys assign, distribute, disposition, lifecycle, outcome and the two Undo releases under the sales prefix', () => {
     expect(salesMutationKeys).toEqual({
       all: ['mip', 'sales'],
       assign: ['mip', 'sales', 'assign'],
@@ -138,6 +138,9 @@ describe('sales mutation keys', () => {
       disposition: ['mip', 'sales', 'disposition'],
       lifecycle: ['mip', 'sales', 'lifecycle'],
       outcome: ['mip', 'sales', 'outcome'],
+      // W5d w5-sales-loop: the assignment and distribution Undo (lib/mutations/salesLoop).
+      release: ['mip', 'sales', 'release'],
+      releaseDistribution: ['mip', 'sales', 'release-distribution'],
     });
   });
 });

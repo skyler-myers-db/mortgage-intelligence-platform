@@ -144,6 +144,11 @@ const DATA_MARKS = [
   '.genie-line__point',
   '.genie-bars__track',
   '.genie-line__path',
+  // The Distribution Board's per-officer load bar (W5d w5-sales-loop,
+  // deviation:distribution-board): aria-hidden segments in Highlight and Mark
+  // inside a bar edged in CanvasText (DistributionBoard.css).
+  '.distribution-board__seg--added',
+  '.distribution-board__over',
 ];
 
 /** The Highlight-filled interactive states that paint the system pair themselves (W5b, Firefox backplate). */
