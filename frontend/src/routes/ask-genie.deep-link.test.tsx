@@ -13,7 +13,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFunction } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieAnswer, GenieStartResult, GrowthAgentHomeResponse } from '../types';
 
@@ -47,17 +47,20 @@ vi.mock('../components/AppContext', () => ({
 }));
 
 import { ApiError } from '../lib/api';
-import { GENIE_CONVERSATION_RESET_EVENT, GENIE_CONVERSATION_STORAGE_KEY } from '../lib/genieConversation';
+import { GENIE_CONVERSATION_RESET_EVENT, GENIE_CONVERSATION_STORAGE_KEY, writeGenieConversationId } from '../lib/genieConversation';
 import { clearGenieTurns, getGenieTurns, setGenieTurns } from '../lib/genieConversationStore';
+import { _resetGenieLinkCacheSyncForTests, emitGenieConversationSwitch } from '../lib/genieConversationSwitch';
 import {
   __resetGenieTurnStoreForTests,
   __setGenieTurnLockForTests,
+  getGenieTurnSnapshot,
   startGenieTurn,
   stopGenieTurn,
 } from '../lib/genieInFlightTurn';
 import AskGenie from './ask-genie';
 import { GENIE_CONVERSATION_ID_RE, genieConversationQueryKey } from './ask-genie.deep-link';
 import { GENIE_LINK_NOT_FOUND_COPY, GENIE_LINK_UNAVAILABLE_COPY } from '../components/mortgage/GenieConversationLinkState';
+import { GENIE_LINK_RETRY_FAILED_COPY } from '../components/mortgage/GenieConversationLinkState.copy';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -131,13 +134,15 @@ function installStorage(): void {
   });
 }
 
-const where = { pathname: '', search: '' };
+const where: { pathname: string; search: string; go: NavigateFunction | null } = { pathname: '', search: '', go: null };
 
 function LocationProbe() {
   const location = useLocation();
+  const navigate = useNavigate();
   useEffect(() => {
     where.pathname = location.pathname;
     where.search = location.search;
+    where.go = navigate;
   });
   return null;
 }
@@ -184,7 +189,9 @@ describe('/ask-genie/:conversationId', () => {
     container.remove();
     __resetGenieTurnStoreForTests();
     __setGenieTurnLockForTests(null);
+    _resetGenieLinkCacheSyncForTests();
     clearGenieTurns();
+    where.go = null;
   });
 
   function mountAt(path: string): QueryClient {
@@ -197,6 +204,7 @@ describe('/ask-genie/:conversationId', () => {
             <Routes>
               <Route path="/ask-genie" element={<AskGenie />} />
               <Route path="/ask-genie/:conversationId" element={<AskGenie />} />
+              <Route path="/lead-queue" element={<p data-testid="elsewhere">Lead Queue</p>} />
             </Routes>
           </MemoryRouter>
         </QueryClientProvider>,
@@ -253,7 +261,7 @@ describe('/ask-genie/:conversationId', () => {
     await waitUntil(() => apiMocks.genieSubmit.mock.calls.length > 0);
     expect(apiMocks.genieSubmit.mock.calls[0][1]).toBe(id);
     await waitUntil(() => container.textContent?.includes('Follow-up answer.') ?? false);
-    // A settled turn never rewrites the URL.
+    // A same-conversation settle keeps the URL.
     expect(where.pathname).toBe(`/ask-genie/${id}`);
   }, TIMEOUT_MS);
 
@@ -440,5 +448,135 @@ describe('/ask-genie/:conversationId', () => {
     await waitUntil(() => container.textContent?.includes('Restored answer.') ?? false);
     act(() => button('New thread')?.click());
     await waitUntil(() => where.pathname === '/ask-genie');
+  }, TIMEOUT_MS);
+
+  // --- the conversation-switch signal (shell-03 deep-link remainder) ------------
+
+  function submitResult(text: string, conversationId: string, messageId: string) {
+    return {
+      completed: true,
+      conversation_id: conversationId,
+      message_id: messageId,
+      progress_token: null,
+      question_hash: 'h',
+      response: answer(text, conversationId, messageId),
+    };
+  }
+
+  async function askFollowUp(question: string): Promise<void> {
+    const field = composer();
+    if (!field) throw new Error('composer not rendered');
+    act(() => setTextAreaValue(field, question));
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('form.genie-composer button[type="submit"]')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it('a panel History load moves the mounted link to the loaded conversation with no second read', async () => {
+    apiMocks.genieSession.mockResolvedValue(session(HEX_ID));
+    const queryClient = mountAt(`/ask-genie/${HEX_ID}?tab=ask`);
+    await waitUntil(() => container.textContent?.includes('Restored answer.') ?? false);
+
+    // What GenieChat.loadSession does: the thread, the stored id, the switch.
+    const loaded = session(OTHER_HEX_ID, 'Panel-loaded answer.').turns;
+    act(() => {
+      setGenieTurns(loaded);
+      writeGenieConversationId(OTHER_HEX_ID);
+      emitGenieConversationSwitch({ conversationId: OTHER_HEX_ID, surface: 'panel' });
+    });
+    await waitUntil(() => where.pathname === `/ask-genie/${OTHER_HEX_ID}`);
+    expect(where.search).toBe('?tab=ask');
+    await waitUntil(() => container.textContent?.includes('Panel-loaded answer.') ?? false);
+    expect(apiMocks.genieSession).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData(genieConversationQueryKey(OTHER_HEX_ID))).toEqual({ conversationId: OTHER_HEX_ID, turns: loaded });
+
+    // The route's next follow-up targets the loaded conversation.
+    apiMocks.genieSubmit.mockResolvedValue(submitResult('Loaded follow-up.', OTHER_HEX_ID, 'msg-b'));
+    await askFollowUp('Which counties lead?');
+    await waitUntil(() => apiMocks.genieSubmit.mock.calls.length > 0);
+    expect(apiMocks.genieSubmit.mock.calls[0][1]).toBe(OTHER_HEX_ID);
+  }, TIMEOUT_MS);
+
+  it('a panel switch to a legacy id leaves the link for /ask-genie', async () => {
+    apiMocks.genieSession.mockResolvedValue(session(HEX_ID));
+    mountAt(`/ask-genie/${HEX_ID}`);
+    await waitUntil(() => container.textContent?.includes('Restored answer.') ?? false);
+    act(() => emitGenieConversationSwitch({ conversationId: 'conv-legacy', surface: 'panel' }));
+    await waitUntil(() => where.pathname === '/ask-genie');
+  }, TIMEOUT_MS);
+
+  it('a settled turn whose persisted conversation differs moves an adopted link with it', async () => {
+    apiMocks.genieSession.mockResolvedValue(session(HEX_ID));
+    const queryClient = mountAt(`/ask-genie/${HEX_ID}`);
+    await waitUntil(() => container.textContent?.includes('Restored answer.') ?? false);
+
+    apiMocks.genieSubmit.mockResolvedValue(submitResult('New-conversation answer.', OTHER_HEX_ID, 'msg-new'));
+    await askFollowUp('Start over on counties?');
+    await waitUntil(() => where.pathname === `/ask-genie/${OTHER_HEX_ID}`);
+    await waitUntil(() => container.textContent?.includes('New-conversation answer.') ?? false);
+    expect(apiMocks.genieSession).toHaveBeenCalledTimes(1);
+    const cached = queryClient.getQueryData<{ turns: { question: string }[] }>(genieConversationQueryKey(OTHER_HEX_ID));
+    expect(cached?.turns.map((turn) => turn.question)).toContain('Start over on counties?');
+  }, TIMEOUT_MS);
+
+  it('a held link is never moved by a settle in another conversation', async () => {
+    apiMocks.genieSession.mockResolvedValue(session(HEX_ID));
+    let land: (value: unknown) => void = () => undefined;
+    apiMocks.genieSubmit.mockReturnValue(new Promise((resolve) => { land = resolve; }));
+    startGenieTurn({ question: 'Still running', conversationId: OTHER_HEX_ID, surface: 'panel', startedAt: Date.now() });
+    mountAt(`/ask-genie/${HEX_ID}`);
+    await waitUntil(() => askPanel().querySelector('[data-genie-link="held"]') !== null);
+
+    await act(async () => land(submitResult('Other answer.', OTHER_HEX_ID, 'msg-o')));
+    // The held link opens its own conversation once the turn lands; it never follows the other one.
+    await waitUntil(() => container.textContent?.includes('Restored answer.') ?? false);
+    expect(where.pathname).toBe(`/ask-genie/${HEX_ID}`);
+  }, TIMEOUT_MS);
+
+  it('a follow-up, a leave and a Back re-adopt the thread from the synced cache with no read', async () => {
+    apiMocks.genieSession.mockResolvedValue(session(HEX_ID));
+    mountAt('/lead-queue');
+    act(() => where.go?.(`/ask-genie/${HEX_ID}`));
+    await waitUntil(() => container.textContent?.includes('Restored answer.') ?? false);
+    apiMocks.genieSubmit.mockResolvedValue(submitResult('Follow-up answer.', HEX_ID, 'msg-f'));
+    await askFollowUp('Which counties lead?');
+    await waitUntil(() => container.textContent?.includes('Follow-up answer.') ?? false);
+
+    act(() => where.go?.('/lead-queue'));
+    await waitUntil(() => container.querySelector('[data-testid="elsewhere"]') !== null);
+    act(() => where.go?.(-1));
+    await waitUntil(() => where.pathname === `/ask-genie/${HEX_ID}`);
+    await waitUntil(() => container.textContent?.includes('Restored answer.') ?? false);
+    expect(container.textContent).toContain('Follow-up answer.');
+    expect([...userBubbles()].sort()).toEqual(['Which cohorts converted', 'Which counties lead?']);
+    expect(apiMocks.genieSession).toHaveBeenCalledTimes(1);
+  }, TIMEOUT_MS);
+
+  it.each([
+    ['a second 503 says the link still cannot load', 503, GENIE_LINK_RETRY_FAILED_COPY],
+    ['a 404 on retry says the conversation is not available', 404, GENIE_LINK_NOT_FOUND_COPY],
+  ])('a failed Retry is announced once: %s', async (_label, status, copy) => {
+    apiMocks.genieSession.mockRejectedValueOnce(apiError(503)).mockRejectedValueOnce(apiError(status));
+    mountAt(`/ask-genie/${HEX_ID}`);
+    await waitUntil(() => linkState() === 'unavailable');
+    const before = getGenieTurnSnapshot().announcementSeq;
+
+    await act(async () => button('Retry')?.click());
+    await waitUntil(() => getGenieTurnSnapshot().announcementSeq > before);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
+    expect(getGenieTurnSnapshot().announcementSeq).toBe(before + 1);
+    expect(getGenieTurnSnapshot().announcement).toBe(copy);
+    expect(container.querySelector('[data-genie-announcer="route"]')?.textContent).toBe(copy);
+  }, TIMEOUT_MS);
+
+  it('a Retry that succeeds announces nothing', async () => {
+    apiMocks.genieSession.mockRejectedValueOnce(apiError(503)).mockResolvedValueOnce(session(HEX_ID));
+    mountAt(`/ask-genie/${HEX_ID}`);
+    await waitUntil(() => linkState() === 'unavailable');
+    const before = getGenieTurnSnapshot().announcementSeq;
+    await act(async () => button('Retry')?.click());
+    await waitUntil(() => container.textContent?.includes('Restored answer.') ?? false);
+    expect(getGenieTurnSnapshot().announcementSeq).toBe(before);
   }, TIMEOUT_MS);
 });

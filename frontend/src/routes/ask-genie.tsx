@@ -31,6 +31,12 @@ import {
   startGenieTurn,
   subscribeGenieTurnSettled,
 } from '../lib/genieInFlightTurn';
+import {
+  emitGenieConversationSwitch,
+  ensureGenieLinkCacheSync,
+  primeGenieLinkCache,
+  subscribeGenieConversationSwitch,
+} from '../lib/genieConversationSwitch';
 import { ensureGenieLauncherSignal } from '../lib/genieLauncherSignal';
 import { genieStartQueryOptions } from '../lib/genieStartQuery';
 import { AskGenieAnswerPanel, type GenieActionStatus } from './ask-genie.answer-panel';
@@ -89,14 +95,25 @@ export {
  * actor's own, the Ask tab shows its loading / not-found / unavailable state
  * in place of the thread and the composer, and nothing is written. History
  * load puts a shape-valid id in the URL; a reset (actor change, New thread, a
- * fail-closed 403) takes it out. A settled turn never rewrites the URL.
+ * fail-closed 403) takes it out.
+ *
+ * The two surfaces share one conversation (lib/genieConversationSwitch): a
+ * History load in the floating panel switches this route's follow-up target
+ * too, and a mounted link FOLLOWS it in the URL (the cache primed first, so
+ * no second read); a settled turn whose persisted conversation differs from
+ * an adopted link does the same. A held link is never overridden, and a
+ * same-conversation settle keeps the URL. The link cache follows every
+ * settled turn, so a leave and a Back re-adopt the thread with its latest
+ * turn and no request.
  */
 /** Adopt a conversation into the shared thread: its turns, and its id for
- *  follow-ups. The route's own id state is set by the caller. */
+ *  follow-ups, and tell the floating panel. The route's own id state is set
+ *  by the caller. */
 function adoptGenieConversation(conversation: GenieConversationLinkOk): void {
   setGenieTurns(conversation.turns);
   clearGenieTurnNotes();
   writeGenieConversationId(conversation.conversationId);
+  emitGenieConversationSwitch({ conversationId: conversation.conversationId, surface: 'route' });
 }
 
 export default function AskGenie() {
@@ -114,8 +131,8 @@ export default function AskGenie() {
   const suppressBootstrapConversationRef = useRef(conversationParam !== undefined);
   /** The linked conversation last adopted into the thread. */
   const hydratedIdRef = useRef<string | null>(null);
-  /** The URL as last rendered, for the reset listener. */
-  const urlRef = useRef({ conversationParam, search });
+  /** The URL as last rendered, for the reset, switch and settle listeners. */
+  const urlRef = useRef({ conversationParam, search, hash });
   const focusComposerRef = useRef(false);
   const [question, setQuestion] = useState('');
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
@@ -169,14 +186,14 @@ export default function AskGenie() {
   const linked = link.kind === 'ok' ? link.conversation : null;
   const held = linked !== null && busyConversation !== NO_GENIE_TURN && busyConversation !== linked.conversationId;
   useLayoutEffect(() => {
-    urlRef.current = { conversationParam, search };
+    urlRef.current = { conversationParam, search, hash };
     if (conversationParam === undefined) hydratedIdRef.current = null;
     if (!linked || held || hydratedIdRef.current === linked.conversationId) return;
     hydratedIdRef.current = linked.conversationId;
     suppressBootstrapConversationRef.current = true;
     adoptGenieConversation(linked);
     setConversationId(linked.conversationId);
-  }, [conversationParam, search, linked, held]);
+  }, [conversationParam, search, hash, linked, held]);
 
   // Leaving the link (Open Ask Genie on a not-found link) hands focus to the
   // composer that replaces the button.
@@ -186,18 +203,51 @@ export default function AskGenie() {
     questionRef.current?.focus();
   }, [link.kind]);
 
-  // A turn settled, from either surface: follow the conversation the store
-  // persisted. A turn asked HERE also clears the composer, but only while it
-  // still holds the question that was answered (a new draft is kept).
-  useEffect(
-    () =>
-      subscribeGenieTurnSettled((event) => {
-        if (event.persistedConversationId) setConversationId(event.persistedConversationId);
-        if (event.surface !== 'route') return;
-        setQuestion((current) => (current.trim() === event.question.trim() ? '' : current));
-      }),
-    [],
-  );
+  // The shared conversation (audit shell-03 remainder). The link cache
+  // follows every settled turn; a panel History load switches this route's
+  // follow-up target; and a mounted link FOLLOWS a switch in the URL: the
+  // cache is primed from the thread first, so the link adopts it with no
+  // read. A non-linkable id leaves the link for /ask-genie.
+  useEffect(() => {
+    ensureGenieLinkCacheSync(queryClient);
+    const follow = (id: string) => {
+      const url = urlRef.current;
+      if (url.conversationParam === undefined || url.conversationParam === id) return;
+      if (!isGenieConversationId(id)) {
+        navigate({ pathname: '/ask-genie', search: url.search, hash: url.hash }, { replace: true });
+        return;
+      }
+      primeGenieLinkCache(queryClient, id);
+      hydratedIdRef.current = id;
+      navigate({ pathname: `/ask-genie/${id}`, search: url.search, hash: url.hash }, { replace: true });
+    };
+    const stopSwitch = subscribeGenieConversationSwitch((event) => {
+      if (event.surface !== 'panel') return;
+      suppressBootstrapConversationRef.current = true;
+      setConversationId(event.conversationId);
+      follow(event.conversationId);
+    });
+    // A turn settled, from either surface: follow the conversation the store
+    // persisted, and move an ADOPTED link with it (never a held one; a
+    // same-conversation settle keeps the URL). The store appends the turn
+    // right after notifying, so the URL follows once the thread holds it. A
+    // turn asked HERE also clears the composer, but only while it still holds
+    // the question that was answered (a new draft is kept).
+    const stopSettled = subscribeGenieTurnSettled((event) => {
+      const persisted = event.persistedConversationId;
+      if (persisted) setConversationId(persisted);
+      const param = urlRef.current.conversationParam;
+      if (persisted && param !== undefined && hydratedIdRef.current === param && persisted !== param) {
+        queueMicrotask(() => follow(persisted));
+      }
+      if (event.surface !== 'route') return;
+      setQuestion((current) => (current.trim() === event.question.trim() ? '' : current));
+    });
+    return () => {
+      stopSwitch();
+      stopSettled();
+    };
+  }, [navigate, queryClient]);
 
   useEffect(() => {
     // The turn store aborts the turn itself on this event; this clears what

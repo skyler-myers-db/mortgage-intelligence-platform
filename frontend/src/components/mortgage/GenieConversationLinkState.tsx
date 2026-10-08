@@ -1,6 +1,7 @@
 import { Icon } from '../Icon';
 import { Button, SurfaceTitle } from '../Primitives';
 import { Skeleton } from '../ui/Skeleton';
+import { GENIE_LINK_NOT_FOUND_COPY, GENIE_LINK_UNAVAILABLE_COPY } from './GenieConversationLinkState.copy';
 
 /**
  * The conversation deep link's non-ok states (audit 2026-09-21 `shell-03`
@@ -29,8 +30,7 @@ export interface GenieConversationLinkStateProps {
   retrying: boolean;
 }
 
-export const GENIE_LINK_NOT_FOUND_COPY = "This conversation isn't available.";
-export const GENIE_LINK_UNAVAILABLE_COPY = "This conversation can't be loaded right now. Nothing was changed.";
+export { GENIE_LINK_NOT_FOUND_COPY, GENIE_LINK_UNAVAILABLE_COPY };
 
 export default function GenieConversationLinkState({
   state,
@@ -57,9 +57,11 @@ export default function GenieConversationLinkState({
             <p>{failed ? GENIE_LINK_UNAVAILABLE_COPY : GENIE_LINK_NOT_FOUND_COPY}</p>
             <div className="chip-row">
               {failed && (
-                // aria-disabled, never native disabled: a disabled button
-                // drops a keyboard user's focus to <body> mid-retry.
-                <Button type="button" variant="primary" onClick={retrying ? undefined : onRetry} aria-disabled={retrying || undefined}>
+                // The shared pending state (Button `loading`: .btn--loading,
+                // aria-busy, aria-disabled, every press swallowed), never
+                // native disabled: a disabled button drops a keyboard user's
+                // focus to <body> mid-retry.
+                <Button type="button" variant="primary" loading={retrying} onClick={onRetry}>
                   {retrying ? 'Retrying…' : 'Retry'}
                 </Button>
               )}

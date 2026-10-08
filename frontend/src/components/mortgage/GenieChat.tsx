@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { subscribeActorScope } from '../../lib/actorScope';
@@ -23,6 +23,11 @@ import {
   writeGenieConversationId,
 } from '../../lib/genieConversation';
 import { genieStartersForRoute } from '../../lib/genieContext';
+import {
+  emitGenieConversationSwitch,
+  ensureGenieLinkCacheSync,
+  subscribeGenieConversationSwitch,
+} from '../../lib/genieConversationSwitch';
 import { consumeGeniePrefill, subscribeGeniePrefill } from '../../lib/genieOpen';
 import {
   appendGenieTurn,
@@ -170,6 +175,24 @@ export function GenieChat() {
   );
   const bodyRef = useRef<HTMLDivElement>(null);
   const suppressBootstrapConversationRef = useRef(false);
+  // One conversation across both surfaces (audit shell-03 remainder): the
+  // link cache follows every settled turn, and a conversation /ask-genie
+  // adopted (its History load, a deep link) becomes this panel's follow-up
+  // target too, unless a turn in flight owns the id it was submitted with.
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    ensureGenieLinkCacheSync(queryClient);
+  }, [queryClient]);
+  useEffect(
+    () =>
+      subscribeGenieConversationSwitch(({ conversationId: adopted, surface }) => {
+        if (surface !== 'route' || getGenieTurnSnapshot().inFlight !== null) return;
+        suppressBootstrapConversationRef.current = true;
+        lastQuestionRef.current = null;
+        setConversationId(adopted);
+      }),
+    [],
+  );
 
   // The starters and a bootstrap conversation come from `/api/genie/start`,
   // shared with /ask-genie through one query (audit `runtime-06`): opening
@@ -402,7 +425,8 @@ export function GenieChat() {
    * the same `{question, response}` shape the local store persists, so they
    * render through the identical <GenieAnswer> path. The conversation id is
    * adopted too, so a follow-up continues that Databricks thread rather than
-   * opening an orphan one.
+   * opening an orphan one, and a mounted /ask-genie is told (the switch), so
+   * its follow-up target and its link follow.
    */
   const loadSession = (conversationIdToLoad: string, loaded: GenieTurn[]) => {
     if (typing) return;
@@ -415,6 +439,7 @@ export function GenieChat() {
     cancelAnchor();
     setConversationId(conversationIdToLoad);
     writeGenieConversationId(conversationIdToLoad);
+    emitGenieConversationSwitch({ conversationId: conversationIdToLoad, surface: 'panel' });
     setHistoryOpen(false);
     setInput('');
   };
@@ -443,7 +468,7 @@ export function GenieChat() {
         const auditEventId = outcome.result.audit_event_id;
         landActionBubble(
           {
-            // The receipt (GenieChatBody) renders the id; spoken in full.
+            // The receipt (GenieAnswer's text slot) renders the id; spoken in full.
             answer: auditEventId ? outcome.result.message : confirmed,
             // A governed action result answers no question (its turn's is '').
             question: '',
