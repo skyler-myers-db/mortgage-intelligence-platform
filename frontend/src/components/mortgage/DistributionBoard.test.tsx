@@ -3,11 +3,13 @@
  *
  * The Distribution Board (wow-power-5 step 2) with a real QueryClient and the
  * real toast store; only the roster read and the salesLoop client are mocked.
- * Pinned: ONE dry run on open; Commit is disabled until a plan with placed
- * leads is on screen; a 409 distribution_plan_changed keeps the dialog open,
- * re-previews once, shows before -> after and commits the NEW fingerprint
- * with a NEW request id; the dialog cannot be dismissed while committing;
- * closing returns focus to the opener; the 200 raises the run's Undo toast.
+ * Pinned: ONE dry run on open; Commit is aria-disabled (never native, so it
+ * keeps focus) until a plan with placed leads is on screen; a 409
+ * distribution_plan_changed keeps the dialog open, re-previews once, shows
+ * before -> after and commits the NEW fingerprint with a NEW request id; a
+ * failed re-preview never recommits the refused plan and offers Try again;
+ * the dialog cannot be dismissed while committing; closing returns focus to
+ * the opener; the 200 raises the run's Undo toast.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useState } from 'react';
@@ -152,20 +154,101 @@ describe('DistributionBoard', () => {
     expect(document.activeElement).toBe(cancelButton());
   });
 
-  it('keeps Commit disabled while previewing and when nothing would be placed', async () => {
+  it('keeps Commit inert while previewing and when nothing would be placed (aria-disabled, never native)', async () => {
     let answer: (value: unknown) => void = () => undefined;
     loopMocks.previewDistribution.mockReturnValue(new Promise((resolve) => {
       answer = resolve;
     }));
     await openBoard();
     await eventually(() => expect(loopMocks.previewDistribution).toHaveBeenCalledTimes(1));
-    expect(commitButton().disabled).toBe(true);
+    expect(commitButton().getAttribute('aria-disabled')).toBe('true');
+    expect(commitButton().disabled).toBe(false);
 
     await act(async () => {
       answer(previewResponse(plan('b'.repeat(64), [0, 0])));
     });
     await eventually(() => expect(document.body.textContent).toContain('0 of 1 leads placed'));
-    expect(commitButton().disabled).toBe(true);
+    expect(commitButton().getAttribute('aria-disabled')).toBe('true');
+    await act(async () => {
+      commitButton().click();
+    });
+    expect(loopMocks.commitDistribution).not.toHaveBeenCalled();
+  });
+
+  it('keeps focus on Commit when a re-preview after a moved plan places nothing', async () => {
+    loopMocks.previewDistribution
+      .mockResolvedValueOnce(previewResponse(plan('1'.repeat(64), [2, 1])))
+      .mockResolvedValueOnce(previewResponse(plan('2'.repeat(64), [0, 0])));
+    loopMocks.commitDistribution.mockRejectedValueOnce(
+      new ApiError('moved', { path: '/api/sales/distribute', status: 409, reason: 'distribution_plan_changed' }),
+    );
+    await openBoard();
+    await eventually(() => expect(commitButton().getAttribute('aria-disabled')).toBeNull());
+    commitButton().focus();
+
+    await act(async () => {
+      commitButton().click();
+    });
+    await eventually(() => expect(document.body.textContent).toContain('0 of 1 leads placed'));
+    // Never native disabled: a focused button that turns disabled drops focus to <body>.
+    expect(commitButton().disabled).toBe(false);
+    expect(commitButton().getAttribute('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(commitButton());
+    await act(async () => {
+      commitButton().click();
+    });
+    expect(loopMocks.commitDistribution).toHaveBeenCalledTimes(1);
+  });
+
+  it('never recommits a refused plan when its re-preview fails, and Try again re-plans in place', async () => {
+    loopMocks.previewDistribution
+      .mockResolvedValueOnce(previewResponse(plan('3'.repeat(64), [3, 1])))
+      .mockRejectedValueOnce(new ApiError('boom', { path: '/api/sales/distribute', status: 500 }))
+      .mockResolvedValueOnce(previewResponse(plan('4'.repeat(64), [2, 1])));
+    loopMocks.commitDistribution
+      .mockRejectedValueOnce(new ApiError('moved', { path: '/api/sales/distribute', status: 409, reason: 'distribution_plan_changed' }))
+      .mockResolvedValueOnce({
+        assigned_count: 3,
+        strategy: 'score_balanced',
+        assignments: [],
+        per_lo_counts: {},
+        audit_event_id: 'audit-distribute-4',
+        preview: plan('4'.repeat(64), [2, 1]),
+      });
+    await openBoard();
+    await eventually(() => expect(commitButton().getAttribute('aria-disabled')).toBeNull());
+
+    await act(async () => {
+      commitButton().click();
+    });
+    await eventually(() => expect(document.querySelector('dialog [role="alert"]')?.textContent).toContain("Couldn't preview the distribution"));
+    // The refused plan is still on screen, but it is neither "changed" nor committable.
+    expect(document.body.textContent).not.toContain('The plan changed since your preview');
+    expect(document.body.textContent).not.toContain('boom');
+    expect(commitButton().getAttribute('aria-disabled')).toBe('true');
+    await act(async () => {
+      commitButton().click();
+    });
+    expect(loopMocks.commitDistribution).toHaveBeenCalledTimes(1);
+
+    const tryAgain = [...document.querySelectorAll<HTMLButtonElement>('dialog [role="alert"] button')].find((b) => b.textContent?.includes('Try again'));
+    tryAgain?.focus();
+    await act(async () => {
+      tryAgain?.click();
+    });
+    await eventually(() => expect(document.body.textContent).toContain('The plan changed since your preview'));
+    expect(loopMocks.previewDistribution).toHaveBeenCalledTimes(3);
+    expect(document.body.textContent).toContain('Summit LO 01: +3 → +2');
+    expect(document.querySelector('dialog [role="alert"]')).toBeNull();
+    // The Try again that held focus handed it to Commit, not to <body>.
+    expect(document.activeElement).toBe(commitButton());
+
+    await act(async () => {
+      commitButton().click();
+    });
+    await eventually(() => expect(loopMocks.commitDistribution).toHaveBeenCalledTimes(2));
+    const [, second] = loopMocks.commitDistribution.mock.calls as Array<[{ fingerprint: string }]>;
+    expect(second[0].fingerprint).toBe('4'.repeat(64));
   });
 
   it('re-previews on a moved plan, shows before -> after, and commits the new fingerprint with a new request id', async () => {
@@ -183,7 +266,7 @@ describe('DistributionBoard', () => {
         preview: plan('d'.repeat(64), [2, 1]),
       });
     await openBoard();
-    await eventually(() => expect(commitButton().disabled).toBe(false));
+    await eventually(() => expect(commitButton().getAttribute('aria-disabled')).toBeNull());
 
     await act(async () => {
       commitButton().click();
@@ -218,7 +301,7 @@ describe('DistributionBoard', () => {
       new ApiError('The distribution plan changed since the preview.', { path: '/api/sales/distribute', status: 409 }),
     );
     await openBoard();
-    await eventually(() => expect(commitButton().disabled).toBe(false));
+    await eventually(() => expect(commitButton().getAttribute('aria-disabled')).toBeNull());
 
     await act(async () => {
       commitButton().click();
@@ -235,7 +318,7 @@ describe('DistributionBoard', () => {
       fail = reject;
     }));
     await openBoard();
-    await eventually(() => expect(commitButton().disabled).toBe(false));
+    await eventually(() => expect(commitButton().getAttribute('aria-disabled')).toBeNull());
 
     await act(async () => {
       commitButton().click();

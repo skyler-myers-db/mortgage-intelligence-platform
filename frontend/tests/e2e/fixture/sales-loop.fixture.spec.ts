@@ -10,7 +10,8 @@
  *      numbers, axe clean; Commit carries the fingerprint and a request id;
  *      F8 reaches the toast's Undo, which POSTs the run's release with that
  *      request id and raises its own audit-linked toast;
- *  (c) a 409 distribution_plan_changed re-previews and shows the notice;
+ *  (c) a 409 distribution_plan_changed re-previews and shows the notice; a
+ *      re-preview that places nothing keeps focus on Commit;
  *  (d) a 429 holds Retry behind the countdown, then retries the same intent
  *      with the same request id;
  *  (e) a Lead Queue assign -> Undo POSTs the single release; a second Undo
@@ -174,6 +175,29 @@ test.describe('(c) a moved plan', () => {
     expect(previews).toBe(2);
     expect(commits).toEqual([BOARD_FINGERPRINT]);
     await expect(dialog).toBeVisible();
+  });
+
+  test('a re-preview that places nothing keeps focus on Commit', async ({ app, mockApi, page, hygiene }) => {
+    hygiene.allow('console.error', /status of 409/);
+    let previews = 0;
+    mockApi.register<unknown>('POST', '/api/sales/distribute', ({ body }) => {
+      if ((body as { dry_run?: boolean }).dry_run) {
+        previews += 1;
+        return json(dryRunBody(boardPreview(LOAN_OFFICERS, previews === 1 ? [3, 1] : [0, 0], previews === 1 ? BOARD_FINGERPRINT : BOARD_FINGERPRINT_MOVED)));
+      }
+      return json({ detail: 'The distribution plan changed since the preview.', reason: 'distribution_plan_changed' }, { status: 409 });
+    });
+    await app.gotoRoute(SALES_OPS);
+    const dialog = await openBoard(page);
+    const commit = dialog.getByRole('button', { name: 'Commit distribution' });
+    await commit.focus();
+    await page.keyboard.press('Enter');
+
+    await expect(dialog).toContainText('0 of 2 leads placed');
+    // A natively disabled button would have dropped focus to <body> here.
+    await expect(commit).toBeFocused();
+    await expect(commit).toHaveAttribute('aria-disabled', 'true');
+    await expect(commit).toHaveJSProperty('disabled', false);
   });
 });
 

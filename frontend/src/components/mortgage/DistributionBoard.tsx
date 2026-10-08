@@ -104,6 +104,8 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
   const queryClient = useQueryClient();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const commitRef = useRef<HTMLButtonElement | null>(null);
+  const failureRef = useRef<HTMLDivElement | null>(null);
   const previewStarted = useRef(false);
   const titleId = useId();
   const subId = useId();
@@ -115,6 +117,12 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
   // focus (aria-busy, never native disabled) instead of dropping it to <body>.
   const [preview, setPreview] = useState<DistributionPreview | null>(null);
   const [before, setBefore] = useState<DistributionPreview | null>(null);
+  // The server refused the plan on screen as moved (409) and no new plan has
+  // arrived yet: its fingerprint must never be committed again.
+  const [stale, setStale] = useState(false);
+  // A non-429 preview failure, kept until the next preview settles so the
+  // callout (and its Try again, which may hold focus) stays put meanwhile.
+  const [previewError, setPreviewError] = useState<unknown>(null);
   const [commitError, setCommitError] = useState<unknown>(null);
 
   const officers = [...(roster.data ?? [])].sort((a, b) => a.display_label.localeCompare(b.display_label));
@@ -123,11 +131,28 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
   const previewing = previewWrite.isPending;
   const committing = commitWrite.isPending;
 
+  // The failure callout is about to go: a Try again inside it that holds
+  // focus hands it to Commit (focusable even while aria-disabled).
+  const releaseFailureFocus = (): void => {
+    if (failureRef.current?.contains(document.activeElement)) commitRef.current?.focus();
+  };
+
   const runPreview = (retry: () => void): void => {
     previewWrite.mutateAsync(plan).then(
-      (result) => setPreview(result.preview ?? null),
+      (result) => {
+        releaseFailureFocus();
+        setPreview(result.preview ?? null);
+        setStale(false);
+        setPreviewError(null);
+      },
       (error: unknown) => {
-        if (isCountdown429(error)) toastSalesWriteFailure(PREVIEW_FAILED, error, 'the preview', retry);
+        if (!isCountdown429(error)) {
+          setPreviewError(error);
+          return;
+        }
+        releaseFailureFocus();
+        setPreviewError(null);
+        toastSalesWriteFailure(PREVIEW_FAILED, error, 'the preview', retry);
       },
     );
   };
@@ -174,6 +199,7 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
           && (error.reason === 'distribution_plan_changed' || error.reason === null)
         ) {
           setBefore(current);
+          setStale(true);
           withRetry(runPreview);
           return;
         }
@@ -186,15 +212,18 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
     );
   };
 
+  // Commit is aria-disabled, never native disabled: a re-preview that places
+  // nothing (or fails) must not drop a focused Commit to <body>.
+  const canCommit = preview !== null && preview.placed_count > 0 && !stale;
   const commit = () => {
-    if (!preview || committing || previewing) return;
+    if (!preview || !canCommit || committing || previewing) return;
     withRetry((retry) => runCommit(preview, retry));
   };
 
   const capped = officers.length > BOARD_MAX_OFFICERS;
   const loading = roster.isPending || (previewing && preview === null);
   // A 429 is the toast's countdown, not a failure shown here.
-  const failure = roster.error ?? (previewing || isCountdown429(previewWrite.error) ? null : previewWrite.error);
+  const failure = roster.error ?? previewError;
   const noOfficers = roster.isSuccess && planned.length === 0;
 
   return (
@@ -219,7 +248,7 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
           {BOARD_MAX_OFFICERS} of {formatCount(officers.length)} by name.
         </div>
       )}
-      {before && preview && !previewing && <ChangedNotice before={before} after={preview} />}
+      {before && preview && !previewing && !stale && <ChangedNotice before={before} after={preview} />}
       {noOfficers && (
         <div className="status-callout status-callout--warning" role="note">
           No active loan officers are in your scope, so there is nothing to plan.
@@ -266,8 +295,15 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
         )}
       </div>
       {failure ? (
-        <div className="status-callout status-callout--danger" role="alert">
-          {PREVIEW_FAILED}: <DescribedErrorBody error={failure} subject="the distribution preview" />
+        <div ref={failureRef} className="status-callout status-callout--danger distribution-board__failure" role="alert">
+          <span>
+            {PREVIEW_FAILED}: <DescribedErrorBody error={failure} subject="the distribution preview" />
+          </span>
+          {roster.error ? null : (
+            <Button size="sm" loading={previewing} onClick={() => withRetry(runPreview)}>
+              Try again
+            </Button>
+          )}
         </div>
       ) : null}
       {preview && (
@@ -289,11 +325,12 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
           Cancel
         </button>
         <Button
+          ref={commitRef}
           variant="primary"
           size="sm"
           onClick={commit}
           loading={committing || (previewing && preview !== null)}
-          disabled={preview === null || preview.placed_count === 0}
+          aria-disabled={canCommit ? undefined : true}
         >
           Commit distribution
         </Button>

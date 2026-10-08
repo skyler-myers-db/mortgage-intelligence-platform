@@ -70,7 +70,35 @@
   gap: var(--sp-2);
 }
 
+/* A failed preview keeps its Try again beside the reason. */
+.distribution-board__failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+/* Commit while it cannot run (nothing placed, or a plan the server refused
+   as moved): aria-disabled, never native `disabled`, so a focused Commit
+   keeps focus when a re-preview takes it away. It takes the
+   .btn--primary[disabled] look from 01-app-shell.css; Button's own loading
+   state keeps its progress look. */
+.distribution-board__actions .btn--primary[aria-disabled="true"]:not(.btn--loading),
+.distribution-board__actions .btn--primary[aria-disabled="true"]:not(.btn--loading):hover {
+  cursor: not-allowed;
+  box-shadow: none;
+  background: var(--bg-3);
+  border-color: var(--line-2);
+  color: var(--text-1);
+  translate: none;
+}
+
 @media (forced-colors: active) {
+  .distribution-board__actions .btn--primary[aria-disabled="true"]:not(.btn--loading) {
+    color: GrayText;
+    border-color: GrayText;
+  }
   .distribution-board__bar { border: 1px solid CanvasText; }
   .distribution-board__seg--open { background: GrayText; box-shadow: none; }
   .distribution-board__seg--added { background: Highlight; forced-color-adjust: none; }
