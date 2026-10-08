@@ -13,6 +13,8 @@
  *  (b) a campaign-bound queue: aria-disabled with the binding reason;
  *  (c) a governed 422 keeps the text and says the refusal was recorded;
  *  (d) My requests -> Withdraw -> confirm: one POST, the toast, rows unmarked;
+ *      by keyboard, focus never falls to <body> (the confirm, Keep back to
+ *      Withdraw, then the panel title after the 200);
  *  (e) an approver: "Approval requests · 3" -> the panel -> Open in queue:
  *      one GET /api/leads with only approval_request_batch, the scope row,
  *      an approve through the review carrying approval_request_batch_id, and
@@ -93,6 +95,8 @@ test.describe('a non-approver', () => {
     await expect(page.locator('.toast-region .toast')).toHaveCount(0);
     store.createGate.release();
     await expect(form).toHaveCount(0);
+    // The form unmounted with focus on Send request: focus is on the table region, never <body>.
+    await expect(visible(page.getByRole('region', { name: 'Ranked borrowers table scroll region' }))).toBeFocused();
     const toast = page.locator('.toast-region .toast', { hasText: `Approval requested for ${REQUESTED_IDS.length} borrowers` });
     await expect(toast).toBeVisible();
     // The audit link (or, for a reader without the ledger, the id) rides the toast.
@@ -151,12 +155,22 @@ test.describe('a non-approver', () => {
     const panel = page.getByTestId('my-approval-requests-panel');
     await expect(panel).toContainText(`Reason for the request ${REQUEST_REASON}`);
     await expect(panel).toContainText('Waiting for an approver');
-    await panel.getByTestId(`approval-request-withdraw-${REQUEST_BATCH_ID}`).click();
+    // By keyboard: every step unmounts the focused control, and focus follows it into the panel.
+    const trigger = panel.getByTestId(`approval-request-withdraw-${REQUEST_BATCH_ID}`);
+    const confirm = panel.getByTestId(`approval-request-withdraw-confirm-${REQUEST_BATCH_ID}`);
+    await trigger.press('Enter');
     await expect(panel).toContainText(`Withdraw ${REQUESTED_IDS.length} open borrowers? Approvers stop seeing them.`);
-    await panel.getByTestId(`approval-request-withdraw-confirm-${REQUEST_BATCH_ID}`).click();
+    await expect(confirm).toBeFocused();
+    await panel.getByTestId(`approval-request-withdraw-keep-${REQUEST_BATCH_ID}`).press('Enter');
+    await expect(trigger).toBeFocused();
+    expect(store.withdraws).toEqual([]);
+    await trigger.press('Enter');
+    await expect(confirm).toBeFocused();
+    await confirm.press('Enter');
     await expect(page.locator('.toast-region .toast', { hasText: 'Request withdrawn' })).toBeVisible();
     expect(store.withdraws).toEqual([REQUEST_BATCH_ID]);
     await expect(cell(page, REQUESTED_IDS[0])).not.toContainText('Approval requested');
+    await expect(panel.getByRole('heading', { name: 'My requests' })).toBeFocused();
   });
 
   test('(g) an errored session check offers no request control', async ({ app, hygiene, mockApi, page }) => {
