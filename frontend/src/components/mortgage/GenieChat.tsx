@@ -297,7 +297,12 @@ export function GenieChat() {
   // panel sat closed. Never while a turn is in flight: that turn owns the id
   // it was submitted with.
   useEffect(() => {
-    if (!genieOpen) return;
+    // Closing the panel closes its History menu as well (the menu's exit
+    // runs, inert and aria-hidden), so a reopen never shows a stale menu.
+    if (!genieOpen) {
+      setHistoryOpen(false);
+      return;
+    }
     setUnseen(null);
     if (getGenieTurnSnapshot().inFlight === null) setConversationId(readGenieConversationId());
   }, [genieOpen]);

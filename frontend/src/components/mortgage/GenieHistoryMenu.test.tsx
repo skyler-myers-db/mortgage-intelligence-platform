@@ -31,6 +31,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   },
 }));
 
+import { hasOpenOverlay } from '../../lib/keymap';
 import { GenieHistoryMenu } from './GenieHistoryMenu';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -258,5 +259,81 @@ describe('GenieHistoryMenu', () => {
     expect(mocks.onLoad).toHaveBeenCalledWith('conv-past', [
       { question: 'Which segments lead?', response: { answer: 'Restored.' } },
     ]);
+  });
+
+  describe('the exit (motion-01 item 2e)', () => {
+    let restoreStyle: (() => void) | null = null;
+
+    /** The lazy sheet's exit, as the browser computes it (DOM tests have no stylesheets). */
+    function withExitTransition() {
+      const original = window.getComputedStyle;
+      window.getComputedStyle = ((element: Element, pseudo?: string | null) => {
+        const style = original.call(window, element, pseudo);
+        if (!(element as HTMLElement).classList?.contains('genie-history__menu--exiting')) return style;
+        // useExitRetained reads these two only.
+        return { transitionDuration: '0.12s', transitionDelay: '0s' } as unknown as CSSStyleDeclaration;
+      }) as typeof window.getComputedStyle;
+      restoreStyle = () => {
+        window.getComputedStyle = original;
+      };
+    }
+
+    afterEach(() => {
+      restoreStyle?.();
+      restoreStyle = null;
+    });
+
+    it('closes at once where nothing transitions (a DOM test, or reduced motion)', async () => {
+      mocks.genieSessions.mockResolvedValue([PAST]);
+      render(true);
+      await waitUntil(() => rowTitles().length === 1);
+      render(false);
+      expect(menu()).toBeNull();
+    });
+
+    it('a closing menu stays through its exit: inert, aria-hidden, no open overlay, focus back on the toggle', async () => {
+      withExitTransition();
+      mocks.genieSessions.mockResolvedValue([PAST]);
+      render(true);
+      await waitUntil(() => rowTitles().length === 1);
+      act(() => container.querySelector<HTMLButtonElement>('.genie-history__item')?.focus());
+
+      render(false);
+      const exiting = menu();
+      expect(exiting?.classList.contains('genie-history__menu--exiting')).toBe(true);
+      expect(exiting?.getAttribute('aria-hidden')).toBe('true');
+      expect(exiting?.hasAttribute('inert')).toBe(true);
+      expect(hasOpenOverlay(document), 'an exiting menu is no open overlay for the keymap').toBe(false);
+      expect(document.activeElement).toBe(container.querySelector('button[aria-label="Genie conversation history"]'));
+
+      act(() => exiting?.dispatchEvent(new Event('transitionend')));
+      expect(menu()).toBeNull();
+    });
+
+    it('a reopen during the exit remounts the rows and reads again: one read per open', async () => {
+      withExitTransition();
+      mocks.genieSessions.mockResolvedValue([PAST]);
+      render(true);
+      await waitUntil(() => rowTitles().length === 1);
+      expect(mocks.genieSessions).toHaveBeenCalledTimes(1);
+
+      render(false);
+      expect(menu()?.classList.contains('genie-history__menu--exiting')).toBe(true);
+      render(true);
+      await settle();
+      expect(menu()?.classList.contains('genie-history__menu--exiting')).toBe(false);
+      expect(mocks.genieSessions, 'the reopen read again').toHaveBeenCalledTimes(2);
+      expect(menu()?.hasAttribute('aria-hidden')).toBe(false);
+    });
+
+    it('a closed menu never reads, exit or not', async () => {
+      withExitTransition();
+      mocks.genieSessions.mockResolvedValue([PAST]);
+      render(false);
+      render(false);
+      await settle();
+      expect(mocks.genieSessions).not.toHaveBeenCalled();
+      expect(menu()).toBeNull();
+    });
   });
 });

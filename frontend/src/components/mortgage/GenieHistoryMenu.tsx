@@ -1,10 +1,12 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useExitRetained } from '../../hooks/useExitRetained';
 import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
 import type { GenieTurn } from '../../lib/genieConversationStore';
 import { Icon } from '../Icon';
+import './GenieHistoryMenu.css';
 
 /**
  * The history list's cache key. Kept local (rate-lever's geoQueryKeys
@@ -43,6 +45,15 @@ function readGenieSessionTurns(
  * backend without the endpoint), a 5xx, or a network failure all collapse to
  * one inline "History unavailable" row — the chat underneath keeps working
  * and no error is surfaced as a governed answer.
+ *
+ * Exit (audit motion-01 item 2e): closing keeps the rows mounted through a
+ * short fade (useExitRetained over the lazy GenieHistoryMenu.css), marked
+ * `genie-history__menu--exiting`, inert and aria-hidden, so it takes no
+ * pointer, no focus and is no open overlay for the keymap; instant under
+ * reduced motion. Focus inside the menu returns to the toggle as the exit
+ * STARTS. The rows are keyed by an open generation, so a reopen during the
+ * exit remounts them and reads again: one read per open.
+ * deviation:genie-history-exit
  */
 export function GenieHistoryMenu({
   open,
@@ -61,6 +72,24 @@ export function GenieHistoryMenu({
   // Synchronous latch: two fast clicks on the same row both read
   // `loadingId === null` in the same frame without it.
   const loadLatchRef = useRef(false);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  // One generation per open (tracked during render, the useExitRetained
+  // pattern): it keys the rows, so a reopen mid-exit mounts fresh rows.
+  const [lastOpen, setLastOpen] = useState(open);
+  const [generation, setGeneration] = useState(0);
+  if (open !== lastOpen) {
+    setLastOpen(open);
+    if (open) setGeneration(generation + 1);
+  }
+  const shownGeneration = useExitRetained(open ? generation : null, menuRef);
+  const exiting = !open && shownGeneration !== null;
+  // The exit starts with focus back on the toggle (never left in an inert menu).
+  useEffect(() => {
+    if (open) return;
+    const active = typeof document === 'undefined' ? null : document.activeElement;
+    if (active && menuRef.current?.contains(active)) toggleRef.current?.focus();
+  }, [open]);
 
   /** Resolves false only when the picked session could not be read; an
    *  ignored click (latched or disabled) is not a failure. */
@@ -84,6 +113,7 @@ export function GenieHistoryMenu({
   return (
     <div className="genie-history">
       <button
+        ref={toggleRef}
         type="button"
         className="drawer__close"
         onClick={(e) => {
@@ -97,7 +127,16 @@ export function GenieHistoryMenu({
       >
         <Icon name="audit" size={14} />
       </button>
-      {open && <GenieHistoryRows loadingId={loadingId} disabled={disabled} onPick={load} />}
+      {shownGeneration !== null && (
+        <GenieHistoryRows
+          key={shownGeneration}
+          menuRef={menuRef}
+          exiting={exiting}
+          loadingId={loadingId}
+          disabled={disabled}
+          onPick={load}
+        />
+      )}
     </div>
   );
 }
@@ -115,10 +154,15 @@ export function GenieHistoryMenu({
  * reconnect is not an open, so only a reopen reads again.
  */
 function GenieHistoryRows({
+  menuRef,
+  exiting,
   loadingId,
   disabled,
   onPick,
 }: {
+  menuRef: RefObject<HTMLDivElement | null>;
+  /** Closed, still fading out: inert, aria-hidden, no pointer. */
+  exiting: boolean;
   loadingId: string | null;
   disabled: boolean;
   onPick: (conversationId: string) => Promise<boolean>;
@@ -142,9 +186,12 @@ function GenieHistoryRows({
 
   return (
     <div
-      className="filter-menu genie-history__menu"
+      ref={menuRef}
+      className={`filter-menu genie-history__menu${exiting ? ' genie-history__menu--exiting' : ''}`}
       role="menu"
       aria-label="Past Genie conversations"
+      aria-hidden={exiting || undefined}
+      inert={exiting}
       onPointerDown={(e) => e.stopPropagation()}
     >
       {failed && (

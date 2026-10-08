@@ -1,0 +1,27 @@
+/* ============================================================
+   GENIE HISTORY MENU EXIT (audit 2026-09-21 motion-01 item 2e)
+
+   Lazy stylesheet, imported by GenieHistoryMenu.tsx: it loads with the
+   Genie panel and route chunks, never in the initial CSS. Tokens only.
+
+   Closing the History menu used to hard-cut it (`{open && <rows/>}`).
+   useExitRetained keeps the rows mounted while this exit runs; the
+   component marks them `genie-history__menu--exiting`, inert and
+   aria-hidden, so the fading menu takes no pointer, no focus and is no open
+   overlay for the keymap. An ease-in exit on --dur-fast (the motion-01
+   exit-shorter-than-entry rule); none under reduced motion, which also
+   makes useExitRetained release at once. Additive to the prototype, whose
+   Genie header (design_files/index.html:718-722) carries no History menu
+   and so no exit for one. deviation:genie-history-exit
+   ============================================================ */
+.genie-history .genie-history__menu--exiting {
+  opacity: 0;
+  translate: 0 calc(var(--sp-1) * -1);
+  pointer-events: none;
+  transition:
+    opacity var(--dur-fast) var(--ease-exit),
+    translate var(--dur-fast) var(--ease-exit);
+}
+@media (prefers-reduced-motion: reduce) {
+  .genie-history .genie-history__menu--exiting { transition: none; }
+}
