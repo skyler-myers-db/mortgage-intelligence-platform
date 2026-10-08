@@ -5,7 +5,8 @@ value to HOW the rows produce it. Pinned here:
 
 * one case per support kind (cell, row_count, sum, share, derived, bound);
 * the fixed priority on each contested pair, and the column rule (two columns
-  at the winning priority leave it None);
+  at the winning priority leave it None), both taken across EVERY key within
+  the verdict tolerance, not the first one;
 * that identifier and date string tokens stay ``derived`` exactly as the
   phase-1 derivation labelled them;
 * ``occurrences``: set only when every number with that token in the checked
@@ -145,6 +146,39 @@ def test_cell_beats_a_derived_identifier_token() -> None:
     assert (item.support, item.column, item.derivation) == ("cell", "borrowers", "returned_value")
 
 
+def _keys_within_tolerance(text: str, rows: list[dict[str, Any]]) -> list[tuple[float, Any]]:
+    """The map's keys (in insertion order) the claim's value is within the
+    verdict tolerance of, with their labels."""
+
+    [claim] = _numeric_claims(text)
+    support = _numeric_support_from_rows(rows, claim=claim)
+    return [(key, label) for key, label in support.items() if _is_supported(claim.value, {key})]
+
+
+def test_the_best_support_is_taken_across_every_key_within_tolerance() -> None:
+    # Spec 1b: the highest priority among ALL keys within tolerance, not the
+    # first one. The identifier token 1203 (derived) is a DISTINCT key that is
+    # inserted before the 1204 cell and is within rel_tol 0.001 of 1,204.
+    rows = [{"borrower_id": "B1203", "borrowers": 1204}]
+    text = "Texas has 1,204 borrowers."
+    near = _keys_within_tolerance(text, rows)
+    assert [(key, label.kind) for key, label in near][:1] == [(1203.0, "derived")], near
+    assert (1204.0, "cell") in [(key, label.kind) for key, label in near], near
+    item = _item(text, "1,204", rows)
+    assert (item.support, item.column, item.derivation) == ("cell", "borrowers", "returned_value")
+
+
+def test_two_columns_on_distinct_keys_within_tolerance_name_no_column() -> None:
+    # The column rule also spans keys: 1,204 is within tolerance of a cell of
+    # a_loans (1204) and of a different cell of b_loans (1203).
+    rows = [{"segment": "A", "a_loans": 1204, "b_loans": 1203}]
+    text = "Segment A carries 1,204 loans."
+    near = {(key, label.kind, label.column) for key, label in _keys_within_tolerance(text, rows)}
+    assert {(1204.0, "cell", "a_loans"), (1203.0, "cell", "b_loans")} <= near, near
+    item = _item(text, "1,204", rows)
+    assert (item.support, item.column, item.derivation) == ("cell", None, "returned_value")
+
+
 def test_two_columns_at_the_winning_priority_name_no_column() -> None:
     rows = [{"segment": "A", "heloc_loans": 50, "refi_loans": 50}]
     item = _item("Segment A carries 50 loans.", "50", rows)
@@ -242,12 +276,17 @@ def test_a_token_over_32_characters_is_never_located() -> None:
 
 
 def test_occurrences_is_computed_before_the_40_item_cap() -> None:
+    # One token straddles the cap: S0's 1,000 is listed (item 0) and repeated
+    # after the 40th item. Counting only the listed items would see one cell
+    # claim against two numbers in the text and drop the listed occurrences.
     rows = [{"segment": f"S{i}", "loans": 1000 + i} for i in range(45)]
     text = " ".join(f"Segment S{i} has {1000 + i:,} loans." for i in range(45))
-    text += " Segment S44 has 1,044 loans again."
+    text += " Segment S0 has 1,000 loans again."
     check = check_numeric_claims(text, rows, "q")
     assert check.verified_count == 46 and len(check.verified) == 40
-    assert all(item.occurrences == 1 for item in check.verified)
+    first = check.verified[0]
+    assert (first.token, first.support, first.occurrences) == ("1,000", "cell", 2)
+    assert all(item.occurrences == 1 for item in check.verified[1:])
 
 
 # --- the wire model --------------------------------------------------------
