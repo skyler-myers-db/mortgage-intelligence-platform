@@ -39,7 +39,6 @@ import { menuSpaceStyle, useMenuPlacement } from './useMenuPlacement';
  * the listbox through each option's index.
  */
 
-
 interface FilterSelectProps {
   label: string;
   value: string;

@@ -178,7 +178,6 @@ export function AuditExplorerFilterForm({ applied, onApply, applyButtonRef }: Fi
           {...fieldErrorProps('until')}
         />
       </label>
-
       <label className="filter-row__group">
         <span className="field__label">CORRELATION ID</span>
         <input
