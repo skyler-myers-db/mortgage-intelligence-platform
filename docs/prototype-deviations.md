@@ -119,3 +119,4 @@ enforces it.
 
 | id | deviation | prototype cite | class | code | pinning test | finding ids | ruling date | lane |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| growth-agent-plan-progress | While a composed plan runs, its Plan steps show the server-reported step: Done / Running (Approval gate at the gate) / Waiting text chips, `aria-current="step"` on the running step, "Recording the audit trail…" before the audit write, and one polite status line that changes only with the step or phase (`.growth-agent-step--running` / `--waiting`). /ask-genie has no prototype page; the rows reuse the Genie panel's step list and `.chip`. | design_files/Module 0 Prototype.html:1365 | product | frontend/src/routes/ask-genie.compose-plan-card.tsx::ComposePlanCard; frontend/src/routes/ask-genie.growth-agent.css::.growth-agent-step--running | frontend/src/routes/ask-genie.compose-plan-card.test.tsx | genie-09 | 2026-10-07 | w5-growth-watchlists |

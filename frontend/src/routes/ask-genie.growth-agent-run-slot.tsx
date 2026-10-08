@@ -118,6 +118,7 @@ export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRu
             conflict: agent.planExecution.conflict !== null,
             errorMessage: agent.planExecution.errorMessage,
             onRun: () => agent.executeComposedPlan(composePlan),
+            progress: agent.planExecution.progress,
             // The card that answers Compose again takes focus once (critic-01).
             onComposeAgain: () => void agent.composeGrowthAgentPlan({ focusResult: true }),
           }}

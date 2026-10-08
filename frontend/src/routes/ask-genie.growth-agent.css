@@ -77,3 +77,21 @@
   flex-basis: 100%;
   margin: 0;
 }
+
+/* deviation:growth-agent-plan-progress
+   A running composed plan's Plan steps (genie-09 part 4): the step the
+   server reports is accented and carries a Running (or Approval gate) chip,
+   earlier steps read Done and later ones Waiting. --completed needs no rule
+   (the trace's completed steps keep their default). */
+.growth-agent-step--running > svg {
+  color: var(--accent);
+}
+.growth-agent-step--waiting .growth-agent-step__title {
+  color: var(--text-2);
+}
+.growth-agent-step__progress {
+  margin-block-start: var(--sp-1);
+}
+.growth-agent-step__recording {
+  margin-block: var(--sp-2) 0;
+}

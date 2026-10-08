@@ -19,6 +19,7 @@ import {
   container,
   executeComposedGrowthAgentPlan,
   mount,
+  planProgress,
   registerGrowthAgentRoutePanelHooks,
   setNativeValue,
   stateInput,
@@ -220,7 +221,12 @@ describe('Growth Agent compose, review, run', () => {
     await waitUntil(() => executeComposedGrowthAgentPlan.mock.calls.length === 1);
 
     const [request] = executeComposedGrowthAgentPlan.mock.calls[0] as [Record<string, unknown>];
-    expect(request).toEqual({ objective: OBJECTIVE, states: ['IL'], plan: reply.plan, plan_digest: DIGEST_A });
+    // genie-09 part 4: the run mints its request id, which the progress poll reads.
+    expect(request).toEqual({
+      objective: OBJECTIVE, states: ['IL'], plan: reply.plan, plan_digest: DIGEST_A, request_id: expect.any(String),
+    });
+    await waitUntil(() => planProgress.mock.calls.length > 0);
+    expect(planProgress.mock.calls[0][0]).toBe(request.request_id);
     expect(composeMortgageGrowthAgentPlan).toHaveBeenCalledTimes(1);
 
     // Pessimistic: nothing reads as run until the server answers. The button
@@ -304,7 +310,9 @@ describe('Growth Agent compose, review, run', () => {
     act(() => button(/^Run this plan$/).click());
     await waitUntil(() => executeComposedGrowthAgentPlan.mock.calls.length === 2);
     const [request] = executeComposedGrowthAgentPlan.mock.calls[1] as [Record<string, unknown>];
-    expect(request).toEqual({ objective: OBJECTIVE, states: ['IL'], plan: RECOMPOSED.plan, plan_digest: DIGEST_B });
+    expect(request).toEqual({
+      objective: OBJECTIVE, states: ['IL'], plan: RECOMPOSED.plan, plan_digest: DIGEST_B, request_id: expect.any(String),
+    });
   });
 
   it('a Compose again that fails leaves no focus claim for a later command-bar compose', async () => {
