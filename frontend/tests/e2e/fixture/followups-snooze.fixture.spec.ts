@@ -15,8 +15,9 @@
  *      the tray (the top layer wins);
  *  (d) a slow snooze keeps the row with the chosen option loading until it
  *      answers, sends exactly {snooze_days, request_id}, then the row leaves
- *      and the success toast shows; a 409 not_contactable keeps the row and
- *      re-reads the list;
+ *      and the success toast shows; focus then moves to the next VISIBLE row,
+ *      else the tray heading (never <body>); a 409 not_contactable keeps the
+ *      row and re-reads the list;
  *  (e) the default (ineligible) actor gets no item and no list read.
  */
 import type { Page } from '@playwright/test';
@@ -159,6 +160,29 @@ for (const theme of FIXTURE_THEMES) {
       release();
       await expect(row).toHaveCount(0);
       await expect(page.locator('.toast').filter({ hasText: 'Snoozed until' })).toBeVisible();
+    });
+
+    test('(d) after a snooze, focus moves to the next visible row, else to the tray heading', async ({ app, mockApi, page }) => {
+      registerFollowUps(mockApi);
+      await app.gotoRoute('/');
+      const { tray } = await openTray(page);
+      const snoozeRow = async (borrowerId: string) => {
+        const row = tray.locator(`.followups__row[data-borrower-id="${borrowerId}"]`);
+        await row.getByRole('button', { name: 'Snooze' }).click();
+        await row.getByRole('button', { name: '1 day' }).click();
+        await expect(row).toHaveCount(0);
+      };
+
+      // Control: the next row sits in an open section and takes focus.
+      await snoozeRow(FOLLOWUP_IDS.today);
+      await expect(tray.locator(`.followups__row[data-borrower-id="${FOLLOWUP_IDS.week}"] .followups__id`)).toBeFocused();
+
+      // The last open row: Older and No longer contactable stay collapsed
+      // after it, and a link inside a closed <details> cannot take focus.
+      await snoozeRow(FOLLOWUP_IDS.assigned);
+      await expect(tray.locator('details.followups__section--collapsed:not([open])')).toHaveCount(2);
+      await expect(tray.getByRole('heading', { name: 'Follow-ups', level: 2 })).toBeFocused();
+      expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('BODY');
     });
 
     test('(d) a 409 not_contactable keeps the row and re-reads the list', async ({ app, hygiene, mockApi, page }) => {

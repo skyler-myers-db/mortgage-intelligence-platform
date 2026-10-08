@@ -107,7 +107,11 @@ export default function FollowUpsTray({ id, triggerRef, onClose }: FollowUpsTray
       if (result === null) return;
       const rows = [...(trayRef.current?.querySelectorAll<HTMLElement>('.followups__row[data-borrower-id]') ?? [])];
       const index = rows.findIndex((row) => row.dataset.borrowerId === item.borrower_id);
-      focusAfterSnooze.current = rows[index + 1]?.dataset.borrowerId ?? '';
+      // A row inside a collapsed group (Older, No longer contactable) cannot
+      // take focus: focus() is a no-op and focus would fall to <body>, so the
+      // next VISIBLE row wins, else the tray heading.
+      const next = rows.slice(index + 1).find((row) => !row.closest('details:not([open])'));
+      focusAfterSnooze.current = next?.dataset.borrowerId ?? '';
       setSnoozed((previous) => new Set(previous).add(item.borrower_id));
     });
   };

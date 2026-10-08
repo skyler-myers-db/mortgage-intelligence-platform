@@ -280,4 +280,23 @@ describe('the Follow-ups tray', () => {
     expect(tray.querySelector(`[data-borrower-id="${id(2)}"]`)).toBeNull();
     expect(document.activeElement, 'focus moves to the next row').toBe(tray.querySelector(`[data-borrower-id="${id(3)}"] a`));
   });
+
+  it.each([
+    ['collapsed', 'the tray heading', false],
+    ['expanded', 'its first row', true],
+  ])('after snoozing the last open row with Older %s, focus moves to %s', async (_state, _target, expandOlder) => {
+    api.snooze.mockResolvedValue({ borrower_id: id(5), wake_at: '2026-10-08T15:00:00Z', wake_clamped: false, audit_event_id: '11111111-1111-4111-8111-111111111111' });
+    const { tray } = await openTray(FULL);
+    const older = sectionOf(tray, 'Older') as HTMLDetailsElement;
+    if (expandOlder) await act(async () => { older.open = true; });
+    const row = tray.querySelector(`[data-borrower-id="${id(5)}"]`)!;
+    await act(async () => row.querySelector<HTMLButtonElement>('button.followups__snooze')?.click());
+    api.list.mockResolvedValue(list(FULL.filter((entry) => entry.borrower_id !== id(5))));
+    await act(async () => row.querySelector<HTMLButtonElement>('[role="group"] button')?.click());
+    await settle(() => tray.querySelector(`[data-borrower-id="${id(5)}"]`) === null);
+
+    // A link inside a collapsed group cannot take focus in a browser.
+    const expected = expandOlder ? tray.querySelector(`[data-borrower-id="${id(6)}"] a`) : tray.querySelector('.followups__title');
+    expect(document.activeElement).toBe(expected);
+  });
 });
