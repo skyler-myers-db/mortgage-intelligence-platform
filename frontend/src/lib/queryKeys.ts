@@ -39,7 +39,7 @@ export const queryKeys = {
    * page's ['mip','data-estate'] (whose query function substitutes a fallback).
    */
   paletteAssets: () => ['mip', 'palette', 'assets'] as const,
-  borrower:(borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? ''] as const,
+  borrower: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? ''] as const,
   borrowerProof: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? '', 'proof'] as const,
   borrowerLifecycle: (borrowerId: string | null | undefined) =>
     ['mip', 'borrower', borrowerId ?? '', 'lifecycle'] as const,
