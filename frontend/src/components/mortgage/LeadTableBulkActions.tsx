@@ -160,7 +160,9 @@ export function LeadTableBulkActions({
   );
   // motion-08 slice 2: a run's own button shows Button loading and is never native disabled
   // (focus would drop to <body>), even once its last group leaves no selected row eligible.
-  const ownRun = (kind: BulkRunKind) => bulkApproving && runKind === kind;
+  // Plain booleans, not a helper: a closure here costs the compiled toolbar memo slots.
+  const approveRunning = bulkApproving && runKind === 'approve';
+  const rejectRunning = bulkApproving && runKind === 'reject';
   const rationaleMissing = bulkRationale.trim().length === 0;
   const armingCopy = !gateOpen
     ? null
@@ -275,10 +277,10 @@ export function LeadTableBulkActions({
           // motion-08 slice 2: its own run shows Button loading (never native
           // disabled, which would drop focus); the other kind's run disables it.
           disabled={
-            approverGate !== null || campaignBindingBlocked || (bulkApproving && !ownRun('reject'))
-            || (selectedApprovalEligibleCount === 0 && !ownRun('reject'))
+            approverGate !== null || campaignBindingBlocked
+            || ((bulkApproving || selectedApprovalEligibleCount === 0) && !rejectRunning)
           }
-          loading={ownRun('reject')}
+          loading={rejectRunning}
           aria-disabled={bulkBlocked || undefined}
           aria-describedby={describedBy(
             approverGate !== null && APPROVER_ROLE_STATUS_ID,
@@ -299,10 +301,10 @@ export function LeadTableBulkActions({
           icon={bulkApproving ? undefined : 'check'}
           onClick={approve}
           disabled={
-            approverGate !== null || campaignBindingBlocked || (bulkApproving && !ownRun('approve'))
-            || (selectedApprovalEligibleCount === 0 && !ownRun('approve'))
+            approverGate !== null || campaignBindingBlocked
+            || ((bulkApproving || selectedApprovalEligibleCount === 0) && !approveRunning)
           }
-          loading={ownRun('approve')}
+          loading={approveRunning}
           aria-disabled={armingCopy !== null || bulkBlocked || undefined}
           aria-describedby={describedBy(
             approverGate !== null && APPROVER_ROLE_STATUS_ID,
