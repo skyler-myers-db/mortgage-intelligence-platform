@@ -8,7 +8,7 @@
  * actor-binding 409 (`actor_changed`) shows governed copy and no Compose again.
  */
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
-import { act, createElement } from 'react';
+import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComposePlanResponse, ExecutePlanRequest, GrowthAgentPlanProgressResponse } from '../types/growthAgent';
@@ -70,7 +70,10 @@ let hook: ComposedPlanExecution;
 const executed = vi.fn();
 
 function Probe() {
-  hook = useComposedPlanExecution({ onExecuted: executed });
+  const execution = useComposedPlanExecution({ onExecuted: executed });
+  useEffect(() => {
+    hook = execution;
+  });
   return null;
 }
 
