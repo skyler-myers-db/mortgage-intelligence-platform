@@ -1182,6 +1182,13 @@ be contacted). A snooze ends at its wake time on its own: reads compare
 lifecycle sync runs: an approval's background sync, Administration's 'Sync
 workflow state', deploy step 9 and a run of the bundle job, whose schedule
 ships PAUSED. The tray hint says "at the next workflow sync" for that reason.
+One accepted imprecision: a gold `listing` row whose MLS status date and
+listing date are both missing is dated by the source update time, else the
+ingest time (`sql/transformations/gold_evidence_events.sql`, `listing_rows`),
+and gold carries no column that marks the fallback. Such a listing can wake a
+snooze at the first refresh after the snooze day although the listing is not
+new. It is still a current active listing (a purchase signal), so the wake
+accepts it rather than read silver from the probe, which stays gold-only.
 
 | Event | Level | Fields | Meaning |
 | --- | --- | --- | --- |
