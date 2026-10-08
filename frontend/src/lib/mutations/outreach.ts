@@ -48,6 +48,19 @@ export function invalidateApprovalRequests(queryClient: QueryClient): Promise<vo
   return queryClient.invalidateQueries({ queryKey: queryKeys.approvalRequests().slice(0, 2), refetchType: 'active' });
 }
 
+/**
+ * After a recorded decision: a single approve or reject, or a bulk run that
+ * recorded at least one row (its rows each suppress their own). The audited
+ * reads go stale without refetching (invalidateOperationalQueries, 'none')
+ * and the audit-free approval-request list refetches while mounted
+ * (invalidateApprovalRequests, 'active'), so a decided request's count,
+ * panel and scope row clear (flow-02 item 4a).
+ */
+export function invalidateAfterDecision(queryClient: QueryClient): void {
+  void invalidateOperationalQueries(queryClient);
+  void invalidateApprovalRequests(queryClient);
+}
+
 export const outreachMutationKeys = {
   all: ['mip', 'outreach'] as const,
   approve: ['mip', 'outreach', 'approve'] as const,
@@ -226,10 +239,7 @@ export function useApproveLead(queryClient: QueryClient) {
       networkMode: 'always',
       retry: false,
       onSuccess: (result, variables) => {
-        if (result.approved && !variables.suppressInvalidation) {
-          void invalidateOperationalQueries(queryClient);
-          void invalidateApprovalRequests(queryClient);
-        }
+        if (result.approved && !variables.suppressInvalidation) invalidateAfterDecision(queryClient);
       },
     },
     queryClient,
@@ -244,10 +254,7 @@ export function useRejectLead(queryClient: QueryClient) {
       networkMode: 'always',
       retry: false,
       onSuccess: (result, variables) => {
-        if (result.rejected && !variables.suppressInvalidation) {
-          void invalidateOperationalQueries(queryClient);
-          void invalidateApprovalRequests(queryClient);
-        }
+        if (result.rejected && !variables.suppressInvalidation) invalidateAfterDecision(queryClient);
       },
     },
     queryClient,
