@@ -22,8 +22,10 @@
  *  L. W5c w5-lead-queue-paging: the Lead Queue paged footer            2
  *  M. W5c w5-zcta-watchlist: the Segments map drilled to Illinois'
  *     ZIP areas                                                        2
+ *  S. W5d w5-genie-provenance-tiles: an /ask-genie answer with a
+ *     verified figure's hover card open                                2
  *                                                                     --
- *                                                                    122
+ *                                                                    124
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -37,6 +39,8 @@ import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
 import { enterState, prepareState, type FixtureState } from './fixtureStates';
 import type { HomeSummary, SessionResponse } from '../../../src/types';
+import { provenanceSingleAnswer } from './data/genieProvenance';
+import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
 import { registerPagedQueue } from './data/leadPages';
 import { PRESENTER_SESSION } from './data/shell';
@@ -226,6 +230,27 @@ for (const theme of FIXTURE_THEMES) {
       await footer.scrollIntoViewIfNeeded();
       await app.settle();
       await capture(page, `lead-queue--${theme}--paged-footer.png`, { element: footer });
+    });
+
+    // S (W5d w5-genie-provenance-tiles, genie-10 phase 2): a verified figure
+    // in an /ask-genie answer with its evidence hover card open. The open card
+    // IS the state under test, so the pointer stays on the figure instead of
+    // capture()'s parking (which would close it); the figure is a <mark>, not
+    // a control, and nothing else is hovered.
+    test('ask-genie · verified figures', async ({ app, mockApi, page }) => {
+      registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceSingleAnswer() });
+      const { naturalLoad } = await load(app, mockApi, route('ask-genie'), theme);
+      const main = page.locator('#main-content');
+      await main.getByRole('textbox', { name: 'Ask Genie — question' }).fill(GENIE_QUESTION);
+      await main.getByRole('button', { name: 'Ask Genie', exact: true }).click();
+      const figure = main.locator('.genie-thread .genie-answer mark.genie-md-figure').first();
+      await expect(figure).toBeVisible({ timeout: 20_000 });
+      await expectNoSurfaceOverflow(page, { route: 'ask-genie', state: 'verified-figures', theme });
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await figure.hover();
+      await expect(page.locator('.evidence-hovercard:not(.is-closing)')).toBeVisible();
+      await expect.soft(page).toHaveScreenshot(`ask-genie--${theme}--verified-figures.png`);
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'ask-genie · verified figures');
     });
 
     // F: a 1280x720 laptop.
