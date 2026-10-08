@@ -8,6 +8,7 @@ import {
   genieAnswerMemorySize,
   genieExportLatchKey,
   genieVoteKey,
+  readGenieVote,
   settleGenieExport,
   settleGenieVote,
 } from './genieAnswerMemory';
@@ -45,14 +46,35 @@ describe('genieAnswerMemory', () => {
     // Pending: the latch holds a second vote in either direction.
     expect(beginGenieVote(VOTE, 'up', mint)).toBeNull();
     expect(beginGenieVote(VOTE, 'down', mint)).toBeNull();
-    expect(settleGenieVote(VOTE, first, false)).toBe(true);
+    expect(settleGenieVote(VOTE, first, 'failed')).toBe(true);
 
     const retry = beginGenieVote(VOTE, 'up', mint)!;
     expect(retry.requestId).toBe('request-1');
-    expect(settleGenieVote(VOTE, retry, true)).toBe(true);
+    expect(settleGenieVote(VOTE, retry, null)).toBe(true);
     // Recorded: never offered again.
     expect(beginGenieVote(VOTE, 'down', mint)).toBeNull();
     expect(minted).toBe(1);
+  });
+
+  it('stores a failed vote as a closed KIND until the next vote starts, and none once recorded', () => {
+    const first = beginGenieVote(VOTE, 'down', mint)!;
+    expect(readGenieVote(VOTE).failure).toBeNull();
+    expect(settleGenieVote(VOTE, first, 'rejected')).toBe(true);
+    expect(readGenieVote(VOTE)).toEqual({ status: 'idle', direction: null, requestIds: { down: 'request-1' }, failure: 'rejected' });
+
+    // A new vote clears the failure while it runs; a recorded vote holds none.
+    const retry = beginGenieVote(VOTE, 'down', mint)!;
+    expect(readGenieVote(VOTE).failure).toBeNull();
+    expect(settleGenieVote(VOTE, retry, null)).toBe(true);
+    expect(readGenieVote(VOTE)).toEqual({ status: 'recorded', direction: 'down', requestIds: { down: 'request-1' }, failure: null });
+  });
+
+  it('a failure that settles after the actor boundary writes nothing', () => {
+    const vote = beginGenieVote(VOTE, 'up', mint)!;
+    clearActorScopedMemoryCaches();
+    expect(settleGenieVote(VOTE, vote, 'actor_changed')).toBe(false);
+    expect(readGenieVote(VOTE).failure).toBeNull();
+    expect(genieAnswerMemorySize()).toBe(0);
   });
 
   it('the actor boundary empties both kinds, and a request that settles after it writes nothing', () => {
@@ -64,7 +86,7 @@ describe('genieAnswerMemory', () => {
     clearActorScopedMemoryCaches();
 
     expect(genieAnswerMemorySize()).toBe(0);
-    expect(settleGenieVote(VOTE, vote, true)).toBe(false);
+    expect(settleGenieVote(VOTE, vote, null)).toBe(false);
     expect(settleGenieExport(LATCH, exportEpoch, 'CSV downloaded.')).toBe(false);
     expect(genieAnswerMemorySize()).toBe(0);
     // The next actor starts clean: a fresh id, a free latch.

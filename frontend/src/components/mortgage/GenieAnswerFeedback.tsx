@@ -6,6 +6,7 @@ import {
   settleGenieVote,
   useGenieVote,
   type GenieVoteDirection,
+  type GenieVoteFailure,
 } from '../../lib/genieAnswerMemory';
 import { Icon, ThumbsDown, ThumbsUp } from '../Icon';
 
@@ -29,31 +30,34 @@ import { Icon, ThumbsDown, ThumbsUp } from '../Icon';
 
 type Vote = GenieVoteDirection;
 
-type FeedbackOutcome = { ok: true } | { ok: false; message: string };
+/**
+ * The fixed line per failure kind. Declared copy change (genie-08 follow-up,
+ * W5d): a 422 no longer echoes the server detail, so the vote memory stores a
+ * closed kind and never text. An actor change never invites a retry of the
+ * same vote: the signed-in user is someone else now.
+ */
+export const GENIE_FEEDBACK_FAILURE_COPY: Readonly<Record<GenieVoteFailure, string>> = {
+  rejected: 'Feedback could not be recorded.',
+  actor_changed: 'The signed-in user changed. Nothing was recorded.',
+  unreconciled: 'Feedback is still being processed or could not be reconciled. Retry to safely confirm the same vote.',
+  failed: 'Feedback could not be recorded. Please try again.',
+};
+
+/** The closed kind of a failed vote (never the server's text). */
+function voteFailure(err: unknown): GenieVoteFailure {
+  if (!(err instanceof ApiError)) return 'failed';
+  if (err.status === 422) return 'rejected';
+  if (err.status === 409) return err.reason === 'actor_changed' ? 'actor_changed' : 'unreconciled';
+  return 'failed';
+}
 
 /**
- * POST one vote. Never rejects: a failure becomes its fixed user-facing
- * line. Outside the component so the submit handler needs no try statement
+ * POST one vote. Never rejects: it settles to null (recorded) or the failure
+ * kind. Outside the component so the submit handler needs no try statement
  * (audit 2026-09-21 `runtime-03`: a try/finally stops the React Compiler).
  */
-function recordGenieFeedback(body: Parameters<typeof api.genieFeedback>[0]): Promise<FeedbackOutcome> {
-  return api.genieFeedback(body).then(
-    (): FeedbackOutcome => ({ ok: true }),
-    (err: unknown): FeedbackOutcome => {
-      // A policy rejection can still return 422 for a stale client payload.
-      // Surface only the fixed backend detail.
-      if (err instanceof ApiError && err.status === 422) {
-        return { ok: false, message: err.message || 'Feedback could not be recorded.' };
-      }
-      if (err instanceof ApiError && err.status === 409) {
-        return {
-          ok: false,
-          message: 'Feedback is still being processed or could not be reconciled. Retry to safely confirm the same vote.',
-        };
-      }
-      return { ok: false, message: 'Feedback could not be recorded. Please try again.' };
-    },
-  );
+function recordGenieFeedback(body: Parameters<typeof api.genieFeedback>[0]): Promise<GenieVoteFailure | null> {
+  return api.genieFeedback(body).then(() => null, voteFailure);
 }
 
 export const GENIE_FEEDBACK_RECORDED = 'Feedback recorded';
@@ -77,8 +81,11 @@ export function GenieAnswerFeedback({
   // pending or recorded vote, and a retry reuses the same request id.
   const vote = useGenieVote(voteKey);
   const recorded = vote.status === 'recorded';
-  // A failure is shown only under the answer it happened on.
-  const [error, setError] = useState<{ key: string; message: string } | null>(null);
+  // A failure's line comes from the vote memory, so it survives a collapse,
+  // a remount or a return to the page. It is an alert only when it settled
+  // in THIS mount (the answer whose key this holds): a remounted failure
+  // shows the same line without being announced again.
+  const [alertKey, setAlertKey] = useState<string | null>(null);
   // The answer this control shows now: a vote that settles after the ids
   // changed under it moves no focus and shows no error here.
   const shownKeyRef = useRef(voteKey);
@@ -115,27 +122,28 @@ export function GenieAnswerFeedback({
     // already recorded (in any mount of this answer) sends nothing.
     const start = beginGenieVote(voteKey, direction, () => crypto.randomUUID());
     if (!start) return;
-    setError(null);
+    setAlertKey(null);
     void recordGenieFeedback({
       conversation_id: conversationId,
       message_id: messageId,
       helpful,
       request_id: start.requestId,
-    }).then((outcome) => {
+    }).then((failure) => {
       const stillShown = shownKeyRef.current === voteKey;
-      if (outcome.ok && stillShown) {
+      if (failure === null && stillShown) {
         // Follow only if focus is still on the row, or was dropped to <body>
         // when the pressed button disabled; never pull it back from elsewhere.
         focusDoneRef.current = voteButtonHadFocus && (focusInRow() || document.activeElement === document.body);
       }
       // Nothing more after an actor change cleared the memory mid-vote.
-      if (!settleGenieVote(voteKey, start, outcome.ok)) return;
-      if (outcome.ok) onAnnounce?.(GENIE_FEEDBACK_RECORDED);
-      else if (stillShown) setError({ key: voteKey, message: outcome.message });
+      if (!settleGenieVote(voteKey, start, failure)) return;
+      if (failure === null) onAnnounce?.(GENIE_FEEDBACK_RECORDED);
+      else if (stillShown) setAlertKey(voteKey);
     });
   };
   const pending = vote.status === 'pending';
-  const shownError = error !== null && error.key === voteKey ? error.message : null;
+  const shownError = vote.failure === null ? null : GENIE_FEEDBACK_FAILURE_COPY[vote.failure];
+  const alerting = alertKey === voteKey;
 
   if (recorded) {
     // Not a live region (audit `a11y-06`): a region mounted already
@@ -176,7 +184,7 @@ export function GenieAnswerFeedback({
         </button>
       </div>
       {shownError && (
-        <div className="genie-feedback__error" role="alert">
+        <div className="genie-feedback__error" role={alerting ? 'alert' : undefined}>
           {shownError}
         </div>
       )}
