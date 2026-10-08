@@ -165,8 +165,9 @@ export default function DistributionBoard({ borrowerIds, onClose }: Distribution
       },
       (error: unknown) => {
         // The commit's only 409 is the moved plan (backend/api/sales.py). A
-        // transport that does not yet carry a 409's top-level `reason`
-        // (INTEGRATOR: W5d lq-requests-binding adds that parse) reads null.
+        // transport that does not yet carry a 409's top-level `reason` reads
+        // null (INTEGRATOR: W5d w5-actor-binding adds that parse, through
+        // apiActorBinding.actorRefusalReason).
         if (
           error instanceof ApiError
           && error.status === 409

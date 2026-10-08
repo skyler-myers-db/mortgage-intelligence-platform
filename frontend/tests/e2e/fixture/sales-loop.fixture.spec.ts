@@ -55,11 +55,16 @@ interface ReleaseBody {
 }
 
 /**
- * Whether the transport carries a 409 body's top-level `reason` (lane base:
- * only 503 / 429 bodies are parsed for it, in _parseRetryableBody).
+ * Whether the transport carries a 409 body's top-level `reason`. On this
+ * lane's base only 503 / 429 bodies are parsed for it (_parseRetryableBody's
+ * early return). W5d w5-actor-binding KEEPS that early return and carries a
+ * 409's string `reason` through apiActorBinding.actorRefusalReason(res) when
+ * the transport builds the ApiError, so the capability is that call, or any
+ * transport that no longer stops at 503 / 429.
  */
 const TRANSPORT_SOURCE = fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'apiTransport.ts'), 'utf8');
-const TRANSPORT_CARRIES_409_REASON = !TRANSPORT_SOURCE.includes('if (res.status !== 503 && res.status !== 429) return empty;');
+const TRANSPORT_CARRIES_409_REASON = TRANSPORT_SOURCE.includes('actorRefusalReason(res)')
+  || !TRANSPORT_SOURCE.includes('if (res.status !== 503 && res.status !== 429) return empty;');
 const LOAN_OFFICERS = SALES_TEAM.filter((member) => member.role === 'loan_officer');
 
 async function openBoard(page: Page) {
@@ -260,9 +265,10 @@ test.describe('(e) the Lead Queue assign Undo', () => {
     // base the transport carries `reason` for 503 / 429 bodies only
     // (lib/apiTransport.ts _parseRetryableBody), so a 409 still reads as the
     // generic "Reload to read the current version." until W5d
-    // w5-lq-requests-binding's 409 parse lands; the integrator re-runs this
-    // spec after that merge (lane note 6), and the fixme lifts itself.
-    test.fixme(!TRANSPORT_CARRIES_409_REASON, 'needs the 409 reason parse from W5d w5-lq-requests-binding');
+    // w5-actor-binding's 409 reason parse (apiActorBinding.actorRefusalReason)
+    // merges; then TRANSPORT_CARRIES_409_REASON is true and this case runs.
+    // The integrator confirms it runs and passes after that merge.
+    test.fixme(!TRANSPORT_CARRIES_409_REASON, 'needs the 409 reason parse from W5d w5-actor-binding');
     hygiene.allow('console.error', /status of 409/);
     registerQueueWrites(mockApi, () =>
       json({ detail: 'The loan officer has already started on this lead.', reason: 'assignment_started' }, { status: 409 }));
