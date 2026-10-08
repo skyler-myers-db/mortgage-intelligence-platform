@@ -21,6 +21,7 @@ import { invalidateOperationalQueries } from '../../lib/queryKeys';
 import {
   decisionFailure,
   draftForApproval as draftGovernedCopy,
+  invalidateApprovalRequests,
   isDecisionPending,
   useApproveLead,
   usePendingDecisions,
@@ -519,13 +520,18 @@ export function useLeadApprovalActions({
    * (safe to retry: the server did not commit them) and the rows that never
    * started stay selected. Skipped rows (a decision already on the wire) and
    * unmount-aborted rows are not re-selected (R5-21). One invalidation for
-   * the whole run, then focus goes back to the trigger when the toolbar
-   * survives, else to the table region.
+   * the whole run (every row's write suppressed its own), plus the active
+   * refetch of the audit-free approval-request list (flow-02 item 4a: a
+   * decided request's count, panel and scope row clear), then focus goes
+   * back to the trigger when the toolbar survives, else to the table region.
    */
   function settleRun(result: BulkRunResult) {
     const keep = [...result.failed.map((issue) => issue.borrowerId), ...result.notStarted];
     setSelectedIds(new Set(keep));
-    if (result.ok > 0) void invalidateOperationalQueries(queryClient);
+    if (result.ok > 0) {
+      void invalidateOperationalQueries(queryClient);
+      void invalidateApprovalRequests(queryClient);
+    }
     const focusTarget = bulkActionFocusTarget(keep.length);
     const trigger = result.kind === 'reject' ? bulkRejectBtnRef : bulkApproveBtnRef;
     requestAnimationFrame(() => {
