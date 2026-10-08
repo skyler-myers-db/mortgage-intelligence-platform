@@ -117,7 +117,9 @@ function cancelButton(): HTMLButtonElement {
 
 describe('DistributionBoard', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // reset, not clear: a failed test's unconsumed mock*Once answers must not
+    // leak into the next test and turn one red into a cascade of timeouts.
+    vi.resetAllMocks();
     clearToasts();
     closed = 0;
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
