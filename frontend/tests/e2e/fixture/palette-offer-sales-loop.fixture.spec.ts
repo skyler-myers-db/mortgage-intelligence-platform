@@ -356,18 +356,65 @@ test.describe('the Offer (shell-04 / flow-09, states-04, critic-04, motion-01, s
     await expect(failure.getByRole('button', { name: 'Regenerate draft' })).toHaveCount(0);
   });
 
-  test('P9: a 409 offers Regenerate draft and never re-drafts on its own', async ({ app, page, mockApi }) => {
-    app.degrade('/api/outreach/approve', { method: 'POST', status: 409, body: { detail: 'draft proof mismatch (fixture)' } });
+  test('P9: a draft-proof 409 offers Regenerate draft and never re-drafts on its own', async ({ app, page, mockApi }) => {
+    const proof = 'Generated draft proof does not match this approval; regenerate the draft.';
+    app.degrade('/api/outreach/approve', { method: 'POST', status: 409, body: { detail: proof } });
     await app.gotoRoute(offerUrl(PRIMARY_BORROWER.borrower_id, false));
     const drafts = () => callsTo(mockApi, '/api/outreach/draft').length;
     const draftsBefore = drafts();
     await page.getByRole('button', { name: 'Approve outreach' }).click();
     const failure = page.getByTestId('offer-action-bar').locator('[role="alert"]');
-    await expect(failure.getByRole('button', { name: 'Regenerate draft' })).toBeVisible();
-    await expect(failure).not.toContainText('mismatch (fixture)');
+    await expect(failure).toContainText(`Couldn't write approval. ${proof}`);
+    const regenerate = failure.getByRole('button', { name: 'Regenerate draft' });
+    await expect(regenerate).toBeVisible();
     await expect(failure).not.toContainText(/reload/i);
     await page.waitForTimeout(300);
     expect(drafts(), 'no draft POST until the reviewer asks').toBe(draftsBefore);
+    await regenerate.click();
+    await expect.poll(drafts, 'one draft POST on the reviewer\'s click').toBeGreaterThan(draftsBefore);
+  });
+
+  test('P9: any other 409 reads a neutral sentence, with no Regenerate draft and no raw detail', async ({ app, page }) => {
+    app.degrade('/api/outreach/approve', { method: 'POST', status: 409, body: { detail: 'draft proof mismatch (fixture)' } });
+    await app.gotoRoute(offerUrl(PRIMARY_BORROWER.borrower_id, false));
+    await page.getByRole('button', { name: 'Approve outreach' }).click();
+    const failure = page.getByTestId('offer-action-bar').locator('[role="alert"]');
+    await expect(failure).toContainText("Couldn't write approval. The server refused this decision; it was not recorded.");
+    await expect(failure).not.toContainText('mismatch (fixture)');
+    await expect(failure).not.toContainText(/reload|no longer current/i);
+    await expect(failure.getByRole('button', { name: 'Regenerate draft' })).toHaveCount(0);
+  });
+
+  test('P9: a draft-proof 409 on Save draft offers Regenerate draft in the draft panel, never reload advice', async ({ app, page, mockApi }) => {
+    const proof = 'Generated draft no longer matches the reviewed copy; regenerate before saving.';
+    app.degrade('/api/workspace/drafts/:borrowerId', { method: 'PUT', status: 409, body: { detail: proof } });
+    await app.gotoRoute(offerUrl(PRIMARY_BORROWER.borrower_id, false));
+    const drafts = () => callsTo(mockApi, '/api/outreach/draft').length;
+    const save = page.getByRole('button', { name: `Save outreach draft for ${PRIMARY_BORROWER.borrower_id}` });
+    await expect(save).toBeEnabled();
+    await save.click();
+    const failure = page.locator('[role="alert"]').filter({ hasText: "Couldn't save draft." });
+    await expect(failure).toContainText(`Couldn't save draft. ${proof}`);
+    await expect(failure).not.toContainText(/reload/i);
+    const draftsBefore = drafts();
+    await failure.getByRole('button', { name: 'Regenerate draft' }).click();
+    await expect.poll(drafts, 'one draft POST on the reviewer\'s click').toBeGreaterThan(draftsBefore);
+    await expect(failure).toHaveCount(0);
+  });
+
+  test('P9: a 422 governed-text refusal of the reject note names the field, never filter advice', async ({ app, page, mockApi }) => {
+    app.degrade('/api/outreach/reject', { method: 'POST', status: 422, body: { detail: 'rationale failed the governed text policy' } });
+    await app.gotoRoute(offerUrl(PRIMARY_BORROWER.borrower_id, false));
+    const bar = page.getByTestId('offer-action-bar');
+    await bar.getByRole('button', { name: 'Reject', exact: true }).click();
+    await bar.getByLabel('Reason').selectOption('other_with_text');
+    await bar.getByLabel('Rationale note').fill('Asked to be called after the holidays (fixture)');
+    await bar.getByRole('button', { name: 'Confirm reject' }).click();
+    const failure = bar.locator('[role="alert"]');
+    await expect(failure).toContainText("Couldn't record rejection. Rationale failed the governed text policy.");
+    await expect(failure).not.toContainText(/filter|reload/i);
+    await expect(failure.getByRole('button', { name: 'Regenerate draft' })).toHaveCount(0);
+    expect(callsTo(mockApi, '/api/outreach/reject')).toHaveLength(1);
   });
 
   test('P10: Other with an empty note marks the note, describes the error and sends no reject', async ({ app, page, mockApi }) => {

@@ -37,7 +37,7 @@ import { OfferDecisionOutcome } from './offer-orchestrator.decision';
 import { OfferPriorDecisions } from './offer-orchestrator.priorDecisions';
 import { bindingShowsPager, useVerifiedOfferBinding } from './offer-orchestrator.binding';
 import { announceApprovalRouting, offerUnsavedMessage } from './offer-orchestrator.feedback';
-import { OfferFailureBody, OfferWriteFailureCopy, type OfferWriteFailure } from './offer-orchestrator.errors';
+import { OfferWriteFailureCopy, type OfferWriteFailure } from './offer-orchestrator.errors';
 import {
   OfferLoadErrorRoute,
   OfferOrchestratorEmptyRoute,
@@ -141,9 +141,6 @@ export default function OfferOrchestrator() {
   const requestIds = useIntentRequestIds();
   const approving = approveMutation.isPending || rejectMutation.isPending;
   const draftSavePending = draftSave.isPending;
-  const draftSaveError: ReactNode = draftSave.error
-    ? <>{"Couldn't save draft."} <OfferFailureBody cause={draftSave.error} subject="the draft" /></>
-    : null;
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${activeDraftChannel}` : null;
   // The route is the ONE observer of both reads (offer-orchestrator.queries):
@@ -268,6 +265,22 @@ export default function OfferOrchestrator() {
     setLoadGeneration((n) => n + 1);
     rereadSnapshotAndDraft();
   };
+  // A draft-proof refusal of the save offers the same explicit Regenerate
+  // draft; any other refusal reads as a neutral sentence (states-04).
+  const draftSaveError: ReactNode = draftSave.error
+    ? (
+      <OfferWriteFailureCopy
+        failure={{ lead: "Couldn't save draft.", cause: draftSave.error }}
+        subject="the draft"
+        scope="draft-save"
+        onRegenerate={() => {
+          draftSave.reset();
+          regenerateDraft();
+        }}
+        regenerateDisabled={approving || draftSavePending}
+      />
+    )
+    : null;
 
   const onApprove = async () => {
     // Synchronous latch: a decision for this borrower is already on the wire
@@ -385,8 +398,9 @@ export default function OfferOrchestrator() {
     setRejectNoteError(null);
   };
 
-  // A 409 offers an explicit Regenerate draft in the alert: one audited
-  // draft read on the reviewer's click, never automatic, never a reload.
+  // A draft-proof refusal offers an explicit Regenerate draft in the alert:
+  // one audited draft read on the reviewer's click, never automatic, never a
+  // reload. Any other refusal reads as a neutral sentence.
   const approveErrorNode: ReactNode = approveError === null || typeof approveError === 'string'
     ? approveError
     : (
