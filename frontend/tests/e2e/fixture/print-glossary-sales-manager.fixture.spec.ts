@@ -324,9 +324,25 @@ test.describe('presence exit (motion-01 item 2e)', () => {
   test('under reduced motion the same close removes the menu at once', async ({ app, page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await app.gotoRoute('/lead-queue');
-    await app.openFilterMenu('STATE');
+    const menu = await app.openFilterMenu('STATE');
+    // 'At once' is proven by the absence of a fade, not by a one-shot count
+    // right after Escape (a loaded runner can be a commit behind). Watch the
+    // menu from before Escape: no exit transition may ever start on it.
+    await menu.evaluate((element) => {
+      const watch = { transitioned: false };
+      (window as unknown as { __menuExitWatch: typeof watch }).__menuExitWatch = watch;
+      const runningTransition = () => element.getAnimations().some((animation) => animation instanceof CSSTransition);
+      element.addEventListener('transitionrun', () => {
+        watch.transitioned = true;
+      });
+      new MutationObserver(() => {
+        if (element.classList.contains('is-closing') && runningTransition()) watch.transitioned = true;
+      }).observe(element, { attributes: true, attributeFilter: ['class'] });
+    });
     await page.keyboard.press('Escape');
-    expect(await page.locator('.filter-menu').count()).toBe(0);
+    await expect(page.locator('.filter-menu')).toHaveCount(0, { timeout: 500 });
+    const watch = await page.evaluate(() => (window as unknown as { __menuExitWatch: { transitioned: boolean } }).__menuExitWatch);
+    expect(watch.transitioned, 'no exit transition under reduced motion').toBe(false);
   });
 });
 
