@@ -16,11 +16,12 @@
  * The mark itself (GenieFigureMark, with its stylesheet) loads lazily the
  * first time an answer has a figure to mark; until then the token renders as
  * the same plain text, so the route closure carries only the decision code.
+ * A chunk that fails to load keeps the plain text (never a route error).
  * It is a PASSIVE preview: the evidence hover card on pointer hover only, not
  * focusable; keyboard and screen-reader users read the same fact in the
  * proof drawer's Verified figures list.
  */
-import { createContext, lazy, Suspense, useContext, type ReactNode } from 'react';
+import { createContext, lazy, Suspense, useContext, type ComponentType, type ReactNode } from 'react';
 import type { GenieAnswer as GenieAnswerShape, GenieVerifiedClaim } from '../../types';
 import {
   FIGURE_TOKEN_RE,
@@ -31,7 +32,25 @@ import {
   type FigureHighlight,
 } from '../../lib/genieFigureTokens';
 
-const GenieFigureMark = lazy(() => import('./GenieFigureMark'));
+type FigureMarkProps = { token: string; column: string | null };
+
+/** The unmarked token: what the answer shows when the mark chunk cannot load. */
+const PlainFigure: ComponentType<FigureMarkProps> = ({ token }) => <>{token}</>;
+
+// The mark is decorative, so its chunk fails soft (as Rail.tsx's
+// RailRoadmap): a tab opened before a redeploy, or a network blip, renders
+// the plain token, never a route or panel error over a verified answer. Two
+// steps: when the stale-chunk listener cancels vite:preloadError, Vite's
+// preload helper resolves the import to undefined, skipping the first .then,
+// so the undefined guard sits in the second one.
+const GenieFigureMark = lazy<ComponentType<FigureMarkProps>>(() =>
+  import('./GenieFigureMark')
+    .then((module) => module.default)
+    .then(
+      (mark: ComponentType<FigureMarkProps> | undefined) => ({ default: mark ?? PlainFigure }),
+      () => ({ default: PlainFigure }),
+    ),
+);
 
 /** Verified figures per rendered text: the provider's value. */
 export type GenieFigureScopeMap = ReadonlyMap<string, readonly GenieVerifiedClaim[]>;
