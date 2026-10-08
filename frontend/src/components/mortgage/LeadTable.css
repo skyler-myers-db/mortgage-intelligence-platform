@@ -358,3 +358,20 @@
    carry it), so the row height and the column's declared width hold. */
 .tbl-cell--approval .lead-table__approval-actions { max-inline-size: 100%; }
 .lead-table__request-chip { flex: 0 1 auto; }
+
+/* The non-approver's role line (approver-role-status) keeps one line at
+   1440x900 with the Console open, its request note included (audit
+   shell-06; deviation:request-approval). The signed-in address is the only
+   open-ended text in it, so it stops at 22ch with an ellipsis: the line's
+   width is bounded whatever the address, with room left for wider Linux
+   text. The full address stays in the DOM text, which the gated controls'
+   aria-describedby reads. Bottom-aligned, because a clipped inline-block's
+   baseline is its bottom edge. */
+.lead-table__actor-email {
+  display: inline-block;
+  max-inline-size: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}

@@ -25,11 +25,15 @@
  *  (h) axe on the form, both panels and the scope row, both themes;
  *  (i) Button loading computes a grid display over an unchanged box on
  *      Confirm approval and the row Reject;
- *  (j) the 83 px header and eight rows above the fold with the Console open,
- *      in both sessions.
+ *  (j) the 83 px header with the Console open, in both sessions; eight rows
+ *      above the fold for an approver, seven for a non-approver, whose
+ *      pre-existing role line keeps ONE line with its request note, at Linux
+ *      text widths and for an address of any length.
  *
- * WebKit and Firefox run on CI. Locators filter to visible elements: the
- * queue stays hidden in the DOM behind a dossier.
+ * Chromium only (fixture-chromium): this is not a cross-engine spec, so the
+ * fixture-webkit and Firefox projects do not collect it (playwright.config's
+ * WEBKIT_SPEC / FIREFOX_FORCED_SPEC). Locators filter to visible elements:
+ * the queue stays hidden in the DOM behind a dossier.
  */
 import type { Locator, Page } from '@playwright/test';
 import type { SessionResponse } from '../../../src/types';
@@ -63,6 +67,42 @@ function calls(mockApi: MockApi, method: string, path: RegExp) {
 const visible = (locator: Locator) => locator.filter({ visible: true });
 const chip = (page: Page) => visible(page.getByTestId('approval-requests-chip'));
 const cell = (page: Page, borrowerId: string) => visible(page.getByTestId(`lead-approval-cell-${borrowerId}`));
+
+/**
+ * Linux Chromium sets Geist Mono wider than macOS (segments-cards'
+ * LINUX_TEXT_EMULATION): off Linux the role line's mono text, the chip and
+ * the signed-in address, is widened past that (+0.5px a glyph; the chip
+ * keeps its own 0.02em), so its one-line fit holds on the CI renderer too.
+ */
+const LINUX_TEXT_EMULATION = `
+  [data-testid="approver-role-status"] .mono { letter-spacing: 0.5px; }
+  [data-testid="approver-role-status"] .chip { letter-spacing: calc(0.02em + 0.5px); }
+`;
+/**
+ * A synthetic address past any cap. The session fixture keeps SESSION's own
+ * address (C7: a spec-local session overrides only the role flags), so the
+ * rendered address is replaced in the DOM to measure a long one.
+ */
+const LONG_ACTOR_EMAIL = 'regional.mortgage.loan.analyst.team@summit.example';
+/** The share of the role line's content box its one line leaves free (the ~6% text slack). */
+const ROLE_LINE_SLACK = 0.06;
+
+/** The role line's fit: its height against two chip heights, the free share of its box, the address clipped. */
+function roleLineFit(status: Locator) {
+  return status.evaluate((row) => {
+    const style = getComputedStyle(row);
+    const content = row.clientWidth - parseFloat(style.paddingInlineStart) - parseFloat(style.paddingInlineEnd);
+    const parts = [...row.children].map((child) => child.getBoundingClientRect().width);
+    const needed = parts.reduce((sum, width) => sum + width, 0) + parseFloat(style.columnGap) * (parts.length - 1);
+    const address = row.querySelector<HTMLElement>('.mono');
+    return {
+      height: row.getBoundingClientRect().height,
+      twoChips: (row.querySelector('.chip')?.getBoundingClientRect().height ?? 0) * 2,
+      slack: (content - needed) / content,
+      clipped: address !== null && address.scrollWidth > address.clientWidth,
+    };
+  });
+}
 
 async function selectRequested(page: Page): Promise<void> {
   for (const borrowerId of REQUESTED_IDS) await visible(page.getByTestId(`lead-select-${borrowerId}`)).check();
@@ -320,11 +360,18 @@ for (const theme of FIXTURE_THEMES) {
         if (name === 'non-approver') {
           const status = page.getByTestId('approver-role-status').filter({ visible: true });
           await expect(status).toContainText('Request approval sends them to an approver.');
-          const lineHeight = await status.evaluate((element) => {
-            const chip = element.querySelector('.chip');
-            return [Math.round(element.getBoundingClientRect().height), Math.round((chip?.getBoundingClientRect().height ?? 0) * 2)];
-          });
-          expect(lineHeight[0], 'the role line stays one line').toBeLessThan(lineHeight[1]);
+          if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TEXT_EMULATION });
+          const fixtureFit = await roleLineFit(status);
+          expect(fixtureFit.height, 'the role line stays one line').toBeLessThan(fixtureFit.twoChips);
+          expect(fixtureFit.slack, 'the role line keeps its text slack').toBeGreaterThanOrEqual(ROLE_LINE_SLACK);
+          await status.locator('.mono').evaluate((address, email) => {
+            address.textContent = email;
+          }, LONG_ACTOR_EMAIL);
+          const longFit = await roleLineFit(status);
+          expect(longFit.clipped, 'a long address ends in an ellipsis').toBe(true);
+          expect(longFit.height, 'one line for a long address too').toBeLessThan(longFit.twoChips);
+          expect(longFit.slack, 'and the same slack').toBeGreaterThanOrEqual(ROLE_LINE_SLACK);
+          await expect(status, 'the DOM text keeps the whole address').toContainText(LONG_ACTOR_EMAIL);
         }
         await expect.poll(() => page.locator('tr[data-borrower-row]').evaluateAll(
           (rows) => rows.filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight).length,

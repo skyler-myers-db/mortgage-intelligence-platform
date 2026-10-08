@@ -57,7 +57,7 @@ export function LeadTableStatusChips({
           <Chip variant="warning" icon="shield">{approverGate}</Chip>
           <span>
             Approve, reject and bulk approve are disabled
-            {actorEmail ? <> for <span className="mono">{actorEmail}</span></> : ' for this sign-in'}.
+            {actorEmail ? <> for <span className="mono lead-table__actor-email">{actorEmail}</span></> : ' for this sign-in'}.
             {requestPathOpen && ' Request approval sends them to an approver.'}
           </span>
         </div>
