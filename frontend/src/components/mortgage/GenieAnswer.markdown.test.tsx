@@ -301,7 +301,7 @@ describe('MarkdownAnswer figure marks', () => {
     column: 'borrowers',
     occurrences,
   });
-  const renderScoped = (text: string, items: GenieVerifiedClaim[], workspaceHost: string | null = null) =>
+  const renderScoped = async (text: string, items: GenieVerifiedClaim[], workspaceHost: string | null = null) => {
     act(() =>
       root.render(
         <GenieFigureScopes value={new Map([[text, items]])}>
@@ -309,11 +309,16 @@ describe('MarkdownAnswer figure marks', () => {
         </GenieFigureScopes>,
       ),
     );
+    // The mark loads lazily: let the import settle and React re-render.
+    await act(async () => {
+      await import('./GenieFigureMark');
+    });
+  };
   const markParents = () =>
     Array.from(container.querySelectorAll('mark.genie-md-figure')).map((m) => [m.textContent, m.parentElement?.tagName]);
 
-  it('marks inside strong, em, list items, headings and link text', () => {
-    renderScoped(
+  it('marks inside strong, em, list items, headings and link text', async () => {
+    await renderScoped(
       '### 412 in the lead\nThe leader holds **1,204** borrowers and *388* more.\n- 71 in the list\n\nSee [the 905 rows](https://example.test/x).',
       [cell('412', 1), cell('1,204', 1), cell('388', 1), cell('71', 1), cell('905', 1)],
     );
@@ -328,10 +333,10 @@ describe('MarkdownAnswer figure marks', () => {
     expect(container.querySelector('li mark')?.textContent).toBe('71');
   });
 
-  it('never marks inside inline code, a verbatim block or the Source anchor', () => {
+  it('never marks inside inline code, a verbatim block or the Source anchor', async () => {
     // Four 250s are counted (code, prose, verbatim, the anchor's table name);
     // only the prose one is marked.
-    renderScoped('Use `250` here and 250 borrowers.\n\n```\n250\n```\n\nSource: mip.gold.250.', [cell('250', 4)], HOST);
+    await renderScoped('Use `250` here and 250 borrowers.\n\n```\n250\n```\n\nSource: mip.gold.250.', [cell('250', 4)], HOST);
     expect(markParents()).toEqual([['250', 'SPAN']]);
     expect(container.querySelector('code mark')).toBeNull();
     expect(container.querySelector('pre mark')).toBeNull();

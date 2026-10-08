@@ -42,14 +42,15 @@ export const FIGURE_TOKEN_RE = new RegExp(
   'gu',
 );
 
-const PY_TRIM_RE = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, 'gu');
+/** A match never starts with whitespace (it opens on `$` or a digit). */
+const PY_TRAILING_SPACE_RE = new RegExp(`[${PY_SPACE}]+$`, 'u');
 
 /** The longest token the server lists (GenieVerifiedClaim.token). */
 export const MAX_FIGURE_TOKEN_CHARS = 32;
 
-/** Python's `raw.strip()` with the same whitespace set. */
+/** Python's `match.strip()` with the same whitespace set. */
 export function trimFigure(raw: string): string {
-  return raw.replace(PY_TRIM_RE, '');
+  return raw.replace(PY_TRAILING_SPACE_RE, '');
 }
 
 /** Python's `text[:n]`: a code-point prefix. */
@@ -117,26 +118,23 @@ export function highlightableFigures(
   items: readonly GenieVerifiedClaim[],
   workspaceHost?: string | null,
 ): Map<string, FigureHighlight> {
-  const byToken = new Map<string, { occurrences: number | null; columns: Set<string | null> }>();
+  const byToken = new Map<string, { n: number | null; column: string | null }>();
   for (const item of items) {
-    const occurrences = item.support === 'cell' && typeof item.occurrences === 'number' ? item.occurrences : null;
+    const n = item.support === 'cell' && typeof item.occurrences === 'number' ? item.occurrences : null;
+    const column = item.column ?? null;
     const entry = byToken.get(item.token);
     if (!entry) {
-      byToken.set(item.token, { occurrences, columns: new Set([item.column ?? null]) });
+      byToken.set(item.token, { n, column });
     } else {
-      if (entry.occurrences !== occurrences) entry.occurrences = null;
-      entry.columns.add(item.column ?? null);
+      if (entry.n !== n) entry.n = null;
+      if (entry.column !== column) entry.column = null;
     }
   }
-  const out = new Map<string, FigureHighlight>();
-  if (![...byToken.values()].some((entry) => entry.occurrences !== null)) return out;
   const full = countTokens([text]);
   const rendered = countTokens(renderedSegments(text, workspaceHost));
-  for (const [token, entry] of byToken) {
-    const n = entry.occurrences;
-    if (n === null || n < 1 || full.get(token) !== n || rendered.get(token) !== n) continue;
-    const [column] = entry.columns;
-    out.set(token, { column: entry.columns.size === 1 ? column : null });
+  const out = new Map<string, FigureHighlight>();
+  for (const [token, { n, column }] of byToken) {
+    if (n !== null && n > 0 && full.get(token) === n && rendered.get(token) === n) out.set(token, { column });
   }
   return out;
 }

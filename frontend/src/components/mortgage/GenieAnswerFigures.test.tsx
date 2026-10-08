@@ -35,7 +35,8 @@ vi.mock('./evidenceDrawerBodyLoader', () => ({
 import { GenieAnswer } from './GenieAnswer';
 import { GenieAnswerSections } from './GenieAnswer.sections';
 import { MarkdownAnswer } from './GenieAnswer.markdown';
-import { FIGURE_HOVER_CTA, FIGURE_HOVER_TITLE, GenieFigureScopes } from './GenieAnswerFigures';
+import { GenieFigureScopes } from './GenieAnswerFigures';
+import { FIGURE_HOVER_CTA, FIGURE_HOVER_TITLE } from './GenieFigureMark';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,6 +89,13 @@ function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   } as unknown as GenieAnswerShape;
 }
 
+/** The mark loads lazily: let the import settle and React re-render. */
+async function settleLazyMarks(): Promise<void> {
+  await act(async () => {
+    await import('./GenieFigureMark');
+  });
+}
+
 const marks = (root: ParentNode) => Array.from(root.querySelectorAll('mark.genie-md-figure')).map((m) => m.textContent);
 
 describe('GenieFigureMark', () => {
@@ -109,7 +117,7 @@ describe('GenieFigureMark', () => {
     vi.unstubAllGlobals();
   });
 
-  function renderScoped(text: string, items: GenieVerifiedClaim[]) {
+  async function renderScoped(text: string, items: GenieVerifiedClaim[]) {
     act(() =>
       root.render(
         <GenieFigureScopes value={new Map([[text, items]])}>
@@ -117,26 +125,27 @@ describe('GenieFigureMark', () => {
         </GenieFigureScopes>,
       ),
     );
+    await settleLazyMarks();
   }
 
-  it('wraps the trimmed token only and leaves the trailing whitespace outside', () => {
-    renderScoped('The total is 250 .', [cell('250', 1, 'borrowers')]);
+  it('wraps the trimmed token only and leaves the trailing whitespace outside', async () => {
+    await renderScoped('The total is 250 .', [cell('250', 1, 'borrowers')]);
     const mark = container.querySelector('mark.genie-md-figure');
     expect(mark?.textContent).toBe('250');
     expect(mark?.nextSibling?.textContent).toBe(' .');
     expect(container.querySelector('p')?.textContent).toBe('The total is 250 .');
   });
 
-  it('is not focusable and carries no title', () => {
-    renderScoped('Texas has 250 borrowers.', [cell('250', 1, 'borrowers')]);
+  it('is not focusable and carries no title', async () => {
+    await renderScoped('Texas has 250 borrowers.', [cell('250', 1, 'borrowers')]);
     const mark = container.querySelector('mark.genie-md-figure')!;
     expect(mark.hasAttribute('tabindex')).toBe(false);
     expect(mark.hasAttribute('title')).toBe(false);
     expect(mark.getAttributeNames().sort()).toEqual(['class']);
   });
 
-  it('shows the aria-hidden evidence card with the title, column and CTA after the hover delay', () => {
-    renderScoped('Texas has 250 borrowers.', [cell('250', 1, 'in_the_money_borrowers')]);
+  it('shows the aria-hidden evidence card with the title, column and CTA after the hover delay', async () => {
+    await renderScoped('Texas has 250 borrowers.', [cell('250', 1, 'in_the_money_borrowers')]);
     const mark = container.querySelector('mark.genie-md-figure')!;
     act(() => {
       mark.dispatchEvent(new MouseEvent('mouseenter'));
@@ -158,8 +167,8 @@ describe('GenieFigureMark', () => {
     expect(document.body.querySelector('.evidence-hovercard:not(.is-closing)')).toBeNull();
   });
 
-  it('shows no column row when the figure names no column', () => {
-    renderScoped('Texas has 250 borrowers.', [cell('250', 1, null)]);
+  it('shows no column row when the figure names no column', async () => {
+    await renderScoped('Texas has 250 borrowers.', [cell('250', 1, null)]);
     act(() => {
       container.querySelector('mark')!.dispatchEvent(new MouseEvent('mouseenter'));
     });
@@ -183,7 +192,7 @@ describe('GenieAnswer figure scopes', () => {
     container.remove();
   });
 
-  function render(value: GenieAnswerShape) {
+  async function render(value: GenieAnswerShape) {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     act(() =>
       root.render(
@@ -194,10 +203,11 @@ describe('GenieAnswer figure scopes', () => {
         </QueryClientProvider>,
       ),
     );
+    await settleLazyMarks();
   }
 
-  it('marks a single answer\'s cell figure and never its derived figure', () => {
-    render(payload());
+  it('marks a single answer\'s cell figure and never its derived figure', async () => {
+    await render(payload());
     expect(marks(container)).toEqual(['250']);
   });
 
@@ -214,8 +224,8 @@ describe('GenieAnswer figure scopes', () => {
         },
       } as Partial<GenieAnswerShape>,
     ],
-  ])('marks nothing on %s', (_label, overrides) => {
-    render(payload(overrides));
+  ])('marks nothing on %s', async (_label, overrides) => {
+    await render(payload(overrides));
     expect(container.textContent).toContain('250');
     expect(marks(container)).toEqual([]);
   });
@@ -229,8 +239,8 @@ describe('GenieAnswer figure scopes', () => {
       proof: { trusted: true, sql_query: 'SELECT 1', claims: { verified: items.length, total: items.length, items } },
     } as Partial<GenieAnswerShape>);
 
-  it('keys the sweep summary and each section by the exact text it renders', () => {
-    render(
+  it('keys the sweep summary and each section by the exact text it renders', async () => {
+    await render(
       sweep(
         [
           section(),
@@ -261,9 +271,9 @@ describe('GenieAnswer figure scopes', () => {
     expect(sectionNodes.map((node) => marks(node))).toEqual([['900'], ['620'], []]);
   });
 
-  it('drops a duplicate text: two sections with the same answer mark nothing', () => {
+  it('drops a duplicate text: two sections with the same answer mark nothing', async () => {
     const twin = 'Texas leads with 900 in-the-money borrowers.';
-    render(
+    await render(
       sweep(
         [section({ answer: twin }), section({ title: 'Second view', question: 'Again?', answer: twin })],
         [cell('900', 1, 'borrowers', 'Where the opportunity sits'), cell('900', 1, 'borrowers', 'Second view')],
@@ -272,8 +282,8 @@ describe('GenieAnswer figure scopes', () => {
     expect(marks(container)).toEqual([]);
   });
 
-  it('drops two sections that share a title', () => {
-    render(
+  it('drops two sections that share a title', async () => {
+    await render(
       sweep(
         [
           section({ answer: 'Texas leads with 900 borrowers.' }),
@@ -285,7 +295,7 @@ describe('GenieAnswer figure scopes', () => {
     expect(marks(container)).toEqual([]);
   });
 
-  it('marks nothing in the Partial research preview (rendered outside GenieAnswer)', () => {
+  it('marks nothing in the Partial research preview (rendered outside GenieAnswer)', async () => {
     act(() =>
       root.render(
         <MemoryRouter>

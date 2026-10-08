@@ -13,15 +13,15 @@
  * a rescue answer and history recorded before the provenance fields render
  * exactly as before.
  *
- * The mark is a PASSIVE preview: it shows the evidence hover card on pointer
- * hover only and is not focusable (no tabindex). Keyboard and screen-reader
- * users read the same fact in the proof drawer's Verified figures list. A
- * hover preloads the evidence drawer's body chunk only, never data.
+ * The mark itself (GenieFigureMark, with its stylesheet) loads lazily the
+ * first time an answer has a figure to mark; until then the token renders as
+ * the same plain text, so the route closure carries only the decision code.
+ * It is a PASSIVE preview: the evidence hover card on pointer hover only, not
+ * focusable; keyboard and screen-reader users read the same fact in the
+ * proof drawer's Verified figures list.
  */
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, lazy, Suspense, useContext, type ReactNode } from 'react';
 import type { GenieAnswer as GenieAnswerShape, GenieVerifiedClaim } from '../../types';
-import type { DrawerSource } from '../AppContext';
-import { useEvidenceHoverCard } from '../EvidenceHoverCard';
 import {
   FIGURE_TOKEN_RE,
   MAX_FIGURE_TOKEN_CHARS,
@@ -30,8 +30,8 @@ import {
   trimFigure,
   type FigureHighlight,
 } from '../../lib/genieFigureTokens';
-import { humanizeKey } from './GenieAnswer.logic';
-import './GenieAnswerFigures.css';
+
+const GenieFigureMark = lazy(() => import('./GenieFigureMark'));
 
 /** Verified figures per rendered text: the provider's value. */
 export type GenieFigureScopeMap = ReadonlyMap<string, readonly GenieVerifiedClaim[]>;
@@ -40,14 +40,6 @@ export type GenieFigureScopeMap = ReadonlyMap<string, readonly GenieVerifiedClai
 export type GenieFigureMarks = ReadonlyMap<string, FigureHighlight>;
 
 export const GenieFigureScopes = createContext<GenieFigureScopeMap | null>(null);
-
-export const FIGURE_HOVER_TITLE = 'Matches a returned value';
-export const FIGURE_HOVER_CTA = 'Listed under Verified figures in the proof';
-
-/** Python's `text[:n]` on a section title (the server's `[:200]` label). */
-function sectionLabel(title: string): string {
-  return codePointPrefix(title, 200);
-}
 
 /**
  * The provider's map for a trusted answer: the single answer's text with its
@@ -59,37 +51,25 @@ function sectionLabel(title: string): string {
  */
 export function genieFigureScopes(payload: GenieAnswerShape, singleText: string): GenieFigureScopeMap | null {
   const items = payload.proof?.claims?.items ?? [];
-  if (items.length === 0) return null;
   const sections = Array.isArray(payload.sections) ? payload.sections : [];
-  const entries: Array<[string, GenieVerifiedClaim[]]> = [];
-  const unscoped = items.filter((item) => !item.section);
-  if (sections.length === 0) {
-    entries.push([singleText, unscoped]);
-  } else {
-    entries.push([(payload.summary ?? '').trim(), unscoped]);
-    const labels = sections.map((section) => sectionLabel(section.title));
-    for (const [index, section] of sections.entries()) {
-      const label = labels[index];
-      const shared = labels.filter((other) => other === label).length > 1;
-      entries.push([section.answer, shared ? [] : items.filter((item) => item.section === label)]);
-    }
-  }
-  const seen = new Map<string, number>();
-  for (const [text] of entries) seen.set(text, (seen.get(text) ?? 0) + 1);
+  // [the text a MarkdownAnswer receives, its items' section label]; the
+  // label is the server's `title[:200]` (a code-point prefix).
+  const keys: Array<[string, string | null]> = sections.length
+    ? [[(payload.summary ?? '').trim(), null], ...sections.map((s): [string, string] => [s.answer, codePointPrefix(s.title, 200)])]
+    : [[singleText, null]];
   const scopes = new Map<string, GenieVerifiedClaim[]>();
-  for (const [text, scoped] of entries) {
-    if (text && seen.get(text) === 1 && scoped.length > 0) scopes.set(text, scoped);
+  for (const [text, label] of keys) {
+    const scoped = items.filter((item) => (item.section || null) === label);
+    const unique = keys.filter(([other, otherLabel]) => other === text || (label !== null && otherLabel === label)).length === 1;
+    if (text && unique && scoped.length > 0) scopes.set(text, scoped);
   }
   return scopes.size > 0 ? scopes : null;
 }
 
 /** The marks for one MarkdownAnswer `text`; null without a provider or an entry. */
 export function useGenieFigures(text: string, workspaceHost?: string | null): GenieFigureMarks | null {
-  const scopes = useContext(GenieFigureScopes);
-  const items = scopes?.get(text);
-  if (!items) return null;
-  const marks = highlightableFigures(text, items, workspaceHost);
-  return marks.size > 0 ? marks : null;
+  const items = useContext(GenieFigureScopes)?.get(text);
+  return items ? highlightableFigures(text, items, workspaceHost) : null;
 }
 
 /**
@@ -106,42 +86,14 @@ export function markFigures(segment: string, figures: GenieFigureMarks | null): 
     const figure = figures.get(token);
     if (!figure || codePointPrefix(token, MAX_FIGURE_TOKEN_CHARS) !== token) continue;
     if (match.index > last) out.push(segment.slice(last, match.index));
-    out.push(<GenieFigureMark key={`figure-${match.index}`} token={token} column={figure.column} />);
+    out.push(
+      <Suspense key={`figure-${match.index}`} fallback={token}>
+        <GenieFigureMark token={token} column={figure.column} />
+      </Suspense>,
+    );
     last = match.index + token.length;
   }
   if (out.length === 0) return segment;
   if (last < segment.length) out.push(segment.slice(last));
   return out;
-}
-
-function GenieFigureMark({ token, column }: { token: string; column: string | null }) {
-  const source: DrawerSource = {
-    title: FIGURE_HOVER_TITLE,
-    signals: column ? [{ label: 'Column', source: 'Returned rows', value: humanizeKey(column) }] : undefined,
-  };
-  const { anchorRef, anchorHandlers, hoverCard } = useEvidenceHoverCard(source, { cta: FIGURE_HOVER_CTA });
-  const { onMouseEnter, onMouseLeave } = anchorHandlers;
-  // Pointer only, attached as native mouseenter/mouseleave listeners: the
-  // mark stays a non-interactive element (no focus, no key handlers, no
-  // role), because the same fact is in the proof drawer's Verified figures
-  // list for keyboard and screen-reader users.
-  const markRef = (el: HTMLElement | null) => {
-    anchorRef(el);
-    if (!el) return undefined;
-    el.addEventListener('mouseenter', onMouseEnter);
-    el.addEventListener('mouseleave', onMouseLeave);
-    return () => {
-      el.removeEventListener('mouseenter', onMouseEnter);
-      el.removeEventListener('mouseleave', onMouseLeave);
-      anchorRef(null);
-    };
-  };
-  return (
-    <>
-      <mark ref={markRef} className="genie-md-figure">
-        {token}
-      </mark>
-      {hoverCard}
-    </>
-  );
 }
