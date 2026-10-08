@@ -222,11 +222,24 @@ test.describe('a measured zero (states-v2)', () => {
     });
   }
 
-  test('a county filter never reaches an Ask Genie prompt', async ({ app, mockApi, page }) => {
+  // Deliberate flip (genie-04 phase 2, W5d w5-genie-context-deeplink): a
+  // county no longer goes without an Ask. The browser never builds a county
+  // prompt; it sends the FIPS code on click and the server renders the name.
+  test('a county filter reaches Genie only as a FIPS code, rendered by the server on click', async ({ app, mockApi, page }) => {
     mockApi.register('GET', '/api/leads', () => json([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }));
+    const scopes: unknown[] = [];
+    mockApi.register('POST', '/api/genie/context-scope', ({ body }) => {
+      scopes.push(body);
+      return json({ prompt: null, withheld: 'refused', omitted: [] });
+    });
     await app.gotoRoute('/lead-queue?state=TX&segment=itm&county=48201');
     await expect(page.locator(`${MAIN} .empty`)).toBeVisible();
-    await expect(page.locator(MAIN).getByRole('button', { name: /Ask Genie about this filter selection/ })).toHaveCount(0);
+    const ask = page.locator(MAIN).getByRole('button', { name: /Ask Genie about this filter selection/ });
+    await expect(ask).toHaveCount(1);
+    expect(scopes, 'nothing is sent before the click').toEqual([]);
+    await ask.click();
+    await expect.poll(() => scopes.length).toBe(1);
+    expect(scopes[0]).toEqual({ route: 'lead-queue', segment_codes: ['itm'], segment_mode: 'any', state: 'TX', county_fips: '48201' });
   });
 });
 
