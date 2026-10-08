@@ -104,6 +104,34 @@ async function paperColours(page: Page): Promise<Record<string, string>> {
   });
 }
 
+/**
+ * The paper once it has settled. The switch to print (and the theme switch
+ * before it) starts the shell's colour transitions, 0.01ms under reduced
+ * motion but each a frame away, and a loaded runner can start one AFTER a
+ * single wait on document.getAnimations() returned: a sweep read then
+ * catches the screen ink a transition starts from (or an oklab mid-value).
+ * So wait until no animation runs across two frames, and accept a sweep only
+ * when the next one reads the same.
+ */
+async function settledPaperColours(page: Page, label: string): Promise<Record<string, string>> {
+  const quiet = () => page.evaluate(async () => {
+    await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return document.getAnimations().filter((animation) => animation.playState === 'running').length;
+  });
+  let previous: Record<string, string> | null = null;
+  let settled: Record<string, string> | null = null;
+  await expect.poll(async () => {
+    if ((await quiet()) > 0) return false;
+    const sweep = await paperColours(page);
+    const stable = previous !== null && JSON.stringify(previous) === JSON.stringify(sweep);
+    previous = sweep;
+    if (stable) settled = sweep;
+    return stable;
+  }, { message: `${label}: the paper settles`, timeout: 15_000 }).toBe(true);
+  return settled ?? {};
+}
+
 /** Switch the theme the way a person does, from the account menu (the app persists it). */
 async function chooseTheme(page: Page, theme: FixtureTheme): Promise<void> {
   if ((await page.locator('html').getAttribute('data-theme')) === theme) return;
@@ -119,14 +147,7 @@ async function expectIdenticalPaper(page: Page, label: string, open: () => Promi
     await open();
     await chooseTheme(page, theme);
     await page.emulateMedia({ media: 'print', colorScheme: theme });
-    // The switch to print starts the shell's colour transitions (0.01ms under
-    // reduced motion, still a frame away): read the settled paper, not the
-    // screen ink a transition starts from.
-    await page.evaluate(async () => {
-      await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    });
-    sweeps.push(await paperColours(page));
+    sweeps.push(await settledPaperColours(page, `${label} (${theme})`));
   }
   const [dark, light] = sweeps;
   expect(Object.keys(dark).length, `${label}: the sweep saw the page`).toBeGreaterThan(40);
