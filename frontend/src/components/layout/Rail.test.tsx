@@ -6,6 +6,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import type { SessionResponse } from '../../types';
+import type { ConnectionStatus } from '../connectionState';
 
 const apiMocks = vi.hoisted(() => ({ session: vi.fn() }));
 const roadmapLoads = vi.hoisted(() => {
@@ -20,6 +21,19 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: apiMocks,
 }));
+
+// Rail reads only the connection from the health context; with no provider
+// (every other test) the hook answers null, as the real one does.
+const healthState = vi.hoisted(() => ({ connection: null as ConnectionStatus | null }));
+vi.mock('../HealthProvider', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../HealthProvider')>();
+  type Health = ReturnType<typeof original.useOptionalHealth>;
+  return {
+    ...original,
+    useOptionalHealth: (): Health =>
+      healthState.connection === null ? null : ({ connection: healthState.connection } as NonNullable<Health>),
+  };
+});
 
 // Counts every load of the lazy roadmap chunk (the real module is served) and
 // signals when Rail's own request for it has been transformed and evaluated.
@@ -124,6 +138,7 @@ describe('the module rail', () => {
     root = createRoot(document.getElementById('root') as HTMLElement);
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     apiMocks.session.mockReset();
+    healthState.connection = null;
     roadmapLoads.count = 0;
     fetchSpy = vi.fn(() => new Promise<Response>(() => undefined));
     vi.stubGlobal('fetch', fetchSpy);
@@ -229,6 +244,22 @@ describe('the module rail', () => {
       queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, CUSTOMER);
       await renderRail();
       expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('never polls while the session is expired, and polls once the connection is back', async () => {
+      fetchSpy.mockImplementation(() => respond({ eligible: true, next_due_at: null }));
+      queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, ACTOR);
+      healthState.connection = 'session_expired';
+      const rail = await renderRail();
+      await settle();
+      expect(fetchSpy, 'an expired session sends no summary poll').not.toHaveBeenCalled();
+      expect(dueItem(rail)).toBeUndefined();
+
+      // Control: the same actor, online again, polls (the wait above was long enough to see one).
+      healthState.connection = 'online';
+      await renderRail();
+      await settle(() => fetchSpy.mock.calls.length > 0);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/v1/sales/followups/summary');
     });
 
     it.each([
