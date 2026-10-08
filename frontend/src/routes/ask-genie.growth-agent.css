@@ -84,7 +84,7 @@
    earlier steps read Done and later ones Waiting. --completed needs no rule
    (the trace's completed steps keep their default). */
 .growth-agent-step--running > svg {
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .growth-agent-step--waiting .growth-agent-step__title {
   color: var(--text-2);
