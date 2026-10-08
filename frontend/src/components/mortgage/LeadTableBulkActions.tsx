@@ -93,8 +93,8 @@ interface LeadTableBulkActionsProps {
   /**
    * "Request approval for N" (flow-02 / shell-06; deviation:request-approval):
    * a ready non-approver on an unscoped queue only. `blockedReason` keeps it
-   * aria-disabled with its reason (a campaign binding); so does a selection
-   * over the server's per-request cap (REQUEST_OVER_CAP).
+   * aria-disabled with its reason (a campaign binding). A selection over the
+   * server's per-request cap is the lazy form's to refuse (REQUEST_OVER_CAP).
    */
   requestApproval?: { blockedReason: string | null; onOpen: () => void } | null;
   /** The request form (RequestApprovalForm, lazy), while it is open from here. */
@@ -102,11 +102,6 @@ interface LeadTableBulkActionsProps {
 }
 
 const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
-
-/** backend/schemas/approval_request.py MAX_APPROVAL_REQUEST_BORROWERS (the create body's maxItems). */
-export const MAX_APPROVAL_REQUEST_BORROWERS = 500;
-export const REQUEST_OVER_CAP =
-  `A request names at most ${MAX_APPROVAL_REQUEST_BORROWERS} borrowers. Select fewer to request approval.`;
 
 export function LeadTableBulkActions({
   selectionCount,
@@ -150,13 +145,8 @@ export function LeadTableBulkActions({
   const gateOpen = selectionCount > 1 && bulkRationaleOpen;
   const rejectGateOpen = selectionCount > 1 && bulkRejectOpen;
   const running = runKind !== null;
-  // Over the cap the create would be a schema 422, read as "Shorten the reason": say why up front.
-  const requestBlockedReason = requestApproval === null
-    ? null
-    : requestApproval.blockedReason
-      ?? (selectedApprovalEligibleCount > MAX_APPROVAL_REQUEST_BORROWERS ? REQUEST_OVER_CAP : null);
   const requestOff = requestApproval !== null && (
-    requestBlockedReason !== null || running || selectedApprovalEligibleCount === 0
+    requestApproval.blockedReason !== null || running || selectedApprovalEligibleCount === 0
   );
   // motion-08 slice 2: a run's own button shows Button loading and is never native disabled
   // (focus would drop to <body>), even once its last group leaves no selected row eligible.
@@ -327,16 +317,16 @@ export function LeadTableBulkActions({
               if (!requestOff) requestApproval.onOpen();
             }}
             aria-disabled={requestOff || undefined}
-            aria-describedby={requestBlockedReason !== null ? requestNoteId : undefined}
+            aria-describedby={requestApproval.blockedReason !== null ? requestNoteId : undefined}
             data-testid="lead-bulk-request-approval"
           >
             Request approval for {selectedApprovalEligibleCount}
           </Button>
         )}
       </div>
-      {requestBlockedReason && (
+      {requestApproval?.blockedReason && (
         <span id={requestNoteId} className="muted fs-12" data-testid="lead-bulk-request-blocked">
-          {requestBlockedReason}
+          {requestApproval.blockedReason}
         </span>
       )}
       {armingCopy !== null && (

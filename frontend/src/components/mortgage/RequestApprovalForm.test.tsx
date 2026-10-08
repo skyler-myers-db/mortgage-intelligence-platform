@@ -5,8 +5,15 @@
  * at the rendered layer: the governed "Reason for the request" (O3, never
  * "Note"), one POST per send with one request_key per intent, nothing
  * drafted, the toast only after the 200, and failure copy that never claims
- * a record the server did not write (O1, W5d C3 / C4).
+ * a record the server did not write (O1, W5d C3 / C4). Over the server's
+ * 500-borrower cap the form says so and sends nothing (never the schema
+ * 422's "Shorten the reason").
  */
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads the committed OpenAPI baseline under Vitest only.
+import { readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,7 +22,15 @@ import { ApiError } from '../../lib/apiTransport';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { mount } from '../../test/render';
 import type { ApprovalRequestCreated } from '../../types/approvalRequests';
-import { RequestApprovalForm, REQUEST_FAILURE_COPY, skippedSummary } from './RequestApprovalForm';
+import {
+  MAX_APPROVAL_REQUEST_BORROWERS,
+  REQUEST_FAILURE_COPY,
+  REQUEST_OVER_CAP,
+  RequestApprovalForm,
+  skippedSummary,
+} from './RequestApprovalForm';
+
+declare const process: { cwd(): string };
 
 const IDS = ['B-REQFORM000001', 'B-REQFORM000002', 'B-REQFORM000003'];
 const CREATED: ApprovalRequestCreated = {
@@ -237,6 +252,44 @@ describe('RequestApprovalForm', () => {
     });
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(create).not.toHaveBeenCalled();
+  });
+
+  /** n masked ids, all distinct (the cap counts borrowers). */
+  const manyIds = (n: number) => Array.from({ length: n }, (_, index) => `B-CAP${String(index).padStart(10, '0')}`);
+
+  it('sends at the cap', async () => {
+    const create = vi.spyOn(approvalRequestsApi, 'create').mockResolvedValue(CREATED);
+    await render(manyIds(MAX_APPROVAL_REQUEST_BORROWERS));
+    expect(document.querySelector('[data-testid="request-approval-over-cap"]')).toBeNull();
+    await type('Rate-sensitive refinance candidates.');
+    expect(send().getAttribute('aria-disabled')).toBeNull();
+    await submit();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].borrower_ids).toHaveLength(MAX_APPROVAL_REQUEST_BORROWERS);
+  });
+
+  it('over the cap says why and sends nothing, whatever the reason', async () => {
+    const create = vi.spyOn(approvalRequestsApi, 'create');
+    await render(manyIds(MAX_APPROVAL_REQUEST_BORROWERS + 1));
+    const note = document.querySelector('[data-testid="request-approval-over-cap"]')!;
+    expect(note.textContent).toBe(REQUEST_OVER_CAP);
+    expect(REQUEST_OVER_CAP).toBe('A request names at most 500 borrowers. Select fewer to request approval.');
+    await type('Rate-sensitive refinance candidates.');
+    expect(send().getAttribute('aria-disabled')).toBe('true');
+    expect(send().disabled, 'never native disabled').toBe(false);
+    expect(send().getAttribute('aria-describedby')).toBe(note.id);
+    expect(field().getAttribute('aria-describedby')).toContain(note.id);
+    await submit();
+    expect(create).not.toHaveBeenCalled();
+    expect(failure(), 'never the 422 copy').toBeNull();
+  });
+
+  it('the cap is the create body\'s maxItems in the committed OpenAPI baseline', () => {
+    const baseline = JSON.parse(
+      readFileSync(join(process.cwd(), '..', 'tests', 'fixtures', 'openapi_baseline.json'), 'utf8') as string,
+    ) as { components: { schemas: Record<string, { properties: Record<string, { maxItems?: number }> }> } };
+    const borrowerIds = baseline.components.schemas.ApprovalRequestCreate.properties.borrower_ids;
+    expect(borrowerIds.maxItems).toBe(MAX_APPROVAL_REQUEST_BORROWERS);
   });
 
   it('summarizes skips by reason', () => {

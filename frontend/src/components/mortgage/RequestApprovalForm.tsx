@@ -12,7 +12,9 @@
  * the success toast (with its APPROVAL_REQUESTED audit link) shows only after
  * the 200; the row chips follow from the active refetch of the list. Every
  * failure keeps the form and the text, with copy that never claims a record
- * the server did not write (O1 / W5d C3, C4).
+ * the server did not write (O1 / W5d C3, C4). A selection over the server's
+ * per-request cap (500) is refused here, before any POST: the schema 422 it
+ * would draw reads as "Shorten the reason", which is the wrong guidance.
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -29,6 +31,10 @@ import { describeWriteFailure } from './leadWriteFailureToast';
 import './ApprovalRequests.css';
 
 export const REQUEST_REASON_MAX_LENGTH = 500;
+/** backend/schemas/approval_request.py MAX_APPROVAL_REQUEST_BORROWERS (the create body's maxItems). */
+export const MAX_APPROVAL_REQUEST_BORROWERS = 500;
+export const REQUEST_OVER_CAP =
+  `A request names at most ${MAX_APPROVAL_REQUEST_BORROWERS} borrowers. Select fewer to request approval.`;
 const REASON_HINT = 'Say why these borrowers; leave out personal details.';
 const NOTHING_SENT = "Nothing is sent. An approver reviews each borrower's copy before anything is approved.";
 
@@ -85,7 +91,9 @@ export function RequestApprovalForm({ borrowerIds, onCancel, onRequested }: Requ
   const titleId = useId();
   const hintId = useId();
   const failureId = useId();
+  const capId = useId();
   const blank = reason.trim().length === 0;
+  const overCap = borrowerIds.length > MAX_APPROVAL_REQUEST_BORROWERS;
 
   const cancel = () => {
     onCancel();
@@ -119,7 +127,7 @@ export function RequestApprovalForm({ borrowerIds, onCancel, onRequested }: Requ
   // submit inside that window would otherwise send a second POST.
   const inFlight = useRef(false);
   const submit = () => {
-    if (inFlight.current || create.isPending) return;
+    if (inFlight.current || create.isPending || overCap) return;
     if (blank) {
       fieldRef.current?.focus();
       return;
@@ -165,7 +173,7 @@ export function RequestApprovalForm({ borrowerIds, onCancel, onRequested }: Requ
           required
           maxLength={REQUEST_REASON_MAX_LENGTH}
           aria-invalid={failure !== null || undefined}
-          aria-describedby={failure ? `${hintId} ${failureId}` : hintId}
+          aria-describedby={[hintId, overCap && capId, failure && failureId].filter(Boolean).join(' ')}
           onChange={(event) => setReason(event.target.value)}
           data-testid="request-approval-reason"
         />
@@ -177,8 +185,9 @@ export function RequestApprovalForm({ borrowerIds, onCancel, onRequested }: Requ
           type="submit"
           variant="primary"
           size="sm"
-          // aria-disabled until a reason is written: an empty submit moves focus to the field.
-          aria-disabled={blank || undefined}
+          // aria-disabled until a reason is written (an empty submit moves focus to the field), and over the cap.
+          aria-disabled={blank || overCap || undefined}
+          aria-describedby={overCap ? capId : undefined}
           loading={create.isPending}
           data-testid="request-approval-send"
         >
@@ -186,6 +195,9 @@ export function RequestApprovalForm({ borrowerIds, onCancel, onRequested }: Requ
         </Button>
       </div>
       <p className="muted fs-12 approval-requests__note">{NOTHING_SENT}</p>
+      {overCap && (
+        <p id={capId} className="approval-requests__failure" data-testid="request-approval-over-cap">{REQUEST_OVER_CAP}</p>
+      )}
       {failure && (
         <p id={failureId} role="alert" className="approval-requests__failure" data-testid="request-approval-failure">
           {failure}
