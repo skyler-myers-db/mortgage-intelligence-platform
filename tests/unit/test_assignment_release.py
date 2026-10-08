@@ -248,7 +248,8 @@ def test_validation_and_not_found(fake_lakebase_client: Any) -> None:
         {**good, "request_id": "call me at 555-555-0100"},
     ):
         assert client.post(f"/api/leads/{borrower_id}/assignment/release", json=bad).status_code == 422
-    assert client.post("/api/leads/B-ZZZZZZZZZZ999/assignment/release", json=good).status_code in {404, 422}
+    # A well-formed masked id the repository does not hold is a 404, not a 422.
+    assert client.post("/api/leads/B-ZZZZZZZZZZ999/assignment/release", json=good).status_code == 404
     assert _unassign_rows(fake_lakebase_client) == []
 
 

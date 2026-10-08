@@ -197,7 +197,6 @@ class DistributeLeadsRequest(BaseModel):
             return None
         return validate_public_opaque_id(value)
 
-
     @model_validator(mode="after")
     def _board_fields(self) -> DistributeLeadsRequest:
         board = self.dry_run or self.expected_plan_fingerprint is not None
