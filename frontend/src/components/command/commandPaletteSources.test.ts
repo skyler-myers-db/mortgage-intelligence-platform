@@ -45,6 +45,9 @@ describe('palette provider builders', () => {
     ]);
     expect(rows.map((row) => row.borrowerId)).toEqual([ids[0], ids[2]]);
     expect(rows[0].to).toBe(`/borrower-360/${ids[0]}`);
+    // Any borrower event lists the borrower (a decision too), so the hint
+    // claims no more than 'Recent'.
+    expect(recentBorrowerRows([{ ...event(ids[3]), event_type: 'OUTREACH_APPROVE' }])[0].hint).toBe('Recent');
   });
 
   it('saved views open the Lead Queue with their exact params', () => {

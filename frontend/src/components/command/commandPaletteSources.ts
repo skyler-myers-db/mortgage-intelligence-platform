@@ -129,8 +129,9 @@ export function savedLeadRows(savedLeads: Readonly<Record<string, SavedLead>>): 
 }
 
 /**
- * The borrowers this actor opened recently, newest first, from the actor's
- * own audit-free my-events feed: masked ids only, each once.
+ * The borrowers this actor worked on recently (any borrower event: a view, a
+ * decision), newest first, from the actor's own audit-free my-events feed:
+ * masked ids only, each once. Hence 'Recent', not 'Recently opened'.
  */
 export function recentBorrowerRows(events: readonly ActorAuditEventSummary[]): PaletteSourceRow[] {
   const seen = new Set<string>();
@@ -142,7 +143,7 @@ export function recentBorrowerRows(events: readonly ActorAuditEventSummary[]): P
     rows.push({
       id: `recent-${id}`,
       label: id,
-      hint: 'Recently opened',
+      hint: 'Recent',
       icon: 'user',
       keywords: [],
       to: borrowerPath(id),
