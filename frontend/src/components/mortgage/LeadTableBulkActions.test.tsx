@@ -12,7 +12,10 @@
  *    are not eligible): a focused button that turns disabled drops focus to
  *    <body> (motion-08 slice 2).
  */
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads the committed OpenAPI baseline under Vitest only.
 import { readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
 import { join } from 'node:path';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -49,6 +52,8 @@ async function renderToolbar({ eligible, runKind = null, onOpen = () => undefine
   );
 }
 
+declare const process: { cwd(): string };
+
 const byTestId = (id: string) => document.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!;
 
 describe('LeadTableBulkActions: Request approval over the cap', () => {
@@ -78,7 +83,7 @@ describe('LeadTableBulkActions: Request approval over the cap', () => {
 
   it('is the create body\'s maxItems in the committed OpenAPI baseline', () => {
     const baseline = JSON.parse(
-      readFileSync(join(process.cwd(), '..', 'tests', 'fixtures', 'openapi_baseline.json'), 'utf8'),
+      readFileSync(join(process.cwd(), '..', 'tests', 'fixtures', 'openapi_baseline.json'), 'utf8') as string,
     ) as { components: { schemas: Record<string, { properties: Record<string, { maxItems?: number }> }> } };
     const borrowerIds = baseline.components.schemas.ApprovalRequestCreate.properties.borrower_ids;
     expect(borrowerIds.maxItems).toBe(MAX_APPROVAL_REQUEST_BORROWERS);
