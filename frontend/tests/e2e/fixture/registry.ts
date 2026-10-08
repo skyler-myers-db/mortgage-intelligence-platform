@@ -11,6 +11,7 @@ import { adminFixtures } from './data/admin';
 import { analyticsFixtures } from './data/analytics';
 import { dataEstateFixtures } from './data/dataEstate';
 import { genieFixtures } from './data/genie';
+import { growthWatchlistFixtures } from './data/growthWatchlists';
 import { leadFixtures } from './data/leads';
 import { offerFixtures } from './data/offers';
 import { portfolioFixtures } from './data/portfolio';
@@ -32,6 +33,7 @@ export function defaultFixtures(): FixtureEntry[] {
     ...rateLeverFixtures,
     ...salesOpsFixtures,
     ...genieFixtures,
+    ...growthWatchlistFixtures,
     ...adminFixtures,
     ...dataEstateFixtures,
   ];

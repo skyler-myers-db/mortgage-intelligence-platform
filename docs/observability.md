@@ -1148,3 +1148,21 @@ WHERE day >= current_date - 6 AND sample_count > 0
 GROUP BY day, metric
 ORDER BY day DESC, metric;
 ```
+
+## 13. Growth Agent watchlists (W5d)
+
+Audit 2026-09-21 `wow-ai-2`, `genie-09` part 4 and `flow-08` slice 2. None of
+these events carries an actor, a request or monitor id, a rate, a level, a
+borrower id or any message text.
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `growth_agent_rate_watch_saved` | INFO; WARNING when `failed` | `outcome` saved / replayed / refused_409 / failed | "Watch this level" (`POST /api/v1/growth-agent/rate-watch`). `saved` upserted the watch and wrote one `GROWTH_AGENT_MONITOR_SAVE` row; `replayed` found an identical active watch and wrote nothing; `refused_409` means the grid was not built or the step left today's grid (nothing written); `failed` is a Lakebase failure (a 503, nothing written). |
+| `growth_agent_rate_trigger_quiet` | INFO | — | A rate watch's run did not reach its level (or had no weekly print), so the draft step wrote no draft and no audit row. Expected on most scheduled passes; the watch is due again by cadence only. |
+| `growth_agent_plan_progress_unavailable` | WARNING, once per execution | `exc_type` | A composed-plan progress write failed (typically the App promoted ahead of `mip_lakebase_migrate`). Progress writes stop for that execution; the run, its trace and its audit rows are unaffected, and the browser keeps its indeterminate "Running…". |
+| `growth_agent_plan_progress_read_failed` | WARNING | `exc_type` | `GET /api/v1/growth-agent/agent/plan/progress` could not read the progress row and answered `not_started`. |
+
+The saved-watchlist scheduler state (`growth_agent_scheduler_state_unavailable`,
+`exc_type` only) is served stale-while-refresh: a stale answer is returned at
+once while at most one background refresh runs, so a slow Jobs API never holds
+Home or Saved monitors; the event fires once per failed lookup.
