@@ -27,6 +27,14 @@ import { splitSourceLinks } from './genieSourceLinks';
  * `occurrences`. Anything else (an appended disclosure that repeats the
  * token, a stripped restatement, a list marker or a link target the renderer
  * drops, a disagreeing duplicate item) is never marked.
+ *
+ * Known residual (recorded, not closed): the counts are equalities, so two
+ * opposite changes can cancel. If stripQuestionRestatement removes one
+ * occurrence of a located token AND an appended cross-check note adds the
+ * same token, both counts still equal `occurrences` and the note's copy
+ * could be marked. It needs the restated figure to be a cell-supported claim
+ * itself (the server counted it in the checked prose); the claims list and
+ * the count in the proof drawer are unaffected.
  */
 
 /** Python's `\s` for str patterns (str.isspace), as a character-class body. */

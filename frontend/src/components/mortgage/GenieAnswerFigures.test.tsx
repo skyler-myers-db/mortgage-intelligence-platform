@@ -33,8 +33,8 @@ vi.mock('./evidenceDrawerBodyLoader', () => ({
 }));
 
 import { GenieAnswer } from './GenieAnswer';
-import { GenieAnswerSections } from './GenieAnswer.sections';
 import { MarkdownAnswer } from './GenieAnswer.markdown';
+import { GenieVerifiedReveal } from './GenieVerifiedReveal';
 import { GenieFigureScopes } from './GenieAnswerFigures';
 import { FIGURE_HOVER_CTA, FIGURE_HOVER_TITLE } from './GenieFigureMark';
 
@@ -295,15 +295,30 @@ describe('GenieAnswer figure scopes', () => {
     expect(marks(container)).toEqual([]);
   });
 
-  it('marks nothing in the Partial research preview (rendered outside GenieAnswer)', async () => {
+  it('marks nothing in the Partial research preview, even beside a marked answer with the same section text', async () => {
+    // The preview renders outside GenieAnswer, whose provider is the only
+    // source of marks. Here a live provider holds the preview's exact section
+    // text and the mark chunk is loaded (the answer's own section IS marked),
+    // so a provider that leaked out of GenieAnswer's subtree (a module-level
+    // store, a hoisted context) would mark the preview too. The fixture spec
+    // (genie-provenance-tiles case (c)) pins the real in-flight thread.
+    const shared = section();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     act(() =>
       root.render(
-        <MemoryRouter>
-          <GenieAnswerSections summary={SUMMARY} sections={[section()]} workspaceHost={null} preview />
-        </MemoryRouter>,
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <GenieAnswer payload={sweep([shared], [cell('900', 1, 'borrowers', shared.title)])} question="Where should we focus?" />
+            <GenieVerifiedReveal reveal={{ jobId: 'job-1', verified: 3, partsPlanned: 3, rev: 1, sections: [shared] }} />
+          </MemoryRouter>
+        </QueryClientProvider>,
       ),
     );
-    expect(container.textContent).toContain('900');
-    expect(marks(container)).toEqual([]);
+    await settleLazyMarks();
+    const preview = container.querySelector('[role="group"][aria-label="Partial research"]')!;
+    const answerSection = container.querySelector('.genie-answer .genie-answer__section')!;
+    expect(marks(answerSection), 'the answer marks its section (provider live, chunk loaded)').toEqual(['900']);
+    expect(preview.textContent).toContain(shared.answer);
+    expect(marks(preview)).toEqual([]);
   });
 });

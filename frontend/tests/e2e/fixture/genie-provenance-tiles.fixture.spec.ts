@@ -12,7 +12,9 @@
  *      marked, and the prose's figure that coincides with the note's is not
  *      marked either (its full-text count no longer matches);
  *  (c) sweep: the summary and each section mark their own figures; a
- *      withheld section and the Partial research preview mark none;
+ *      withheld section and the Partial research preview mark none (a first
+ *      turn loads the lazy mark chunk, so the preview check cannot pass on
+ *      the Suspense fallback);
  *  (d) an answer recorded before provenance: no mark, derivation labels;
  *  (e) axe on the answer with a card open and on the proof drawer;
  *  (f) forced colours: the figure paints the surrounding ink and canvas,
@@ -58,6 +60,11 @@ function main(page: Page): Locator {
 
 function answer(page: Page): Locator {
   return main(page).locator('.genie-thread .genie-answer').first();
+}
+
+/** The newest answer in the thread (case (c) asks twice). */
+function lastAnswer(page: Page): Locator {
+  return main(page).locator('.genie-thread .genie-answer').last();
 }
 
 async function askOnRoute(page: Page): Promise<void> {
@@ -127,114 +134,135 @@ test.describe('genie-10 phase 2: figures that match one returned cell', () => {
     });
   }
 
-  test('(b) O2: the cross-check note is disclosed, never counted and never marked', async ({ app, page, mockApi }) => {
-    registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceDivergenceAnswer() });
-    await app.gotoRoute('/ask-genie');
-    const natural = markNaturalLoad(mockApi);
-    await askOnRoute(page);
-    const body = answer(page);
-    await expect(body).toContainText('overlaps 3 of 10 borrowers', STAGE_WAIT);
+  for (const theme of FIXTURE_THEMES) {
+    test(`(b) ${theme}: O2: the cross-check note is disclosed, never counted and never marked`, async ({ app, page, mockApi }) => {
+      registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceDivergenceAnswer() });
+      await app.setTheme(theme);
+      await app.gotoRoute('/ask-genie');
+      const natural = markNaturalLoad(mockApi);
+      await askOnRoute(page);
+      const body = answer(page);
+      await expect(body).toContainText('overlaps 3 of 10 borrowers', STAGE_WAIT);
 
-    // The note's "10" coincides with the prose's: neither is marked.
-    await expect(marks(body)).toHaveText([DIVERGENCE_SCORE]);
-    const noteParagraph = body.locator('p', { hasText: 'Governed cross-check' });
-    await expect(noteParagraph.locator('mark')).toHaveCount(0);
-    await expect(body.locator('p', { hasText: `${DIVERGENCE_COINCIDENT} of the ranked borrowers` }).locator('mark')).toHaveText([
-      DIVERGENCE_SCORE,
-    ]);
+      // The note's "10" coincides with the prose's: neither is marked.
+      await expect(marks(body)).toHaveText([DIVERGENCE_SCORE]);
+      const noteParagraph = body.locator('p', { hasText: 'Governed cross-check' });
+      await expect(noteParagraph.locator('mark')).toHaveCount(0);
+      await expect(body.locator('p', { hasText: `${DIVERGENCE_COINCIDENT} of the ranked borrowers` }).locator('mark')).toHaveText([
+        DIVERGENCE_SCORE,
+      ]);
 
-    const drawer = await openProof(page);
-    await expect(drawer).toContainText('2 of 2 answer figures verified');
-    await expect(drawer.locator('.genie-claims__token')).toHaveText([DIVERGENCE_SCORE, DIVERGENCE_COINCIDENT]);
-    await expect(drawer).toContainText(DIVERGENCE_NOTE);
-    expectNoAuditedReadSince(mockApi, natural, 'the divergence note');
-    expect(forbiddenCalls(mockApi, natural)).toEqual([]);
-  });
-
-  test('(c) sweep: summary and sections mark their own figures; a withheld section and the preview mark none', async ({ app, page, mockApi }) => {
-    const sweep = provenanceSweepAnswer();
-    const previewSections = genieRevealSectionsFixture(3).map((section, index) => ({
-      ...section,
-      answer: (sweep.sections ?? [])[index]?.answer ?? section.answer,
-    }));
-    const steps: readonly GenieJobStep[] = [
-      { stage: 'queued' },
-      { stage: 'researching', parts: [3, 7], reveal: { verified: 3, rev: 1, sections: previewSections } },
-      'succeeded',
-    ];
-    const job = registerGenieJob(mockApi, { deep: true, steps, answer: sweep });
-    await app.gotoRoute('/ask-genie');
-    const natural = markNaturalLoad(mockApi);
-    await askOnRoute(page);
-
-    job.next();
-    const preview = main(page).getByRole('group', { name: 'Partial research' });
-    await expect(preview).toBeVisible(STAGE_WAIT);
-    await expect(preview).toContainText(SWEEP_SECTION_CELL);
-    await expect(preview.locator('mark')).toHaveCount(0);
-
-    job.next();
-    const body = answer(page);
-    await expect(body.locator('.genie-answer__section')).toHaveCount(3, STAGE_WAIT);
-    const summary = body.locator('.genie-answer__sections > .genie-md-p--heading + p');
-    await expect(summary).toContainText(SWEEP_SUMMARY_SUM);
-    await expect(marks(summary)).toHaveText([SWEEP_SUMMARY_CELL]);
-    const sections = body.locator('.genie-answer__section');
-    await expect(marks(sections.nth(0))).toHaveText([SWEEP_SECTION_CELL]);
-    await expect(marks(sections.nth(1))).toHaveText([SWEEP_CONTACTABLE_CELL]);
-    await expect(sections.nth(2)).toContainText(WITHHELD_TITLE);
-    await expect(marks(sections.nth(2))).toHaveCount(0);
-    expectNoAuditedReadSince(mockApi, natural, 'the sweep highlight');
-    expect(forbiddenCalls(mockApi, natural)).toEqual([]);
-  });
-
-  test('(d) an answer recorded before provenance marks nothing and keeps the derivation labels', async ({ app, page, mockApi }) => {
-    registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceLegacyAnswer() });
-    await app.gotoRoute('/ask-genie');
-    await askOnRoute(page);
-    const body = answer(page);
-    await expect(body).toContainText(SINGLE_CELL, STAGE_WAIT);
-    const drawer = await openProof(page);
-    await expect(body.locator('mark')).toHaveCount(0);
-    await expect(drawer).toContainText('3 of 3 answer figures verified');
-    await expect(drawer.locator('.genie-claims__derivation')).toHaveText([
-      'Matches a returned value',
-      'Derived from the returned rows (a total, average, share or change)',
-      'A threshold the returned values satisfy',
-    ]);
-  });
-
-  test('(f) forced colours: the figure paints the surrounding ink, never the Mark highlighter', async ({ app, page, mockApi }) => {
-    registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceSingleAnswer() });
-    await app.gotoRoute('/ask-genie');
-    await askOnRoute(page);
-    const mark = marks(answer(page));
-    await expect(mark).toBeVisible(STAGE_WAIT);
-    await page.emulateMedia({ forcedColors: 'active' });
-    const paint = await mark.evaluate((el) => {
-      const probe = (value: string) => {
-        const node = document.createElement('span');
-        node.style.backgroundColor = value;
-        node.style.color = value;
-        document.body.appendChild(node);
-        const resolved = getComputedStyle(node).backgroundColor;
-        node.remove();
-        return resolved;
-      };
-      const own = getComputedStyle(el);
-      const parent = getComputedStyle(el.parentElement as HTMLElement);
-      return {
-        color: own.color,
-        parentColor: parent.color,
-        background: own.backgroundColor,
-        canvas: probe('Canvas'),
-        mark: probe('Mark'),
-        markText: probe('MarkText'),
-      };
+      const drawer = await openProof(page);
+      await expect(drawer).toContainText('2 of 2 answer figures verified');
+      await expect(drawer.locator('.genie-claims__token')).toHaveText([DIVERGENCE_SCORE, DIVERGENCE_COINCIDENT]);
+      await expect(drawer).toContainText(DIVERGENCE_NOTE);
+      expectNoAuditedReadSince(mockApi, natural, 'the divergence note');
+      expect(forbiddenCalls(mockApi, natural)).toEqual([]);
     });
-    expect(paint.color).toBe(paint.parentColor);
-    expect(paint.background).toBe(paint.canvas);
-    expect(paint.background).not.toBe(paint.mark);
-    await page.emulateMedia({ forcedColors: 'none' });
-  });
+
+    test(`(c) ${theme}: sweep: summary and sections mark their own figures; a withheld section and the preview mark none`, async ({
+      app,
+      page,
+      mockApi,
+    }) => {
+      registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceSingleAnswer() });
+      await app.setTheme(theme);
+      await app.gotoRoute('/ask-genie');
+      const natural = markNaturalLoad(mockApi);
+
+      // Turn 1 loads the lazy mark chunk: its cell figure is marked. Without
+      // this, the preview check below would pass on the Suspense fallback
+      // (the plain token) even if a provider reached the preview.
+      await askOnRoute(page);
+      await expect(marks(answer(page))).toHaveText([SINGLE_CELL], STAGE_WAIT);
+
+      // Turn 2, a sweep whose Partial research preview shows the SAME
+      // section text the final answer then marks.
+      const sweep = provenanceSweepAnswer();
+      const previewSections = genieRevealSectionsFixture(3).map((section, index) => ({
+        ...section,
+        answer: (sweep.sections ?? [])[index]?.answer ?? section.answer,
+      }));
+      const steps: readonly GenieJobStep[] = [
+        { stage: 'queued' },
+        { stage: 'researching', parts: [3, 7], reveal: { verified: 3, rev: 1, sections: previewSections } },
+        'succeeded',
+      ];
+      const job = registerGenieJob(mockApi, { deep: true, steps, answer: sweep });
+      await askOnRoute(page);
+
+      job.next();
+      const preview = main(page).getByRole('group', { name: 'Partial research' });
+      await expect(preview).toBeVisible(STAGE_WAIT);
+      await expect(preview).toContainText(SWEEP_SECTION_CELL);
+      // The chunk is loaded, so a mark would render synchronously here.
+      await expect(preview.locator('mark')).toHaveCount(0);
+
+      job.next();
+      const body = lastAnswer(page);
+      await expect(body.locator('.genie-answer__section')).toHaveCount(3, STAGE_WAIT);
+      const summary = body.locator('.genie-answer__sections > .genie-md-p--heading + p');
+      await expect(summary).toContainText(SWEEP_SUMMARY_SUM);
+      await expect(marks(summary)).toHaveText([SWEEP_SUMMARY_CELL]);
+      const sections = body.locator('.genie-answer__section');
+      await expect(marks(sections.nth(0))).toHaveText([SWEEP_SECTION_CELL]);
+      await expect(marks(sections.nth(1))).toHaveText([SWEEP_CONTACTABLE_CELL]);
+      await expect(sections.nth(2)).toContainText(WITHHELD_TITLE);
+      await expect(marks(sections.nth(2))).toHaveCount(0);
+      expectNoAuditedReadSince(mockApi, natural, 'the sweep highlight');
+      expect(forbiddenCalls(mockApi, natural)).toEqual([]);
+    });
+
+    test(`(d) ${theme}: an answer recorded before provenance marks nothing and keeps the derivation labels`, async ({ app, page, mockApi }) => {
+      registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceLegacyAnswer() });
+      await app.setTheme(theme);
+      await app.gotoRoute('/ask-genie');
+      await askOnRoute(page);
+      const body = answer(page);
+      await expect(body).toContainText(SINGLE_CELL, STAGE_WAIT);
+      const drawer = await openProof(page);
+      await expect(body.locator('mark')).toHaveCount(0);
+      await expect(drawer).toContainText('3 of 3 answer figures verified');
+      await expect(drawer.locator('.genie-claims__derivation')).toHaveText([
+        'Matches a returned value',
+        'Derived from the returned rows (a total, average, share or change)',
+        'A threshold the returned values satisfy',
+      ]);
+    });
+
+    test(`(f) ${theme}: forced colours: the figure paints the surrounding ink, never the Mark highlighter`, async ({ app, page, mockApi }) => {
+      registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceSingleAnswer() });
+      await app.setTheme(theme);
+      await app.gotoRoute('/ask-genie');
+      await askOnRoute(page);
+      const mark = marks(answer(page));
+      await expect(mark).toBeVisible(STAGE_WAIT);
+      await page.emulateMedia({ forcedColors: 'active' });
+      const paint = await mark.evaluate((el) => {
+        const probe = (value: string) => {
+          const node = document.createElement('span');
+          node.style.backgroundColor = value;
+          node.style.color = value;
+          document.body.appendChild(node);
+          const resolved = getComputedStyle(node).backgroundColor;
+          node.remove();
+          return resolved;
+        };
+        const own = getComputedStyle(el);
+        const parent = getComputedStyle(el.parentElement as HTMLElement);
+        return {
+          color: own.color,
+          parentColor: parent.color,
+          background: own.backgroundColor,
+          canvas: probe('Canvas'),
+          mark: probe('Mark'),
+          markText: probe('MarkText'),
+        };
+      });
+      expect(paint.color).toBe(paint.parentColor);
+      expect(paint.background).toBe(paint.canvas);
+      expect(paint.background).not.toBe(paint.mark);
+      await page.emulateMedia({ forcedColors: 'none' });
+    });
+  }
 });
