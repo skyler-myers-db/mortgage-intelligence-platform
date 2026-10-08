@@ -2,8 +2,9 @@
  * The W5d sales loop at the rendered layer, 1440 x 900 (w5-sales-loop):
  *
  *  (a) the sales manager view: a period preset is written to the URL, every
- *      loan officer is listed, and neither the load, a period change nor the
- *      Board's dry run opens an audited read;
+ *      loan officer is listed (one with no calls in the period as '0 calls'),
+ *      and neither the load, a period change nor the Board's dry run opens an
+ *      audited read;
  *  (b) the Distribution Board, both themes: exactly one dry-run POST
  *      (score_balanced, dry_run, no request id), the per-officer bars and
  *      numbers, axe clean; Commit carries the fingerprint and a request id;
@@ -35,6 +36,7 @@ import {
   assignmentRow,
   boardPreview,
   commitBody,
+  conversionWithCalls,
   distributionReleaseBody,
   dryRunBody,
   registerBoard,
@@ -75,6 +77,9 @@ function toastWithLink(page: Page, auditId: string) {
 test.describe('(a) the sales manager view', () => {
   test('a preset changes the URL, every officer is listed, and nothing reads an audited row', async ({ app, mockApi, page }) => {
     registerBoard(mockApi);
+    // Only the first officer logged calls: the other has no conversion row at all.
+    mockApi.register('GET', '/api/sales/conversion', ({ query }) =>
+      json(conversionWithCalls(LOAN_OFFICERS.slice(0, 1), query.get('from') ?? undefined, query.get('to') ?? undefined)));
     await app.gotoRoute(SALES_OPS);
     const period = page.locator('.sales-ops-period');
     await expect(period.getByRole('button', { name: 'Week to date' })).toHaveAttribute('aria-pressed', 'true');
@@ -84,7 +89,10 @@ test.describe('(a) the sales manager view', () => {
     await expect(period.getByRole('button', { name: '30 days' })).toHaveAttribute('aria-pressed', 'true');
     await app.settle();
     const conversion = page.locator('.sales-ops-card').filter({ hasText: 'Last 30 days conversion' });
+    // Every in-scope loan officer, the one without calls as an explicit zero.
     await expect(conversion.locator('.split-row')).toHaveCount(LOAN_OFFICERS.length);
+    await expect(conversion.locator('.split-row').nth(0)).toContainText(LOAN_OFFICERS[0].display_label);
+    await expect(conversion.locator('.split-row').nth(1)).toHaveText(`${LOAN_OFFICERS[1].display_label}0 calls`);
     await expect(conversion.locator('[title]')).toHaveCount(0);
 
     await openBoard(page);

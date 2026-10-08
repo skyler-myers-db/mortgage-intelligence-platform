@@ -466,6 +466,52 @@ describe('Analytics Sales ops tab', () => {
       expect(card?.querySelectorAll('[title]').length).toBe(0);
     });
 
+    it('lists the officers with no calls in the period too, as an explicit zero after the rows (critic-10 6e)', async () => {
+      apiMocks.salesTeam.mockResolvedValue(TEAM);
+      // conversion() groups call dispositions: only two officers have rows,
+      // in the server's order, one keyed in another case.
+      apiMocks.salesConversion.mockResolvedValue({
+        rows: [
+          { group_key: 'lo04@summit.example', application_start_rate: 0.25 },
+          { group_key: 'LO02@summit.example', application_start_rate: 0.1 },
+        ],
+      });
+      await renderView('/analytics?view=sales-ops');
+
+      expect(conversionCells()).toEqual([
+        ['Summit LO 04', '25%'],
+        ['Summit LO 02', '10%'],
+        ['Summit LO 01', '0 calls'],
+        ['Summit LO 03', '0 calls'],
+        ['Summit LO 05', '0 calls'],
+      ]);
+      // Never an invented rate, and still no LO email in the DOM.
+      expect(conversionCells().filter(([, value]) => value === '0%')).toEqual([]);
+      expect(conversionCard()?.innerHTML).not.toContain('@summit.example');
+    });
+
+    it('claims no zero calls when the conversion read failed', async () => {
+      apiMocks.salesTeam.mockResolvedValue(TEAM);
+      apiMocks.salesConversion.mockRejectedValue(new ApiError('down', { path: '/api/v1/sales/conversion', status: 500 }));
+      await renderView('/analytics?view=sales-ops');
+
+      expect(conversionCells()).toEqual([]);
+      expect(conversionCard()?.textContent).not.toContain('No LO dispositions');
+      expect(document.body.textContent).toContain('Sales operations metrics unavailable');
+    });
+
+    it('reads an officer missing past the 100-row cap as unknown, not as zero calls', async () => {
+      apiMocks.salesTeam.mockResolvedValue(TEAM.slice(0, 1));
+      apiMocks.salesConversion.mockResolvedValue({
+        rows: Array.from({ length: 100 }, (_, index) => ({ group_key: `other${index}@summit.example`, application_start_rate: 0 })),
+      });
+      await renderView('/analytics?view=sales-ops');
+
+      const cells = conversionCells();
+      expect(cells).toHaveLength(101);
+      expect(cells[100]).toEqual(['Summit LO 01', '—']);
+    });
+
     it('offers the Distribution Board only after the manager read succeeded with an officer in scope', async () => {
       apiMocks.salesTeam.mockResolvedValue(TEAM);
       await renderView('/analytics?view=sales-ops');

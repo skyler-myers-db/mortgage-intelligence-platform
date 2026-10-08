@@ -16,7 +16,7 @@ import type {
   SalesOutcomeSummaryResponse,
   SalesStandupResponse,
 } from '../types';
-import { formatCount } from '../lib/formatters';
+import { UNKNOWN_VALUE, formatCount } from '../lib/formatters';
 import {
   SALES_PERIOD_PRESETS,
   isoDay,
@@ -50,6 +50,8 @@ import './analytics.sales-ops.css';
 const DistributionBoard = lazy(() => import('../components/mortgage/DistributionBoard'));
 // Field and its stylesheet load only when a manager picks Custom.
 const SalesPeriodRange = lazy(() => import('../components/mortgage/SalesPeriodRange'));
+/** GET /sales/conversion returns at most this many groups (its LIMIT 100). */
+const CONVERSION_ROW_CAP = 100;
 
 function relativeIsoDate(days: number): string {
   const date = new Date();
@@ -209,6 +211,19 @@ export function SalesOpsSection() {
     );
     return match?.display_label ?? groupKey;
   };
+  // Every in-scope loan officer (critic-10 6e): conversion() groups call
+  // dispositions, so an officer with no calls in the period has no row. The
+  // rows keep the server's order, then each roster officer without one
+  // follows by label as an explicit zero, never an invented rate. Past the
+  // read's 100-row cap (sales_state_reporting.conversion) a missing officer
+  // may have calls, so it reads as unknown instead. A failed read claims
+  // nothing: no zeros and no "no dispositions" line.
+  const conversionRows = conversion?.rows ?? [];
+  const withCalls = new Set(conversionRows.map((row) => row.group_key.trim().toLowerCase()));
+  const idleOfficers = conversion === null ? [] : salesTeam
+    .filter((member) => !withCalls.has(member.email.toLowerCase()))
+    .sort((a, b) => a.display_label.localeCompare(b.display_label));
+  const idleValue = conversionRows.length >= CONVERSION_ROW_CAP ? UNKNOWN_VALUE : '0 calls';
 
   return (
     <div className="surface">
@@ -290,15 +305,25 @@ export function SalesOpsSection() {
                 ? [0, 1, 2].map((row) => (
                   <span key={row} className="skeleton kpi__delta-skeleton" aria-hidden="true" />
                 ))
-                : (conversion?.rows ?? []).map((row) => (
-                  <div key={row.group_key} className="split-row">
-                    <span className="fs-12">{loanOfficerLabel(row.group_key)}</span>
-                    <span className="mono num">{Math.round(row.application_start_rate * 100)}%</span>
-                  </div>
-                ))}
+                : (
+                  <>
+                    {conversionRows.map((row) => (
+                      <div key={row.group_key} className="split-row">
+                        <span className="fs-12">{loanOfficerLabel(row.group_key)}</span>
+                        <span className="mono num">{Math.round(row.application_start_rate * 100)}%</span>
+                      </div>
+                    ))}
+                    {idleOfficers.map((member) => (
+                      <div key={member.email} className="split-row">
+                        <span className="fs-12">{member.display_label}</span>
+                        <span className="mono num muted">{idleValue}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
               {/* "No dispositions" is a CLAIM about the window, so it may only
                   render once the window has actually been read. */}
-              {!periodLoading && (conversion?.rows ?? []).length === 0 && (
+              {conversion !== null && conversionRows.length === 0 && (
                 <div className="muted fs-12">No LO dispositions logged in this period.</div>
               )}
             </div>

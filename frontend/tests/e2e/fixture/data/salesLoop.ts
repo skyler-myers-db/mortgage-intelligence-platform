@@ -1,6 +1,7 @@
 /**
  * The W5d sales loop's bodies (w5-sales-loop): the Distribution Board's dry
- * run and commit, and the two Undo releases. Specs register them per test
+ * run and commit, the two Undo releases, and a conversion read in which only
+ * some officers logged calls. Specs register them per test
  * through mockApi.register (sales-loop.fixture.spec.ts), so the default
  * registry is unchanged; contractSamples() hands every shape to the fixture
  * contract exporter, which validates it against the real FastAPI models.
@@ -14,7 +15,7 @@ import type {
   AssignmentReleaseResponse,
   DistributionReleaseResponse,
 } from '../../../../src/lib/apiClients/salesLoop';
-import type { LeadAssignment, SalesTeamMember } from '../../../../src/types';
+import type { LeadAssignment, SalesConversionResponse, SalesTeamMember } from '../../../../src/types';
 import type { ContractSample } from '../contractSamples';
 import { json, type FixtureReply, type MockApi } from '../mockApi';
 import { LEADS } from './borrowers';
@@ -165,6 +166,30 @@ export function registerBoard(
   return bodies;
 }
 
+/**
+ * GET /sales/conversion when only `withCalls` logged dispositions in the
+ * window: conversion() groups call_dispositions, so every other in-scope
+ * officer has no row at all (the manager view lists them as '0 calls').
+ */
+export function conversionWithCalls(withCalls: SalesTeamMember[], from = '2026-07-13', to = '2026-07-14'): SalesConversionResponse {
+  return {
+    from_date: from,
+    to_date: to,
+    group_by: 'lo',
+    rows: withCalls.map((officer) => ({
+      group_key: officer.email,
+      calls_attempted: 40,
+      contacts_reached: 15,
+      callbacks_scheduled: 4,
+      applications_started: 3,
+      unique_leads_contacted: 32,
+      unique_contacts_reached: 12,
+      unique_application_starts: 3,
+      application_start_rate: 0.094,
+    })),
+  };
+}
+
 function sampled(source: string, pattern: string, body: unknown, path = pattern): ContractSample {
   return { source, method: 'POST', pattern, path, query: '', status: 200, body };
 }
@@ -181,5 +206,14 @@ export function contractSamples(): ContractSample[] {
     sampled('releaseBody(restored)', '/api/leads/:id/assignment/release', releaseBody(single, CONTRACT_OFFICERS[0]), releasePath),
     sampled('releaseBody(skipped)', '/api/leads/:id/assignment/release', releaseBody(single, null), releasePath),
     sampled('distributionReleaseBody', '/api/sales/distribute/release', distributionReleaseBody(committed.assignments)),
+    {
+      source: 'conversionWithCalls',
+      method: 'GET',
+      pattern: '/api/sales/conversion',
+      path: '/api/sales/conversion',
+      query: 'from=2026-07-13&to=2026-07-14&groupBy=lo',
+      status: 200,
+      body: conversionWithCalls(CONTRACT_OFFICERS.slice(0, 1)),
+    },
   ];
 }
