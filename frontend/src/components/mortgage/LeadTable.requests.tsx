@@ -11,7 +11,7 @@
  * form is a lazy chunk opened on the explicit Request approval (row or
  * toolbar); nothing here drafts, writes or reads by itself.
  */
-import { useState, type ReactNode } from 'react';
+import { useState, type ReactNode, type RefObject } from 'react';
 import type { ApprovalRequestCreated } from '../../types/approvalRequests';
 import { APPROVER_ROLE_REQUIRED } from './approverGate';
 import type { LeadTableApprovalRequests } from './LeadTable.types';
@@ -34,6 +34,8 @@ export interface LeadTableRequestsInput {
   campaignBound: boolean;
   /** Drop the requested ids from the selection (after the 200 only). */
   dropFromSelection: (ids: readonly string[]) => void;
+  /** The table region: focus lands here after the 200, as after the other decision panels. */
+  tableWrapRef: RefObject<HTMLElement | null>;
 }
 
 /** The approval request every decision in a scoped queue answers (approvers only). */
@@ -57,6 +59,7 @@ export function useLeadTableRequests({
   approverGate,
   campaignBound,
   dropFromSelection,
+  tableWrapRef,
 }: LeadTableRequestsInput): LeadTableRequests {
   const [form, setForm] = useState<RequestFormState | null>(null);
   const scoped = approvalRequests?.scope ?? null;
@@ -75,6 +78,9 @@ export function useLeadTableRequests({
       borrowerIds={form.ids}
       onCancel={() => setForm(null)}
       onRequested={(created: ApprovalRequestCreated) => {
+        // Before the form unmounts with focus on Send request, so focus never falls to <body>
+        // (the row's opener is hidden once the row is marked; the toolbar may go with the selection).
+        tableWrapRef.current?.focus();
         setForm(null);
         dropFromSelection(created.requested);
       }}

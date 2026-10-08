@@ -264,6 +264,31 @@ describe('the table: Request approval', { timeout: 60_000 }, () => {
     expect(draftOutreach).not.toHaveBeenCalled();
   });
 
+  it('after the 200 the form closes and focus lands on the table region, never <body>', async () => {
+    vi.spyOn(approvalRequestsApi, 'create').mockResolvedValue({
+      batch_id: BATCH, audit_event_id: 'audit-req-focus', requested: IDS, skipped: [],
+    });
+    await renderTable(requests());
+    await selectAll();
+    await act(async () => q<HTMLButtonElement>('[data-testid="lead-bulk-request-approval"]')!.click());
+    await vi.waitFor(async () => {
+      await flush();
+      expect(q('[data-testid="request-approval-form"]')).not.toBeNull();
+    }, { timeout: 15_000 });
+    const field = q<HTMLTextAreaElement>('[data-testid="request-approval-reason"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, 'Rate-sensitive refinance candidates.');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const send = q<HTMLButtonElement>('[data-testid="request-approval-send"]')!;
+    send.focus();
+    await act(async () => send.click());
+    await flush();
+    expect(q('[data-testid="request-approval-form"]'), 'closed after the 200').toBeNull();
+    expect(send.isConnected).toBe(false);
+    expect(document.activeElement).toBe(q('[role="region"][aria-label="Ranked borrowers table scroll region"]'));
+  });
+
   it('is aria-disabled with the binding reason on a campaign-bound queue', async () => {
     await renderTable(requests(), '/lead-queue?campaign_id=c1&variant_name=A');
     await selectAll();

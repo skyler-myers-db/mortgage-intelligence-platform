@@ -277,6 +277,7 @@ export function LeadTable({
     approverGate,
     campaignBound: hasCampaignBindingRequest,
     dropFromSelection: approval.dropFromSelection,
+    tableWrapRef,
   });
   // The Triage deck (D-approval-flow-a2): `?mode=triage`, approvers only. A
   // definitive non-approver's check strips the mode; a loading one waits; a
