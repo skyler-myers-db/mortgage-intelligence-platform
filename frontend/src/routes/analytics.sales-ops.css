@@ -43,7 +43,9 @@
 .sales-ops-period__range {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  /* First baselines: the fields and Apply stay on one line while an inline
+     error hangs below its own field. */
+  align-items: baseline;
   gap: var(--sp-2);
 }
 .sales-ops-period__date { min-inline-size: calc(var(--sp-6) * 6); }
