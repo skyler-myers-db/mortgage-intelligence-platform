@@ -38,6 +38,34 @@ import { auditedReadsAfter, expectNoAuditedReadSince, markNaturalLoad } from './
 
 const NON_ADMIN: SessionResponse = { ...SESSION, can_access_admin: false };
 
+/** lib/queryPersist's sessionStorage snapshot of the allow-listed query cache. */
+const QUERY_CACHE_KEY = 'mip.queryCache.v1';
+interface PersistedCache {
+  clientState: { queries: Array<{ queryKey: readonly unknown[] }> };
+}
+
+/** The persisted snapshot's raw JSON ('' while none is written). */
+const persistedCache = (page: Page): Promise<string> =>
+  page.evaluate((key) => sessionStorage.getItem(key) ?? '', QUERY_CACHE_KEY);
+
+/**
+ * Count the persister's writes from now on. The fixture pins the clock, so a
+ * save's timestamp never moves and an identical snapshot is rewritten as the
+ * same string: only the write itself shows that a save ran.
+ */
+async function countPersistWrites(page: Page): Promise<() => Promise<number>> {
+  await page.evaluate((key) => {
+    const counter = window as unknown as { __mipPersistWrites: number };
+    counter.__mipPersistWrites = 0;
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function countedSetItem(this: Storage, name: string, value: string) {
+      if (this === sessionStorage && name === key) counter.__mipPersistWrites += 1;
+      setItem.call(this, name, value);
+    };
+  }, QUERY_CACHE_KEY);
+  return () => page.evaluate(() => (window as unknown as { __mipPersistWrites: number }).__mipPersistWrites);
+}
+
 const callsTo = (mockApi: MockApi, path: string, since = 0): ApiCall[] =>
   mockApi.calls.slice(since).filter((call) => call.path.replace('/api/v1/', '/api/') === path);
 
@@ -109,7 +137,12 @@ test.describe('the palette (shell-07, runtime-06, tables-09)', () => {
     await app.settle();
     // Nothing reads my-events before an open (the Console is closed too).
     expect(callsTo(mockApi, '/api/audit/my-events'), 'no recents read before the palette opens').toHaveLength(0);
+    // The query persister writes the home load's cache on a 1 s throttle
+    // (QUERY_CACHE_SAVE_THROTTLE_MS): let that first write land before the
+    // snapshot, so the diff below measures the palette only.
+    await expect.poll(() => persistedCache(page), 'the persisted home-load cache').not.toBe('');
     const before = await storageKeys(page);
+    const persistWrites = await countPersistWrites(page);
     const naturalLoad = markNaturalLoad(mockApi);
 
     await openPalette(page);
@@ -122,7 +155,15 @@ test.describe('the palette (shell-07, runtime-06, tables-09)', () => {
     await page.waitForTimeout(500);
     await app.settle();
     expect(callsTo(mockApi, '/api/audit/my-events', afterClose), 'no read after close').toHaveLength(0);
+    // The palette's reads are cache events, so the persister saves again;
+    // once it has, no storage key was added, and neither a palette nor a
+    // search entry nor any masked borrower id reached the persisted cache.
+    await expect.poll(persistWrites, 'a save after the palette read').toBeGreaterThan(0);
     expect(await storageKeys(page), 'no storage key was added').toEqual(before);
+    const persisted = await persistedCache(page);
+    const persistedKeys = (JSON.parse(persisted) as PersistedCache).clientState.queries.map((query) => query.queryKey);
+    expect(persistedKeys.filter((key) => key[1] === 'palette' || key[1] === 'borrower-search'), 'no palette or search entry persisted').toEqual([]);
+    expect(persisted, 'no masked borrower id persisted').not.toMatch(/B-[0-9A-Z]{13}/);
     expectNoAuditedReadSince(mockApi, naturalLoad, 'palette · recents');
 
     // One read per open: the closed palette's query is off, so a reopen reads again.
