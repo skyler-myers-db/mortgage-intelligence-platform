@@ -9411,6 +9411,7 @@
               "branch_capacity_review",
               "source_freshness_sentinel",
               "custom_segment_watch",
+              "rate_trigger_watch",
               "live_analysis"
             ],
             "title": "Workflow Id",
@@ -9560,6 +9561,80 @@
         "title": "GrowthAgentNotificationDraft",
         "type": "object"
       },
+      "GrowthAgentPlanProgressResponse": {
+        "additionalProperties": false,
+        "description": "Where the caller's own plan execute is: step k of N and its phase.",
+        "properties": {
+          "state": {
+            "enum": [
+              "not_started",
+              "running",
+              "gate",
+              "recording"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "step_index": {
+            "anyOf": [
+              {
+                "maximum": 8.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The 1-based step running or gated; the executed count while recording.",
+            "title": "Step Index"
+          },
+          "step_tool": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reviewed tool of that step.",
+            "title": "Step Tool"
+          },
+          "step_total": {
+            "anyOf": [
+              {
+                "maximum": 8.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The plan's step count.",
+            "title": "Step Total"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "GrowthAgentPlanProgressResponse",
+        "type": "object"
+      },
       "GrowthAgentPolicyCheck": {
         "properties": {
           "detail": {
@@ -9672,6 +9747,107 @@
           "prompt"
         ],
         "title": "GrowthAgentPromptRunRequest",
+        "type": "object"
+      },
+      "GrowthAgentRateWatchRequest": {
+        "additionalProperties": false,
+        "description": "Watch the par level of one Rate Lever step. No rate, no name.",
+        "properties": {
+          "cadence": {
+            "default": "daily",
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "step_bps": {
+            "description": "The Rate Lever step in basis points of par move; not 0. The server reads its par level.",
+            "maximum": 100.0,
+            "minimum": -100.0,
+            "title": "Step Bps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "step_bps"
+        ],
+        "title": "GrowthAgentRateWatchRequest",
+        "type": "object"
+      },
+      "GrowthAgentRateWatchResponse": {
+        "additionalProperties": false,
+        "description": "The saved watch, the server's level and the latest weekly print.",
+        "properties": {
+          "latest_print_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest weekly 30-year print in percent; None when no print is available.",
+            "title": "Latest Print Pct"
+          },
+          "latest_print_week": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Week-starting Monday of that print (ISO date).",
+            "title": "Latest Print Week"
+          },
+          "monitor": {
+            "$ref": "#/components/schemas/GrowthAgentMonitor"
+          },
+          "replayed": {
+            "description": "True when an identical active watch already existed: nothing was written.",
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "scheduler": {
+            "$ref": "#/components/schemas/GrowthAgentSchedulerStatus"
+          },
+          "watch_direction": {
+            "enum": [
+              "at_or_below",
+              "at_or_above"
+            ],
+            "title": "Watch Direction",
+            "type": "string"
+          },
+          "watch_level_pct": {
+            "description": "The watched 30-year par level in percent, from today's scenario grid.",
+            "title": "Watch Level Pct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "monitor",
+          "replayed",
+          "watch_level_pct",
+          "watch_direction",
+          "scheduler"
+        ],
+        "title": "GrowthAgentRateWatchResponse",
         "type": "object"
       },
       "GrowthAgentRunRequest": {
@@ -10133,6 +10309,7 @@
               "branch_capacity_review",
               "source_freshness_sentinel",
               "custom_segment_watch",
+              "rate_trigger_watch",
               "live_analysis"
             ],
             "title": "Workflow Id",
@@ -10438,6 +10615,7 @@
               "branch_capacity_review",
               "source_freshness_sentinel",
               "custom_segment_watch",
+              "rate_trigger_watch",
               "live_analysis"
             ],
             "title": "Workflow Id",
@@ -10508,6 +10686,7 @@
               "branch_capacity_review",
               "source_freshness_sentinel",
               "custom_segment_watch",
+              "rate_trigger_watch",
               "live_analysis"
             ],
             "title": "Id",
@@ -23653,6 +23832,52 @@
         ]
       }
     },
+    "/api/growth-agent/agent/plan/progress": {
+      "get": {
+        "deprecated": true,
+        "description": "Per-step progress of the caller's own composed-plan execute (genie-09 part 4).\n\nThe browser polls it about once a second only while its OWN execute\nrequest is pending. Read-only operational Lakebase state for this actor;\nanother actor's request id reads ``not_started``.",
+        "operationId": "get_api_growth_agent_agent_plan_progress_growth_agent_plan_progress",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentPlanProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Plan Progress",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/growth-agent/agent/run": {
       "post": {
         "deprecated": true,
@@ -24071,6 +24296,62 @@
         ]
       }
     },
+    "/api/growth-agent/rate-watch": {
+      "post": {
+        "deprecated": true,
+        "description": "Watch the par level of one Rate Lever step as a reviewed watchlist.\n\nThe body carries the step only: the server reads the level from today's\nscenario grid and names the watchlist. One ``GROWTH_AGENT_MONITOR_SAVE``\naudit row is written; an identical active watch is returned as-is with\n``replayed`` true and no second row. No run starts and nothing is sent.",
+        "operationId": "post_api_growth_agent_rate_watch_save_growth_agent_rate_watch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRateWatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRateWatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Rate scenarios are not built, or the step is no longer on today's grid. Nothing was saved."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Rate Watch",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/growth-agent/runs": {
       "get": {
         "deprecated": true,
@@ -24212,6 +24493,7 @@
                 "branch_capacity_review",
                 "source_freshness_sentinel",
                 "custom_segment_watch",
+                "rate_trigger_watch",
                 "live_analysis"
               ],
               "title": "Workflow Id",
@@ -34391,6 +34673,51 @@
         ]
       }
     },
+    "/api/v1/growth-agent/agent/plan/progress": {
+      "get": {
+        "description": "Per-step progress of the caller's own composed-plan execute (genie-09 part 4).\n\nThe browser polls it about once a second only while its OWN execute\nrequest is pending. Read-only operational Lakebase state for this actor;\nanother actor's request id reads ``not_started``.",
+        "operationId": "get_api_v1_growth_agent_agent_plan_progress_growth_agent_plan_progress",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentPlanProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Plan Progress",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/v1/growth-agent/agent/run": {
       "post": {
         "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen Databricks Agent Responses is configured, it may suggest exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
@@ -34801,6 +35128,61 @@
         ]
       }
     },
+    "/api/v1/growth-agent/rate-watch": {
+      "post": {
+        "description": "Watch the par level of one Rate Lever step as a reviewed watchlist.\n\nThe body carries the step only: the server reads the level from today's\nscenario grid and names the watchlist. One ``GROWTH_AGENT_MONITOR_SAVE``\naudit row is written; an identical active watch is returned as-is with\n``replayed`` true and no second row. No run starts and nothing is sent.",
+        "operationId": "post_api_v1_growth_agent_rate_watch_save_growth_agent_rate_watch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRateWatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRateWatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Rate scenarios are not built, or the step is no longer on today's grid. Nothing was saved."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Rate Watch",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/v1/growth-agent/runs": {
       "get": {
         "description": "List the caller's own recent reviewed-workflow runs, newest first.\n\nRead-only Lakebase app state: it writes no audit row, and each summary\nomits the actor, the stored criteria and the stored route (which can hold\nan expiring, actor-bound Lead Queue handoff proof).",
@@ -34939,6 +35321,7 @@
                 "branch_capacity_review",
                 "source_freshness_sentinel",
                 "custom_segment_watch",
+                "rate_trigger_watch",
                 "live_analysis"
               ],
               "title": "Workflow Id",

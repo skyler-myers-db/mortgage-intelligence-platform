@@ -1372,7 +1372,7 @@ export interface ResponseSchemas {
     source_assets: string[];
     status: "active" | "paused" | "disabled";
     updated_at: string | null;
-    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
   };
   GrowthAgentNotificationDraft: {
     body: string;
@@ -1388,10 +1388,35 @@ export interface ResponseSchemas {
     title: string;
     updated_at: string | null;
   };
+  /** Where the caller's own plan execute is: step k of N and its phase. */
+  GrowthAgentPlanProgressResponse: {
+    state: "not_started" | "running" | "gate" | "recording";
+    /** The 1-based step running or gated; the executed count while recording. */
+    step_index: number | null;
+    /** The reviewed tool of that step. */
+    step_tool: string | null;
+    /** The plan's step count. */
+    step_total: number | null;
+    updated_at: string | null;
+  };
   GrowthAgentPolicyCheck: {
     detail: string;
     label: string;
     status: "passed" | "review_required" | "blocked";
+  };
+  /** The saved watch, the server's level and the latest weekly print. */
+  GrowthAgentRateWatchResponse: {
+    /** The latest weekly 30-year print in percent; None when no print is available. */
+    latest_print_pct: number | null;
+    /** Week-starting Monday of that print (ISO date). */
+    latest_print_week: string | null;
+    monitor: ResponseSchemas['GrowthAgentMonitor'];
+    /** True when an identical active watch already existed: nothing was written. */
+    replayed: boolean;
+    scheduler: ResponseSchemas['GrowthAgentSchedulerStatus'];
+    watch_direction: "at_or_below" | "at_or_above";
+    /** The watched 30-year par level in percent, from today's scenario grid. */
+    watch_level_pct: number;
   };
   GrowthAgentRunResponse: {
     actionable_avg_score: number | null;
@@ -1441,7 +1466,7 @@ export interface ResponseSchemas {
     run_id: string;
     source_assets: string[];
     status: "completed" | "failed";
-    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
     workflow_title: string;
   };
   /** Whether scheduled watchlist runs are on, and why the App knows. */
@@ -1473,7 +1498,7 @@ export interface ResponseSchemas {
     recent_actionable_totals: number[];
     run_count: number;
     status: "active" | "paused" | "disabled";
-    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
   };
   /** The caller's saved watchlists as briefings, with the scheduler state. */
   GrowthAgentWatchlistSummaryResponse: {
@@ -1484,7 +1509,7 @@ export interface ResponseSchemas {
     action_label: string;
     cadence_options: ("daily" | "weekly")[];
     default_route: string;
-    id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+    id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
     objective: string;
     proof_points: string[];
     source_assets: string[];
@@ -2869,6 +2894,13 @@ export interface RequestSchemas {
     segment_mode?: "any" | "all";
     states?: string[];
   };
+  /** Watch the par level of one Rate Lever step. No rate, no name. */
+  GrowthAgentRateWatchRequest: {
+    cadence?: "daily" | "weekly";
+    request_id?: string | null;
+    /** The Rate Lever step in basis points of par move; not 0. The server reads its par level. */
+    step_bps: number;
+  };
   GrowthAgentRunRequest: {
     cadence?: "daily" | "weekly";
     monitor_name?: string | null;
@@ -3753,6 +3785,15 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['GrowthAgentHomeResponse'];
   };
+  "GET /api/v1/growth-agent/agent/plan/progress": {
+    pathParams: Record<string, never>;
+    query: {
+      request_id: string;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['GrowthAgentPlanProgressResponse'];
+  };
   "GET /api/v1/growth-agent/monitors": {
     pathParams: Record<string, never>;
     query: Record<string, never>;
@@ -4461,6 +4502,13 @@ export interface ApiOperations {
     body: RequestSchemas['GrowthAgentRunRequest'];
     ok: ResponseSchemas['GrowthAgentRunResponse'];
   };
+  "POST /api/v1/growth-agent/rate-watch": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['GrowthAgentRateWatchRequest'];
+    ok: ResponseSchemas['GrowthAgentRateWatchResponse'];
+  };
   "POST /api/v1/growth-agent/runs/{run_id}/monitors": {
     pathParams: {
       run_id: string;
@@ -4472,7 +4520,7 @@ export interface ApiOperations {
   };
   "POST /api/v1/growth-agent/workflows/{workflow_id}/run": {
     pathParams: {
-      workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+      workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
     };
     query: Record<string, never>;
     headers: Record<string, never>;
