@@ -170,8 +170,74 @@ describe('GenieAnswer deep-research sections', () => {
       ['H3', 'Second'],
     ]);
     expect(container.querySelectorAll('p.genie-md-p--heading')).toHaveLength(0);
-    // Three or fewer sections: plain headings, no toggles.
+    // Three or fewer sections: plain headings, no outline and no toggles.
+    expect(container.querySelector('.genie-answer__outline')).toBeNull();
     expect(container.querySelector('.genie-answer__section-toggle')).toBeNull();
+  });
+
+  it('gives a 4-section sweep an outline of its section titles (genie-08 item 1)', () => {
+    const titles = ['Market size', 'Rate spread', 'Equity', 'What this adds up to'];
+    render(payload({ summary: 'Summary text.', sections: titles.map((title) => section({ title })) }));
+    const outline = container.querySelector('nav.genie-answer__outline');
+    expect(outline?.getAttribute('aria-label')).toBe('Sections in this answer');
+    const entries = Array.from(outline?.querySelectorAll<HTMLButtonElement>('ol > li > button.genie-answer__outline-link') ?? []);
+    expect(entries.map((b) => b.textContent)).toEqual(titles);
+    for (const entry of entries) expect(entry.type).toBe('button');
+    // Three sections: no outline.
+    render(payload({ sections: titles.slice(0, 3).map((title) => section({ title })) }));
+    expect(container.querySelector('.genie-answer__outline')).toBeNull();
+  });
+
+  it.each([
+    ['smooth', false],
+    ['auto', true],
+  ])('an outline entry opens its section, scrolls its heading %s and focuses its toggle', (behavior, reduced) => {
+    const scrolled: Array<[Element, ScrollIntoViewOptions | boolean | undefined]> = [];
+    const original = HTMLElement.prototype.scrollIntoView;
+    const originalMatchMedia = window.matchMedia;
+    HTMLElement.prototype.scrollIntoView = function scrollIntoView(this: HTMLElement, arg?: ScrollIntoViewOptions | boolean) {
+      scrolled.push([this, arg]);
+    };
+    window.matchMedia = ((query: string) => ({ matches: reduced && query.includes('reduce'), media: query })) as unknown as typeof window.matchMedia;
+    try {
+      render(payload({ sections: ['A', 'B', 'C', 'D'].map((title) => section({ title, question: `Q ${title}` })) }));
+      const toggle = container.querySelectorAll<HTMLButtonElement>('.genie-answer__section-toggle')[2];
+      act(() => toggle.click());
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      const entry = container.querySelectorAll<HTMLButtonElement>('.genie-answer__outline-link')[2];
+      act(() => entry.click());
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect(document.activeElement).toBe(toggle);
+      expect(scrolled).toHaveLength(1);
+      expect(scrolled[0][0]).toBe(toggle.parentElement);
+      expect(scrolled[0][0].tagName).toBe('H3');
+      expect(scrolled[0][1]).toEqual({ block: 'start', behavior });
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it('keys sections stably: an out-of-order reveal never remounts a later section or moves its open state', () => {
+    const planned = (title: string) => section({ title, question: `Planned ${title}` });
+    render(payload({ sections: [planned('A'), planned('C'), planned('D'), planned('E')] }));
+    const sectionNamed = (title: string) =>
+      Array.from(container.querySelectorAll<HTMLElement>('section.genie-answer__section')).find(
+        (el) => el.querySelector('h3')?.textContent === title,
+      );
+    const toggleOf = (title: string) => sectionNamed(title)?.querySelector<HTMLButtonElement>('.genie-answer__section-toggle');
+    act(() => toggleOf('D')?.click());
+    const before = { C: sectionNamed('C'), D: sectionNamed('D'), E: sectionNamed('E') };
+    expect(toggleOf('D')?.getAttribute('aria-expanded')).toBe('false');
+
+    // B is revealed after C, D and E.
+    render(payload({ sections: [planned('A'), planned('B'), planned('C'), planned('D'), planned('E')] }));
+    expect(sectionNamed('C')).toBe(before.C);
+    expect(sectionNamed('D')).toBe(before.D);
+    expect(sectionNamed('E')).toBe(before.E);
+    expect(toggleOf('D')?.getAttribute('aria-expanded')).toBe('false');
+    expect(toggleOf('C')?.getAttribute('aria-expanded')).toBe('true');
+    expect(toggleOf('B')?.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('gives a 4-section sweep accordion headings, every section open', () => {
@@ -251,6 +317,19 @@ describe('GenieAnswerSections preview (genie-01 phase 1b partial research)', () 
       );
     });
   }
+
+  it('never shows the outline in a partial preview, even at four sections', () => {
+    const four = ['A', 'B', 'C', 'D'].map((title) => section({ title, question: `Q ${title}` }));
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <GenieAnswerSections summary={null} sections={four} exportBase={null} preview />
+        </MemoryRouter>,
+      );
+    });
+    expect(container.querySelector('.genie-answer__outline')).toBeNull();
+    expect(container.querySelectorAll('.genie-answer__section-toggle')).toHaveLength(4);
+  });
 
   it('hides row actions, CSV and cell links, and says the rows were trimmed', () => {
     renderSections(true);

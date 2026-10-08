@@ -1,6 +1,7 @@
-import { lazy, Suspense, useId, useState } from 'react';
+import { lazy, Suspense, useId, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
+import { prefersReducedMotion } from './genieMotion';
 import type {
   GenieAnswer as GenieAnswerShape,
   GenieAnswerSection,
@@ -303,20 +304,40 @@ export function GenieSectionVisual({
   );
 }
 
-/** Sections from which a long sweep gets collapsible bodies. */
+/** Sections from which a long sweep gets an outline and collapsible bodies. */
 export const GENIE_ACCORDION_MIN_SECTIONS = 4;
+
+/**
+ * A STABLE key per section: its planned sub-question, else its title, with
+ * an occurrence suffix for a repeat. An index key remounted every later
+ * section (and moved its open state) when a partial sweep revealed a section
+ * out of order (W5b review).
+ */
+export function genieSectionKeys(sections: readonly GenieAnswerSection[]): string[] {
+  const used = new Set<string>();
+  return sections.map((section) => {
+    const base = (section.question || section.title || '').trim() || 'section';
+    let key = base;
+    for (let occurrence = 2; used.has(key); occurrence += 1) key = `${base}\u0000${occurrence}`;
+    used.add(key);
+    return key;
+  });
+}
 
 /**
  * Deep-research body (audit 2026-09-21 `genie-08`). The Summary and every
  * section title are REAL h3 headings (the same classes the old <p> carried,
  * so the pixels match), and the prose inside a section heads at h4.
  *
- * A sweep of four or more sections also gets collapsible bodies. The APG
- * accordion pattern is used rather than <details>: a heading inside
- * <summary> loses its heading semantics in Firefox (its children are
+ * A sweep of four or more sections also gets an outline and collapsible
+ * bodies. The APG accordion pattern is used rather than <details>: a heading
+ * inside <summary> loses its heading semantics in Firefox (its children are
  * presentational). Every section starts open; the open/closed state is
- * presentation only and is never written to any store. (The outline above
- * the sections is held for wave 4 by the lane's JS budget cut line.)
+ * presentation only and is never written to any store. The outline is a
+ * list of section buttons (never in a partial preview): one opens its
+ * section, brings its heading to the top of the scroller and focuses its
+ * toggle. deviation:genie-answer-outline (the prototype's Genie bubble,
+ * design_files/index.html:741-760, has no multi-section answer).
  */
 export function GenieAnswerSections({
   summary,
@@ -343,15 +364,26 @@ export function GenieAnswerSections({
   const summaryText = (summary ?? '').trim();
   const collapsible = sections.length >= GENIE_ACCORDION_MIN_SECTIONS;
   const idBase = useId();
-  const [closed, setClosed] = useState<ReadonlySet<number>>(() => new Set());
+  const keys = genieSectionKeys(sections);
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleRefs = useRef(new Map<string, HTMLButtonElement>());
   const titleOf = (section: GenieAnswerSection) => section.title || section.question;
-  const setOpen = (index: number, open: boolean) =>
+  const setOpen = (key: string, open: boolean) =>
     setClosed((current) => {
       const next = new Set(current);
-      if (open) next.delete(index);
-      else next.add(index);
+      if (open) next.delete(key);
+      else next.add(key);
       return next;
     });
+  // An outline entry opens its section, brings its heading to the top of the
+  // scroller and puts focus on its toggle.
+  const jumpTo = (key: string) => {
+    setOpen(key, true);
+    const toggle = toggleRefs.current.get(key);
+    if (!toggle) return;
+    toggle.parentElement?.scrollIntoView({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    toggle.focus({ preventScroll: true });
+  };
   return (
     <div className="genie-answer__sections">
       {summaryText && (
@@ -360,10 +392,24 @@ export function GenieAnswerSections({
           <MarkdownAnswer text={summaryText} workspaceHost={workspaceHost} headingLevel={4} />
         </>
       )}
+      {collapsible && !preview && (
+        <nav className="genie-answer__outline" aria-label="Sections in this answer">
+          <ol>
+            {sections.map((section, i) => (
+              <li key={keys[i]}>
+                <button type="button" className="genie-answer__outline-link" onClick={() => jumpTo(keys[i])}>
+                  {titleOf(section)}
+                </button>
+              </li>
+            ))}
+          </ol>
+        </nav>
+      )}
       {sections.map((section, i) => {
+        const key = keys[i];
         const headingClass = `genie-md-p genie-md-p--heading${!summaryText && i === 0 ? ' genie-md-p--first' : ''}`;
         const bodyId = `${idBase}-section-${i}`;
-        const open = !closed.has(i);
+        const open = !closed.has(key);
         // A section whose narrative failed verification still renders its
         // prose here — the reason is disclosed in the proof drawer's known
         // data gaps, not duplicated as an inline notice.
@@ -383,16 +429,20 @@ export function GenieAnswerSections({
           </>
         );
         return (
-          <section className="genie-answer__section" key={`${section.title || 'section'}-${i}`}>
+          <section className="genie-answer__section" key={key}>
             {collapsible ? (
               <>
                 <h3 className={headingClass}>
                   <button
+                    ref={(element) => {
+                      if (element) toggleRefs.current.set(key, element);
+                      else toggleRefs.current.delete(key);
+                    }}
                     type="button"
                     className="genie-answer__section-toggle"
                     aria-expanded={open}
                     aria-controls={bodyId}
-                    onClick={() => setOpen(i, !open)}
+                    onClick={() => setOpen(key, !open)}
                   >
                     <span>{titleOf(section)}</span>
                     <Icon name="chevdown" size={12} />

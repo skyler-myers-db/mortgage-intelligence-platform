@@ -15,10 +15,42 @@
 :is(h3, h4).genie-md-p { font-weight: inherit; }
 
 /* Deep-research sections (genie-08), for a sweep of four or more: an
-   accordion toggle inside each h3. `.genie-answer__section-toggle` and
+   outline of the section titles and an accordion toggle inside each h3.
+   `.genie-answer__outline`, `__outline-link`, `__section-toggle` and
    `__section-body` are documented BEM extensions of `.genie-answer`; the
    prototype's Genie bubble (design_files/index.html:741-760) has no
-   multi-section answer. */
+   multi-section answer. deviation:genie-answer-outline */
+.genie-answer__outline {
+  margin-top: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+.genie-answer__outline ol {
+  margin: 0;
+  padding-left: var(--sp-5);
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+}
+/* A 24 px target across the full row (WCAG 2.5.8 target size). */
+.genie-answer__outline-link {
+  display: flex;
+  align-items: center;
+  inline-size: 100%;
+  min-block-size: var(--sp-6);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--text-2);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.genie-answer__outline-link:hover { color: var(--text-1); text-decoration: underline; }
+/* An outline jump lands the heading clear of the scroller's edge. */
+.genie-answer__section > h3 { scroll-margin-block-start: var(--sp-3); }
 .genie-answer__section-toggle {
   display: flex;
   align-items: center;

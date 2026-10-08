@@ -119,3 +119,4 @@ enforces it.
 
 | id | deviation | prototype cite | class | code | pinning test | finding ids | ruling date | lane |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| genie-answer-outline | A Genie sweep of four or more sections opens with an outline (`nav.genie-answer__outline`, aria-label "Sections in this answer"): an `<ol>` of `.genie-answer__outline-link` buttons with a 24 px full-width target (`min-block-size: var(--sp-6)`) that open their section, scroll its h3 to the block start (smooth unless reduced motion; `scroll-margin-block-start: var(--sp-3)` on the heading) and focus its toggle. Never in a partial preview. The prototype's Genie bubble has no multi-section answer. | design_files/index.html:741-760 | product | frontend/src/components/mortgage/GenieAnswer.sections.tsx; frontend/src/components/mortgage/GenieAnswerReading.css | frontend/src/components/mortgage/GenieAnswer.sections.test.tsx | genie-08 | 2026-10-07 | w5-genie-context-deeplink |
