@@ -6,6 +6,11 @@
  * as approved or rejected) and, while any borrower is still open, Withdraw
  * behind an inline confirm. Withdraw is one POST (APPROVAL_REQUEST_WITHDRAWN
  * when it closed anything); the toast and the unmarked rows follow the 200.
+ *
+ * Focus never falls to <body> when the focused control unmounts: opening
+ * the confirm moves it to the confirm's Withdraw, Keep returns it to the
+ * Withdraw that opened it, and a successful withdraw (whose actions unmount
+ * once the refetched rows are no longer open) moves it to the panel title.
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -36,10 +41,30 @@ export interface MyApprovalRequestsPanelProps {
   onClose: () => void;
 }
 
-function MyRequest({ batch }: { batch: ApprovalRequestBatchView }) {
+interface MyRequestProps {
+  batch: ApprovalRequestBatchView;
+  /** After the 200: focus goes to the panel title (this request's actions are about to unmount). */
+  onWithdrawn: () => void;
+}
+
+function MyRequest({ batch, onWithdrawn }: MyRequestProps) {
   const queryClient = useQueryClient();
   const withdraw = useWithdrawApprovalRequest(queryClient);
   const [confirming, setConfirming] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  // Set by the click that opens or closes the confirm, read once its render committed.
+  const focusNext = useRef<'confirm' | 'trigger' | null>(null);
+  useEffect(() => {
+    const target = focusNext.current;
+    focusNext.current = null;
+    if (target === 'confirm') confirmRef.current?.focus();
+    else if (target === 'trigger') triggerRef.current?.focus();
+  }, [confirming]);
+  const toggleConfirm = (next: boolean) => {
+    focusNext.current = next ? 'confirm' : 'trigger';
+    setConfirming(next);
+  };
   // A synchronous latch: TanStack Query publishes isPending on a later task,
   // so a second click inside that window would otherwise send a second POST.
   const inFlight = useRef(false);
@@ -52,6 +77,8 @@ function MyRequest({ batch }: { batch: ApprovalRequestBatchView }) {
         inFlight.current = false;
       },
       onSuccess: (result) => {
+        // Before the confirm unmounts, so focus never passes through <body>.
+        onWithdrawn();
         setConfirming(false);
         if (result.withdrawn_now > 0) toast.success('Request withdrawn', { auditEventId: result.audit_event_id });
         else toast.info('Nothing was open to withdraw');
@@ -87,13 +114,22 @@ function MyRequest({ batch }: { batch: ApprovalRequestBatchView }) {
               <span className="fs-12">
                 Withdraw {formatCount(open)} open {open === 1 ? 'borrower' : 'borrowers'}? Approvers stop seeing them.
               </span>
-              <Button size="sm" variant="danger" loading={withdraw.isPending} onClick={confirmWithdraw} data-testid={`approval-request-withdraw-confirm-${batch.batch_id}`}>
+              <Button
+                ref={confirmRef}
+                size="sm"
+                variant="danger"
+                loading={withdraw.isPending}
+                onClick={confirmWithdraw}
+                data-testid={`approval-request-withdraw-confirm-${batch.batch_id}`}
+              >
                 Withdraw
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>Keep</Button>
+              <Button size="sm" variant="ghost" onClick={() => toggleConfirm(false)} data-testid={`approval-request-withdraw-keep-${batch.batch_id}`}>
+                Keep
+              </Button>
             </>
           ) : (
-            <Button size="sm" onClick={() => setConfirming(true)} data-testid={`approval-request-withdraw-${batch.batch_id}`}>
+            <Button ref={triggerRef} size="sm" onClick={() => toggleConfirm(true)} data-testid={`approval-request-withdraw-${batch.batch_id}`}>
               Withdraw
             </Button>
           )}
@@ -105,6 +141,7 @@ function MyRequest({ batch }: { batch: ApprovalRequestBatchView }) {
 
 export function MyApprovalRequestsPanel({ requests, onClose }: MyApprovalRequestsPanelProps) {
   const titleId = useId();
+  const titleRef = useRef<HTMLHeadingElement | null>(null);
   const closeRef = useRef(onClose);
   useEffect(() => {
     closeRef.current = onClose;
@@ -120,9 +157,14 @@ export function MyApprovalRequestsPanel({ requests, onClose }: MyApprovalRequest
       aria-labelledby={titleId}
       data-testid="my-approval-requests-panel"
     >
-      <SurfaceTitle level={3} id={titleId} className="approval-requests__panel-title">My requests</SurfaceTitle>
+      {/* tabIndex -1: the focus target after a withdraw (DecisionReceipt's heading precedent). */}
+      <SurfaceTitle level={3} id={titleId} ref={titleRef} tabIndex={-1} className="approval-requests__panel-title">
+        My requests
+      </SurfaceTitle>
       {requests.batches.length === 0 && <p className="approval-requests__state">You have no approval requests.</p>}
-      {requests.batches.map((batch) => <MyRequest key={batch.batch_id} batch={batch} />)}
+      {requests.batches.map((batch) => (
+        <MyRequest key={batch.batch_id} batch={batch} onWithdrawn={() => titleRef.current?.focus()} />
+      ))}
     </div>
   );
 }

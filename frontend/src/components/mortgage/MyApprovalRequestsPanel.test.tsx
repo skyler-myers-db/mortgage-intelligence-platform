@@ -4,7 +4,8 @@
  * The requester's My requests panel (flow-02 / shell-06): each request's age,
  * "Reason for the request" (O3) and per-borrower outcome (an exhaustive label
  * map), and Withdraw behind an inline confirm: one POST, and the toast only
- * after the 200 (pessimistic).
+ * after the 200 (pessimistic). Keyboard focus never falls to <body> when the
+ * focused control unmounts (the confirm opening, Keep, a 200).
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -48,12 +49,16 @@ async function flush() {
   });
 }
 
-async function render() {
-  await mount(
+function panel(requests: LeadTableApprovalRequests = REQUESTS) {
+  return (
     <QueryClientProvider client={client}>
-      <MyApprovalRequestsPanel requests={REQUESTS} onClose={() => undefined} />
-    </QueryClientProvider>,
+      <MyApprovalRequestsPanel requests={requests} onClose={() => undefined} />
+    </QueryClientProvider>
   );
+}
+
+async function render() {
+  return mount(panel());
 }
 
 const byTestId = (id: string) => document.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`);
@@ -110,6 +115,48 @@ describe('MyApprovalRequestsPanel', () => {
     await flush();
     const [toast] = getToasts();
     expect([toast.tone, toast.title, toast.auditEventId]).toEqual(['success', 'Request withdrawn', 'audit-w-1']);
+  });
+
+  it('moves focus to the confirm on open and back to Withdraw on Keep, never to <body>', async () => {
+    const withdraw = vi.spyOn(approvalRequestsApi, 'withdraw');
+    await render();
+    const trigger = byTestId(`approval-request-withdraw-${BATCH}`)!;
+    trigger.focus();
+    await act(async () => trigger.click());
+    const confirm = byTestId(`approval-request-withdraw-confirm-${BATCH}`);
+    expect(trigger.isConnected, 'the trigger unmounted').toBe(false);
+    expect(document.activeElement, 'focus is on the confirm Withdraw').toBe(confirm);
+
+    await act(async () => byTestId(`approval-request-withdraw-keep-${BATCH}`)!.click());
+    expect(byTestId(`approval-request-withdraw-confirm-${BATCH}`)).toBeNull();
+    expect(document.activeElement, 'Keep returns focus to Withdraw').toBe(byTestId(`approval-request-withdraw-${BATCH}`));
+    expect(withdraw).not.toHaveBeenCalled();
+  });
+
+  it('after the 200, focus is on the panel title and stays there when the refetch closes the request', async () => {
+    vi.spyOn(approvalRequestsApi, 'withdraw').mockResolvedValue({
+      batch_id: BATCH, withdrawn_now: 2, already_closed: 1, audit_event_id: 'audit-w-2',
+    });
+    const mounted = await render();
+    await act(async () => byTestId(`approval-request-withdraw-${BATCH}`)!.click());
+    const confirm = byTestId(`approval-request-withdraw-confirm-${BATCH}`)!;
+    expect(document.activeElement).toBe(confirm);
+    await act(async () => confirm.click());
+    await flush();
+    const panelEl = document.querySelector('[data-testid="my-approval-requests-panel"]')!;
+    const title = panelEl.querySelector('h3')!;
+    expect(confirm.isConnected, 'the confirm unmounted').toBe(false);
+    expect(document.activeElement, 'focus moved to the panel title').toBe(title);
+
+    // The active refetch: no row is open any more, so the actions block unmounts.
+    const closed: LeadTableApprovalRequests = {
+      ...REQUESTS,
+      batches: [{ ...MINE, rows: MINE.rows.map((row) => (row.state === 'open' ? { ...row, state: 'withdrawn' as const } : row)) }],
+    };
+    await mounted.rerender(panel(closed));
+    expect(document.querySelector('.approval-requests__actions')).toBeNull();
+    expect(document.activeElement, 'still inside the panel').toBe(title);
+    expect(panelEl.contains(document.activeElement)).toBe(true);
   });
 
   it('says when nothing was open to withdraw', async () => {
