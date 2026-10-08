@@ -7,6 +7,10 @@
  *    create body's maxItems) is aria-disabled with the cap as its reason, so
  *    the person is never sent to a schema 422 that reads "Shorten the
  *    reason" (flow-02 / shell-06).
+ *  - A run's own button keeps Button loading and is never native disabled,
+ *    even when its last group leaves no selected row eligible (in-flight rows
+ *    are not eligible): a focused button that turns disabled drops focus to
+ *    <body> (motion-08 slice 2).
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -14,10 +18,11 @@ import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { mount } from '../../test/render';
 import { LeadTableBulkActions, MAX_APPROVAL_REQUEST_BORROWERS, REQUEST_OVER_CAP } from './LeadTableBulkActions';
+import type { BulkRunKind } from './useLeadBulkRun';
 
 interface Options {
   eligible: number;
-  runKind?: 'approve' | 'reject' | null;
+  runKind?: BulkRunKind | null;
   onOpen?: () => void;
   blockedReason?: string | null;
 }
@@ -83,5 +88,28 @@ describe('LeadTableBulkActions: Request approval over the cap', () => {
     await renderToolbar({ eligible: MAX_APPROVAL_REQUEST_BORROWERS + 1, blockedReason: 'Clear the campaign binding.' });
     const button = byTestId('lead-bulk-request-approval');
     expect(document.getElementById(button.getAttribute('aria-describedby')!)!.textContent).toBe('Clear the campaign binding.');
+  });
+});
+
+describe('LeadTableBulkActions: a run\'s own button is never native disabled', () => {
+  const cases: Array<[BulkRunKind, string, string]> = [
+    ['approve', 'lead-bulk-approve', 'lead-bulk-reject'],
+    ['reject', 'lead-bulk-reject', 'lead-bulk-approve'],
+  ];
+  it.each(cases)('a %s run whose last group left nothing eligible: loading, focusable; the other kind disabled', async (kind, own, other) => {
+    await renderToolbar({ eligible: 0, runKind: kind });
+    const button = byTestId(own);
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    expect(byTestId(other).disabled).toBe(true);
+  });
+
+  it('with no run, nothing eligible still disables both natively', async () => {
+    await renderToolbar({ eligible: 0 });
+    expect(byTestId('lead-bulk-approve').disabled).toBe(true);
+    expect(byTestId('lead-bulk-reject').disabled).toBe(true);
   });
 });
