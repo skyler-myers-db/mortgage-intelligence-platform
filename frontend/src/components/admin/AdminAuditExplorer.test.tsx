@@ -6,7 +6,9 @@
  * the real query hook: what reaches the explorer's page read, what the URL
  * holds, and what the table shows. W5d adds the recorded-read discipline of
  * the facets (an explicit menu open; never on mount), the per-viewer
- * exclusion and the audited, admin-only page CSV.
+ * exclusion and the audited, admin-only page CSV. Fix round 1 pins Export
+ * PDF's page identity: a receipt captions only the page it was requested on,
+ * so the next page of the same size prints as unaudited.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect } from 'react';
@@ -27,6 +29,26 @@ const mocks = vi.hoisted(() => ({
   facetCalls: [] as Array<{ since: string | null; until: string | null }>,
   receiptCalls: [] as Array<{ row_count: number; filters: Record<string, string> }>,
   order: [] as string[],
+  // A second cursor page (Next): null keeps the single-page fixture.
+  secondPage: null as AuditEventRow[] | null,
+  printReceipt: null as Promise<unknown> | null,
+}));
+
+const PRINT_RECEIPT_ID = 'receipt-page-1';
+vi.mock('../../lib/apiClients/printReceipt', () => ({
+  createPrintReceipt: (body: { row_count: number }) => {
+    mocks.order.push(`print-receipt:${body.row_count}`);
+    return mocks.printReceipt ?? Promise.resolve({
+      audit_event_id: PRINT_RECEIPT_ID,
+      event_type: 'PRINT_EXPORT',
+      actor: 'ledger.reader@summit.example',
+      surface: 'audit_ledger',
+      row_count: body.row_count,
+      borrower_id: null,
+      filter_fingerprint: 'keyed-fixture',
+      recorded_at: '2026-10-07T15:00:04Z',
+    });
+  },
 }));
 
 // The explorer reads the session's role and lender name (Export PDF's
@@ -51,6 +73,11 @@ vi.mock('../../lib/apiClients/auditExplorer', async (importOriginal) => {
     auditEventPage: (_limit: number, _signal: AbortSignal | undefined, filters: PageFilters) => {
       mocks.pageCalls.push(filters);
       if (mocks.pageError) return Promise.reject(mocks.pageError);
+      if (mocks.secondPage) {
+        return Promise.resolve<AuditEventPage>(filters.cursor === 'cursor-page-2'
+          ? { items: mocks.secondPage, next_cursor: null }
+          : { items: mocks.rows, next_cursor: 'cursor-page-2' });
+      }
       const rows = filters.event_id
         ? mocks.rows.filter((row) => row.event_id === filters.event_id)
         : mocks.rows;
@@ -84,6 +111,7 @@ import { ApiError } from '../../lib/api';
 import { preloadDescribedError } from '../ui/DescribedError';
 import { AUDIT_PAGE_CSV_HEADER } from './AdminAuditExplorer.csv';
 import { auditDayBoundary } from './AdminAuditExplorer.params';
+import { UNAUDITED_PRINT } from '../print/PrintProvenance';
 
 function row(index: number, overrides: Partial<AuditEventRow> = {}): AuditEventRow {
   return {
@@ -168,6 +196,8 @@ describe('AdminAuditExplorer', () => {
     mocks.facetCalls.length = 0;
     mocks.receiptCalls.length = 0;
     mocks.order.length = 0;
+    mocks.secondPage = null;
+    mocks.printReceipt = null;
     appContext.canAccessAdmin = true;
     mocks.rows = [row(1), row(2, { event_type: 'VIEW_LEADS', action: 'leads.view', entity_type: 'borrower', entity_id: 'B-AAAAAAAAAAAA2' })];
     container = document.createElement('div');
@@ -479,6 +509,69 @@ describe('AdminAuditExplorer', () => {
     act(() => button(/^Download page 1 of the audit explorer as CSV$/).click());
     await vi.waitFor(() => expect(mocks.order).toEqual(['receipt', 'download']));
     expect(mocks.receiptCalls[0]).toMatchObject({ row_count: 2, filters: { event_type: 'LEAD_EXPORT' } });
+  });
+
+  describe('Export PDF page identity', () => {
+    const provenance = () => container.querySelector<HTMLElement>('[data-testid="print-provenance"]')?.textContent ?? '';
+
+    beforeEach(() => {
+      // Page 2 holds as many rows as page 1: the row count cannot tell them apart.
+      mocks.secondPage = [row(3), row(4)];
+      Object.defineProperty(window, 'print', {
+        configurable: true,
+        writable: true,
+        value: vi.fn(() => mocks.order.push('print')),
+      });
+    });
+
+    it("captions only the page it was requested on: Next to a same-size page prints as unaudited", async () => {
+      await render('/audit-ledger');
+      act(() => container.querySelector<HTMLButtonElement>('[data-testid="audit-export-pdf"]')!.click());
+      await settle();
+      expect(mocks.order).toEqual(['print-receipt:2', 'print']);
+      expect(provenance()).toContain(`Audit receipt ${PRINT_RECEIPT_ID}`);
+
+      act(() => button(/^Next$/).click());
+      await settle();
+      await settle();
+
+      expect(lastCall()).toMatchObject({ cursor: 'cursor-page-2' });
+      expect(provenance()).toContain('Audit ledger page 2 · 2 rows');
+      expect(provenance()).toContain(UNAUDITED_PRINT);
+      expect(provenance()).not.toContain(PRINT_RECEIPT_ID);
+
+      // Back on page 1, its own receipt captions it again.
+      act(() => button(/^Previous$/).click());
+      await settle();
+      await settle();
+      expect(provenance()).toContain(`Audit receipt ${PRINT_RECEIPT_ID}`);
+    });
+
+    it('prints nothing when the receipt resolves after Next', async () => {
+      let resolveReceipt: (value: unknown) => void = () => undefined;
+      mocks.printReceipt = new Promise((resolve) => {
+        resolveReceipt = resolve;
+      });
+      await render('/audit-ledger');
+      act(() => container.querySelector<HTMLButtonElement>('[data-testid="audit-export-pdf"]')!.click());
+      act(() => button(/^Next$/).click());
+      await settle();
+      await settle();
+      await act(async () => resolveReceipt({
+        audit_event_id: PRINT_RECEIPT_ID,
+        event_type: 'PRINT_EXPORT',
+        actor: 'ledger.reader@summit.example',
+        surface: 'audit_ledger',
+        row_count: 2,
+        borrower_id: null,
+        filter_fingerprint: 'keyed-fixture',
+        recorded_at: '2026-10-07T15:00:04Z',
+      }));
+
+      expect(mocks.order).toEqual(['print-receipt:2']);
+      expect(provenance()).toContain('Audit ledger page 2 · 2 rows');
+      expect(provenance()).toContain(UNAUDITED_PRINT);
+    });
   });
 
   it('shows a read-only auditor no page CSV, and Export PDF still', async () => {

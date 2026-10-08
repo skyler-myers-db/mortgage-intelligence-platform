@@ -7,9 +7,9 @@
  * the shared vocabulary and never the transport message; a 404 is unchanged.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/apiTransport';
 
@@ -48,7 +48,11 @@ vi.mock('../lib/prefetch', async (importOriginal) => ({
   saveDataRequested: () => preload.saveData,
 }));
 
+const printMocks = vi.hoisted(() => ({ createPrintReceipt: vi.fn() }));
+vi.mock('../lib/apiClients/printReceipt', () => ({ createPrintReceipt: printMocks.createPrintReceipt }));
+
 import Borrower360 from './borrower-360';
+import { UNAUDITED_PRINT } from '../components/print/PrintProvenance';
 import type { Borrower360 as Borrower360Type } from '../types';
 
 const ID = 'B-0123456789ABC';
@@ -286,6 +290,63 @@ describe('Borrower 360 loaded dossier (W5d)', () => {
     act(() => link!.blur());
     act(() => link!.focus());
     expect(preload.route).not.toHaveBeenCalled();
+  });
+
+  // Fix round 1 (responsive-08): the route element is keyed by the route, so
+  // the pager swaps borrower A for B in place. A receipt that resolves after
+  // that swap is A's; it must never open the print dialog on B's dossier.
+  it('prints nothing when the receipt resolves after the dossier changed to another borrower', async () => {
+    const OTHER_ID = 'B-0123456789ABD';
+    let navigateTo: (path: string) => void = () => undefined;
+    function NavigateProbe() {
+      const navigate = useNavigate();
+      useEffect(() => {
+        navigateTo = (path) => void navigate(path);
+      }, [navigate]);
+      return null;
+    }
+    let resolveReceipt: (value: unknown) => void = () => undefined;
+    printMocks.createPrintReceipt.mockReset();
+    printMocks.createPrintReceipt.mockReturnValue(new Promise((resolve) => {
+      resolveReceipt = resolve;
+    }));
+    const print = vi.fn();
+    Object.defineProperty(window, 'print', { configurable: true, writable: true, value: print });
+    state.borrower.data = dossier(true);
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={[`/borrower-360/${ID}`]}>
+            <NavigateProbe />
+            <Routes>
+              <Route path="/borrower-360/:id" element={<Borrower360 />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+
+    act(() => document.querySelector<HTMLButtonElement>('[data-testid="export-pdf"]')!.click());
+    expect(printMocks.createPrintReceipt).toHaveBeenCalledWith({ surface: 'borrower_360', borrower_id: ID, row_count: 1 });
+
+    state.borrower = { data: { ...dossier(true), borrower_id: OTHER_ID }, warmingUp: null, error: null, manualRetry: vi.fn() };
+    await act(async () => navigateTo(`/borrower-360/${OTHER_ID}`));
+    await act(async () => resolveReceipt({
+      audit_event_id: 'receipt-for-a',
+      event_type: 'PRINT_EXPORT',
+      actor: 'ledger.reader@summit.example',
+      surface: 'borrower_360',
+      row_count: 1,
+      borrower_id: ID,
+      filter_fingerprint: null,
+      recorded_at: '2026-10-07T15:00:04Z',
+    }));
+
+    expect(print).not.toHaveBeenCalled();
+    const provenance = document.querySelector('[data-testid="print-provenance"]')?.textContent ?? '';
+    expect(provenance).toContain(`Borrower 360 · ${OTHER_ID}`);
+    expect(provenance).toContain(UNAUDITED_PRINT);
+    expect(provenance).not.toContain('receipt-for-a');
   });
 
   it('offers Export PDF only once the dossier has loaded', async () => {

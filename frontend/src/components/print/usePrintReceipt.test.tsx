@@ -11,6 +11,11 @@
  * Mutation check (lane report): calling `window.print()` before
  * `createPrintReceipt` resolves fails "prints only after the receipt
  * resolves, on the page that already names it".
+ *
+ * Fix round 1 pins the page identity: a receipt belongs to the page it was
+ * requested on. A receipt that resolves after the page changed (a pager step
+ * to another borrower, an unmount on a route change) prints nothing, and a
+ * 429 Try again after the page changed asks for nothing.
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -33,7 +38,14 @@ vi.mock('./receiptFailureToast', () => ({ toastReceiptFailure: mocks.toastReceip
 vi.mock('../AppContext', () => ({ useApp: () => ({ lender: 'Summit Mortgage' }) }));
 
 import { PrintProvenance, UNAUDITED_PRINT } from './PrintProvenance';
-import { PRINT_NOT_RECORDED, PRINT_RECEIPT_RECORDED, usePrintReceipt } from './usePrintReceipt';
+import {
+  PRINT_NOT_RECORDED,
+  PRINT_PAGE_CHANGED,
+  PRINT_PAGE_CHANGED_RECORDED,
+  PRINT_PAGE_CHANGED_UNRECORDED,
+  PRINT_RECEIPT_RECORDED,
+  usePrintReceipt,
+} from './usePrintReceipt';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -49,14 +61,16 @@ const RECEIPT: PrintReceipt = {
   recorded_at: '2026-10-07T15:00:04Z',
 };
 
-function Harness({ request = REQUEST }: { request?: PrintReceiptRequest }) {
-  const print = usePrintReceipt();
+const OTHER: PrintReceiptRequest = { ...REQUEST, borrower_id: 'B-0000000000002' };
+
+function Harness({ request = REQUEST, pageKey }: { request?: PrintReceiptRequest; pageKey?: string }) {
+  const print = usePrintReceipt(request, pageKey);
   return (
     <>
-      <button type="button" id="export" onClick={() => print.run(request)} aria-busy={print.pending || undefined}>
+      <button type="button" id="export" onClick={print.run} aria-busy={print.pending || undefined}>
         Export PDF
       </button>
-      <PrintProvenance subject="Borrower 360 · B-0000000000001" receipt={print.receiptFor(request)} />
+      <PrintProvenance subject={`Borrower 360 · ${request.borrower_id}`} receipt={print.receipt} />
     </>
   );
 }
@@ -165,7 +179,86 @@ describe('usePrintReceipt', () => {
     click();
     await act(async () => undefined);
     expect(provenance()?.textContent).toContain('Audit receipt');
-    act(() => root.render(<Harness request={{ ...REQUEST, borrower_id: 'B-0000000000002' }} />));
+    act(() => root.render(<Harness request={OTHER} />));
+    expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
+  });
+
+  it('a receipt for another page key (same request) does not caption this page', async () => {
+    act(() => root.render(<Harness pageKey="0|evt-1,evt-2" />));
+    mocks.createPrintReceipt.mockResolvedValue(RECEIPT);
+    click();
+    await act(async () => undefined);
+    expect(provenance()?.textContent).toContain('Audit receipt');
+    act(() => root.render(<Harness pageKey="1|evt-3,evt-4" />));
+    expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
+  });
+
+  it('a receipt that resolves after the page changed prints nothing and says the page changed', async () => {
+    const receipt = deferred<PrintReceipt>();
+    mocks.createPrintReceipt.mockReturnValue(receipt.promise);
+    click();
+    expect(mocks.createPrintReceipt).toHaveBeenCalledWith(REQUEST);
+
+    // The Borrower 360 pager keeps the route instance: B replaces A in place.
+    act(() => root.render(<Harness request={OTHER} />));
+    await act(async () => receipt.resolve(RECEIPT));
+
+    expect(window.print).not.toHaveBeenCalled();
+    expect(mocks.toastInfo).not.toHaveBeenCalledWith(PRINT_RECEIPT_RECORDED, expect.anything());
+    expect(mocks.toastInfo).toHaveBeenCalledWith(PRINT_PAGE_CHANGED, {
+      detail: PRINT_PAGE_CHANGED_RECORDED,
+      auditEventId: RECEIPT.audit_event_id,
+    });
+    expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
+    expect(container.querySelector('#export')?.getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('a receipt that resolves after an unmount (a route change) prints nothing', async () => {
+    const receipt = deferred<PrintReceipt>();
+    mocks.createPrintReceipt.mockReturnValue(receipt.promise);
+    click();
+    act(() => root.render(<p id="elsewhere">Another route</p>));
+    await act(async () => receipt.resolve(RECEIPT));
+
+    expect(window.print).not.toHaveBeenCalled();
+    expect(mocks.toastInfo).toHaveBeenCalledWith(PRINT_PAGE_CHANGED, {
+      detail: PRINT_PAGE_CHANGED_RECORDED,
+      auditEventId: RECEIPT.audit_event_id,
+    });
+  });
+
+  it("a 429 Try again after the page changed asks for nothing and never prints the new page under A's receipt", async () => {
+    const limited = new ApiError('rate limited', { path: '/api/print-receipt', status: 429, retryAfterMs: 4000 });
+    mocks.createPrintReceipt.mockRejectedValueOnce(limited);
+    click();
+    await act(async () => undefined);
+    const retry = (mocks.toastReceiptFailure.mock.calls[0] as [string, unknown, string, () => void])[3];
+
+    act(() => root.render(<Harness request={OTHER} />));
+    mocks.createPrintReceipt.mockResolvedValue(RECEIPT);
+    await act(async () => retry());
+
+    expect(mocks.createPrintReceipt).toHaveBeenCalledTimes(1);
+    expect(window.print).not.toHaveBeenCalled();
+    expect(mocks.toastInfo).toHaveBeenCalledWith(PRINT_PAGE_CHANGED, { detail: PRINT_PAGE_CHANGED_UNRECORDED });
+    expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
+  });
+
+  it('a 429 Try again whose receipt resolves after the page changed still prints nothing', async () => {
+    const limited = new ApiError('rate limited', { path: '/api/print-receipt', status: 429, retryAfterMs: 4000 });
+    mocks.createPrintReceipt.mockRejectedValueOnce(limited);
+    click();
+    await act(async () => undefined);
+    const retry = (mocks.toastReceiptFailure.mock.calls[0] as [string, unknown, string, () => void])[3];
+
+    const receipt = deferred<PrintReceipt>();
+    mocks.createPrintReceipt.mockReturnValueOnce(receipt.promise);
+    await act(async () => retry());
+    expect(mocks.createPrintReceipt).toHaveBeenLastCalledWith(REQUEST);
+    act(() => root.render(<Harness request={OTHER} />));
+    await act(async () => receipt.resolve(RECEIPT));
+
+    expect(window.print).not.toHaveBeenCalled();
     expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
   });
 });

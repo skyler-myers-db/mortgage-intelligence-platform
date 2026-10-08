@@ -144,9 +144,6 @@ export function AdminAuditExplorer() {
   );
   const [expandedState, setExpandedState] = useState<{ key: string; id: string | null } | null>(null);
   const [copyState, setCopyState] = useState<AuditCopyState | null>(null);
-  // Export PDF (responsive-08; deviation:print-export): any ledger reader
-  // prints the page already rendered, behind a PRINT_EXPORT receipt.
-  const print = usePrintReceipt();
 
   const pageCursors = cursorState.key === appliedKey ? cursorState.cursors : [null];
   const page = pageCursors.length - 1;
@@ -205,11 +202,19 @@ export function AdminAuditExplorer() {
   // The query of the page on screen, as the receipts' fingerprinted filters
   // (only the set parameters, as the page request sends them).
   const receiptFilters = auditQueryFilters(explorerQuery);
-  const printRequest: PrintReceiptRequest = {
-    surface: 'audit_ledger',
-    filters: receiptFilters,
-    row_count: events?.length ?? 0,
-  };
+  const printRequest: PrintReceiptRequest | null = events?.length
+    ? { surface: 'audit_ledger', filters: receiptFilters, row_count: events.length }
+    : null;
+  // Export PDF (responsive-08; deviation:print-export): any ledger reader
+  // prints the page already rendered, behind a PRINT_EXPORT receipt. The
+  // receipt belongs to THIS page: the page index and the event ids on screen
+  // are its client-only identity (never sent), so the next page of the same
+  // query, even one of the same size, prints as unaudited until its own
+  // Export PDF, and a receipt resolving after Next prints nothing.
+  const print = usePrintReceipt(
+    printRequest,
+    `${page}|${(events ?? []).map((event) => event.event_id).join(',')}`,
+  );
   const exportCsv = () => {
     if (!events?.length) return;
     setCsvPending(true);
@@ -286,7 +291,7 @@ export function AdminAuditExplorer() {
           <button
             type="button"
             className="btn btn--ghost btn--sm"
-            onClick={() => print.run(printRequest)}
+            onClick={print.run}
             disabled={!events?.length || updating || print.pending}
             aria-busy={print.pending || undefined}
             data-testid="audit-export-pdf"
@@ -369,7 +374,7 @@ export function AdminAuditExplorer() {
         {events !== null && !error && (
           <PrintProvenance
             subject={`Audit ledger page ${page + 1} · ${formatCount(events.length)} rows`}
-            receipt={print.receiptFor(printRequest)}
+            receipt={print.receipt}
           />
         )}
         {events !== null && !error && (

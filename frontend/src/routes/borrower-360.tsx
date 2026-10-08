@@ -135,7 +135,9 @@ export default function Borrower360() {
   const latestDecisionRegionId = useId();
   // Export PDF (responsive-08; deviation:print-export): a PRINT_EXPORT receipt
   // first, then the print dialog on the page already rendered; no re-read.
-  const print = usePrintReceipt();
+  // The request names the dossier on screen, so a receipt that resolves after
+  // the pager moved on prints nothing (usePrintReceipt).
+  const print = usePrintReceipt(b ? { surface: 'borrower_360', borrower_id: b.borrower_id, row_count: 1 } : null);
 
   // Borrower 360 is a per-borrower detail page; without an id in the URL
   // there is no borrower to show. Render a proper empty-state landing
@@ -323,7 +325,6 @@ export default function Borrower360() {
   };
 
   const offerLabel = offerDisplayLabel(b.recommended_offer_code, b.recommended_offer);
-  const printRequest = { surface: 'borrower_360', borrower_id: b.borrower_id, row_count: 1 } as const;
   // bundle-09 item 1: intent on 'Build outreach draft' warms the Offer route's
   // CHUNK only. Never its data: the Offer read writes VIEW_BORROWER and
   // RECOMMEND_OFFER audit rows, so it waits for the navigation.
@@ -365,7 +366,7 @@ export default function Borrower360() {
             size="sm"
             icon="export"
             loading={print.pending}
-            onClick={() => print.run(printRequest)}
+            onClick={print.run}
             data-testid="export-pdf"
           >
             Export PDF
@@ -373,7 +374,7 @@ export default function Borrower360() {
         </>
       }
     >
-      <PrintProvenance subject={`Borrower 360 · ${b.borrower_id}`} receipt={print.receiptFor(printRequest)} />
+      <PrintProvenance subject={`Borrower 360 · ${b.borrower_id}`} receipt={print.receipt} />
       {pager}
       {latestDecisionAuditId && (
         <div id={latestDecisionRegionId} hidden={!latestDecisionOpen}>
