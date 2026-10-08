@@ -9,7 +9,10 @@
  *     once instead of firing on reconnect unconfirmed.
  *   - One request_key per intent (the sorted borrower ids and the reason),
  *     settled on the 200 and reused when the same content is sent again, so
- *     the server replays a retry without a second audit row.
+ *     the server replays a retry without a second audit row. A request-key
+ *     409 (the key already names another request on the server) settles it
+ *     too: the same 409 would answer every resend under that key, so "Send
+ *     it again" mints a new one.
  *   - onSuccess refetches only the ACTIVE approval-request list
  *     (invalidateApprovalRequests): never invalidateOperationalQueries, and
  *     never an audited read. Nothing here drafts (/outreach/draft is never
@@ -19,7 +22,7 @@
  */
 import { useMutation, type QueryClient } from '@tanstack/react-query';
 import type { ApprovalRequestCreated, ApprovalRequestWithdrawn } from '../../types/approvalRequests';
-import { approvalRequestsApi } from '../apiClients/approvalRequests';
+import { approvalRequestFailure, approvalRequestsApi } from '../apiClients/approvalRequests';
 import { invalidateApprovalRequests } from './outreach';
 import { intentFingerprint, useIntentRequestIds } from './requestIds';
 
@@ -51,10 +54,16 @@ export function useCreateApprovalRequest(queryClient: QueryClient) {
             rationale: variables.rationale,
             request_key: requestKeys.idFor(intent),
           })
-          .then((created) => {
-            requestKeys.settle(intent);
-            return created;
-          });
+          .then(
+            (created) => {
+              requestKeys.settle(intent);
+              return created;
+            },
+            (error: unknown) => {
+              if (approvalRequestFailure(error) === 'key_conflict') requestKeys.settle(intent);
+              throw error;
+            },
+          );
       },
       networkMode: 'always',
       retry: false,

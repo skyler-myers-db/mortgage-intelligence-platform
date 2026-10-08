@@ -167,6 +167,21 @@ describe('RequestApprovalForm', () => {
     expect(keys[2]).not.toBe(keys[0]);
   });
 
+  it('mints a new request_key after a request-key 409, so sending the same content again is a new request', async () => {
+    const create = vi.spyOn(approvalRequestsApi, 'create')
+      .mockRejectedValueOnce(new ApiError('request_key already belongs to a different approval request', { path: '/x', status: 409 }))
+      .mockResolvedValueOnce(CREATED);
+    await render();
+    await type('Rate-sensitive refinance candidates.');
+    await submit();
+    expect(failure()).toBe(REQUEST_FAILURE_COPY.key_conflict);
+    await submit();
+    const keys = create.mock.calls.map(([body]) => body.request_key);
+    expect(keys).toHaveLength(2);
+    expect(keys[1], 'the conflicting key is never resent').not.toBe(keys[0]);
+    expect(onRequested).toHaveBeenCalledWith(CREATED);
+  });
+
   const classified: Array<[string, ApiError, string]> = [
     ['actor_changed', new ApiError('Actor changed', { path: '/x', status: 409, reason: 'actor_changed' }), REQUEST_FAILURE_COPY.actor_changed],
     ['a governed 422', new ApiError('rationale failed the governed text policy', { path: '/x', status: 422 }), REQUEST_FAILURE_COPY.governed],

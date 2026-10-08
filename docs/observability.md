@@ -1122,8 +1122,9 @@ reconnect refetch, no retry: a failed read shows "Approval requests
 unavailable" with a Retry and no row marks. Expect at most a handful of these
 audit-free GETs per Lead Queue session; a steady stream means a regression.
 A create is one `POST` whose `request_key` is one UUID per intent (the sorted
-ids and the reason), replayed on a retry of the same content; the request
-path never calls `/outreach/draft`. Every approve and reject taken in a
+ids and the reason), replayed on a retry of the same content; a request-key
+409 retires that key, so the next send of the same content is a new request
+under a new key. The request path never calls `/outreach/draft`. Every approve and reject taken in a
 request-scoped queue (`?approval_request_batch=`) carries
 `approval_request_batch_id`; an unscoped body is unchanged. A session that
 ends during a create or a withdraw reads as a lost change in the session
