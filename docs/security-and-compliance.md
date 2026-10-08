@@ -56,6 +56,31 @@ derived from trusted answer rows or source filters and the user confirms the
 action. The destination route must preserve those filters, and the action must
 be audited.
 
+### Genie context scope (genie-04 phase 2)
+
+An empty Lead Queue can offer "Ask Genie" for a filter selection a client
+template cannot state (a segment intersection, a county, a ZIP, a governed
+city, a Competitor ref). The posture:
+
+- **Codes only.** The browser sends a closed `GenieContext`
+  (`backend/schemas/genie_context.py`, `extra='forbid'`): registry segment
+  codes, a USPS code, a five-digit county FIPS or ZIP, one `CITY~ST` key, a
+  `Competitor X` ref and assignee `me`. No field carries free text, a
+  borrower id or an email; the client builder refuses any other filter
+  (borrower ids, cohorts, criteria, bounds) and never sends an email
+  assignee. An assignee is never rendered: the answer names it as omitted.
+- **Render-only, audit-exempt.** `POST /api/v1/genie/context-scope` fills a
+  closed template from governed vocabularies and runs the same deterministic
+  prompt guards the phase-1 template battery runs, plus the Sales Ops router
+  and the request model, before it returns anything; a hit withholds the
+  prompt (`refused`). It reads no borrower data, calls no Genie and writes no
+  audit row; it runs only on an explicit click.
+- **The scope rides in the prompt of record.** The answer only PREFILLS the
+  composer; the user's own Ask submits it through the unchanged submit
+  battery, so the scope is inside the question text, its `question_hash` and
+  the `RUN_GENIE` / `genie.message_submitted` row. Nothing is added to the
+  submit body and no guard changed.
+
 ## Consented Genie refusal questions
 
 A lender who files "This was legitimate" on a governed Genie refusal may
@@ -206,6 +231,7 @@ the pull request that ships the behaviour, never earlier.
 | Genie completion-job status poll (`genie.genie_message_status`) | none | every ~1.5 s poll of the caller's own job; while a deep job runs it may carry verified sections as Partial research | audit-free; `genie.run_query` RUN_GENIE stays at the job's single `recorded_at` commit point and no action token is issued for a revealed section |
 | Genie verified section revealed (the job's sections writer, `genie_completion_sections`) | `GENIE_SECTION_REVEALED` | once per section, before it can be served (ruling R1): job and turn ids, plan index, row count, SQL hash, verification verdict; never question text or a row value | same Lakebase transaction as the `sections_json` write, fail-closed: a failed audit write withholds the section until the final answer; a turn that later fails, stops or expires keeps the rows |
 | Admin SSE ingress probe (`admin_sse_probe.sse_probe`, `admin_sse_probe.sse_probe_outcome`) | none | admin-only transport diagnostic (delivery-04) | audit-free; reads no UC or Lakebase data |
+| Genie context scope (`genie_context_routes.genie_context_scope`) | none | only on an explicit "Ask Genie" click in an empty Lead Queue; never on render, hover, focus or prefetch | audit-free (renders a reviewed prompt from closed codes; the scope is audited later inside the submitted question's `question_hash`) |
 | KPI proof (`kpi_proof.get_kpi_proof`) | none | when a KPI's evidence drawer opens; reads nothing | audit-free (fixed governed SQL text, gold and semantics relations only) |
 | Evidence drawer freshness (`asset_freshness.get_asset_freshness`) | none | when an evidence drawer opens on a mapped asset; never on hover, prefetch or poll | audit-free (one `gold.source_readiness` row; schema internals stay on the admin metadata read) |
 | Admin Field performance (`admin_field_performance.field_performance`) | none | when Administration opens, and on an explicit Refresh or 7/28-day change; never polled or refetched on focus | audit-free (admin-only; day-grain browser RUM aggregates, no borrower data) |
