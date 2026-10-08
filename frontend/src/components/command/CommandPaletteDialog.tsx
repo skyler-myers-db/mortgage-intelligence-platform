@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -175,7 +176,7 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     [selection, query],
   );
   const genieQuery = query.trim();
-  const sections: PaletteSection[] = useMemo(() => {
+  const { sections, sectionStarts, statusSlot } = useMemo(() => {
     const sourceSection = (group: { id: string; label: string; rows: readonly PaletteSourceRow[] }): PaletteSection => ({
       key: group.id,
       ariaLabel: group.label,
@@ -201,7 +202,17 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
         items: genieQuery.length >= MIN_GENIE_QUERY ? [{ kind: 'genie', prompt: genieQuery }] : [],
       },
     ];
-    return all.filter((section) => section.items.length > 0);
+    const shown = (section: PaletteSection) => section.items.length > 0;
+    const kept = all.filter(shown);
+    const borrowersAt = all.findIndex((section) => section.key === 'borrowers');
+    return {
+      sections: kept,
+      // Each group's first row index in `items` order (the option ids).
+      sectionStarts: kept.map((_, at) => kept.slice(0, at).reduce((sum, section) => sum + section.items.length, 0)),
+      // The borrower search's status line sits at the Borrowers group's
+      // place (after it when it has rows), before Data assets and Genie.
+      statusSlot: all.slice(0, borrowersAt + 1).filter(shown).length,
+    };
   }, [verbs, actions, sources.groups, sources.assetGroup, borrowers, genieQuery]);
   const items: FlatItem[] = useMemo(() => sections.flatMap((section) => section.items), [sections]);
 
@@ -303,7 +314,6 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   }, [activeIndex, open]);
 
   const optionId = (i: number) => `cmdk-option-${i}`;
-  let runningIndex = -1;
   const matchCount = items.filter((it) => it.kind !== 'genie').length;
   const borrowerCount = items.filter((it) => it.kind === 'borrower').length;
   // At most one line speaks (shell-07 item 4): the empty state only once the
@@ -316,6 +326,9 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     : searchFailed
       ? 'Borrower search is temporarily unavailable.'
       : noMatch ? `No pages, actions, or borrowers match “${query.trim()}”.` : '';
+  const searchStatusLine = searching || searchFailed
+    ? <div className={searchFailed ? 'cmdk__status cmdk__status--error' : 'cmdk__status'} aria-hidden="true">{statusText}</div>
+    : null;
   const rowFor = (item: FlatItem, i: number) => {
     const common = {
       index: i,
@@ -392,21 +405,19 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
             <div className="cmdk__empty" aria-hidden="true">{statusText}</div>
           )}
 
-          {/* Every group in `items` order, so the running index stays in
-              step; the borrower search's status line follows the Borrowers
-              group's place, before Data assets and the Genie fallback. */}
-          {sections.map((section) => (
-            <div key={section.key} className="cmdk__group" role="group" aria-label={section.ariaLabel}>
-              <div className="cmdk__group-label">{section.label}</div>
-              {section.items.map((item) => {
-                runningIndex += 1;
-                return rowFor(item, runningIndex);
-              })}
-            </div>
+          {/* Every group in `items` order, each row at its index there; the
+              borrower search's status line follows the Borrowers group's
+              place, before Data assets and the Genie fallback. */}
+          {sections.map((section, index) => (
+            <Fragment key={section.key}>
+              {index === statusSlot && searchStatusLine}
+              <div className="cmdk__group" role="group" aria-label={section.ariaLabel}>
+                <div className="cmdk__group-label">{section.label}</div>
+                {section.items.map((item, at) => rowFor(item, sectionStarts[index] + at))}
+              </div>
+            </Fragment>
           ))}
-
-          {searching && <div className="cmdk__status" aria-hidden="true">{statusText}</div>}
-          {searchFailed && <div className="cmdk__status cmdk__status--error" aria-hidden="true">{statusText}</div>}
+          {statusSlot >= sections.length && searchStatusLine}
         </div>
         {/* The palette's one live region, outside the listbox (see above). */}
         <div className="sr-only" role="status">{open ? statusText : ''}</div>

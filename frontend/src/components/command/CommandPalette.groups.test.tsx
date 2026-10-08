@@ -240,6 +240,22 @@ describe('palette provider groups', () => {
     act(() => rowsOf('Data assets')[0].click());
     expect(navigate).toHaveBeenCalledWith('/data-estate/assets/property_master');
   });
+
+  // The listbox's children in order: a group by its name, a line by its class.
+  const listOrder = () => [...(container.querySelector('dialog.cmdk[open] [role="listbox"]')?.children ?? [])]
+    .map((child) => child.getAttribute('aria-label') ?? child.className);
+
+  it.each([
+    ['running', () => new Promise<never>(() => undefined), 'cmdk__status'],
+    ['failed', () => Promise.reject(new Error('search down')), 'cmdk__status cmdk__status--error'],
+  ])('the %s borrower search\'s line sits at the Borrowers place, before Data assets and Ask Genie', async (_state, search, line) => {
+    app.admin = true;
+    calls.borrowerSearch.mockImplementation(search);
+    toggle();
+    setQuery('property');
+    await settle();
+    expect(listOrder().slice(-3)).toEqual([line, 'Data assets', 'Ask Genie']);
+  });
 });
 
 describe('palette keycaps from the live keymap (shell-07 item 3)', () => {
