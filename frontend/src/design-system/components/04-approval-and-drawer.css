@@ -267,12 +267,6 @@
   gap: var(--sp-1);
   min-inline-size: 12rem;
 }
-.outreach-routing__label {
-  font-size: var(--fs-11);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-caps);
-  color: var(--text-3);
-}
 .outreach-routing__select {
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-md);
