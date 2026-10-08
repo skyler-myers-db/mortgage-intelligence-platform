@@ -74,10 +74,10 @@ describe('previousWindow and the eyebrow', () => {
     expect(previousWindow(resolve('sales_period=yesterday'))).toEqual({ from: '2026-10-05', to: '2026-10-05' });
   });
 
-  it('names the window on the conversion card', () => {
-    expect(periodEyebrow(resolve(''))).toBe('Week-to-date conversion');
-    expect(periodEyebrow(resolve('sales_period=custom&sales_from=2026-09-01&sales_to=2026-09-30'))).toBe(
-      'Conversion 2026-09-01 to 2026-09-30',
+  it('names the window on the conversion card, a custom range in the short date form', () => {
+    expect(periodEyebrow(resolve(''), TODAY)).toBe('Week-to-date conversion');
+    expect(periodEyebrow(resolve('sales_period=custom&sales_from=2026-09-01&sales_to=2026-09-30'), TODAY)).toBe(
+      'Conversion Sep 1 to Sep 30',
     );
   });
 

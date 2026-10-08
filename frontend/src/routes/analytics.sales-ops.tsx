@@ -121,8 +121,10 @@ export function SalesOpsSection() {
     if (cleaned) setSearchParams(cleaned, { replace: true });
   });
 
+  // A chosen period is a history entry (Back steps through periods); only
+  // the normalisation above replaces.
   const choosePeriod = (preset: SalesPeriodPreset, range?: { from: string; to: string }) => {
-    setSearchParams((current) => paramsForPeriod(current, preset, range), { replace: true });
+    setSearchParams((current) => paramsForPeriod(current, preset, range));
   };
 
   const salesTeamQuery = useSalesRoster(loanOfficersOnly);
@@ -138,6 +140,8 @@ export function SalesOpsSection() {
     staleTime: 30_000,
   });
   const periodQuery = useQuery<{
+    /** The window these numbers are for (the previous one while a new period loads). */
+    period: SalesPeriod;
     conversion: SalesConversionResponse;
     outcomes: SalesOutcomeSummaryResponse | null;
     /** The outcome read's own failure, kept apart: it degrades one card only. */
@@ -149,7 +153,7 @@ export function SalesOpsSection() {
       const outcomeResult = await api.salesOutcomeSummary(period.from, period.to, signal)
         .then((data) => ({ data, error: null as unknown }))
         .catch((error: unknown) => ({ data: null, error }));
-      return { conversion, outcomes: outcomeResult.data, outcomesError: outcomeResult.error };
+      return { period, conversion, outcomes: outcomeResult.data, outcomesError: outcomeResult.error };
     },
     placeholderData: keepPreviousData,
     staleTime: 30_000,
@@ -187,6 +191,10 @@ export function SalesOpsSection() {
   const periodState = stateOf(periodQuery);
   const snapshotLoading = snapshotState === 'loading';
   const periodLoading = periodState === 'loading';
+  // keepPreviousData holds the last window's numbers while a new period
+  // loads: the eyebrow names the window they are for, and the cards are busy.
+  const periodBusy = periodLoading || periodQuery.isPlaceholderData;
+  const shownPeriod = periodQuery.data?.period ?? period;
   // The Board is a manager action: offered once the manager-only snapshot
   // read succeeded and someone is in scope (the server enforces RBAC anyway).
   const canDistribute = snapshotQuery.isSuccess && salesTeam.length > 0;
@@ -273,8 +281,8 @@ export function SalesOpsSection() {
               </div>
             )}
           </div>
-          <div className="sales-ops-card" aria-busy={periodLoading}>
-            <div className="eyebrow">{periodEyebrow(period)}</div>
+          <div className="sales-ops-card" aria-busy={periodBusy}>
+            <div className="eyebrow">{periodEyebrow(shownPeriod)}</div>
             {/* Every loan officer, by roster label; the internal email is never
                 put in the DOM (critic-08: no title= carrying an LO address). */}
             <div className="sales-ops-list">
@@ -295,7 +303,7 @@ export function SalesOpsSection() {
               )}
             </div>
           </div>
-          <div className="sales-ops-card" aria-busy={periodLoading}>
+          <div className="sales-ops-card" aria-busy={periodBusy}>
             <div className="eyebrow">
               {hasDryRunOutcomeRows ? 'Outcome ledger · includes dry run' : 'Closed-loop outcomes'}
             </div>

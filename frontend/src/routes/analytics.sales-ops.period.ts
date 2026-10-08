@@ -12,6 +12,7 @@
  * fall back to week to date, and `normalizedParams` returns the URL without
  * the bad keys so the caller can replace it. Dates are LOCAL calendar days.
  */
+import { formatDate } from '../lib/time';
 
 export type SalesPeriodPreset = 'yesterday' | 'wtd' | '7d' | '30d' | 'mtd' | 'custom';
 
@@ -154,8 +155,8 @@ export function previousWindow(period: SalesPeriod): { from: string; to: string 
   return { from: isoDay(addDays(to, -(period.days - 1))), to: isoDay(to) };
 }
 
-/** The conversion card's eyebrow. */
-export function periodEyebrow(period: SalesPeriod): string {
+/** The conversion card's eyebrow; a custom range reads in the app's short date form ("Jul 1"). */
+export function periodEyebrow(period: SalesPeriod, today: Date = new Date()): string {
   switch (period.preset) {
     case 'yesterday':
       return "Yesterday's conversion";
@@ -168,6 +169,6 @@ export function periodEyebrow(period: SalesPeriod): string {
     case 'mtd':
       return 'Month-to-date conversion';
     default:
-      return `Conversion ${period.from} to ${period.to}`;
+      return `Conversion ${formatDate(period.from, { now: today })} to ${formatDate(period.to, { now: today })}`;
   }
 }

@@ -10,7 +10,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, useLocation, useNavigationType } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -336,11 +336,25 @@ describe('Analytics Sales ops tab', () => {
       active: true,
     }));
     let location = '';
+    let navigation = '';
 
     function LocationProbe() {
       const current = useLocation();
       location = `${current.pathname}${current.search}`;
+      navigation = useNavigationType();
       return null;
+    }
+
+    function conversionCard(): Element | undefined {
+      return [...document.querySelectorAll('.sales-ops-card')].find((node) =>
+        node.querySelector('.eyebrow')?.textContent?.toLowerCase().includes('conversion'),
+      );
+    }
+
+    function conversionCells(): Array<Array<string | null>> {
+      return [...(conversionCard()?.querySelectorAll('.split-row') ?? [])].map((row) =>
+        [...row.children].map((cell) => cell.textContent),
+      );
     }
 
     async function renderView(path: string): Promise<void> {
@@ -378,6 +392,8 @@ describe('Analytics Sales ops tab', () => {
       await settle();
 
       expect(location).toBe('/analytics?view=sales-ops&sales_period=7d');
+      // A chosen period is a history entry: Back steps through periods.
+      expect(navigation).toBe('PUSH');
       expect(periodButton('7 days')?.getAttribute('aria-pressed')).toBe('true');
       const [, last] = conversionWindows();
       expect(last).toMatch(/^\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$/);
@@ -404,7 +420,36 @@ describe('Analytics Sales ops tab', () => {
       apiMocks.salesConversion.mockClear();
       await renderView('/analytics?view=sales-ops&sales_period=custom&sales_from=2026-01-05&sales_to=2025-01-20');
       expect(location).toBe('/analytics?view=sales-ops');
+      expect(navigation).toBe('REPLACE');
       expect(periodButton('Week to date')?.getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('keeps the last window busy and named for its own period while a new period loads', async () => {
+      apiMocks.salesTeam.mockResolvedValue(TEAM);
+      apiMocks.salesConversion.mockResolvedValue({ rows: [{ group_key: TEAM[0].email, application_start_rate: 0.5 }] });
+      await renderView('/analytics?view=sales-ops');
+      let answer: (value: unknown) => void = () => undefined;
+      apiMocks.salesConversion.mockReturnValueOnce(new Promise((resolve) => {
+        answer = resolve;
+      }));
+
+      await act(async () => {
+        periodButton('30 days')?.click();
+      });
+      await settle();
+      expect(periodButton('30 days')?.getAttribute('aria-pressed')).toBe('true');
+      // The numbers on screen are still the week's: say so, and say busy.
+      expect(conversionCard()?.querySelector('.eyebrow')?.textContent).toBe('Week-to-date conversion');
+      expect(conversionCard()?.getAttribute('aria-busy')).toBe('true');
+      expect(conversionCells()[0]).toEqual(['Summit LO 01', '50%']);
+
+      await act(async () => {
+        answer({ rows: [{ group_key: TEAM[0].email, application_start_rate: 0.2 }] });
+      });
+      await settle();
+      expect(conversionCard()?.querySelector('.eyebrow')?.textContent).toBe('Last 30 days conversion');
+      expect(conversionCard()?.getAttribute('aria-busy')).toBe('false');
+      expect(conversionCells()[0]).toEqual(['Summit LO 01', '20%']);
     });
 
     it('lists every loan officer, with no title attribute', async () => {
