@@ -1,4 +1,4 @@
-import { useState, type FocusEvent, type KeyboardEvent } from 'react';
+import { useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { MAX_PERIOD_DAYS, customRangeIssue, type CustomRangeIssue } from '../../routes/analytics.sales-ops.period';
 import { Field } from '../ui/Field';
 
@@ -52,6 +52,7 @@ export default function SalesPeriodRange({ from, to, max, onApply }: SalesPeriod
   const [draft, setDraft] = useState<Range>({ from, to });
   const [edited, setEdited] = useState<Edge>('from');
   const [checked, setChecked] = useState(false);
+  const rangeRef = useRef<HTMLDivElement | null>(null);
   // A range that arrives from the URL (an apply, Back, a shared link)
   // replaces the draft in place: the inputs stay mounted and keep focus.
   if (shown.from !== from || shown.to !== to) {
@@ -68,9 +69,11 @@ export default function SalesPeriodRange({ from, to, max, onApply }: SalesPeriod
     setChecked(refused);
     if (!unchanged && !refused) onApply(draft);
   };
-  const leave = (event: FocusEvent<HTMLDivElement>) => {
+  // On each control (the group itself takes no handler): focus moving to the
+  // other field or to Apply stays inside the range and applies nothing.
+  const leave = (event: FocusEvent<HTMLElement>) => {
     const next = event.relatedTarget;
-    if (next instanceof Node && event.currentTarget.contains(next)) return;
+    if (next instanceof Node && rangeRef.current?.contains(next)) return;
     if (document.hasFocus()) apply();
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -91,16 +94,17 @@ export default function SalesPeriodRange({ from, to, max, onApply }: SalesPeriod
             setEdited(edge);
           }}
           onKeyDown={onKeyDown}
+          onBlur={leave}
         />
       )}
     </Field>
   );
 
   return (
-    <div className="sales-ops-period__range" role="group" aria-label="Custom range" onBlur={leave}>
+    <div ref={rangeRef} className="sales-ops-period__range" role="group" aria-label="Custom range">
       {field('from', 'From')}
       {field('to', 'To')}
-      <button type="button" className="btn btn--default btn--sm" onClick={apply}>
+      <button type="button" className="btn btn--default btn--sm" onClick={apply} onBlur={leave}>
         Apply
       </button>
     </div>
