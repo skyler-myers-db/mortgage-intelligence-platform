@@ -38,6 +38,7 @@ STRANGER = "someone@summit-mortgage.example"
 BORROWER = "B-48291"
 # Route literal for the architecture manifest: /api/leads/{borrower_id}/snooze
 PATH = f"/api/v1/leads/{BORROWER}/snooze"
+RECENT_TOUCH = datetime.now(UTC) - timedelta(days=2)
 
 
 class _Cursor:
@@ -234,7 +235,12 @@ def test_a_frequency_capped_item_wakes_no_earlier_than_the_cap(lakebase: _Lakeba
         ({"suppression_reason": "bankruptcy"}, "suppressed"),
         ({"consent_status": "opt_out"}, "consent_not_opt_in"),
         ({"contactable_sql": False}, "eligibility_not_proven"),
+        # evaluate() reports the cap first; a cap never masks the block behind it
+        # (a borrower who said stop during a call is both recently touched and DNC).
+        ({"suppression_reason": "do_not_contact", "dnc": True, "last_touch_at": RECENT_TOUCH}, "suppressed"),
+        ({"marketing_eligible": False, "last_touch_at": RECENT_TOUCH}, "eligibility_not_proven"),
     ],
+    ids=["suppressed", "consent", "predicate", "dnc-behind-cap", "unproven-behind-cap"],
 )
 def test_a_withheld_item_is_refused_with_exactly_one_refusal_row(
     lakebase: _Lakebase, repo: Any, overrides: dict[str, Any], reason: str

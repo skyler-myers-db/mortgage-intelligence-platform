@@ -14,7 +14,9 @@ Order of checks, each before anything is written:
    any reason other than the contact frequency cap: 409 ``not_contactable``
    and exactly ONE ``LEAD_SNOOZE_REFUSED`` row (borrower id and the closed
    reason code only), because a snooze must never hide a suppression. A
-   frequency-capped item wakes no earlier than the cap lifts.
+   frequency-capped item wakes no earlier than the cap lifts. The cap is the
+   reason only when nothing else blocks the row: a recently touched borrower
+   who is also suppressed, do-not-contact or unproven is refused for that.
 
 Then ONE Lakebase transaction: close the pair's expired open row as 'timer',
 supersede its unexpired open row, insert the ``LEAD_SNOOZE`` audit row (ids,

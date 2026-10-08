@@ -355,8 +355,16 @@ email.
 **A snooze never hides a suppression.** A snooze of an item withheld for any
 reason other than the contact frequency cap is refused (409, one
 `LEAD_SNOOZE_REFUSED` row). A capped item wakes no earlier than the cap
-lifts. A snoozed item that later becomes withheld re-surfaces under "No
-longer contactable" whatever the snooze says.
+lifts. The cap counts as the reason only when nothing else blocks the row:
+`GoldEligibilityService.evaluate` reports the cap before a suppression,
+do-not-contact or a missing marketing-eligible proof, so a recently touched
+borrower who also carries one of those reads `suppressed` or
+`eligibility_not_proven` in the tray and the snooze, never `frequency_cap`
+and never a "do not call before" date. A cap never masks a suppression. A
+snoozed item that later becomes withheld for any other reason re-surfaces
+under "No longer contactable" whatever the snooze says; one withheld only by
+the cap stays hidden until its snooze wakes, and then shows under "No longer
+contactable" with its cap date.
 
 **Inventory: `mip_app.lead_snoozes`.** Actor email (the staff member's own,
 as the edge forwarded it, lower-cased), the masked borrower id, the snooze,

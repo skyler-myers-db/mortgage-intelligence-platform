@@ -40,7 +40,12 @@ from backend.schemas.sales_followups import (
 )
 from backend.services.actor_identity import actor_cache_key, forwarded_identity
 from backend.services.databricks_sql import DatabricksSqlError
-from backend.services.eligibility import REASON_FREQUENCY_CAP, get_eligibility_service
+from backend.services.eligibility import (
+    REASON_FREQUENCY_CAP,
+    REASON_SUPPRESSED,
+    EligibilityDecision,
+    get_eligibility_service,
+)
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.observability import emit
 from backend.services.rbac import can_access_approver
@@ -98,6 +103,25 @@ def invalidate_followup_summary(actor: str) -> None:
     _SUMMARY_CACHE.invalidate(summary_cache_key(normalize_actor(actor)))
 
 
+def _block_reason(decision: EligibilityDecision) -> ContactBlockReason:
+    """The reason a row is withheld, with a cap that is the ONLY block.
+
+    ``evaluate`` reports the frequency cap before a suppression or a missing
+    marketing-eligible proof, so a borrower touched recently and then put on
+    do-not-contact reads ``frequency_cap``. The tray and the snooze treat a
+    cap as waitable (a snooze may hide it, the wake clamps to its end), so a
+    cap that also carries a suppression or no proof is reported as that
+    block instead: a cap never masks a suppression.
+    """
+    reason = decision.reason_code or _NOT_PROVEN
+    if reason == REASON_FREQUENCY_CAP:
+        if decision.suppression_reason or decision.dnc:
+            return cast(ContactBlockReason, REASON_SUPPRESSED)
+        if not decision.marketing_eligible:
+            return _NOT_PROVEN
+    return cast(ContactBlockReason, reason)
+
+
 def contact_verdict(row: BorrowerContactabilityRow | None) -> ContactVerdict:
     """The canonical evaluate + predicate pair; both must allow, else fail closed."""
     if row is None:
@@ -105,7 +129,7 @@ def contact_verdict(row: BorrowerContactabilityRow | None) -> ContactVerdict:
     decision = get_eligibility_service().evaluate(row)
     if decision.eligible and row.contactable_sql is True:
         return ContactVerdict(True, None, None)
-    reason = cast(ContactBlockReason, decision.reason_code or _NOT_PROVEN)
+    reason = _block_reason(decision)
     earliest = decision.earliest_recontact_at if reason == REASON_FREQUENCY_CAP else None
     return ContactVerdict(False, reason, earliest)
 

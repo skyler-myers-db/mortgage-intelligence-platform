@@ -396,6 +396,35 @@ def test_a_snooze_hides_a_callable_or_capped_row_but_never_a_suppression(borrowe
     assert items["B-51872"]["woke_on_signal"] is True
 
 
+@pytest.mark.parametrize("snoozed", [True, False], ids=["snoozed", "unsnoozed"])
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"suppression_reason": "do_not_contact", "dnc": True}, "suppressed"),
+        ({"dnc": True, "suppression_reason": None}, "suppressed"),
+        ({"marketing_eligible": False}, "eligibility_not_proven"),
+    ],
+    ids=["dnc-reason", "dnc-flag", "unproven"],
+)
+def test_a_frequency_cap_never_masks_the_block_behind_it(
+    borrower_repo: Any, overrides: dict[str, Any], reason: str, snoozed: bool
+) -> None:
+    # evaluate() reports the cap first: a borrower who said stop during a call
+    # is recently touched AND do-not-contact. The cap is waitable (a snooze may
+    # hide it, its end is a "do not call before" date); the block behind it is
+    # not, so the row is listed, withheld for that block, with no recontact date.
+    borrower_repo.contactability_overrides = {
+        "B-48291": {**overrides, "last_touch_at": NOW - timedelta(days=2)},
+    }
+    _install(_Lakebase(rows=[_row("B-48291", snoozed=snoozed)]))
+
+    [item] = _get(LIST, LO).json()["items"]
+
+    assert item["borrower_id"] == "B-48291"
+    assert (item["contactable"], item["contact_block_reason"]) == (False, reason)
+    assert item["earliest_recontact_at"] is None
+
+
 def test_a_kind_past_its_cap_sets_truncated_and_drops_the_extra_row(borrower_repo: Any) -> None:
     rows = [_row("B-48291", rank=50), _row("B-48294", rank=51)]
     _install(_Lakebase(rows=rows))
