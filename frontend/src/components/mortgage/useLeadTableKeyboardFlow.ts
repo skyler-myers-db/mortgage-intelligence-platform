@@ -184,7 +184,11 @@ export function useLeadTableKeyboardFlow({
   });
   const navigate = useNavigate();
   // The decision toast's action outlives this render: it reads the latest rows and receipt opener.
-  const toastActionsRef = useRef({ leadsById, viewReceipt: (borrowerId: string) => borrowerId.length > 0 });
+  // Until the first commit installs the real opener, nothing can be opened: false, never a claimed success.
+  const toastActionsRef = useRef<{ leadsById: typeof leadsById; viewReceipt: (borrowerId: string) => boolean }>({
+    leadsById,
+    viewReceipt: () => false,
+  });
   const [refocusTable, setRefocusTable] = useState(false);
   // The review chunk being fetched for an Approve (no draft until it loads),
   // and whether that fetch failed.
