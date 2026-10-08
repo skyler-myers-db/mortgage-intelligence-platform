@@ -13,7 +13,10 @@
  *  (d) a 429 holds Retry behind the countdown, then retries the same intent
  *      with the same request id;
  *  (e) a Lead Queue assign -> Undo POSTs the single release; a second Undo
- *      the server refuses as started shows the client copy, not the server's.
+ *      the server refuses as started shows the client copy, not the server's;
+ *  (f) the custom range at the keyboard: an ArrowUp or a typed year stays a
+ *      draft (focus kept, URL untouched, Custom kept), an unreadable draft
+ *      shows its inline error, and Enter applies a readable one in place.
  *
  * Every write is registered per test (mockApi.register); the default
  * registry is unchanged.
@@ -262,5 +265,51 @@ test.describe('(e) the Lead Queue assign Undo', () => {
     const refused = page.locator('.toast').filter({ hasText: "Couldn't undo the assignment" });
     await expect(refused).toContainText('The loan officer has already started on this lead; reassign instead of undoing.');
     await expect(refused).not.toContainText('already started on this lead.');
+  });
+});
+
+test.describe('(f) the custom range at the keyboard (Chromium fires change per keyboard edit)', () => {
+  test('edits stay a draft until Enter, focus never drops, and an unreadable draft stays in Custom', async ({ app, page }) => {
+    await app.gotoRoute(`${SALES_OPS}&sales_period=custom&sales_from=2026-07-01&sales_to=2026-07-10`);
+    const period = page.locator('.sales-ops-period');
+    const from = period.getByLabel('From');
+    await expect(from).toHaveValue('2026-07-01');
+    const start = page.url();
+
+    // en-US segments are mm/dd/yyyy: ArrowRight reaches the day, ArrowUp moves it.
+    await from.focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowUp');
+    await expect(from).toHaveValue('2026-07-02');
+    await expect(from).toBeFocused();
+    expect(page.url()).toBe(start);
+
+    // A typed year passes through 0002, 0020 and 0202 on its way: none of
+    // them may leave Custom or touch the URL.
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.type('2025');
+    await expect(from).toHaveValue('2025-07-02');
+    await expect(from).toBeFocused();
+    await expect(period.getByRole('button', { name: 'Custom' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(period.locator('input[type="date"]')).toHaveCount(2);
+    expect(page.url()).toBe(start);
+
+    // Enter on a range over 92 days: an inline error, the draft kept, the URL alone.
+    await page.keyboard.press('Enter');
+    await expect(period.locator('.field__error')).toHaveText('A custom range covers at most 92 days.');
+    await expect(from).toHaveAttribute('aria-invalid', 'true');
+    await expect(from).toHaveValue('2025-07-02');
+    await expect(from).toBeFocused();
+    expect(page.url()).toBe(start);
+
+    // A readable draft applies on Enter, and focus stays on the field.
+    await page.keyboard.press('ArrowUp');
+    await expect(from).toHaveValue('2026-07-02');
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/[?&]sales_from=2026-07-02(&|$)/);
+    await expect(page).toHaveURL(/[?&]sales_to=2026-07-10(&|$)/);
+    await expect(from).toBeFocused();
+    await expect(period.locator('.field__error')).toHaveCount(0);
+    await expect(page.locator('.sales-ops-card .eyebrow').filter({ hasText: 'Conversion Jul 2 to Jul 10' })).toBeVisible();
   });
 });

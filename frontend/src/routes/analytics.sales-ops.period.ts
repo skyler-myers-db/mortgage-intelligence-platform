@@ -96,12 +96,33 @@ function isPreset(value: string | null): value is SalesPeriodPreset {
   return SALES_PERIOD_PRESETS.some((preset) => preset.value === value);
 }
 
+/** Why a custom range cannot be read (the range fields' inline error), in check order. */
+export type CustomRangeIssue = 'from_incomplete' | 'to_incomplete' | 'from_future' | 'to_future' | 'reversed' | 'too_long';
+
+function rangeIssue(from: Date | null, to: Date | null, today: Date): CustomRangeIssue | null {
+  const last = startOfDay(today);
+  if (!from) return 'from_incomplete';
+  if (!to) return 'to_incomplete';
+  if (from > last) return 'from_future';
+  if (to > last) return 'to_future';
+  if (to < from) return 'reversed';
+  return spanDays(from, to) > MAX_PERIOD_DAYS ? 'too_long' : null;
+}
+
+/**
+ * Null when `from`..`to` is a real, past-or-today range of at most 92 days.
+ * One rule for the URL and for a draft in the range fields: a partly typed
+ * year (0002-07-01) is not a real day here, so it reads as incomplete.
+ */
+export function customRangeIssue(from: string, to: string, today: Date = new Date()): CustomRangeIssue | null {
+  return rangeIssue(parseIsoDay(from), parseIsoDay(to), today);
+}
+
 /** The custom window, when it is a real, past-or-today range of at most 92 days. */
 function customWindow(params: URLSearchParams, today: Date): SalesPeriod | null {
   const from = parseIsoDay(params.get(SALES_FROM_PARAM));
   const to = parseIsoDay(params.get(SALES_TO_PARAM));
-  if (!from || !to || to < from || to > startOfDay(today)) return null;
-  if (spanDays(from, to) > MAX_PERIOD_DAYS) return null;
+  if (!from || !to || rangeIssue(from, to, today)) return null;
   return periodWindow('custom', from, to);
 }
 

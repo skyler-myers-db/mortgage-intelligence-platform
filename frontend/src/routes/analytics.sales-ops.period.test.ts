@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  customRangeIssue,
   normalizedParams,
   paramsForPeriod,
   parseIsoDay,
@@ -54,6 +55,24 @@ describe('resolveSalesPeriod', () => {
     expect(normalizedParams(new URLSearchParams('view=sales-ops&sales_period=7d'), TODAY)).toBeNull();
     expect(normalizedParams(new URLSearchParams('view=sales-ops'), TODAY)).toBeNull();
     expect(normalizedParams(new URLSearchParams('sales_period=7d&sales_from=2026-10-01'), TODAY)?.toString()).toBe('sales_period=7d');
+  });
+});
+
+describe('customRangeIssue (the range fields and the URL share one rule)', () => {
+  it.each([
+    ['2026-07-01', '2026-07-10', null],
+    ['2026-07-08', '2026-10-07', null],
+    ['', '2026-07-10', 'from_incomplete'],
+    // A year typed digit by digit in Chromium: 0002-, 0020-, 0202- are not real days here.
+    ['0002-07-02', '2026-07-10', 'from_incomplete'],
+    ['0202-07-02', '2026-07-10', 'from_incomplete'],
+    ['2026-07-01', '0020-07-10', 'to_incomplete'],
+    ['2026-10-08', '2026-10-09', 'from_future'],
+    ['2026-10-01', '2026-10-08', 'to_future'],
+    ['2026-07-10', '2026-07-01', 'reversed'],
+    ['2025-07-02', '2026-07-10', 'too_long'],
+  ])('%s .. %s -> %s', (from, to, issue) => {
+    expect(customRangeIssue(from, to, TODAY)).toBe(issue);
   });
 });
 

@@ -43,6 +43,7 @@
 .sales-ops-period__range {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-end;
   gap: var(--sp-2);
 }
 .sales-ops-period__date { min-inline-size: calc(var(--sp-6) * 6); }
