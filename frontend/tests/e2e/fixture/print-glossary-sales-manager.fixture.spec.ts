@@ -327,13 +327,14 @@ test.describe('presence exit (motion-01 item 2e)', () => {
     const menu = await app.openFilterMenu('STATE');
     // 'At once' is proven by the absence of a fade, not by a one-shot count
     // right after Escape (a loaded runner can be a commit behind). Watch the
-    // menu from before Escape: no exit transition may ever start on it.
+    // menu from before Escape: no exit transition may ever start on the menu
+    // itself (an option's own hover transition bubbles here and is not one).
     await menu.evaluate((element) => {
       const watch = { transitioned: false };
       (window as unknown as { __menuExitWatch: typeof watch }).__menuExitWatch = watch;
       const runningTransition = () => element.getAnimations().some((animation) => animation instanceof CSSTransition);
-      element.addEventListener('transitionrun', () => {
-        watch.transitioned = true;
+      element.addEventListener('transitionrun', (event) => {
+        if (event.target === element) watch.transitioned = true;
       });
       new MutationObserver(() => {
         if (element.classList.contains('is-closing') && runningTransition()) watch.transitioned = true;
