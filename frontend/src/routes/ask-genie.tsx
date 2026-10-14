@@ -104,7 +104,10 @@ export {
  * an adopted link does the same. A held link is never overridden, and a
  * same-conversation settle keeps the URL. The link cache follows every
  * settled turn, so a leave and a Back re-adopt the thread with its latest
- * turn and no request.
+ * turn and no request. A settle that persists to a NEW conversation B while
+ * the link shows A primes B's cache with the whole shared thread (A's turns
+ * plus the new one); a reload of /ask-genie/B reads only B's server turns,
+ * so the in-session and the reloaded views of B can differ by A's turns.
  */
 /** Adopt a conversation into the shared thread: its turns, and its id for
  *  follow-ups, and tell the floating panel. The route's own id state is set

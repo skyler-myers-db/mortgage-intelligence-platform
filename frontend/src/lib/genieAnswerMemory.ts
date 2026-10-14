@@ -107,7 +107,11 @@ function readVote(key: string): GenieVoteMemory {
   return (entries.get(key) as GenieVoteMemory | undefined) ?? NO_VOTE;
 }
 
-/** The vote for `key` outside React (the hook below reads the same). */
+/**
+ * The vote for `key` outside React (the hook below reads the same). Test-
+ * facing: production components read through the hook; genieAnswerMemory.test.ts
+ * reads the stored record (status, request id, failure kind) directly.
+ */
 export function readGenieVote(key: string): GenieVoteMemory {
   return readVote(key);
 }
