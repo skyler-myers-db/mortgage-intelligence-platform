@@ -4354,7 +4354,7 @@ COMMENT ON TABLE mip_app.lead_snoozes IS
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_0X_lead_snoozes',
+    '2026_10_14_lead_snoozes',
     'Follow-ups snooze: mip_app.lead_snoozes (one open row per actor and borrower, closed once as timer, signal or superseded), SELECT/INSERT/UPDATE only'
 )
 ON CONFLICT (version) DO NOTHING;

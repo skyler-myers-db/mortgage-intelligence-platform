@@ -39,8 +39,8 @@ from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
-#: A placeholder the integrator dates at the W5d merge (tail order: second).
-LEAD_SNOOZES_VERSION = "2026_10_0X_lead_snoozes"
+#: Dated at the W5d merge: the second W5d block, after 2026_10_14_followups_index.
+LEAD_SNOOZES_VERSION = "2026_10_14_lead_snoozes"
 _MARKER = "-- Lead snoozes ---"
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
