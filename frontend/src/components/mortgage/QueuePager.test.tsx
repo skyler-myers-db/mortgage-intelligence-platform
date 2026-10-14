@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { formatCount } from '../../lib/formatters';
 import { KEYMAP_SCOPE_LABELS, listKeyBindings } from '../../lib/keymap';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { MAX_QUEUE_CONTEXT_IDS, type QueueContext } from '../../lib/queueContext';
 import { offerPath } from '../../lib/routeMeta';
 import { QueuePager } from './QueuePager';
@@ -51,7 +51,6 @@ describe('QueuePager', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

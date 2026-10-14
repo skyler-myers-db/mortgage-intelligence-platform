@@ -13,7 +13,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { OPEN_SHORTCUTS_EVENT, openShortcutOverlay, registerKeyBinding } from '../../lib/keymap';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { ShortcutOverlayHost } from './ShortcutOverlayHost';
 import { leadTableHotkeys } from '../mortgage/LeadTable.keymap';
 import { triageHotkeys } from '../mortgage/TriageDeck.keys';
@@ -32,7 +32,6 @@ describe('ShortcutOverlay', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

@@ -32,7 +32,6 @@ import { RouterProvider } from 'react-router/dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import { clearToasts, getToasts } from '../../lib/toast';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -198,7 +197,6 @@ describe('LeadTable approve review guards', { timeout: LOADED_RUNNER_TEST_TIMEOU
     clearToasts();
     store.reset(false);
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draftFor(borrowerId)));
     approve.mockImplementation((borrowerId: string) => Promise.resolve({
       approved: true, audit_event_id: `audit-${borrowerId}`, approval_id: 'apr-1',

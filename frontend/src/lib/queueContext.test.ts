@@ -13,7 +13,6 @@ import { MASKED_BORROWER_ID_RE } from './routeMeta';
 import {
   QUEUE_CONTEXT_STORAGE_KEY,
   QUEUE_MASKED_ID_RE,
-  clearQueueContext,
   queueCrumbLabel,
   queueHref,
   resolveQueueContext,
@@ -26,7 +25,6 @@ const IDS = ['B-0000000000001', 'B-0000000000002', 'B-0000000000003'];
 describe('queue context', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
-    clearQueueContext();
   });
 
   it('filters on the canonical masked-id shape (kept local to stay out of a chunk split)', () => {

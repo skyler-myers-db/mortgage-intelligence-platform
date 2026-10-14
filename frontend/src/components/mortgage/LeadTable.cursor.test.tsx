@@ -16,7 +16,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -95,7 +95,6 @@ describe('LeadTable keyboard row cursor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     reject.mockResolvedValue({ rejected: true, audit_event_id: 'audit-reject' });
     container = document.createElement('div');
     document.body.appendChild(container);

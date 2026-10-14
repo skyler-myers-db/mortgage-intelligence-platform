@@ -30,7 +30,6 @@ import { RouterProvider } from 'react-router/dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -184,7 +183,6 @@ describe('LeadTable: a decision on the wire locks its row\'s review, across a re
     vi.clearAllMocks();
     store.reset();
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     window.sessionStorage.clear();
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draftFor(borrowerId)));

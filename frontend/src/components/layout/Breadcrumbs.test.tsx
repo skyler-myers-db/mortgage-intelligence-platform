@@ -11,7 +11,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { clearQueueContext, type QueueContext } from '../../lib/queueContext';
+import { type QueueContext } from '../../lib/queueContext';
 import { publishQueueContext } from '../../lib/queueContextPublish';
 import { Breadcrumbs } from './Breadcrumbs';
 
@@ -31,7 +31,6 @@ describe('Breadcrumbs', () => {
 
   beforeEach(() => {
     window.sessionStorage.clear();
-    clearQueueContext();
     queue = publishQueueContext({ search: '?state=IL&segment=itm', label: 'IL · In the Money', ids: IDS });
     container = document.createElement('div');
     document.body.appendChild(container);

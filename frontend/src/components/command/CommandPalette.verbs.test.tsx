@@ -15,7 +15,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { registerKeyBinding } from '../../lib/keymap';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { commandVerbActions } from './commandActions';
 import { publishCommandSelection, type CommandSelectionContext } from './commandSelection';
 
@@ -91,7 +91,6 @@ describe('CommandPalette selection verbs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

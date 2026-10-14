@@ -29,7 +29,6 @@ import {
 } from './keymap';
 import {
   SINGLE_KEY_SHORTCUTS_STORAGE_KEY,
-  clearSingleKeyShortcutsPreference,
   setSingleKeyShortcutsEnabled,
   singleKeyShortcutsEnabled,
   subscribeSingleKeyShortcuts,
@@ -99,7 +98,6 @@ describe('registry dispatch', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
   });
 
   afterEach(() => {
@@ -317,7 +315,6 @@ describe('overlay state', () => {
 describe('single-key preference', () => {
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
   });
 
   it('defaults on, persists off per actor, and an actor change reads the new actor entry and notifies', () => {
@@ -351,7 +348,6 @@ describe('function keys (the toast region F8, wave-3 review #13)', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
   });
 
   afterEach(() => {
@@ -396,7 +392,6 @@ describe('the Triage deck scope (D-approval-flow-a2)', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
   });
 
   afterEach(() => {

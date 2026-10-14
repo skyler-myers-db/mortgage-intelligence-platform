@@ -32,7 +32,7 @@ import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { ApiError } from '../../lib/apiTransport';
 import { clearToasts, getToasts } from '../../lib/toast';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import {
   parseTriageMode,
   searchParamsWithLeadTablePlace,
@@ -215,7 +215,6 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     session.sessionStatus = 'ready';
     session.canAccessAdmin = true;
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draftFor(borrowerId)));
     approve.mockImplementation((borrowerId: string) => Promise.resolve({
       approved: true, audit_event_id: `audit-${borrowerId}`, approval_id: 'apr-1',

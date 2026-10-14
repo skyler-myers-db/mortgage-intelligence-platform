@@ -22,7 +22,6 @@ import { RouterProvider } from 'react-router/dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import { parseLeadTablePlace, searchParamsWithLeadTablePlace } from '../../routes/lead-queue.filters';
 import { clearToasts, getToasts } from '../../lib/toast';
 
@@ -151,7 +150,6 @@ describe('LeadTable: Back / Forward away from an open inline review', () => {
     vi.clearAllMocks();
     clearToasts();
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draftFor(borrowerId)));
     container = document.createElement('div');
     document.body.appendChild(container);

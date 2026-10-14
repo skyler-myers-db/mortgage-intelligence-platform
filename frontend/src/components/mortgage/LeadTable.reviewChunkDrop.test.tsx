@@ -14,7 +14,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,7 +87,6 @@ describe('LeadTable: an Approve waiting on the review chunk', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

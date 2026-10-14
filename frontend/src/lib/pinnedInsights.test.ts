@@ -8,7 +8,6 @@ import { NOBODY, _resetActorScopeForTests, observeActor } from './actorScope';
 import { buildPinFromAnswer } from './genieAnswerText';
 import {
   PINNED_INSIGHTS_KEY,
-  clearPinnedInsights,
   isTrustedGenieSource,
   pinInsight,
   unpinInsight,
@@ -75,7 +74,6 @@ function installLocalStorage() {
 describe('pinned insights store', () => {
   beforeEach(() => {
     installLocalStorage();
-    clearPinnedInsights();
   });
 
   it('pins, persists to localStorage, and unpins', () => {
@@ -110,12 +108,6 @@ describe('pinned insights store', () => {
     expect(stored.map((p) => p.id)).toEqual(['h9', 'h8', 'h7', 'h6', 'h5', 'h4']);
   });
 
-  it('clearPinnedInsights removes the stored list', () => {
-    pinInsight(buildPinFromAnswer(answer(), 's', 'Q'));
-    clearPinnedInsights();
-    expect(window.localStorage.getItem(PINNED_INSIGHTS_KEY)).toBeNull();
-    expect(pinnedSnapshot()).toEqual([]);
-  });
 });
 
 /**

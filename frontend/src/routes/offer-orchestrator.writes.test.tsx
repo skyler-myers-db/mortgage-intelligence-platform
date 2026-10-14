@@ -16,7 +16,7 @@ import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Borrower360, BorrowerLifecycle, OfferRecommendation, SalesTeamMember } from '../types';
 import type { OutreachDraftResult } from '../lib/apiTypes';
-import { clearQueueContext, storeQueueContext } from '../lib/queueContext';
+import { storeQueueContext } from '../lib/queueContext';
 import { isDecisionPending, outreachMutationKeys } from '../lib/mutations/outreach';
 import { queryKeys } from '../lib/queryKeys';
 
@@ -271,7 +271,6 @@ describe('Offer Orchestrator writes', () => {
     queryClient.clear();
     container.remove();
     navigate = null;
-    clearQueueContext();
     window.sessionStorage.clear();
   });
 
