@@ -22,8 +22,12 @@
  *  L. W5c w5-lead-queue-paging: the Lead Queue paged footer            2
  *  M. W5c w5-zcta-watchlist: the Segments map drilled to Illinois'
  *     ZIP areas                                                        2
+ *  N. W5d w5-lq-requests-binding: the Lead Queue's Approval requests
+ *     panel, My requests and the Request approval form                 6
  *  O. W5d w5-sales-loop: the Sales ops manager view (30-day period)
  *     and the Distribution Board's dry-run plan                        4
+ *  P. W5d w5-palette-offer-sales-loop: the command palette's provider
+ *     groups for a typed query                                         2
  *  Q. W5d w5-followups-snooze: the rail with the Follow-ups due dot
  *     and the open Follow-ups tray                                     4
  *  R. W5d w5-print-glossary-sales-manager: Home's account menu open,
@@ -34,7 +38,7 @@
  *     and its watching line on Home and Segments, and a composed plan's
  *     card mid-progress                                               10
  *                                                                     --
- *                                                                    126
+ *                                                                    154
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
