@@ -20,8 +20,6 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer: appMocks.setDrawer, showEvidence: true, showConfidence: true }),
 }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const STEPS = [-100, -75, -50, -25, 0, 25, 50, 75, 100];
 const RESPONSE: RateSensitivityResponse = {
   built: true,

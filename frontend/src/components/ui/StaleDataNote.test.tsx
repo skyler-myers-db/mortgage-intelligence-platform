@@ -10,8 +10,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StaleDataNote } from './StaleDataNote';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const NOW = Date.parse('2026-10-01T12:00:00Z');
 
 describe('StaleDataNote', () => {

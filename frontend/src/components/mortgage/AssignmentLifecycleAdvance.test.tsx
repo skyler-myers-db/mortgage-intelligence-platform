@@ -21,8 +21,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssignmentLifecycleStatus } from '../../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const apiMocks = vi.hoisted(() => ({
   updateAssignmentStatus: vi.fn(),
   recordAssignmentOutcome: vi.fn(),

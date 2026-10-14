@@ -7,8 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import type { MapCard } from './USChoroplethMap.hover';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * Addressable-vs-contactable disclosure on the map tile.
  *

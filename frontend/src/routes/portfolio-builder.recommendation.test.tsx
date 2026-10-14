@@ -60,8 +60,6 @@ import PortfolioBuilder from './portfolio-builder';
 import { CAMPAIGN_DRAFT_KEY } from './portfolio-builder.draft';
 import { removeActorScoped } from '../lib/actorScope';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {

@@ -20,8 +20,6 @@ import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { MultiFilterSelect } from './MultiFilterSelect';
 import { TYPEAHEAD_RESET_MS } from './useListboxNavigation';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const OPTIONS = [
   { value: 'AZ', label: 'Arizona' },
   { value: 'CA', label: 'California' },

@@ -34,8 +34,6 @@ import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { clearToasts, getToasts } from '../../lib/toast';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 type Decision = 'approved' | 'rejected';
 
 /**

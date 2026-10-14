@@ -38,7 +38,6 @@ import {
 } from '../mortgage/DecisionReceipt.copy';
 import { AuditEventTableRow, DECISION_RECEIPT_ACTION_NAMES, DECISION_RECEIPT_TYPES } from './AdminAuditExplorer.row';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
 
 const APPROVE_ROW: AuditEventRow = {

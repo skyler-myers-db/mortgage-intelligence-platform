@@ -16,8 +16,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { DrawerSource } from '../components/AppContext';
 import type { ApprovalFunnelResponse, LoanOfficerFunnelDetailResponse } from '../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const LO_01 = '55555555-5555-4555-8555-555555555501';
 const LO_02 = '55555555-5555-4555-8555-555555555502';
 

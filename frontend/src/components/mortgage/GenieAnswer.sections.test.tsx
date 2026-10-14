@@ -22,8 +22,6 @@ vi.mock('../HealthProvider', () => ({ useWorkspaceHost: () => null }));
 import { GenieAnswer } from './GenieAnswer';
 import { GenieAnswerSections } from './GenieAnswer.sections';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const TOP_LEVEL_BODY = 'Stitched narrative that repeats every section verbatim.';
 
 function section(overrides: Partial<GenieAnswerSection> = {}): GenieAnswerSection {

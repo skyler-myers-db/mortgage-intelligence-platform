@@ -92,7 +92,6 @@ vi.mock('react-router', async () => {
 
 import AskGenie from './ask-genie';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
 
 export const WORKFLOW: GrowthAgentWorkflow = {

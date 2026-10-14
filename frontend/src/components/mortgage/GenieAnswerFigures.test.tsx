@@ -38,8 +38,6 @@ import { GenieVerifiedReveal } from './GenieVerifiedReveal';
 import { GenieFigureScopes } from './GenieAnswerFigures';
 import { FIGURE_HOVER_CTA, FIGURE_HOVER_TITLE } from './GenieFigureMark';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function cell(token: string, occurrences: number, column: string | null, section: string | null = null): GenieVerifiedClaim {
   return { token, kind: 'number', derivation: 'returned_value', support: 'cell', column, occurrences, section };
 }

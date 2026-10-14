@@ -12,8 +12,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GenieRowsVisual } from './GenieAnswer.sections';
 import { MAX_TABLE_COLS } from './GenieAnswer.logic';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const NO_PLAN = { kind: 'none', chart: null, viz: null };
 
 function row(i: number): Record<string, unknown> {

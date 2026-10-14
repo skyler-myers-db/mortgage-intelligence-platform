@@ -7,8 +7,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QUEUE_VERSION_KEY, fetchQueueVersion, readQueueVersion, useQueueVersion } from './queueVersion';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * The audit-free queue-version poll (audit states-09): once a minute while
  * enabled, paused while the document is hidden, no retry, no focus refetch,

@@ -96,8 +96,8 @@ describe('CommandPalette', () => {
     container.remove();
   });
 
-  function pressMetaK() {
-    act(() => {
+  async function pressMetaK() {
+    await act(async () => {
       window.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }),
       );
@@ -120,9 +120,9 @@ describe('CommandPalette', () => {
     });
   }
 
-  it('is closed until the ⌘K chord, then renders an accessible dialog/combobox/listbox', () => {
+  it('is closed until the ⌘K chord, then renders an accessible dialog/combobox/listbox', async () => {
     expect(dialog()).toBeNull();
-    pressMetaK();
+    await pressMetaK();
     expect(dialog()).not.toBeNull();
     // Named by the dialog itself; role and modality are implicit.
     expect(dialog()!.getAttribute('aria-label')).toBe('Command palette');
@@ -138,32 +138,32 @@ describe('CommandPalette', () => {
     expect(container.textContent).not.toContain('Admin');
   });
 
-  it('offers the Audit ledger to a read-only auditor and never Admin; a plain user gets neither (D-audit-reads-c3)', () => {
-    pressMetaK();
+  it('offers the Audit ledger to a read-only auditor and never Admin; a plain user gets neither (D-audit-reads-c3)', async () => {
+    await pressMetaK();
     setQuery('audit');
     expect(container.textContent, 'a plain workspace user is not offered the ledger').not.toContain('Audit ledger');
-    pressMetaK();
+    await pressMetaK();
     access.auditor = true;
     try {
-      pressMetaK();
+      await pressMetaK();
       setQuery('audit');
       expect(container.textContent).toContain('Audit ledger');
       expect(container.textContent).not.toContain('Admin');
-      pressMetaK();
+      await pressMetaK();
     } finally {
       access.auditor = false;
     }
   });
 
-  it('toggles closed on a second ⌘K', () => {
-    pressMetaK();
+  it('toggles closed on a second ⌘K', async () => {
+    await pressMetaK();
     expect(dialog()).not.toBeNull();
-    pressMetaK();
+    await pressMetaK();
     expect(dialog()).toBeNull();
   });
 
-  it('moves aria-activedescendant with ArrowDown/ArrowUp (wrapping)', () => {
-    pressMetaK();
+  it('moves aria-activedescendant with ArrowDown/ArrowUp (wrapping)', async () => {
+    await pressMetaK();
     const optionCount = container.querySelectorAll('[role="option"]').length;
     expect(optionCount).toBeGreaterThan(1);
     keyOnInput('ArrowDown');
@@ -173,8 +173,8 @@ describe('CommandPalette', () => {
     expect(input().getAttribute('aria-activedescendant')).toBe(`cmdk-option-${optionCount - 1}`);
   });
 
-  it('filters actions as the operator types and routes on Enter', () => {
-    pressMetaK();
+  it('filters actions as the operator types and routes on Enter', async () => {
+    await pressMetaK();
     setQuery('lead');
     // Lead Queue is the top match.
     const firstOption = container.querySelector('[role="option"]')!;
@@ -185,8 +185,8 @@ describe('CommandPalette', () => {
     expect(dialog()).toBeNull();
   });
 
-  it('runs a workspace command (toggle theme) and closes', () => {
-    pressMetaK();
+  it('runs a workspace command (toggle theme) and closes', async () => {
+    await pressMetaK();
     setQuery('toggle theme');
     keyOnInput('Enter');
     expect(setTheme).toHaveBeenCalledWith('light'); // current theme is dark
@@ -199,50 +199,50 @@ describe('CommandPalette', () => {
    * the evidence drawer, the ? sheet) and fought their focus traps.
    */
   describe('never opens over a modal layer', () => {
-    function withLayer(markup: string, run: () => void) {
+    async function withLayer(markup: string, run: () => Promise<void>) {
       const host = document.createElement('div');
       host.innerHTML = markup;
       document.body.appendChild(host);
       try {
-        run();
+        await run();
       } finally {
         host.remove();
       }
     }
 
-    it('stays closed under an open native dialog', () => {
-      withLayer('<dialog open><form>Leave without saving?</form></dialog>', () => {
-        pressMetaK();
+    it('stays closed under an open native dialog', async () => {
+      await withLayer('<dialog open><form>Leave without saving?</form></dialog>', async () => {
+        await pressMetaK();
         expect(dialog()).toBeNull();
       });
     });
 
-    it('stays closed under an aria-modal layer', () => {
-      withLayer('<div role="dialog" aria-modal="true" aria-label="Your session ended"></div>', () => {
-        pressMetaK();
+    it('stays closed under an aria-modal layer', async () => {
+      await withLayer('<div role="dialog" aria-modal="true" aria-label="Your session ended"></div>', async () => {
+        await pressMetaK();
         expect(dialog()).toBeNull();
       });
     });
 
-    it('ignores a closed aria-modal drawer that is still rendered but hidden', () => {
-      withLayer('<aside class="drawer" role="dialog" aria-modal="true" aria-hidden="true"></aside>', () => {
-        pressMetaK();
+    it('ignores a closed aria-modal drawer that is still rendered but hidden', async () => {
+      await withLayer('<aside class="drawer" role="dialog" aria-modal="true" aria-hidden="true"></aside>', async () => {
+        await pressMetaK();
         expect(dialog()).not.toBeNull();
       });
     });
 
-    it('still closes an open palette when a modal layer appears', () => {
-      pressMetaK();
+    it('still closes an open palette when a modal layer appears', async () => {
+      await pressMetaK();
       expect(dialog()).not.toBeNull();
-      withLayer('<div role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"></div>', () => {
-        pressMetaK();
+      await withLayer('<div role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"></div>', async () => {
+        await pressMetaK();
         expect(dialog()).toBeNull();
       });
     });
   });
 
-  it('closes on Escape', () => {
-    pressMetaK();
+  it('closes on Escape', async () => {
+    await pressMetaK();
     expect(dialog()).not.toBeNull();
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
@@ -250,8 +250,8 @@ describe('CommandPalette', () => {
     expect(dialog()).toBeNull();
   });
 
-  it('runs an action when a row is CLICKED (mouse path), not just on Enter', () => {
-    pressMetaK();
+  it('runs an action when a row is CLICKED (mouse path), not just on Enter', async () => {
+    await pressMetaK();
     setQuery('analytics');
     const firstOption = container.querySelector<HTMLButtonElement>('[role="option"]')!;
     expect(firstOption.textContent).toContain('Analytics');
@@ -260,8 +260,8 @@ describe('CommandPalette', () => {
     expect(dialog()).toBeNull();
   });
 
-  it('closes on a press on the backdrop layer but not on a press inside the panel', () => {
-    pressMetaK();
+  it('closes on a press on the backdrop layer but not on a press inside the panel', async () => {
+    await pressMetaK();
     const press = (target: Element) => act(() => {
       target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
       target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -274,11 +274,11 @@ describe('CommandPalette', () => {
     expect(dialog()).toBeNull();
   });
 
-  it('keeps the last results through its exit: closed, inert, hidden, no active descendant', () => {
-    pressMetaK();
+  it('keeps the last results through its exit: closed, inert, hidden, no active descendant', async () => {
+    await pressMetaK();
     setQuery('analytics');
     expect(input().getAttribute('aria-activedescendant')).toBe('cmdk-option-0');
-    pressMetaK(); // toggle closed
+    await pressMetaK(); // toggle closed
     const closing = container.querySelector<HTMLDialogElement>('dialog.cmdk')!;
     expect(closing.open).toBe(false);
     expect(closing.hasAttribute('inert')).toBe(true);
@@ -290,7 +290,7 @@ describe('CommandPalette', () => {
   });
 
   it('shows an empty state when nothing matches, with the Ask Genie handoff as the only row', async () => {
-    pressMetaK();
+    await pressMetaK();
     setQuery('zzzznope');
     // The empty state waits for the borrower search to settle (shell-07 item 4).
     for (const ms of [220, 20, 20]) {
@@ -306,13 +306,13 @@ describe('CommandPalette', () => {
     expect(container.querySelector('.cmdk__empty')!.textContent).toContain('No pages, actions, or borrowers');
   });
 
-  it('resets the query when toggled closed and reopened with ⌘K (state hygiene)', () => {
-    pressMetaK();
+  it('resets the query when toggled closed and reopened with ⌘K (state hygiene)', async () => {
+    await pressMetaK();
     setQuery('admin');
     expect(input().value).toBe('admin');
-    pressMetaK(); // toggle closed
+    await pressMetaK(); // toggle closed
     expect(dialog()).toBeNull();
-    pressMetaK(); // reopen
+    await pressMetaK(); // reopen
     expect(input().value).toBe(''); // not the stale "admin"
   });
 });
@@ -338,8 +338,8 @@ describe('CommandPalette borrower search (networked path)', () => {
 
   const input = () => container.querySelector<HTMLInputElement>('input[role="combobox"]')!;
   const dialog = () => container.querySelector<HTMLDialogElement>('dialog.cmdk[open]');
-  function pressMetaK() {
-    act(() => {
+  async function pressMetaK() {
+    await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
     });
   }
@@ -360,7 +360,7 @@ describe('CommandPalette borrower search (networked path)', () => {
 
   it('merges live borrower rows under the actions and navigates to the dossier on Enter', async () => {
     borrowerSearch.mockResolvedValue([lead('B-1EEEN00S99GXC'), lead('B-0CPWBTJMAPFY2')]);
-    pressMetaK();
+    await pressMetaK();
     setQuery('60611');
     // Debounced 160ms search; advance + flush the resolved promise.
     await advanceSearch();
@@ -386,7 +386,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     // above a borrower match: Enter with no ArrowDown opened the first
     // borrower before that row existed, and still has to.
     borrowerSearch.mockResolvedValue([lead('B-1EEEN00S99GXC')]);
-    pressMetaK();
+    await pressMetaK();
     setQuery('B-1EEEN00S99GXC');
     // Before the search lands the Genie row is the only option. Enter is held
     // there: the masked id must not reach Genie's composer.
@@ -408,7 +408,7 @@ describe('CommandPalette borrower search (networked path)', () => {
 
   it('a query no borrower matches still reaches the Genie fallback on Enter once the search settles', async () => {
     borrowerSearch.mockResolvedValue([]);
-    pressMetaK();
+    await pressMetaK();
     setQuery('zyrplax');
     await advanceSearch();
     keyOnInput('Enter');
@@ -418,7 +418,7 @@ describe('CommandPalette borrower search (networked path)', () => {
 
   it('navigates to the dossier when a borrower row is CLICKED', async () => {
     borrowerSearch.mockResolvedValue([lead('B-1IB0UGBTFYM20')]);
-    pressMetaK();
+    await pressMetaK();
     setQuery('chicago');
     await advanceSearch();
     const row = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="option"]')).find((o) =>
@@ -432,7 +432,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     borrowerSearch.mockResolvedValue(
       Array.from({ length: 20 }, (_, i) => lead(`B-CAP${String(i).padStart(10, '0')}`)),
     );
-    pressMetaK();
+    await pressMetaK();
     setQuery('cook');
     await advanceSearch();
     const borrowerOptions = Array.from(container.querySelectorAll('[role="option"]')).filter((o) =>
@@ -455,7 +455,7 @@ describe('CommandPalette borrower search (networked path)', () => {
     // speaks (a listbox may own only options and groups).
     const visible = () => [...container.querySelectorAll('.cmdk__empty, .cmdk__status')].map((el) => el.textContent);
     const spoken = () => [...container.querySelectorAll('[role="status"]')].map((el) => el.textContent);
-    pressMetaK();
+    await pressMetaK();
     setQuery('zz');
     await advanceSearch();
     expect(borrowerSearch).toHaveBeenCalledTimes(1);
@@ -501,8 +501,8 @@ describe('CommandPalette active-row chunk preload (bundle-09 item 2)', () => {
 
   const input = () => container.querySelector<HTMLInputElement>('input[role="combobox"]')!;
   const activeRow = () => container.querySelector<HTMLElement>('.cmdk__row.is-active');
-  function pressMetaK() {
-    act(() => {
+  async function pressMetaK() {
+    await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
     });
   }
@@ -523,9 +523,9 @@ describe('CommandPalette active-row chunk preload (bundle-09 item 2)', () => {
   }
   const preloaded = () => preloadRouteForPath.mock.calls.map(([path]) => path as string);
 
-  it('warms the first route row on open and the next one on ArrowDown, and nothing once closed', () => {
+  it('warms the first route row on open and the next one on ArrowDown, and nothing once closed', async () => {
     expect(preloadRouteForPath).not.toHaveBeenCalled();
-    pressMetaK();
+    await pressMetaK();
     // A route row's hint is its route pattern (commandActions.routeAction).
     const first = activeRow()?.querySelector('.cmdk__row-hint')?.textContent;
     expect(first).toMatch(/^\//);
@@ -536,7 +536,7 @@ describe('CommandPalette active-row chunk preload (bundle-09 item 2)', () => {
     expect(preloadRouteForPath).toHaveBeenLastCalledWith(second);
 
     const calls = preloadRouteForPath.mock.calls.length;
-    pressMetaK();
+    await pressMetaK();
     expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
     expect(preloadRouteForPath).toHaveBeenCalledTimes(calls);
     // Chunks only: the borrower search is the palette's one network call.
@@ -546,7 +546,7 @@ describe('CommandPalette active-row chunk preload (bundle-09 item 2)', () => {
   it("warms the dossier chunk for a borrower row (the id never leaves the palette's own path)", async () => {
     const lead = { borrower_id: 'B-1EEEN00S99GXC', city: 'Chicago', state: 'IL', zip: '60611' };
     borrowerSearch.mockResolvedValue([lead]);
-    pressMetaK();
+    await pressMetaK();
     setQuery('B-1EEEN00S99GXC');
     await settleSearch();
     expect(activeRow()?.textContent).toContain('B-1EEEN00S99GXC');
@@ -555,7 +555,7 @@ describe('CommandPalette active-row chunk preload (bundle-09 item 2)', () => {
   });
 
   it('warms nothing for Ask Genie, workspace-command or selection-verb rows', async () => {
-    pressMetaK();
+    await pressMetaK();
     setQuery('zyrplax');
     await settleSearch();
     expect(activeRow()?.textContent).toContain('Ask Genie: zyrplax');
@@ -568,36 +568,39 @@ describe('CommandPalette active-row chunk preload (bundle-09 item 2)', () => {
     expect(activeRow()?.textContent).toContain('Toggle');
     expect(preloadRouteForPath).not.toHaveBeenCalled();
 
-    pressMetaK();
-    const unpublish = publishCommandSelection({
-      selectedCount: 2, approveCount: 2, canApprove: true, rejectCount: 2, canReject: true, canAssign: false, run: () => undefined,
+    await pressMetaK();
+    let unpublish: () => void = () => undefined;
+    act(() => {
+      unpublish = publishCommandSelection({
+        selectedCount: 2, approveCount: 2, canApprove: true, rejectCount: 2, canReject: true, canAssign: false, run: () => undefined,
+      });
     });
-    pressMetaK();
+    await pressMetaK();
     expect(activeRow()?.textContent).toContain('Approve 2 selected');
     expect(preloadRouteForPath).not.toHaveBeenCalled();
-    unpublish();
+    act(() => unpublish());
   });
 
-  it('never warms /admin-config for a non-admin, and warms nothing under Save-Data', () => {
+  it('never warms /admin-config for a non-admin, and warms nothing under Save-Data', async () => {
     // Control: an admin's Admin row is warmed like any route row.
     access.admin = true;
-    pressMetaK();
+    await pressMetaK();
     setQuery('admin');
     expect(preloaded()).toContain('/admin-config');
-    pressMetaK();
+    await pressMetaK();
     access.admin = false;
     preloadRouteForPath.mockClear();
 
-    pressMetaK();
+    await pressMetaK();
     setQuery('admin');
     for (let i = 0; i < 12; i += 1) keyOnInput('ArrowDown');
     expect(container.textContent).not.toContain('/admin-config');
     expect(preloaded()).not.toContain('/admin-config');
-    pressMetaK();
+    await pressMetaK();
 
     preloadRouteForPath.mockClear();
     saveData.on = true;
-    pressMetaK();
+    await pressMetaK();
     keyOnInput('ArrowDown');
     expect(preloadRouteForPath).not.toHaveBeenCalled();
   });

@@ -22,8 +22,6 @@ vi.mock('../lib/borrowerMorph', () => ({
 
 import { BorrowerTitle } from './borrower-360.title';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const ID = 'B-0123456789ABC';
 let root: Root;
 

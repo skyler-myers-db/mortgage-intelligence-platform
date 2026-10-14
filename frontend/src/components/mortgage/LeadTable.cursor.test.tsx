@@ -18,8 +18,6 @@ import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const draftOutreach = vi.fn();
 const approve = vi.fn();
 const reject = vi.fn();

@@ -26,8 +26,6 @@ import { join } from 'node:path';
 declare const process: { cwd(): string };
 const signalStackCss = readFileSync(join(process.cwd(), 'src/components/mortgage/SignalStack.css'), 'utf8') as string;
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const mocks = vi.hoisted(() => ({ combinations: vi.fn(), setDrawer: vi.fn() }));
 vi.mock('../../lib/apiClients/segmentCombinations', () => ({
   segmentCombinationsApi: { combinations: mocks.combinations },

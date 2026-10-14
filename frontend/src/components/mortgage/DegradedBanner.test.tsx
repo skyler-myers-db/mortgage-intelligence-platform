@@ -6,8 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { HealthProvider } from '../HealthProvider';
 import { DegradedBanner, degradedDependency, shouldUseStandaloneHealth } from './DegradedBanner';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * DegradedBanner dependency selection.
  *

@@ -61,8 +61,6 @@ vi.mock('../components/AppContext', () => ({
 
 import PortfolioBuilder from './portfolio-builder';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const PREVIEW = {
   marketable_population: 76_487,
   campaign_build_contact_count: 76_487,

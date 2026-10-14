@@ -15,8 +15,6 @@ import { type QueueContext } from '../../lib/queueContext';
 import { publishQueueContext } from '../../lib/queueContextPublish';
 import { Breadcrumbs } from './Breadcrumbs';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const IDS = ['B-0000000000001', 'B-0000000000002', 'B-0000000000003'];
 
 function Probe() {

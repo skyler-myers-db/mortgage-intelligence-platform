@@ -19,8 +19,6 @@ import App from './app';
  * keying that produce it, and the harness contract on the painted wrapper.
  */
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 interface Recorded {
   instance: number;
   props: Record<string, unknown>;

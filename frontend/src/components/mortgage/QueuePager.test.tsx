@@ -21,8 +21,6 @@ import { MAX_QUEUE_CONTEXT_IDS, type QueueContext } from '../../lib/queueContext
 import { offerPath } from '../../lib/routeMeta';
 import { QueuePager } from './QueuePager';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const IDS = ['B-0000000000001', 'B-0000000000002', 'B-0000000000003'];
 const QUEUE: QueueContext = { epoch: 'e1', search: '?state=IL', label: 'IL', ids: IDS };
 

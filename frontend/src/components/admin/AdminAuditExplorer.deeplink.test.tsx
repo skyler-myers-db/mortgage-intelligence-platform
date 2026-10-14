@@ -9,8 +9,6 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuditEventRow } from '../../lib/api';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * The Decision receipt deep-links the explorer as `?audit_event_id=<id>`.
  * Dropping that pin by the chip's dismiss must reset the explorer the way

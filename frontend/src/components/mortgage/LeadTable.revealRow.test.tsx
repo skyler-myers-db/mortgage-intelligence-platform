@@ -30,8 +30,6 @@ import { parseLeadTablePlace, searchParamsWithLeadTablePlace } from '../../route
 import { scrollStorageKey, writeOffsets } from '../../hooks/scrollOffsetStore';
 import { LEAD_TABLE_SCROLL_STORAGE_KEY } from './useLeadTableScroll';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const scrolledTo = vi.hoisted(() => [] as number[]);
 const offsetsSet = vi.hoisted(() => [] as number[]);
 

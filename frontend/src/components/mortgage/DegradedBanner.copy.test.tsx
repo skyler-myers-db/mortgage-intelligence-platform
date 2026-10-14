@@ -5,8 +5,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DegradedBanner, type HealthPayload } from './DegradedBanner';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * Truthful banner copy (audit 2026-09-21 `states-03`). The banner used to say
  * "This page refreshes every 3 seconds". The page never refreshed: only the

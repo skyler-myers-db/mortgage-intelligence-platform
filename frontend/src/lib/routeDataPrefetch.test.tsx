@@ -18,8 +18,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *     non-audited aggregate reads.
  */
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 interface ApiCall {
   method: string;
   args: unknown[];

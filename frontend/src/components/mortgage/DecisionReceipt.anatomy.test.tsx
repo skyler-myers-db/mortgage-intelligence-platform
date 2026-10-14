@@ -52,8 +52,6 @@ import { ApiError } from '../../lib/api';
 import { DecisionReceipt } from './DecisionReceipt';
 import { SCORE_ANATOMY_COPY } from './scoreAnatomy.copy';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const AUDIT_ID = '5b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d';
 const BORROWER_ID = 'B-0000000000001';
 

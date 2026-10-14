@@ -11,8 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { GenieAnswerToolbar, answerPlainText, answerSql } from './GenieAnswerToolbar';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SQL = 'SELECT state, count(*) AS borrowers FROM mip.gold.borrower_360 GROUP BY state';
 
 function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {

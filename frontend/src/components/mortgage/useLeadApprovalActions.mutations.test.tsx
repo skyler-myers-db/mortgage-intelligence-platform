@@ -25,8 +25,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const apiMocks = vi.hoisted(() => ({
   draftOutreach: vi.fn(),
   approve: vi.fn(),

@@ -17,8 +17,6 @@ vi.mock('./api', async (importOriginal) => ({
 import { usePresenterMode } from './presenterMode';
 import { canReadAuditLedger, useAuditLedgerAccess } from './sessionQuery';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * The two session-derived UI flags (D-audit-reads-c3, D-shell-deviations-e1)
  * read the shell's one `/api/session` query and fail closed: while it is

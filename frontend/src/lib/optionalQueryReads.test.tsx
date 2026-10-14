@@ -19,8 +19,6 @@ vi.mock('./api', async (importOriginal) => ({
 
 import { useAuditLinkAccess, useOptionalSession, useRefusalTextCapture } from './optionalQueryReads';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let seen: { session: SessionResponse | undefined; capture: boolean; audit: boolean } | null = null;
 
 function Probe() {

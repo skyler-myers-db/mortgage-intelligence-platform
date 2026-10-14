@@ -35,8 +35,6 @@ vi.mock('../lib/api', async () => {
 import { __resetGenieTurnStoreForTests, getGenieTurnSnapshot, startGenieTurn } from '../lib/genieInFlightTurn';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function answer(text: string, id: string): GenieAnswer {
   return {
     answer: text,

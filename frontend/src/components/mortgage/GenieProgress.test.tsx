@@ -23,8 +23,6 @@ import {
   genieTypicalDurationHint,
 } from './GenieProgress';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 describe('genieStatusLabel', () => {
   it('maps observed Genie statuses to human progress copy', () => {
     expect(genieStatusLabel('SUBMITTED')).toBe('Question submitted to Genie');

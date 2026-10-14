@@ -39,8 +39,6 @@ import { __resetGenieTurnStoreForTests, __setGenieTurnLockForTests } from '../li
 import { __resetGenieAnnouncerForTests } from '../components/mortgage/useGenieAnnouncer';
 import { observeStrongly } from '../components/mortgage/genieAnnouncer.test-support';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const TIMEOUT_MS = 30_000;
 
 describe('/ask-genie on the in-flight turn store', () => {

@@ -19,8 +19,6 @@ import { GenieFigureScopes } from './GenieAnswerFigures';
 import './GenieFigureMark';
 import type { GenieVerifiedClaim } from '../../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SWEEP_ANSWER = [
   'I asked the governed space to plan this request itself; it decomposed the question into 8 sub-analyses.',
   '**Which segments have the highest opportunity, and how large is each segment?**',

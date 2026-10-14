@@ -34,8 +34,6 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer: vi.fn(), showEvidence: true, showConfidence: true }),
 }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** The first import of the Score anatomy chunk transforms its module graph: allow for a loaded machine. */
 const WAIT = { timeout: 15_000 };
 vi.setConfig({ testTimeout: 30_000 });

@@ -26,8 +26,6 @@ import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { installLocalStorage } from '../../test/installLocalStorage';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const draftOutreach = vi.fn();
 const approve = vi.fn();
 const setDrawer = vi.fn();

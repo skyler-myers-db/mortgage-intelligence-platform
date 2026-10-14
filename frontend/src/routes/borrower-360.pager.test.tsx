@@ -16,8 +16,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { QueueContext } from '../lib/queueContext';
 import { BorrowerQueuePager } from './borrower-360.pager';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const IDS = ['B-0000000000001', 'B-0000000000002', 'B-0000000000003'];
 const QUEUE: QueueContext = { epoch: 'e1', search: '?state=IL', label: 'IL', ids: IDS };
 

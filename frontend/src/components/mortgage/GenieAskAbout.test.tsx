@@ -29,8 +29,6 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer, showEvidence: true, setLastBorrowerId, saveLead, isLeadSaved: () => false }),
 }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SEGMENT: SegmentSummary = {
   code: 'itm',
   name: 'Prime Refi Candidates',

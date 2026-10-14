@@ -16,8 +16,6 @@ import { RethrowToRootBoundary, appRouteObjects } from './appRouter';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { rootErrorOptions } from './lib/clientErrorLog';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function ShellThrow(): ReactNode {
   throw new Error('shell render failed for B-0TESTBORROWER');
 }

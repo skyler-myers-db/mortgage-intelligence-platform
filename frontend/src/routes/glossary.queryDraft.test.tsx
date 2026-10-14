@@ -26,8 +26,6 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import GlossaryRoute from './glossary';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let container: HTMLDivElement;
 let root: Root;
 let router: ReturnType<typeof createMemoryRouter>;

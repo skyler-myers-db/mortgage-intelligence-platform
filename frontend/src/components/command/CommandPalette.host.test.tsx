@@ -21,8 +21,6 @@ vi.mock('./CommandPaletteDialog', () => {
 
 import { CommandPalette } from './CommandPalette';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 async function flush(): Promise<void> {
   await act(async () => {
     for (let i = 0; i < 5; i += 1) await Promise.resolve();

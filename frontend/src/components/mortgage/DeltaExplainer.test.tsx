@@ -22,7 +22,6 @@ import DeltaExplainer from './DeltaExplainer';
 import { OTHER_STATES_LABEL, UNATTRIBUTED_LABEL, waterfallSteps, withinAttributionWindow } from './deltaExplainer.model';
 
 declare const process: { cwd(): string };
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const fetchMock = vi.fn();
 /** The tests' today: the baselines below sit inside (or, on purpose, outside) the route's lookback. */

@@ -26,8 +26,6 @@ vi.mock('../../lib/api', async () => {
 
 import { GenieAnswer } from './GenieAnswer';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   return {
     answer: 'The average loan age is 5.25 years.',

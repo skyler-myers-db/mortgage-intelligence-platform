@@ -32,8 +32,6 @@ import { currentCommandSelection } from '../command/commandSelection';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { DECISION_LEFT_LIST, _resetDecisionToastForTests } from './leadDecisionToast';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const draftOutreach = vi.fn();
 const approve = vi.fn();
 const setApproval = vi.fn();

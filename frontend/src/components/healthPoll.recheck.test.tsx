@@ -11,8 +11,6 @@ import { _resetSessionStatusForTests, markSessionExpired } from '../lib/sessionS
 import { ACTOR_A } from '../test/actorKeys';
 import { HealthProvider, useHealth } from './HealthProvider';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * The health recheck (lib/healthRecheck, D-identity-review-a3): the actor
  * gate suspends a tab whose shared stamp another tab changed and asks for one

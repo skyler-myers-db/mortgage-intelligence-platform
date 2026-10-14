@@ -12,8 +12,6 @@ import type { ComposedPlan, ComposePlanResponse, GrowthAgentWorkflow } from '../
 import type { GrowthAgentPlanProgressResponse } from '../types/growthAgent';
 import { ComposePlanCard, type ComposePlanRunControls } from './ask-genie.compose-plan-card';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const FALLBACK_WORKFLOW: GrowthAgentWorkflow = {
   id: 'daily_refi_brief',
   title: 'Daily Refi Opportunity Brief',

@@ -39,8 +39,6 @@ import {
   searchParamsWithTriageMode,
 } from '../../routes/lead-queue.filters';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const store = vi.hoisted(() => {
   let state: Record<string, 'approved' | 'rejected'> = {};
   const listeners = new Set<() => void>();

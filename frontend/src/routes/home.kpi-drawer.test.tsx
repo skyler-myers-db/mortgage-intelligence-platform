@@ -14,8 +14,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrawerSource } from '../components/AppContext';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const PREVIEW = {
   marketable_population: 12,
   high_intent_leads: 7,

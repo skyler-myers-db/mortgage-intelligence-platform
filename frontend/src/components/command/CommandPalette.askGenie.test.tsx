@@ -44,8 +44,6 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 
 import { CommandPalette, loadCommandPaletteDialog } from './CommandPalette';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 
 // The palette dialog is a lazy chunk behind the shell host (audit bundle-04):
 // load it once up front, as the idle preload leaves it in the app, so the

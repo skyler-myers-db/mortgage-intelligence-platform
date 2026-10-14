@@ -16,8 +16,6 @@ import { escapeLayerCount } from '../lib/escapeStack';
 import { modalLayerCount, topModalLayer } from '../lib/modalLayers';
 import { useModalDialog, type ModalBackdrop } from './useModalDialog';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 interface HarnessProps {
   open: boolean;
   onDismiss: () => void;

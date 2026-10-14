@@ -84,8 +84,6 @@ vi.mock('../components/mortgage/BorrowerOfferPreviewMock', () => {
 
 import OfferOrchestrator from './offer-orchestrator';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const BORROWER_ID = 'B-0000000000001';
 
 const BORROWER = {

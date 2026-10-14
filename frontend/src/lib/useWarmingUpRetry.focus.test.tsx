@@ -8,8 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_QUERY_STALE_MS, createMipQueryClient } from './queryClient';
 import { useWarmingUpRetry } from './useWarmingUpRetry';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * No passive refetch on window focus (2026-09-21 audit runtime-08; the
  * D-audit-reads-c3 rule that a ledger read is never polled or prefetched).

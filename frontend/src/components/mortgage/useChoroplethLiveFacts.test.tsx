@@ -43,8 +43,6 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 vi.mock('../../lib/apiClients/rateScenario', () => ({ rateScenarioApi: { rateSensitivity: mocks.rateSensitivity } }));
 vi.mock('./USStateMapData', () => ({ loadUsaStateMap: () => new Promise(() => undefined) }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;

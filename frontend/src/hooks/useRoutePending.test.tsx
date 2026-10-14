@@ -11,8 +11,6 @@ import { MemoryRouter, Outlet, RouterProvider, createMemoryRouter, useLocation }
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useRoutePending } from './useRoutePending';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function Probe() {
   const pending = useRoutePending();
   const { pathname } = useLocation();

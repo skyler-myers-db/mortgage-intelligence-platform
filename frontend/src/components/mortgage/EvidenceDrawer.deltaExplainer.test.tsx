@@ -41,8 +41,6 @@ vi.mock('../../lib/apiClients/assets', () => ({
   assetsApi: { assetFreshness: apiMocks.freshness },
 }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const PLAIN: DrawerSource = {
   title: 'Since your last login — refi candidates',
   short: 'portfolio_headline_metric_view.refi_economics_screen',

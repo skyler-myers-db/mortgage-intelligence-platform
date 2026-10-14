@@ -25,8 +25,6 @@ import type { RateSensitivityResponse } from '../../types/rateScenario';
 import { USChoroplethMap } from './USChoroplethMap';
 import { RATE_COHORT_NOTE } from './rateScenario.logic';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const mocks = vi.hoisted(() => ({
   stateRollups: vi.fn(),
   zipRollups: vi.fn(),

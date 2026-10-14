@@ -14,8 +14,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const state = vi.hoisted(() => ({
   borrower: { data: null as unknown, warmingUp: null as unknown, error: null as unknown, manualRetry: vi.fn() },
 }));

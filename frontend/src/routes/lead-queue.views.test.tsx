@@ -12,8 +12,6 @@ import {
   searchParamsWithPreset,
 } from './lead-queue.views';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const sp = (query: string) => new URLSearchParams(query);
 
 describe('queue presets (audit tables-09 phase 1)', () => {

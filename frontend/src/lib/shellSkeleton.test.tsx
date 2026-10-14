@@ -11,8 +11,6 @@ import { RouteNav } from '../components/layout/RouteNav';
 import { installLocalStorage } from '../test/installLocalStorage';
 import { SHELL_SKELETON_HTML, injectShellSkeleton, shellSkeleton } from './shellSkeleton';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * The pre-JS shell skeleton (audit bundle-10) is a copy of the shell's own
  * markup, so it is pinned to the REAL AppShell and RouteFallback: every grid

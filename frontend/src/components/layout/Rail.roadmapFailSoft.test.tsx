@@ -24,8 +24,6 @@ vi.mock('./RailRoadmap', () => ({ default: undefined }));
 
 import { Rail } from './Rail';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const PRESENTER: SessionResponse = { can_access_admin: true, can_approve: true, can_read_audit: true, presenter_mode: true };
 
 describe('the presenter roadmap chunk resolving to undefined', () => {

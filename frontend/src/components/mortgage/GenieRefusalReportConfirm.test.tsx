@@ -15,8 +15,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GenieRefusalReportConfirm, REFUSAL_CAPTURE_DISCLOSURE } from './GenieRefusalReportConfirm';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const QUESTION = 'Which zyrplax borrowers are eligible for a HELOC?';
 
 describe('GenieRefusalReportConfirm', () => {

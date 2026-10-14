@@ -15,8 +15,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const retryState = vi.hoisted(() => ({
   // One row: LeadTable mounts only for rows (a measured zero is an EmptyState).
   data: { leads: [{ borrower_id: 'B-0123456789ABC' }], totalMatching: 1, returnedRows: 1, truncatedAt: null },

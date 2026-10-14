@@ -78,8 +78,6 @@ vi.mock('../AppContext', () => ({
 
 import { GenieChat } from './GenieChat';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const START: GenieStartResult = {
   conversation_id: null,
   trusted_assets: ['mip.gold.borrower_360'],

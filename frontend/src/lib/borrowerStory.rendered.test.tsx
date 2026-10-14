@@ -13,8 +13,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Borrower360 } from '../types';
 import { BorrowerStoryCard } from '../components/mortgage/BorrowerStoryCard';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 // The audited dossier: the Chicago single-property borrower from the fixture
 // screenshot (5.75% rate, 88 bps above market).
 const SINGLE_PROPERTY = {

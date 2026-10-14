@@ -30,7 +30,6 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({ ActivationLoopP
 
 import { OfferDecisionOutcome, type OfferDecisionOutcomeProps } from './offer-orchestrator.decision';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
 
 const AUDIT_ID = '7d3e9f1a-2b4c-4d6e-8f0a-1b2c3d4e5f60';

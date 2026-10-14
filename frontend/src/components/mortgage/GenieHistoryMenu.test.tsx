@@ -34,8 +34,6 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 import { hasOpenOverlay } from '../../lib/keymap';
 import { GenieHistoryMenu } from './GenieHistoryMenu';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const PAST: GenieSessionSummary = {
   conversation_id: 'conv-past',
   title: 'Equity sweep',

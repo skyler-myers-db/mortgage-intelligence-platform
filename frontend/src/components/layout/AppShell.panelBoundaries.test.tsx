@@ -11,8 +11,6 @@ import { installLocalStorage } from '../../test/installLocalStorage';
 import { useApp } from '../AppContext';
 import { AppShell } from './AppShell';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * Panel crash containment on the REAL AppShell (audit 2026-09-21 states-01,
  * shell-01). The Console, the evidence drawer and the Genie chat are replaced

@@ -3,7 +3,8 @@
  */
 
 import { act } from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { settleInAct } from '../test/settleInAct';
 import type { GrowthAgentRunResponse } from '../types';
 import {
   HOME,
@@ -20,11 +21,19 @@ import {
   runMortgageGrowthAgent,
   setNativeValue,
   stateInput,
-  waitUntil,
+  waitUntil as waitUntilPolled,
 } from './ask-genie.growth-agent.test-support';
+
+/** Yield inside act first, so updates the last synchronous act started land in scope (quality-06). */
+async function waitUntil(condition: () => boolean): Promise<void> {
+  await settleInAct(1);
+  await waitUntilPolled(condition);
+}
 
 describe('AskGenie Growth Agent route panel', () => {
   registerGrowthAgentRoutePanelHooks();
+  // A run's late answers land inside act before the support's unmount (quality-06).
+  afterEach(() => settleInAct());
 
   it('renders governed workflows and blocks invalid state scopes before posting', async () => {
     mount();

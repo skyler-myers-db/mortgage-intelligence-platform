@@ -14,8 +14,6 @@ import { leadQueueFilterParams } from '../../routes/lead-queue.activeFilters';
 import { SEGMENT_CODES } from '../../routes/lead-queue.filters';
 import { LeadQueueEmptyState, queueFilterGeniePrompt } from './LeadQueueEmptyState';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const genieMocks = vi.hoisted(() => ({ openGenie: vi.fn(), requestGenieContextScope: vi.fn() }));
 vi.mock('../../lib/genieOpen', () => ({ openGenie: genieMocks.openGenie }));
 vi.mock('../../lib/apiClients/genieContextScope', () => ({ requestGenieContextScope: genieMocks.requestGenieContextScope }));

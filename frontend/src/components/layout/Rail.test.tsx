@@ -46,8 +46,6 @@ vi.mock('./RailRoadmap', async (importOriginal) => {
 
 import { Rail } from './Rail';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * The module rail (critic-05, shell-09; D-shell-deviations-e2,
  * deviation:rail-roadmap-presenter-only): M1-M4 render only in presenter

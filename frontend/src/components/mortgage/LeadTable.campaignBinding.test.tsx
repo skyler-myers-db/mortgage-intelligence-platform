@@ -10,8 +10,6 @@ import { RouterProvider } from 'react-router/dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CampaignSummary, LeadSummary } from '../../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const campaign = vi.fn();
 const draftOutreach = vi.fn();
 const approve = vi.fn();

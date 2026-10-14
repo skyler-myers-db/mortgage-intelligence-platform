@@ -13,8 +13,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * is replaced, so the test can make the whole shell throw.
  */
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const shell = vi.hoisted(() => ({
   render: (): ReactNode => {
     throw new Error('shell crashed while rendering borrower B-0TESTBORROWER');

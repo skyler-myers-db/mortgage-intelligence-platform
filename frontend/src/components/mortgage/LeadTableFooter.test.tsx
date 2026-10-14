@@ -25,8 +25,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LeadTableFooter, type LeadTableFooterProps } from './LeadTableFooter';
 import type { LeadTablePaging } from './LeadTable.types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function paging(overrides: Partial<LeadTablePaging> = {}): LeadTablePaging {
   return {
     viewId: 'view-1',

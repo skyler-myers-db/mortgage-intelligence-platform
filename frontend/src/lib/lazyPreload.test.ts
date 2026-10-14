@@ -8,8 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isChunkLoadError } from './chunkLoadError';
 import { hasRenderBlockedChunkLoad, lazyWithPreload, preloadBestEffort } from './lazyPreload';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function DummyComponent() {
   return null;
 }

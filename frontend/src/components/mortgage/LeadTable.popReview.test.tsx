@@ -25,8 +25,6 @@ import { installLocalStorage } from '../../test/installLocalStorage';
 import { parseLeadTablePlace, searchParamsWithLeadTablePlace } from '../../routes/lead-queue.filters';
 import { clearToasts, getToasts } from '../../lib/toast';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const draftOutreach = vi.fn();
 const approve = vi.fn();
 const setApproval = vi.fn();

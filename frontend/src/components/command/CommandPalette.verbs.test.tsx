@@ -97,25 +97,27 @@ describe('CommandPalette selection verbs', () => {
     act(() => root.render(<QueryClientProvider client={new QueryClient()}><CommandPalette /></QueryClientProvider>));
   });
   afterEach(() => {
-    unpublish?.();
+    act(() => {
+      unpublish?.();
+    });
     unpublish = null;
     act(() => root.unmount());
     container.remove();
   });
 
-  function openPalette() {
-    act(() => {
+  async function openPalette() {
+    await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
     });
   }
   const verbGroup = () => container.querySelector('[role="group"][aria-label="Selected borrowers"]');
 
-  it('lists the verbs first and runs them through the page handler, not an approval', () => {
+  it('lists the verbs first and runs them through the page handler, not an approval', async () => {
     const context = selection();
     act(() => {
       unpublish = publishCommandSelection(context);
     });
-    openPalette();
+    await openPalette();
 
     const rows = [...(verbGroup()?.querySelectorAll('[role="option"]') ?? [])];
     expect(rows.map((row) => row.textContent)).toEqual([
@@ -133,12 +135,12 @@ describe('CommandPalette selection verbs', () => {
     expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
   });
 
-  it('runs the reject verb through the page handler (the reason gate), never a reject', () => {
+  it('runs the reject verb through the page handler (the reason gate), never a reject', async () => {
     const context = selection();
     act(() => {
       unpublish = publishCommandSelection(context);
     });
-    openPalette();
+    await openPalette();
     const reject = [...(verbGroup()?.querySelectorAll('[role="option"]') ?? [])]
       .find((row) => row.textContent?.includes('Reject 11 selected…'));
     expect(reject?.textContent).toContain('Opens the rejection reason gate');
@@ -149,17 +151,17 @@ describe('CommandPalette selection verbs', () => {
     expect(container.querySelector('dialog.cmdk[open]')).toBeNull();
   });
 
-  it('shows no approve or reject verb for a selection the actor cannot decide', () => {
+  it('shows no approve or reject verb for a selection the actor cannot decide', async () => {
     act(() => {
       unpublish = publishCommandSelection(selection({ canApprove: false, canReject: false }));
     });
-    openPalette();
+    await openPalette();
     expect(verbGroup()?.textContent).not.toContain('Approve');
     expect(verbGroup()?.textContent).not.toContain('Reject');
     expect(verbGroup()?.textContent).toContain('Assign 12 selected…');
   });
 
-  it('drops the verbs when the page clears its selection', () => {
+  it('drops the verbs when the page clears its selection', async () => {
     act(() => {
       unpublish = publishCommandSelection(selection());
     });
@@ -167,11 +169,11 @@ describe('CommandPalette selection verbs', () => {
       unpublish?.();
       unpublish = null;
     });
-    openPalette();
+    await openPalette();
     expect(verbGroup()).toBeNull();
   });
 
-  it('Cmd-K never mounts the palette under a native modal dialog (the approve review)', () => {
+  it('Cmd-K never mounts the palette under a native modal dialog (the approve review)', async () => {
     // The palette dialog stays mounted once rendered: an open one has `open`.
     const palette = () => container.querySelector('dialog.cmdk[open][aria-label="Command palette"]');
     const dialog = document.createElement('dialog');
@@ -181,20 +183,20 @@ describe('CommandPalette selection verbs', () => {
       else dialog.setAttribute('open', '');
     });
     try {
-      openPalette();
+      await openPalette();
       expect(palette(), 'no inert, unseen palette under the modal').toBeNull();
     } finally {
       dialog.remove();
     }
-    openPalette();
+    await openPalette();
     expect(palette(), 'the chord works again once the modal is gone').not.toBeNull();
   });
 
-  it('shows Shift A / Shift R on the verbs only while the Lead Queue binds them and single keys are on', () => {
+  it('shows Shift A / Shift R on the verbs only while the Lead Queue binds them and single keys are on', async () => {
     act(() => {
       unpublish = publishCommandSelection(selection());
     });
-    openPalette();
+    await openPalette();
     const verbRow = (label: string) => [...(verbGroup()?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])]
       .find((row) => row.textContent?.includes(label));
     const keycaps = (row: HTMLElement | undefined) => [...(row?.querySelectorAll('.cmdk__row-hint kbd') ?? [])].map((kbd) => kbd.textContent);
@@ -216,9 +218,9 @@ describe('CommandPalette selection verbs', () => {
     act(() => unregister());
   });
 
-  it('Cmd-K is a modifier chord: it opens with single-key shortcuts switched off', () => {
-    setSingleKeyShortcutsEnabled(false);
-    openPalette();
+  it('Cmd-K is a modifier chord: it opens with single-key shortcuts switched off', async () => {
+    act(() => setSingleKeyShortcutsEnabled(false));
+    await openPalette();
     expect(container.querySelector('dialog.cmdk[open][aria-label="Command palette"]')).not.toBeNull();
   });
 });

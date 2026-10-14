@@ -12,8 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieActionSuggestion } from '../../types';
 import { GenieActions } from './GenieAnswerActions';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** Vitest reports an unhandled rejection through Node's process event. */
 declare const process: {
   on(event: 'unhandledRejection', listener: (reason: unknown) => void): void;

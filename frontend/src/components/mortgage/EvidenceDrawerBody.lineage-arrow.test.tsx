@@ -15,8 +15,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { DrawerSource } from '../AppContext';
 import type { LineageManifestResponse } from '../../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SOURCE: DrawerSource = {
   title: 'Refinance economics screen',
   short: 'Rate + equity screen',

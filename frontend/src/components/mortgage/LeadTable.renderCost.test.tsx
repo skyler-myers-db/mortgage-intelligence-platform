@@ -37,8 +37,6 @@ import type { LeadSummary, SalesTeamMember } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import type { LeadTableSort } from './LeadTable.types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const app = vi.hoisted(() => ({
   density: 'comfortable' as 'comfortable' | 'compact',
   // An AppContext field no table input reads (the open evidence drawer).

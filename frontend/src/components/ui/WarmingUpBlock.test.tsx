@@ -7,8 +7,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
 import { WAREHOUSE_WARMING_BODY, WarmingUpBlock, preloadWarmingExtras } from './WarmingUpBlock';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('../../lib/toast', () => ({ toast: toastMocks }));
 

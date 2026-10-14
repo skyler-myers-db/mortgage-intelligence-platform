@@ -25,8 +25,6 @@ vi.mock('../HealthProvider', () => ({ useWorkspaceHost: () => workspaceHost.valu
 
 import { GenieAnswer } from './GenieAnswer';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const HOST = 'https://dbc-test.cloud.databricks.com';
 const BORROWER = 'B-7K2M9QX4TB3PZ';
 

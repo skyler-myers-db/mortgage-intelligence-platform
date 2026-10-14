@@ -15,8 +15,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import type { Borrower360 as Borrower360Type } from '../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const state = vi.hoisted(() => ({ borrower: null as unknown }));
 
 vi.mock('../lib/useWarmingUpRetry', () => ({

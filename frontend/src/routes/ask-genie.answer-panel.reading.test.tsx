@@ -38,8 +38,6 @@ import { GenieAnnouncerRegion } from '../components/mortgage/GenieAnnouncerRegio
 import { __resetGenieAnnouncerForTests } from '../components/mortgage/useGenieAnnouncer';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function answer(text: string, id: string, overrides: Partial<GenieAnswer> = {}): GenieAnswer {
   return {
     answer: text,
