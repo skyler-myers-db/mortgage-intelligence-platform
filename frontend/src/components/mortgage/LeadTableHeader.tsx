@@ -4,6 +4,7 @@ import { Icon } from '../Icon';
 import { Button, SurfaceTitle } from '../Primitives';
 import { auditEventHref } from '../../lib/auditLinks';
 import { formatCount } from '../../lib/formatters';
+import { useAuditLedgerAccess } from '../../lib/sessionQuery';
 import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyboardHint';
 import { LeadTableViewControl } from './LeadTableViewControl';
 import type { LeadTableView } from './LeadTable.columns';
@@ -130,17 +131,11 @@ export function LeadTableHeader({
         <LeadTableShortcutsButton singleKeysOn={singleKeysOn} />
         {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
         {exportState.status === 'done' && (
-          <span className="muted fs-12" data-testid="lead-export-receipt">
-            Exported {formatCount(exportState.rowCount)} {exportState.rowCount === 1 ? 'row' : 'rows'}
-            {' · audit '}
-            {canAccessAdmin ? (
-              <Link className="mono" to={auditEventHref(exportState.receipt.audit_event_id)}>
-                {exportState.receipt.audit_event_id}
-              </Link>
-            ) : (
-              <span className="mono">{exportState.receipt.audit_event_id}</span>
-            )}
-          </span>
+          <LeadExportReceiptLine
+            rowCount={exportState.rowCount}
+            auditEventId={exportState.receipt.audit_event_id}
+            canAccessAdmin={canAccessAdmin}
+          />
         )}
         <Button
           size="sm"
@@ -174,5 +169,35 @@ export function LeadTableHeader({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * "Exported N rows · audit <id>" (flow-04 / critic-03): the id links to its
+ * ledger row for anyone who may read the ledger (an administrator or a
+ * read-only auditor, the same decision require_audit_reader makes), else it
+ * is the plain id. Its own component, mounted only once an export is done,
+ * so the header reads the session only then.
+ */
+function LeadExportReceiptLine({
+  rowCount,
+  auditEventId,
+  canAccessAdmin,
+}: {
+  rowCount: number;
+  auditEventId: string;
+  canAccessAdmin: boolean;
+}) {
+  const ledgerReader = useAuditLedgerAccess();
+  return (
+    <span className="muted fs-12" data-testid="lead-export-receipt">
+      Exported {formatCount(rowCount)} {rowCount === 1 ? 'row' : 'rows'}
+      {' · audit '}
+      {canAccessAdmin || ledgerReader ? (
+        <Link className="mono" to={auditEventHref(auditEventId)}>{auditEventId}</Link>
+      ) : (
+        <span className="mono">{auditEventId}</span>
+      )}
+    </span>
   );
 }
