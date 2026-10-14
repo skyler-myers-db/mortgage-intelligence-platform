@@ -37,6 +37,7 @@ import {
 import { api, ApiError, isAbortError } from '../api';
 import type { ApproveResult, OutreachDraftResult, RejectResult, ReviewMode } from '../apiTypes';
 import { invalidateOperationalQueries, queryKeys } from '../queryKeys';
+import { wireOfferCodeOrNull, wireRejectReasonCode } from '../outreachWireCodes';
 
 /**
  * Refetch the ACTIVE approval-request list (only a mounted Lead Queue reads
@@ -179,6 +180,9 @@ export async function draftForApproval(
 }
 
 async function approveLeadRequest(variables: ApproveLeadVariables): Promise<ApproveResult> {
+  // A row offer the route would refuse (WireCodeRefusedError): refused before
+  // the draft, so no DRAFT_OUTREACH row and no approve POST.
+  if (variables.offerCode) wireOfferCodeOrNull(variables.offerCode, 'approve');
   const draft = variables.reviewedDraft
     ?? await draftForApproval(variables.borrowerId, variables.campaignBinding, variables.signal);
   // The in-run offer check: an unsampled row whose drafted offer the gate
@@ -187,11 +191,13 @@ async function approveLeadRequest(variables: ApproveLeadVariables): Promise<Appr
     const offerCode = draft.offer_code ?? variables.offerCode ?? '';
     if (!variables.coveredOfferCodes.has(offerCode)) throw new OfferNotPreviewedError(offerCode);
   }
+  // The drafted (or row) code, narrowed before the approve POST; an absent one stays null.
+  const offerCode = wireOfferCodeOrNull(draft.offer_code ?? variables.offerCode, 'approve');
   return api.approve(
     variables.borrowerId,
     {
       evidence_ids: variables.evidenceIds,
-      offer_code: draft.offer_code ?? variables.offerCode,
+      offer_code: offerCode,
       draft_subject: draft.subject?.trim() ?? '',
       draft_body: draft.body,
       draft_generation_id: draft.generation_id,
@@ -212,11 +218,12 @@ async function approveLeadRequest(variables: ApproveLeadVariables): Promise<Appr
   );
 }
 
-function rejectLeadRequest(variables: RejectLeadVariables): Promise<RejectResult> {
+async function rejectLeadRequest(variables: RejectLeadVariables): Promise<RejectResult> {
+  // Both codes narrowed before any I/O (WireCodeRefusedError: nothing sent).
   const body = {
     evidence_ids: variables.evidenceIds,
-    offer_code: variables.offerCode,
-    rationale_code: variables.rationaleCode,
+    offer_code: wireOfferCodeOrNull(variables.offerCode, 'reject'),
+    rationale_code: wireRejectReasonCode(variables.rationaleCode),
     rationale: variables.rationale,
     campaign_id: variables.campaignBinding?.campaign_id ?? null,
     variant_name: variables.campaignBinding?.variant_name ?? null,

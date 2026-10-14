@@ -8,12 +8,13 @@
  */
 import type { ApproveResult, RejectResult, OutreachDraftResult, ReviewMode } from '../apiTypes';
 import { _newRequestId, postJson } from '../apiTransport';
+import type { WireOfferCode, WireRejectReasonCode } from '../outreachWireCodes';
 
 /** The `/api/outreach/approve` body as the client sends it. */
 export interface OutreachApproveRequest {
   borrower_id: string;
   actor: string;
-  offer_code?: string | null;
+  offer_code?: WireOfferCode | null;
   evidence_ids?: string[];
   draft_subject?: string | null;
   draft_body?: string | null;
@@ -41,9 +42,9 @@ export interface OutreachApproveRequest {
 export interface OutreachRejectRequest {
   borrower_id: string;
   actor: string;
-  offer_code?: string | null;
+  offer_code?: WireOfferCode | null;
   evidence_ids?: string[];
-  rationale_code: string;
+  rationale_code: WireRejectReasonCode;
   rationale?: string | null;
   channel?: 'email' | 'sms' | 'direct_mail';
   campaign_id?: string | null;
@@ -67,7 +68,7 @@ export const outreachApi = {
     borrower_id: string,
     opts: {
       actor?: string;
-      offer_code?: string | null;
+      offer_code?: WireOfferCode | null;
       evidence_ids?: string[];
       draft_subject?: string | null;
       draft_body?: string | null;
@@ -144,9 +145,9 @@ export const outreachApi = {
     borrower_id: string,
     opts: {
       actor?: string;
-      offer_code?: string | null;
+      offer_code?: WireOfferCode | null;
       evidence_ids?: string[];
-      rationale_code: string;
+      rationale_code: WireRejectReasonCode;
       rationale?: string | null;
       channel?: 'email' | 'sms' | 'direct_mail';
       campaign_id?: string | null;

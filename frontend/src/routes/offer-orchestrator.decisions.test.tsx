@@ -83,7 +83,7 @@ const SNAPSHOT = '2026-07-13T12:00:00Z';
 const BORROWER = {
   borrower_id: ID, source_refreshed_at: SNAPSHOT, display_name: 'Owner 1', city: 'Chicago', state: 'IL',
   zip: '60601', clip: 'CLIP-0001', segment_codes: ['itm'], equity_estimate: 180_000, rate_spread_bps: 125,
-  opportunity_score: 91, confidence: 0.94, recommended_offer_code: 'rate_term_refi',
+  opportunity_score: 91, confidence: 0.94, recommended_offer_code: 'refi',
   recommended_offer: 'Rate and term refinance review', why_now: 'Current lien rate exceeds the reviewed market threshold.',
   evidence_ids: ['ev-1'], approval_status: 'pending', clip_id: 'clip-1', owner_link_id: 'owner-1',
   subject_property: '100 Main St', avm_value: 500_000, current_lien_balance: 320_000, current_rate: 7.25, ltv: 0.64,
@@ -96,7 +96,7 @@ const BORROWER = {
 } as Borrower360;
 
 const RECOMMENDATION: OfferRecommendation = {
-  borrower_id: ID, source_refreshed_at: SNAPSHOT, offer_code: 'rate_term_refi', offer_type: 'refi',
+  borrower_id: ID, source_refreshed_at: SNAPSHOT, offer_code: 'refi', offer_type: 'refi',
   product_label: 'Rate and term refinance review', confidence: 0.94,
   rationale: 'Reviewed lien economics support a refinance conversation.', evidence_ids: ['ev-1', 'ev-2'],
   sources: ['mip.gold.borrower_360'], alternatives: [], thresholds_applied: { min_spread_bps: 75, min_equity_pct: 15 },
@@ -106,7 +106,7 @@ const LIFECYCLE: BorrowerLifecycle = { borrower_id: ID, approval_status: 'pendin
 
 const DRAFT: OutreachDraftResult = {
   generation_id: 'gen-email', response_hash: 'a'.repeat(64), source_refreshed_at: SNAPSHOT, borrower_id: ID,
-  campaign_id: null, variant_name: null, offer_code: 'rate_term_refi', channel: 'email', subject: 'email subject',
+  campaign_id: null, variant_name: null, offer_code: 'refi', channel: 'email', subject: 'email subject',
   body: 'email governed body', status: 'draft', disclosure_version: 'v1', disclosure_state: 'IL',
   marketing_eligible: true, generation_mode: 'supervisor', generator_label: 'Mortgage Growth Supervisor',
   strategy_summary: 'Use a clear, low-pressure review invitation.',
@@ -350,7 +350,7 @@ describe('Offer prior decisions', () => {
       await waitUntil(() => apiMocks.reject.mock.calls.length === 1);
       const { request_id: _requestId, ...body } = apiMocks.reject.mock.calls[0][1] as Record<string, unknown>;
       expect(body).toEqual({
-        offer_code: 'rate_term_refi',
+        offer_code: 'refi',
         evidence_ids: ['ev-1', 'ev-2'],
         channel: 'email',
         rationale_code: 'data_quality',

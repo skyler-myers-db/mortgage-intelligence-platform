@@ -10,11 +10,13 @@
  * wire-drift entry tagged to the lane that fixes it at the cause.
  */
 import type { ApiBody, ApiOk, ApiRequest, ApiResponse } from './api.gen';
-import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
+import type { DeepNoPhantomKeys, Equal, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
 import type { BorrowerDecisionEvent, BorrowerDecisionHistoryResponse } from '../lib/apiClients/borrowerDecisions';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from '../lib/apiClients/leadExport';
 import type { OfferRecommendRequest } from '../lib/apiClients/leads';
 import type { OutreachApproveRequest, OutreachDraftRequest, OutreachRejectRequest } from '../lib/apiClients/outreach';
+import type { WIRE_OFFER_CODES, WIRE_REJECT_REASON_CODES, WireOfferCode, WireRejectReasonCode } from '../lib/outreachWireCodes';
+import type { RejectReasonCode } from '../components/mortgage/LeadTable.types';
 import type { ApproveResult, OutreachDraftResult, RejectResult } from '../lib/apiTypes';
 import type { Borrower360, BorrowerLifecycle, BorrowerProof, EvidenceEvent, LeadScorePoints, LeadSummary, OfferAlternative, OfferRecommendation, ProofEvidenceEvent, ProofFormulaLine, ProofOfferBranch, ProofReproduceQuery, ProofScoreComponent, SourceLabel, WhyPanel } from '../types';
 import type { LeadCountResponse, LeadFacetBucket, LeadFacetsResponse, SavedView, SavedViewCreateRequest, SavedViewListResponse, SavedViewMutationResponse } from './leadFilters';
@@ -28,14 +30,19 @@ export type WireContractLeads = [
   Expect<DeepNoPhantomKeys<LeadExportReceiptRequest, ApiRequest<'LeadExportReceiptRequest'>>>,
   Expect<WireFits<OfferRecommendRequest, ApiRequest<'OfferRecommendRequest'>>>,
   Expect<DeepNoPhantomKeys<OfferRecommendRequest, ApiRequest<'OfferRecommendRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: offer_code is string | null in the client body but a closed offer-code union | null on the wire
   Expect<WireFits<OutreachApproveRequest, ApiRequest<'OutreachApproveRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachApproveRequest, ApiRequest<'OutreachApproveRequest'>>>,
   Expect<WireFits<OutreachDraftRequest, ApiRequest<'OutreachDraftRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachDraftRequest, ApiRequest<'OutreachDraftRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: offer_code is string | null and rationale_code is string in the client body, closed literal unions on the wire
   Expect<WireFits<OutreachRejectRequest, ApiRequest<'OutreachRejectRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachRejectRequest, ApiRequest<'OutreachRejectRequest'>>>,
+  // The approve / reject code vocabularies (lib/outreachWireCodes.ts) equal their wire unions, both ways.
+  Expect<Equal<(typeof WIRE_OFFER_CODES)[number], WireOfferCode>>,
+  Expect<Equal<WireOfferCode, NonNullable<ApiRequest<'OutreachRejectRequest'>['offer_code']>>>,
+  Expect<Equal<(typeof WIRE_REJECT_REASON_CODES)[number], WireRejectReasonCode>>,
+  Expect<Equal<RejectReasonCode, WireRejectReasonCode>>,
+  Expect<string extends WireOfferCode ? false : true>,
+  Expect<string extends RejectReasonCode ? false : true>,
   Expect<WireFits<ApiResponse<'Borrower360'>, Borrower360>>,
   Expect<NoPhantomKeys<Borrower360, ApiResponse<'Borrower360'>>>,
   Expect<WireFits<ApiResponse<'BorrowerProof'>, BorrowerProof>>,
