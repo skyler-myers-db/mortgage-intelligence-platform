@@ -12,6 +12,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { MarkdownAnswer, isSectionHeading, isSourceFootnote } from './GenieAnswer.markdown';
 import { GenieFigureScopes } from './GenieAnswerFigures';
+// Load the lazy mark's module graph (EvidenceHoverCard and its imports) at
+// file load, as GenieAnswerFigures.test.tsx does, so its first transform is
+// not charged to the first figure-mark test's timeout. renderScoped still
+// awaits the import to let React.lazy settle.
+import './GenieFigureMark';
 import type { GenieVerifiedClaim } from '../../types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
