@@ -49,7 +49,6 @@ export type WireContractPortfolio = [
   Expect<NoPhantomKeys<HouseholdDedupSummary, ApiResponse<'HouseholdDedupSummary'>>>,
   Expect<WireFits<ApiResponse<'PortfolioCreateResponse'>, PortfolioCreateResponse>>,
   Expect<NoPhantomKeys<PortfolioCreateResponse, ApiResponse<'PortfolioCreateResponse'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: trends values carry a plain-string direction on the wire but up | down | flat in KpiTrend
   Expect<WireFits<ApiResponse<'PortfolioPreview'>, PortfolioPreview>>,
   Expect<NoPhantomKeys<PortfolioPreview, ApiResponse<'PortfolioPreview'>>>,
   Expect<WireFits<ApiResponse<'SegmentSummary'>, SegmentSummary>>,

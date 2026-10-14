@@ -12404,6 +12404,11 @@
           },
           "direction": {
             "default": "flat",
+            "enum": [
+              "up",
+              "down",
+              "flat"
+            ],
             "title": "Direction",
             "type": "string"
           },

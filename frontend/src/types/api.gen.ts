@@ -1773,7 +1773,7 @@ export interface ResponseSchemas {
   KpiTrend: {
     comparison_label: string | null;
     delta_pct: number | null;
-    direction: string;
+    direction: "up" | "down" | "flat";
     note: string | null;
     series: number[];
   };
