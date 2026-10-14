@@ -11,7 +11,7 @@
       "ecosystem": "npm",
       "package": "vitest",
       "below": "5.0.0",
-      "reason": "vitest 5 needs its own budget and VRT batch, and the browser-mode packages move with it; not a Storybook peer constraint (D-platform-process-a)",
+      "reason": "vitest 5 needs its own budget and VRT batch, and the browser-mode packages move with it; no peer range forces it (D-platform-process-a)",
       "review_by": "2026-11-15"
     },
     {
