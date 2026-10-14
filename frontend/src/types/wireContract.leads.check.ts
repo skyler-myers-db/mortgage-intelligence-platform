@@ -11,25 +11,18 @@
  */
 import type { ApiBody, ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Equal, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
-import type { BorrowerDecisionEvent, BorrowerDecisionHistoryResponse } from '../lib/apiClients/borrowerDecisions';
-import type { LeadExportReceipt, LeadExportReceiptRequest } from '../lib/apiClients/leadExport';
-import type { OfferRecommendRequest } from '../lib/apiClients/leads';
+import type { LeadExportReceipt } from '../lib/apiClients/leadExport';
 import type { OutreachApproveRequest, OutreachDraftRequest, OutreachRejectRequest } from '../lib/apiClients/outreach';
 import type { WIRE_OFFER_CODES, WIRE_REJECT_REASON_CODES, WireOfferCode, WireRejectReasonCode } from '../lib/outreachWireCodes';
 import type { RejectReasonCode } from '../components/mortgage/LeadTable.types';
 import type { ApproveResult, OutreachDraftResult, RejectResult } from '../lib/apiTypes';
-import type { Borrower360, BorrowerLifecycle, BorrowerProof, EvidenceEvent, LeadScorePoints, LeadSummary, OfferAlternative, OfferRecommendation, ProofEvidenceEvent, ProofFormulaLine, ProofOfferBranch, ProofReproduceQuery, ProofScoreComponent, SourceLabel, WhyPanel } from '../types';
-import type { LeadCountResponse, LeadFacetBucket, LeadFacetsResponse, SavedView, SavedViewCreateRequest, SavedViewListResponse, SavedViewMutationResponse } from './leadFilters';
+import type { ApprovalStatus, Borrower360, BorrowerLifecycle, BorrowerProof, LeadSummary, OfferRecommendation, OutreachStatus, ProofReproduceQuery, ProofScoreComponent, WhyPanel } from '../types';
 import type { ApprovalRequestBatchView, ApprovalRequestCreate, ApprovalRequestCreated, ApprovalRequestList, ApprovalRequestRow, ApprovalRequestSkip, ApprovalRequestWithdrawBody, ApprovalRequestWithdrawn } from './approvalRequests';
 
 export type WireContractLeads = [
   // (i) schema-named hand types
   Expect<WireFits<ApiResponse<'LeadExportReceipt'>, LeadExportReceipt>>,
   Expect<NoPhantomKeys<LeadExportReceipt, ApiResponse<'LeadExportReceipt'>>>,
-  Expect<WireFits<LeadExportReceiptRequest, ApiRequest<'LeadExportReceiptRequest'>>>,
-  Expect<DeepNoPhantomKeys<LeadExportReceiptRequest, ApiRequest<'LeadExportReceiptRequest'>>>,
-  Expect<WireFits<OfferRecommendRequest, ApiRequest<'OfferRecommendRequest'>>>,
-  Expect<DeepNoPhantomKeys<OfferRecommendRequest, ApiRequest<'OfferRecommendRequest'>>>,
   Expect<WireFits<OutreachApproveRequest, ApiRequest<'OutreachApproveRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachApproveRequest, ApiRequest<'OutreachApproveRequest'>>>,
   Expect<WireFits<OutreachDraftRequest, ApiRequest<'OutreachDraftRequest'>>>,
@@ -43,52 +36,23 @@ export type WireContractLeads = [
   Expect<Equal<RejectReasonCode, WireRejectReasonCode>>,
   Expect<string extends WireOfferCode ? false : true>,
   Expect<string extends RejectReasonCode ? false : true>,
+  // The LeadSummary status vocabularies (P3 indexed aliases) stay closed unions.
+  Expect<string extends ApprovalStatus ? false : true>,
+  Expect<string extends OutreachStatus ? false : true>,
   Expect<WireFits<ApiResponse<'Borrower360'>, Borrower360>>,
   Expect<NoPhantomKeys<Borrower360, ApiResponse<'Borrower360'>>>,
   Expect<WireFits<ApiResponse<'BorrowerProof'>, BorrowerProof>>,
   Expect<NoPhantomKeys<BorrowerProof, ApiResponse<'BorrowerProof'>>>,
-  Expect<WireFits<ApiResponse<'EvidenceEvent'>, EvidenceEvent>>,
-  Expect<NoPhantomKeys<EvidenceEvent, ApiResponse<'EvidenceEvent'>>>,
   Expect<WireFits<ApiResponse<'LeadSummary'>, LeadSummary>>,
   Expect<NoPhantomKeys<LeadSummary, ApiResponse<'LeadSummary'>>>,
-  Expect<WireFits<ApiResponse<'LeadScorePoints'>, LeadScorePoints>>,
-  Expect<NoPhantomKeys<LeadScorePoints, ApiResponse<'LeadScorePoints'>>>,
-  Expect<WireFits<ApiResponse<'OfferAlternative'>, OfferAlternative>>,
-  Expect<NoPhantomKeys<OfferAlternative, ApiResponse<'OfferAlternative'>>>,
   Expect<WireFits<ApiResponse<'OfferRecommendation'>, OfferRecommendation>>,
   Expect<NoPhantomKeys<OfferRecommendation, ApiResponse<'OfferRecommendation'>>>,
-  Expect<WireFits<ApiResponse<'ProofEvidenceEvent'>, ProofEvidenceEvent>>,
-  Expect<NoPhantomKeys<ProofEvidenceEvent, ApiResponse<'ProofEvidenceEvent'>>>,
-  Expect<WireFits<ApiResponse<'ProofFormulaLine'>, ProofFormulaLine>>,
-  Expect<NoPhantomKeys<ProofFormulaLine, ApiResponse<'ProofFormulaLine'>>>,
-  Expect<WireFits<ApiResponse<'ProofOfferBranch'>, ProofOfferBranch>>,
-  Expect<NoPhantomKeys<ProofOfferBranch, ApiResponse<'ProofOfferBranch'>>>,
-  Expect<WireFits<ApiResponse<'ProofReproduceQuery'>, ProofReproduceQuery>>,
-  Expect<NoPhantomKeys<ProofReproduceQuery, ApiResponse<'ProofReproduceQuery'>>>,
   Expect<WireFits<ApiResponse<'ProofScoreComponent'>, ProofScoreComponent>>,
   Expect<NoPhantomKeys<ProofScoreComponent, ApiResponse<'ProofScoreComponent'>>>,
-  Expect<WireFits<ApiResponse<'SourceLabel'>, SourceLabel>>,
-  Expect<NoPhantomKeys<SourceLabel, ApiResponse<'SourceLabel'>>>,
+  Expect<WireFits<ApiResponse<'ProofReproduceQuery'>, ProofReproduceQuery>>,
+  Expect<NoPhantomKeys<ProofReproduceQuery, ApiResponse<'ProofReproduceQuery'>>>,
   Expect<WireFits<ApiResponse<'WhyPanel'>, WhyPanel>>,
   Expect<NoPhantomKeys<WhyPanel, ApiResponse<'WhyPanel'>>>,
-  Expect<WireFits<ApiResponse<'LeadCountResponse'>, LeadCountResponse>>,
-  Expect<NoPhantomKeys<LeadCountResponse, ApiResponse<'LeadCountResponse'>>>,
-  Expect<WireFits<ApiResponse<'LeadFacetBucket'>, LeadFacetBucket>>,
-  Expect<NoPhantomKeys<LeadFacetBucket, ApiResponse<'LeadFacetBucket'>>>,
-  Expect<WireFits<ApiResponse<'LeadFacetsResponse'>, LeadFacetsResponse>>,
-  Expect<NoPhantomKeys<LeadFacetsResponse, ApiResponse<'LeadFacetsResponse'>>>,
-  Expect<WireFits<ApiResponse<'SavedView'>, SavedView>>,
-  Expect<NoPhantomKeys<SavedView, ApiResponse<'SavedView'>>>,
-  Expect<WireFits<SavedViewCreateRequest, ApiRequest<'SavedViewCreateRequest'>>>,
-  Expect<DeepNoPhantomKeys<SavedViewCreateRequest, ApiRequest<'SavedViewCreateRequest'>>>,
-  Expect<WireFits<ApiResponse<'SavedViewListResponse'>, SavedViewListResponse>>,
-  Expect<NoPhantomKeys<SavedViewListResponse, ApiResponse<'SavedViewListResponse'>>>,
-  Expect<WireFits<ApiResponse<'SavedViewMutationResponse'>, SavedViewMutationResponse>>,
-  Expect<NoPhantomKeys<SavedViewMutationResponse, ApiResponse<'SavedViewMutationResponse'>>>,
-  Expect<WireFits<ApiResponse<'BorrowerDecisionEvent'>, BorrowerDecisionEvent>>,
-  Expect<NoPhantomKeys<BorrowerDecisionEvent, ApiResponse<'BorrowerDecisionEvent'>>>,
-  Expect<WireFits<ApiResponse<'BorrowerDecisionHistoryResponse'>, BorrowerDecisionHistoryResponse>>,
-  Expect<NoPhantomKeys<BorrowerDecisionHistoryResponse, ApiResponse<'BorrowerDecisionHistoryResponse'>>>,
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'GET /api/v1/borrowers/{borrower_id}/lifecycle'>, BorrowerLifecycle>>,
   Expect<NoPhantomKeys<BorrowerLifecycle, ApiOk<'GET /api/v1/borrowers/{borrower_id}/lifecycle'>>>,

@@ -1,3 +1,4 @@
+import type { ApiResponse } from './types/api.gen';
 import type { AssignmentLifecycleStatus } from './types/loanOfficer';
 import type { LeadScorePoints, SourceLabel } from './types/borrower';
 
@@ -25,19 +26,10 @@ export type SegmentCode =
 /** S1.3 three-state source gate resolved from gold.source_readiness. */
 export type SegmentSourceStatus = 'connected' | 'not_connected' | 'not_licensed';
 export type OfferType = 'refi' | 'heloc' | 'cash_out' | 'purchase' | 'retention' | 'recapture';
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'hold';
-export type OutreachStatus = 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied';
+export type ApprovalStatus = ApiResponse<'LeadSummary'>['approval_status'];
+export type OutreachStatus = ApiResponse<'LeadSummary'>['outreach_status'];
 
-export interface EvidenceEvent {
-  evidence_id: string;
-  source_product: string;
-  source_table: string;
-  signal_type: string;
-  signal_value: string;
-  display_text: string;
-  confidence: number;
-  timestamp: string;
-}
+export type EvidenceEvent = ApiResponse<'EvidenceEvent'>;
 
 /** One value/count pair in a borrower-dimension mix, sorted by count descending. */
 export interface DimensionFacetCount {
@@ -324,11 +316,7 @@ export interface CampaignListResponse {
   campaigns: CampaignSummary[];
 }
 
-export interface OfferAlternative {
-  offer_code: string;
-  product_label: string;
-  reason_not_chosen: string;
-}
+export type OfferAlternative = ApiResponse<'OfferAlternative'>;
 
 export interface OfferRecommendation {
   borrower_id: string;

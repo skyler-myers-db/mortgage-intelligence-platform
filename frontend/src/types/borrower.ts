@@ -1,23 +1,13 @@
+import type { ApiResponse } from './api.gen';
 import type { EvidenceEvent, LeadSummary } from '../types';
 import type { ProofMargin } from './proofMargins';
 
-export interface ProofEvidenceEvent {
-  evidence_id: string;
-  source_product: string;
-  signal_type: string;
-  signal_value: string;
-  display_text: string;
-  confidence: number;
-  timestamp: string;
-}
+export type ProofEvidenceEvent = ApiResponse<'ProofEvidenceEvent'>;
 
 /** Business-friendly label for a UC source (2026-04-22). `name` is the
  *  raw UC object name (drives drawer lineage); `display_label` is the
  *  human-readable chip text (e.g. "In-the-money rule"). */
-export interface SourceLabel {
-  name: string;
-  display_label: string;
-}
+export type SourceLabel = ApiResponse<'SourceLabel'>;
 
 export interface WhyPanel {
   rate_spread_bps: number;
@@ -36,13 +26,7 @@ export interface WhyPanel {
  *  (audit wow-stage-2). Each is the fn_lead_score weight times its 0..100
  *  sub-score; the five sum, rounded half to even and clipped to 0..100, to
  *  opportunity_score. A null `score_points` is absent, never 0. */
-export interface LeadScorePoints {
-  economic_incentive: number;
-  intent_trigger: number;
-  fit: number;
-  relationship: number;
-  evidence: number;
-}
+export type LeadScorePoints = ApiResponse<'LeadScorePoints'>;
 
 export interface Borrower360 extends LeadSummary {
   source_refreshed_at?: string | null;
@@ -78,12 +62,7 @@ export interface Borrower360 extends LeadSummary {
   first_itm_week?: string | null;
 }
 
-export interface ProofFormulaLine {
-  label: string;
-  expression: string;
-  result: string;
-  source?: string | null;
-}
+export type ProofFormulaLine = ApiResponse<'ProofFormulaLine'>;
 
 export type ProofScoreComponentKey =
   | 'economic_incentive'
@@ -103,13 +82,7 @@ export interface ProofScoreComponent {
   fair_lending_note?: string | null;
 }
 
-export interface ProofOfferBranch {
-  code: string;
-  label: string;
-  passed: boolean;
-  selected: boolean;
-  reason: string;
-}
+export type ProofOfferBranch = ApiResponse<'ProofOfferBranch'>;
 
 export interface ProofReproduceQuery {
   title: string;
