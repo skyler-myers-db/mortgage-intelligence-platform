@@ -23,6 +23,7 @@ import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -233,3 +234,63 @@ def test_the_board_commit_re_plans_on_the_transaction_cursor(conn_kwargs: dict[s
     assert {(a.borrower_id, a.assigned_to_email) for a in assignments} == {(BORROWERS[0], LO1), (BORROWERS[1], LO2)}
     assert store.open_assignment_counts([LO1, LO2]) == {LO1: 1, LO2: 1}
     assert store.active_borrower_ids(BORROWERS) == {BORROWERS[0], BORROWERS[1]}
+
+
+def test_the_workload_counts_open_stale_assigned_and_worked_in_both_windows(conn_kwargs: dict[str, str]) -> None:
+    # W5e w5-analytics item 10 (critic-10 6c): the EXACT workload statement on
+    # PostgreSQL. Rows are placed relative to now() so each falls in a known
+    # window: the period is the last 7 days, the previous one the 7 before.
+    store = _store(conn_kwargs)
+    [today] = _rows(conn_kwargs, "SELECT current_date AS d", {})
+    to_date = today["d"]
+    window = {
+        "from_date": (to_date - timedelta(days=6)).isoformat(),
+        "to_date": to_date.isoformat(),
+        "previous_from": (to_date - timedelta(days=13)).isoformat(),
+        "previous_to": (to_date - timedelta(days=7)).isoformat(),
+        "stale_days": 7,
+    }
+    ids = [f"B-0000000000WL{n}" for n in range(1, 5)]
+    with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+        for borrower_id, days_ago, released in [
+            (ids[0], 2, False),  # open, assigned this period, worked this period
+            (ids[1], 10, False),  # open and STALE: older than 7 days, no disposition since
+            (ids[2], 9, False),  # open, a disposition after it was assigned: not stale; worked previous
+            (ids[3], 3, True),  # released: not open, still assigned this period
+        ]:
+            conn.execute(
+                "INSERT INTO mip_app.lead_assignments (borrower_id, assigned_to_email, assigned_by, assigned_at, released_at) "
+                "VALUES (%(bid)s, %(lo)s, %(by)s, now() - make_interval(days => %(days)s), "
+                "CASE WHEN %(released)s THEN now() - interval '1 day' END)",
+                {"bid": borrower_id, "lo": LO1, "by": ADMIN, "days": days_ago, "released": released},
+            )
+        for borrower_id, days_ago in [(ids[0], 1), (ids[0], 1), (ids[2], 8)]:
+            conn.execute(
+                "INSERT INTO mip_app.call_dispositions (borrower_id, lo_email, outcome, occurred_at) "
+                "VALUES (%(bid)s, %(lo)s, 'connected', now() - make_interval(days => %(days)s))",
+                {"bid": borrower_id, "lo": LO1, "days": days_ago},
+            )
+
+    [before] = _rows(conn_kwargs, "SELECT COUNT(*) AS n FROM mip_app.action_audit", {})
+    manager = store.visible_lo_emails(actor="sam.manager@summit.example")
+    rows = {row["email"]: row for row in store.workload(**window, visible_lo_emails=manager)}
+
+    # Every active loan officer in the manager's scope is listed, worked or not.
+    assert set(rows) == {f"lo0{n}@summit.example" for n in range(1, 7)}
+    lo1 = rows[LO1]
+    assert (lo1["open_count"], lo1["stale_count"]) == (3, 1)
+    assert (lo1["assigned_count"], lo1["previous_assigned_count"]) == (2, 2)
+    # Worked counts distinct borrowers: two calls to one borrower is one.
+    assert (lo1["worked_count"], lo1["previous_worked_count"]) == (1, 1)
+    assert lo1["display_label"] == "Summit LO 01" and lo1["capacity_per_day"] == 35
+    lo2 = rows[LO2]
+    assert [lo2[key] for key in ("open_count", "stale_count", "assigned_count", "worked_count")] == [0, 0, 0, 0]
+
+    # Scope: only the visible officers; an admin (None) sees every loan officer.
+    assert [row["email"] for row in store.workload(**window, visible_lo_emails={LO2})] == [LO2]
+    assert len(store.workload(**window, visible_lo_emails=None)) == 6
+    # stale_days is the bound: at 11 days the 10-day-old assignment is not stale yet.
+    assert store.workload(**{**window, "stale_days": 11}, visible_lo_emails={LO1})[0]["stale_count"] == 0
+    # The reads wrote nothing: no audit row.
+    [after] = _rows(conn_kwargs, "SELECT COUNT(*) AS n FROM mip_app.action_audit", {})
+    assert after["n"] == before["n"]

@@ -49,6 +49,7 @@ from backend.api import (
     refusal_reports_admin,
     sales,
     sales_followups,
+    sales_workload,
     segments,
     session,
     telemetry,
@@ -81,6 +82,8 @@ API_ROUTERS = [
     approval_requests.router,
     outreach_revoke.router,
     sales.router,
+    # W5e w5-analytics (critic-10 6c): the audit-free per-officer workload read.
+    sales_workload.router,
     sales_followups.router,
     lead_snooze.router,
     loan_officers.router,
