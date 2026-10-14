@@ -284,8 +284,14 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
   });
 
   it('rings the listbox cursor in HighlightText, since its inset ring sits on the shared fill', () => {
-    const cursor = declarations.filter((d) => d.selector === '.filter-menu__item.is-focused');
-    expect(cursor.map((d) => [d.property, d.value])).toEqual([['--focus-ring-color', 'HighlightText']]);
+    // The filter menu's, the palette's and the topbar search's cursors
+    // (css-06 / a11y-10): a Highlight ring on the Highlight fill was invisible.
+    for (const cursorSelector of ['.filter-menu__item.is-focused', '.cmdk__row.is-active', '.topbar__search-result.is-active']) {
+      const ring = declarations.filter((d) => (
+        d.property === '--focus-ring-color' && selectorList(d.selector).map(normalize).includes(cursorSelector)
+      ));
+      expect(ring.map((d) => d.value), cursorSelector).toEqual(['HighlightText']);
+    }
   });
 
   it('keeps the score band as a border style, since score chips carry text', () => {

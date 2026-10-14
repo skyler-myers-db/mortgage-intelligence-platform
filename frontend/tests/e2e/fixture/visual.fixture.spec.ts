@@ -262,6 +262,19 @@ for (const theme of FIXTURE_THEMES) {
       expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics-sales-ops · distribution board');
     });
 
+    // P (W5d w5-palette-offer-sales-loop, shell-07): the palette's provider
+    // groups for a typed query (Pages & actions, Saved views, Segments,
+    // Glossary, Ask Genie). Audit-free reads only.
+    test('home · command-palette-groups', async ({ app, mockApi, page }) => {
+      const { naturalLoad } = await load(app, mockApi, route('home'), theme);
+      const palette = await app.openCommandPalette();
+      await palette.getByRole('combobox').fill('refi');
+      await expect(palette.getByRole('group', { name: 'Glossary' })).toBeVisible();
+      await app.settle();
+      await check(page, 'home', theme, 'command-palette-groups');
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'home · command-palette-groups');
+    });
+
     // E: compact density.
     test('lead-queue · compact density', async ({ app, mockApi, page }) => {
       await app.setDensity('compact');

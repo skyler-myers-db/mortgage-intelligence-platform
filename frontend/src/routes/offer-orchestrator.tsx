@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation, useParams } from 'react-router';
 import type { ApproveResult, RejectResult } from '../lib/apiTypes';
@@ -14,7 +14,6 @@ import { isDecisionPending } from '../lib/mutations/outreach';
 import { intentFingerprint, useIntentRequestIds } from '../lib/mutations/requestIds';
 import { queueHref, useQueueContext } from '../lib/queueContext';
 import { queuePosition } from '../lib/queuePosition';
-import { offerPath } from '../lib/routeMeta';
 import { queryKeys } from '../lib/queryKeys';
 import { usePresenterMode } from '../lib/presenterMode';
 import { PageShell } from '../components/layout/PageShell';
@@ -36,7 +35,9 @@ import { draftProofMatchesSnapshot, resolveOfferApprovalStatus } from './offer-o
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
 import { OfferDecisionOutcome } from './offer-orchestrator.decision';
 import { OfferPriorDecisions } from './offer-orchestrator.priorDecisions';
+import { bindingShowsPager, useVerifiedOfferBinding } from './offer-orchestrator.binding';
 import { announceApprovalRouting, offerUnsavedMessage } from './offer-orchestrator.feedback';
+import { OfferWriteFailureCopy, type OfferWriteFailure } from './offer-orchestrator.errors';
 import {
   OfferLoadErrorRoute,
   OfferOrchestratorEmptyRoute,
@@ -55,15 +56,6 @@ const PREVIEW_MOCK_CHUNK = lazyModule(() => import('../components/mortgage/Borro
 // carries and verifies additional stored channel variants.
 const SAVED_CAMPAIGN_OUTREACH_CHANNELS: readonly OutreachChannel[] = ['email'];
 
-/** "Couldn't write approval: …" / "Couldn't record rejection: …", verbatim from before the port. */
-function writeErrorCopy(err: unknown, lead: string): string {
-  return err instanceof Error ? `${lead}: ${err.message}` : `${lead}.`;
-}
-
-function draftSaveErrorCopy(err: unknown): string {
-  return err instanceof Error ? `Couldn't save draft: ${err.message}` : "Couldn't save draft.";
-}
-
 export default function OfferOrchestrator() {
   const { id } = useParams();
   const location = useLocation();
@@ -71,8 +63,14 @@ export default function OfferOrchestrator() {
   // the pager, the Next-in-queue step and the queue-aware back links.
   const queue = useQueueContext(location.state, id ?? null);
   const { campaignBinding, campaignBindingError } = useOfferCampaignBinding();
+  // The pager and Next in queue carry a VERIFIED binding only; an unverified
+  // one hides them (shell-04 / flow-09, offer-orchestrator.binding).
+  const binding = useVerifiedOfferBinding(campaignBinding, campaignBindingError, queue);
+  const steppingQueue = bindingShowsPager(binding.state) ? queue : null;
   const queryClient = useQueryClient();
-  const [approveError, setApproveError] = useState<string | null>(null);
+  // A local gate refusal is a plain sentence; a failed write keeps its lead
+  // phrase and a described cause, never err.message (states-04).
+  const [approveError, setApproveError] = useState<string | OfferWriteFailure | null>(null);
   // Counts this view's explicit re-reads (Regenerate / Retry draft, a saved
   // draft's reset, the load-error Retry): the old effect's reloadToken, kept
   // only so a decision's one-shot receipt reveal is tied to the load it was
@@ -98,13 +96,19 @@ export default function OfferOrchestrator() {
   // ledger is one a reviewer chose.
   const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode | ''>('');
   const rejectReasonRef = useRef<HTMLSelectElement>(null);
+  // 'Other' needs a note: a field error on the note (critic-04), never a bar alert.
+  const rejectNoteRef = useRef<HTMLTextAreaElement>(null);
+  const [rejectNoteError, setRejectNoteError] = useState<string | null>(null);
   const salesTeam = useOfferSalesTeam();
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
   const [borrowerPreviewOpen, setBorrowerPreviewOpen] = useState(false);
+  // Once opened the mock stays mounted, so its close plays the exit (motion-01);
+  // a customer session never opens it, so never imports the chunk.
+  const [previewEverOpened, setPreviewEverOpened] = useState(false);
   const presenterMode = usePresenterMode();
-  const previewChunk = useLazyModule(PREVIEW_MOCK_CHUNK, presenterMode && borrowerPreviewOpen);
-  const BorrowerOfferPreviewMock = presenterMode && borrowerPreviewOpen ? previewChunk.module?.BorrowerOfferPreviewMock : undefined;
+  const previewChunk = useLazyModule(PREVIEW_MOCK_CHUNK, presenterMode && previewEverOpened);
+  const BorrowerOfferPreviewMock = presenterMode && previewEverOpened ? previewChunk.module?.BorrowerOfferPreviewMock : undefined;
   const allowedDraftChannels = campaignBinding
     ? SAVED_CAMPAIGN_OUTREACH_CHANNELS
     : undefined;
@@ -137,7 +141,6 @@ export default function OfferOrchestrator() {
   const requestIds = useIntentRequestIds();
   const approving = approveMutation.isPending || rejectMutation.isPending;
   const draftSavePending = draftSave.isPending;
-  const draftSaveError = draftSave.error ? draftSaveErrorCopy(draftSave.error) : null;
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${activeDraftChannel}` : null;
   // The route is the ONE observer of both reads (offer-orchestrator.queries):
@@ -185,14 +188,15 @@ export default function OfferOrchestrator() {
 
   // shell-04 / flow-09: step offer to offer through the queue. The keys are
   // off while the reject rationale is open (the only typed work here) and,
-  // with the buttons, while a decision is on the wire.
+  // with the buttons, while a decision is on the wire or the campaign
+  // binding is still being verified.
   const pager = (
     <QueuePager
       borrowerId={id}
-      queue={queue}
-      pathFor={offerPath}
+      queue={steppingQueue}
+      pathFor={binding.pathFor}
       hotkeys={!rejectReviewOpen && !approving}
-      disabled={approving}
+      disabled={approving || binding.state === 'validating'}
     />
   );
 
@@ -261,6 +265,22 @@ export default function OfferOrchestrator() {
     setLoadGeneration((n) => n + 1);
     rereadSnapshotAndDraft();
   };
+  // A draft-proof refusal of the save offers the same explicit Regenerate
+  // draft; any other refusal reads as a neutral sentence (states-04).
+  const draftSaveError: ReactNode = draftSave.error
+    ? (
+      <OfferWriteFailureCopy
+        failure={{ lead: "Couldn't save draft.", cause: draftSave.error }}
+        subject="the draft"
+        scope="draft-save"
+        onRegenerate={() => {
+          draftSave.reset();
+          regenerateDraft();
+        }}
+        regenerateDisabled={approving || draftSavePending}
+      />
+    )
+    : null;
 
   const onApprove = async () => {
     // Synchronous latch: a decision for this borrower is already on the wire
@@ -298,7 +318,7 @@ export default function OfferOrchestrator() {
     try {
       res = await approveMutation.mutateAsync(variables);
     } catch (err: unknown) {
-      setApproveError(writeErrorCopy(err, "Couldn't write approval"));
+      setApproveError({ lead: "Couldn't write approval.", cause: err });
       return;
     }
     if (!res.approved) {
@@ -339,7 +359,8 @@ export default function OfferOrchestrator() {
       return;
     }
     if (rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0) {
-      setApproveError('Rejection reason "Other" requires a rationale note.');
+      setRejectNoteError('Add a note when the reason is Other.');
+      rejectNoteRef.current?.focus();
       return;
     }
     // Confirm reject waits for this open's snapshot read, like Approve.
@@ -360,7 +381,7 @@ export default function OfferOrchestrator() {
     try {
       res = await rejectMutation.mutateAsync(variables);
     } catch (err: unknown) {
-      setApproveError(writeErrorCopy(err, "Couldn't record rejection"));
+      setApproveError({ lead: "Couldn't record rejection.", cause: err });
       return;
     }
     if (!res.rejected) {
@@ -374,7 +395,24 @@ export default function OfferOrchestrator() {
     setRejectReviewOpen(false);
     setRejectReasonCode('');
     setRejectRationale('');
+    setRejectNoteError(null);
   };
+
+  // A draft-proof refusal offers an explicit Regenerate draft in the alert:
+  // one audited draft read on the reviewer's click, never automatic, never a
+  // reload. Any other refusal reads as a neutral sentence.
+  const approveErrorNode: ReactNode = approveError === null || typeof approveError === 'string'
+    ? approveError
+    : (
+      <OfferWriteFailureCopy
+        failure={approveError}
+        onRegenerate={() => {
+          setApproveError(null);
+          regenerateDraft();
+        }}
+        regenerateDisabled={approving}
+      />
+    );
 
   if (snapshot.warmingUp) {
     return <OfferWarmingRoute borrowerId={id} warmingUp={snapshot.warmingUp} pager={pager} />;
@@ -385,6 +423,7 @@ export default function OfferOrchestrator() {
       <OfferLoadErrorRoute
         borrowerId={id}
         loadError={snapshot.loadError}
+        loadErrorCause={snapshot.loadErrorCause}
         notFound={snapshot.notFound}
         backTo={queueHref(queue)}
         pager={pager}
@@ -404,7 +443,7 @@ export default function OfferOrchestrator() {
     <PageShell
       eyebrow="Offer & Outreach"
       title="Review and approve outreach"
-      lede="Review the selected offer path, alternatives considered, thresholds applied, and borrower-facing draft. Approve to place the decision in the governed internal queue; reject to drop the borrower."
+      lede="Review the selected offer path, alternatives considered, thresholds applied, and borrower-facing draft. Approve outreach places the decision in the governed internal queue; Reject drops the borrower."
       heroRight={
         b && (
           <>
@@ -422,7 +461,10 @@ export default function OfferOrchestrator() {
                 variant="ghost"
                 size="sm"
                 icon="user"
-                onClick={() => setBorrowerPreviewOpen(true)}
+                onClick={() => {
+                  setPreviewEverOpened(true);
+                  setBorrowerPreviewOpen(true);
+                }}
                 data-testid="preview-borrower-offer"
               >
                 Preview borrower view
@@ -462,7 +504,7 @@ export default function OfferOrchestrator() {
         </div>
       )}
       {BorrowerOfferPreviewMock && b && (
-        <BorrowerOfferPreviewMock borrower={b} onClose={() => setBorrowerPreviewOpen(false)} />
+        <BorrowerOfferPreviewMock borrower={b} open={borrowerPreviewOpen} onClose={() => setBorrowerPreviewOpen(false)} />
       )}
       <OfferReviewGrid
         borrower={b}
@@ -474,6 +516,7 @@ export default function OfferOrchestrator() {
         draftPending={draft.pending}
         draftLoaded={draftLoaded}
         draftError={draft.error}
+        draftErrorCause={draft.errorCause}
         draftSubject={draftSubject}
         draftText={draftText}
         draftChannel={activeDraftChannel}
@@ -515,11 +558,12 @@ export default function OfferOrchestrator() {
         auditId={auditId}
         justDecided={justDecided}
         approvalId={approvalId}
-        approveError={decisionPending ? null : approveError}
+        approveError={decisionPending ? null : approveErrorNode}
         score={b ? { opportunityScore: b.opportunity_score, confidence: b.confidence } : null}
         routing={approvalRouting?.id === id ? approvalRouting : null}
-        queue={queue}
+        queue={binding.state === 'validating' ? null : steppingQueue}
         nextId={queue ? queuePosition(queue, id)?.next ?? null : null}
+        pathFor={binding.pathFor}
       />
       <OfferPriorDecisions borrowerId={b?.borrower_id ?? id} />
       {decisionPending && (
@@ -537,22 +581,31 @@ export default function OfferOrchestrator() {
           isSubmitting={approving || snapshotReconciling}
           approverGate={approverGate}
           actorEmail={actorEmail}
-          approveError={approveError}
+          approveError={approveErrorNode}
           genieOpen={genieOpen}
           rejectReview={rejectReviewOpen && (
             <RejectRationalePanel
               reasonCode={rejectReasonCode}
               rationale={rejectRationale}
-              onReasonChange={setRejectReasonCode}
-              onRationaleChange={setRejectRationale}
+              onReasonChange={(reason) => {
+                setRejectReasonCode(reason);
+                setRejectNoteError(null);
+              }}
+              onRationaleChange={(note) => {
+                setRejectRationale(note);
+                setRejectNoteError(null);
+              }}
               onCancel={() => {
                 setRejectReviewOpen(false);
                 setRejectRationale('');
                 setRejectReasonCode('');
+                setRejectNoteError(null);
               }}
               onSubmit={() => void onReject()}
               submitDisabled={snapshot.reading}
               reasonRef={rejectReasonRef}
+              noteError={rejectNoteError}
+              noteRef={rejectNoteRef}
             />
           )}
         />

@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -10,8 +11,9 @@ import {
 import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
-import { api } from '../../lib/api';
+import { useBorrowerSearch } from '../../hooks/useBorrowerSearch';
 import { openGenie } from '../../lib/genieOpen';
+import { openShortcutOverlay } from '../../lib/keymap';
 import { saveDataRequested } from '../../lib/prefetch';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import { useAuditLedgerAccess } from '../../lib/sessionQuery';
@@ -23,8 +25,10 @@ import {
   filterCommandActions,
   type CommandAction,
 } from './commandActions';
+import { dedupePaletteBorrowers, type PaletteSourceRow } from './commandPaletteSources';
 import { currentCommandSelection, useCommandSelection } from './commandSelection';
 import type { CommandPaletteDialogProps } from './CommandPalette';
+import { useCommandPaletteSources, useLiveShortcut, type LiveShortcut } from './useCommandPaletteSources';
 
 /**
  * ⌘K command palette (re-audit #4 Buyer-Wow #1). Reuses the wired
@@ -57,12 +61,30 @@ import type { CommandPaletteDialogProps } from './CommandPalette';
  * never lands on it while the borrower search is still in flight, so a
  * masked borrower id or a ZIP still opens its dossier on Enter instead of
  * being handed to Genie's composer.
+ *
+ * Provider groups (audit shell-07 items 2 and 5, tables-09 phase 2;
+ * deviation:palette-provider-groups): Saved views, Segments, Glossary, Saved
+ * leads and Recent borrowers sit between Pages & actions and the live
+ * Borrowers, and an administrator's Data assets follow them; Ask Genie stays
+ * last. Their reads are audit-free and open-gated (useCommandPaletteSources),
+ * and every row navigates. A row whose action has a live keymap binding shows
+ * its keycaps and carries aria-keyshortcuts (item 3). The groups reuse the
+ * prototype `.cmdk__group` / `.cmdk__row` BEM; no new class.
  */
 
 type FlatItem =
   | { kind: 'action'; action: CommandAction }
+  | { kind: 'source'; row: PaletteSourceRow }
   | { kind: 'genie'; prompt: string }
   | { kind: 'borrower'; lead: LeadSummary };
+
+/** One rendered group: its accessible name, visible label and rows, in list order. */
+interface PaletteSection {
+  key: string;
+  ariaLabel: string;
+  label: string;
+  items: FlatItem[];
+}
 
 /**
  * The route chunk the row opens, for the active-row preload (audit bundle-09
@@ -72,11 +94,15 @@ type FlatItem =
  */
 function routeChunkPath(item: FlatItem | undefined): string | null {
   if (item?.kind === 'borrower') return `/borrower-360/${item.lead.borrower_id}`;
+  if (item?.kind === 'source') return item.row.to;
   if (item?.kind === 'action' && item.action.target.kind === 'route') return item.action.target.to;
   return null;
 }
 
-const DEBOUNCE_MS = 160;
+function actionItems(actions: readonly CommandAction[]): FlatItem[] {
+  return actions.map((action) => ({ kind: 'action', action }));
+}
+
 const MAX_BORROWERS = 6;
 /** Typed text this long or longer also offers "Ask Genie: <text>". */
 const MIN_GENIE_QUERY = 2;
@@ -95,8 +121,6 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   // fail-closed session decision RouteNav and the Rail use (D-audit-reads-c3).
   const canReadAudit = useAuditLedgerAccess();
   const [query, setQuery] = useState('');
-  const [borrowers, setBorrowers] = useState<LeadSummary[]>([]);
-  const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle');
   const [activeIndex, setActiveIndex] = useState(0);
   // True once the user moves onto the "Ask Genie" fallback (arrows or
   // pointer). Borrower rows land after the debounce ABOVE that row, so the
@@ -115,8 +139,6 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     setOpenLatch(open);
     if (open) {
       setQuery('');
-      setBorrowers([]);
-      setSearchStatus('idle');
       setActiveIndex(0);
     }
   }
@@ -129,37 +151,18 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   // the panel closes; a press inside the panel never does.
   useModalDialog({ open, dialogRef, initialFocusRef: inputRef, onDismiss: close, backdrop: 'self' });
 
-  // Debounced borrower/geography search (mirrors the topbar). Actions are
-  // always available locally; the network only augments with borrower rows.
-  useEffect(() => {
-    if (!open) return;
-    const q = query.trim();
-    if (q.length < 2) {
-      setBorrowers([]);
-      setSearchStatus('idle');
-      return;
-    }
-    const ctrl = new AbortController();
-    setSearchStatus('loading');
-    const t = window.setTimeout(() => {
-      api
-        .borrowerSearch(q, ctrl.signal)
-        .then((rows) => {
-          if (ctrl.signal.aborted) return;
-          setBorrowers(rows.slice(0, MAX_BORROWERS));
-          setSearchStatus(rows.length > 0 ? 'idle' : 'empty');
-        })
-        .catch(() => {
-          if (ctrl.signal.aborted) return;
-          setBorrowers([]);
-          setSearchStatus('error');
-        });
-    }, DEBOUNCE_MS);
-    return () => {
-      window.clearTimeout(t);
-      ctrl.abort();
-    };
-  }, [open, query]);
+  // The one shared borrower / geography search (hooks/useBorrowerSearch,
+  // runtime-06): the topbar's cache entry for the same term answers here
+  // without a request. Actions are local; the network only adds borrowers.
+  const borrowerSearch = useBorrowerSearch(query, { enabled: open });
+  const searchStatus = borrowerSearch.status;
+  const sources = useCommandPaletteSources(open, query);
+  // A borrower another group lists (a saved lead, a recent) appears there only.
+  const borrowers = useMemo(
+    () => dedupePaletteBorrowers(borrowerSearch.rows, sources.groups).slice(0, MAX_BORROWERS),
+    [borrowerSearch.rows, sources.groups],
+  );
+  const liveShortcut = useLiveShortcut();
 
   const actions = useMemo(
     () => filterCommandActions(query, commandActionsForAccess(canAccessAdmin, undefined, canReadAudit)),
@@ -173,16 +176,45 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
     [selection, query],
   );
   const genieQuery = query.trim();
-  const items: FlatItem[] = useMemo(
-    () => [
-      ...verbs.map((action) => ({ kind: 'action' as const, action })),
-      ...actions.map((action) => ({ kind: 'action' as const, action })),
-      ...borrowers.map((lead) => ({ kind: 'borrower' as const, lead })),
+  const { sections, sectionStarts, statusSlot } = useMemo(() => {
+    const sourceSection = (group: { id: string; label: string; rows: readonly PaletteSourceRow[] }): PaletteSection => ({
+      key: group.id,
+      ariaLabel: group.label,
+      label: group.label,
+      items: group.rows.map((row) => ({ kind: 'source', row })),
+    });
+    const all: PaletteSection[] = [
+      { key: 'verbs', ariaLabel: 'Selected borrowers', label: 'Selected borrowers', items: actionItems(verbs) },
+      { key: 'actions', ariaLabel: 'Pages and actions', label: 'Pages & actions', items: actionItems(actions) },
+      ...sources.groups.map(sourceSection),
+      {
+        key: 'borrowers',
+        ariaLabel: 'Borrowers',
+        label: 'Borrowers',
+        items: borrowers.map((lead) => ({ kind: 'borrower', lead })),
+      },
+      ...(sources.assetGroup ? [sourceSection(sources.assetGroup)] : []),
       // Last: Enter at the first row must reach a match before the fallback.
-      ...(genieQuery.length >= MIN_GENIE_QUERY ? [{ kind: 'genie' as const, prompt: genieQuery }] : []),
-    ],
-    [verbs, actions, borrowers, genieQuery],
-  );
+      {
+        key: 'genie',
+        ariaLabel: 'Ask Genie',
+        label: 'Ask Genie',
+        items: genieQuery.length >= MIN_GENIE_QUERY ? [{ kind: 'genie', prompt: genieQuery }] : [],
+      },
+    ];
+    const shown = (section: PaletteSection) => section.items.length > 0;
+    const kept = all.filter(shown);
+    const borrowersAt = all.findIndex((section) => section.key === 'borrowers');
+    return {
+      sections: kept,
+      // Each group's first row index in `items` order (the option ids).
+      sectionStarts: kept.map((_, at) => kept.slice(0, at).reduce((sum, section) => sum + section.items.length, 0)),
+      // The borrower search's status line sits at the Borrowers group's
+      // place (after it when it has rows), before Data assets and Genie.
+      statusSlot: all.slice(0, borrowersAt + 1).filter(shown).length,
+    };
+  }, [verbs, actions, sources.groups, sources.assetGroup, borrowers, genieQuery]);
+  const items: FlatItem[] = useMemo(() => sections.flatMap((section) => section.items), [sections]);
 
   // Clamp the active index whenever the result set shrinks; keep a user who
   // chose the Genie row on it when borrower rows are inserted above it.
@@ -214,6 +246,11 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
         openGenie({ prompt: item.prompt });
         return;
       }
+      if (item.kind === 'source') {
+        close();
+        navigate(item.row.to);
+        return;
+      }
       const { target } = item.action;
       if (target.kind === 'route') {
         close();
@@ -231,6 +268,8 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
       if (target.command === 'toggle-theme') setTheme(theme === 'dark' ? 'light' : 'dark');
       else if (target.command === 'toggle-console') setConsoleOpen(!consoleOpen);
       else if (target.command === 'open-genie') setGenieOpen(true);
+      // The sheet is a modal of its own: open it once the palette has closed.
+      else if (target.command === 'open-shortcuts') window.requestAnimationFrame(() => openShortcutOverlay());
     },
     [close, navigate, setTheme, theme, setConsoleOpen, consoleOpen, setGenieOpen],
   );
@@ -275,23 +314,52 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
   }, [activeIndex, open]);
 
   const optionId = (i: number) => `cmdk-option-${i}`;
-  let runningIndex = -1;
-  const allActionItems = items.filter((it) => it.kind === 'action') as Extract<FlatItem, { kind: 'action' }>[];
-  const verbItems = allActionItems.filter((it) => it.action.target.kind === 'verb');
-  const actionItems = allActionItems.filter((it) => it.action.target.kind !== 'verb');
-  const genieItems = items.filter((it) => it.kind === 'genie') as Extract<FlatItem, { kind: 'genie' }>[];
-  const borrowerItems = items.filter((it) => it.kind === 'borrower') as Extract<FlatItem, { kind: 'borrower' }>[];
+  const matchCount = items.filter((it) => it.kind !== 'genie').length;
+  const borrowerCount = items.filter((it) => it.kind === 'borrower').length;
   // At most one line speaks (shell-07 item 4): the empty state only once the
   // borrower search has neither failed nor is still running.
-  const searching = query.trim().length >= 2 && searchStatus === 'loading' && borrowerItems.length === 0;
+  const searching = query.trim().length >= 2 && searchStatus === 'loading' && borrowerCount === 0;
   const searchFailed = query.trim().length >= 2 && searchStatus === 'error';
-  const noMatch = allActionItems.length === 0 && borrowerItems.length === 0
-    && searchStatus !== 'loading' && searchStatus !== 'error';
+  const noMatch = matchCount === 0 && searchStatus !== 'loading' && searchStatus !== 'error';
   const statusText = searching
     ? 'Searching borrowers…'
     : searchFailed
       ? 'Borrower search is temporarily unavailable.'
       : noMatch ? `No pages, actions, or borrowers match “${query.trim()}”.` : '';
+  const searchStatusLine = searching || searchFailed
+    ? <div className={searchFailed ? 'cmdk__status cmdk__status--error' : 'cmdk__status'} aria-hidden="true">{statusText}</div>
+    : null;
+  const rowFor = (item: FlatItem, i: number) => {
+    const common = {
+      index: i,
+      optionId: optionId(i),
+      active: i === activeIndex,
+      onActivate: () => runItem(item),
+      onHover: () => moveTo(i),
+    };
+    if (item.kind === 'borrower') {
+      const { lead } = item;
+      return (
+        <CommandRow key={lead.borrower_id} {...common} icon="user" label={lead.borrower_id}
+          hint={`${lead.city}, ${lead.state} · ${lead.zip}`} mono />
+      );
+    }
+    if (item.kind === 'source') {
+      const { row } = item;
+      return <CommandRow key={row.id} {...common} icon={row.icon} label={row.label} hint={row.hint} mono={Boolean(row.borrowerId)} />;
+    }
+    if (item.kind === 'genie') {
+      return (
+        <CommandRow key="ask-genie" {...common} icon="sparkle" label={`Ask Genie: ${item.prompt}`}
+          hint="Opens Genie with this question; you press Ask" />
+      );
+    }
+    const { action } = item;
+    return (
+      <CommandRow key={action.id} {...common} icon={action.icon} label={action.label} hint={action.hint}
+        shortcut={liveShortcut(action.shortcut)} />
+    );
+  };
 
   return (
     <dialog
@@ -328,112 +396,28 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
 
         <div className="cmdk__list" id="cmdk-listbox" role="listbox" ref={listRef}>
           {/* The Genie row is a way out, not a match: the empty state still
-              says so when no page, action or borrower matched. While the
-              borrower search runs or after it failed, its status line shows
-              instead (shell-07 item 4): "no borrowers" is not known yet. The
-              visible lines are aria-hidden: a listbox may own only options and
-              groups, so the one live region below the list announces them. */}
+              says so when nothing else matched. While the borrower search
+              runs or after it failed, its status line shows instead (shell-07
+              item 4): "no borrowers" is not known yet. The visible lines are
+              aria-hidden: a listbox may own only options and groups, so the
+              one live region below the list announces them. */}
           {noMatch && (
             <div className="cmdk__empty" aria-hidden="true">{statusText}</div>
           )}
 
-          {verbItems.length > 0 && (
-            <div className="cmdk__group" role="group" aria-label="Selected borrowers">
-              <div className="cmdk__group-label">Selected borrowers</div>
-              {verbItems.map((item) => {
-                runningIndex += 1;
-                const i = runningIndex;
-                return (
-                  <CommandRow
-                    key={item.action.id}
-                    index={i}
-                    optionId={optionId(i)}
-                    active={i === activeIndex}
-                    icon={item.action.icon}
-                    label={item.action.label}
-                    hint={item.action.hint}
-                    onActivate={() => runItem(item)}
-                    onHover={() => moveTo(i)}
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          {actionItems.length > 0 && (
-            <div className="cmdk__group" role="group" aria-label="Pages and actions">
-              <div className="cmdk__group-label">Pages &amp; actions</div>
-              {actionItems.map((item) => {
-                runningIndex += 1;
-                const i = runningIndex;
-                return (
-                  <CommandRow
-                    key={item.action.id}
-                    index={i}
-                    optionId={optionId(i)}
-                    active={i === activeIndex}
-                    icon={item.action.icon}
-                    label={item.action.label}
-                    hint={item.action.hint}
-                    onActivate={() => runItem(item)}
-                    onHover={() => moveTo(i)}
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          {borrowerItems.length > 0 && (
-            <div className="cmdk__group" role="group" aria-label="Borrowers">
-              <div className="cmdk__group-label">Borrowers</div>
-              {borrowerItems.map((item) => {
-                runningIndex += 1;
-                const i = runningIndex;
-                return (
-                  <CommandRow
-                    key={item.lead.borrower_id}
-                    index={i}
-                    optionId={optionId(i)}
-                    active={i === activeIndex}
-                    icon="user"
-                    label={item.lead.borrower_id}
-                    hint={`${item.lead.city}, ${item.lead.state} · ${item.lead.zip}`}
-                    mono
-                    onActivate={() => runItem(item)}
-                    onHover={() => moveTo(i)}
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          {searching && <div className="cmdk__status" aria-hidden="true">{statusText}</div>}
-          {searchFailed && <div className="cmdk__status cmdk__status--error" aria-hidden="true">{statusText}</div>}
-
-          {/* The fallback, after every match (and the same order as `items`,
-              so the running index stays in step). */}
-          {genieItems.length > 0 && (
-            <div className="cmdk__group" role="group" aria-label="Ask Genie">
-              <div className="cmdk__group-label">Ask Genie</div>
-              {genieItems.map((item) => {
-                runningIndex += 1;
-                const i = runningIndex;
-                return (
-                  <CommandRow
-                    key="ask-genie"
-                    index={i}
-                    optionId={optionId(i)}
-                    active={i === activeIndex}
-                    icon="sparkle"
-                    label={`Ask Genie: ${item.prompt}`}
-                    hint="Opens Genie with this question; you press Ask"
-                    onActivate={() => runItem(item)}
-                    onHover={() => moveTo(i)}
-                  />
-                );
-              })}
-            </div>
-          )}
+          {/* Every group in `items` order, each row at its index there; the
+              borrower search's status line follows the Borrowers group's
+              place, before Data assets and the Genie fallback. */}
+          {sections.map((section, index) => (
+            <Fragment key={section.key}>
+              {index === statusSlot && searchStatusLine}
+              <div className="cmdk__group" role="group" aria-label={section.ariaLabel}>
+                <div className="cmdk__group-label">{section.label}</div>
+                {section.items.map((item, at) => rowFor(item, sectionStarts[index] + at))}
+              </div>
+            </Fragment>
+          ))}
+          {statusSlot >= sections.length && searchStatusLine}
         </div>
         {/* The palette's one live region, outside the listbox (see above). */}
         <div className="sr-only" role="status">{open ? statusText : ''}</div>
@@ -456,6 +440,7 @@ function CommandRow({
   label,
   hint,
   mono,
+  shortcut = null,
   onActivate,
   onHover,
 }: {
@@ -466,6 +451,8 @@ function CommandRow({
   label: string;
   hint: string;
   mono?: boolean;
+  /** The action's live keymap chord (useLiveShortcut), or null. */
+  shortcut?: LiveShortcut | null;
   onActivate: () => void;
   onHover: () => void;
 }) {
@@ -475,6 +462,7 @@ function CommandRow({
       id={optionId}
       role="option"
       aria-selected={active}
+      aria-keyshortcuts={shortcut?.aria}
       data-cmd-index={index}
       className={`cmdk__row${active ? ' is-active' : ''}`}
       // Keep focus in the input (where arrow keys work); select on hover.
@@ -484,7 +472,10 @@ function CommandRow({
     >
       <Icon name={icon} size={14} className="cmdk__row-icon" />
       <span className={`cmdk__row-label${mono ? ' mono' : ''}`}>{label}</span>
-      <span className="cmdk__row-hint">{hint}</span>
+      <span className="cmdk__row-hint">
+        {hint}
+        {shortcut?.keycaps.map((cap) => <kbd key={cap}>{cap}</kbd>)}
+      </span>
     </button>
   );
 }

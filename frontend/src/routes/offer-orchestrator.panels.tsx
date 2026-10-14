@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Link } from 'react-router';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
@@ -7,6 +7,7 @@ import { ScoreAnatomyGate } from '../components/mortgage/ScoreAnatomyGate';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { Button, Chip, EvidenceChip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { Field } from '../components/ui/Field';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
@@ -20,6 +21,7 @@ import {
 } from './offer-orchestrator.constants';
 import { humanizeThresholdKey, shortSourceLabel } from './offer-orchestrator.helpers';
 import { CertifiedCopyPreview } from './offer-orchestrator.preview';
+import { OfferFailureBody } from './offer-orchestrator.errors';
 
 export function OfferOrchestratorEmptyState() {
   return (
@@ -69,6 +71,10 @@ interface RejectRationalePanelProps {
   submitDisabled?: boolean;
   /** The route's handle on Reason, so the bar's own Reject can focus it too. */
   reasonRef?: RefObject<HTMLSelectElement | null>;
+  /** 'Other' with an empty note: the route's field error, shown on the note. */
+  noteError?: string | null;
+  /** The route's handle on the note, focused with that error. */
+  noteRef?: RefObject<HTMLTextAreaElement | null>;
 }
 
 /**
@@ -86,6 +92,8 @@ export function RejectRationalePanel({
   onSubmit,
   submitDisabled = false,
   reasonRef: routeReasonRef,
+  noteError = null,
+  noteRef,
 }: RejectRationalePanelProps) {
   const ownReasonRef = useRef<HTMLSelectElement>(null);
   const reasonRef = routeReasonRef ?? ownReasonRef;
@@ -114,28 +122,21 @@ export function RejectRationalePanel({
             Capture a committee-visible reason before dropping this lead.
           </div>
         </div>
-        <label className="decision-panel__field">
-          <span className="field__label">Reason</span>
-          <select
-            ref={reasonRef}
-            value={reasonCode}
-            onChange={(e) => onReasonChange(e.target.value as RejectReasonCode | '')}
-          >
-            <option value="">Choose a reason</option>
-            {REJECT_REASONS.map((reason) => (
-              <option key={reason.code} value={reason.code}>{reason.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="decision-panel__field decision-panel__field--wide">
-          <span className="field__label">Rationale note</span>
-          <textarea
-            value={rationale}
-            onChange={(e) => onRationaleChange(e.target.value)}
-            maxLength={500}
-            placeholder="Optional unless reason is Other."
-          />
-        </label>
+        <Field label="Reason" className="decision-panel__field">
+          {(control) => (
+            <select {...control} ref={reasonRef} value={reasonCode} onChange={(e) => onReasonChange(e.target.value as RejectReasonCode | '')}>
+              <option value="">Choose a reason</option>
+              {REJECT_REASONS.map((reason) => (
+                <option key={reason.code} value={reason.code}>{reason.label}</option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Rationale note" className="decision-panel__field decision-panel__field--wide" hint="Up to 500 characters." error={noteError}>
+          {(control) => (
+            <textarea {...control} ref={noteRef} value={rationale} onChange={(e) => onRationaleChange(e.target.value)} maxLength={500} placeholder="Optional unless reason is Other." />
+          )}
+        </Field>
         <div className="decision-panel__actions">
           <Button
             type="button"
@@ -150,10 +151,10 @@ export function RejectRationalePanel({
             variant="primary"
             size="sm"
             icon="cross"
-            disabled={submitDisabled || (reasonCode === 'other_with_text' && rationale.trim().length === 0)}
-            // aria-disabled, never native `disabled`, until a reason is chosen:
-            // the submit then moves focus to Reason instead of sending.
-            aria-disabled={reasonCode === '' || undefined}
+            disabled={submitDisabled}
+            // aria-disabled, never native `disabled`, until a reason (and for
+            // Other, a note) is given: the submit then lands on the missing field.
+            aria-disabled={reasonCode === '' || (reasonCode === 'other_with_text' && rationale.trim().length === 0) || undefined}
           >
             Confirm reject
           </Button>
@@ -173,6 +174,8 @@ interface OfferReviewGridProps {
   draftPending?: boolean;
   draftLoaded: boolean;
   draftError: string | null;
+  /** What failed, described after 'Offer draft unavailable.' (states-04). */
+  draftErrorCause?: unknown;
   draftSubject: string;
   draftText: string;
   draftChannel: OutreachChannel;
@@ -192,7 +195,7 @@ interface OfferReviewGridProps {
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
   draftSavePending?: boolean;
-  draftSaveError?: string | null;
+  draftSaveError?: ReactNode;
   savedDraftExists: boolean;
   resetCurrentDraft: () => void;
   draftReady: boolean;
@@ -210,6 +213,7 @@ export function OfferReviewGrid({
   draftPending = false,
   draftLoaded,
   draftError,
+  draftErrorCause = null,
   draftSubject,
   draftText,
   draftChannel,
@@ -259,6 +263,7 @@ export function OfferReviewGrid({
         draftPending={draftPending}
         draftLoaded={draftLoaded}
         draftError={draftError}
+        draftErrorCause={draftErrorCause}
         draftSubject={draftSubject}
         draftText={draftText}
         draftChannel={draftChannel}
@@ -386,6 +391,8 @@ interface DraftOutreachPanelProps {
   draftPending?: boolean;
   draftLoaded: boolean;
   draftError: string | null;
+  /** What failed, described after 'Offer draft unavailable.' (states-04). */
+  draftErrorCause?: unknown;
   draftSubject: string;
   draftText: string;
   draftChannel: OutreachChannel;
@@ -405,7 +412,7 @@ interface DraftOutreachPanelProps {
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
   draftSavePending?: boolean;
-  draftSaveError?: string | null;
+  draftSaveError?: ReactNode;
   savedDraftExists: boolean;
   resetCurrentDraft: () => void;
   draftReady: boolean;
@@ -419,6 +426,7 @@ function DraftOutreachPanel({
   draftPending = false,
   draftLoaded,
   draftError,
+  draftErrorCause = null,
   draftSubject,
   draftText,
   draftChannel,
@@ -479,7 +487,10 @@ function DraftOutreachPanel({
             className="status-callout status-callout--warning mb-3"
             role="alert"
           >
-            <span>{draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}</span>
+            <span>
+              {draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}
+              {draftErrorCause != null && <> <OfferFailureBody cause={draftErrorCause} subject="the offer draft" /></>}
+            </span>
             {draftError && (
               <div className="chip-row mt-2">
                 <Button

@@ -7,6 +7,7 @@
  * prototype's building glyph.
  */
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
@@ -42,6 +43,9 @@ vi.mock('./IdentityMenu', () => ({ IdentityMenu: () => null }));
 
 import { LenderMark } from './LenderMark';
 import { Topbar } from './Topbar';
+
+// Topbar's borrower search reads through TanStack Query (hooks/useBorrowerSearch).
+const queryClient = new QueryClient();
 
 const MARK_URL = '/branding/lender-mark.png?v=0a1b2c3d';
 const LENDER = 'Fixture Test Lending';
@@ -100,7 +104,7 @@ describe('LenderMark', () => {
   });
 
   it('the Topbar pill draws the mark once the session lender matches, keeping its aria-label and tooltip copy', async () => {
-    const { container, rerender } = await mount(<MemoryRouter><Topbar /></MemoryRouter>);
+    const { container, rerender } = await mount(<QueryClientProvider client={queryClient}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>);
     // The Topbar loads the mark lazily, only on a co-branded build.
     await act(async () => {
       await import('./LenderMark');
@@ -116,7 +120,7 @@ describe('LenderMark', () => {
 
     // Before /api/session answers, AppContext's label is not the session's: no mark.
     app.sessionStatus = 'loading';
-    await rerender(<MemoryRouter><Topbar /></MemoryRouter>);
+    await rerender(<QueryClientProvider client={queryClient}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>);
     expect(container.querySelector('.topbar__pill img')).toBeNull();
   });
 

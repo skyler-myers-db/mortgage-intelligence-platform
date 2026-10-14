@@ -180,6 +180,15 @@ describe('OfferDecisionOutcome', () => {
       expect(link?.getAttribute('href')).toBe('/lead-queue?state=IL');
     });
 
+    it('a verified campaign binding rides the Next link (offer-orchestrator.binding pathFor)', async () => {
+      apiMocks.auditReceipt.mockResolvedValue(receipt('approved'));
+      const pathFor = (id: string) => `/offer-orchestrator/${id}?campaign_id=cmp-0001&variant_name=Variant+A`;
+      await render({ queue: QUEUE, nextId: 'B-0000000000002', pathFor });
+      expect(nextStep()?.querySelector('a')?.getAttribute('href')).toBe(
+        '/offer-orchestrator/B-0000000000002?campaign_id=cmp-0001&variant_name=Variant+A',
+      );
+    });
+
     it('never for a durable decision, and never without a queue', async () => {
       apiMocks.auditReceipt.mockResolvedValue(receipt('approved'));
       await render({ justDecided: false, routing: null, queue: QUEUE, nextId: 'B-0000000000002' });

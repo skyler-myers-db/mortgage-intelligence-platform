@@ -210,6 +210,42 @@ test.describe('forced colors paints every Highlight state legibly (responsive-v3
         expect(owners).toEqual(expect.arrayContaining(['cmdk__row-label', 'cmdk__row-hint']));
       });
 
+      test('the palette and topbar-search cursor rings stand off the Highlight fill (css-06 / a11y-10)', async ({ app, page }) => {
+        // W5d: the palette's and the topbar search's active row drew the
+        // Highlight ring on the Highlight fill (1.46:1 light, 1.58:1 dark);
+        // 33-contrast-modes.css rings them in HighlightText, as the filter menu.
+        await app.gotoRoute('/lead-queue');
+        expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), 'precondition: forced colors').toBe(true);
+        const fill = await paintedSystemFill(page, 'Highlight');
+        const ringOf = async (name: string, cursor: Locator) => {
+          await expect(cursor).toHaveCount(1);
+          const width = Number.parseFloat(await tokenValue(cursor, '--focus-ring-width'));
+          const ring = await insetRingBand(page, cursor, width);
+          const ratio = contrastRatio(ring.ring, ring.inside);
+          const described = `${name}: ring rgb(${ring.ring.join(', ')}) on fill rgb(${ring.inside.join(', ')}) at ${ratio.toFixed(2)}:1`;
+          expect.soft(sameColor(ring.inside, fill), `${described}: the cursor keeps the Highlight fill`).toBe(true);
+          expect.soft(ratio, described).toBeGreaterThanOrEqual(3);
+        };
+
+        // The topbar search, from the keyboard: ArrowDown moves its cursor.
+        const search = page.locator('.topbar__search input');
+        await search.focus();
+        await page.keyboard.type('Chicago');
+        const list = page.getByRole('listbox', { name: 'Borrower matches' });
+        await expect(list).toBeVisible();
+        await page.keyboard.press('ArrowDown');
+        await ringOf('topbar search cursor', list.locator('.topbar__search-result.is-active'));
+        await page.keyboard.press('Escape');
+        await page.keyboard.press('Escape');
+
+        // The palette, opened with its chord so its input is keyboard-focused.
+        await page.keyboard.press('ControlOrMeta+k');
+        const palette = page.getByRole('dialog', { name: 'Command palette' });
+        await expect(palette).toBeVisible();
+        await page.keyboard.press('ArrowDown');
+        await ringOf('palette cursor', palette.locator('.cmdk__row.is-active'));
+      });
+
       test("an applied chip's remove glyph stays visible at rest, on hover and on keyboard focus", async ({ app, page }) => {
         await app.gotoRoute(`/lead-queue?owner_link=${encodeURIComponent(OWNER_LINK)}`);
         const fill = await paintedSystemFill(page, 'Highlight');

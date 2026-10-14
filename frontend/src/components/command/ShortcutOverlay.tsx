@@ -2,6 +2,7 @@ import { Fragment, useId, useRef, useSyncExternalStore } from 'react';
 import { useModalDialog } from '../../hooks/useModalDialog';
 import {
   KEYMAP_SCOPE_LABELS,
+  KEYMAP_SCOPE_ORDER,
   chordKeycaps,
   keyBindingsVersion,
   listKeyBindings,
@@ -40,7 +41,7 @@ interface SheetEntry {
 }
 
 /** Page-specific scopes first, then what works everywhere. */
-const SCOPE_ORDER: readonly KeymapScope[] = ['triage', 'lead-queue', 'global'];
+const SCOPE_ORDER: readonly KeymapScope[] = KEYMAP_SCOPE_ORDER;
 
 function sheetEntries(): Map<KeymapScope, SheetEntry[]> {
   const grouped = new Map<KeymapScope, SheetEntry[]>();

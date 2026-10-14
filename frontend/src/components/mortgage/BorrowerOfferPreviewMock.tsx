@@ -43,13 +43,27 @@ function borrowerReason(b: Borrower360): string {
 
 export function BorrowerOfferPreviewMock({
   borrower,
+  open = true,
   onClose,
 }: {
   borrower: Borrower360;
+  /**
+   * The route keeps the mock mounted once opened, so closing plays its exit
+   * (audit motion-01; deviation:offer-mock-exit): `open` false closes the
+   * dialog at exit start, and the closing copy is inert and aria-hidden.
+   */
+  open?: boolean;
   onClose: () => void;
 }) {
   const { lender } = useApp();
   const [accepted, setAccepted] = useState(false);
+  // A new open starts on the offer, never on the last "Thanks" card (a
+  // render-time latch on the rising edge of `open`, never an effect).
+  const [openLatch, setOpenLatch] = useState(open);
+  if (openLatch !== open) {
+    setOpenLatch(open);
+    if (open) setAccepted(false);
+  }
   const product = offerDisplayLabel(borrower.recommended_offer_code, borrower.recommended_offer || 'a mortgage option');
   const lenderName = (lender || 'Your lender').trim();
   const reason = borrowerReason(borrower);
@@ -58,8 +72,8 @@ export function BorrowerOfferPreviewMock({
   // A native modal <dialog> like the drawers and the palette (audit
   // stack-05 / a11y-07): showModal() makes the page inert, Escape and a
   // press on the ::backdrop close it, focus goes back to "Preview borrower
-  // experience".
-  useModalDialog({ open: true, dialogRef, initialFocusRef: closeRef, onDismiss: onClose, backdrop: 'outside' });
+  // view" when it closes.
+  useModalDialog({ open, dialogRef, initialFocusRef: closeRef, onDismiss: onClose, backdrop: 'outside' });
 
   if (typeof document === 'undefined') return null;
 
@@ -69,6 +83,8 @@ export function BorrowerOfferPreviewMock({
       className="offer-mock"
       aria-label="Borrower offer experience — prototype"
       data-testid="borrower-offer-mock"
+      aria-hidden={!open || undefined}
+      inert={!open}
     >
         <span className="offer-mock__watermark" aria-hidden="true">PROTOTYPE</span>
         <div className="offer-mock__banner" role="note">

@@ -72,8 +72,8 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({ ActivationLoopP
 vi.mock('../components/mortgage/BorrowerOfferPreviewMock', () => {
   previewModule.loads += 1;
   return {
-    BorrowerOfferPreviewMock: ({ onClose }: { onClose: () => void }) => (
-      <div data-testid="borrower-preview-mock">
+    BorrowerOfferPreviewMock: ({ open, onClose }: { open: boolean; onClose: () => void }) => (
+      <div data-testid="borrower-preview-mock" data-open={String(open)}>
         PROTOTYPE borrower view
         <button type="button" onClick={onClose}>Close preview</button>
       </div>
@@ -216,9 +216,13 @@ describe('Offer Orchestrator presenter-only borrower preview', () => {
     const mock = container.querySelector('[data-testid="borrower-preview-mock"]');
     expect(mock?.textContent).toContain('PROTOTYPE borrower view');
 
+    expect(mock?.getAttribute('data-open')).toBe('true');
+
     await act(async () => {
       mock?.querySelector('button')?.click();
     });
-    expect(container.querySelector('[data-testid="borrower-preview-mock"]')).toBeNull();
+    // Closed, but still mounted: the mock plays its exit (motion-01).
+    expect(container.querySelector('[data-testid="borrower-preview-mock"]')?.getAttribute('data-open')).toBe('false');
+    expect(previewModule.loads).toBe(1);
   });
 });

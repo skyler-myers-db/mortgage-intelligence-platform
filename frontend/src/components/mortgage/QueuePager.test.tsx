@@ -13,7 +13,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { QueueContext } from '../../lib/queueContext';
+import { installLocalStorage } from '../../test/installLocalStorage';
+import { formatCount } from '../../lib/formatters';
+import { KEYMAP_SCOPE_LABELS, listKeyBindings } from '../../lib/keymap';
+import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { MAX_QUEUE_CONTEXT_IDS, type QueueContext } from '../../lib/queueContext';
 import { offerPath } from '../../lib/routeMeta';
 import { QueuePager } from './QueuePager';
 
@@ -46,6 +50,8 @@ describe('QueuePager', () => {
   let root: Root;
 
   beforeEach(() => {
+    installLocalStorage();
+    clearSingleKeyShortcutsPreference();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -91,17 +97,70 @@ describe('QueuePager', () => {
     expect(where()[0]).toBe(`/offer-orchestrator/${IDS[1]}`);
   });
 
-  it('counts through lib/formatters: a four-digit queue reads grouped', async () => {
-    const ids = Array.from({ length: 1000 }, (_, index) => `B-${String(index + 1).padStart(13, '0')}`);
+  async function renderQueueOf(length: number) {
+    const ids = Array.from({ length }, (_, index) => `B-${String(index + 1).padStart(13, '0')}`);
     const big: QueueContext = { ...QUEUE, ids };
     await act(async () => {
       root.render(
         <MemoryRouter>
-          <QueuePager borrowerId={ids[999]} queue={big} pathFor={offerPath} />
+          <QueuePager borrowerId={ids[length - 1]} queue={big} pathFor={offerPath} />
         </MemoryRouter>,
       );
     });
-    expect(pager()?.textContent).toContain('1,000 of 1,000 ranked in IL');
+  }
+
+  it('counts through lib/formatters: a four-digit queue reads grouped', async () => {
+    await renderQueueOf(MAX_QUEUE_CONTEXT_IDS);
+    const cap = formatCount(MAX_QUEUE_CONTEXT_IDS);
+    expect(pager()?.textContent).toContain(`${cap} of the first ${cap} ranked in IL`);
+  });
+
+  it('a queue that reached the published cap says it walks only the first ranked ids', async () => {
+    await renderQueueOf(MAX_QUEUE_CONTEXT_IDS);
+    expect(pager()?.textContent).toContain(`of the first ${formatCount(MAX_QUEUE_CONTEXT_IDS)} ranked`);
+    await renderQueueOf(MAX_QUEUE_CONTEXT_IDS - 1);
+    expect(pager()?.textContent).not.toContain('the first');
+    expect(pager()?.textContent).toContain(
+      `${formatCount(MAX_QUEUE_CONTEXT_IDS - 1)} of ${formatCount(MAX_QUEUE_CONTEXT_IDS - 1)} ranked in IL`,
+    );
+  });
+
+  it('names J / K in a Tooltip and aria-keyshortcuts, never a DOM title (wow-power-4)', async () => {
+    await renderAt(IDS[1]);
+    for (const [name, key, text] of [['Previous', 'K', 'Previous borrower'], ['Next', 'J', 'Next borrower']] as const) {
+      const control = button(name);
+      expect(control.hasAttribute('title')).toBe(false);
+      expect(control.getAttribute('aria-keyshortcuts')).toBe(key);
+      expect(control.getAttribute('data-tooltip-shortcut')).toBe(key);
+      const description = document.getElementById(control.getAttribute('data-tooltip') ?? '');
+      expect(description?.textContent).toBe(`${text} (${key})`);
+    }
+  });
+
+  it('lists J / K in the queue-pager scope only while each one can page', async () => {
+    await renderAt(IDS[0]);
+    const pagerBindings = () => listKeyBindings().filter((binding) => binding.scope === 'queue-pager')
+      .map((binding) => [binding.id, binding.keys.join(' '), binding.description]);
+    expect(KEYMAP_SCOPE_LABELS['queue-pager']).toBe('Queue pager');
+    // The top of the queue: no previous borrower, so no K.
+    expect(pagerBindings()).toEqual([['queue-pager-next', 'j', 'Next borrower in the queue']]);
+    act(() => button('Next').click());
+    expect(pagerBindings()).toEqual(expect.arrayContaining([
+      ['queue-pager-next', 'j', 'Next borrower in the queue'],
+      ['queue-pager-previous', 'k', 'Previous borrower in the queue'],
+    ]));
+  });
+
+  it('the Console single-key switch turns J / K and their names off', async () => {
+    await renderAt(IDS[0]);
+    act(() => setSingleKeyShortcutsEnabled(false));
+    pressJ();
+    expect(where()[0]).toBe(`/offer-orchestrator/${IDS[0]}`);
+    expect(button('Next').hasAttribute('aria-keyshortcuts')).toBe(false);
+    expect(button('Next').hasAttribute('data-tooltip-shortcut')).toBe(false);
+    act(() => setSingleKeyShortcutsEnabled(true));
+    pressJ();
+    expect(where()[0]).toBe(`/offer-orchestrator/${IDS[1]}`);
   });
 
   it('J pages by default', async () => {
@@ -114,6 +173,8 @@ describe('QueuePager', () => {
     await renderAt(IDS[0], { hotkeys: false });
     pressJ();
     expect(where()[0]).toBe(`/offer-orchestrator/${IDS[0]}`);
+    expect(button('Next').hasAttribute('aria-keyshortcuts')).toBe(false);
+    expect(listKeyBindings().some((binding) => binding.scope === 'queue-pager')).toBe(false);
     expect(button('Next').disabled).toBe(false);
     act(() => button('Next').click());
     expect(where()[0]).toBe(`/offer-orchestrator/${IDS[1]}`);

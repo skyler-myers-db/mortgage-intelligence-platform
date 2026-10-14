@@ -14,7 +14,7 @@ import type { CommandSelectionContext, CommandVerb } from './commandSelection';
 
 export type CommandTarget =
   | { kind: 'route'; to: string }
-  | { kind: 'command'; command: 'toggle-theme' | 'toggle-console' | 'open-genie' }
+  | { kind: 'command'; command: 'toggle-theme' | 'toggle-console' | 'open-genie' | 'open-shortcuts' }
   // A verb on the page's current selection (audit wow-power-4). The palette
   // resolves it through the selection context the page published, which
   // calls the page's own guarded handler (never a parallel approval path).
@@ -30,6 +30,20 @@ export interface CommandAction {
   /** Extra search terms beyond the label. */
   keywords: string[];
   target: CommandTarget;
+  /**
+   * The keymap binding that does the same thing (shell-07 item 3). The row
+   * shows the chord's keycaps and the option's aria-keyshortcuts only while
+   * that binding is registered and the chord is live (a single-key chord is
+   * off with the Console's single-key switch).
+   */
+  shortcut?: CommandShortcut;
+}
+
+export interface CommandShortcut {
+  /** A lib/keymap binding id (`registerKeyBinding({ id })`). */
+  bindingId: string;
+  /** One of that binding's chords, in lib/keymap notation ('Shift+A', '?'). */
+  chord: string;
 }
 
 /**
@@ -94,7 +108,14 @@ export const COMMAND_ACTIONS: readonly CommandAction[] = [
     keywords: ['dark', 'light', 'appearance'], target: { kind: 'command', command: 'toggle-theme' } },
   { id: 'cmd-console', label: 'Toggle Console', hint: 'Theme · accent · density', icon: 'tweak', group: 'Workspace',
     keywords: ['settings', 'density', 'accent', 'tenant'], target: { kind: 'command', command: 'toggle-console' } },
+  // The `?` sheet (shell-07 item 3): the palette closes, then the sheet opens.
+  { id: 'cmd-shortcuts', label: 'Keyboard shortcuts', hint: 'What this page binds', icon: 'tweak', group: 'Workspace',
+    keywords: ['keyboard', 'shortcuts', 'hotkeys', 'keys', 'help'], target: { kind: 'command', command: 'open-shortcuts' },
+    shortcut: { bindingId: 'shortcut-sheet', chord: '?' } },
 ];
+
+/** The Lead Queue's one bulk binding carries Shift+A and Shift+R (LeadTable.keymap). */
+const LEAD_TABLE_BULK_BINDING = 'lead-table-bulk-approve';
 
 /**
  * Verbs on the published selection. "Approve N selected…" opens the page's
@@ -114,6 +135,7 @@ export function commandVerbActions(selection: CommandSelectionContext | null): C
       group: 'Selection',
       keywords: ['approve', 'bulk', 'selected', 'selection', 'rationale'],
       target: { kind: 'verb', verb: 'approve-selected' },
+      shortcut: { bindingId: LEAD_TABLE_BULK_BINDING, chord: 'Shift+A' },
     });
   }
   if (selection.canReject && selection.rejectCount > 0) {
@@ -125,6 +147,7 @@ export function commandVerbActions(selection: CommandSelectionContext | null): C
       group: 'Selection',
       keywords: ['reject', 'bulk', 'selected', 'selection', 'reason'],
       target: { kind: 'verb', verb: 'reject-selected' },
+      shortcut: { bindingId: LEAD_TABLE_BULK_BINDING, chord: 'Shift+R' },
     });
   }
   if (selection.canAssign) {
@@ -163,26 +186,70 @@ function normalize(text: string): string {
   return text.toLowerCase().trim();
 }
 
+/** Letters only, at least three: a masked id ('B-…') or a ZIP never qualifies. */
+const FUZZY_QUERY_RE = /^[a-z]{3,}$/;
+const MASKED_ID_LABEL_RE = /^b-[0-9a-z]{13}$/;
+
+/** Can `query` be spelled by prefixes of consecutive `words`, each at least one letter, starting at `from`? */
+function prefixRun(query: string, words: readonly string[], from: number): boolean {
+  if (query === '') return true;
+  const word = words[from];
+  if (word === undefined) return false;
+  for (let take = Math.min(query.length, word.length); take > 0; take -= 1) {
+    if (word.startsWith(query.slice(0, take)) && prefixRun(query.slice(take), words, from + 1)) return true;
+  }
+  return false;
+}
+
 /**
- * Rank one action against a normalized query. Higher is better; 0 means no
- * match (filtered out). Label matches outrank keyword matches; a prefix
- * outranks a mid-string hit so "lead" surfaces Lead Queue first.
+ * The fuzzy step after every exact, prefix, substring, hint and keyword
+ * check (shell-07 item 5): the query runs through prefixes of the label's
+ * words in order, so 'leaqu' finds Lead Queue. 20 when the run starts at the
+ * first word, 10 otherwise: below every keyword hit (25 and up), so the
+ * mortgage synonyms still resolve first. Masked ids and ZIPs never fuzzy-match.
  */
-export function scoreAction(action: CommandAction, query: string): number {
+export function fuzzyWordPrefixScore(label: string, query: string): number {
+  const q = normalize(query).replace(/\s+/g, '');
+  const text = normalize(label);
+  if (!FUZZY_QUERY_RE.test(q) || MASKED_ID_LABEL_RE.test(text)) return 0;
+  const words = text.split(/[^a-z0-9]+/).filter((word) => word.length > 0);
+  for (let start = 0; start < words.length; start += 1) {
+    if (prefixRun(q, words, start)) return start === 0 ? 20 : 10;
+  }
+  return 0;
+}
+
+/**
+ * Rank a row (label, hint, keywords) against a query. Higher is better; 0
+ * means no match. Label matches outrank hint and keyword matches; a prefix
+ * outranks a mid-string hit so "lead" surfaces Lead Queue first; the fuzzy
+ * word-prefix step comes last. The palette's other groups rank with it too.
+ */
+export function scoreText(
+  labelText: string,
+  hintText: string,
+  keywords: readonly string[],
+  query: string,
+): number {
   const q = normalize(query);
   if (!q) return 1; // no query → everything shows in registry order
-  const label = normalize(action.label);
+  const label = normalize(labelText);
   if (label === q) return 100;
   if (label.startsWith(q)) return 80;
   if (label.includes(q)) return 60;
-  const hint = normalize(action.hint);
+  const hint = normalize(hintText);
   if (hint.includes(q)) return 45;
-  for (const kw of action.keywords) {
+  for (const kw of keywords) {
     const k = normalize(kw);
     if (k === q || k.startsWith(q)) return 40;
     if (k.includes(q)) return 25;
   }
-  return 0;
+  return fuzzyWordPrefixScore(label, q);
+}
+
+/** Rank one action against a query (see scoreText). */
+export function scoreAction(action: CommandAction, query: string): number {
+  return scoreText(action.label, action.hint, action.keywords, query);
 }
 
 export function filterCommandActions(

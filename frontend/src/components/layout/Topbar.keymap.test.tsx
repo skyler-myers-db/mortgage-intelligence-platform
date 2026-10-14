@@ -7,6 +7,7 @@
  * Console's single-key switch off. The `?` sheet lists it.
  */
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
@@ -37,6 +38,9 @@ vi.mock('./IdentityMenu', () => ({ IdentityMenu: () => null }));
 
 import { Topbar } from './Topbar';
 
+// Topbar's borrower search reads through TanStack Query (hooks/useBorrowerSearch).
+const queryClient = new QueryClient();
+
 describe('Topbar / shortcut through the keymap', () => {
   let container: HTMLElement;
   const strays: HTMLElement[] = [];
@@ -44,7 +48,7 @@ describe('Topbar / shortcut through the keymap', () => {
   beforeEach(async () => {
     installLocalStorage();
     clearSingleKeyShortcutsPreference();
-    ({ container } = await mount(<MemoryRouter><Topbar /></MemoryRouter>));
+    ({ container } = await mount(<QueryClientProvider client={queryClient}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>));
   });
 
   // mount() unmounts the Topbar and removes its container after each test.
@@ -92,5 +96,13 @@ describe('Topbar / shortcut through the keymap', () => {
     const event = slash();
     expect(document.activeElement).not.toBe(search());
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('announces `/` as the search shortcut only while single keys are on (shell-07 item 3)', () => {
+    expect(search().getAttribute('aria-keyshortcuts')).toBe('/');
+    act(() => setSingleKeyShortcutsEnabled(false));
+    expect(search().hasAttribute('aria-keyshortcuts')).toBe(false);
+    act(() => setSingleKeyShortcutsEnabled(true));
+    expect(search().getAttribute('aria-keyshortcuts')).toBe('/');
   });
 });

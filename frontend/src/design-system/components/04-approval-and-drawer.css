@@ -267,12 +267,6 @@
   gap: var(--sp-1);
   min-inline-size: 12rem;
 }
-.outreach-routing__label {
-  font-size: var(--fs-11);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-caps);
-  color: var(--text-3);
-}
 .outreach-routing__select {
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-md);
@@ -306,11 +300,21 @@
   background: var(--bg-1);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
+  /* The exit (motion-01; deviation:offer-mock-exit, the palette's recipe in
+     05-command-palette.css): the route keeps the mock mounted, close() runs
+     at exit start, and the closed dialog and its backdrop fade while
+     `display` and `overlay` hold them in the top layer (allow-discrete). */
+  transition: opacity var(--dur-exit) var(--ease-exit), display var(--dur-exit) allow-discrete, overlay var(--dur-exit) allow-discrete;
 }
+.offer-mock:not([open]) { display: none; opacity: 0; }
 .offer-mock::backdrop {
   background: var(--surface-scrim);
   backdrop-filter: blur(2px);
   transition: opacity var(--dur-base) var(--ease);
+}
+.offer-mock:not([open])::backdrop {
+  opacity: 0;
+  transition: opacity var(--dur-exit) var(--ease-exit), display var(--dur-exit) allow-discrete, overlay var(--dur-exit) allow-discrete;
 }
 @starting-style {
   .offer-mock[open]::backdrop { opacity: 0; }
@@ -318,6 +322,7 @@
 @media (prefers-reduced-motion: reduce) {
   /* The global reduced-motion reset matches `*`, never `::backdrop`. */
   .offer-mock::backdrop { transition: none; }
+  .offer-mock, .offer-mock:not([open])::backdrop { transition: none; }
 }
 .offer-mock__watermark {
   position: absolute;
