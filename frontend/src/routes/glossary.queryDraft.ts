@@ -23,73 +23,50 @@ import { useLocation, useSearchParams } from 'react-router';
  */
 const WRITE_STAMP = 'glossaryQueryWrite';
 
-let lastStamp = 0;
+let stamps = 0;
+const nextStamp = (): number => ++stamps;
+const stampsIssued = (): number => stamps;
 
-function nextStamp(): number {
-  lastStamp += 1;
-  return lastStamp;
-}
-
-function stampsIssued(): number {
-  return lastStamp;
-}
-
-function stampOf(state: unknown): number | null {
-  if (typeof state !== 'object' || state === null) return null;
-  const stamp = (state as Record<string, unknown>)[WRITE_STAMP];
-  return typeof stamp === 'number' ? stamp : null;
-}
-
-interface Draft {
-  text: string;
-  /** The location the draft last accounted for. */
-  locationKey: string;
-  /** The newest stamp already landed or superseded. */
-  landed: number;
-  /** The newest stamp this field has written. */
-  issued: number;
-}
-
-export interface GlossaryQuery {
-  /** What the field shows and the glossary filters by. */
-  text: string;
-  /** Type: update the field now and write ?q= (an empty value drops it). */
-  setText: (next: string) => void;
-}
-
-export function useGlossaryQuery(): GlossaryQuery {
+/**
+ * [what the field shows and the glossary filters by, set it as typed: the
+ * field updates now and ?q= follows (an empty value drops it)].
+ *
+ * The draft records the location it last accounted for (`key`), the newest
+ * stamp already landed or superseded (`landed`) and the newest this field
+ * has written (`issued`). A changed location is adjusted for during render;
+ * React discards that render's output and renders again before committing.
+ */
+export function useGlossaryQuery(): [string, (next: string) => void] {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const committed = searchParams.get('q') ?? '';
-  const [draft, setDraft] = useState<Draft>(() => ({
-    text: committed,
-    locationKey: location.key,
+  const [draft, setDraft] = useState(() => ({
+    text: searchParams.get('q') ?? '',
+    key: location.key,
     landed: stampsIssued(),
     issued: stampsIssued(),
   }));
-
-  let current = draft;
-  if (draft.locationKey !== location.key) {
-    const stamp = stampOf(location.state);
-    current = stamp !== null && stamp > draft.landed && stamp <= draft.issued
-      ? { ...draft, locationKey: location.key, landed: stamp }
-      : { text: committed, locationKey: location.key, landed: draft.issued, issued: draft.issued };
-    setDraft(current);
-  }
-
-  const setText = (next: string): void => {
-    const stamp = nextStamp();
-    setDraft((previous) => ({ ...previous, text: next, issued: stamp }));
-    setSearchParams(
-      (params) => {
-        const written = new URLSearchParams(params);
-        if (next) written.set('q', next);
-        else written.delete('q');
-        return written;
-      },
-      { replace: true, preventScrollReset: true, state: { [WRITE_STAMP]: stamp } },
+  if (draft.key !== location.key) {
+    const stamp: unknown = (location.state as Record<string, unknown> | null)?.[WRITE_STAMP];
+    setDraft(
+      typeof stamp === 'number' && stamp > draft.landed && stamp <= draft.issued
+        ? { ...draft, key: location.key, landed: stamp }
+        : { text: searchParams.get('q') ?? '', key: location.key, landed: draft.issued, issued: draft.issued },
     );
-  };
-
-  return { text: current.text, setText };
+  }
+  return [
+    draft.text,
+    (next) => {
+      const stamp = nextStamp();
+      setDraft((previous) => ({ ...previous, text: next, issued: stamp }));
+      setSearchParams(
+        (params) => {
+          const written = new URLSearchParams(params);
+          if (next) written.set('q', next);
+          else written.delete('q');
+          return written;
+        },
+        { replace: true, preventScrollReset: true, state: { [WRITE_STAMP]: stamp } },
+      );
+    },
+  ];
 }

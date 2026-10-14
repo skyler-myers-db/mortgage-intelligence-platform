@@ -39,7 +39,7 @@ export default function GlossaryRoute() {
   // field shows a synchronous draft that writes ?q= (glossary.queryDraft):
   // controlled from the URL, a router transition would undo keystrokes. The
   // list follows the deferred draft, so typing never waits on the filter.
-  const { text: draftQuery, setText: setQuery } = useGlossaryQuery();
+  const [draftQuery, setQuery] = useGlossaryQuery();
   const query = useDeferredValue(draftQuery);
   const tokens = glossaryQueryTokens(query);
   const searchRef = useRef<HTMLInputElement>(null);
