@@ -26,6 +26,7 @@ function Harness() {
   return (
     <>
       <button type="button" id="outside">Outside</button>
+      <button type="button" id="preset" data-period-preset="">7 days</button>
       <SalesPeriodRange
         from={range.from}
         to={range.to}
@@ -155,5 +156,30 @@ describe('SalesPeriodRange', () => {
     expect(inputs()).toEqual([from, to]);
     expect([from.value, to.value]).toEqual(['2026-06-01', '2026-06-30']);
     expect(applied).not.toHaveBeenCalled();
+  });
+
+  // W5e C11 (the W5d period-control residuals).
+  it('announces a refused apply through the field notice region', () => {
+    const [from] = inputs();
+    const notices = () => [...document.querySelectorAll('.field__notice')].map((node) => node.textContent);
+    expect(notices()).toEqual(['', '']);
+    edit(from, '2025-07-02');
+    press(from, 'Enter');
+    expect(applied).not.toHaveBeenCalled();
+    const region = document.querySelector<HTMLElement>(`#${CSS.escape(from.getAttribute('aria-describedby')?.split(' ').find((id) => id.endsWith('notice')) ?? '')}`);
+    expect(region?.getAttribute('role')).toBe('status');
+    expect(region?.getAttribute('aria-live')).toBe('polite');
+    expect(region?.textContent).toBe('Range not applied.');
+    // Fixed, it clears.
+    edit(from, '2026-07-02');
+    expect(notices()).toEqual(['', '']);
+  });
+
+  it('applies nothing when focus moves from a dirty draft onto a period preset', () => {
+    const [from] = inputs();
+    edit(from, '2026-07-03');
+    focusOut(from, document.getElementById('preset'));
+    expect(applied).not.toHaveBeenCalled();
+    expect(from.value).toBe('2026-07-03');
   });
 });

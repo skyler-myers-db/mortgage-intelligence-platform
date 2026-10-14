@@ -24,10 +24,12 @@ import {
   normalizedParams,
   paramsForPeriod,
   periodEyebrow,
+  previousWindow,
   resolveSalesPeriod,
   type SalesPeriod,
   type SalesPeriodPreset,
 } from './analytics.sales-ops.period';
+import { SalesTeamComparison, teamTotals, type TeamTotals } from './analytics.sales-ops.team';
 import './analytics.sales-ops.css';
 
 /**
@@ -53,6 +55,8 @@ const DistributionBoard = lazy(() => import('../components/mortgage/Distribution
 const SalesPeriodRange = lazy(() => import('../components/mortgage/SalesPeriodRange'));
 /** GET /sales/conversion returns at most this many groups (its LIMIT 100). */
 const CONVERSION_ROW_CAP = 100;
+/** An officer the roster does not list: never the raw email. */
+const OFF_ROSTER_LABEL = 'Loan officer not on the current roster';
 
 function relativeIsoDate(days: number): string {
   const date = new Date();
@@ -96,6 +100,12 @@ function SalesPeriodControl({ period, onChange }: {
             type="button"
             className={preset.value === period.preset ? 'is-active' : undefined}
             aria-pressed={preset.value === period.preset}
+            // A preset chosen while a custom draft is dirty applies the
+            // preset only: the press keeps focus in the range (no blur
+            // apply first, so one history entry), and a keyboard move onto
+            // a preset is not "leaving the range" (SalesPeriodRange).
+            data-period-preset=""
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => onChange(preset.value, preset.value === 'custom' ? { from: period.from, to: period.to } : undefined)}
           >
             {preset.label}
@@ -149,14 +159,25 @@ export function SalesOpsSection() {
     outcomes: SalesOutcomeSummaryResponse | null;
     /** The outcome read's own failure, kept apart: it degrades one card only. */
     outcomesError: unknown;
+    /** The team totals for the period and the same span before it (critic-10 6b); null when that read failed. */
+    team: { current: TeamTotals | null; previous: TeamTotals | null };
   }>({
     queryKey: [...queryKeys.salesOps(), 'period', period.from, period.to],
     queryFn: async ({ signal }) => {
+      const previous = previousWindow(period);
+      // The cohort reads run beside the per-officer one; a failure there
+      // degrades the team row only (an em-dash, never a zero).
+      const teamResult = Promise.all([
+        api.salesConversion(period.from, period.to, 'cohort', signal),
+        api.salesConversion(previous.from, previous.to, 'cohort', signal),
+      ])
+        .then(([current, before]) => ({ current: teamTotals(current), previous: teamTotals(before) }))
+        .catch(() => ({ current: null, previous: null }));
       const conversion = await api.salesConversion(period.from, period.to, 'lo', signal);
       const outcomeResult = await api.salesOutcomeSummary(period.from, period.to, signal)
         .then((data) => ({ data, error: null as unknown }))
         .catch((error: unknown) => ({ data: null, error }));
-      return { period, conversion, outcomes: outcomeResult.data, outcomesError: outcomeResult.error };
+      return { period, conversion, outcomes: outcomeResult.data, outcomesError: outcomeResult.error, team: await teamResult };
     },
     placeholderData: keepPreviousData,
     staleTime: 30_000,
@@ -203,14 +224,16 @@ export function SalesOpsSection() {
   const canDistribute = snapshotQuery.isSuccess && salesTeam.length > 0;
   // Conversion rows are grouped by LO EMAIL (`group_by: 'lo'`), which is an
   // internal identifier -- the queue shows every other LO reference as
-  // "Summit LO 01". Resolve through the roster the same page already loads,
-  // and fall back to the raw key when the roster has no entry (a manager or a
-  // deactivated LO can still own dispositions) so a name is never invented.
+  // "Summit LO 01". Resolve through the roster the same page already loads;
+  // an officer the roster does not list (a manager or a deactivated LO can
+  // still own dispositions) reads as the fixed label below, so the raw email
+  // never reaches the DOM as text, a title or an accessible name, and no
+  // name is invented (W5e C1, lexicon item 19b).
   const loanOfficerLabel = (groupKey: string): string => {
     const match = salesTeam.find(
       (member) => member.email.toLowerCase() === groupKey.trim().toLowerCase(),
     );
-    return match?.display_label ?? groupKey;
+    return match?.display_label ?? OFF_ROSTER_LABEL;
   };
   // Every in-scope loan officer (critic-10 6e): conversion() groups call
   // dispositions, so an officer with no calls in the period has no row. The
@@ -256,6 +279,12 @@ export function SalesOpsSection() {
       </div>
       <div className="surface__body">
         <SalesPeriodControl period={period} onChange={choosePeriod} />
+        <SalesTeamComparison
+          current={periodQuery.data?.team.current ?? null}
+          previous={periodQuery.data?.team.previous ?? null}
+          days={shownPeriod.days}
+          loading={periodLoading}
+        />
         {salesTeamError && (
           <div role="alert" className="status-callout status-callout--warning mb-3">
             Sales team unavailable: <ErrorBody error={salesTeamError} subject="the sales team" />

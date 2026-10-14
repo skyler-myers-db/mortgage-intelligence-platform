@@ -20,6 +20,8 @@ const apiMocks = vi.hoisted(() => ({
   salesAging: vi.fn(),
   salesStandup: vi.fn(),
   salesConversion: vi.fn(),
+  /** The cohort (team) reads of GET /sales/conversion, apart from the per-officer one. */
+  salesCohort: vi.fn(),
   salesOutcomeSummary: vi.fn(),
 }));
 
@@ -34,6 +36,13 @@ vi.mock('../lib/useWarmingUpRetry', () => ({
     isFetching: false,
     manualRetry: vi.fn(),
   }),
+}));
+
+// The team row's KPI cards carry evidence chips (critic-10 6b), which read
+// the app context; the drawer itself is not under test here.
+vi.mock('../components/AppContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../components/AppContext')>()),
+  useApp: () => ({ lender: 'Summit Mortgage', setDrawer: () => undefined, showEvidence: true }),
 }));
 
 vi.mock('../lib/configOptionsQuery', () => ({
@@ -52,20 +61,26 @@ vi.mock('../components/FootprintProvider', () => ({
 
 vi.mock('../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/api')>()),
-  api: apiMocks,
+  api: {
+    ...apiMocks,
+    // groupBy=cohort goes to its own mock, so the per-officer pins stay on salesConversion.
+    salesConversion: (from: string, to: string, groupBy: 'lo' | 'cohort' = 'lo', signal?: AbortSignal) =>
+      groupBy === 'cohort' ? apiMocks.salesCohort(from, to, signal) : apiMocks.salesConversion(from, to, groupBy, signal),
+  },
 }));
 
 import AnalyticsRoute from './analytics';
+import './analytics.sales-ops';
 import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
 import { ApiError } from '../lib/apiTransport';
+import { signedCount, signedPct } from '../lib/formatters';
 import { preloadDescribedError } from '../components/ui/DescribedError';
 
-// The error vocabulary is its own chunk (loaded with the first failure), and
-// the Sales ops tab is its own chunk (W5e item 2b): load both up front so a
-// render settles in one tick.
+// The error vocabulary is its own chunk (loaded with the first failure):
+// load it up front. The Sales ops tab is its own chunk too (W5e item 2b); the
+// static import below puts it in the module graph before any test renders.
 beforeAll(async () => {
   await preloadDescribedError();
-  await import('./analytics.sales-ops');
 });
 
 async function settle(): Promise<void> {
@@ -110,6 +125,7 @@ describe('Analytics Sales ops tab', () => {
       applications_started: 0,
     });
     apiMocks.salesConversion.mockResolvedValue({ rows: [] });
+    apiMocks.salesCohort.mockResolvedValue({ rows: [] });
     apiMocks.salesOutcomeSummary.mockResolvedValue({
       total_outcomes: 0,
       applications_submitted: 0,
@@ -159,7 +175,7 @@ describe('Analytics Sales ops tab', () => {
     expect(document.querySelector('[aria-label="Analytics filters"]')).toBeNull();
   });
 
-  it('shows LO display names in week-to-date conversion, falling back to the raw key', async () => {
+  it('shows LO display names in week-to-date conversion, and a fixed label for an officer off the roster', async () => {
     apiMocks.salesTeam.mockResolvedValue([
       {
         email: 'lo02@summit.example',
@@ -189,8 +205,11 @@ describe('Analytics Sales ops tab', () => {
     // critic-08: the LO email is never put in the DOM as a title= attribute.
     expect(card?.querySelectorAll('[title]').length).toBe(0);
     expect(card?.innerHTML).not.toContain('lo02@summit.example');
-    // No roster entry -> render the key, never an invented name.
-    expect(card?.textContent).toContain('manager@summit.example');
+    // No roster entry -> the fixed label, never the raw email and never an
+    // invented name (W5e C1, lexicon item 19b): not as text, a title or an
+    // accessible name anywhere on the page.
+    expect(card?.textContent).toContain('Loan officer not on the current roster');
+    expect(document.body.innerHTML).not.toContain('manager@summit.example');
   });
 
   it('Sales ops and Offer\'s assignment share one roster read and narrow it each their own way (runtime-06)', async () => {
@@ -222,7 +241,7 @@ describe('Analytics Sales ops tab', () => {
     await settle();
 
     expect(apiMocks.salesTeam, 'one GET /sales/team for both surfaces').toHaveBeenCalledTimes(1);
-    // Sales ops narrows to loan officers: the manager's row keeps its raw key.
+    // Sales ops narrows to loan officers: the manager's row reads as off the roster.
     const card = [...document.querySelectorAll('.sales-ops-card')].find((node) =>
       node.textContent?.includes('Week-to-date conversion'),
     );
@@ -534,6 +553,73 @@ describe('Analytics Sales ops tab', () => {
       apiMocks.salesTeam.mockResolvedValue([]);
       await renderView('/analytics?view=sales-ops');
       expect(document.body.textContent).not.toContain('Distribute approved leads…');
+    });
+  });
+
+  describe('the team comparison (critic-10 6b)', () => {
+    const teamCards = () =>
+      [...document.querySelectorAll('[data-testid="sales-team-comparison"] .kpi')].map((card) => ({
+        label: card.querySelector('.kpi__label')?.textContent ?? null,
+        value: card.querySelector('.kpi__value')?.textContent ?? null,
+        delta: card.querySelector('.kpi__delta')?.textContent ?? null,
+        loading: card.classList.contains('is-loading'),
+      }));
+    const cohort = (calls: number, contacts: number, starts: number) => ({
+      rows: [{ group_key: 'all_cohorts', calls_attempted: calls, unique_contacts_reached: contacts, unique_application_starts: starts, contacts_reached: contacts, callbacks_scheduled: 0, applications_started: starts, application_start_rate: 0 }],
+    });
+
+    it('reads the cohort for the period and the same span before it, and states the change', async () => {
+      // The period's read first, then the span before it (Promise.all order).
+      apiMocks.salesCohort.mockResolvedValueOnce(cohort(220, 74, 12)).mockResolvedValueOnce(cohort(180, 74, 0));
+      await act(async () => {
+        renderAt('/analytics?view=sales-ops&sales_period=7d');
+      });
+      await settle();
+
+      // Both reads are cohort reads: the team totals never sum the LO rows.
+      const windows = apiMocks.salesCohort.mock.calls.map((call) => `${String(call[0])}..${String(call[1])}`);
+      expect(windows).toHaveLength(2);
+      const [current, previous] = windows.map((window) => window.split('..'));
+      const dayMs = 24 * 60 * 60 * 1000;
+      expect((Date.parse(current[0]) - Date.parse(previous[1])) / dayMs).toBe(1);
+      expect((Date.parse(previous[1]) - Date.parse(previous[0])) / dayMs).toBe(6);
+      expect(teamCards()).toEqual([
+        { label: 'Calls attempted', value: '220', delta: `${signedCount(40)} vs previous 7 days`, loading: false },
+        { label: 'Contacts reached', value: '74', delta: 'no change vs previous 7 days', loading: false },
+        { label: 'Application starts', value: '12', delta: 'new vs previous 7 days', loading: false },
+        { label: 'Start rate', value: '16.2%', delta: `${signedPct(16.2, 1).slice(0, -1)} pts vs previous 7 days`, loading: false },
+      ]);
+      // The delta direction follows the sign; "no change" is flat.
+      const deltas = [...document.querySelectorAll('[data-testid="sales-team-comparison"] .kpi__delta')].map((node) => node.className);
+      expect(deltas).toEqual(['kpi__delta up', 'kpi__delta flat', 'kpi__delta up', 'kpi__delta up']);
+      // Each card opens the call-dispositions evidence.
+      expect(document.querySelectorAll('[data-testid="sales-team-comparison"] .evidence-chip')).toHaveLength(4);
+    });
+
+    it('shows skeletons, never zeros, while loading and an em-dash when the team read failed', async () => {
+      const never = new Promise<never>(() => {});
+      apiMocks.salesConversion.mockReturnValueOnce(never);
+      apiMocks.salesCohort.mockReturnValue(never);
+      await act(async () => {
+        renderAt('/analytics?view=sales-ops');
+      });
+      await settle();
+      expect(teamCards().map((card) => card.loading)).toEqual([true, true, true, true]);
+      expect(teamCards().map((card) => card.value)).toEqual([null, null, null, null]);
+
+      act(() => root.unmount());
+      queryClient.clear();
+      root = createRoot(document.getElementById('root') as HTMLElement);
+      apiMocks.salesConversion.mockResolvedValue({ rows: [] });
+      apiMocks.salesCohort.mockRejectedValue(new ApiError('down', { path: '/api/v1/sales/conversion', status: 500 }));
+      await act(async () => {
+        renderAt('/analytics?view=sales-ops');
+      });
+      await settle();
+      expect(teamCards().map((card) => card.value)).toEqual(['—', '—', '—', '—']);
+      expect(teamCards().map((card) => card.delta)).toEqual([null, null, null, null]);
+      // The per-officer card still reads: the team failure degrades the team row only.
+      expect(document.body.textContent).toContain('No LO dispositions logged in this period.');
     });
   });
 

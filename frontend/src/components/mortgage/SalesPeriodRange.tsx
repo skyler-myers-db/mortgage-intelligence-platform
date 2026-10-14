@@ -74,13 +74,23 @@ export default function SalesPeriodRange({ from, to, max, onApply }: SalesPeriod
   const leave = (event: FocusEvent<HTMLElement>) => {
     const next = event.relatedTarget;
     if (next instanceof Node && rangeRef.current?.contains(next)) return;
+    // Moving onto a period preset is choosing a preset, not leaving with the
+    // draft: applying here first wrote a second history entry (W5e C11).
+    if (next instanceof Element && next.closest('[data-period-preset]')) return;
     if (document.hasFocus()) apply();
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') apply();
   };
   const field = (edge: Edge, label: string) => (
-    <Field label={label} className="sales-ops-period__date" error={issue && errorOn === edge ? ISSUE_COPY[issue] : null}>
+    <Field
+      label={label}
+      className="sales-ops-period__date"
+      error={issue && errorOn === edge ? ISSUE_COPY[issue] : null}
+      // The refusal is announced through Field's polite notice region (W5e
+      // C11): the error line itself is not a live region.
+      notice={issue && errorOn === edge ? 'Range not applied.' : null}
+    >
       {(control) => (
         <input
           {...control}
