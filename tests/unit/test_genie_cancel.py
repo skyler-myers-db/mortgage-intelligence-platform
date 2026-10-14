@@ -724,6 +724,35 @@ def test_adoptable_never_takes_a_precancelled_row(monkeypatch: Any) -> None:
 # ------------------------------------------- the Genie-side cancel tripwire
 
 
+REVIEWED_AGENT_MODE_CANCEL = "genie_cancel_response"
+
+
+def unreviewed_cancel_methods(api: type) -> list[str]:
+    """Cancel-named public methods of a GenieAPI class that no review has admitted.
+
+    W5e (genie-03 residual, 2026-10-14): databricks-sdk 0.152.0 adds exactly
+    one cancel, ``genie_cancel_response(agent_id, conversation_id,
+    response_id)``, the agent-mode response cancel this app does not use. It
+    is admitted only while its signature carries ``agent_id`` (so a chat-mode
+    cancel reusing the name is still caught); every other cancel-named method
+    is returned and forces the decision again.
+    """
+
+    import inspect
+
+    found = []
+    for name in sorted(n for n in dir(api) if not n.startswith("_") and "cancel" in n.lower()):
+        if name == REVIEWED_AGENT_MODE_CANCEL:
+            try:
+                parameters = inspect.signature(getattr(api, name)).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "agent_id" in parameters:
+                continue
+        found.append(name)
+    return found
+
+
 def test_the_pinned_sdk_genie_api_has_no_message_cancel() -> None:
     """Audit genie-03 residual (W5c): a Stop cancels only this app's record.
 
@@ -731,13 +760,34 @@ def test_the_pinned_sdk_genie_api_has_no_message_cancel() -> None:
     chat-mode conversation message (the REST reference's only cancel is the
     agent-mode response cancel, an API this app does not use), and
     ``delete_conversation_message`` is a deletion, not a cancel. So the copy
-    keeps 'Genie may keep the question as context'. An SDK bump that adds a
-    cancel method goes red here and forces the decision
-    (docs/observability.md section 9).
+    keeps 'Genie may keep the question as context'. An SDK bump that adds an
+    unreviewed cancel method goes red here and forces the decision
+    (docs/observability.md section 9; the W5e no-bump decision).
     """
 
     from databricks.sdk.service.dashboards import GenieAPI
 
     methods = [name for name in dir(GenieAPI) if not name.startswith("_")]
     assert "create_message" in methods and "delete_conversation_message" in methods, "the inspected surface"
-    assert [name for name in methods if "cancel" in name.lower()] == []
+    assert unreviewed_cancel_methods(GenieAPI) == []
+
+
+def test_the_tripwire_admits_only_the_reviewed_agent_mode_cancel() -> None:
+    """Planted classes prove both directions of the helper above."""
+
+    class AgentModeOnly:  # the 0.152.0 shape
+        def genie_cancel_response(self, agent_id: str, conversation_id: str, response_id: str) -> None: ...
+
+    class ChatModeUnderTheReviewedName:
+        def genie_cancel_response(self, space_id: str, conversation_id: str, message_id: str) -> None: ...
+
+    class ChatModeCancel(AgentModeOnly):
+        def cancel_message(self, space_id: str, conversation_id: str, message_id: str) -> None: ...
+
+    class NoCancel:
+        def create_message(self) -> None: ...
+
+    assert unreviewed_cancel_methods(AgentModeOnly) == []
+    assert unreviewed_cancel_methods(NoCancel) == []
+    assert unreviewed_cancel_methods(ChatModeUnderTheReviewedName) == ["genie_cancel_response"]
+    assert unreviewed_cancel_methods(ChatModeCancel) == ["cancel_message"]

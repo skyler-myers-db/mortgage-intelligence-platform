@@ -900,6 +900,18 @@ app's work and record only, and the copy keeps "Genie may keep the question
 as context". `tests/unit/test_genie_cancel.py` fails on an SDK that adds a
 cancel method, which forces the decision then.
 
+Decision, 2026-10-14 (W5e `w5-deps-report`, genie-03 residual): no
+`databricks-sdk` bump. The newest release, 0.152.0 (published 2026-10-13),
+adds exactly one cancel to `GenieAPI`, `genie_cancel_response(agent_id,
+conversation_id, response_id)`: the agent-mode response cancel above, not a
+chat-mode message cancel. So a bump would bring this app no Genie-side
+cancel, and a 0.103.0 -> 0.152.0 jump touches every Databricks surface and
+needs a live deploy proof of its own. The pin is held below 0.104.0 in
+`tools/dependency_holds.json` (review_by 2026-11-15), and the tripwire now
+admits exactly that reviewed agent-mode method, and only while its signature
+carries `agent_id`; any other cancel-named method still fails it. The copy
+"Genie may keep the question as context" is unchanged.
+
 ### Genie context scope (genie-04 phase 2, W5d)
 
 `POST /api/v1/genie/context-scope` renders a closed Lead Queue context
