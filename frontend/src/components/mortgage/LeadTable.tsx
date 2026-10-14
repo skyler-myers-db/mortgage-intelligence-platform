@@ -17,7 +17,7 @@ import { useStableRowCallbacks } from './LeadTable.rowCallbacks';
 import { LeadTableHead } from './LeadTableHead';
 import { LeadTableHeader } from './LeadTableHeader';
 import { LeadTableFooter } from './LeadTableFooter';
-import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
+import { LeadTableBulkActions } from './LeadTableBulkActions';
 import { LeadBulkRunProgressFallback, LeadBulkRunResultFallback } from './LeadBulkRunFallback';
 import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
@@ -276,6 +276,7 @@ export function LeadTable({
     leadViewId: paging?.viewId ?? null,
     // A request-scoped queue (flow-02): every decision answers that request.
     approvalRequestBatchId: requestDecisionBatchId(approvalRequests),
+    openRecentActivity: openConsoleRecentActivity,
   });
   const requests = useLeadTableRequests({
     approvalRequests,
@@ -777,15 +778,6 @@ export function LeadTable({
       {bulkRun.result && (BulkRunResult
         ? <BulkRunResult result={bulkRun.result} onDismiss={bulkRun.dismissResult} />
         : bulkChunk.failed && <LeadBulkRunResultFallback result={bulkRun.result} onDismiss={bulkRun.dismissResult} />)}
-      {approval.bulkToast && (
-        <LeadTableBulkToast
-          toast={approval.bulkToast}
-          onReviewRecentActivity={() => {
-            openConsoleRecentActivity();
-            approval.setBulkToast(null);
-          }}
-        />
-      )}
       {!triageOn && <LeadTableFooter
         loadedCount={leads.length}
         totalMatching={totalMatching}

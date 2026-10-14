@@ -1,8 +1,9 @@
 /**
  * LeadTableBulkActions — the sticky `.bulk-actions` toolbar under the ranked
  * borrower table (selection label, shared approval rationale, assignee
- * select, assign / distribute / approve controls) and the `.bulk-actions`
- * result toast. Every decision stays in useLeadApprovalActions /
+ * select, assign / distribute / approve controls). A cut-short run's result
+ * is one shell toast (useLeadApprovalActions, states-07 item 5b). Every
+ * decision stays in useLeadApprovalActions /
  * useLeadSalesActions; the one state here is the gate's shared rationale
  * (audit runtime-04 slice 2), so typing it re-renders this toolbar, never
  * the table. It is cleared once a run settles. Extracted from LeadTable.tsx
@@ -35,7 +36,6 @@ import { useId, useState, type ReactNode, type RefObject } from 'react';
 import type { SalesTeamMember } from '../../types';
 import { formatCount } from '../../lib/formatters';
 import { Button } from '../Primitives';
-import type { BulkToast } from './useLeadApprovalActions';
 import { bulkRunVerb, type BulkRunKind } from './useLeadBulkRun';
 import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 import { DISTRIBUTION_MAX_BORROWERS } from './LeadTable.distribution';
@@ -383,53 +383,6 @@ export function LeadTableBulkActions({
       {rejectGateOpen && rejectGate}
       {requestGate}
       {running && runStatus}
-    </div>
-  );
-}
-
-interface LeadTableBulkToastProps {
-  toast: BulkToast;
-  onReviewRecentActivity: () => void;
-}
-
-/**
- * Compact result banner for the last bulk run. `aborted` and `network` rows
- * are called out separately from plain failures: aborted rows may or may not
- * have committed server-side, so the copy sends the operator to Recent
- * activity instead of offering a blind retry.
- */
-export function LeadTableBulkToast({ toast, onReviewRecentActivity }: LeadTableBulkToastProps) {
-  return (
-    <div className="bulk-actions" data-testid="lead-bulk-toast">
-      <span
-        role="status"
-        aria-live="polite"
-        className={`bulk-actions__toast ${
-          toast.aborted > 0 || toast.network > 0
-            ? 'bulk-actions__toast--danger'
-            : toast.fail > 0
-              ? 'bulk-actions__toast--warn'
-              : 'bulk-actions__toast--ok'
-        }`}
-      >
-        {toast.ok} {toast.kind === 'reject' ? 'rejected' : 'approved'}
-        {toast.fail > 0 ? `, ${toast.fail} failed` : ''}
-        {toast.network > 0
-          ? ` (${toast.network} network dropped; retry)`
-          : ''}
-        {toast.aborted > 0
-          ? ` · ${toast.aborted} cancelled in flight. Confirm the outcome in Recent activity.`
-          : ''}
-      </span>
-      {toast.aborted > 0 && (
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          onClick={onReviewRecentActivity}
-        >
-          Review recent activity
-        </button>
-      )}
     </div>
   );
 }

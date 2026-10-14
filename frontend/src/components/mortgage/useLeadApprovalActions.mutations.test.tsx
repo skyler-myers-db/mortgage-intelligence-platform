@@ -269,10 +269,10 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(bodies.find((body) => body.review_mode === 'bulk_sample')?.draft_generation_id).toBe('gen-sample');
     // Only the six unsampled rows drafted in the run.
     expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(6);
-    // A finished run reports through the run's result; the static toast is
-    // only the unmount stash (R5-21).
+    // A finished run reports through the run's result; the cut-short toast is
+    // only the unmount stash (R5-21, states-07 item 5b).
     expect(actions!.bulkRun.result).toMatchObject({ ok: 7, failed: [], skipped: [], notStarted: [], stopped: false });
-    expect(actions!.bulkToast).toBeNull();
+    expect(getToasts().filter((toast) => /^\d+ (approved|rejected)/.test(toast.title))).toEqual([]);
     expect(actions!.selectionCount).toBe(0);
   });
 
@@ -470,7 +470,10 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     actions = null;
     root = createRoot(container);
     mount();
-    expect(actions!.bulkToast).toEqual({ ok: 0, fail: 0, network: 0, aborted: 7, kind: 'approve' });
+    // states-07 item 5b: ONE shell toast, audit-ambiguous rows sent to Recent activity.
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['error', '0 approved', '7 cancelled in flight. Confirm the outcome in Recent activity.'],
+    ]);
     // Aborted rows are audit-ambiguous: nothing is re-selected for a retry.
     expect(actions!.selectionCount).toBe(0);
     expect(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled')).toBeNull();
@@ -582,29 +585,27 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect([...actions!.selectedIds].sort()).toEqual([...IDS].sort());
   });
 
-  it('flashes a cut-short reject run as rejected', () => {
+  it('raises a cut-short reject run as rejected, once', () => {
     window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 2, aborted: 1, kind: 'reject', ts: Date.now() }));
     mount();
-    expect(actions!.bulkToast).toEqual({ ok: 2, fail: 0, network: 0, aborted: 1, kind: 'reject' });
+    expect(getToasts().map((toast) => [toast.tone, toast.title])).toEqual([['error', '2 rejected']]);
   });
 
-  it('clears a flashed run with nothing aborted after 4 s, and keeps an aborted one until it is resolved', () => {
-    vi.useFakeTimers();
-    try {
-      window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 3, aborted: 0, ts: Date.now() }));
-      mount();
-      expect(actions!.bulkToast).toEqual({ ok: 3, fail: 0, network: 0, aborted: 0, kind: 'approve' });
-      act(() => vi.advanceTimersByTime(4000));
-      expect(actions!.bulkToast, 'nothing is ambiguous: no dismiss control needed').toBeNull();
+  it('raises a run with nothing cut as one success toast, an aborted one as an error, and each only once', () => {
+    window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 3, aborted: 0, ts: Date.now() }));
+    mount();
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail, toast.action])).toEqual([
+      ['success', '3 approved', null, null],
+    ]);
+    expect(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled')).toBeNull();
+    remount();
+    expect(getToasts(), 'the key went with the first mount: no second toast').toHaveLength(1);
 
-      // Aborted rows may have committed: that flash waits for Recent activity.
-      window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 1, aborted: 2, ts: Date.now() }));
-      remount();
-      act(() => vi.advanceTimersByTime(60_000));
-      expect(actions!.bulkToast).toEqual({ ok: 1, fail: 0, network: 0, aborted: 2, kind: 'approve' });
-    } finally {
-      vi.useRealTimers();
-    }
+    // Aborted rows may have committed: an error, sent to Recent activity.
+    clearToasts();
+    window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 1, aborted: 2, ts: Date.now() }));
+    remount();
+    expect(getToasts().map((toast) => [toast.tone, toast.title])).toEqual([['error', '1 approved']]);
   });
 
   describe('a 429 Retry (states-08 item 3)', () => {
