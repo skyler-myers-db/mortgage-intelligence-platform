@@ -7,8 +7,9 @@
  * contract exporter, which validates it against the real FastAPI models.
  *
  * Masked ids come from data/borrowers; loan officers are lo0N@summit.example
- * in the contract samples, and the roster's own addresses when a handler
- * echoes the request's lo_emails.
+ * in the contract samples' commit and release bodies, and the roster's own
+ * addresses when a handler echoes the request's lo_emails (and in the
+ * exported BOARD_PLANS previews).
  */
 import type { DistributeLeadsResponse, DistributionPreview } from '../../../../src/lib/apiClients/sales';
 import type {
@@ -50,31 +51,72 @@ export function assignmentRow(borrowerId: string, officer: SalesTeamMember, extr
   };
 }
 
+/** Every fixture lead scores the same, so a plan's score sums follow its counts. */
+const LEAD_SCORE = 72;
+
+/** One Board plan for two loan officers (25/day then 20/day), in roster order. */
+export interface BoardPlan {
+  /** Each officer's open book, which the planner measures capacity against. */
+  open: readonly [number, number];
+  /** The new leads each officer receives. */
+  added: readonly [number, number];
+  /** Pool leads no officer had room for. */
+  unplaced: number;
+  /** Candidates a live assignment already holds, so left out of the pool. */
+  alreadyAssigned: number;
+}
+
 /**
- * A plan across `officers`: the first officer takes `added[0]` new leads, the
- * second `added[1]`, and so on. Aggregates only, never a borrower id.
+ * Every plan the Board fixture serves. Each is one
+ * backend/services/sales_distribution_plan.py produces for its officers on a
+ * pool of equal-score, out-of-region leads, and
+ * tests/unit/test_e2e_fixture_contract.py replays every one (contractSamples
+ * below exports them all) through the real planner:
+ *  - rule 2: an officer's room is max(0, capacity - open), so a book already
+ *    over capacity (Loan Officer B: 22 open at 20/day) takes no lead. That is
+ *    the only plan that draws the over-capacity marker, and it never sits on
+ *    a planned lead;
+ *  - rule 4: a lead is left unplaced only when NO officer has room.
+ * The roster's regions ('Midwest', 'South') are not states, so no lead is
+ * in-region.
  */
-export function boardPreview(officers: SalesTeamMember[], added: number[], fingerprint = BOARD_FINGERPRINT): DistributionPreview {
+export const BOARD_PLANS = {
+  /** A has room for 19 and takes the whole pool; B is over capacity. */
+  default: { open: [6, 22], added: [4, 0], unplaced: 0, alreadyAssigned: 3 },
+  /** The re-plan after a 409: one more pool lead was assigned elsewhere meanwhile. */
+  moved: { open: [6, 22], added: [3, 0], unplaced: 0, alreadyAssigned: 4 },
+  /** Every book full: nothing placed, the whole pool left unplaced. */
+  full: { open: [25, 22], added: [0, 0], unplaced: 2, alreadyAssigned: 3 },
+} as const satisfies Record<string, BoardPlan>;
+
+export type BoardPlanName = keyof typeof BOARD_PLANS;
+
+/** The named plan across `officers` (two, in roster order). Aggregates only, never a borrower id. */
+export function boardPreview(officers: SalesTeamMember[], name: BoardPlanName = 'default', fingerprint = BOARD_FINGERPRINT): DistributionPreview {
+  const plan: BoardPlan = BOARD_PLANS[name];
+  if (officers.length !== plan.open.length) {
+    throw new Error(`board plan ${name} covers ${plan.open.length} loan officers, not ${officers.length}`);
+  }
   const loads = officers.map((officer, index) => ({
     email: officer.email,
     display_label: officer.display_label,
     region: officer.region ?? null,
     capacity_per_day: officer.capacity_per_day,
-    open_count: index === 0 ? 6 : officer.capacity_per_day + 2,
-    added_count: added[index] ?? 0,
-    added_score_sum: (added[index] ?? 0) * 72,
-    in_region_count: Math.max(0, (added[index] ?? 0) - 1),
+    open_count: plan.open[index],
+    added_count: plan.added[index],
+    added_score_sum: plan.added[index] * LEAD_SCORE,
+    in_region_count: 0,
   }));
   const placed = loads.reduce((sum, load) => sum + load.added_count, 0);
   return {
     strategy: 'score_balanced',
     plan_fingerprint: fingerprint,
-    pool_count: placed + 2,
+    pool_count: placed + plan.unplaced,
     placed_count: placed,
-    placed_score_sum: loads.reduce((sum, load) => sum + load.added_score_sum, 0),
-    unplaced_no_capacity: 2,
+    placed_score_sum: placed * LEAD_SCORE,
+    unplaced_no_capacity: plan.unplaced,
     skipped_not_assignable: 1,
-    skipped_already_assigned: 3,
+    skipped_already_assigned: plan.alreadyAssigned,
     officers: loads,
   };
 }
@@ -150,7 +192,7 @@ export interface DistributeBody {
  */
 export function registerBoard(
   mockApi: MockApi,
-  options: { added?: number[]; onCommit?: (body: DistributeBody, index: number) => FixtureReply | Promise<FixtureReply> } = {},
+  options: { plan?: BoardPlanName; onCommit?: (body: DistributeBody, index: number) => FixtureReply | Promise<FixtureReply> } = {},
 ): DistributeBody[] {
   const bodies: DistributeBody[] = [];
   let commits = 0;
@@ -158,7 +200,7 @@ export function registerBoard(
     const request = body as DistributeBody;
     bodies.push(request);
     const officers = SALES_TEAM.filter((member) => request.lo_emails.includes(member.email));
-    const preview = boardPreview(officers, options.added ?? [3, 1]);
+    const preview = boardPreview(officers, options.plan);
     if (request.dry_run) return json(dryRunBody(preview));
     commits += 1;
     return options.onCommit ? options.onCommit(request, commits) : json(commitBody(officers, preview));
@@ -196,13 +238,19 @@ function sampled(source: string, pattern: string, body: unknown, path = pattern)
 
 /** Every sales-loop body a spec registers, for the fixture contract exporter. */
 export function contractSamples(): ContractSample[] {
-  const preview = boardPreview(CONTRACT_OFFICERS, [3, 1]);
+  const preview = boardPreview(CONTRACT_OFFICERS);
+  const loanOfficers = SALES_TEAM.filter((member) => member.role === 'loan_officer');
+  // Every plan a spec can serve, on the roster's own officers: the contract
+  // test replays each through the real planner.
+  const plans = (Object.keys(BOARD_PLANS) as BoardPlanName[]).map((name) =>
+    sampled(`dryRunBody(${name})`, '/api/sales/distribute', dryRunBody(boardPreview(loanOfficers, name))));
   const committed = commitBody(CONTRACT_OFFICERS, preview);
   const single = assignmentRow(LEADS[0].borrower_id, CONTRACT_OFFICERS[1]);
   const releasePath = `/api/leads/${LEADS[0].borrower_id}/assignment/release`;
   return [
     sampled('dryRunBody', '/api/sales/distribute', dryRunBody(preview)),
     sampled('commitBody', '/api/sales/distribute', committed),
+    ...plans,
     sampled('releaseBody(restored)', '/api/leads/:id/assignment/release', releaseBody(single, CONTRACT_OFFICERS[0]), releasePath),
     sampled('releaseBody(skipped)', '/api/leads/:id/assignment/release', releaseBody(single, null), releasePath),
     sampled('distributionReleaseBody', '/api/sales/distribute/release', distributionReleaseBody(committed.assignments)),

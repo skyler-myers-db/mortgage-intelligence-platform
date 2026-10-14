@@ -127,11 +127,11 @@ test.describe('(b) the Distribution Board', () => {
   for (const theme of FIXTURE_THEMES) {
     test(`${theme}: one dry run, the plan, a fingerprinted commit, and the run's Undo`, async ({ app, mockApi, page }) => {
       await app.setTheme(theme);
-      const bodies = registerBoard(mockApi, { added: [3, 1] });
+      const bodies = registerBoard(mockApi);
       const releases: Array<{ distribution_request_id: string; request_id: string }> = [];
       mockApi.register('POST', '/api/sales/distribute/release', ({ body }) => {
         releases.push(body as { distribution_request_id: string; request_id: string });
-        return json(distributionReleaseBody(commitBody(LOAN_OFFICERS, boardPreview(LOAN_OFFICERS, [3, 1])).assignments));
+        return json(distributionReleaseBody(commitBody(LOAN_OFFICERS, boardPreview(LOAN_OFFICERS)).assignments));
       });
       await app.gotoRoute(SALES_OPS);
       const dialog = await openBoard(page);
@@ -139,12 +139,27 @@ test.describe('(b) the Distribution Board', () => {
       expect(bodies).toHaveLength(1);
       expect(bodies[0]).toMatchObject({ strategy: 'score_balanced', dry_run: true, borrower_ids: [] });
       expect(bodies[0]).not.toHaveProperty('request_id');
-      await expect(dialog).toContainText('4 of 6 leads placed · 2 left unplaced: no capacity · 3 skipped: already assigned');
+      // BOARD_PLANS.default, a plan the planner produces: B's open book is
+      // over its capacity, so A takes the whole pool and nothing is unplaced.
+      await expect(dialog).toContainText('4 of 4 leads placed · 3 skipped: already assigned · 1 skipped: not approved or not contactable');
       await expect(dialog.locator('.distribution-board__bar')).toHaveCount(LOAN_OFFICERS.length);
-      await expect(dialog.locator('tbody tr').first()).toContainText('+3');
+      const rows = dialog.locator('tbody tr');
+      await expect(rows.first()).toContainText('+4');
+      await expect(rows.nth(1)).toContainText('+0');
+      // The over-capacity marker on B alone, and never over a planned lead.
+      await expect(rows.first().locator('.distribution-board__over')).toHaveCount(0);
+      await expect(rows.nth(1).locator('.distribution-board__over')).toHaveCount(1);
+      const hidden = await dialog.locator('.distribution-board__bar').evaluateAll((bars) => bars.flatMap((bar) => {
+        const over = bar.querySelector('.distribution-board__over')?.getBoundingClientRect();
+        const added = bar.querySelector('.distribution-board__seg--added')?.getBoundingClientRect();
+        return over && added && added.width > 0 && added.right > over.left
+          ? [`planned lead x${added.left}-${added.right} under the marker x${over.left}-${over.right}`]
+          : [];
+      }));
+      expect(hidden, 'a planned lead painted under the over-capacity marker').toEqual([]);
       // The first officer has room left: its free segment paints the track,
       // which must stand apart from the dialog's fill and from the open book.
-      const first = dialog.locator('tbody tr').first();
+      const first = rows.first();
       const free = await centerPixel(page, first.locator('.distribution-board__seg--free'));
       const open = await centerPixel(page, first.locator('.distribution-board__seg--open'));
       const fill = (await renderedColors(dialog)).bg;
@@ -184,8 +199,8 @@ test.describe('(c) a moved plan', () => {
       if (request.dry_run) {
         previews += 1;
         return json(dryRunBody(previews === 1
-          ? boardPreview(LOAN_OFFICERS, [3, 1])
-          : boardPreview(LOAN_OFFICERS, [2, 1], BOARD_FINGERPRINT_MOVED)));
+          ? boardPreview(LOAN_OFFICERS)
+          : boardPreview(LOAN_OFFICERS, 'moved', BOARD_FINGERPRINT_MOVED)));
       }
       commits.push(request.expected_plan_fingerprint ?? '');
       return json({ detail: 'The distribution plan changed since the preview.', reason: 'distribution_plan_changed' }, { status: 409 });
@@ -195,7 +210,7 @@ test.describe('(c) a moved plan', () => {
     await dialog.getByRole('button', { name: 'Commit distribution' }).click();
 
     await expect(dialog.getByText('The plan changed since your preview')).toBeVisible();
-    await expect(dialog).toContainText(`${LOAN_OFFICERS[0].display_label}: +3 → +2`);
+    await expect(dialog).toContainText(`${LOAN_OFFICERS[0].display_label}: +4 → +3`);
     expect(previews).toBe(2);
     expect(commits).toEqual([BOARD_FINGERPRINT]);
     await expect(dialog).toBeVisible();
@@ -207,7 +222,7 @@ test.describe('(c) a moved plan', () => {
     mockApi.register<unknown>('POST', '/api/sales/distribute', ({ body }) => {
       if ((body as { dry_run?: boolean }).dry_run) {
         previews += 1;
-        return json(dryRunBody(boardPreview(LOAN_OFFICERS, previews === 1 ? [3, 1] : [0, 0], previews === 1 ? BOARD_FINGERPRINT : BOARD_FINGERPRINT_MOVED)));
+        return json(dryRunBody(previews === 1 ? boardPreview(LOAN_OFFICERS) : boardPreview(LOAN_OFFICERS, 'full', BOARD_FINGERPRINT_MOVED)));
       }
       return json({ detail: 'The distribution plan changed since the preview.', reason: 'distribution_plan_changed' }, { status: 409 });
     });
@@ -217,7 +232,7 @@ test.describe('(c) a moved plan', () => {
     await commit.focus();
     await page.keyboard.press('Enter');
 
-    await expect(dialog).toContainText('0 of 2 leads placed');
+    await expect(dialog).toContainText('0 of 2 leads placed · 2 left unplaced: no capacity');
     // A natively disabled button would have dropped focus to <body> here.
     await expect(commit).toBeFocused();
     await expect(commit).toHaveAttribute('aria-disabled', 'true');
@@ -238,7 +253,7 @@ test.describe('(d) a rate-limited commit', () => {
           { detail: 'Too many requests.', retryable: true, reason: 'rate_limited', retry_after_seconds: 12 },
           { status: 429, headers: { 'Retry-After': '12' } },
         )
-        : json(commitBody(LOAN_OFFICERS, boardPreview(LOAN_OFFICERS, [3, 1])))),
+        : json(commitBody(LOAN_OFFICERS, boardPreview(LOAN_OFFICERS)))),
     });
     await app.gotoRoute(SALES_OPS);
     const dialog = await openBoard(page);
