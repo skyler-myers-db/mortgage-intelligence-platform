@@ -40,9 +40,17 @@ describe('resetActorScopedAppState', () => {
 });
 
 describe('shouldInstallRum', () => {
-  it('treats browser RUM as explicit opt-in configuration', () => {
+  // On by default through the deploy payload (D-platform-process-d1); the
+  // browser still installs RUM only when the served setting says true.
+  it('installs browser RUM exactly when the served setting is true', () => {
     expect(shouldInstallRum(undefined)).toBe(false);
     expect(shouldInstallRum({ rum_enabled: false })).toBe(false);
     expect(shouldInstallRum({ rum_enabled: true })).toBe(true);
+  });
+
+  it('the session setting wins over the options call when it is a boolean', () => {
+    expect(shouldInstallRum({ rum_enabled: true }, { rum_enabled: false })).toBe(false);
+    expect(shouldInstallRum({ rum_enabled: false }, { rum_enabled: true })).toBe(true);
+    expect(shouldInstallRum({ rum_enabled: true }, { rum_enabled: null })).toBe(true);
   });
 });

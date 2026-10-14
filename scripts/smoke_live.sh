@@ -281,6 +281,40 @@ for dep in warehouse lakebase genie; do
 done
 echo "[smoke] health ok · warehouse/lakebase/genie all up · breaker states present"
 
+# --- Actor binding (D-identity-review-a4) ----------------------------------
+# (a) A stale X-MIP-Actor-Key must be refused with 409 actor_changed: a 200
+# means the edge dropped the header or the binding middleware is missing.
+# (b) The session's own key must pass. Status codes only; never the key.
+# GET /config/options writes no audit row.
+ACTOR_PROBE_CODE="$(curl_bounded -sS "${CURL_AUTH_ARGS[@]}" \
+  -H 'X-MIP-Actor-Key: actor_0000000000000000' \
+  -o /tmp/mip-smoke-actor-binding.json -w '%{http_code}' \
+  "$APP_URL$API_PREFIX/config/options")" || ACTOR_PROBE_CODE="000"
+if [[ "$ACTOR_PROBE_CODE" != "409" ]] \
+  || [[ "$(jq -r '.reason // empty' /tmp/mip-smoke-actor-binding.json 2>/dev/null)" != "actor_changed" ]]; then
+  echo "[smoke] actor binding: a stale X-MIP-Actor-Key answered HTTP $ACTOR_PROBE_CODE (expected 409 actor_changed)" >&2
+  exit 1
+fi
+echo "[smoke] actor binding: stale key refused · HTTP 409 actor_changed"
+SESSION_ACTOR_KEY="$(curl_bounded -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL$API_PREFIX/session" \
+  | jq -r '.actor_cache_key // empty')" || SESSION_ACTOR_KEY=""
+if [[ -n "$SESSION_ACTOR_KEY" ]]; then
+  ACTOR_PROBE_CODE="$(curl_bounded -sS "${CURL_AUTH_ARGS[@]}" \
+    -H "X-MIP-Actor-Key: $SESSION_ACTOR_KEY" \
+    -o /tmp/mip-smoke-actor-binding.json -w '%{http_code}' \
+    "$APP_URL$API_PREFIX/config/options")" || ACTOR_PROBE_CODE="000"
+  if [[ "$ACTOR_PROBE_CODE" != "200" ]]; then
+    echo "[smoke] actor binding: the session's own key answered HTTP $ACTOR_PROBE_CODE (expected 200)" >&2
+    exit 1
+  fi
+  echo "[smoke] actor binding: session key accepted · HTTP 200"
+elif [[ "$BOOT_LOCAL" == "0" ]]; then
+  echo "[smoke] actor binding: $API_PREFIX/session carried no actor_cache_key on a deployed app" >&2
+  exit 1
+else
+  echo "[smoke] actor binding: session-key probe skipped (local boot forwards no identity)"
+fi
+
 # --- Five canonical API calls -------------------------------------------
 REQUEST_HTTP_CODE="000"
 REQUEST_CURL_RC=0

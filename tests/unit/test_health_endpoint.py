@@ -474,6 +474,8 @@ def test_health_authenticated_returns_runtime_status_only(
         "dependencies",
         "circuit_breakers",
         "actor_cache_key",
+        # D-identity-review-a4: set explicitly on this body ([] outside a rotation).
+        "actor_cache_key_aliases",
         # 2026-07-30 gate restructure: deploy-promotion marker state is part
         # of the authenticated runtime body so the UI can name why a bare
         # deploy is degraded. Outside Databricks Apps it reads "enabled".
@@ -708,6 +710,31 @@ def test_health_admin_endpoint_rejects_non_admin(
         headers={"X-Forwarded-Email": "user@example.com", "X-Forwarded-Groups": ""},
     )
     assert res.status_code == 403
+
+
+def test_health_rotation_aliases_ride_the_authenticated_body_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Aliases only under a live previous secret; the anonymous body stays {status, mode}."""
+    from pydantic import SecretStr
+
+    from backend.services.actor_identity import actor_cache_key_aliases
+
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    monkeypatch.setattr(health_mod.settings, "mip_genie_action_secret_current", SecretStr("test-secret-0123456789abcdef"))
+    headers = {"X-Forwarded-Email": "ops@example.com"}
+
+    assert client.get("/api/health", headers=headers).json()["actor_cache_key_aliases"] == []
+    monkeypatch.setattr(health_mod.settings, "mip_genie_action_secret_previous", SecretStr("previous-action-secret"))
+    rotated = client.get("/api/health", headers=headers).json()
+    admin = client.get("/api/admin/health", headers=ADMIN_HEADERS).json()
+
+    assert rotated["actor_cache_key_aliases"] == actor_cache_key_aliases("ops@example.com")
+    assert rotated["actor_cache_key_aliases"][0] != rotated["actor_cache_key"]
+    assert admin["actor_cache_key_aliases"] == rotated["actor_cache_key_aliases"]
+    assert set(client.get("/api/health").json()) == {"status", "mode"}
 
 
 def test_health_actor_cache_key_changes_by_actor(

@@ -69,6 +69,8 @@ export interface ResponseSchemas {
   };
   AdminHealthResponse: {
     actor_cache_key: string | null;
+    /** The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4): an open tab holding it re-stamps instead of resetting, and requests bound to it are still accepted. Empty outside a rotation. Authenticated body only. */
+    actor_cache_key_aliases: string[];
     agent_gateway_binding_sha256: string | null;
     app_env: string | null;
     /** Identities configured as auditor that are also configured as administrator or approver (segregation-of-duties signal). A count only. */
@@ -1504,6 +1506,8 @@ export interface ResponseSchemas {
   };
   HealthResponse: {
     actor_cache_key?: string | null;
+    /** The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4): an open tab holding it re-stamps instead of resetting, and requests bound to it are still accepted. Empty outside a rotation. Authenticated body only. */
+    actor_cache_key_aliases?: string[];
     agent_gateway_binding_sha256?: string | null;
     campaign_treatment_runtime?: string | null;
     circuit_breakers?: { [key: string]: string };
@@ -2387,6 +2391,8 @@ export interface ResponseSchemas {
   SessionResponse: {
     /** Opaque per-actor browser-cache discriminator: the same keyed hash of the forwarded identity that the authenticated health body carries, so the browser can seed its actor-scoped storage gate before the first health probe. Not reversible to the identity and never sent to telemetry. Null exactly when actor_email is. */
     actor_cache_key: string | null;
+    /** The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4); the health body carries the same list, and the browser reads it from there only. Empty whenever actor_email is null. */
+    actor_cache_key_aliases: string[];
     /** A readable label for the caller's own forwarded identity, derived from the same header as actor_email and nothing else (no directory lookup): an email's local part with dot, underscore or hyphen separated letter words read as capitalised words (jane.doe@... -> 'Jane Doe'), else the local part verbatim; a non-email identity verbatim. Null exactly when actor_email is. */
     actor_display_name: string | null;
     /** The caller's own identity as forwarded by the trusted Databricks Apps edge (X-Forwarded-Email, else X-Forwarded-User): the name an approval's audit row is recorded under. Null when the edge forwarded none or forwarded headers are not trusted; never a configured default actor. */
@@ -2403,7 +2409,7 @@ export interface ResponseSchemas {
     refusal_text_capture_enabled: boolean;
     /** Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), 'Auditor' (a configured auditor, read-only), else 'Workspace user' for a forwarded identity that holds no tier. Empty only when the session holds no tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract. */
     role_labels: string[];
-    /** Whether the browser may install the opt-in RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). */
+    /** Whether the browser may install the RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). On by default; the deploy setting MIP_RUM_ENABLED=0 turns it off (D-platform-process-d1). */
     rum_enabled: boolean | null;
   };
   SignalAnalyticsResponse: {

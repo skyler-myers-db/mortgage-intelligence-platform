@@ -10,10 +10,13 @@ import logging
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from backend.config.settings import settings
 from backend.main import app
-from backend.services.actor_identity import actor_cache_key
+from backend.services import rbac
+from backend.services.actor_identity import actor_cache_key, actor_cache_key_aliases
+from backend.services.audit_store import get_fallback_identity_count
 
 _ACTOR = "approver.one@summit.example"
 
@@ -66,6 +69,7 @@ def test_session_identity_matches_the_actor_the_approver_gate_admits(
         "rum_enabled": settings.mip_rum_enabled,
         "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": actor_cache_key(_ACTOR),
+        "actor_cache_key_aliases": [],
     }
 
 
@@ -114,6 +118,7 @@ def test_session_ignores_forwarded_identity_when_the_edge_is_untrusted(
         "rum_enabled": settings.mip_rum_enabled,
         "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
+        "actor_cache_key_aliases": [],
     }
 
 
@@ -335,3 +340,76 @@ def test_session_presenter_mode_follows_the_strictly_parsed_setting(
     assert body["presenter_mode"] is expected
     assert body["can_access_admin"] is False
     assert body["can_approve"] is False
+
+
+# --- D-identity-review-a4: rotation aliases and the session/health key ---
+
+
+def test_session_carries_the_rotation_aliases_beside_the_key(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same list the health body carries; [] whenever actor_email is null."""
+    monkeypatch.setattr(settings, "mip_genie_action_secret_current", SecretStr("test-secret-0123456789abcdef"))
+    monkeypatch.setattr(settings, "mip_genie_action_secret_previous", SecretStr("previous-action-secret"))
+    headers = {"X-Forwarded-Email": _ACTOR, "X-Forwarded-Groups": ""}
+
+    session = client.get("/api/v1/session", headers=headers).json()
+    health = client.get("/api/v1/health", headers=headers).json()
+    nobody = client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""}).json()
+
+    assert session["actor_cache_key_aliases"] == actor_cache_key_aliases(_ACTOR)
+    assert len(session["actor_cache_key_aliases"]) == 1
+    assert session["actor_cache_key"] == health["actor_cache_key"]
+    assert session["actor_cache_key_aliases"] == health["actor_cache_key_aliases"]
+    assert nobody["actor_email"] is None
+    assert nobody["actor_cache_key"] is None
+    assert nobody["actor_cache_key_aliases"] == []
+
+
+# --- request-scoped actor resolution (rbac memo; W5c dossier-decisions deferred) ---
+
+
+def test_one_session_read_without_an_identity_falls_back_once(
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``get_session`` asks four rbac questions; they share ONE resolve_actor,
+    so a local/test read without a forwarded identity warns and counts once."""
+    before = get_fallback_identity_count()
+
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""})
+
+    assert response.status_code == 200
+    fallbacks = [record for record in caplog.records if record.getMessage() == "identity_fallback"]
+    assert len(fallbacks) == 1
+    assert get_fallback_identity_count() == before + 1
+
+
+def test_one_session_read_resolves_the_actor_once(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    real = rbac.resolve_actor
+
+    def spy(request: object) -> str:
+        actor = real(request)  # type: ignore[arg-type]
+        calls.append(actor)
+        return actor
+
+    monkeypatch.setattr(rbac, "resolve_actor", spy)
+
+    client.get("/api/v1/session", headers={"X-Forwarded-Email": _ACTOR, "X-Forwarded-Groups": ""})
+
+    assert calls == [_ACTOR]
+
+
+def test_the_memo_falls_back_to_a_plain_call_without_a_scope() -> None:
+    """An object with no scope dict (a test double) still resolves."""
+
+    class _Bare:
+        headers: dict[str, str] = {}
+
+    assert rbac._request_actor(_Bare()) == rbac.resolve_actor(_Bare())  # type: ignore[arg-type]

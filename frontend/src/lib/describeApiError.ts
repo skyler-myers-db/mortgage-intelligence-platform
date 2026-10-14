@@ -17,6 +17,7 @@
  */
 import { ApiError, COHORT_PROOF_MESSAGES, clientFailureReason, isAbortError } from './apiTransport';
 import { CLIENT_FAILURE_MESSAGES } from './apiFailure';
+import { ACTOR_CHANGED_COPY, ACTOR_CHANGED_REASON } from './apiActorBinding';
 import { friendlyDependencyName } from '../components/healthRecovery';
 
 export type ApiErrorKind =
@@ -28,6 +29,7 @@ export type ApiErrorKind =
   | 'not_found'
   | 'conflict'
   | 'cohort_proof'
+  | 'actor_changed'
   | 'invalid_request'
   | 'rate_limited'
   | 'warming_up'
@@ -209,6 +211,16 @@ export function describeApiError(error: unknown, ctx: DescribeContext): ApiError
       tone: 'danger',
       title: "Couldn't verify the Growth Agent cohort",
       body: COHORT_PROOF_SENTENCES.has(error.message) ? error.message : COHORT_PROOF_FALLBACK,
+      action: 'none',
+    }, error);
+  }
+  if (error.reason === ACTOR_CHANGED_REASON) {
+    // D-identity-review-a4: the server refused a request bound to the
+    // previous user. Never 'reload': that re-requests the URL as the new actor.
+    return build('actor_changed', {
+      tone: 'warning',
+      title: 'The signed-in user changed',
+      body: ACTOR_CHANGED_COPY,
       action: 'none',
     }, error);
   }

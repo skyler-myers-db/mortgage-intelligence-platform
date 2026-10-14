@@ -126,7 +126,8 @@ function seedActorFromSession(
   const seed = (data: unknown) => {
     if (healthObserved.current) return;
     const seen = sessionActorObservation(data);
-    if (seen.trusted) setActorIdentity((prior) => prior ?? { key: seen.key });
+    // Aliases come from /health only (D-identity-review-a4): a seed carries none.
+    if (seen.trusted) setActorIdentity((prior) => prior ?? { key: seen.key, aliases: [] });
   };
   const primed: unknown = queryClient.getQueryData(queryKey);
   if (primed !== undefined) {

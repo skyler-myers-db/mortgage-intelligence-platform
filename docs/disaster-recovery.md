@@ -249,6 +249,39 @@ Validation:
 .venv/bin/python -m pytest -q tests/unit/test_genie_actions_api.py -k "token or confirmation"
 ```
 
+Browser identity across a rotation (D-identity-review-a4): the same
+`MIP_GENIE_ACTION_SECRET_CURRENT` keys the opaque per-actor browser key
+(`actor_cache_key`), and `MIP_GENIE_ACTION_SECRET_PREVIOUS` also keeps that
+identity continuous during the grace window. `/api/v1/health` publishes the
+actor's key under the previous secret as `actor_cache_key_aliases`, so an open
+tab re-stamps to the new key with no reset, and the request binding
+(`X-MIP-Actor-Key`) accepts either key until the previous secret is removed. A
+browser first seen after the window loses its pins once. A deploy without
+`MIP_GENIE_ACTION_SECRET_CURRENT` (a bare UI Deploy, which drops the operator
+env) falls back to a per-process secret, so every restart resets open tabs;
+`scripts/deploy.sh` always provisions it. A retired previous value (the
+provisioning tool's `disabled.` prefix) publishes no alias.
+
+### Actor binding: the Apps edge must forward `X-MIP-Actor-Key`
+
+The live smoke (`scripts/smoke_live.sh`, run by `scripts/deploy.sh` unless
+`--skip-smoke`; the piecewise deploy runs none, so run it explicitly) sends a
+stale `X-MIP-Actor-Key` to `GET /api/v1/config/options` and expects `409`
+with `reason: "actor_changed"`, then the session's own key and expects `200`.
+
+- Probe (a) answers `200`: the Databricks Apps edge stripped the header, or
+  the binding middleware is not registered. Header-less requests pass, so the
+  binding is inert (the browser's actor gate still resets tabs), not
+  fail-open. Confirm the running `git_sha` on `/api/v1/health`, check
+  `backend/main.py` registers `ActorBindingMiddleware`, and escalate an edge
+  that drops the header to the platform team. Never drop the probe or widen
+  the exemption set to make the smoke green.
+- Probe (b) answers `409`: the key the session serves does not verify, for
+  example two app replicas running with different `MIP_GENIE_ACTION_SECRET_CURRENT`
+  values (a bare deploy on one of them). Redeploy with `scripts/deploy.sh`.
+- `/api/v1/session` carries no `actor_cache_key` on a deployed app: the edge
+  forwarded no identity for the smoke's bearer token; the smoke fails.
+
 ## Audit Ledger Archival
 
 Retention policy:

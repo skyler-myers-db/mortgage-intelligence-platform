@@ -11,6 +11,8 @@ import {
   _resetActorScopeForTests,
   _setResetDocumentForTests,
   actorScopeStatus,
+  documentOwnerKey,
+  subscribeActorScope,
 } from '../../lib/actorScope';
 import { api } from '../../lib/api';
 import { GENIE_IN_FLIGHT_TURN_KEY } from '../../lib/genieConversation';
@@ -222,6 +224,8 @@ const unauthorized: HealthAnswer = () => jsonResponse(401, {});
 const forbidden: HealthAnswer = () => jsonResponse(403, { detail: 'forbidden' });
 
 const LAST_BORROWER = 'B-0OXOBYLW8MNCK';
+/** ACTOR_A's key under a rotated secret (D-identity-review-a4). */
+const ACTOR_A2 = `actor_${'a2'.repeat(8)}`;
 
 /** Sets the in-memory last borrower once, and shows what the shell holds. */
 function LastBorrowerProbe() {
@@ -378,6 +382,30 @@ describe('AppShell identity boundary: only a trusted probe moves the actor', () 
     expect(survivingState()).toEqual([]);
     // No lastBorrower assertion: the shell's memory goes with the document.
     expect(stamps()).toEqual([ACTOR_B, ACTOR_B]);
+  });
+
+  it('(iii-b) a, then a2 naming a as its rotation alias: re-stamps in place, no reset and no clear (a4)', async () => {
+    await midSession();
+    const resetDocument = vi.fn();
+    _setResetDocumentForTests(resetDocument);
+    const reasons: string[] = [];
+    const unsubscribe = subscribeActorScope(({ reason }) => reasons.push(reason));
+    await nextProbe(() => jsonResponse(200, {
+      status: 'ok',
+      mode: 'live',
+      dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
+      circuit_breakers: {},
+      actor_cache_key: ACTOR_A2,
+      actor_cache_key_aliases: [ACTOR_A],
+    }));
+    unsubscribe();
+    expect(resetDocument).not.toHaveBeenCalled();
+    expect(reasons).toEqual(['restamped']);
+    expect(stamps(), 'both areas re-stamped to the rotated key').toEqual([ACTOR_A2, ACTOR_A2]);
+    expect(documentOwnerKey(), 'later requests carry the rotated key').toBe(ACTOR_A2);
+    expect(actorScopeStatus()).toBe('open');
+    expect(survivingState()).toEqual(KEPT);
+    expect(lastBorrower(), 'nothing was cleared').toBe(LAST_BORROWER);
   });
 
   it('(iv) a reload with stored a whose first probes fail, then a: keeps, and nothing clears in between', async () => {

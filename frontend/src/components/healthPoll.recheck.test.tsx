@@ -162,12 +162,12 @@ describe('the health recheck (lib/healthRecheck)', () => {
   it('publishes a fresh identity object for an unchanged key once, then dedupes again', async () => {
     await mount();
     const first = latest();
-    expect(first).toEqual({ key: ACTOR_A });
+    expect(first).toEqual({ key: ACTOR_A, aliases: [] });
     await settle(NUDGE_GAP_MS);
     await recheck();
     await settle(0);
     const fresh = latest();
-    expect(fresh).toEqual({ key: ACTOR_A });
+    expect(fresh).toEqual({ key: ACTOR_A, aliases: [] });
     expect(fresh, 'a recheck probe republishes the same key').not.toBe(first);
 
     // The next ordinary probe (here a second, unrelated nudge path: the poll
