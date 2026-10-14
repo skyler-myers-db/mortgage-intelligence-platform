@@ -24,6 +24,10 @@ from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.audit import AuditEvent
 from backend.services.audit_filter_sql import audit_count_statement, audit_filter_clauses
+from backend.services.audit_fingerprint import (
+    AUDIT_LEDGER_FINGERPRINT_DOMAIN,
+    keyed_filter_fingerprint,
+)
 from backend.services.audit_lakebase_store import LakebaseAuditStore
 from backend.services.audit_pagination import audit_filter_fingerprint
 from backend.services.audit_store import get_audit_store
@@ -38,6 +42,10 @@ APPROVER = "approver@summit-mortgage.example"
 ADMIN_HEADERS = {"X-Forwarded-Email": ADMIN, "X-Forwarded-Groups": "mip-admin"}
 AUDITOR_HEADERS = {"X-Forwarded-Email": AUDITOR, "X-Forwarded-Groups": ""}
 PAGE = "/api/v1/audit/events/page"
+EVENTS = "/api/v1/audit/events"
+# Both list routes take the flag: the explorer pages through /events/page, and
+# /events is the older offset list the same reader identity binds.
+LIST_ROUTES = (PAGE, EVENTS)
 EXCLUSION_CLAUSE = (
     "(event_type IS DISTINCT FROM 'VIEW_AUDIT_LEDGER' "
     "OR actor_email IS DISTINCT FROM %(exclude_ledger_reads_by)s)"
@@ -125,25 +133,28 @@ def _view_leads(memory: InMemoryAuditStore, actor: str, index: int = 0) -> Audit
 
 
 def _ids(response: Any) -> set[str]:
-    return {item["event_id"] for item in response.json()["items"]}
+    body = response.json()
+    items = body["items"] if isinstance(body, dict) else body
+    return {item["event_id"] for item in items}
 
 
 # --- what the exclusion drops ----------------------------------------------------
 
 
-def test_only_the_readers_own_ledger_reads_are_excluded(store: InMemoryAuditStore) -> None:
+@pytest.mark.parametrize("route", LIST_ROUTES)
+def test_only_the_readers_own_ledger_reads_are_excluded(store: InMemoryAuditStore, route: str) -> None:
     mine = _ledger_read(store, ADMIN)
     theirs = _ledger_read(store, AUDITOR)
     my_other = _view_leads(store, ADMIN)
     approver = _view_leads(store, APPROVER, 1)
 
-    excluded = client.get(f"{PAGE}?limit=50&exclude_own_ledger_reads=true", headers=ADMIN_HEADERS)
+    excluded = client.get(f"{route}?limit=50&exclude_own_ledger_reads=true", headers=ADMIN_HEADERS)
     assert excluded.status_code == 200, excluded.text
     assert _ids(excluded) == {theirs.event_id, my_other.event_id, approver.event_id}
 
     # The same reader with the flag off sees every row, the one just written
     # by the excluded read included.
-    everything = client.get(f"{PAGE}?limit=50", headers=ADMIN_HEADERS)
+    everything = client.get(f"{route}?limit=50", headers=ADMIN_HEADERS)
     assert {mine.event_id, theirs.event_id, my_other.event_id, approver.event_id} <= _ids(everything)
 
 
@@ -156,7 +167,8 @@ def test_every_served_read_still_writes_its_ledger_row(store: InMemoryAuditStore
     assert rows[0].actor == AUDITOR
 
 
-def test_a_client_actor_param_cannot_redirect_the_exclusion(store: InMemoryAuditStore) -> None:
+@pytest.mark.parametrize("route", LIST_ROUTES)
+def test_a_client_actor_param_cannot_redirect_the_exclusion(store: InMemoryAuditStore, route: str) -> None:
     auditor_read = _ledger_read(store, AUDITOR)
     _ledger_read(store, ADMIN)
 
@@ -164,7 +176,7 @@ def test_a_client_actor_param_cannot_redirect_the_exclusion(store: InMemoryAudit
     # ignored: neither names whose reads are excluded. The admin's own
     # identity does, so the auditor's ledger read stays.
     response = client.get(
-        f"{PAGE}?limit=50&exclude_own_ledger_reads=true&actor={AUDITOR}&exclude_ledger_reads_by={AUDITOR}",
+        f"{route}?limit=50&exclude_own_ledger_reads=true&actor={AUDITOR}&exclude_ledger_reads_by={AUDITOR}",
         headers=ADMIN_HEADERS,
     )
 
@@ -213,6 +225,58 @@ class _RecordingClient:
 
 
 # --- cursors and fingerprints -------------------------------------------------------
+
+# The plain filter dict each list route fingerprints for ``?limit=50`` with no
+# other filter, and the ledger surface its VIEW_AUDIT_LEDGER row names.
+_NO_FILTERS: dict[str, Any] = {
+    "actor": None,
+    "action": None,
+    "entity_id": None,
+    "borrower_id": None,
+    "subject_clip": None,
+    "event_type": None,
+    "correlation_id": None,
+    "since": None,
+    "until": None,
+    "event_id": None,
+}
+_RECORDED_READS: dict[str, tuple[str, dict[str, Any]]] = {
+    PAGE: ("events_page", {"limit": 50, **_NO_FILTERS}),
+    EVENTS: ("events", {"limit": 50, "offset": 0, **_NO_FILTERS}),
+}
+
+
+def _recorded_fingerprint(memory: InMemoryAuditStore, route: str, query: str) -> str:
+    """The keyed fingerprint on the one VIEW_AUDIT_LEDGER row a read of ``route`` wrote."""
+
+    surface, _ = _RECORDED_READS[route]
+    before = {row.event_id for row in memory.list(limit=500)}
+    response = client.get(f"{route}?{query}", headers=ADMIN_HEADERS)
+    assert response.status_code == 200, response.text
+    [row] = [
+        row
+        for row in memory.list(limit=500)
+        if row.event_id not in before and row.event_type == "VIEW_AUDIT_LEDGER"
+    ]
+    assert row.payload_json["ledger_surface"] == surface
+    return str(row.payload_json["filter_fingerprint"])
+
+
+@pytest.mark.parametrize("route", LIST_ROUTES)
+def test_the_recorded_fingerprint_names_the_flag_only_when_it_is_on(store: InMemoryAuditStore, route: str) -> None:
+    _, plain = _RECORDED_READS[route]
+
+    def keyed(filters: dict[str, Any]) -> str | None:
+        return keyed_filter_fingerprint(audit_filter_fingerprint(filters), domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN)
+
+    off = keyed(plain)
+    on = keyed({**plain, "exclude_own_ledger_reads": True})
+    assert off is not None and on is not None and off != on
+
+    assert _recorded_fingerprint(store, route, "limit=50") == off
+    assert _recorded_fingerprint(store, route, "limit=50&exclude_own_ledger_reads=false") == off
+    assert _recorded_fingerprint(store, route, "limit=50&exclude_own_ledger_reads=true") == on
+
 
 
 def test_a_cursor_never_crosses_the_flag(store: InMemoryAuditStore) -> None:
